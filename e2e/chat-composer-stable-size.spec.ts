@@ -113,12 +113,17 @@ async function composerMetrics(page: Page) {
     if (!textarea || !modelTrigger) throw new Error("Composer controls are missing")
     const style = getComputedStyle(surface)
 
+    const textareaRect = textarea.getBoundingClientRect()
+    const modelRect = modelTrigger.getBoundingClientRect()
     return {
       width: rect.width,
       height: rect.height,
       textareaClientHeight: textarea.clientHeight,
       textareaScrollHeight: textarea.scrollHeight,
       textareaOverflowY: getComputedStyle(textarea).overflowY,
+      stacked: surface.getAttribute("data-composer-stacked") === "true",
+      modelBottomGap: rect.bottom - modelRect.bottom,
+      modelBelowText: modelRect.top > textareaRect.top + 8,
       borderTopWidth: style.borderTopWidth,
       borderRadius: style.borderRadius,
       backgroundColor: style.backgroundColor,
@@ -215,9 +220,11 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   await page.waitForTimeout(200)
 
   const multiline = await composerMetrics(page)
-  expectSameComposerSize(multiline, approved)
-  expect(multiline.textareaScrollHeight).toBeGreaterThan(multiline.textareaClientHeight)
-  expect(multiline.textareaOverflowY).toBe("auto")
+  expectSameComposerWidth(multiline, approved)
+  expect(multiline.height).toBeGreaterThan(approved.height)
+  expect(multiline.stacked).toBe(true)
+  expect(multiline.modelBelowText).toBe(true)
+  expect(multiline.modelBottomGap).toBeLessThanOrEqual(16)
 
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
@@ -272,9 +279,10 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   await page.waitForTimeout(200)
 
   const multiline = await composerMetrics(page)
-  expectSameComposerSize(multiline, approved)
-  expect(multiline.textareaScrollHeight).toBeGreaterThan(multiline.textareaClientHeight)
-  expect(multiline.textareaOverflowY).toBe("auto")
+  expectSameComposerWidth(multiline, approved)
+  expect(multiline.height).toBeGreaterThan(approved.height)
+  expect(multiline.stacked).toBe(true)
+  expect(multiline.modelBelowText).toBe(true)
 })
 
 test("conversation content rail aligns with the composer on desktop, narrow panes, and mobile", async ({ page }) => {

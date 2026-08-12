@@ -7,6 +7,10 @@ const globalsPath = path.join(process.cwd(), "app", "globals.css")
 const globals = fs.readFileSync(globalsPath, "utf8")
 const chatInterfacePath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
 const chatInterface = fs.readFileSync(chatInterfacePath, "utf8")
+const composerSurfacePath = path.join(process.cwd(), "components", "chat", "ChatComposerSurface.tsx")
+const composerSurface = fs.readFileSync(composerSurfacePath, "utf8")
+const composerLayoutPath = path.join(process.cwd(), "lib", "composer-layout.ts")
+const composerLayout = fs.readFileSync(composerLayoutPath, "utf8")
 
 describe("professional chat composer surface source contract", () => {
   it("uses one neutral solid surface without stacked rings or glass", () => {
@@ -52,14 +56,14 @@ describe("professional chat composer surface source contract", () => {
       "focus should remain neutral instead of turning into a branded glow"
     )
     const composerClassBlocks = [
-      ...chatInterface.matchAll(
+      ...composerSurface.matchAll(
         /className=\{cn\(\s*"composer-surface group\/composer relative",([\s\S]*?)\n\s*\)\}/g
       ),
     ]
     assert.equal(
       composerClassBlocks.length,
-      2,
-      "the initial and in-chat composers should share the same surface contract"
+      1,
+      "empty-state and in-chat composers should share one surface component"
     )
     for (const [, classBlock] of composerClassBlocks) {
       assert.doesNotMatch(
@@ -69,7 +73,7 @@ describe("professional chat composer surface source contract", () => {
       )
     }
     assert.doesNotMatch(
-      chatInterface,
+      `${chatInterface}\n${composerSurface}`,
       /composer-surface composer-liquid-surface/,
       "the chat composer should not opt back into the decorative liquid treatment"
     )
@@ -146,21 +150,31 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.equal(
       (chatInterface.match(/aria-label="Mensaje para SiraGPT"/g) || []).length,
-      2,
+      1,
       "both composer paths should expose the same accessible message label"
     )
     assert.equal(
       (chatInterface.match(/enterKeyHint="send"/g) || []).length,
-      2,
+      1,
       "mobile keyboards should expose the send action consistently"
+    )
+    assert.equal(
+      (chatInterface.match(/\{renderChatComposer\(\)\}/g) || []).length,
+      2,
+      "empty-state and in-chat composers must render the same extracted surface"
     )
   })
 
   it("uses the compact professional rhythm on desktop and mobile", () => {
     assert.match(
       globals,
-      /\.composer-input-row\s*\{[\s\S]{0,420}display: flex !important;[\s\S]{0,120}align-items: flex-end;[\s\S]{0,160}min-height: 3\.35rem;[\s\S]{0,120}padding: 0\.4rem 0\.45rem 0\.4rem 0\.4rem !important;/,
+      /\.composer-input-row\s*\{[\s\S]{0,420}display: grid !important;[\s\S]{0,160}grid-template-areas: "leading text actions";[\s\S]{0,160}min-height: 3\.35rem;[\s\S]{0,120}padding: 0\.4rem 0\.45rem 0\.4rem 0\.4rem !important;/,
       "the idle composer should keep a single-row Claude/ChatGPT control bar"
+    )
+    assert.match(
+      globals,
+      /\.composer-surface\[data-composer-stacked="true"\] \.composer-input-row\s*\{[\s\S]{0,220}grid-template-areas:[\s\S]{0,80}"text text text"[\s\S]{0,80}"leading leading actions";/,
+      "wrapped text must drop the model picker onto the composer footer"
     )
     assert.match(
       globals,
@@ -174,12 +188,12 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.equal(
       (chatInterface.match(/"composer-textarea textarea-scrollbar[^"]*",\s*"p-0"/g) || []).length,
-      2,
-      "both textareas should drop utility padding so CSS can pin the first line"
+      1,
+      "the shared textarea should drop utility padding so CSS can pin the first line"
     )
     assert.equal(
-      (chatInterface.match(/className="composer-input-row"/g) || []).length,
-      2,
+      (composerSurface.match(/className="composer-input-row"/g) || []).length,
+      1,
       "both composer paths should rely on the shared CSS row contract"
     )
   })
@@ -242,8 +256,13 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       chatInterface,
-      /resizeComposerTextarea[\s\S]{0,900}scrollHeight[\s\S]{0,400}style\.height/,
+      /resizeComposerTextarea[\s\S]{0,1600}scrollHeight[\s\S]{0,800}style\.height/,
       "typing should auto-grow the textarea height from scrollHeight"
+    )
+    assert.match(
+      composerLayout,
+      /export function shouldStackComposer/,
+      "stacking the footer toolbar must live in a pure layout helper"
     )
     assert.doesNotMatch(
       chatInterface,
@@ -251,8 +270,8 @@ describe("professional chat composer surface source contract", () => {
       "growth stays CSS/JS layout only — no expanded UI mode flag"
     )
     assert.equal(
-      (chatInterface.match(/data-testid="chat-composer-surface"/g) || []).length,
-      2,
+      (composerSurface.match(/data-testid="chat-composer-surface"/g) || []).length,
+      1,
       "both composer render paths should expose the same measurable surface"
     )
   })
@@ -264,17 +283,17 @@ describe("professional chat composer surface source contract", () => {
       "an unused context tray should reserve no space"
     )
     assert.equal(
-      (chatInterface.match(/className="composer-context-tray"/g) || []).length,
-      2,
+      (composerSurface.match(/className="composer-context-tray"/g) || []).length,
+      1,
       "both composer render paths should use the context tray"
     )
     // The tray must be a child of the surface: dropped files sit within the
     // same rounded border as the input, never as a floating card above it.
     assert.equal(
-      (chatInterface.match(
+      (composerSurface.match(
         /data-testid="chat-composer-surface"[\s\S]{0,1400}?className="composer-context-tray"/g
       ) || []).length,
-      2,
+      1,
       "both composers must nest the tray inside the surface"
     )
     // [^}] keeps the check inside the rule body — [\s\S] would spill past the

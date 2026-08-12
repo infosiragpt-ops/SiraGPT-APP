@@ -96,6 +96,14 @@ import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
 } from "@/components/chat/ComposerInlineDisplays"
+import {
+  ChatComposerPrimaryAction,
+  ChatComposerSurface,
+} from "@/components/chat/ChatComposerSurface"
+import {
+  COMPOSER_TEXTAREA_MIN_PX,
+  measureComposerTextarea,
+} from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
@@ -1900,13 +1908,13 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
   if (uploadedFiles.length === 0) return null;
 
   return (
-    <div className="p-3  bg-background">
+    <div className="composer-attachment-rail">
       {/* aria-live announcer so keyboard reordering is narrated. */}
       <span aria-live="polite" className="sr-only">{reorderAnnouncement}</span>
       <div
         role="list"
         aria-label="Archivos adjuntos"
-        className="flex flex-wrap items-center gap-2 max-h-40 overflow-y-auto"
+        className="flex flex-wrap items-end gap-2"
       >
         <AnimatePresence initial={false}>
         {uploadedFiles.map((file, index) => {
@@ -1919,7 +1927,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
             : (rawProgress || 0);
           const isFailed = file.status === 'failed';
           const longPasteMeta = getLongPasteMetadata(file);
-          const imageSizeClass = uploadedFiles.length > 1 ? 'h-20 w-20' : 'h-32 w-32';
+          const imageSizeClass = uploadedFiles.length > 1 ? 'h-[4.5rem] w-[4.5rem]' : 'h-20 w-20';
           const attachment = viewerSiblings[index];
           const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
           const openPreview = () => {
@@ -1952,12 +1960,14 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
               exit={{ opacity: 0, scale: 0.85, y: 8 }}
               transition={{ type: 'spring', stiffness: 420, damping: 30, mass: 0.7 }}
               className={cn(
-                "relative text-sm rounded-xl",
-                "border",
-                isFailed ? "border-red-300 dark:border-red-700/50" : "border-gray-200 dark:border-border/60",
-                isImage ? `${imageSizeClass} p-0` : "flex items-center gap-2 px-2 py-1",
+                "relative text-sm",
+                "border bg-background/90",
+                isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
+                isImage
+                  ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
+                  : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
-                canPreview && "cursor-pointer hover:border-foreground/40 hover:shadow-sm transition-all",
+                canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
               title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
@@ -6745,43 +6755,89 @@ But first, you need to connect your Spotify account securely using the button be
     root.dataset.chatInputFocused = focused ? "true" : "false";
   }, []);
 
+  const applyComposerTextareaMetrics = React.useCallback((
+    textarea: HTMLTextAreaElement,
+    scrollHeight: number,
+    maxHeight: number,
+    currentlyStacked = false,
+  ) => {
+    const measured = measureComposerTextarea({
+      scrollHeight,
+      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      maxHeight,
+      hasExplicitNewline: textarea.value.includes("\n"),
+      charCount: textarea.value.length,
+      currentlyStacked,
+    });
+    const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
+    const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
+
+    textarea.style.height = `${measured.height}px`;
+    textarea.style.overflowY = measured.overflowY;
+    if (shell) {
+      shell.style.height = `${measured.height}px`;
+    }
+    if (surface) {
+      const stackedValue = measured.stacked ? "true" : "false";
+      if (surface.dataset.composerStacked !== stackedValue) {
+        surface.dataset.composerStacked = stackedValue;
+      }
+    }
+    return measured;
+  }, []);
+
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
 
     // Grow with content (Claude/ChatGPT control-bar rhythm) up to the CSS
     // max-height, then scroll internally so the surface stays professional.
-    const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
+    // When the prompt wraps, pin the model picker to the footer so the
+    // capsule captures the full draft instead of clipping it beside the chip.
     const computedMax = Number.parseFloat(
       window.getComputedStyle(textarea).maxHeight || "0",
     );
     const maxHeight = Number.isFinite(computedMax) && computedMax > 0
       ? computedMax
       : 200;
-    const minHeight = 26;
 
+    const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
+    const currentlyStacked = surface?.dataset.composerStacked === "true";
     textarea.style.height = "0px";
-    const scrollHeight = textarea.scrollHeight;
-    const nextHeight = Math.min(maxHeight, Math.max(minHeight, scrollHeight));
-    const nextOverflowY = scrollHeight > maxHeight + 1 ? "auto" : "hidden";
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = nextOverflowY;
-    if (shell) {
-      shell.style.height = `${nextHeight}px`;
+    let measured = applyComposerTextareaMetrics(
+      textarea,
+      textarea.scrollHeight,
+      maxHeight,
+      currentlyStacked,
+    );
+
+    // Switching to the stacked grid changes the textarea width, so remasure
+    // height after the footer layout is applied. Keep the stacked decision
+    // from the first pass so a wider line cannot collapse the toolbar.
+    if (measured.stacked) {
+      textarea.style.height = "0px";
+      const restacked = applyComposerTextareaMetrics(
+        textarea,
+        textarea.scrollHeight,
+        maxHeight,
+        true,
+      );
+      measured = { ...restacked, stacked: true };
+      if (surface) surface.dataset.composerStacked = "true";
     }
 
     const previousLayout = textareaLayoutRef.current;
-    const heightChanged = previousLayout.height !== nextHeight;
-    const overflowChanged = previousLayout.overflowY !== nextOverflowY;
+    const heightChanged = previousLayout.height !== measured.height;
+    const overflowChanged = previousLayout.overflowY !== measured.overflowY;
     if (heightChanged || overflowChanged) {
-      textareaLayoutRef.current = { height: nextHeight, overflowY: nextOverflowY };
+      textareaLayoutRef.current = { height: measured.height, overflowY: measured.overflowY };
     }
-    if (nextOverflowY === "auto" && document.activeElement === textarea) {
+    if (measured.overflowY === "auto" && document.activeElement === textarea) {
       textarea.scrollTop = textarea.scrollHeight;
     }
 
     syncChatLayoutVars();
-  }, [syncChatLayoutVars]);
+  }, [applyComposerTextareaMetrics, syncChatLayoutVars]);
 
   const scheduleComposerTextareaResize = React.useCallback(() => {
     if (composerResizeFrameRef.current !== null) return;
@@ -7457,6 +7513,158 @@ But first, you need to connect your Spotify account securely using the button be
         </p>
       </TooltipContent>
     </Tooltip>
+  );
+
+  const renderChatComposer = () => (
+    <ChatComposerSurface
+      overlayVisible={pasteCapture.overlayVisible}
+      overlay={pasteCapture.Overlay}
+      slashMenu={
+        <SlashCommandMenu
+          open={slashMenuOpen}
+          filter={slashMenuFilter}
+          onCommandPick={(cmd) => {
+            setInput(cmd.insert);
+            setSlashMenuOpen(false);
+            window.setTimeout(() => {
+              const el = textareaRef.current;
+              if (el) {
+                const len = cmd.insert.length;
+                el.focus();
+                try { el.setSelectionRange(len, len); } catch { /* old Safari */ }
+              }
+            }, 0);
+          }}
+          onClose={() => setSlashMenuOpen(false)}
+        />
+      }
+      contextTray={
+        <>
+          <ActiveOptionsDisplay
+            uploadedFiles={uploadedFiles}
+            removeFile={removeFile}
+            uploadProgress={uploadProgress}
+            retryUpload={retryUpload}
+            restoreLongPasteToInput={restoreLongPasteToInput}
+            moveFile={moveFile}
+            onPreviewAttachment={handleComposerAttachmentPreview}
+            onFileProcessingStatusChange={handleFileProcessingStatusChange}
+          />
+          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
+        </>
+      }
+      leading={
+        <>
+          <ActionsDropdown {...actionsDropdownProps} />
+          {shouldInlineActiveTools && (
+            <div className="composer-inline-active-tools">
+              <ActiveToolsDisplay {...activeToolsProps} />
+            </div>
+          )}
+        </>
+      }
+      textarea={
+        <div className="composer-textarea-shell min-w-0 flex-1">
+          {hasDetectedLinks && input ? (
+            <div
+              ref={composerHighlightOverlayRef}
+              className="composer-textarea-highlights textarea-scrollbar"
+              aria-hidden="true"
+            >
+              <ComposerInlineLinkHighlights value={input} />
+            </div>
+          ) : null}
+          <Textarea
+            ref={textareaRef}
+            value={input}
+            onChange={handleTextareaChange}
+            onKeyDown={handleKeyDown}
+            onFocus={handleTextareaFocus}
+            onBlur={handleTextareaBlur}
+            onPaste={handleTextareaPaste}
+            onScroll={handleComposerTextareaScroll}
+            onCompositionStart={() => { isComposingRef.current = true }}
+            onCompositionEnd={() => { isComposingRef.current = false }}
+            aria-label="Mensaje para SiraGPT"
+            enterKeyHint="send"
+            data-link-highlights={hasDetectedLinks ? "true" : undefined}
+            placeholder={
+              isImageGenerationActive
+                ? tComposer("placeholderImage")
+                : isVideoGenerationActive
+                  ? tComposer("placeholderVideo")
+                  : isVoiceGenerationActive
+                    ? VOICE_COMPOSER_PLACEHOLDER
+                    : isMusicGenerationActive
+                      ? "Describe la música que quieres crear"
+                      : isWebSearchActive
+                        ? tComposer("placeholderWebSearch")
+                        : isComputerUseActive
+                          ? tComposer("placeholderComputer")
+                          : isGmailActive
+                            ? tComposer("placeholderGmail")
+                            : (isGoogleCalendarActive || isGoogleDriveActive)
+                              ? tComposer("placeholderGoogle")
+                              : isSpotifyActive
+                                ? tComposer("placeholderSpotify")
+                                : isWordConnectorActive
+                                  ? tComposer("placeholderWord")
+                                  : isWorkModeActive
+                                    ? "Describe el resultado que quieres obtener"
+                                    : tComposer("placeholderDefault")
+            }
+            className={cn(
+              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
+              "p-0",
+              "text-[15px] leading-[1.5] tracking-normal text-foreground",
+              "placeholder:text-muted-foreground/65 placeholder:font-normal",
+              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
+              "outline-none ring-0 focus:outline-none focus:ring-0",
+              "rounded-none transition-colors duration-200",
+            )}
+            style={{
+              minHeight: "26px",
+              maxHeight: "min(12.5rem, 42vh)",
+              overflowY: "hidden",
+              overflowX: "hidden",
+              wordWrap: "break-word",
+              border: "none",
+              outline: "none",
+              boxShadow: "none",
+            }}
+            rows={1}
+          />
+        </div>
+      }
+      toolbar={
+        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
+          <ComposerCharCounter input={input} />
+          {renderComposerModelControls()}
+          {!isStopButtonVisible && (
+            renderDictationButton()
+          )}
+          <ChatComposerPrimaryAction
+            input={input}
+            hasAttachment={uploadedFiles.length > 0}
+            requiresPromptBeforePrimarySend={requiresPromptBeforePrimarySend}
+            busy={isCurrentChatLocalJobBusy || isUploading}
+            isStopButtonVisible={isStopButtonVisible}
+            shouldPrioritizeStopButton={shouldPrioritizeStopButton}
+            pendingStop={pendingStop}
+            isCurrentChatStreaming={isCurrentChatStreaming}
+            onSend={handleSend}
+            onStop={stopActiveGeneration}
+          />
+        </div>
+      }
+      footer={
+        hasActiveTools && !shouldInlineActiveTools ? (
+          <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
+            <ActiveToolsDisplay {...activeToolsProps} />
+          </div>
+        ) : null
+      }
+    />
   );
 
   // React.useEffect(() => {
@@ -12448,260 +12656,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <div className="canvas-ambient chat-initial-stage flex flex-1 items-center justify-center">
               <div className="chat-composer-frame">
                   <div className="space-y-3">
-                  {/* Composer — quiet production UI. The shared surface owns
-                      the solid fill, neutral outline and restrained elevation
-                      in both themes; controls keep their existing behavior. */}
-                  {/* The input surface keeps one approved size. Attachments and
-                      connector context use the independent tray above it. */}
-                  <div className="relative">
-                    {pasteCapture.Overlay}
-                    {/* Slash-command menu — appears when the input starts with "/" */}
-                    <SlashCommandMenu
-                      open={slashMenuOpen}
-                      filter={slashMenuFilter}
-                      onCommandPick={(cmd) => {
-                        setInput(cmd.insert);
-                        setSlashMenuOpen(false);
-                        window.setTimeout(() => {
-                          const el = textareaRef.current;
-                          if (el) {
-                            const len = cmd.insert.length;
-                            el.focus();
-                            try { el.setSelectionRange(len, len); } catch { /* old Safari */ }
-                          }
-                        }, 0);
-                      }}
-                      onClose={() => setSlashMenuOpen(false)}
-                    />
-                    <CredentialWarning text={input} />
-                    <div
-                      data-testid="chat-composer-surface"
-                      className={cn(
-                        "composer-surface group/composer relative",
-                        pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                    )}
-                  >
-                    {/* Attachments live INSIDE the composer border (Claude-style):
-                        the surface's rounded overflow clips them, so a dropped
-                        file reads as part of the input, not a floating card. */}
-                    <div className="composer-context-tray">
-                      <ActiveOptionsDisplay
-                        uploadedFiles={uploadedFiles}
-                        removeFile={removeFile}
-                        uploadProgress={uploadProgress}
-                        retryUpload={retryUpload}
-                        restoreLongPasteToInput={restoreLongPasteToInput}
-                        moveFile={moveFile}
-                        onPreviewAttachment={handleComposerAttachmentPreview}
-                        onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                      />
-                      <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                    </div>
-                    {/* Media controls stay inline with the attach button. */}
-                    <TooltipProvider>
-                      <div
-                        className="composer-input-row"
-                      >
-                        {/* LEFT — Plus / attach + tool selector. Media chips
-                            (Voz/Imágenes/Música/Video) render inline right
-                            next to the "+" so both share the same row. */}
-                        <ActionsDropdown {...actionsDropdownProps} />
-                        {shouldInlineActiveTools && (
-                          <div className="composer-inline-active-tools">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
-                        )}
-
-                        {/* CENTER — single-line default; grows with content. */}
-                        <div className="composer-textarea-shell min-w-0 flex-1">
-                          {hasDetectedLinks && input ? (
-                            <div
-                              ref={composerHighlightOverlayRef}
-                              className="composer-textarea-highlights textarea-scrollbar"
-                              aria-hidden="true"
-                            >
-                              <ComposerInlineLinkHighlights value={input} />
-                            </div>
-                          ) : null}
-                          <Textarea
-                            ref={textareaRef}
-                            value={input}
-                            onChange={handleTextareaChange}
-                            onKeyDown={handleKeyDown}
-                            onFocus={handleTextareaFocus}
-                            onBlur={handleTextareaBlur}
-                            onPaste={handleTextareaPaste}
-                            onScroll={handleComposerTextareaScroll}
-                            onCompositionStart={() => { isComposingRef.current = true }}
-                            onCompositionEnd={() => { isComposingRef.current = false }}
-                            aria-label="Mensaje para SiraGPT"
-                            enterKeyHint="send"
-                            data-link-highlights={hasDetectedLinks ? "true" : undefined}
-                            placeholder={
-                              isImageGenerationActive
-                                ? tComposer("placeholderImage")
-                                : isVideoGenerationActive
-                                  ? tComposer("placeholderVideo")
-                                  : isVoiceGenerationActive
-                                    ? VOICE_COMPOSER_PLACEHOLDER
-                                    : isMusicGenerationActive
-                                      ? "Describe la música que quieres crear"
-                                        : isWebSearchActive
-                                          ? tComposer("placeholderWebSearch")
-                                          : isComputerUseActive
-                                            ? tComposer("placeholderComputer")
-                                          : isGmailActive
-                                            ? tComposer("placeholderGmail")
-                                          : (isGoogleCalendarActive || isGoogleDriveActive)
-                                            ? tComposer("placeholderGoogle")
-                                            : isSpotifyActive
-                                              ? tComposer("placeholderSpotify")
-                                              : isWordConnectorActive
-                                                ? tComposer("placeholderWord")
-                                                : isWorkModeActive
-                                                  ? "Describe el resultado que quieres obtener"
-                                                  : tComposer("placeholderDefault")
-                            }
-                            className={cn(
-                              "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                              "p-0",
-                              "text-[15px] leading-[1.5] tracking-normal text-foreground",
-                              "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                              "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                              "outline-none ring-0 focus:outline-none focus:ring-0",
-                              "rounded-none transition-colors duration-200",
-                            )}
-                            style={{
-                              minHeight: "26px",
-                              maxHeight: "min(12.5rem, 42vh)",
-                              overflowY: "hidden",
-                              overflowX: "hidden",
-                              wordWrap: "break-word",
-                              border: "none",
-                              outline: "none",
-                              boxShadow: "none",
-                            }}
-                            rows={1}
-                          />
-                        </div>
-
-                        {/* RIGHT — VoiceControls (mic, ghost) + primary action.
-                            Primary swaps glyph based on state — never a
-                            decorative button. */}
-                        <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
-                          {/* Pulido · contador suave de caracteres. Aparece
-                              sólo cuando ya escribiste bastante. */}
-                          <ComposerCharCounter input={input} />
-                          {renderComposerModelControls()}
-                          {!isStopButtonVisible && (
-                            renderDictationButton()
-                          )}
-
-                          {!isStopButtonVisible && (() => {
-                            const hasText = input.trim().length > 0
-                            const hasAttachment = uploadedFiles.length > 0
-                            const needsPrompt = requiresPromptBeforePrimarySend && !hasText
-                            const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
-                            const busy = isCurrentChatLocalJobBusy || isUploading
-                            // The primary button is always Send. It used to flip to a
-                            // waveform icon that opened Voice Studio whenever the composer
-                            // was empty, which put two different speech affordances side by
-                            // side (this button and the dictation mic) with nothing to tell
-                            // them apart. Voice Studio now lives in the "+" menu instead.
-                            const action = handleSend
-                            const label = canSend
-                              ? 'Enviar (⏎)'
-                              : needsPrompt
-                                ? 'Describe lo que quieres crear'
-                                : 'Escribe un mensaje para enviar'
-                            const Icon = ArrowUp
-                            return (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    onClick={action}
-                                    disabled={!canSend || busy}
-                                    size="icon"
-                                    aria-label={label}
-                                    className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
-                                      "bg-foreground text-background",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.08),0_4px_10px_-2px_rgba(0,0,0,0.12)]",
-                                      "hover:bg-foreground/92 hover:shadow-[0_2px_4px_rgba(0,0,0,0.12),0_8px_16px_-4px_rgba(0,0,0,0.22)] hover:-translate-y-[0.5px]",
-                                      "active:scale-[0.94] active:translate-y-0",
-                                      "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100 disabled:translate-y-0 disabled:hover:translate-y-0",
-                                    )}
-                                  >
-                                    {busy ? (
-                                      <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                                    ) : (
-                                      <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
-                                    )}
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent side="top">
-                                  <p>{label}</p>
-                                </TooltipContent>
-                              </Tooltip>
-                            )
-                          })()}
-
-                          {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  onClick={handleSend}
-                                  size="icon"
-                                  aria-label="Enviar a la cola · se procesa en orden"
-                                  className={cn(
-                                      "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                      "bg-[hsl(var(--accent-violet))] text-white",
-                                      "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
-                                      "hover:opacity-90 active:scale-[0.96]",
-                                  )}
-                                >
-                                  <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
-                            </Tooltip>
-                          )}
-                          {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
-                            <Button
-                              onClick={stopActiveGeneration}
-                              size="icon"
-                              aria-label="Detener generación"
-                              title="Detener"
-                              disabled={pendingStop && isCurrentChatStreaming}
-                              className={cn(
-                                "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                "bg-foreground text-white",
-                                "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                "hover:bg-foreground/90 active:scale-[0.96]",
-                                "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
-                              )}
-                            >
-                              {pendingStop ? (
-                                <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
-                              ) : (
-                                <span
-                                  aria-hidden
-                                  className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
-                                />
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    </TooltipProvider>
-
-                    {hasActiveTools && !shouldInlineActiveTools && (
-                      <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
-                        <ActiveToolsDisplay {...activeToolsProps} />
-                      </div>
-                    )}
-                  </div>
-                  </div>
+                  <CredentialWarning text={input} />
+                  {renderChatComposer()}
 
                   {/* <p className="text-center text-xs text-muted-foreground">
                 {isWebSearchActive
@@ -12919,232 +12875,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
                       {/* Input Area */}
 
-                      {/* Same fixed-size composer as the initial state. */}
                       <CredentialWarning text={input} />
-                      <div className="relative">
-                        {pasteCapture.Overlay}
-                        <div
-                          data-testid="chat-composer-surface"
-                          className={cn(
-                            "composer-surface group/composer relative",
-                            pasteCapture.overlayVisible ? "overflow-visible" : "overflow-hidden",
-                        )}
-                      >
-                        {/* Attachments live INSIDE the composer border (Claude-style):
-                            the surface's rounded overflow clips them, so a dropped
-                            file reads as part of the input, not a floating card. */}
-                        <div className="composer-context-tray">
-                          <ActiveOptionsDisplay
-                            uploadedFiles={uploadedFiles}
-                            removeFile={removeFile}
-                            uploadProgress={uploadProgress}
-                            retryUpload={retryUpload}
-                            restoreLongPasteToInput={restoreLongPasteToInput}
-                            moveFile={moveFile}
-                            onPreviewAttachment={handleComposerAttachmentPreview}
-                            onFileProcessingStatusChange={handleFileProcessingStatusChange}
-                          />
-                          <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
-                        </div>
-                        <TooltipProvider>
-                          <div
-                            className="composer-input-row"
-                          >
-                            {/* LEFT — Plus / attach + tool selector. Media
-                                chips render inline next to the "+". */}
-                            <ActionsDropdown {...actionsDropdownProps} />
-                            {shouldInlineActiveTools && (
-                              <div className="composer-inline-active-tools">
-                                <ActiveToolsDisplay {...activeToolsProps} />
-                              </div>
-                            )}
-                            <div className="composer-textarea-shell min-w-0 flex-1">
-                              {hasDetectedLinks && input ? (
-                                <div
-                                  ref={composerHighlightOverlayRef}
-                                  className="composer-textarea-highlights textarea-scrollbar"
-                                  aria-hidden="true"
-                                >
-                                  <ComposerInlineLinkHighlights value={input} />
-                                </div>
-                              ) : null}
-                              <Textarea
-                                ref={textareaRef}
-                                value={input}
-                                onChange={handleTextareaChange}
-                                onKeyDown={handleKeyDown}
-                                onFocus={handleTextareaFocus}
-                                onBlur={handleTextareaBlur}
-                                onPaste={handleTextareaPaste}
-                                onScroll={handleComposerTextareaScroll}
-                                onCompositionStart={() => { isComposingRef.current = true }}
-                                onCompositionEnd={() => { isComposingRef.current = false }}
-                                aria-label="Mensaje para SiraGPT"
-                                enterKeyHint="send"
-                                data-link-highlights={hasDetectedLinks ? "true" : undefined}
-                                placeholder={
-                                  isImageGenerationActive
-                                    ? tComposer("placeholderImage")
-                                    : isVideoGenerationActive
-                                      ? tComposer("placeholderVideo")
-                                      : isVoiceGenerationActive
-                                        ? VOICE_COMPOSER_PLACEHOLDER
-                                        : isMusicGenerationActive
-                                          ? "Describe la música que quieres crear"
-                                            : isWebSearchActive
-                                              ? tComposer("placeholderWebSearch")
-                                              : isComputerUseActive
-                                                ? tComposer("placeholderComputer")
-                                            : isGmailActive
-                                              ? tComposer("placeholderGmail")
-                                              : (isGoogleCalendarActive || isGoogleDriveActive)
-                                                ? tComposer("placeholderGoogle")
-                                                : isSpotifyActive
-                                                  ? tComposer("placeholderSpotify")
-                                                  : isWordConnectorActive
-                                                    ? tComposer("placeholderWord")
-                                                    : isWorkModeActive
-                                                      ? "Describe el resultado que quieres obtener"
-                                                      : tComposer("placeholderDefault")
-                                }
-                                className={cn(
-                                  "composer-textarea textarea-scrollbar min-h-[24px] min-w-0 w-full resize-none border-none bg-transparent",
-                                  "p-0",
-                                  "text-[15px] leading-[1.5] tracking-normal text-foreground",
-                                  "placeholder:text-muted-foreground/65 placeholder:font-normal",
-                                  "dark:placeholder:text-[hsl(var(--text-tertiary))]",
-                                  "outline-none ring-0 focus:outline-none focus:ring-0",
-                                  "rounded-none transition-colors duration-200",
-                                )}
-                                style={{
-                                  minHeight: "26px",
-                                  maxHeight: "min(12.5rem, 42vh)",
-                                  overflowY: "hidden",
-                                  overflowX: "hidden",
-                                  wordWrap: "break-word",
-                                  border: "none",
-                                  outline: "none",
-                                  boxShadow: "none",
-                                }}
-                                rows={1}
-                              />
-                            </div>
-                            <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
-                              {/* Pulido · contador suave de caracteres. */}
-                              <ComposerCharCounter input={input} />
-                              {renderComposerModelControls()}
-                              {!isStopButtonVisible && (
-                                renderDictationButton()
-                              )}
-
-                              {!isStopButtonVisible && (() => {
-                                const hasText = input.trim().length > 0
-                                const hasAttachment = uploadedFiles.length > 0
-                                const needsPrompt = requiresPromptBeforePrimarySend && !hasText
-                                const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
-                                const busy = isCurrentChatLocalJobBusy || isUploading
-                                // Always Send — see the matching note on the empty-state
-                                // composer above. Voice Studio moved to the "+" menu.
-                                const action = handleSend
-                                const label = canSend
-                                  ? 'Enviar (⏎)'
-                                  : needsPrompt
-                                    ? 'Describe lo que quieres crear'
-                                    : 'Escribe un mensaje para enviar'
-                                const Icon = ArrowUp
-                                return (
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button
-                                        onClick={action}
-                                        disabled={!canSend || busy}
-                                        size="icon"
-                                        aria-label={label}
-                                        className={cn(
-                                          "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                          "bg-foreground text-background",
-                                          "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                          "hover:bg-foreground/90 hover:shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.18)]",
-                                          "active:scale-[0.96]",
-                                          "disabled:bg-muted disabled:text-muted-foreground/60 disabled:shadow-none disabled:cursor-not-allowed disabled:active:scale-100",
-                                        )}
-                                      >
-                                        {busy ? (
-                                          <ThinkingIndicator size="sm" className="h-[15px] w-[15px]" />
-                                        ) : (
-                                          <Icon className="h-[16px] w-[16px]" strokeWidth={canSend ? 2.25 : 1.75} />
-                                        )}
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="top">
-                                      <p>{label}</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                )
-                              })()}
-
-                              {/* While the agent is thinking, a non-empty
-                                  composer SENDS the new task to the queue
-                                  (runs in order after the current one). This
-                                  is what makes "send more while it thinks"
-                                  work on mobile, where Enter isn't available.
-                                  Empty composer → STOP button. */}
-                              {isStopButtonVisible && input.trim().length > 0 && !shouldPrioritizeStopButton && (
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button
-                                      onClick={handleSend}
-                                      size="icon"
-                                      aria-label="Enviar a la cola · se procesa en orden"
-                                      className={cn(
-                                        "h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                        "bg-[hsl(var(--accent-violet))] text-white",
-                                        "shadow-[0_1px_2px_rgba(0,0,0,0.10),0_4px_10px_-3px_rgba(0,0,0,0.22)]",
-                                        "hover:opacity-90 active:scale-[0.96]",
-                                      )}
-                                    >
-                                      <ArrowUp className="h-[16px] w-[16px]" strokeWidth={2.25} />
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
-                                </Tooltip>
-                              )}
-                              {isStopButtonVisible && (input.trim().length === 0 || shouldPrioritizeStopButton) && (
-                                <Button
-                                  onClick={stopActiveGeneration}
-                                  size="icon"
-                                  aria-label="Detener generación"
-                                  title="Detener"
-                                  disabled={pendingStop && isCurrentChatStreaming}
-                                  className={cn(
-                                    "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
-                                    "bg-foreground text-white",
-                                    "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-                                    "hover:bg-foreground/90 active:scale-[0.96]",
-                                    "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
-                                  )}
-                                >
-                                  {pendingStop ? (
-                                    <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
-                                  ) : (
-                                    <span
-                                      aria-hidden
-                                      className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
-                                    />
-                                  )}
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        </TooltipProvider>
-
-                        {hasActiveTools && !shouldInlineActiveTools && (
-                          <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">
-                            <ActiveToolsDisplay {...activeToolsProps} />
-                          </div>
-                        )}
-                      </div>
-                      </div>
+                      {renderChatComposer()}
                     </div>
                   </div>
                 </>

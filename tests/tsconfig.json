@@ -21,6 +21,7 @@
     "../lib/next-api-cors.ts",
     "../lib/app-wrapper-routes.ts",
     "../lib/long-paste.ts",
+    "../lib/composer-layout.ts",
     "../lib/message-preservation.ts",
     "../lib/attachment-url.ts",
     "../lib/attachment-ingest.ts",
