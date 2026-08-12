@@ -156,8 +156,13 @@ describe("chat video auto-activation source contract", () => {
     // affordance. Voice Studio moved to the "+" menu.
     assert.match(
       composerSurface,
-      /<ArrowUp className="h-\[16px\] w-\[16px\]" strokeWidth=\{canSend \? 2\.25 : 1\.75\} \/>/,
-      "the shared primary action should always show the arrow send affordance"
+      /composer-send-button/,
+      "the shared primary action should use the black send disc"
+    )
+    assert.match(
+      composerSurface,
+      /function ComposerSendArrow/,
+      "the shared primary action should always show the white line send arrow"
     )
     assert.match(
       composerSurface,
