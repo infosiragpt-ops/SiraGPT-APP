@@ -16,6 +16,7 @@ import type {
   AgentAction,
   AgentBuildContext,
   AgentGoal,
+  AgentIterationBudget,
   AgentSignal,
   AgentState,
   AgentTask,
@@ -68,6 +69,37 @@ export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number 
   return (tasks || []).filter((task) => task.status === "completed").length
 }
 
+/** Default autonomous-iteration budget: 20 iterations, 60 minutes. */
+export const DEFAULT_MAX_ITERATIONS = 20
+export const DEFAULT_ITERATION_TIMEOUT_MS = 60 * 60 * 1000
+
+/**
+ * Advance the iteration budget for a new autonomous turn. Returns the
+ * incremented budget, or its exhausted flagged copy when the cap is hit.
+ */
+export function advanceIterationBudget(
+  budget: AgentIterationBudget | undefined,
+  now = Date.now(),
+): AgentIterationBudget {
+  const current = budget
+    ? { ...budget }
+    : {
+        count: 0,
+        max: DEFAULT_MAX_ITERATIONS,
+        startedAt: now,
+        timeoutMs: DEFAULT_ITERATION_TIMEOUT_MS,
+      }
+  const count = current.count + 1
+  const overTime = current.timeoutMs > 0 && now - current.startedAt > current.timeoutMs
+  return { ...current, count, max: current.max, startedAt: current.startedAt, timeoutMs: current.timeoutMs, exhausted: count > current.max || overTime }
+}
+
+/** True when the budget is spent, so the FSM must stop autonomous work. */
+export function isBudgetExhausted(budget: AgentIterationBudget | undefined, now = Date.now()): boolean {
+  if (!budget) return false
+  if (budget.count >= budget.max) return true
+  return budget.timeoutMs > 0 && now - budget.startedAt > budget.timeoutMs
+}
 /** Return the next task the agent should work on, or null if none are pending. */
 export function nextPendingTask(tasks: AgentTask[] | undefined): AgentTask | null {
   const list = tasks || []
@@ -595,6 +627,12 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   if (state.phase === "preview") {
     const task = nextPendingTask(state.tasks)
     if (task && (text === "" || isBareTaskContinue(text))) {
+      // Mejora 4: the iteration budget caps how many autonomous turns the agent
+      // may take in one run. Once the cap or the timeout is spent, stop
+      // auto-continuing so a broken loop can never run forever.
+      if (isBudgetExhausted(state.budget)) {
+        return { type: "passthrough" }
+      }
       return { type: "work_task", taskId: task.id, instruction: task.detail || task.title }
     }
   }

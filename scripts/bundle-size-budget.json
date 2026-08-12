@@ -1,8 +1,8 @@
 {
-  "__comment": "KB caps for the gzipped Next.js production bundle in .next/static. Re-seed with `node scripts/bundle-size-check.js --update-baseline` after a deliberate, vetted change. The 2026-08-06 baseline includes the lazy shared pdf.js renderer for generated Office previews. Tolerance is a multiplicative slack (percent) applied to every cap before the gate fails.",
-  "totalJsKB": 7088,
+  "__comment": "KB caps for the gzipped Next.js production bundle in .next/static. Re-seed with `node scripts/bundle-size-check.js --update-baseline` after a deliberate, vetted change. The 2026-08-06 baseline includes the lazy shared pdf.js renderer for generated Office previews. Tolerance is a multiplicative slack (percent) applied to every cap before the gate fails. The 2026-08-11 batch (code-agent round-1+round-2 autonomy, /chat doc editor) legitimately grew the client bundle; caps re-seeded to the measured ceiling of PR #256 (totalJsKB 7446 / totalKB 7815) plus stable headroom.",
+  "totalJsKB": 7470,
   "totalCssKB": 600,
-  "totalKB": 7439,
+  "totalKB": 7850,
   "largestChunkKB": 1500,
   "tolerancePct": 5
 }
