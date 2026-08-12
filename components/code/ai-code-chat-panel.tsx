@@ -1117,6 +1117,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     freshVoiceIdsRef.current.add(turnId)
   }, [])
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const lastAppliedFilesRef = React.useRef<Array<{ path: string; content: string }>>([])
   const scrollerRef = React.useRef<HTMLDivElement | null>(null)
   const selectionRequestRef = React.useRef(0)
   // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
@@ -1199,6 +1200,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     inputRef.current?.blur()
     toast("Selecciona en el preview la parte que quieres modificar.")
   }, [selectingTarget])
+
+  React.useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${Math.min(140, Math.max(28, el.scrollHeight))}px`
+  }, [input])
 
   React.useEffect(() => {
     codeAttachmentsRef.current = codeAttachments
@@ -1756,19 +1764,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )
       }
       const text = normalized.value.trim()
-      if (!text || busy) return
+      if (!text || busy) return { applied: [] as Array<{ path: string; content: string }> }
       if (!user) {
         toast.error("Inicia sesión para usar el chat de código.")
-        return
+        return { applied: [] as Array<{ path: string; content: string }> }
       }
       if (!activeModelName) {
         toast.error("Cargando modelos… intenta de nuevo en un momento.")
-        return
+        return { applied: [] as Array<{ path: string; content: string }> }
       }
 
       if (!sessionId) {
         toast.error("Selecciona o crea un agente de código.")
-        return
+        return { applied: [] as Array<{ path: string; content: string }> }
       }
 
       // Intake / routing is decided by the agent FSM (nextAgentAction) in
@@ -1864,6 +1872,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // generated files without reading it back out of a setState updater
       // (updaters must stay pure — applyBlock is a side effect).
       let assistantText = ""
+      let applied: Array<{ path: string; content: string }> = []
+      let rejectedStream: { issue?: string; retryInstruction?: string } | null = null
       const startedAt = Date.now()
       // Real token usage (+ optional USD cost) from the stream's `usage` frame,
       // delivered just before onClose so it's available when we build metrics.
@@ -1921,7 +1931,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // writing). Read-only modes (ask/plan/image) pass autoApply:false and
             // never apply. `applied` feeds the Worked-Summary/action-log metrics
             // on the turn (real numbers).
-            let applied: Array<{ path: string; content: string }> = []
             if (!conversational) {
               patchAssistant({
                 agentLabel: "Aplicando cambios al workspace",
@@ -1941,35 +1950,41 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
                 if (blocks.length > 0) {
                   // Mejora 3 (stream validator): when the streamed content fails
-                  // the deterministic structural checks, surface it immediately
-                  // instead of shipping a broken file to the preview. The actual
-                  // auto-retry loop lives in the work_task flow ([retry:N]).
+                  // the deterministic structural checks, do NOT ship a broken
+                  // file to the preview. The work_task loop retries with the
+                  // returned instruction. Debug spoken turns still apply so a
+                  // targeted SRE patch is not blocked by a leftover fence.
                   const streamCheck = validateStreamedFiles(
                     blocks.map((b) => ({ path: b.path as string, content: b.content })),
                   )
                   if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                    rejectedStream = streamCheck
                     toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                    patchAssistant({
+                      agentLabel: "Validación bloqueó la aplicación",
+                      agentPhases: buildCodeAgentPhases("apply", {
+                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                        generate: { status: "done", detail: "Stream completado" },
+                        apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
+                      }),
+                    })
+                  } else {
+                    for (const b of blocks) {
+                      if (b.path) applyBlock(b.path, b.content)
+                    }
+                    applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                    lastAppliedFilesRef.current = applied
+                    const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                    const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                    toast.success(
+                      hasPkg
+                        ? "Proyecto generado — levantando el dev server…"
+                        : hasHtml
+                          ? "App generada — revisa el preview en vivo →"
+                          : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                    )
+                    openPreviewAndMaybeRun(applied)
                   }
-                  for (const b of blocks) {
-                    if (b.path) applyBlock(b.path, b.content)
-                  }
-                  applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
-                  const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
-                  const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
-                  toast.success(
-                    hasPkg
-                      ? "Proyecto generado — levantando el dev server…"
-                      : hasHtml
-                        ? "App generada — revisa el preview en vivo →"
-                        : `Generados ${blocks.length} archivo(s) — abriendo preview`,
-                  )
-                  // applyBlock already emits "siragpt:code-open-preview"; make
-                  // sure the preview pane is shown even if it was collapsed, and
-                  // auto-boot the dev server so the user sees the running result
-                  // without hunting for ▶ Ejecutar. The PreviewPane only acts on
-                  // this for real Vite/Next projects and degrades silently if the
-                  // environment/user can't run apps.
-                  openPreviewAndMaybeRun(applied)
                 }
               } catch {
                 // Auto-apply failed (parse/write error). There is no manual
@@ -2178,7 +2193,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               setBusy(false)
             }
             await codexEngineRef.current(text, sessionId, { iterate: true, omitUserTurn: true })
-            return
+            return { applied: lastAppliedFilesRef.current, rejected: rejectedStream || undefined }
           }
           toast.error(err?.message || "Error en el chat de código")
           patchAssistant({
@@ -2197,6 +2212,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           abortRef.current = null
           setBusy(false)
         }
+      }
+      return {
+        applied,
+        rejected: rejectedStream || undefined,
       }
     },
     [
@@ -2530,6 +2549,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     (files: Array<{ path: string; content: string }>) => {
       const ordered = orderFilesForWorkspaceApply(files)
       for (const f of ordered) applyBlock(f.path, f.content)
+      lastAppliedFilesRef.current = ordered
       if (files.length > 0) openPreviewAndMaybeRun(files)
       return files
     },
@@ -3741,24 +3761,24 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // A missing association/project is an actionable identity problem,
           // not a code-generation failure. Keep the active mapping intact so
           // the user can inspect/reassociate it instead of losing it silently.
-          finish(`⚠️ ${code}: ${message}`, {
+          finish(`⚠️ ${message}`, {
             label: "Entorno no disponible",
             phases: buildCodeAgentPhases("context", {
               context: { status: "error", detail: message },
             }),
           })
-          toast.error(`${code}: ${message}`)
+          toast.error(message)
         } else if (errorCode === "company_association_required") {
           const code = "company_association_required"
           const message = "Confirma qué entorno Codex pertenece a esta empresa antes de ejecutar agentes."
           setIdentityIssue({ code, message })
-          finish(`⚠️ ${code}: ${message}`, {
+          finish(`⚠️ ${message}`, {
             label: "Asociación requerida",
             phases: buildCodeAgentPhases("context", {
               context: { status: "error", detail: message },
             }),
           })
-          toast.error(`${code}: ${message}`)
+          toast.error(message)
         } else if (!opts?.iterate && !opts?.resume) {
           // Project provisioning / plan-run error during a BUILD → still deliver
           // via the deterministic builder in the same turn.
@@ -4204,40 +4224,50 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // "[retry:N]" prefix so the loop is bounded by MAX_STREAM_RETRIES.
           let instruction = action.instruction
           let retryAttempt = 0
-          const filesBefore = new Map(Object.entries(files).map(([path, f]) => [path, f.content]))
+          let lastVerdict: { ok: boolean; retryInstruction?: string } = { ok: true }
           for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+            lastAppliedFilesRef.current = []
+            let promptResult: { applied: Array<{ path: string; content: string }>; rejected?: { issue?: string; retryInstruction?: string } } | undefined
             if (attachedFileIds.length > 0 && activeModelName) {
-              await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+              promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             } else if (runDeterministicPatch(instruction, sid)) {
               // patched deterministically
             } else if (codexAvailable) {
               const out = await runCodexEngine(instruction, sid, { iterate: true })
               if (out === "workspace_sync_failed") {
-                await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+                promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
               }
             } else if (engineMode && engineAvailable) {
               await runEngine(instruction, sid, { iterate: true })
             } else {
-              await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+              promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             }
-            // Validate only the files THIS turn added or modified — never the whole
-            // workspace (pre-existing console.log in old files must not block
-            // a new task).
-            const appliedNow = Object.values(files)
-              .filter((f) => f.content !== filesBefore.get(f.path))
-              .map((f) => ({ path: f.path, content: f.content }))
-            const verdict = validateGeneratedFiles(appliedNow)
-            if (verdict.ok) break
+            // Prefer files the executor just wrote (React `files` is still the
+            // previous render). A rejected stream is a failed turn even when
+            // nothing was applied — that is what the retry loop is for.
+            const appliedNow = promptResult?.applied?.length
+              ? promptResult.applied
+              : lastAppliedFilesRef.current
+            lastVerdict = promptResult?.rejected
+              ? { ok: false, retryInstruction: promptResult.rejected.retryInstruction }
+              : validateGeneratedFiles(appliedNow)
+            if (lastVerdict.ok) break
             if (attempt >= MAX_STREAM_RETRIES) break
             retryAttempt = attempt + 1
             const task = currentAgent?.tasks?.find((t) => t.id === action.taskId)
             const baseInstruction = (task?.detail || task?.title || instruction).replace(/^\[retry:\d+\]\s*/, "")
-            instruction = `${verdict.retryInstruction}\n\n[retry:${retryAttempt}] ${baseInstruction}`
-            toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${verdict.retryInstruction?.slice(0, 90)}…`)
+            instruction = `${lastVerdict.retryInstruction}\n\n[retry:${retryAttempt}] ${baseInstruction}`
+            toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${lastVerdict.retryInstruction?.slice(0, 90)}…`)
           }
           const doneAgent = activeCodeChatSession?.agent
-          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, { status: "completed" })
-          patchAgentState(sid, (s) => ({ ...s, phase: "preview", tasks: patchedTasks }))
+          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
+            status: lastVerdict.ok ? "completed" : "blocked",
+          })
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: lastVerdict.ok ? "preview" : "debugging",
+            tasks: patchedTasks,
+          }))
           return
         }
         case "patch": {
@@ -4697,9 +4727,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
           role="alert"
           data-testid="code-identity-error"
+          data-identity-code={identityIssue.code}
         >
           <span>
-            {identityIssue.code}: {identityIssue.message}
+            {identityIssue.message}
           </span>
           <Button
             type="button"
