@@ -935,12 +935,12 @@ test("visual inspector and model depth selector survive a deterministic interact
 
   const selector = page.locator('[data-testid="code-target-selector"]:visible').first()
   await expect(selector).toBeVisible({ timeout: 30_000 })
-  await expect(selector).toContainText("Seleccionar UI")
+  await expect(selector).toHaveAttribute("aria-label", "Seleccionar elemento de la interfaz")
   await expect(selector).toHaveAttribute("aria-pressed", "false")
 
   await selector.click()
   await expect(selector).toHaveAttribute("aria-pressed", "true")
-  await expect(selector).toContainText("Cancelar")
+  await expect(selector).toHaveAttribute("aria-label", "Cancelar inspector visual")
   const inspector = page.getByTestId("code-preview-inspector-toolbar")
   await expect(inspector).toBeVisible()
   await expect(inspector).toContainText("Inspector visual activo")
