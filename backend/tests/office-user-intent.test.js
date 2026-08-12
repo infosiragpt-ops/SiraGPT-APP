@@ -31,6 +31,26 @@ describe('office user-intent parser — general structural append', () => {
     assert.match(intent.topic, /ejemplos/);
   });
 
+  test('live prompt: 5 ppts más, estas mimas, casos de éxito, APA 7', () => {
+    const prompt = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
+    const intent = parseAddSlidesIntent(prompt);
+    assert.equal(intent.count, 5);
+    assert.equal(intent.lastIsBibliography, true);
+    assert.equal(intent.sameDocument, true);
+    assert.equal(intent.citationStyle, 'apa7');
+    assert.match(intent.topic, /casos de exito/);
+    const ops = buildAddSlideOperations(intent, {
+      sourceText: 'Gestión administrativa\nEl ciclo planificar-organizar-dirigir-controlar reduce incertidumbre',
+      originalName: 'Gestion_amdinistrativa.pptx',
+      requestText: prompt,
+    });
+    assert.equal(ops.length, 5);
+    assert.ok(ops.slice(0, 4).every((op) => /Caso de éxito/i.test(op.title)));
+    assert.match(ops[4].title, /APA 7/i);
+    assert.match(ops[4].bullets.join(' '), /American Psychological Association/);
+    assert.doesNotMatch(JSON.stringify(ops), /Cómo se implementa ejemplos/);
+  });
+
   test('works for any topic — marketing, onboarding, clinical', () => {
     const marketing = parseAddSlidesIntent('en esta misma ppt agrega 4 slides sobre funnel de conversion');
     assert.equal(marketing.count, 4);
