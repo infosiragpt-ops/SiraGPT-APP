@@ -80,7 +80,8 @@ test("buildCompanyAgentFileArtifacts creates one report per agent and groups by 
     {
       id: "sess-mkt",
       workspaceId: "project:test",
-      title: "Campaña marketing Q3",
+      title: "Trabajo prioritario Q3",
+      departmentId: "marketing",
       createdAt: 1_700_000_100_000,
       updatedAt: 1_700_000_200_000,
       turns: [
@@ -219,9 +220,15 @@ test("buildCompanyAgentFileArtifacts creates one report per agent and groups by 
   assert.ok(agentReports.every((item) => item.path.startsWith("Agentes/")))
   assert.ok(agentReports.every((item) => item.content.includes("# Reporte de archivos ·")))
 
-  // One group per agent, never a single global empty dump.
-  assert.equal(result.groups.length, result.agents.length)
-  assert.ok(result.groups.every((group) => group.artifacts.some((item) => item.source === "agent-report")))
+  // Every agent keeps its report folder; unattributed workspace files stay in
+  // a truthful workspace group instead of being silently assigned to CEO.
+  const agentGroups = result.groups.filter((group) => group.id !== "workspace")
+  assert.equal(agentGroups.length, result.agents.length)
+  assert.ok(agentGroups.every((group) => group.artifacts.some((item) => item.source === "agent-report")))
+  const workspaceGroup = result.groups.find((group) => group.id === "workspace")
+  assert.ok(workspaceGroup)
+  assert.ok(workspaceGroup?.artifacts.some((item) => item.path === "docs/readme.md"))
+  assert.ok(workspaceGroup?.artifacts.every((item) => item.source !== "agent-report"))
 
   const engGroup = result.groups.find((group) => group.id === "run:eng-1")
   assert.ok(engGroup)
@@ -259,4 +266,67 @@ test("empty company still exposes one report folder per agent seat", () => {
   assert.equal(result.artifacts.length, 4)
   assert.ok(result.artifacts.every((item) => item.source === "agent-report"))
   assert.ok(result.artifacts.every((item) => item.content.includes("Sin archivos de workspace atribuidos todavía.")))
+})
+
+test("mission with no matching department or agent remains unattributed in workspace", () => {
+  const missionEvidence: CodexMissionEvidenceLedger = {
+    version: 1,
+    summary: {
+      missions: 1,
+      completed: 1,
+      blocked: 0,
+      pendingReview: 1,
+      approved: 0,
+      reports: 0,
+      emailQueued: 0,
+    },
+    records: [{
+      id: "mission-unattributed",
+      missionId: "external-audit",
+      missionTitle: "Auditoría independiente",
+      objective: "Revisar evidencia",
+      department: "Área externa desconocida",
+      status: "completed",
+      summary: "Auditoría terminada.",
+      author: "Auditor externo sin cuenta",
+      runId: null,
+      source: "import",
+      sourceRef: "external:1",
+      version: 1,
+      contentHash: null,
+      createdAt: "2026-08-11T10:00:00.000Z",
+      updatedAt: "2026-08-11T10:05:00.000Z",
+      deliverables: [],
+      evidence: [],
+      ceoReview: {
+        status: "pending",
+        reviewedAt: null,
+        reviewedBy: null,
+        note: null,
+      },
+    }],
+    reports: [],
+  }
+
+  const result = buildCompanyAgentFileArtifacts({
+    companyName: "TESIS20.COM",
+    departments,
+    files: {},
+    sessions: [],
+    workers: [],
+    missionEvidence,
+  })
+  const mission = result.artifacts.find((item) => item.id === "report:mission:mission-unattributed")
+  assert.ok(mission)
+  assert.equal(mission?.agentId, "workspace")
+  assert.equal(mission?.departmentId, "workspace")
+  assert.equal(mission?.agentName, "Espacio de trabajo")
+  assert.equal(
+    mission?.path,
+    "Agentes/Espacio de trabajo/Misiones/auditoria-independiente.md",
+  )
+  const workspace = result.groups.find((group) => group.id === "workspace")
+  assert.ok(workspace?.artifacts.some((item) => item.id === mission?.id))
+  assert.ok(!result.groups.find((group) => group.id === "seat:ceo-office:1")
+    ?.artifacts.some((item) => item.id === mission?.id))
 })

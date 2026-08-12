@@ -7,7 +7,27 @@ const sales = require('../src/services/codex/company-operations/sales-pipeline')
 
 test('lead research persists only candidates backed by returned source URLs', async () => {
   const rows = [];
+  const usageRows = [];
   const prisma = {
+    codexDepartmentPool: {
+      findUnique: async () => ({
+        id: 'pool-sales',
+        projectId: 'project-a',
+        departmentId: 'sales',
+        size: 2,
+        enabled: true,
+      }),
+    },
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        const row = { id: `usage-${usageRows.length + 1}`, ...data };
+        usageRows.push(row);
+        return row;
+      },
+      findUnique: async () => null,
+      findMany: async () => usageRows.map((row) => structuredClone(row)),
+    },
+    codexRunMetric: { findMany: async () => [] },
     codexCompanyLead: {
       create: async ({ data }) => {
         const row = { id: `lead-${rows.length + 1}`, ...data };
@@ -54,6 +74,13 @@ test('lead research persists only candidates backed by returned source URLs', as
           },
         ],
       }),
+      usage: {
+        tokensIn: 220,
+        tokensOut: 80,
+        provider: 'Anthropic',
+        model: 'claude-sonnet-4-6',
+        generationId: 'sales-research-1',
+      },
     }),
   });
   assert.equal(result.action, 'leads_saved');
@@ -62,6 +89,83 @@ test('lead research persists only candidates backed by returned source URLs', as
   assert.equal(rows[0].userId, 'user-a');
   assert.equal(rows[0].companyName, 'Empresa Alfa');
   assert.equal(rows[0].status, 'qualified');
+  assert.equal(usageRows.length, 1);
+  assert.equal(usageRows[0].source, 'sales_research');
+  assert.equal(usageRows[0].projectId, 'project-a');
+  assert.equal(usageRows[0].departmentPoolId, 'pool-sales');
+});
+
+test('lead research budget zero blocks the LLM provider before spend', async () => {
+  let llmCalls = 0;
+  await assert.rejects(
+    sales.researchLeads({
+      prisma: {
+        codexRunMetric: { findMany: async () => [] },
+        codexUsageEntry: { findMany: async () => [] },
+      },
+      project: {
+        id: 'project-budget-zero',
+        userId: 'user-a',
+        brief: { proactive: { configuredDailyBudgetUsd: 0 } },
+      },
+      companyContext: {
+        profile: {
+          offer: 'Agentes de software',
+          targetCustomer: 'Empresas B2B',
+          autonomy: { research: true },
+        },
+      },
+      webSearch: async () => ({
+        results: [{
+          title: 'Empresa Alfa',
+          url: 'https://alfa.example',
+          snippet: 'Empresa B2B verificada.',
+        }],
+      }),
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"leads":[]}' };
+      },
+    }),
+    (error) => error?.code === 'company_daily_budget_exceeded' && error?.status === 429,
+  );
+  assert.equal(llmCalls, 0);
+});
+
+test('lead research without a configured Sales pool fails closed before the LLM provider', async () => {
+  let llmCalls = 0;
+  await assert.rejects(
+    sales.researchLeads({
+      prisma: {
+        codexRunMetric: { findMany: async () => [] },
+        codexUsageEntry: { findMany: async () => [] },
+        codexDepartmentPool: { findUnique: async () => null },
+      },
+      project: { id: 'project-without-sales-pool', userId: 'user-a' },
+      companyContext: {
+        profile: {
+          offer: 'Agentes de software',
+          targetCustomer: 'Empresas B2B',
+          autonomy: { research: true },
+        },
+      },
+      webSearch: async () => ({
+        results: [{
+          title: 'Empresa Alfa',
+          url: 'https://alfa.example',
+          snippet: 'Empresa B2B verificada.',
+        }],
+      }),
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"leads":[]}' };
+      },
+    }),
+    (error) => error?.code === 'department_pool_budget_check_failed'
+      && error?.status === 503
+      && error?.budget?.reason === 'department_pool_not_configured',
+  );
+  assert.equal(llmCalls, 0);
 });
 
 test('re-research preserves protected commercial states and only upgrades discovered leads', async () => {

@@ -3,9 +3,11 @@
 const { mutateProjectBrief } = require('./project-brief-store');
 const projectBudget = require('./project-budget');
 
-// Physical pool seats per department / project (writers still isolation-capped).
-const MAX_DEPARTMENT_POOL_SIZE = 512;
-const MAX_PROJECT_POOL_CAPACITY = 512;
+// Physical writer capacity must match run-service's isolated-worktree hard cap.
+// Logical agents can still scale far beyond this number, but reporting hundreds
+// of simultaneous physical writers was impossible and misled the office UI.
+const MAX_DEPARTMENT_POOL_SIZE = 32;
+const MAX_PROJECT_POOL_CAPACITY = 32;
 
 function boundedSize(value, fallback = 1) {
   const parsed = Number.parseInt(value, 10);
@@ -36,11 +38,15 @@ function normalizePool(row) {
 
 function poolCapacity(pools) {
   const enabled = (Array.isArray(pools) ? pools : []).filter((pool) => pool?.enabled !== false);
-  const physicalAgents = enabled.reduce((sum, pool) => sum + boundedSize(pool?.size), 0);
+  const configuredPhysicalAgents = enabled.reduce(
+    (sum, pool) => sum + boundedSize(pool?.size),
+    0,
+  );
+  const physicalAgents = Math.min(MAX_PROJECT_POOL_CAPACITY, configuredPhysicalAgents);
   return {
     pools: enabled.length,
     physicalAgents,
-    writerConcurrency: Math.max(1, Math.min(MAX_PROJECT_POOL_CAPACITY, physicalAgents || 1)),
+    writerConcurrency: Math.max(1, physicalAgents || 1),
     dailyBudgetUsd: enabled.reduce((sum, pool) => (
       pool?.dailyBudgetUsd == null ? sum : sum + Number(pool.dailyBudgetUsd)
     ), 0),
@@ -153,6 +159,87 @@ async function checkDepartmentPoolBudget({
   }
 }
 
+function operationBudgetError(scope, status) {
+  const reason = String(status?.reason || 'budget_query_failed');
+  const exceeded = reason === 'daily_budget_exceeded';
+  const disabled = scope === 'department_pool' && reason === 'pool_disabled';
+  const code = scope === 'company'
+    ? (exceeded ? 'company_daily_budget_exceeded' : 'company_budget_check_failed')
+    : disabled
+      ? 'department_pool_disabled'
+      : exceeded
+        ? 'department_pool_daily_budget_exceeded'
+        : 'department_pool_budget_check_failed';
+  const error = new Error(`${code}:${reason}`);
+  error.code = code;
+  error.status = disabled ? 409 : exceeded ? 429 : 503;
+  error.budget = {
+    scope,
+    reason,
+    costTodayUsd: status?.costTodayUsd ?? null,
+    dailyBudgetUsd: status?.dailyBudgetUsd ?? null,
+    remainingUsd: status?.remainingUsd ?? null,
+  };
+  return error;
+}
+
+/**
+ * Shared fail-closed preflight for direct company-operation LLM calls.
+ *
+ * Keeping this check at the service boundary means an HTTP route, the
+ * proactive engine, and any future internal caller all receive the same
+ * project and department-pool enforcement before provider spend occurs.
+ */
+async function requireOperationBudget({
+  prisma,
+  project,
+  departmentId,
+  departmentPoolId = null,
+  env = process.env,
+  now = new Date(),
+}) {
+  if (!project?.id || !departmentId) {
+    throw operationBudgetError('company', { reason: 'budget_context_invalid' });
+  }
+  const companyBudget = await projectBudget.checkCompanyDailyBudget({
+    prisma,
+    project,
+    env,
+    now,
+  });
+  if (companyBudget?.allowed !== true) {
+    throw operationBudgetError('company', companyBudget);
+  }
+  const poolBudget = await checkDepartmentPoolBudget({
+    prisma,
+    projectId: project.id,
+    departmentId,
+    env,
+    now,
+  });
+  if (!poolBudget?.pool) {
+    throw operationBudgetError('department_pool', {
+      reason: 'department_pool_not_configured',
+    });
+  }
+  if (poolBudget?.allowed !== true) {
+    throw operationBudgetError('department_pool', poolBudget);
+  }
+  if (
+    departmentPoolId
+    && String(poolBudget?.pool?.id || '') !== String(departmentPoolId)
+  ) {
+    throw operationBudgetError('department_pool', {
+      reason: 'department_pool_attribution_mismatch',
+    });
+  }
+  return {
+    companyBudget,
+    poolBudget,
+    pool: poolBudget.pool || null,
+  };
+}
+
 async function listDepartmentPools({ prisma, projectId }) {
   if (!prisma?.codexDepartmentPool?.findMany || !projectId) return [];
   const rows = await prisma.codexDepartmentPool.findMany({
@@ -187,6 +274,7 @@ async function upsertDepartmentPool({
   size,
   dailyBudgetUsd,
   enabled = true,
+  preserveExisting = false,
 }) {
   if (!project?.id || !departmentId) throw new Error('department_pool_invalid');
   if (!prisma?.codexDepartmentPool?.upsert) return null;
@@ -207,11 +295,16 @@ async function upsertDepartmentPool({
       dailyBudgetUsd: normalizedBudget,
       enabled: enabled !== false,
     },
-    update: {
-      size: normalizedSize,
-      ...(budgetProvided ? { dailyBudgetUsd: normalizedBudget } : {}),
-      enabled: enabled !== false,
-    },
+    // Bootstrap callers need an atomic create-if-absent. An empty update keeps
+    // a concurrently-created pool's operator budget/enabled kill switch intact
+    // instead of reverting it from a stale pre-bootstrap snapshot.
+    update: preserveExisting
+      ? {}
+      : {
+        size: normalizedSize,
+        ...(budgetProvided ? { dailyBudgetUsd: normalizedBudget } : {}),
+        enabled: enabled !== false,
+      },
   });
   await persistProjectCap({ prisma, project });
   return normalizePool(row);
@@ -237,6 +330,7 @@ module.exports = {
   findDepartmentPool,
   listDepartmentPools,
   normalizePool,
+  requireOperationBudget,
   persistProjectCap,
   poolCapacity,
   removeDepartmentPool,

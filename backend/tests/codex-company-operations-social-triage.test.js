@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const socialTriage = require('../src/services/codex/company-operations/social-triage');
 const companyResources = require('../src/services/codex/company-resources');
 
-function fakePrisma({ mode = 'review', platform = 'x' } = {}) {
+function fakePrisma({ mode = 'review', platform = 'x', poolBudgetUsd = null } = {}) {
   const connection = {
     id: `connection-${platform}`,
     userId: 'user-a',
@@ -16,9 +16,36 @@ function fakePrisma({ mode = 'review', platform = 'x' } = {}) {
     accessToken: 'encrypted',
   };
   const resourceKey = companyResources.socialResourceKeyForConnection(connection);
-  const state = { items: [], actions: [], connection, sent: [] };
+  const state = { items: [], actions: [], connection, sent: [], usage: [] };
   return {
     state,
+    codexDepartmentPool: {
+      findUnique: async ({ where }) => ({
+        id: 'pool-customer-success',
+        projectId: where.projectId_departmentId.projectId,
+        departmentId: where.projectId_departmentId.departmentId,
+        size: 2,
+        enabled: true,
+        dailyBudgetUsd: poolBudgetUsd,
+      }),
+    },
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        if (state.usage.some((row) => row.idempotencyKey === data.idempotencyKey)) {
+          const error = new Error('unique');
+          error.code = 'P2002';
+          throw error;
+        }
+        const row = { id: `usage-${state.usage.length + 1}`, ...data };
+        state.usage.push(row);
+        return structuredClone(row);
+      },
+      findUnique: async ({ where }) => state.usage.find(
+        (row) => row.idempotencyKey === where.idempotencyKey,
+      ) || null,
+      findMany: async () => state.usage.map((row) => structuredClone(row)),
+    },
+    codexRunMetric: { findMany: async () => [] },
     socialConnection: {
       findMany: async () => [structuredClone(connection)],
       findFirst: async ({ where }) => (
@@ -160,8 +187,10 @@ function interactions() {
   }];
 }
 
+let chatCompletionSequence = 0;
 const chatComplete = async ({ messages }) => {
   assert.match(messages[0].content, /DATO NO CONFIABLE/);
+  chatCompletionSequence += 1;
   return {
     content: JSON.stringify({
       items: [{
@@ -174,6 +203,13 @@ const chatComplete = async ({ messages }) => {
         reason: 'Consulta comercial directa.',
       }],
     }),
+    usage: {
+      tokensIn: 200,
+      tokensOut: 55,
+      provider: 'Anthropic',
+      model: 'claude-sonnet-4-6',
+      generationId: `social-triage-${chatCompletionSequence}`,
+    },
   };
 };
 
@@ -197,6 +233,41 @@ test('review mode ingests social interactions and creates one idempotent action'
   assert.equal(second.actions[0].id, first.actions[0].id);
   assert.equal(prisma.state.items.length, 1);
   assert.equal(prisma.state.actions.length, 1);
+  assert.equal(prisma.state.usage.length, 2);
+  assert.equal(prisma.state.usage.every((row) => row.source === 'social_triage'), true);
+  assert.equal(
+    prisma.state.usage.every((row) => row.departmentPoolId === 'pool-customer-success'),
+    true,
+  );
+});
+
+test('social triage pool budget zero blocks the LLM provider before spend', async () => {
+  const prisma = fakePrisma({ mode: 'review', poolBudgetUsd: 0 });
+  const pool = {
+    id: 'pool-customer-success',
+    projectId: 'project-a',
+    departmentId: 'customer-success',
+    size: 2,
+    enabled: true,
+    dailyBudgetUsd: 0,
+  };
+  prisma.codexDepartmentPool.findUnique = async () => structuredClone(pool);
+  let llmCalls = 0;
+  await assert.rejects(
+    socialTriage.triageSocialConversations({
+      prisma,
+      project: { id: 'project-a', userId: 'user-a' },
+      companyContext: companyContext('review'),
+      listInteractions: async () => interactions(),
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"items":[]}' };
+      },
+    }),
+    (error) => error?.code === 'department_pool_daily_budget_exceeded'
+      && error?.status === 429,
+  );
+  assert.equal(llmCalls, 0);
 });
 
 test('auto mode sends one reply through the exact tenant connection', async () => {

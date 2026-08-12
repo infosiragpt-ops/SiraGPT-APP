@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 
 const departments = require('../src/services/codex/company-departments');
 const pools = require('../src/services/codex/department-pools');
+const runService = require('../src/services/codex/run-service');
 
 function fakePrisma(project) {
   const state = {
@@ -115,6 +116,17 @@ test('physical capacity is bounded independently from logical agents and shrinks
   storedPools = await pools.listDepartmentPools({ prisma, projectId: project.id });
   assert.deepEqual(storedPools, []);
   assert.equal(prisma.state.project.brief.maxConcurrentRuns, 1);
+});
+
+test('reported physical and writer capacity never exceed the real run hard cap', () => {
+  assert.equal(pools.MAX_PROJECT_POOL_CAPACITY, runService.MAX_CONCURRENT_RUNS_HARD_CAP);
+  const capacity = pools.poolCapacity(Array.from({ length: 14 }, (_, index) => ({
+    id: `pool-${index}`,
+    enabled: true,
+    size: pools.MAX_DEPARTMENT_POOL_SIZE,
+  })));
+  assert.equal(capacity.physicalAgents, runService.MAX_CONCURRENT_RUNS_HARD_CAP);
+  assert.equal(capacity.writerConcurrency, runService.MAX_CONCURRENT_RUNS_HARD_CAP);
 });
 
 test('updating pool size preserves an existing budget when no budget field is sent', async () => {

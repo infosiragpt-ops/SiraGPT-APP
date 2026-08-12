@@ -263,12 +263,16 @@ if (payload.op === 'list' || payload.op === 'cleanup') {
   const loaded = load(id);
   if (!terminal.has(loaded.meta.status)) {
     verifyControl(loaded.meta);
-    try { process.kill(-Number(loaded.meta.pid), 'SIGTERM'); } catch {
-      try { process.kill(Number(loaded.meta.pid), 'SIGTERM'); } catch {}
-    }
+    // Persist the control-plane intent before signalling. The supervisor can
+    // finish very quickly after SIGTERM and atomically write "stopped"; writing
+    // "stopping" afterwards would resurrect that terminal task. A later list
+    // would then see a dead PID and incorrectly downgrade it to "lost".
     loaded.meta.status = 'stopping';
     loaded.meta.updatedAt = new Date().toISOString();
     atomicWrite(loaded.files.meta, loaded.meta);
+    try { process.kill(-Number(loaded.meta.pid), 'SIGTERM'); } catch {
+      try { process.kill(Number(loaded.meta.pid), 'SIGTERM'); } catch {}
+    }
   }
   result = { task: loaded.meta };
 } else {

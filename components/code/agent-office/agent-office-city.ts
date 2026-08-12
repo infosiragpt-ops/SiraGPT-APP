@@ -52,9 +52,12 @@ export type EdgeDistrictResult = {
   beacon: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>
   vehicleMesh: THREE.InstancedMesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
   animateVehicles: (elapsedSeconds: number) => void
-  counts: EdgeDistrictCounts
+  /** Development/test telemetry; omitted from the production bundle. */
+  counts: EdgeDistrictCounts | null
   framing: EdgeDistrictFraming
 }
+
+const CITY_DIAGNOSTICS_ENABLED = process.env.NODE_ENV !== "production"
 
 export type AddEdgeDistrictOptions = {
   scene: THREE.Scene
@@ -737,7 +740,9 @@ export function addEdgeDistrict({
       height,
       color: palette[Math.floor(random() * palette.length)],
     }
-    tallestBuildingHeight = Math.max(tallestBuildingHeight, height)
+    if (CITY_DIAGNOSTICS_ENABLED) {
+      tallestBuildingHeight = Math.max(tallestBuildingHeight, height)
+    }
     secondaryBuildings.push(building)
     structureInstances.push({
       position: [x, groundY + height / 2, z],
@@ -753,7 +758,7 @@ export function addEdgeDistrict({
         scale: [width * (towerProfile === 0 ? 0.54 : 0.68), crownHeight, depth * 0.64],
         color: night ? 0x4a7183 : 0xc6dadd,
       })
-      architecturalCrownCount += 1
+      if (CITY_DIAGNOSTICS_ENABLED) architecturalCrownCount += 1
     }
     if (height > 20) {
       const setbackHeight = Math.min(4.8, height * (towerProfile === 2 ? 0.18 : 0.14))
@@ -773,8 +778,10 @@ export function addEdgeDistrict({
     }
     const signatureTower = index % 5 === 1
     if (signatureTower) {
-      signatureTowerCount += 1
-      architecturalCrownCount += 1
+      if (CITY_DIAGNOSTICS_ENABLED) {
+        signatureTowerCount += 1
+        architecturalCrownCount += 1
+      }
       const crownHeight = 4.4 + random() * 3.2
       const crownWidth = width * (0.42 + random() * 0.08)
       const crownDepth = depth * (0.42 + random() * 0.08)
@@ -821,7 +828,7 @@ export function addEdgeDistrict({
         scale: [width * 0.56, 0.08, depth * 0.44],
         color: fullNight ? 0x7de7f2 : timePhase === "dusk" ? 0xf2b786 : 0xc9edf2,
       })
-      architecturalCrownCount += 1
+      if (CITY_DIAGNOSTICS_ENABLED) architecturalCrownCount += 1
     }
     const facadePalette = night ? nightGlassColors : dayGlassColors
     const facadeColor = facadePalette[(index + towerProfile) % facadePalette.length]
@@ -877,7 +884,7 @@ export function addEdgeDistrict({
           color: night ? 0xffd98e : 0xf2fbff,
         },
       )
-      terraceAmenityCount += 3
+      if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 3
       architecturalGlowInstances.push({
         position: [x, padY + 0.14, z],
         scale: [width * 0.55, 0.04, depth * 0.55],
@@ -924,8 +931,10 @@ export function addEdgeDistrict({
           color: fullNight ? 0x66e6f2 : timePhase === "dusk" ? 0xf2bc8f : 0x8bcbd5,
           rotation: [0, yaw, 0],
         })
-        architecturalCrownCount += 1
-        terraceAmenityCount += 1
+        if (CITY_DIAGNOSTICS_ENABLED) {
+          architecturalCrownCount += 1
+          terraceAmenityCount += 1
+        }
         bridgesBuilt += 1
         break
       }
@@ -985,7 +994,7 @@ export function addEdgeDistrict({
       color: fullNight ? 0x72e5f0 : timePhase === "dusk" ? 0xf0b385 : 0xb9e6eb,
     },
   )
-  architecturalCrownCount += 1
+  if (CITY_DIAGNOSTICS_ENABLED) architecturalCrownCount += 1
 
   const structureMesh = createBoxInstances(
     structureInstances,
@@ -1324,7 +1333,7 @@ export function addEdgeDistrict({
       color: night ? 0x87979d : 0xe9eeeb,
     },
   )
-  terraceAmenityCount += 2
+  if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
   architecturalGlowInstances.push({
     position: [0, 0.58, receptionZ + 0.37],
     scale: [3.45, 0.08, 0.045],
@@ -1344,7 +1353,7 @@ export function addEdgeDistrict({
         color: night ? 0xbfc9cc : 0xf5f6f3,
       },
     )
-    terraceAmenityCount += 2
+    if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
 
     const planterX = side * Math.min(4.1, deckWidth * 0.13)
     propInstances.push({
@@ -1357,7 +1366,7 @@ export function addEdgeDistrict({
       scale: [0.42, 0.58, 0.42],
       color: night ? 0x2b6b53 : 0x32855e,
     })
-    terraceAmenityCount += 1
+    if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 1
   }
 
   const collaborationZ = totalDepth / 2 + 4.65
@@ -1367,7 +1376,7 @@ export function addEdgeDistrict({
     scale: [premiumDeckWidth, 0.1, 4.75],
     color: night ? 0x253c49 : 0x9db0b5,
   })
-  terraceAmenityCount += 1
+  if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 1
   propInstances.push(
     {
       position: [0, 0.82, collaborationZ],
@@ -1380,7 +1389,7 @@ export function addEdgeDistrict({
       color: night ? 0x62747e : 0x8b9ca3,
     },
   )
-  terraceAmenityCount += 2
+  if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
   for (const side of [-1, 1]) {
     for (const offset of [-1.18, 0, 1.18]) {
       propInstances.push({
@@ -1388,7 +1397,7 @@ export function addEdgeDistrict({
         scale: [0.72, 0.46, 0.68],
         color: night ? 0xd3d9dc : 0xf5f6f4,
       })
-      terraceAmenityCount += 1
+      if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 1
     }
   }
 
@@ -1418,7 +1427,7 @@ export function addEdgeDistrict({
       color: fullNight ? 0x78e3f0 : 0xb4e5ea,
     },
   )
-  terraceAmenityCount += 2
+  if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
 
   const loungeX = amenityOffset
   const loungeUpholstery = night ? 0xbfcbd0 : 0xf5f7f5
@@ -1436,7 +1445,7 @@ export function addEdgeDistrict({
         rotation: [side * 0.08, 0, 0],
       },
     )
-    terraceAmenityCount += 2
+    if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
   }
   propInstances.push(
     {
@@ -1450,7 +1459,7 @@ export function addEdgeDistrict({
       color: night ? 0x61747d : 0x80959d,
     },
   )
-  terraceAmenityCount += 2
+  if (CITY_DIAGNOSTICS_ENABLED) terraceAmenityCount += 2
 
   const pergolaWidth = Math.min(11, totalWidth * 0.42)
   for (const x of [-pergolaWidth / 2, pergolaWidth / 2]) {
@@ -1809,7 +1818,7 @@ export function addEdgeDistrict({
     beacon,
     vehicleMesh,
     animateVehicles,
-    counts: {
+    counts: CITY_DIAGNOSTICS_ENABLED ? {
       buildings: secondaryCount + 1,
       secondaryBuildings: secondaryCount,
       signatureTowers: signatureTowerCount,
@@ -1822,7 +1831,7 @@ export function addEdgeDistrict({
       vehicles: vehicleRoutes.length,
       lightFixtures: streetLightGlows.length,
       expectedDrawCalls: night ? 27 : 26,
-    },
+    } : null,
     framing: {
       target: new THREE.Vector3(
         0,

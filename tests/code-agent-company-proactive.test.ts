@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 
 import {
@@ -9,6 +10,8 @@ import {
   setProactiveCompanyEnabled,
   setProactiveCompanyObjective,
 } from "../lib/code-agent-company-proactive"
+
+const companyPanelSource = readFileSync("components/code/agent-company-panel.tsx", "utf8")
 
 describe("code agent company proactive", () => {
   it("exposes the full matrix-style fleet including CEO Office and all departments", () => {
@@ -65,5 +68,67 @@ describe("code agent company proactive", () => {
     const second = setProactiveCompanyEnabled(true, { workspaceId: "ws-stable" })
     assert.equal(second.startedAt, first.startedAt)
     setProactiveCompanyEnabled(false, { workspaceId: "ws-stable" })
+  })
+
+  it("does not re-enter the department bootstrap after the durable fleet is ready", () => {
+    assert.match(companyPanelSource, /const departmentSessionsReady = React\.useMemo/)
+    assert.match(companyPanelSource, /departmentSessionBootstrapRef\.current\.inFlight/)
+    assert.match(
+      companyPanelSource,
+      /return departmentSessionBootstrapRef\.current\.rootSessionId/,
+    )
+    assert.match(
+      companyPanelSource,
+      /if \(!proactiveOn \|\| departmentSessionsReady\) return\s+ensureDepartmentSessions\(\)/,
+    )
+    assert.match(companyPanelSource, /codeChatSessionMatchesDepartment\(existingSession, identity\)/)
+  })
+
+  it("uses authoritative project-wide cancellation and reports partial status honestly", () => {
+    const start = companyPanelSource.indexOf("const cancelCompanyExecution = React.useCallback")
+    const end = companyPanelSource.indexOf("const sessionForRun = React.useCallback", start)
+    assert.notEqual(start, -1)
+    assert.notEqual(end, -1)
+    const cancellation = companyPanelSource.slice(start, end)
+
+    assert.match(cancellation, /await codexApi\.cancelActiveRuns\(runtimeProjectId\)/)
+    assert.match(cancellation, /cancellation\?\.complete === true/)
+    assert.match(cancellation, /cancellation\?\.failedRunIds\.length/)
+    assert.match(cancellation, /await codexApi\.listRuns\(runtimeProjectId\)/)
+    assert.match(cancellation, /toast\.warning\(/)
+    assert.match(cancellation, /Cancelación parcial:/)
+    assert.doesNotMatch(cancellation, /codexApi\.cancelRun\(activeRun\.id\)/)
+    assert.doesNotMatch(cancellation, /cancelActiveCodexRunFamilies/)
+  })
+
+  it("reports a partial swarm resume honestly and exposes an explicit recovery retry", () => {
+    const start = companyPanelSource.indexOf("const startEnterpriseExecution = React.useCallback")
+    const end = companyPanelSource.indexOf("const pauseEnterpriseExecution = React.useCallback", start)
+    assert.notEqual(start, -1)
+    assert.notEqual(end, -1)
+    const resume = companyPanelSource.slice(start, end)
+
+    assert.match(resume, /const resume = await codexApi\.resumeSwarm\(projectId, swarmId\)/)
+    assert.match(resume, /await refreshCommandCenter\(projectId\)/)
+    assert.match(resume, /if \(!resume\.complete\)/)
+    assert.match(resume, /resume\.runRecovery\.failed/)
+    assert.match(resume, /toast\.warning\(/)
+    assert.match(resume, /Reanudación parcial:/)
+    assert.match(resume, /label: "Reintentar recuperación"/)
+    assert.match(resume, /void resumePersistedSwarm\(\)/)
+
+    const partialGuard = resume.indexOf("if (!resume.complete)")
+    const successToast = resume.indexOf("toast.success", partialGuard)
+    assert.ok(partialGuard >= 0 && successToast > partialGuard)
+  })
+
+  it("shares accessible per-run controls across full and compact surfaces", () => {
+    assert.match(companyPanelSource, /function CompanyRunActions\(/)
+    assert.match(companyPanelSource, /data-testid=\{`company-run-actions-\$\{run\.id\}`\}/)
+    assert.match(companyPanelSource, /layout="surface"/)
+    assert.match(companyPanelSource, /layout="compact"/)
+    assert.match(companyPanelSource, /aria-label=\{`Inspeccionar \$\{title\}`\}/)
+    assert.match(companyPanelSource, /aria-label=\{`Detener \$\{title\}`\}/)
+    assert.match(companyPanelSource, /aria-label=\{`Reintentar \$\{title\}`\}/)
   })
 })

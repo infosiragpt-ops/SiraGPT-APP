@@ -44,8 +44,10 @@ function externalActionPrisma(actions, {
   resourceDepartment = 'customer-success',
   companyDeletedAt = null,
   failCompletionUpdate = false,
+  poolBudgetUsd = null,
 } = {}) {
   let completionUpdateFailed = false;
+  const usageRows = [];
   const project = {
     id: 'project-1',
     userId: 'user-1',
@@ -69,6 +71,34 @@ function externalActionPrisma(actions, {
     },
   };
   return {
+    _usageRows: usageRows,
+    codexDepartmentPool: {
+      findUnique: async ({ where }) => ({
+        id: where.id || `pool-${where.projectId_departmentId.departmentId}`,
+        projectId: where.projectId_departmentId?.projectId || 'project-1',
+        departmentId: where.projectId_departmentId?.departmentId || 'sales',
+        size: 2,
+        enabled: true,
+        dailyBudgetUsd: poolBudgetUsd,
+      }),
+    },
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        if (usageRows.some((row) => row.idempotencyKey === data.idempotencyKey)) {
+          const error = new Error('unique');
+          error.code = 'P2002';
+          throw error;
+        }
+        const row = { id: `usage-${usageRows.length + 1}`, ...data };
+        usageRows.push(row);
+        return structuredClone(row);
+      },
+      findUnique: async ({ where }) => usageRows.find(
+        (row) => row.idempotencyKey === where.idempotencyKey,
+      ) || null,
+      findMany: async () => usageRows.map((row) => structuredClone(row)),
+    },
+    codexRunMetric: { findMany: async () => [] },
     codexProject: {
       findFirst: async ({ where }) => (
         where.id === project.id
@@ -210,6 +240,7 @@ test('concurrent lead preparation creates one durable action before one Gmail dr
     sourceUrl: 'https://alfa.example',
   });
   let drafts = 0;
+  let llmCalls = 0;
   const args = {
     prisma,
     project: { id: 'project-1', userId: 'user-1' },
@@ -222,9 +253,19 @@ test('concurrent lead preparation creates one durable action before one Gmail dr
       },
       readiness: { evidence: { gmailConnected: true } },
     },
-    chatComplete: async () => ({
-      content: '{"subject":"Propuesta para Alfa","body":"Hola, esta es una propuesta verificable."}',
-    }),
+    chatComplete: async () => {
+      llmCalls += 1;
+      return {
+        content: '{"subject":"Propuesta para Alfa","body":"Hola, esta es una propuesta verificable."}',
+        usage: {
+          tokensIn: 90,
+          tokensOut: 35,
+          provider: 'Anthropic',
+          model: 'claude-sonnet-4-6',
+          generationId: `sales-outreach-${llmCalls}`,
+        },
+      };
+    },
     gmailLoader: async () => ({
       client: {
         createDraft: async () => {
@@ -242,6 +283,44 @@ test('concurrent lead preparation creates one durable action before one Gmail dr
   assert.equal(drafts, 1);
   assert.equal(results.filter((result) => result.action === 'outreach_review').length, 1);
   assert.equal(results.filter((result) => result.action === 'outreach_already_prepared').length, 1);
+  assert.equal(prisma._usageRows.length, llmCalls);
+  assert.equal(prisma._usageRows.every((row) => row.source === 'sales_outreach'), true);
+  assert.equal(prisma._usageRows.every((row) => row.departmentPoolId === 'pool-sales'), true);
+});
+
+test('lead outreach pool budget zero blocks the LLM provider before spend', async () => {
+  const actions = [];
+  const prisma = externalActionPrisma(actions, {
+    resourceDepartment: 'sales',
+    poolBudgetUsd: 0,
+  });
+  prisma.codexCompanyLead.findFirst = async () => ({
+    id: 'lead-budget-zero',
+    projectId: 'project-1',
+    userId: 'user-1',
+    companyName: 'Empresa Alfa',
+    email: 'ventas@alfa.example',
+    status: 'qualified',
+  });
+  let llmCalls = 0;
+  await assert.rejects(
+    sales.prepareLeadOutreach({
+      prisma,
+      project: { id: 'project-1', userId: 'user-1' },
+      leadId: 'lead-budget-zero',
+      companyContext: {
+        profile: { autonomy: { leadOutreach: 'review' } },
+        readiness: { evidence: { gmailConnected: true } },
+      },
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"subject":"x","body":"y"}' };
+      },
+    }),
+    (error) => error?.code === 'department_pool_daily_budget_exceeded'
+      && error?.status === 429,
+  );
+  assert.equal(llmCalls, 0);
 });
 
 test('resource revoked after approval prevents the Gmail effect', async () => {

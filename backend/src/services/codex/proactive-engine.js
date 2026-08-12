@@ -41,6 +41,7 @@ const companyResources = require('./company-resources');
 const businessAnalyzer = require('./business-analyzer');
 const proactiveLease = require('./proactive-lease');
 const projectBudget = require('./project-budget');
+const usageLedger = require('./usage-ledger');
 const { mutateProjectBrief } = require('./project-brief-store');
 
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
@@ -48,6 +49,7 @@ const DEPARTMENTS = companyDepartments.BUILT_IN_DEPARTMENTS;
 const DIRECT_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'marketing']);
 /** Departments that never create CodexRuns — safe while a code build holds the lock. */
 const SIDE_BY_SIDE_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'marketing']);
+const ACTIVE_DURABLE_SWARM_STATUSES = Object.freeze(['queued', 'running', 'paused', 'cancelling']);
 
 function pickSideBySideDepartment(departments, startIndex = 0) {
   const rows = Array.isArray(departments) ? departments : [];
@@ -149,6 +151,7 @@ async function ensureFleetDepartmentPools({ prisma, project }) {
         departmentId: department.id,
         size,
         enabled: true,
+        preserveExisting: true,
       });
       if (pool) created.push(pool);
     } catch (err) {
@@ -348,6 +351,7 @@ async function proposeTask({
   mission = null,
   qaCycle = false,
   chatComplete,
+  usageContext = null,
 }) {
   const assignedResources = resourcesAssignedToDepartment(project, department.id);
   const openFailures = progressLedger.readOpenFailures(ledger);
@@ -419,7 +423,21 @@ async function proposeTask({
     temperature: 0.5,
     maxTokens: department.id === 'ceo-office' ? 1_000 : 450,
   };
-  let out = await chatComplete({ messages, ...completionOptions });
+  const completeProposal = async (attempt) => {
+    const callId = usageLedger.createUsageCallId();
+    const completion = await chatComplete({ messages, ...completionOptions });
+    if (usageContext) {
+      await usageLedger.recordCompletionUsage({
+        ...usageContext,
+        source: 'proactive_proposal',
+        sourceId: `${usageContext.sourceId || `${project.id}:${department.id}`}:${attempt}`,
+        completion,
+        callId,
+      });
+    }
+    return completion;
+  };
+  let out = await completeProposal('initial');
   let parsed = extractJson(out && out.content);
   let repeatedFailure = parsed?.title
     ? progressLedger.findOpenFailure(ledger, parsed.title)
@@ -436,7 +454,7 @@ async function proposeTask({
         'Propón una tarea diferente. Si debes perseguir el mismo objetivo, cambia explícitamente el enfoque usando la evidencia del fallo y asigna un título que describa la remediación concreta.',
       ].join(' '),
     });
-    out = await chatComplete({ messages, ...completionOptions });
+    out = await completeProposal('retry');
     parsed = extractJson(out && out.content);
     repeatedFailure = parsed?.title
       ? progressLedger.findOpenFailure(ledger, parsed.title)
@@ -478,6 +496,27 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
   const state = readProactiveState(project);
   if (!state.enabled) return { action: 'disabled' };
   const runService = deps.runService || require('./run-service');
+
+  // A durable swarm owns company-wide scheduling. Even if a user or stale
+  // client re-enables the legacy ticker while that swarm is active, do not
+  // start a second autonomous execution lane for the same project.
+  if (typeof prisma?.codexSwarm?.findFirst === 'function') {
+    const activeSwarm = await prisma.codexSwarm.findFirst({
+      where: {
+        projectId: project.id,
+        status: { in: ACTIVE_DURABLE_SWARM_STATUSES },
+        cancelRequestedAt: null,
+      },
+      select: { id: true, status: true },
+    });
+    if (activeSwarm) {
+      return {
+        action: 'skipped_durable_swarm',
+        swarmId: activeSwarm.id,
+        swarmStatus: activeSwarm.status,
+      };
+    }
+  }
 
   const today = dayKey(now());
   const runsToday = state.dayKey === today ? state.runsToday : 0;
@@ -571,6 +610,11 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       mode: 'build',
       prompt: active.prompt,
       planRunId: active.id,
+      // Preserve the exact operational lineage selected by the proactive
+      // planner. The build must be billed to the same department/task as its
+      // plan instead of becoming an unattributed company-level run.
+      departmentPoolId: active.departmentPoolId || activePoolBudget.pool?.id || deps.departmentPoolId || null,
+      swarmTaskId: active.swarmTaskId || deps.swarmTaskId || null,
       // Durable multi-hour continuation even if the browser tab closes.
       autoExecute: true,
       db: prisma,
@@ -760,6 +804,8 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
         .filter(Boolean),
       chatComplete,
       now,
+      departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
+      env,
     });
     const outcome = ['scheduled_auto', 'drafted_review', 'already_generated'].includes(result.action)
       ? 'passed'
@@ -816,6 +862,8 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       chatComplete,
       webSearch: deps.webSearch,
       now,
+      departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
+      env,
     });
     const passed = ['leads_saved', 'no_qualified_results', 'no_results'].includes(result.action);
     await finishOperationalCycle({
@@ -865,6 +913,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
           gmailLoader: deps.gmailLoader,
           env,
           now,
+          departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
         });
       } catch (error) {
         inboxResult = {
@@ -893,6 +942,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
           chatComplete,
           env,
           now,
+          departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
         });
       } catch (error) {
         socialResult = {
@@ -971,6 +1021,13 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       mission: selectedMission,
       qaCycle,
       chatComplete,
+      usageContext: {
+        prisma,
+        projectId: project.id,
+        departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
+        sourceId: `${today}:${department.id}:cycle-${runsToday + 1}`,
+        env,
+      },
     });
   } catch (err) {
     await writeProactiveState({ prisma, project, patch: { lastCycleAt: now().toISOString(), lastError: String(err?.message || err).slice(0, 300) } });
@@ -1017,6 +1074,11 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     projectId: project.id,
     mode: 'plan',
     prompt,
+    // Department pools are the budget/accounting source of truth. A direct
+    // proactive cycle has no swarm task, while callers executing the cycle as
+    // part of a durable swarm can provide its validated task id through deps.
+    departmentPoolId: deps.departmentPoolId || poolBudget.pool?.id || null,
+    swarmTaskId: deps.swarmTaskId || null,
     // OpenClaw-style durable autonomy: plan auto-continues into build.
     autoExecute: true,
     db: prisma,

@@ -80,6 +80,21 @@ const EVIDENCE_LABELS: Record<NonNullable<AgentOfficeWorker["evidenceReview"]>, 
   blocked: "Bloqueada",
 }
 
+const OFFICE_TIME_MODE_STORAGE_KEY = "siragpt:agent-office:time-mode"
+
+function initialOfficeTimeMode(): OfficeTimeMode {
+  if (typeof window === "undefined") return "night"
+  try {
+    const stored = window.localStorage.getItem(OFFICE_TIME_MODE_STORAGE_KEY)
+    if (stored === "auto" || stored === "dawn" || stored === "day" || stored === "dusk" || stored === "night") {
+      return stored
+    }
+  } catch {
+    // Storage may be unavailable in hardened/private browser contexts.
+  }
+  return "night"
+}
+
 function money(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—"
   return `$${value.toFixed(value >= 10 ? 2 : 3)}`
@@ -128,7 +143,7 @@ export function AgentOfficeOverlay({
     type: "reset" | "zoom-in" | "zoom-out"
     nonce: number
   }>({ type: "reset", nonce: 0 })
-  const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>("auto")
+  const [timeMode, setTimeMode] = React.useState<OfficeTimeMode>(initialOfficeTimeMode)
   const [localClock, setLocalClock] = React.useState(() => new Date())
   const dialogRef = React.useRef<HTMLDivElement>(null)
   const closeButtonRef = React.useRef<HTMLButtonElement>(null)
@@ -149,6 +164,14 @@ export function AgentOfficeOverlay({
   )
 
   React.useEffect(() => setMounted(true), [])
+
+  React.useEffect(() => {
+    try {
+      window.localStorage.setItem(OFFICE_TIME_MODE_STORAGE_KEY, timeMode)
+    } catch {
+      // The selected environment still works for this session without storage.
+    }
+  }, [timeMode])
 
   React.useEffect(() => {
     onCloseRef.current = onClose
@@ -305,25 +328,25 @@ export function AgentOfficeOverlay({
         }}
       />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-16 items-center border-b border-white/10 bg-slate-950/95 px-3 shadow-2xl backdrop-blur-2xl sm:px-5">
-        <div className="pointer-events-auto flex min-w-0 items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-slate-800 to-slate-900 text-sky-300 shadow-lg">
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-30 flex h-16 items-center border-b border-white/10 bg-slate-950/95 px-2 shadow-2xl backdrop-blur-2xl sm:px-5">
+        <div className="pointer-events-auto flex min-w-0 items-center gap-2 sm:gap-3">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-sky-400/25 bg-gradient-to-br from-slate-800 to-slate-900 text-sky-300 shadow-lg sm:h-11 sm:w-11">
             <Building2 className="h-5 w-5" />
           </span>
-          <span className="min-w-0">
+          <span className="hidden min-w-0 sm:block">
             <span id="agent-office-title" className="block truncate text-sm font-semibold sm:text-base">Oficina de agentes</span>
-            <span className="block max-w-44 truncate text-[11px] text-slate-400 sm:max-w-[420px]">
+            <span className="block max-w-24 truncate text-[10px] text-slate-400 sm:max-w-[420px] sm:text-[11px]">
               {companyName} · {healthLabel} · {model.departments.length} departamentos · {logicalAgentCount} puestos
             </span>
           </span>
         </div>
 
-        <div className="pointer-events-auto ml-auto flex items-center gap-1 rounded-xl border border-white/10 bg-slate-800/90 p-1">
+        <div className="pointer-events-auto ml-auto flex shrink-0 items-center gap-0.5 rounded-xl border border-white/10 bg-slate-800/90 p-0.5 sm:gap-1 sm:p-1">
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
+            className="h-11 w-11 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white"
             onClick={() => setTimeMode((current) => nextOfficeTimeMode(current))}
             aria-label={`Ambiente ${timeLabel}. Cambiar ciclo de luz`}
             title={`Ambiente ${timeLabel}`}
@@ -335,7 +358,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
+            className="h-11 w-11 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white"
             onClick={sound.toggle}
             aria-label={sound.enabled ? "Desactivar sonido de la oficina" : "Activar sonido de la oficina"}
             data-testid="agent-office-sound-toggle"
@@ -346,7 +369,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="hidden h-10 w-10 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white sm:inline-flex"
+            className="h-11 w-11 rounded-lg text-slate-300 hover:bg-white/10 hover:text-white"
             onClick={() => setPaused((current) => !current)}
             aria-label={paused ? "Reanudar oficina" : "Pausar oficina"}
           >
@@ -357,7 +380,7 @@ export function AgentOfficeOverlay({
             type="button"
             variant="ghost"
             size="icon"
-            className="h-10 w-10 rounded-lg text-slate-200 hover:bg-white/10 hover:text-white"
+            className="h-11 w-11 rounded-lg text-slate-200 hover:bg-white/10 hover:text-white"
             onClick={onClose}
             aria-label="Cerrar oficina"
           >

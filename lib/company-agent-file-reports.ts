@@ -320,7 +320,7 @@ export function buildCompanyAgentFileArtifacts({
       agents,
       `${file.path} ${department?.name || ""}`,
       department?.id || null,
-    ) || agents.find((row) => row.departmentId === "product-engineering") || agents[0]
+    )
     return {
       id: `file:${file.path}`,
       name: file.path.split("/").pop() || file.path,
@@ -342,12 +342,13 @@ export function buildCompanyAgentFileArtifacts({
       (turn) => turn.role === "assistant" && !turn.streaming && turn.content.trim(),
     )
     if (!result) return []
-    const department = matchDepartment(`${session.title} ${result.agentLabel || ""}`, departments)
+    const department = departments.find((candidate) => candidate.id === session.departmentId)
+      || matchDepartment(`${session.title} ${result.agentLabel || ""}`, departments)
     const agent = pickAgentForHaystack(
       agents,
       `${session.id} ${session.title} ${result.agentLabel || ""}`,
       department?.id || null,
-    ) || agents[0]
+    )
     const safeTitle = session.title
       .replace(/[^\p{L}\p{N}\s._-]+/gu, "")
       .trim()
@@ -356,13 +357,13 @@ export function buildCompanyAgentFileArtifacts({
     return [{
       id: `report:session:${session.id}`,
       name: `${safeTitle}.md`,
-      path: `Agentes/${agent?.name || "CEO Office"}/Memorias/${safeTitle}.md`,
+      path: `Agentes/${agent?.name || "Espacio de trabajo"}/Memorias/${safeTitle}.md`,
       content: result.content,
       updatedAt: session.updatedAt,
-      departmentId: agent?.departmentId || department?.id || "ceo-office",
-      departmentName: agent?.departmentName || department?.name || "CEO Office",
-      agentId: agent?.id || "ceo-office",
-      agentName: agent?.name || "CEO Office",
+      departmentId: agent?.departmentId || department?.id || "workspace",
+      departmentName: agent?.departmentName || department?.name || "Espacio de trabajo",
+      agentId: agent?.id || "workspace",
+      agentName: agent?.name || "Espacio de trabajo",
       kind: "report" as const,
       extension: "md",
       source: "session" as const,
@@ -375,7 +376,7 @@ export function buildCompanyAgentFileArtifacts({
       agents,
       `${mission.runId || ""} ${mission.author} ${mission.department} ${mission.missionTitle}`,
       department?.id || null,
-    ) || agents[0]
+    )
     const title = safeSlug(mission.missionTitle, "mision")
     const content = [
       `# ${mission.missionTitle}`,
@@ -401,13 +402,13 @@ export function buildCompanyAgentFileArtifacts({
     return [{
       id: `report:mission:${mission.id}`,
       name: `${title}.md`,
-      path: `Agentes/${agent?.name || mission.author}/Misiones/${title}.md`,
+      path: `Agentes/${agent?.name || "Espacio de trabajo"}/Misiones/${title}.md`,
       content,
       updatedAt: Date.parse(mission.updatedAt || mission.createdAt) || Date.now(),
-      departmentId: agent?.departmentId || department?.id || "ceo-office",
-      departmentName: agent?.departmentName || department?.name || mission.department || "CEO Office",
-      agentId: agent?.id || "ceo-office",
-      agentName: agent?.name || mission.author || "CEO Office",
+      departmentId: agent?.departmentId || department?.id || "workspace",
+      departmentName: agent?.departmentName || department?.name || "Espacio de trabajo",
+      agentId: agent?.id || "workspace",
+      agentName: agent?.name || "Espacio de trabajo",
       kind: "report" as const,
       extension: "md",
       source: "mission" as const,
@@ -471,7 +472,8 @@ export function buildCompanyAgentFileArtifacts({
   }
   const ownedSessionsByAgent = new Map<string, CodeChatSession[]>()
   for (const session of sessions) {
-    const department = matchDepartment(session.title, departments)
+    const department = departments.find((candidate) => candidate.id === session.departmentId)
+      || matchDepartment(session.title, departments)
     const agent = pickAgentForHaystack(
       agents,
       `${session.id} ${session.title}`,

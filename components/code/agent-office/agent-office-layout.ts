@@ -102,15 +102,18 @@ function layoutDimensions(
 
   const baseZoneWidth = count > 48 ? 8.2 : count > 24 ? 9.2 : 10.4
   const baseZoneDepth = count > 48 ? 6 : count > 24 ? 6.8 : 7.6
-  const largestRoster = departments.reduce(
-    (largest, department) => Math.max(largest, department.workerCount),
+  const largestVisualRoster = departments.reduce(
+    (largest, department) => Math.max(
+      largest,
+      Math.min(64, Math.max(department.workerCount, department.logicalAgentCount)),
+    ),
     0,
   )
   const workerColumns = Math.min(
     12,
-    Math.max(4, Math.ceil(Math.sqrt(Math.max(1, largestRoster) * 1.1))),
+    Math.max(4, Math.ceil(Math.sqrt(Math.max(1, largestVisualRoster) * 1.1))),
   )
-  const workerRows = Math.max(1, Math.ceil(largestRoster / workerColumns))
+  const workerRows = Math.max(1, Math.ceil(largestVisualRoster / workerColumns))
   // A detailed desk is 1.95 × 0.9 and its worker has a forgiving 1.04-wide
   // hit capsule. Keep at least 1.9 world units between seats so every real
   // worker stays visually distinct and reliably clickable.

@@ -38,6 +38,7 @@ const {
 const autonomousRunPolicy = require('./autonomous-run-policy');
 const usageLedger = require('./usage-ledger');
 const openclawCapabilityKernel = require('../openclaw-capability-kernel');
+const { inspectSwarmRunState } = require('./swarm-run-state');
 
 const DEFAULT_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
@@ -320,6 +321,36 @@ async function processCodexRunJob({
   if (!queuedRun) return { status: 'not_found' };
   // Idempotency: only a freshly-queued run should be processed.
   if (queuedRun.status !== 'queued') return { status: queuedRun.status, skipped: true };
+
+  // A job can survive in Redis while its parent swarm is paused, including an
+  // old `active` record abandoned by a backend restart. Leave the durable run
+  // queued so the explicit swarm resume can publish one fresh job. This check
+  // happens before the atomic claim; work already claimed before the pause is
+  // still allowed to finish its bounded operation.
+  const queuedSwarmState = await inspectSwarmRunState({ prisma, run: queuedRun });
+  if (queuedSwarmState.deferred) {
+    return {
+      status: 'queued',
+      skipped: true,
+      deferred: true,
+      reason: queuedSwarmState.reason,
+    };
+  }
+  // The swarm is the durable cancellation/terminal authority for every linked
+  // run. Fail closed before the atomic claim when that authority is cancelled,
+  // terminal, missing, invalid, or temporarily unreadable. In particular,
+  // external adapters do not run the native loop's later swarm guard, so
+  // allowing them past this boundary would execute work after cancellation.
+  // The queued reconciler owns durable cancellation/terminal transitions; a
+  // store/query failure deliberately leaves the row untouched for a safe retry.
+  if (!queuedSwarmState.executable) {
+    return {
+      status: 'queued',
+      skipped: true,
+      blocked: true,
+      reason: queuedSwarmState.reason,
+    };
+  }
 
   const startedAt = new Date(nowIso(clock));
   const claim = await prisma.codexRun.updateMany({

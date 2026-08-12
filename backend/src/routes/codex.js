@@ -38,6 +38,7 @@ const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
+const swarmLifecycle = require('../services/codex/swarm-lifecycle-coordinator');
 const checkpointService = require('../services/codex/checkpoint-service');
 const {
   CodexSessionError,
@@ -1516,48 +1517,39 @@ router.post(
         Math.min(32, maxConcurrency),
       );
 
-      // Stop the legacy ticker before installing the durable plan. This avoids
-      // a race with the durable fleet while preserving its settings.
-      await require('../services/codex/proactive-engine').setProactive({
-        prisma: codexDb,
-        projectId: project.id,
-        userId: req.user.id,
-        enabled: false,
-      });
-
       const { createFleetSwarm } = require('../services/codex/fleet-orchestrator');
-      const fleet = await createFleetSwarm({
+      const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
+      const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
+      const { fleet } = await swarmLifecycle.launchFleetSafely({
         prisma: codexDb,
-        userId: req.user.id,
         project,
-        objective,
-        companyPlan: initial.plan,
-        explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
-        planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
-        // Full logical capacity (up to 10k). Research shards run in parallel;
-        // writers remain isolation-capped via maxConcurrentWriters / runCap.
-        logicalTasks: logicalAgents,
-        maxConcurrency,
-        maxConcurrentWriters,
-        qaEvery: body.qaEvery,
-        model: body.model ? String(body.model).slice(0, 120) : null,
-        tier: body.tier ? String(body.tier).slice(0, 80) : null,
+        userId: req.user.id,
+        createFleet: () => createFleetSwarm({
+          prisma: codexDb,
+          userId: req.user.id,
+          project,
+          objective,
+          companyPlan: initial.plan,
+          explicitTasks: Array.isArray(body.tasks) ? body.tasks : null,
+          planner: (args) => require('../services/codex/llm-provider').chatComplete(args),
+          // Full logical capacity (up to 10k). Research shards run in parallel;
+          // writers remain isolation-capped via maxConcurrentWriters / runCap.
+          logicalTasks: logicalAgents,
+          maxConcurrency,
+          maxConcurrentWriters,
+          qaEvery: body.qaEvery,
+          model: body.model ? String(body.model).slice(0, 120) : null,
+          tier: body.tier ? String(body.tier).slice(0, 80) : null,
+          env: process.env,
+        }),
+        enqueueSwarm: ({ swarmId }) => require('../services/codex/swarm-runner')
+          .enqueueSwarm({ swarmId }),
+        cancelSwarm: (args) => orchestrator.cancelSwarm(args),
+        // Re-check under the PROACTIVO lease. The first ownership/run gate can
+        // become stale while an LLM planner prepares a large durable fleet.
+        hasActiveRun: () => runService.hasActiveRun({ projectId: project.id, db: codexDb }),
         env: process.env,
       });
-      const swarm = fleet.swarm;
-      try {
-        await require('../services/codex/swarm-runner').enqueueSwarm({
-          swarmId: swarm.id,
-        });
-      } catch (queueError) {
-        const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
-        const orchestrator = new CodexSwarmOrchestrator({ prisma: codexDb });
-        await orchestrator.cancelSwarm({
-          swarmId: swarm.id,
-          reason: 'swarm_queue_unavailable',
-        }).catch(() => {});
-        throw queueError;
-      }
       const state = await commandCenterForProject(project);
       return res.status(202).json({
         swarm: state.commandCenter.swarm,
@@ -1662,10 +1654,17 @@ router.post(
       const { CodexSwarmOrchestrator } = require('../services/codex/swarm-orchestrator');
       const result = await new CodexSwarmOrchestrator({ prisma: codexDb })
         .resumeSwarm({ swarmId: swarm.id });
+      const runRecovery = await require('../services/codex/boot-recovery')
+        .resumeDeferredSwarmRunsReliably({ prisma: codexDb, swarmId: swarm.id });
       await require('../services/codex/swarm-runner').enqueueSwarm({
         swarmId: swarm.id,
       });
-      return res.json({ swarm: result.swarm, progress: result.progress });
+      return res.status(runRecovery.complete ? 200 : 207).json({
+        complete: runRecovery.complete,
+        swarm: result.swarm,
+        progress: result.progress,
+        runRecovery,
+      });
     } catch (error) {
       return sendSwarmError(res, error);
     }
@@ -1687,34 +1686,58 @@ router.post(
         reason: String(req.body?.reason || 'cancelled_by_user').slice(0, 2_000),
       });
 
-      const integrators = await codexDb.codexSwarmTask.findMany({
-        where: { swarmId: swarm.id, role: 'integrator' },
-        select: { result: true },
+      // Every writer can own a Codex plan/build family. Cancelling only the
+      // integrator left sibling writers alive (and recoverable after restart).
+      // Collect lineage from every task and use the atomic family cancellation
+      // service so a concurrent continuation cannot escape the sweep.
+      const linkedTasks = await codexDb.codexSwarmTask.findMany({
+        where: { swarmId: swarm.id },
+        select: { id: true, result: true },
       });
-      const planRunIds = integrators
-        .map((task) => task.result?.planRunId)
-        .filter(Boolean);
-      const linkedRuns = planRunIds.length
+      const linkedTaskIds = linkedTasks.map((task) => String(task.id)).filter(Boolean);
+      // A writer persists CodexRun before it can publish result.planRunId back
+      // to the swarm task. Query the durable swarmTaskId lineage as well so a
+      // cancel racing that small window cannot report requested:0 / success
+      // while the newly-created run family remains active.
+      const linkedRuns = linkedTaskIds.length
         ? await codexDb.codexRun.findMany({
           where: {
             userId: req.user.id,
-            OR: [
-              { id: { in: planRunIds } },
-              { planRunId: { in: planRunIds } },
-            ],
+            swarmTaskId: { in: linkedTaskIds },
             status: { in: runService.ACTIVE_STATUSES },
           },
-          select: { id: true },
+          select: { id: true, planRunId: true },
         })
         : [];
-      await Promise.allSettled(linkedRuns.map((run) => (
-        runService.cancelRun({
+      const planRunIds = [...new Set([
+        ...linkedTasks
+          .map((task) => task.result?.planRunId)
+          .filter(Boolean)
+          .map(String),
+        ...linkedRuns.map((run) => String(run.planRunId || run.id)).filter(Boolean),
+      ])];
+      const runFamilyCancellation = await swarmLifecycle.cancelRunFamiliesReliably({
+        runIds: planRunIds,
+        maxAttempts: 2,
+        cancelRunFamily: (runId) => runService.cancelRunFamily({
           userId: req.user.id,
-          runId: run.id,
+          runId,
           db: codexDb,
-        })
-      )));
-      return res.json({ swarm: result.swarm, progress: result.progress });
+        }),
+      });
+      const payload = {
+        swarm: result.swarm,
+        progress: result.progress,
+        runFamilyCancellation,
+      };
+      if (!runFamilyCancellation.complete) {
+        return res.status(503).json({
+          error: 'codex_swarm_cancel_incomplete',
+          message: 'El enjambre quedó cancelado, pero algunas familias de ejecución siguen activas. Reintenta la cancelación.',
+          ...payload,
+        });
+      }
+      return res.json(payload);
     } catch (error) {
       return sendSwarmError(res, error);
     }
@@ -2087,6 +2110,16 @@ router.post(
     body('reasoningEffort').optional({ nullable: true }).isString().isIn(['low', 'medium', 'high', 'max']),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
     body('autoExecute').optional().isBoolean(),
+    body('departmentPoolId')
+      .optional({ nullable: true })
+      .isString()
+      .bail()
+      .trim()
+      .notEmpty()
+      .isLength({ max: 200 }),
+    body('swarmTaskId')
+      .custom((_value, { req }) => !Object.prototype.hasOwnProperty.call(req.body || {}, 'swarmTaskId'))
+      .withMessage('swarmTaskId is internal and cannot be supplied by clients'),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -2102,8 +2135,66 @@ router.post(
         reasoningEffort: req.body.reasoningEffort ?? null,
         planRunId: req.body.planRunId ?? null,
         autoExecute: req.body.autoExecute === true,
+        departmentPoolId: req.body.departmentPoolId ?? null,
       });
       return res.status(201).json({ run });
+    } catch (err) {
+      return mapRunError(err, res);
+    }
+  },
+);
+
+router.post(
+  '/projects/:id/runs/cancel-active',
+  authenticateToken,
+  requireCodexAgentAccess,
+  async (req, res) => {
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      // This is intentionally an authoritative database query without the
+      // paginated listRuns() limit. An older active run must remain stoppable
+      // even when 50+ newer terminal runs push it out of the UI page.
+      const activeRuns = await codexDb.codexRun.findMany({
+        where: {
+          projectId: project.id,
+          userId: req.user.id,
+          status: { in: runService.ACTIVE_STATUSES },
+        },
+        select: { id: true, planRunId: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      const requestedRunIds = [...new Set(
+        activeRuns.map((run) => String(run.planRunId || run.id)).filter(Boolean),
+      )];
+      const cancellation = await swarmLifecycle.cancelRunFamiliesReliably({
+        runIds: requestedRunIds,
+        maxAttempts: 2,
+        cancelRunFamily: (runId) => runService.cancelRunFamily({
+          userId: req.user.id,
+          runId,
+          db: codexDb,
+        }),
+      });
+      // Public contract is family-root based: requested/cancelled/failed use
+      // the same identity domain even when one family contains plan + build.
+      const cancelledRunIds = cancellation.results
+        .filter((result) => result.status === 'cancelled')
+        .map((result) => result.runId);
+      const failedRunIds = cancellation.results
+        .filter((result) => result.status === 'failed')
+        .map((result) => result.runId);
+      const runsById = new Map();
+      for (const run of cancellation.results.flatMap((result) => result.runs || [])) {
+        if (run?.id) runsById.set(String(run.id), run);
+      }
+      return res.status(cancellation.complete ? 200 : 207).json({
+        complete: cancellation.complete,
+        requestedRunIds,
+        cancelledRunIds,
+        failedRunIds,
+        runs: [...runsById.values()],
+      });
     } catch (err) {
       return mapRunError(err, res);
     }

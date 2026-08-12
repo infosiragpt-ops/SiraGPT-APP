@@ -66,9 +66,10 @@ test('queue metric refresh scheduler starts and stops with the server lifecycle'
   );
 
   const schedulerStop = indexSource.match(
-    /shutdownRegistry\.register\(\s*'scheduler_stop',\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
+    /shutdownRegistry\.register\(\s*'scheduler_stop',\s*(?:async\s*)?\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
   );
   assert.ok(schedulerStop, 'scheduler_stop shutdown phase must remain registered');
+  assert.match(schedulerStop[1], /stopQueuedRunReconciler\(\)/);
   assert.match(schedulerStop[1], /defaultQueueHealthProbe\.stop\(\)/);
 });
 
@@ -118,7 +119,7 @@ test('production shutdown stops the advisory pool autoscaler', () => {
 
 test('first shutdown phase stops both schedulers before other teardown', () => {
   const hook = indexSource.match(
-    /shutdownRegistry\.register\(\s*'scheduler_stop',\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
+    /shutdownRegistry\.register\(\s*'scheduler_stop',\s*(?:async\s*)?\(\)\s*=>\s*\{([\s\S]*?)\},\s*5000,?\s*\);/,
   );
   assert.ok(hook, 'scheduler_stop shutdown phase must remain registered');
   assert.match(hook[1], /internalHealthSystem\.stopScheduler\(\)/);

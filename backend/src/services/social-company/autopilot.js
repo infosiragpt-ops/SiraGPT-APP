@@ -2,6 +2,8 @@
 
 const { writeAuditLog } = require('../../utils/audit-log');
 const companyResources = require('../codex/company-resources');
+const departmentPools = require('../codex/department-pools');
+const usageLedger = require('../codex/usage-ledger');
 const { PLATFORM_IDS } = require('./platforms');
 const {
   POLICY_PREFIX,
@@ -72,7 +74,9 @@ async function generateContent({
   project = null,
   ledger = [],
   objectives = [],
+  usageContext = null,
 }) {
+  const callId = usageLedger.createUsageCallId();
   const result = await chatComplete({
     messages: [
       {
@@ -106,6 +110,14 @@ async function generateContent({
     temperature: 0.4,
     maxTokens: 500,
   });
+  if (usageContext) {
+    await usageLedger.recordCompletionUsage({
+      ...usageContext,
+      source: 'social_autopilot',
+      completion: result,
+      callId,
+    });
+  }
   const parsed = extractJson(result?.content);
   if (!parsed || typeof parsed.caption !== 'string' || !parsed.caption.trim()) return null;
   const maxCaption = platforms.includes('x') ? 260 : 900;
@@ -130,6 +142,8 @@ async function generateDepartmentPost({
   allowedPlatforms = null,
   chatComplete: explicitChatComplete,
   now = () => new Date(),
+  departmentPoolId = null,
+  env = process.env,
 } = {}) {
   if (!prisma || !project?.userId || !project?.id) {
     return { action: 'skipped_invalid_project' };
@@ -182,6 +196,15 @@ async function generateDepartmentPost({
 
   const chatComplete = explicitChatComplete
     || ((args) => require('../codex/llm-provider').chatComplete(args));
+  const budget = await departmentPools.requireOperationBudget({
+    prisma,
+    project: activeProject,
+    departmentId: companyResources.MARKETING_DEPARTMENT_ID,
+    departmentPoolId,
+    env,
+    now: now(),
+  });
+  const usagePool = budget.pool;
   const content = await generateContent({
     policy,
     platforms,
@@ -189,6 +212,13 @@ async function generateDepartmentPost({
     project: activeProject,
     ledger,
     objectives,
+    usageContext: {
+      prisma,
+      projectId: activeProject.id,
+      departmentPoolId: usagePool?.id || null,
+      sourceId: batchId,
+      env,
+    },
   });
   if (!content) return { action: 'skipped_invalid_content', batchId };
 
@@ -258,6 +288,7 @@ async function runAutopilot({
   now = () => new Date(),
   logger = console,
   maxUsers = 25,
+  env = process.env,
 } = {}) {
   // eslint-disable-next-line global-require
   const prisma = explicitPrisma || require('../../config/database');
@@ -356,8 +387,30 @@ async function runAutopilot({
       // eslint-disable-next-line global-require
       const chatComplete = explicitChatComplete
         || ((args) => require('../codex/llm-provider').chatComplete(args));
+      // Enforce both project and Marketing-pool budgets before spending tokens.
       // eslint-disable-next-line no-await-in-loop
-      const content = await generateContent({ policy, platforms, chatComplete });
+      const budget = await departmentPools.requireOperationBudget({
+        prisma,
+        project,
+        departmentId: companyResources.MARKETING_DEPARTMENT_ID,
+        env,
+        now: now(),
+      });
+      const usagePool = budget.pool;
+      // eslint-disable-next-line no-await-in-loop
+      const content = await generateContent({
+        policy,
+        platforms,
+        chatComplete,
+        project,
+        usageContext: {
+          prisma,
+          projectId: project.id,
+          departmentPoolId: usagePool?.id || null,
+          sourceId: batchId,
+          env,
+        },
+      });
       if (!content) {
         results.push({ action: 'skipped_invalid_content', userId, workspaceId });
         continue;

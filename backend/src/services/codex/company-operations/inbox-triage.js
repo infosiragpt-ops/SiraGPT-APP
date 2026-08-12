@@ -3,6 +3,8 @@
 const { loadGmailClientForUser } = require('../../gmail-user-client');
 const externalActions = require('./external-actions');
 const resourceAccess = require('./company-resource-access');
+const departmentPools = require('../department-pools');
+const usageLedger = require('../usage-ledger');
 
 const CATEGORIES = new Set(['lead', 'support', 'billing', 'operations', 'other']);
 const URGENCIES = new Set(['low', 'normal', 'high', 'critical']);
@@ -34,7 +36,8 @@ function parseReceivedAt(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp) : null;
 }
 
-async function classifyEmails({ emails, profile, chatComplete }) {
+async function classifyEmails({ emails, profile, chatComplete, usageContext = null }) {
+  const callId = usageLedger.createUsageCallId();
   const completion = await chatComplete({
     messages: [
       {
@@ -64,6 +67,14 @@ async function classifyEmails({ emails, profile, chatComplete }) {
     temperature: 0.2,
     maxTokens: 1800,
   });
+  if (usageContext) {
+    await usageLedger.recordCompletionUsage({
+      ...usageContext,
+      source: 'inbox_triage',
+      completion,
+      callId,
+    });
+  }
   const parsed = extractJson(completion?.content || completion?.text);
   return Array.isArray(parsed?.items) ? parsed.items : [];
 }
@@ -77,6 +88,7 @@ async function triageInbox({
   env = process.env,
   now = () => new Date(),
   maxResults = 15,
+  departmentPoolId = null,
 }) {
   await resourceAccess.requireCompanyResourceAccess({
     prisma,
@@ -97,10 +109,26 @@ async function triageInbox({
     maxResults: Math.max(1, Math.min(50, Number(maxResults) || 15)),
   });
   if (!emails.length) return { action: 'inbox_clear', items: [], actions: [] };
+  const budget = await departmentPools.requireOperationBudget({
+    prisma,
+    project,
+    departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
+    departmentPoolId,
+    env,
+    now: now(),
+  });
+  const usagePool = budget.pool;
   const classified = await classifyEmails({
     emails,
     profile: companyContext?.profile || {},
     chatComplete,
+    usageContext: {
+      prisma,
+      projectId: project.id,
+      departmentPoolId: usagePool?.id || null,
+      sourceId: `gmail-inbox:${project.id}`,
+      env,
+    },
   });
   const byId = new Map(classified.map((item) => [String(item?.id || ''), item]));
   const policyDecision = await externalActions.decisionForAction({

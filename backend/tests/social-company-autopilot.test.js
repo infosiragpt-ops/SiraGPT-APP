@@ -49,9 +49,57 @@ function activeCompanyProject(where, assignments = { [socialKey('linkedin')]: 'm
   };
 }
 
+function withOperationBudget(prisma, {
+  poolEnabled = true,
+  poolBudgetUsd = null,
+} = {}) {
+  const usageRows = [];
+  prisma.codexRunMetric ||= { findMany: async () => [] };
+  prisma.codexUsageEntry ||= {
+    create: async ({ data }) => {
+      const row = { id: `usage-${usageRows.length + 1}`, ...data };
+      usageRows.push(row);
+      return structuredClone(row);
+    },
+    findUnique: async ({ where }) => usageRows.find(
+      (row) => row.idempotencyKey === where.idempotencyKey,
+    ) || null,
+  };
+  prisma.codexUsageEntry.findMany ||= async () => usageRows.map((row) => structuredClone(row));
+  prisma.codexDepartmentPool ||= {
+    findUnique: async ({ where }) => ({
+      id: where.id || 'pool-marketing',
+      projectId: where.projectId_departmentId?.projectId || 'workspace-a',
+      departmentId: where.projectId_departmentId?.departmentId || 'marketing',
+      size: 2,
+      enabled: poolEnabled,
+      dailyBudgetUsd: poolBudgetUsd,
+    }),
+  };
+  return prisma;
+}
+
 test('CEO autopilot creates at most one approved daily post for connected enabled channels', async () => {
   const creates = [];
+  const usageRows = [];
   const prisma = {
+    codexDepartmentPool: {
+      findUnique: async ({ where }) => ({
+        id: 'pool-marketing',
+        projectId: where.projectId_departmentId.projectId,
+        departmentId: where.projectId_departmentId.departmentId,
+        size: 2,
+        enabled: true,
+      }),
+    },
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        const row = { id: `usage-${usageRows.length + 1}`, ...data };
+        usageRows.push(row);
+        return row;
+      },
+      findUnique: async () => null,
+    },
     codexProject: {
       findFirst: async ({ where }) => activeCompanyProject(where, {
         [socialKey('linkedin')]: 'marketing',
@@ -83,13 +131,20 @@ test('CEO autopilot creates at most one approved daily post for connected enable
     },
   };
   const result = await runAutopilot({
-    prisma,
+    prisma: withOperationBudget(prisma),
     now: () => new Date('2026-07-23T18:00:00.000Z'),
     chatComplete: async () => ({
       content: JSON.stringify({
         caption: 'Tres prácticas concretas para introducir IA con control humano.',
         mediaBrief: 'Equipo revisando un tablero de riesgos y resultados.',
       }),
+      usage: {
+        tokensIn: 150,
+        tokensOut: 45,
+        provider: 'Anthropic',
+        model: 'claude-sonnet-4-6',
+        generationId: 'social-autopilot-1',
+      },
     }),
   });
   assert.equal(result[0].action, 'generated');
@@ -98,6 +153,10 @@ test('CEO autopilot creates at most one approved daily post for connected enable
   assert.equal(creates[0].config.source, 'ceo_autopilot');
   assert.equal(creates[0].config.workspaceId, 'workspace-a');
   assert.match(creates[0].batchId, /^ceo-autopilot:2026-07-23:u1:workspace-a$/);
+  assert.equal(usageRows.length, 1);
+  assert.equal(usageRows[0].source, 'social_autopilot');
+  assert.equal(usageRows[0].projectId, 'workspace-a');
+  assert.equal(usageRows[0].departmentPoolId, 'pool-marketing');
 });
 
 test('CEO autopilot uses only social channels assigned to Marketing in its owned project', async () => {
@@ -141,7 +200,7 @@ test('CEO autopilot uses only social channels assigned to Marketing in its owned
   };
 
   const result = await runAutopilot({
-    prisma,
+    prisma: withOperationBudget(prisma),
     now: () => new Date('2026-07-27T18:00:00.000Z'),
     chatComplete: async () => ({
       content: '{"caption":"Avance comprobable.","mediaBrief":""}',
@@ -190,7 +249,7 @@ test('proactive Marketing creates an unapproved draft under the default review p
     },
   };
   const result = await generateDepartmentPost({
-    prisma,
+    prisma: withOperationBudget(prisma),
     project: { id: 'p1', userId: 'u1', name: 'SiraGPT' },
     ledger: [{ runId: 'r1', outcome: 'passed', task: 'Gate de navegador', diffstat: { additions: 10, deletions: 2 } }],
     objectives: [{ title: 'Mejorar activación', target: '50%' }],
@@ -254,7 +313,7 @@ test('CEO autopilot keeps daily generation and objectives isolated per workspace
   };
 
   const results = await runAutopilot({
-    prisma,
+    prisma: withOperationBudget(prisma),
     now: () => new Date('2026-07-27T12:00:00.000Z'),
     chatComplete: async ({ messages }) => ({
       content: JSON.stringify({
@@ -367,7 +426,7 @@ test('proactive Marketing filters connected channels through an explicit platfor
     },
   };
   const result = await generateDepartmentPost({
-    prisma,
+    prisma: withOperationBudget(prisma),
     project: { id: 'p1', userId: 'u1', name: 'SiraGPT' },
     allowedPlatforms: ['linkedin'],
     now: () => new Date('2026-07-26T12:00:00.000Z'),
@@ -376,6 +435,81 @@ test('proactive Marketing filters connected channels through an explicit platfor
   assert.equal(result.action, 'drafted_review');
   assert.deepEqual(result.platforms, ['linkedin']);
   assert.deepEqual(creates[0].platforms, ['linkedin']);
+});
+
+test('proactive Marketing budget zero blocks content generation before the LLM provider', async () => {
+  let llmCalls = 0;
+  const prisma = withOperationBudget({
+    codexProject: {
+      findFirst: async ({ where }) => {
+        const project = activeCompanyProject(where);
+        project.brief.proactive = { configuredDailyBudgetUsd: 0 };
+        return project;
+      },
+    },
+    systemSettings: {
+      findUnique: async () => ({
+        value: JSON.stringify({
+          enabled: true,
+          mode: 'review',
+          autopilot: true,
+          objective: 'No gastar fuera del presupuesto',
+          platforms: { linkedin: true },
+        }),
+      }),
+    },
+    scheduledPost: { findFirst: async () => null },
+    socialConnection: { findMany: async () => [socialConnection('linkedin')] },
+  });
+
+  await assert.rejects(
+    generateDepartmentPost({
+      prisma,
+      project: { id: 'p-budget-zero', userId: 'u1' },
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"caption":"no","mediaBrief":""}' };
+      },
+    }),
+    (error) => error?.code === 'company_daily_budget_exceeded',
+  );
+  assert.equal(llmCalls, 0);
+});
+
+test('CEO autopilot paused Marketing pool blocks content generation before the LLM provider', async () => {
+  let llmCalls = 0;
+  const prisma = withOperationBudget({
+    codexProject: {
+      findFirst: async ({ where }) => activeCompanyProject(where),
+    },
+    systemSettings: {
+      findMany: async () => [{
+        key: policyKey('u1', 'workspace-a'),
+        value: JSON.stringify({
+          enabled: true,
+          mode: 'auto',
+          autopilot: true,
+          objective: 'No publicar con el pool pausado',
+          workspaceId: 'workspace-a',
+          platforms: { linkedin: true },
+        }),
+      }],
+    },
+    scheduledPost: { findFirst: async () => null },
+    socialConnection: { findMany: async () => [socialConnection('linkedin')] },
+  }, { poolEnabled: false });
+
+  const result = await runAutopilot({
+    prisma,
+    logger: { warn: () => {} },
+    chatComplete: async () => {
+      llmCalls += 1;
+      return { content: '{"caption":"no","mediaBrief":""}' };
+    },
+  });
+  assert.equal(result[0].action, 'error');
+  assert.match(result[0].error, /department_pool_disabled/);
+  assert.equal(llmCalls, 0);
 });
 
 test('CEO autopilot fails closed when Marketing has zero assigned social resources', async () => {

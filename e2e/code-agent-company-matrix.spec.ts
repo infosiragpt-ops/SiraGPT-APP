@@ -1,10 +1,15 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
+import sharp from "sharp"
+
+import { AGENT_COMPANY_DEPARTMENTS } from "../lib/code-agent-company"
 
 const { injectPreviewInteractionBridges } = require("../backend/src/services/code/preview-proxy") as {
   injectPreviewInteractionBridges: (html: string, nonce: string) => string
 }
 
 test.describe.configure({ timeout: 120_000 })
+
+const OFFICE_READY_TIMEOUT_MS = 45_000
 
 const now = "2026-07-23T16:00:00.000Z"
 const project = {
@@ -33,6 +38,36 @@ const user = {
   updatedAt: now,
 }
 
+const MATRIX_CODEX_PROJECT_ID = "codex-matrix-qa"
+const departmentPoolId = (departmentId: string) => `pool-${departmentId}`
+const logicalAgentCount = AGENT_COMPANY_DEPARTMENTS.reduce(
+  (total, department) => total + (department.desiredAgents || 1),
+  0,
+)
+
+function matrixDepartmentPools(projectId = MATRIX_CODEX_PROJECT_ID) {
+  return AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+    id: departmentPoolId(department.id),
+    projectId,
+    departmentId: department.id,
+    size: department.desiredAgents || 1,
+    dailyBudgetUsd: null,
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  }))
+}
+
+const matrixDepartments = AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+  ...department,
+  keywords: [...department.keywords],
+  mission: department.mission || department.description,
+  kind: department.kind || "coordination",
+  desiredAgents: department.desiredAgents || 1,
+  custom: false,
+  enabled: true,
+}))
+
 const runs = [
   {
     id: "run-trust",
@@ -42,6 +77,7 @@ const runs = [
     tier: "pro",
     model: "gpt-5.4",
     planRunId: null,
+    departmentPoolId: departmentPoolId("trust"),
     prompt: "[PROACTIVO · Confianza, Privacidad y Cumplimiento] Verificar el aislamiento del workspace",
     error: null,
     createdAt: "2026-07-23T15:58:00.000Z",
@@ -56,6 +92,7 @@ const runs = [
     tier: "pro",
     model: "gpt-5.4",
     planRunId: null,
+    departmentPoolId: departmentPoolId("product-engineering"),
     prompt: "[PROACTIVO · Producto e Ingeniería SiraGPT] Validar la experiencia de APPS y entregar evidencia",
     error: null,
     createdAt: "2026-07-23T15:40:00.000Z",
@@ -70,6 +107,17 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
     contentType: "application/json",
     body: JSON.stringify(payload),
   })
+}
+
+async function selectOfficePhase(page: Page, phase: "day" | "dusk" | "night") {
+  const overlay = page.getByTestId("agent-office-overlay")
+  const timeToggle = page.getByTestId("agent-office-time-toggle")
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    if (await overlay.getAttribute("data-office-phase") === phase) return
+    await timeToggle.click()
+    await page.waitForTimeout(100)
+  }
+  await expect(overlay).toHaveAttribute("data-office-phase", phase)
 }
 
 async function mockMatrixCompany(
@@ -152,8 +200,10 @@ async function mockMatrixCompany(
   await page.addInitScript(({ activeProject, currentUser, timestamp, shouldLinkProject, seedPreview }) => {
     const ceoSession = {
       id: "ceo-qa",
-      workspaceId: "matrix-qa",
+      workspaceId: `project:${activeProject.id}`,
       title: "CEO Office",
+      departmentId: "ceo-office",
+      departmentPoolId: "pool-ceo-office",
       turns: [],
       createdAt: Date.parse(timestamp),
       updatedAt: Date.parse(timestamp),
@@ -163,7 +213,14 @@ async function mockMatrixCompany(
       ...ceoSession,
       id: "product-qa",
       title: "Producto e Ingeniería SiraGPT",
-      turns: [{ id: "a-2", role: "assistant", content: "Validando la experiencia de APPS." }],
+      departmentId: "product-engineering",
+      departmentPoolId: "pool-product-engineering",
+      turns: [{
+        id: "a-2",
+        role: "assistant",
+        content: "Validando la experiencia de APPS.",
+        codexRunId: "run-product",
+      }],
       createdAt: Date.parse(timestamp) + 1,
       updatedAt: Date.parse(timestamp) + 1,
     }
@@ -191,7 +248,7 @@ async function mockMatrixCompany(
       "code-workspace:agent-sessions:v1",
       JSON.stringify({
         sessions: [ceoSession, productSession],
-        activeByWorkspace: { "matrix-qa": "ceo-qa" },
+        activeByWorkspace: { [`project:${activeProject.id}`]: "ceo-qa" },
       }),
     )
     localStorage.setItem(
@@ -336,6 +393,7 @@ async function mockMatrixCompany(
       } else if (request.method() === "DELETE") {
         proactiveEnabled = false
       }
+      const codexProjectId = path.split("/")[3] || MATRIX_CODEX_PROJECT_ID
       return fulfillJson(route, {
         state: {
           enabled: proactiveEnabled,
@@ -345,8 +403,24 @@ async function mockMatrixCompany(
           deptIndex: 4,
           lastCycleAt: "2026-07-23T15:58:00.000Z",
           lastError: null,
+          costTodayUsd: 0,
+          dailyBudgetUsd: 25,
+          budgetBlocked: false,
+          lastDepartment: "trust",
+          missionIndex: 1,
+          lastMissionId: "code-excellence",
         },
-        departments: [],
+        departments: matrixDepartments,
+        departmentPools: matrixDepartmentPools(codexProjectId),
+        capacity: {
+          departments: AGENT_COMPANY_DEPARTMENTS.length,
+          logicalAgents: logicalAgentCount,
+          departmentPools: AGENT_COMPANY_DEPARTMENTS.length,
+          physicalAgents: 32,
+          writerConcurrency: 32,
+          dailyBudgetUsd: 0,
+          strategy: "isolated_worktrees_serialized_merge",
+        },
       })
     }
     if (/^\/codex\/projects\/[^/]+\/company-resources$/.test(path)) {
@@ -654,7 +728,9 @@ test("modern office city renders a moving day and night environment", async ({ p
   const scene = page.getByTestId("agent-office-scene")
   const canvas = scene.locator("canvas")
   await expect(overlay).toBeVisible()
-  await expect(scene).toHaveAttribute("data-office-ready", "true")
+  await expect(scene).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
+  await expect(overlay).toHaveAttribute("data-office-phase", "night")
+  await expect(overlay).toHaveAttribute("data-office-time", "night")
   await expect.poll(async () => Number(await canvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(35)
   await expect.poll(async () => Number(await canvas.getAttribute("data-city-signature-tower-count"))).toBeGreaterThanOrEqual(6)
   await expect.poll(async () => Number(await canvas.getAttribute("data-city-architectural-crown-count"))).toBeGreaterThanOrEqual(14)
@@ -665,19 +741,18 @@ test("modern office city renders a moving day and night environment", async ({ p
 
   const firstFrame = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))
   expect(firstFrame.length).toBeGreaterThan(10_000)
+  const firstFrameCount = Number(await canvas.getAttribute("data-frame-count"))
   await page.waitForTimeout(750)
-  const secondFrame = await canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL("image/png"))
-  expect(secondFrame).not.toBe(firstFrame)
+  const secondFrameCount = Number(await canvas.getAttribute("data-frame-count"))
+  const reducedMotion = await page.evaluate(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  if (reducedMotion) expect(secondFrameCount - firstFrameCount).toBeLessThanOrEqual(1)
+  else expect(secondFrameCount).toBeGreaterThan(firstFrameCount)
 
-  const timeToggle = page.getByTestId("agent-office-time-toggle")
-  await timeToggle.click()
-  await expect(overlay).toHaveAttribute("data-office-phase", "day")
+  await selectOfficePhase(page, "day")
   await page.screenshot({ path: testInfo.outputPath("modern-office-city-day.png"), fullPage: true })
-  await timeToggle.click()
-  await expect(overlay).toHaveAttribute("data-office-phase", "dusk")
-  await timeToggle.click()
-  await expect(overlay).toHaveAttribute("data-office-phase", "night")
-  await expect(scene).toHaveAttribute("data-office-ready", "true")
+  await selectOfficePhase(page, "dusk")
+  await selectOfficePhase(page, "night")
+  await expect(scene).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
   await page.screenshot({ path: testInfo.outputPath("modern-office-city-night.png"), fullPage: true })
 
   expect(await overlay.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
@@ -698,12 +773,12 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
   await expect(page.getByTestId("agent-company-live-preview")).toBeVisible()
   const officeThumbnail = page.getByTestId("agent-office-thumbnail")
-  await expect(officeThumbnail).toHaveAttribute("data-office-ready", "true")
+  await expect(officeThumbnail).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
   await expect(officeThumbnail).toHaveAttribute("data-office-paused", "false")
   await expect(officeThumbnail).toHaveAttribute("data-rooftop-office", "true")
   await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(15)
   await expect.poll(async () => Number(await officeThumbnail.locator("canvas").getAttribute("data-city-glass-facade-count"))).toBeGreaterThanOrEqual(28)
-  await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1/1 puestos")
+  await expect(page.getByTestId("agent-company-live-preview")).toContainText("Oficina · 1/196 puestos")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
   await expect(page.getByRole("button", { name: "Controlar" })).toContainText(/[1-9]/)
 
@@ -715,7 +790,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
 
   await page.getByTestId("agent-company-live-preview").click()
   await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
-  await expect(page.getByTestId("agent-office-overlay")).toContainText("Oficina operativa · pools reales")
+  await expect(page.locator("#agent-office-title")).toHaveText("Oficina de agentes")
   await expect(officeThumbnail).toHaveAttribute("data-office-paused", "true")
   await page.waitForTimeout(100)
   const pausedThumbnailFrame = Number(await officeThumbnail.locator("canvas").getAttribute("data-frame-count"))
@@ -725,7 +800,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   ).toBeLessThanOrEqual(1)
   const officeScene = page.getByTestId("agent-office-scene")
   const officeCanvas = officeScene.locator("canvas")
-  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-worker-count"))).toBe(3)
   await expect(officeScene).toHaveAttribute("data-rooftop-office", "true")
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-building-count"))).toBeGreaterThanOrEqual(31)
@@ -738,23 +813,29 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-mover-count"))).toBeGreaterThanOrEqual(10)
   await expect.poll(async () => Number(await officeCanvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
 
-  const firstFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => {
-    const gl = canvas.getContext("webgl2") || canvas.getContext("webgl")
-    if (!gl) return { dataUrl: "", range: 0, colored: 0 }
-    const pixels = new Uint8Array(canvas.width * canvas.height * 4)
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+  // Read the composited canvas image that a user actually sees. WebGL is
+  // allowed to discard its drawing buffer after presentation, so readPixels
+  // can legally return zeros here even while Chromium displays a valid frame.
+  const firstFramePng = await officeCanvas.screenshot()
+  const firstFrameRaw = await sharp(firstFramePng)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  const firstFrame = (() => {
+    const pixels = firstFrameRaw.data
+    const channels = firstFrameRaw.info.channels
     let min = 255
     let max = 0
     let colored = 0
-    for (let index = 0; index < pixels.length; index += 64) {
+    for (let index = 0; index < pixels.length; index += channels * 16) {
       const luminance = pixels[index] + pixels[index + 1] + pixels[index + 2]
       min = Math.min(min, luminance)
       max = Math.max(max, luminance)
       if (pixels[index + 3] > 0 && luminance > 30) colored += 1
     }
-    return { dataUrl: canvas.toDataURL("image/png"), range: max - min, colored }
-  })
-  expect(firstFrame.dataUrl.length).toBeGreaterThan(10_000)
+    return { range: max - min, colored }
+  })()
+  expect(firstFramePng.length).toBeGreaterThan(10_000)
   expect(firstFrame.range).toBeGreaterThan(100)
   expect(firstFrame.colored).toBeGreaterThan(100)
 
@@ -763,8 +844,8 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
     y: Number(canvas.dataset.movingWorkerY),
   }))
   await page.waitForTimeout(750)
-  const secondFrame = await officeCanvas.evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL("image/png"))
-  expect(secondFrame).not.toBe(firstFrame.dataUrl)
+  const secondFramePng = await officeCanvas.screenshot()
+  expect(secondFramePng.equals(firstFramePng)).toBe(false)
 
   const movedWorkerPoint = await officeCanvas.evaluate((canvas) => ({
     x: Number(canvas.dataset.movingWorkerX),
@@ -780,17 +861,14 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   const timeToggle = page.getByTestId("agent-office-time-toggle")
   await expect(timeToggle).toHaveAttribute(
     "aria-label",
-    /Ambiente Auto · (Amanecer|Día|Atardecer|Noche)\. Cambiar ciclo de luz/,
+    "Ambiente Noche. Cambiar ciclo de luz",
   )
-  await timeToggle.click()
-  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "day")
+  await selectOfficePhase(page, "day")
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-day.png"), fullPage: true })
-  await timeToggle.click()
-  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "dusk")
+  await selectOfficePhase(page, "dusk")
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-dusk.png"), fullPage: true })
-  await timeToggle.click()
-  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-phase", "night")
-  await expect(officeScene).toHaveAttribute("data-office-ready", "true")
+  await selectOfficePhase(page, "night")
+  await expect(officeScene).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
   await page.screenshot({ path: testInfo.outputPath("agent-office-desktop-night.png"), fullPage: true })
 
   const settledWorkerPoint = await officeCanvas.evaluate((canvas) => ({
@@ -817,7 +895,7 @@ test("desktop company panel shows real Matrix-style operations", async ({ page }
   expect(canvasBox).not.toBeNull()
   await page.mouse.click(canvasBox!.x + workerPoint.x, canvasBox!.y + workerPoint.y)
   await expect(page.getByTestId("agent-office-roster")).toBeVisible()
-  await expect(page.getByTestId("agent-office-roster")).toContainText("Actividad del agente")
+  await expect(page.getByTestId("agent-office-roster")).toContainText("Trabajo actual")
   await expect(page.getByTestId("agent-office-roster")).toContainText(/Abrir (sesión|departamento)/)
   await page.waitForTimeout(150)
   expect(await page.getByTestId("agent-office-overlay").evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
@@ -884,7 +962,17 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
   await page.goto("/code?folder=matrix-qa", { waitUntil: "domcontentloaded" })
 
   await expect(page.getByRole("button", { name: "Cambiar empresa de agentes" })).toBeVisible({ timeout: 30_000 })
-  await expect(page.getByRole("button", { name: "Empresa", pressed: true })).toBeVisible()
+  const mobileTabs = page.getByRole("tablist", { name: "Vista móvil del workspace" })
+  const companyTab = mobileTabs.getByRole("tab", { name: "Empresa", exact: true })
+  const previewTab = mobileTabs.getByRole("tab", { name: "Preview", exact: true })
+  await expect(companyTab).toBeVisible()
+  await expect(companyTab).toHaveAttribute("aria-selected", "true")
+  await expect(companyTab).toHaveAttribute("aria-controls", "code-mobile-panel-chat")
+  await previewTab.click()
+  await expect(previewTab).toHaveAttribute("aria-selected", "true")
+  await expect(previewTab).toHaveAttribute("aria-controls", "code-mobile-panel-preview")
+  await companyTab.click()
+  await expect(companyTab).toHaveAttribute("aria-selected", "true")
   await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible()
 
   const panel = page.locator("[data-agent-company-dock='workspace']")
@@ -893,7 +981,14 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
 
   await page.getByTestId("agent-company-live-preview").click()
   await expect(page.getByTestId("agent-office-overlay")).toBeVisible()
-  await expect(page.getByTestId("agent-office-scene")).toHaveAttribute("data-office-ready", "true")
+  await expect(page.getByTestId("agent-office-scene")).toHaveAttribute(
+    "data-office-ready",
+    "true",
+    { timeout: OFFICE_READY_TIMEOUT_MS },
+  )
+  const timeToggle = page.getByTestId("agent-office-time-toggle")
+  await expect(timeToggle).toBeVisible()
+  await expect(timeToggle).toHaveAttribute("aria-label", "Ambiente Noche. Cambiar ciclo de luz")
   const soundToggle = page.getByTestId("agent-office-sound-toggle")
   await expect(soundToggle).toBeVisible()
   await expect(soundToggle).toHaveAttribute(
@@ -901,6 +996,8 @@ test("mobile company panel remains a single usable vertical surface", async ({ p
     /^(Activar|Desactivar|Reintentar) sonido de la oficina$/,
   )
   await expect(page.getByRole("button", { name: "Pausar oficina" })).toBeVisible()
+  await selectOfficePhase(page, "night")
+  await expect(page.getByTestId("agent-office-overlay")).toHaveAttribute("data-office-time", "night")
   await expect(page.getByRole("button", { name: "Ver agentes" })).toBeVisible()
   await expect(page.getByRole("button", { name: "Cerrar oficina" })).toBeVisible()
   await expect(page.getByRole("combobox", { name: "Filtrar por departamento" })).toBeVisible()

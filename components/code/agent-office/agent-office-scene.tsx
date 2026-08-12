@@ -104,17 +104,19 @@ type AgentOfficeCameraControls = {
   zoomOut: () => void
 }
 
-type StandbyCapacityMarker = {
-  position: [number, number, number]
-  rotationY: number
-  color: number
-}
-
 type CompactWorkerMarker = {
   worker: AgentOfficeWorker
   position: [number, number, number]
   rotationY: number
 }
+
+type CompactWorkstationMarker = readonly [
+  x: number,
+  z: number,
+  color: number,
+  occupied: boolean,
+  active: boolean,
+]
 
 type CompactWorkerMesh = {
   mesh: THREE.InstancedMesh<THREE.CapsuleGeometry, THREE.MeshStandardMaterial>
@@ -134,6 +136,10 @@ const SEAT_LEG_PITCH = -0.75
 const SEAT_ARM_PITCH = -1.02
 const FULL_DETAILED_WORKER_BUDGET = 36
 const THUMBNAIL_DETAILED_WORKER_BUDGET = 10
+// Rich DOM telemetry exists for local/CI visual and performance assertions.
+// Production does not consume it; stripping the strings and per-frame writes
+// keeps the public bundle smaller and avoids needless main-thread mutations.
+const OFFICE_DIAGNOSTICS_ENABLED = process.env.NODE_ENV !== "production"
 /**
  * How far in front of the desk centre the seated body sits. Derived, not
  * eyeballed: with SEAT_ARM_PITCH the hands land 0.45 behind the body, so 0.7
@@ -212,18 +218,18 @@ const PHASE_LIGHTING: Record<OfficeTimePhase, PhaseLighting> = {
   },
   night: {
     sunColor: 0xa9c9ff,
-    sunIntensity: 1.08,
+    sunIntensity: 0.86,
     sunPosition: [-18, 28, 14],
-    hemisphereSky: 0x789bb8,
-    hemisphereGround: 0x12181d,
-    hemisphereIntensity: 1.34,
-    fillColor: 0x87b4df,
-    fillIntensity: 0.94,
-    exposure: 1.16,
-    background: 0x0b1d2c,
-    fog: 0x11283a,
-    horizon: 0x31485b,
-    floor: 0x697277,
+    hemisphereSky: 0x315675,
+    hemisphereGround: 0x05090e,
+    hemisphereIntensity: 0.96,
+    fillColor: 0x3978aa,
+    fillIntensity: 0.72,
+    exposure: 1.1,
+    background: 0x030914,
+    fog: 0x071523,
+    horizon: 0x17324a,
+    floor: 0x17232d,
   },
 }
 
@@ -494,20 +500,44 @@ function departmentLabelSignature(
   ].join("|")
 }
 
+const DEPARTMENT_ROUTE_ALIASES: Record<string, string> = {
+  "ceo-office": "ceo",
+  "agent-infrastructure": "infra",
+  "product-engineering": "product",
+  "engineering-01": "eng-01",
+  "engineering-02": "eng-02",
+  "market-intelligence": "market",
+  sales: "sales",
+  "customer-success": "support",
+  "growth-engines": "growth",
+  marketing: "marketing",
+  "website-distribution": "web",
+  integrations: "integrations",
+  localization: "localization",
+  trust: "secure",
+}
+
+function departmentRoute(departmentId: string): string {
+  const safeId = departmentId.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "")
+  return `/dep/${DEPARTMENT_ROUTE_ALIASES[departmentId] || safeId || "office"}`
+}
+
 function createDepartmentLabel(
   department: AgentOfficeDepartment,
   logicalAgentCount: number,
 ) {
   const canvas = document.createElement("canvas")
-  canvas.width = 768
-  canvas.height = 144
+  canvas.width = 896
+  canvas.height = 224
   const context = canvas.getContext("2d")
   if (!context) return null
 
   const isCeo = department.id === "ceo-office"
-  context.fillStyle = isCeo ? "rgba(7, 17, 30, 0.96)" : "rgba(10, 24, 38, 0.92)"
+  const route = departmentRoute(department.id)
+  const title = isCeo ? "CEO Office" : department.name
+  context.fillStyle = isCeo ? "rgba(5, 13, 28, 0.98)" : "rgba(7, 19, 34, 0.96)"
   context.beginPath()
-  context.roundRect(8, 8, 752, 128, 22)
+  context.roundRect(8, 8, 880, 208, 26)
   context.fill()
   context.strokeStyle = isCeo
     ? "rgba(129, 140, 248, 0.9)"
@@ -517,20 +547,33 @@ function createDepartmentLabel(
   context.lineWidth = isCeo ? 5 : 3
   context.stroke()
 
+  context.fillStyle = isCeo ? "rgba(129, 140, 248, 0.22)" : "rgba(56, 189, 248, 0.16)"
+  context.beginPath()
+  context.roundRect(28, 34, 92, 92, 22)
+  context.fill()
+  context.strokeStyle = isCeo ? "rgba(165, 180, 252, 0.7)" : "rgba(103, 232, 249, 0.56)"
+  context.lineWidth = 3
+  context.stroke()
+  context.fillStyle = isCeo ? "#c7d2fe" : "#a5f3fc"
+  context.font = "800 34px Inter, system-ui, sans-serif"
+  context.textAlign = "center"
+  context.fillText(isCeo ? "HQ" : department.name.slice(0, 2).toUpperCase(), 74, 92)
+  context.textAlign = "left"
+
   context.fillStyle = isCeo ? "#c7d2fe" : "#f8fafc"
-  context.font = "700 37px Inter, system-ui, sans-serif"
-  context.fillText(
-    (isCeo ? `CEO · ${department.name}` : department.name).slice(0, 34),
-    34,
-    62,
-  )
+  context.font = "700 39px Inter, system-ui, sans-serif"
+  context.fillText(title.slice(0, 34), 146, 72)
+  context.fillStyle = "#8fa9bc"
+  context.font = "600 27px ui-monospace, SFMono-Regular, Menlo, monospace"
+  context.fillText(route, 146, 113)
+
   context.fillStyle = department.activeCount > 0 ? "#67e8f9" : "#a7b7c7"
   context.font = "600 25px Inter, system-ui, sans-serif"
   const activeLabel = department.activeCount === 1 ? "1 activo" : `${department.activeCount} activos`
   context.fillText(
-    `${activeLabel} · ${department.workers.length}/${logicalAgentCount} agentes`,
-    34,
-    105,
+    `${activeLabel} · ${department.workers.length}/${logicalAgentCount} puestos ocupados`,
+    32,
+    177,
   )
 
   const texture = new THREE.CanvasTexture(canvas)
@@ -540,12 +583,12 @@ function createDepartmentLabel(
     new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
-      depthTest: true,
+      depthTest: false,
       depthWrite: false,
     }),
   )
-  sprite.scale.set(isCeo ? 4.5 : 4.05, isCeo ? 0.85 : 0.76, 1)
-  sprite.renderOrder = 18
+  sprite.scale.set(isCeo ? 9.4 : 8.8, isCeo ? 2.34 : 2.2, 1)
+  sprite.renderOrder = 30
   tagObject(sprite, { departmentId: department.id })
   return sprite
 }
@@ -606,43 +649,6 @@ function addCeoCommandNexus(
   group.add(core)
 }
 
-function addStandbyCapacityMesh(
-  scene: THREE.Scene,
-  markers: readonly StandbyCapacityMarker[],
-) {
-  if (markers.length === 0) return null
-  const mesh = new THREE.InstancedMesh(
-    new THREE.CapsuleGeometry(0.1, 0.24, 3, 6),
-    new THREE.MeshStandardMaterial({
-      color: 0xffffff,
-      emissive: 0x12283a,
-      emissiveIntensity: 0.22,
-      roughness: 0.62,
-      metalness: 0.2,
-      transparent: true,
-      opacity: 0.42,
-    }),
-    markers.length,
-  )
-  const dummy = new THREE.Object3D()
-  markers.forEach((marker, index) => {
-    dummy.position.set(...marker.position)
-    dummy.rotation.set(0, marker.rotationY, 0)
-    dummy.scale.set(1, 1, 1)
-    dummy.updateMatrix()
-    mesh.setMatrixAt(index, dummy.matrix)
-    mesh.setColorAt(index, new THREE.Color(marker.color))
-  })
-  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
-  mesh.castShadow = false
-  mesh.receiveShadow = false
-  mesh.frustumCulled = true
-  mesh.userData.agentOfficeCapacity = "standby"
-  scene.add(mesh)
-  return mesh
-}
-
 function addCompactWorkerMesh(
   scene: THREE.Scene,
   markers: readonly CompactWorkerMarker[],
@@ -682,6 +688,112 @@ function addCompactWorkerMesh(
   mesh.userData.departmentIds = workers.map((worker) => worker.departmentId)
   scene.add(mesh)
   return { mesh, workers, indexByWorkerId }
+}
+
+function addCompactWorkstationMeshes(
+  scene: THREE.Scene,
+  markers: readonly CompactWorkstationMarker[],
+  night: boolean,
+) {
+  if (markers.length === 0) return null
+
+  const createStandardMesh = (
+    geometry: THREE.BufferGeometry,
+    color: number,
+    roughness: number,
+    metalness: number,
+  ) => new THREE.InstancedMesh(
+    geometry,
+    new THREE.MeshStandardMaterial({ color, roughness, metalness }),
+    markers.length,
+  )
+  const createBasicMesh = (
+    geometry: THREE.BufferGeometry,
+    color: number,
+    opacity: number,
+  ) => new THREE.InstancedMesh(
+    geometry,
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      toneMapped: false,
+    }),
+    markers.length,
+  )
+  const desktop = createStandardMesh(
+    new THREE.BoxGeometry(1.55, 0.08, 0.7),
+    night ? 0x1a2b38 : 0x334650,
+    0.38,
+    0.26,
+  )
+  const base = createStandardMesh(
+    new THREE.BoxGeometry(1.22, 0.62, 0.12),
+    night ? 0x111a23 : 0x26333c,
+    0.5,
+    0.5,
+  )
+  const monitor = createStandardMesh(
+    new THREE.BoxGeometry(1.4, 0.66, 0.06),
+    0x09111d,
+    0.32,
+    0.28,
+  )
+  const screen = createBasicMesh(
+    new THREE.PlaneGeometry(1.28, 0.54),
+    0xffffff,
+    night ? 0.9 : 0.72,
+  )
+  const taskLamp = createBasicMesh(
+    new THREE.SphereGeometry(0.07, 8, 6),
+    night ? 0xffd18a : 0xbdebf4,
+    night ? 0.96 : 0.58,
+  )
+  const chairSeat = createStandardMesh(
+    new THREE.CylinderGeometry(0.27, 0.27, 0.11, 10),
+    night ? 0x17222d : 0x293741,
+    0.78,
+    0.12,
+  )
+  const chairBack = createStandardMesh(
+    new THREE.BoxGeometry(0.48, 0.5, 0.1),
+    night ? 0x17222d : 0x293741,
+    0.78,
+    0.12,
+  )
+
+  const dummy = new THREE.Object3D()
+  const parts = [
+    [desktop, 0, 0.84, 0],
+    [base, 0, 0.49, -0.18],
+    [monitor, 0, 1.28, -0.23],
+    [screen, 0, 1.28, -0.195],
+    [chairSeat, 0, 0.5, 0.64],
+    [chairBack, 0, 0.79, 0.82],
+    [taskLamp, 0.56, 1.03, 0.12],
+  ] as const
+  markers.forEach(([x, z, color, occupied, active], index) => {
+    for (const [mesh, xOffset, y, zOffset] of parts) {
+      dummy.position.set(x + xOffset, y, z + zOffset)
+      dummy.rotation.set(0, 0, 0)
+      dummy.scale.set(1, 1, 1)
+      dummy.updateMatrix()
+      mesh.setMatrixAt(index, dummy.matrix)
+    }
+    screen.setColorAt(
+      index,
+      new THREE.Color(active ? color : occupied ? 0x42a8cd : 0x32799b),
+    )
+  })
+
+  for (const [mesh] of parts) {
+    mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+    mesh.castShadow = false
+    mesh.receiveShadow = mesh === desktop
+    mesh.frustumCulled = true
+    scene.add(mesh)
+  }
+  if (screen.instanceColor) screen.instanceColor.needsUpdate = true
 }
 
 function addWorker({
@@ -989,6 +1101,7 @@ export function AgentOfficeScene({
   } | null>(null)
   const modelRef = React.useRef(model)
   const [failed, setFailed] = React.useState(false)
+  const [sceneGeneration, setSceneGeneration] = React.useState(0)
   const topologySignature = React.useMemo(() => officeSceneTopologySignature(model), [model])
   const liveSignature = React.useMemo(() => officeSceneLiveSignature(model), [model])
   const cameraCommandType = cameraCommand?.type
@@ -1079,7 +1192,19 @@ export function AgentOfficeScene({
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
-    renderer.domElement.dataset.officeCanvas = variant
+    if (OFFICE_DIAGNOSTICS_ENABLED) renderer.domElement.dataset.officeCanvas = variant
+    const onContextLost = (event: Event) => {
+      event.preventDefault()
+      if (OFFICE_DIAGNOSTICS_ENABLED) host.dataset.officeContext = "lost"
+      setFailed(true)
+    }
+    const onContextRestored = () => {
+      if (OFFICE_DIAGNOSTICS_ENABLED) host.dataset.officeContext = "restored"
+      setFailed(false)
+      setSceneGeneration((current) => current + 1)
+    }
+    renderer.domElement.addEventListener("webglcontextlost", onContextLost)
+    renderer.domElement.addEventListener("webglcontextrestored", onContextRestored)
     host.appendChild(renderer.domElement)
 
     const scene = new THREE.Scene()
@@ -1128,19 +1253,21 @@ export function AgentOfficeScene({
       totalDepth,
     } = layout
 
-    host.dataset.officeDepartmentCount = String(sceneModel.departments.length)
-    host.dataset.officeRenderedDepartmentCount = String(layout.departmentCount)
-    host.dataset.officeLogicalAgentCount = String(companyLogicalAgentCount)
-    host.dataset.officeRenderedLogicalAgentCount = String(layout.logicalAgentCount)
-    host.dataset.officeInteractiveWorkerCount = String(companyInteractiveWorkerCount)
-    host.dataset.officeRenderedInteractiveWorkerCount = String(layout.interactiveWorkerCount)
-    host.dataset.officeStandbyAgentCount = String(companyStandbyAgentCount)
-    host.dataset.officeRenderedStandbyAgentCount = String(layout.standbyAgentCount)
-    host.dataset.officeStandbyRenderedCount = String(standbyAllocation.rendered)
-    host.dataset.officeStandbyOverflowCount = String(standbyAllocation.overflow)
-    host.dataset.officeCeoCentral = departments.some((department) => department.id === "ceo-office")
-      ? "true"
-      : "false"
+    if (OFFICE_DIAGNOSTICS_ENABLED) {
+      host.dataset.officeDepartmentCount = String(sceneModel.departments.length)
+      host.dataset.officeRenderedDepartmentCount = String(layout.departmentCount)
+      host.dataset.officeLogicalAgentCount = String(companyLogicalAgentCount)
+      host.dataset.officeRenderedLogicalAgentCount = String(layout.logicalAgentCount)
+      host.dataset.officeInteractiveWorkerCount = String(companyInteractiveWorkerCount)
+      host.dataset.officeRenderedInteractiveWorkerCount = String(layout.interactiveWorkerCount)
+      host.dataset.officeStandbyAgentCount = String(companyStandbyAgentCount)
+      host.dataset.officeRenderedStandbyAgentCount = String(layout.standbyAgentCount)
+      host.dataset.officeStandbyRenderedCount = String(standbyAllocation.rendered)
+      host.dataset.officeStandbyOverflowCount = String(standbyAllocation.overflow)
+      host.dataset.officeCeoCentral = departments.some((department) => department.id === "ceo-office")
+        ? "true"
+        : "false"
+    }
 
     const edgeDistrict = addEdgeDistrict({
       scene,
@@ -1158,18 +1285,21 @@ export function AgentOfficeScene({
       totalDepth * 3,
     )
     camera.updateProjectionMatrix()
-    renderer.domElement.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
-    renderer.domElement.dataset.citySignatureTowerCount = String(edgeDistrict.counts.signatureTowers)
-    renderer.domElement.dataset.cityArchitecturalCrownCount = String(edgeDistrict.counts.architecturalCrowns)
-    renderer.domElement.dataset.cityGlassFacadeCount = String(edgeDistrict.counts.glassFacades)
-    renderer.domElement.dataset.cityTerraceAmenityCount = String(edgeDistrict.counts.terraceAmenities)
-    renderer.domElement.dataset.cityTallestBuildingHeight = edgeDistrict.counts.tallestBuildingHeight.toFixed(1)
-    renderer.domElement.dataset.cityWindowCount = String(edgeDistrict.counts.windows)
-    renderer.domElement.dataset.cityTreeCount = String(edgeDistrict.counts.trees)
-    renderer.domElement.dataset.cityMoverCount = String(edgeDistrict.counts.vehicles)
-    renderer.domElement.dataset.cityLightCount = String(edgeDistrict.counts.lightFixtures)
-    renderer.domElement.dataset.rooftopOffice = "true"
-    host.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
+    if (OFFICE_DIAGNOSTICS_ENABLED && edgeDistrict.counts) {
+      const cityCounts = edgeDistrict.counts
+      renderer.domElement.dataset.cityBuildingCount = String(cityCounts.buildings)
+      renderer.domElement.dataset.citySignatureTowerCount = String(cityCounts.signatureTowers)
+      renderer.domElement.dataset.cityArchitecturalCrownCount = String(cityCounts.architecturalCrowns)
+      renderer.domElement.dataset.cityGlassFacadeCount = String(cityCounts.glassFacades)
+      renderer.domElement.dataset.cityTerraceAmenityCount = String(cityCounts.terraceAmenities)
+      renderer.domElement.dataset.cityTallestBuildingHeight = cityCounts.tallestBuildingHeight.toFixed(1)
+      renderer.domElement.dataset.cityWindowCount = String(cityCounts.windows)
+      renderer.domElement.dataset.cityTreeCount = String(cityCounts.trees)
+      renderer.domElement.dataset.cityMoverCount = String(cityCounts.vehicles)
+      renderer.domElement.dataset.cityLightCount = String(cityCounts.lightFixtures)
+      renderer.domElement.dataset.rooftopOffice = "true"
+      host.dataset.cityBuildingCount = String(cityCounts.buildings)
+    }
 
     let needsRender = true
     let animationFrame = 0
@@ -1308,7 +1438,7 @@ export function AgentOfficeScene({
 
     const aisle = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 6, 1.15),
-      material(night ? 0x7d898e : 0xc7d1d5, 0.9),
+      material(night ? 0x263744 : 0xc7d1d5, night ? 0.62 : 0.9, night ? 0.16 : 0.03),
     )
     aisle.rotation.x = -Math.PI / 2
     aisle.position.set(0, -0.035, totalDepth / 2 + 1.6)
@@ -1331,8 +1461,8 @@ export function AgentOfficeScene({
     const departmentAnimations: DepartmentAnimation[] = []
     const workerSelectables: THREE.Object3D[] = []
     const departmentSelectables: THREE.Object3D[] = []
-    const standbyMarkers: StandbyCapacityMarker[] = []
     const compactWorkerMarkers: CompactWorkerMarker[] = []
+    const compactWorkstationMarkers: CompactWorkstationMarker[] = []
     const detailedIds = detailedWorkerIds(departments, variant)
     const placementById = new Map(
       layout.placements.map((placement) => [placement.id, placement] as const),
@@ -1375,7 +1505,13 @@ export function AgentOfficeScene({
 
       const carpet = new THREE.Mesh(
         new THREE.BoxGeometry(zoneWidth, isCeo ? 0.08 : 0.055, zoneDepth),
-        material(isCeo ? 0x1e3042 : 0x4f5a61, 0.86, isCeo ? 0.12 : 0.02),
+        material(
+          isCeo
+            ? night ? 0x101d2d : 0x1e3042
+            : night ? 0x1a2732 : 0x4f5a61,
+          night ? 0.68 : 0.86,
+          isCeo ? 0.16 : night ? 0.08 : 0.02,
+        ),
       )
       carpet.position.y = isCeo ? -0.005 : -0.018
       carpet.receiveShadow = variant === "full"
@@ -1385,7 +1521,13 @@ export function AgentOfficeScene({
 
       const stripeColor = ACTIVITY_COLORS[department.workers[0]?.activity || (department.id === "ceo-office" ? "coordination" : "software")]
       const zoneEdgeMaterial = new THREE.MeshStandardMaterial({
-        color: isCeo ? 0xa5b4fc : working ? 0x9ddce8 : 0x8f9ca2,
+        color: isCeo
+          ? 0xa5b4fc
+          : working
+            ? 0x67e8f9
+            : night ? 0x37566b : 0x8f9ca2,
+        emissive: night ? (isCeo ? 0x3730a3 : working ? 0x0e7490 : 0x102a3a) : 0x000000,
+        emissiveIntensity: night ? 0.42 : 0,
         roughness: 0.48,
         metalness: 0.24,
       })
@@ -1418,8 +1560,12 @@ export function AgentOfficeScene({
       const visibleWorkers = variant === "thumbnail"
         ? department.workers.slice(0, 5)
         : department.workers
+      const layoutDepartment = layoutDepartmentById.get(department.id)
+      const logicalAgentCount = layoutDepartment?.logicalAgentCount || department.workers.length
+      const standbyCount = standbyAllocation.byDepartment.get(department.id) || 0
+      const renderedStationCount = visibleWorkers.length + standbyCount
       const deskGrid = buildAgentOfficeDeskGrid(
-        visibleWorkers.length,
+        renderedStationCount,
         zoneWidth,
         zoneDepth,
         variant,
@@ -1437,10 +1583,10 @@ export function AgentOfficeScene({
         const deskZ = (deskRow - (deskRows - 1) / 2) * spacingZ - 0.15
         const worker = visibleWorkers[deskIndex]
         const detailed = Boolean(worker && detailedIds.has(worker.id))
-        const station = !worker || detailed
+        const station = detailed
           ? addDesk(departmentGroup, deskX, deskZ, Boolean(worker?.active))
           : null
-        if (!worker || detailed) addChair(departmentGroup, deskX, deskZ + 0.88)
+        if (detailed) addChair(departmentGroup, deskX, deskZ + 0.88)
         if (worker && detailed && station) {
           const animation = addWorker({
             sceneGroup: departmentGroup,
@@ -1461,12 +1607,26 @@ export function AgentOfficeScene({
           animation.activeBeacon = station.activeBeacon
           workers.push(animation)
           workerSelectables.push(animation.interactionTarget)
-        } else if (worker) {
-          compactWorkerMarkers.push({
-            worker,
-            position: [zoneX + deskX, 0.76, zoneZ + deskZ + 1.15],
-            rotationY: Math.PI,
-          })
+        } else {
+          const stationColor = worker
+            ? compactWorkerColor(worker)
+            : isCeo
+              ? 0xa5b4fc
+              : 0x6f8ca0
+          compactWorkstationMarkers.push([
+            zoneX + deskX,
+            zoneZ + deskZ,
+            stationColor,
+            Boolean(worker),
+            Boolean(worker?.active),
+          ])
+          if (worker) {
+            compactWorkerMarkers.push({
+              worker,
+              position: [zoneX + deskX, 0.76, zoneZ + deskZ + 0.64],
+              rotationY: Math.PI,
+            })
+          }
         }
       }
 
@@ -1529,45 +1689,18 @@ export function AgentOfficeScene({
       )
       departmentGroup.add(boardStatus)
 
-      const layoutDepartment = layoutDepartmentById.get(department.id)
-      const logicalAgentCount = layoutDepartment?.logicalAgentCount || department.workers.length
       let departmentLabel: THREE.Sprite | null = null
       if (variant === "full") {
         departmentLabel = createDepartmentLabel(department, logicalAgentCount)
         if (departmentLabel) {
-          departmentLabel.position.set(0, 2.48, -zoneDepth / 2 + 0.5)
+          departmentLabel.position.set(
+            0,
+            2.75 + (departmentIndex % 2) * 0.46,
+            -zoneDepth / 2 + 0.5,
+          )
           departmentGroup.add(departmentLabel)
           departmentSelectables.push(departmentLabel)
         }
-      }
-
-      // Logical capacity is deliberately neutral and static. These lightweight
-      // instanced markers are empty standby positions, never fake active people.
-      const standbyCount = standbyAllocation.byDepartment.get(department.id) || 0
-      const markerColumns = Math.max(
-        1,
-        Math.min(16, Math.floor((zoneWidth - 1.1) / 0.36)),
-      )
-      for (let markerIndex = 0; markerIndex < standbyCount; markerIndex += 1) {
-        const column = markerIndex % markerColumns
-        const row = Math.floor(markerIndex / markerColumns)
-        const centeredColumn =
-          (column - (Math.min(markerColumns, standbyCount) - 1) / 2) * 0.36
-        standbyMarkers.push({
-          position: isCeo
-            ? [
-                zoneX - zoneWidth / 2 + 0.42 + row * 0.36,
-                0.28,
-                zoneZ + centeredColumn,
-              ]
-            : [
-                zoneX + centeredColumn,
-                0.28,
-                zoneZ + zoneDepth / 2 - 0.42 - row * 0.36,
-              ],
-          rotationY: Math.PI,
-          color: isCeo ? 0xa5b4fc : 0x91a8b8,
-        })
       }
 
       // Shift-work pulse on the carpet. It only ever runs for a department
@@ -1604,7 +1737,11 @@ export function AgentOfficeScene({
           ? departmentLabelSignature(department, logicalAgentCount)
           : null,
         logicalAgentCount,
-        labelPosition: new THREE.Vector3(0, 2.48, -zoneDepth / 2 + 0.5),
+        labelPosition: new THREE.Vector3(
+          0,
+          2.75 + (departmentIndex % 2) * 0.46,
+          -zoneDepth / 2 + 0.5,
+        ),
         phase: departmentIndex * 0.83,
       })
 
@@ -1613,21 +1750,26 @@ export function AgentOfficeScene({
 
     const compactWorkerMesh = addCompactWorkerMesh(scene, compactWorkerMarkers)
     if (compactWorkerMesh) workerSelectables.push(compactWorkerMesh.mesh)
-    addStandbyCapacityMesh(scene, standbyMarkers)
+    addCompactWorkstationMeshes(scene, compactWorkstationMarkers, night)
     const renderedInteractiveWorkerCount = workers.length + compactWorkerMarkers.length
-    renderer.domElement.dataset.officeDepartmentCount = String(sceneModel.departments.length)
-    renderer.domElement.dataset.officeRenderedDepartmentCount = String(layout.departmentCount)
-    renderer.domElement.dataset.officeLogicalAgentCount = String(companyLogicalAgentCount)
-    renderer.domElement.dataset.officeRenderedLogicalAgentCount = String(layout.logicalAgentCount)
-    renderer.domElement.dataset.officeInteractiveWorkerCount = String(companyInteractiveWorkerCount)
-    renderer.domElement.dataset.officeRenderedInteractiveWorkerCount = String(renderedInteractiveWorkerCount)
-    renderer.domElement.dataset.officeDetailedWorkerCount = String(workers.length)
-    renderer.domElement.dataset.officeCompactWorkerCount = String(compactWorkerMarkers.length)
-    renderer.domElement.dataset.workerCount = String(renderedInteractiveWorkerCount)
-    renderer.domElement.dataset.officeStandbyAgentCount = String(companyStandbyAgentCount)
-    renderer.domElement.dataset.officeRenderedStandbyAgentCount = String(layout.standbyAgentCount)
-    renderer.domElement.dataset.officeStandbyRenderedCount = String(standbyMarkers.length)
-    renderer.domElement.dataset.officeStandbyOverflowCount = String(standbyAllocation.overflow)
+    if (OFFICE_DIAGNOSTICS_ENABLED) {
+      renderer.domElement.dataset.officeDepartmentCount = String(sceneModel.departments.length)
+      renderer.domElement.dataset.officeRenderedDepartmentCount = String(layout.departmentCount)
+      renderer.domElement.dataset.officeLogicalAgentCount = String(companyLogicalAgentCount)
+      renderer.domElement.dataset.officeRenderedLogicalAgentCount = String(layout.logicalAgentCount)
+      renderer.domElement.dataset.officeInteractiveWorkerCount = String(companyInteractiveWorkerCount)
+      renderer.domElement.dataset.officeRenderedInteractiveWorkerCount = String(renderedInteractiveWorkerCount)
+      renderer.domElement.dataset.officeDetailedWorkerCount = String(workers.length)
+      renderer.domElement.dataset.officeCompactWorkerCount = String(compactWorkerMarkers.length)
+      renderer.domElement.dataset.officeWorkstationCount = String(
+        workers.length + compactWorkstationMarkers.length,
+      )
+      renderer.domElement.dataset.workerCount = String(renderedInteractiveWorkerCount)
+      renderer.domElement.dataset.officeStandbyAgentCount = String(companyStandbyAgentCount)
+      renderer.domElement.dataset.officeRenderedStandbyAgentCount = String(layout.standbyAgentCount)
+      renderer.domElement.dataset.officeStandbyRenderedCount = String(standbyAllocation.rendered)
+      renderer.domElement.dataset.officeStandbyOverflowCount = String(standbyAllocation.overflow)
+    }
 
     const updateLiveScene = (nextModel: AgentOfficeModel) => {
       const nextWorkers = new Map(
@@ -1871,7 +2013,13 @@ export function AgentOfficeScene({
     }
     document.addEventListener("visibilitychange", onVisibilityChange)
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)")
+    let reducedMotion = motionPreference.matches
+    const onMotionPreferenceChange = (event: MediaQueryListEvent) => {
+      reducedMotion = event.matches
+      invalidate()
+    }
+    motionPreference.addEventListener?.("change", onMotionPreferenceChange)
     const animationStartedAt = window.performance.now()
     const projectedWorker = new THREE.Vector3()
     let frameCount = 0
@@ -2031,12 +2179,14 @@ export function AgentOfficeScene({
       renderer.render(scene, camera)
       needsRender = false
       frameCount += 1
-      renderer.domElement.dataset.frameCount = String(frameCount)
-      renderer.domElement.dataset.officeDrawCalls = String(renderer.info.render.calls)
-      renderer.domElement.dataset.officeTriangles = String(renderer.info.render.triangles)
-      hostRef.current?.setAttribute("data-office-draw-calls", String(renderer.info.render.calls))
-      hostRef.current?.setAttribute("data-office-triangles", String(renderer.info.render.triangles))
-      if ((workers[0] || compactWorkerMarkers[0]) && frameCount % 6 === 0) {
+      if (OFFICE_DIAGNOSTICS_ENABLED) {
+        renderer.domElement.dataset.frameCount = String(frameCount)
+        renderer.domElement.dataset.officeDrawCalls = String(renderer.info.render.calls)
+        renderer.domElement.dataset.officeTriangles = String(renderer.info.render.triangles)
+        hostRef.current?.setAttribute("data-office-draw-calls", String(renderer.info.render.calls))
+        hostRef.current?.setAttribute("data-office-triangles", String(renderer.info.render.triangles))
+      }
+      if (OFFICE_DIAGNOSTICS_ENABLED && (workers[0] || compactWorkerMarkers[0]) && frameCount % 6 === 0) {
         let visibleWorkerPoint: { x: number; y: number; score: number } | null = null
         let movingWorkerPoint: { x: number; y: number; score: number } | null = null
         for (const animation of workers) {
@@ -2105,7 +2255,9 @@ export function AgentOfficeScene({
       }
       if (!readyReported && frameCount >= 2) {
         readyReported = true
-        hostRef.current?.setAttribute("data-office-ready", "true")
+        if (OFFICE_DIAGNOSTICS_ENABLED) {
+          hostRef.current?.setAttribute("data-office-ready", "true")
+        }
         onReadyRef.current?.()
       }
       if (canAnimate || !readyReported) scheduleFrame()
@@ -2117,10 +2269,13 @@ export function AgentOfficeScene({
       resizeObserver.disconnect()
       intersectionObserver?.disconnect()
       document.removeEventListener("visibilitychange", onVisibilityChange)
+      motionPreference.removeEventListener?.("change", onMotionPreferenceChange)
       renderer.domElement.removeEventListener("pointerdown", onPointerDown)
       renderer.domElement.removeEventListener("pointermove", onPointerMove)
       renderer.domElement.removeEventListener("pointerup", onPointerUp)
       renderer.domElement.removeEventListener("wheel", onWheel)
+      renderer.domElement.removeEventListener("webglcontextlost", onContextLost)
+      renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored)
       cameraControlsRef.current = null
       invalidateSceneRef.current = null
       if (liveSceneUpdateRef.current === updateLiveScene) {
@@ -2129,23 +2284,26 @@ export function AgentOfficeScene({
       disposeScene(scene)
       renderer.dispose()
       renderer.domElement.remove()
-      delete host.dataset.officeReady
-      delete host.dataset.cityBuildingCount
-      delete host.dataset.officeDepartmentCount
-      delete host.dataset.officeRenderedDepartmentCount
-      delete host.dataset.officeLogicalAgentCount
-      delete host.dataset.officeRenderedLogicalAgentCount
-      delete host.dataset.officeInteractiveWorkerCount
-      delete host.dataset.officeRenderedInteractiveWorkerCount
-      delete host.dataset.officeStandbyAgentCount
-      delete host.dataset.officeRenderedStandbyAgentCount
-      delete host.dataset.officeStandbyRenderedCount
-      delete host.dataset.officeStandbyOverflowCount
-      delete host.dataset.officeCeoCentral
-      delete host.dataset.officeDrawCalls
-      delete host.dataset.officeTriangles
+      if (OFFICE_DIAGNOSTICS_ENABLED) {
+        delete host.dataset.officeReady
+        delete host.dataset.cityBuildingCount
+        delete host.dataset.officeDepartmentCount
+        delete host.dataset.officeRenderedDepartmentCount
+        delete host.dataset.officeLogicalAgentCount
+        delete host.dataset.officeRenderedLogicalAgentCount
+        delete host.dataset.officeInteractiveWorkerCount
+        delete host.dataset.officeRenderedInteractiveWorkerCount
+        delete host.dataset.officeStandbyAgentCount
+        delete host.dataset.officeRenderedStandbyAgentCount
+        delete host.dataset.officeStandbyRenderedCount
+        delete host.dataset.officeStandbyOverflowCount
+        delete host.dataset.officeCeoCentral
+        delete host.dataset.officeDrawCalls
+        delete host.dataset.officeTriangles
+        delete host.dataset.officeContext
+      }
     }
-  }, [timeOfDay, timePhase, topologySignature, variant])
+  }, [sceneGeneration, timeOfDay, timePhase, topologySignature, variant])
 
   return (
     <div
@@ -2156,19 +2314,31 @@ export function AgentOfficeScene({
         className,
       )}
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}
-      data-office-ready="false"
-      data-office-paused={paused ? "true" : "false"}
-      data-rooftop-office="true"
-      data-office-department-count={officePopulation.departmentCount}
-      data-office-logical-agent-count={officePopulation.logicalAgentCount}
-      data-office-interactive-worker-count={officePopulation.interactiveWorkerCount}
-      data-office-standby-agent-count={officePopulation.standbyAgentCount}
-      data-office-time={timeOfDay || "auto"}
-      data-office-phase={timePhase || "auto"}
+      {...(OFFICE_DIAGNOSTICS_ENABLED ? {
+        "data-office-ready": "false",
+        "data-office-paused": paused ? "true" : "false",
+        "data-rooftop-office": "true",
+        "data-office-department-count": officePopulation.departmentCount,
+        "data-office-logical-agent-count": officePopulation.logicalAgentCount,
+        "data-office-interactive-worker-count": officePopulation.interactiveWorkerCount,
+        "data-office-standby-agent-count": officePopulation.standbyAgentCount,
+        "data-office-time": timeOfDay || "auto",
+        "data-office-phase": timePhase || "auto",
+      } : {})}
     >
       {failed ? (
-        <div className="absolute inset-0 flex items-center justify-center bg-zinc-950 px-6 text-center text-xs text-zinc-300">
-          La vista 3D no está disponible en este navegador.
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-slate-950 px-6 text-center text-xs text-slate-300" role="alert">
+          <p>La vista 3D perdió el contexto gráfico.</p>
+          <button
+            type="button"
+            className="mt-4 min-h-11 rounded-xl border border-sky-400/30 bg-sky-400/10 px-5 font-semibold text-sky-200 hover:bg-sky-400/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+            onClick={() => {
+              setFailed(false)
+              setSceneGeneration((current) => current + 1)
+            }}
+          >
+            Reintentar vista 3D
+          </button>
         </div>
       ) : null}
     </div>

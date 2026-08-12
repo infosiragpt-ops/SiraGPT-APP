@@ -527,7 +527,11 @@ const {
     closeSwarmRuntime,
 } = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
-const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
+const {
+    recoverCodexRunsAfterBoot,
+    startQueuedRunReconciler,
+    stopQueuedRunReconciler,
+} = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
 const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
 const alerting = require('./src/services/alerting');
@@ -1572,6 +1576,9 @@ async function startServer() {
     } catch { /* never blocks boot */ }
     recoverCodexRunsAfterBoot().catch((err) => logger.warn({ err: err.message }, 'codex_boot_recovery_failed'));
     startCodexWorker();
+    if (startQueuedRunReconciler({ logger })) {
+        logger.info('codex_queued_run_reconciler_started');
+    }
     startSwarmWorker();
     recoverSwarmJobs()
       .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
@@ -1833,7 +1840,8 @@ async function startServer() {
     }, 5000);
 
     // Scheduler stop runs first so jobs cannot enqueue new work.
-    shutdownRegistry.register('scheduler_stop', () => {
+    shutdownRegistry.register('scheduler_stop', async () => {
+        await stopQueuedRunReconciler();
         try { internalHealthSystem.stopScheduler(); } catch { }
         try { defaultQueueHealthProbe.stop(); } catch { }
         try { scheduler.stop?.(); } catch { }

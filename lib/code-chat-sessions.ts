@@ -51,6 +51,16 @@ export type CodeChatSession = {
   titleLocked?: boolean
   /** FSM state of the /code agent for this session (intake → generate → debug). */
   agent?: AgentState
+  /** Durable company identity. Titles are presentation and may be renamed. */
+  departmentId?: string
+  /** Pool used to attribute cost, limits and office activity to the department. */
+  departmentPoolId?: string
+}
+
+export type CodeChatDepartmentIdentity = {
+  departmentId: string
+  /** undefined preserves an unknown/not-yet-hydrated pool; null clears it explicitly. */
+  departmentPoolId?: string | null
 }
 
 type SessionStore = {
@@ -59,7 +69,11 @@ type SessionStore = {
 }
 
 const STORAGE_KEY = "code-workspace:agent-sessions:v1"
-const MAX_SESSIONS_PER_WORKSPACE = 12
+// Backend capacity is 14 built-in departments (CEO included) plus up to 40
+// custom departments. Keep every durable department seat and another 42
+// ordinary conversations inside a bounded localStorage footprint. Any cap
+// below 54 made the largest supported company impossible to reconcile.
+const MAX_SESSIONS_PER_WORKSPACE = 96
 
 export const CODE_CHAT_SESSIONS_UPDATED_EVENT = "siragpt:code-chat-sessions-updated"
 
@@ -82,7 +96,11 @@ function migrateSessionStore(parsed: SessionStore): SessionStore {
     const title = s.title === "Agente 1" && s.turns.length === 0 && !s.titleLocked
       ? "CEO Office"
       : s.title
-    return key === s.workspaceId && title === s.title ? s : { ...s, workspaceId: key, title }
+    const departmentId = s.departmentId
+      || (title.trim().toLowerCase() === "ceo office" ? "ceo-office" : undefined)
+    return key === s.workspaceId && title === s.title && departmentId === s.departmentId
+      ? s
+      : { ...s, workspaceId: key, title, departmentId }
   })
   const activeByWorkspace: Record<string, string> = {}
   for (const [k, v] of Object.entries(parsed.activeByWorkspace || {})) {
@@ -198,7 +216,10 @@ function sanitizeSession(raw: unknown): CodeChatSession | null {
   const turns = s.turns
     .map(sanitizeTurn)
     .filter((t): t is CodeChatTurn => t !== null)
-  return { ...(s as unknown as CodeChatSession), turns }
+  const session = { ...(s as unknown as CodeChatSession), turns }
+  if (typeof s.departmentId !== "string" || !s.departmentId.trim()) delete session.departmentId
+  if (typeof s.departmentPoolId !== "string" || !s.departmentPoolId.trim()) delete session.departmentPoolId
+  return session
 }
 
 function loadStore(): SessionStore {
@@ -302,6 +323,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
     createdAt: Date.now(),
     updatedAt: Date.now(),
     agent: defaultAgentState(),
+    departmentId: "ceo-office",
   }
   const next: SessionStore = {
     sessions: [...store.sessions, session],
@@ -313,7 +335,7 @@ export function ensureDefaultSession(workspaceId: string, store = loadStore()): 
 
 export function createCodeChatSession(
   workspaceId: string,
-  opts?: { title?: string; id?: string },
+  opts?: { title?: string; id?: string; departmentId?: string; departmentPoolId?: string },
   store = loadStore(),
 ): { store: SessionStore; session: CodeChatSession } {
   const key = codexWorkspaceSessionKey(workspaceId)
@@ -328,12 +350,30 @@ export function createCodeChatSession(
     updatedAt: Date.now(),
     titleLocked: Boolean(opts?.title?.trim()),
     agent: defaultAgentState(),
+    ...(opts?.departmentId?.trim() ? { departmentId: opts.departmentId.trim() } : {}),
+    ...(opts?.departmentPoolId?.trim() ? { departmentPoolId: opts.departmentPoolId.trim() } : {}),
   }
   let sessions = [...ensured.sessions, session]
   const perWs = sessions.filter((s) => s.workspaceId === key)
   if (perWs.length > MAX_SESSIONS_PER_WORKSPACE) {
-    const drop = perWs[MAX_SESSIONS_PER_WORKSPACE - 1]
-    sessions = sessions.filter((s) => s.id !== drop.id)
+    const previousActiveId = ensured.activeByWorkspace[key]
+    // Department sessions are runtime seats, not disposable history. When the
+    // workspace reaches its bound, evict the least-recent ordinary chat first
+    // (preferably not the previously active one). This guarantees bootstrap
+    // convergence even when many user chats existed before custom departments.
+    const drop = perWs
+      .filter((candidate) => (
+        candidate.id !== session.id
+        && (!candidate.departmentId || candidate.id !== previousActiveId)
+      ))
+      .sort((left, right) => {
+        const leftPriority = left.departmentId ? 2 : left.id === previousActiveId ? 1 : 0
+        const rightPriority = right.departmentId ? 2 : right.id === previousActiveId ? 1 : 0
+        return leftPriority - rightPriority
+          || left.updatedAt - right.updatedAt
+          || left.createdAt - right.createdAt
+      })[0]
+    if (drop) sessions = sessions.filter((candidate) => candidate.id !== drop.id)
   }
   const next: SessionStore = {
     sessions,
@@ -341,6 +381,89 @@ export function createCodeChatSession(
   }
   saveStore(next)
   return { store: next, session }
+}
+
+function normalizedDepartmentIdentity(department: CodeChatDepartmentIdentity): {
+  departmentId: string
+  departmentPoolId: string | null | undefined
+} {
+  const rawPoolId = department.departmentPoolId
+  return {
+    departmentId: department.departmentId.trim(),
+    departmentPoolId: rawPoolId === null ? null : rawPoolId?.trim() || undefined,
+  }
+}
+
+/**
+ * Durable department identity is independent from the presentation title.
+ * This also centralizes the exact equality used by the persistence update so
+ * callers can avoid scheduling a React state update when reconciliation is a
+ * no-op.
+ */
+export function codeChatSessionMatchesDepartment(
+  session: CodeChatSession,
+  department: CodeChatDepartmentIdentity,
+): boolean {
+  const identity = normalizedDepartmentIdentity(department)
+  if (!identity.departmentId || session.departmentId !== identity.departmentId) return false
+  // An omitted pool means the server catalog has not hydrated yet. Treat the
+  // durable session pool as authoritative until a concrete id (or explicit
+  // null clear) arrives, so readiness checks cannot erase budget attribution.
+  if (identity.departmentPoolId === undefined) return true
+  const currentPoolId = session.departmentPoolId?.trim() || undefined
+  return identity.departmentPoolId === null
+    ? currentPoolId === undefined
+    : currentPoolId === identity.departmentPoolId
+}
+
+/** Prefer durable identity; use the bootstrap title only for legacy sessions. */
+export function findCodeChatSessionForDepartment(
+  sessions: readonly CodeChatSession[],
+  departmentId: string,
+  bootstrapTitle?: string,
+): CodeChatSession | undefined {
+  const normalizedId = departmentId.trim()
+  if (!normalizedId) return undefined
+  const durable = sessions.find((session) => session.departmentId === normalizedId)
+  if (durable) return durable
+  const normalizedTitle = bootstrapTitle?.trim().toLowerCase()
+  if (!normalizedTitle) return undefined
+  return sessions.find((session) => session.title.trim().toLowerCase() === normalizedTitle)
+}
+
+export function updateCodeChatSessionDepartment(
+  sessionId: string,
+  department: CodeChatDepartmentIdentity,
+  store = loadStore(),
+): SessionStore {
+  const { departmentId, departmentPoolId } = normalizedDepartmentIdentity(department)
+  if (!departmentId) return store
+  const current = store.sessions.find((session) => session.id === sessionId)
+  // A missing session and an already-reconciled identity are both true no-ops:
+  // preserve object identity and do not write localStorage, bump updatedAt, or
+  // emit CODE_CHAT_SESSIONS_UPDATED_EVENT. This prevents PROACTIVO's bootstrap
+  // effect from feeding itself forever through the store notification.
+  if (!current || codeChatSessionMatchesDepartment(current, department)) return store
+  const poolPatch = departmentPoolId === undefined
+    ? {}
+    : departmentPoolId === null
+      ? { departmentPoolId: undefined }
+      : { departmentPoolId }
+  const next: SessionStore = {
+    ...store,
+    sessions: store.sessions.map((session) => (
+      session.id === sessionId
+        ? {
+            ...session,
+            departmentId,
+            ...poolPatch,
+            updatedAt: Date.now(),
+          }
+        : session
+    )),
+  }
+  saveStore(next)
+  return next
 }
 
 export function setActiveCodeChatSession(

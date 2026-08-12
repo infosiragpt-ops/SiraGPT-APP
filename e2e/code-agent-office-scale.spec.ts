@@ -4,7 +4,15 @@ import { AGENT_COMPANY_DEPARTMENTS } from "../lib/code-agent-company"
 
 test.describe.configure({ timeout: 120_000 })
 
-const SCALE_WORKERS = 196
+const SYNTHETIC_LOGICAL_STATIONS = 196
+const SYNTHETIC_CEO_SESSIONS = 1
+// The production list endpoint currently returns at most its default page of
+// 50 runs. This visual stress fixture deliberately mirrors that boundary; it
+// must never be interpreted as evidence of 196 simultaneously loaded runs.
+const RUNS_ENDPOINT_PAGE_SIZE = 50
+const PRODUCTION_PHYSICAL_AGENT_CAPACITY = 32
+const SYNTHETIC_INTERACTIVE_RECORDS = RUNS_ENDPOINT_PAGE_SIZE + SYNTHETIC_CEO_SESSIONS
+const SYNTHETIC_STANDBY_STATIONS = SYNTHETIC_LOGICAL_STATIONS - SYNTHETIC_INTERACTIVE_RECORDS
 const OFFICE_READY_BUDGET_MS = 15_000
 const DRAW_CALL_BUDGET = 2_500
 const TRIANGLE_BUDGET = 300_000
@@ -13,7 +21,7 @@ const now = "2026-08-10T16:00:00.000Z"
 const project = {
   id: "office-scale-196",
   name: "SiraGPT",
-  description: "Empresa de agentes a escala real",
+  description: "Fixture sintético de estrés visual para 196 puestos lógicos",
   instructions: null,
   isStarred: false,
   shareId: null,
@@ -47,9 +55,10 @@ const departmentPools = AGENT_COMPANY_DEPARTMENTS.map((department) => ({
   updatedAt: now,
 }))
 
-// One real CEO chat session plus 195 durable runs gives exactly 196 rendered
-// workers. No worker in this fixture comes from standby/capacity markers.
-const runs = AGENT_COMPANY_DEPARTMENTS.flatMap((department, departmentIndex) => {
+// This catalog is synthetic UI input, not a claim about production concurrency.
+// Only one production-sized page is returned by the mocked runs endpoint below;
+// the remaining logical capacity is rendered as neutral standby workstations.
+const syntheticRunCatalog = AGENT_COMPANY_DEPARTMENTS.flatMap((department, departmentIndex) => {
   const runCount = (department.desiredAgents || 1) - (department.id === "ceo-office" ? 1 : 0)
   return Array.from({ length: runCount }, (_, workerIndex) => {
     const active = departmentIndex === 0 || workerIndex === 0 || (
@@ -76,7 +85,11 @@ const runs = AGENT_COMPANY_DEPARTMENTS.flatMap((department, departmentIndex) => 
   })
 })
 
-expect(runs).toHaveLength(SCALE_WORKERS - 1)
+expect(syntheticRunCatalog).toHaveLength(SYNTHETIC_LOGICAL_STATIONS - SYNTHETIC_CEO_SESSIONS)
+
+const runs = syntheticRunCatalog.slice(0, RUNS_ENDPOINT_PAGE_SIZE)
+
+expect(runs).toHaveLength(RUNS_ENDPOINT_PAGE_SIZE)
 
 async function fulfillJson(route: Route, payload: unknown, status = 200) {
   await route.fulfill({
@@ -88,9 +101,10 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 
 async function mockScaleOffice(page: Page) {
   await page.addInitScript(({ activeProject, currentUser, timestamp }) => {
+    const canonicalWorkspaceId = `project:${activeProject.id}`
     const session = {
       id: "scale-ceo-session",
-      workspaceId: activeProject.id,
+      workspaceId: canonicalWorkspaceId,
       title: "CEO Office",
       turns: [{
         id: "scale-ceo-turn",
@@ -113,7 +127,7 @@ async function mockScaleOffice(page: Page) {
       "code-workspace:agent-sessions:v1",
       JSON.stringify({
         sessions: [session],
-        activeByWorkspace: { [activeProject.id]: session.id },
+        activeByWorkspace: { [canonicalWorkspaceId]: session.id },
       }),
     )
     localStorage.setItem(
@@ -193,8 +207,9 @@ async function mockScaleOffice(page: Page) {
     if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
       return fulfillJson(route, {
         state: {
-          // Keep automatic department-chat warming off. The 196 workers under
-          // test come from the fixture's one CEO session + 195 durable runs.
+          // Keep automatic department-chat warming off. This test supplies one
+          // synthetic CEO session plus one production-sized page of run-shaped
+          // records; all remaining logical stations are neutral standby seats.
           enabled: false,
           enabledAt: null,
           dayKey: "2026-08-10",
@@ -214,10 +229,12 @@ async function mockScaleOffice(page: Page) {
         departmentPools,
         capacity: {
           departments: AGENT_COMPANY_DEPARTMENTS.length,
-          logicalAgents: SCALE_WORKERS,
+          logicalAgents: SYNTHETIC_LOGICAL_STATIONS,
           departmentPools: departmentPools.length,
-          physicalAgents: SCALE_WORKERS,
-          writerConcurrency: 16,
+          // Backend department pools cap physical execution/writer capacity at
+          // 32. Logical office seats may exceed it without claiming concurrency.
+          physicalAgents: PRODUCTION_PHYSICAL_AGENT_CAPACITY,
+          writerConcurrency: PRODUCTION_PHYSICAL_AGENT_CAPACITY,
           dailyBudgetUsd: 25,
           strategy: "isolated_worktrees_serialized_merge",
         },
@@ -309,7 +326,12 @@ async function mockScaleOffice(page: Page) {
   })
 }
 
-test("renders 196 real workers within the megaoffice performance budget", async ({ page }) => {
+test("renders 196 synthetic logical stations within the megaoffice performance budget", async ({ page }, testInfo) => {
+  testInfo.annotations.push({
+    type: "fixture",
+    description:
+      "Synthetic visual workload: 196 logical stations, 50 paged run records + 1 local session, and physical capacity capped at 32; this is not evidence of 196 concurrent agents.",
+  })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.emulateMedia({ reducedMotion: "no-preference" })
   await mockScaleOffice(page)
@@ -333,13 +355,20 @@ test("renders 196 real workers within the megaoffice performance budget", async 
     readyStartedAt,
   )
 
-  await expect(dialog).toHaveAttribute("data-interactive-worker-count", String(SCALE_WORKERS))
-  await expect(scene).toHaveAttribute("data-office-interactive-worker-count", String(SCALE_WORKERS))
-  await expect(canvas).toHaveAttribute("data-office-interactive-worker-count", String(SCALE_WORKERS))
-  await expect(canvas).toHaveAttribute("data-office-rendered-interactive-worker-count", String(SCALE_WORKERS))
-  await expect(canvas).toHaveAttribute("data-office-standby-agent-count", "0")
-  await expect(canvas).toHaveAttribute("data-office-rendered-standby-agent-count", "0")
-  await expect(canvas).toHaveAttribute("data-worker-count", String(SCALE_WORKERS), { timeout: 10_000 })
+  await expect(dialog).toHaveAttribute("data-interactive-worker-count", String(SYNTHETIC_INTERACTIVE_RECORDS))
+  await expect(scene).toHaveAttribute("data-office-logical-agent-count", String(SYNTHETIC_LOGICAL_STATIONS))
+  await expect(scene).toHaveAttribute("data-office-interactive-worker-count", String(SYNTHETIC_INTERACTIVE_RECORDS))
+  await expect(scene).toHaveAttribute("data-office-standby-agent-count", String(SYNTHETIC_STANDBY_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-logical-agent-count", String(SYNTHETIC_LOGICAL_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-rendered-logical-agent-count", String(SYNTHETIC_LOGICAL_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-interactive-worker-count", String(SYNTHETIC_INTERACTIVE_RECORDS))
+  await expect(canvas).toHaveAttribute("data-office-rendered-interactive-worker-count", String(SYNTHETIC_INTERACTIVE_RECORDS))
+  await expect(canvas).toHaveAttribute("data-office-workstation-count", String(SYNTHETIC_LOGICAL_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-standby-agent-count", String(SYNTHETIC_STANDBY_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-rendered-standby-agent-count", String(SYNTHETIC_STANDBY_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-standby-rendered-count", String(SYNTHETIC_STANDBY_STATIONS))
+  await expect(canvas).toHaveAttribute("data-office-standby-overflow-count", "0")
+  await expect(canvas).toHaveAttribute("data-worker-count", String(SYNTHETIC_INTERACTIVE_RECORDS), { timeout: 10_000 })
 
   await expect.poll(
     async () => Number(await canvas.getAttribute("data-office-draw-calls")),
@@ -354,8 +383,12 @@ test("renders 196 real workers within the megaoffice performance budget", async 
   const triangles = Number(await canvas.getAttribute("data-office-triangles"))
   const frameCount = Number(await canvas.getAttribute("data-frame-count"))
   const metrics = {
-    workers: SCALE_WORKERS,
-    standbyWorkers: 0,
+    fixtureKind: "synthetic_ui_stress",
+    logicalStations: SYNTHETIC_LOGICAL_STATIONS,
+    interactiveRecords: SYNTHETIC_INTERACTIVE_RECORDS,
+    pagedRunRecords: RUNS_ENDPOINT_PAGE_SIZE,
+    standbyStations: SYNTHETIC_STANDBY_STATIONS,
+    physicalAgentCapacity: PRODUCTION_PHYSICAL_AGENT_CAPACITY,
     officeReadyMs: Math.round(officeReadyMs),
     drawCalls,
     triangles,

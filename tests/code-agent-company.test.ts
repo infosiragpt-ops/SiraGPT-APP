@@ -87,6 +87,13 @@ describe("code agent company", () => {
     assert.equal(departmentIdForSession(product, "root"), "product-engineering")
     assert.equal(departmentIdForSession(sales, "root"), "sales")
     assert.equal(departmentIdForSession(customerSuccess, "root"), "customer-success")
+    assert.equal(
+      departmentIdForSession(
+        session({ id: "renamed", title: "Prioridad confidencial", departmentId: "sales" }),
+        "root",
+      ),
+      "sales",
+    )
   })
 
   it("maps persisted Codex workers to departments and reports their real state", () => {
@@ -107,6 +114,14 @@ describe("code agent company", () => {
 
     assert.equal(departmentIdForRun(running), "trust")
     assert.equal(departmentIdForRun(completed), "marketing")
+    assert.equal(
+      departmentIdForRun(
+        { ...completed, departmentPoolId: "pool-sales" },
+        undefined,
+        new Map([["pool-sales", "sales"]]),
+      ),
+      "sales",
+    )
     assert.equal(codeRunIsActive(running), true)
     assert.equal(codeRunIsActive(completed), false)
     assert.deepEqual(codeRunStatus(running), { label: "Ejecutando", tone: "active" })
@@ -122,6 +137,18 @@ describe("code agent company", () => {
     const generic = session({ id: "generic", title: "Agente 1", createdAt: 1 })
     const ceo = session({ id: "ceo", title: "CEO Office", createdAt: 2 })
     assert.equal(buildAgentCompanySnapshot([generic, ceo], {}).rootSessionId, "ceo")
+  })
+
+  it("keeps a renamed durable CEO session as root over an older non-CEO chat", () => {
+    const olderChat = session({ id: "older", title: "Ventas", createdAt: 1, departmentId: "sales" })
+    const renamedCeo = session({
+      id: "ceo",
+      title: "Dirección estratégica",
+      createdAt: 2,
+      departmentId: "ceo-office",
+    })
+
+    assert.equal(buildAgentCompanySnapshot([olderChat, renamedCeo], {}).rootSessionId, "ceo")
   })
 
   it("reports streaming and completed phases honestly", () => {

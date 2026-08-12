@@ -33,17 +33,19 @@ describe("agent office Edge District", () => {
     })
 
     // secondaryCount full = 52 → landmark + secondaries = 53 denser modern CBD.
-    expect(district.counts.buildings).toBe(53)
-    expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(8)
-    expect(district.counts.architecturalCrowns).toBeGreaterThanOrEqual(16)
+    expect(district.counts).not.toBeNull()
+    const counts = district.counts!
+    expect(counts.buildings).toBe(53)
+    expect(counts.signatureTowers).toBeGreaterThanOrEqual(8)
+    expect(counts.architecturalCrowns).toBeGreaterThanOrEqual(16)
     // 2 glass planes per secondary (+ optional sky-bridge panes).
-    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(104)
-    expect(district.counts.glassFacades).toBeLessThanOrEqual(112)
-    expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(46)
-    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
-    expect(district.counts.windows).toBeGreaterThanOrEqual(1_800)
-    expect(district.counts.vehicles).toBeGreaterThanOrEqual(16)
+    expect(counts.glassFacades).toBeGreaterThanOrEqual(104)
+    expect(counts.glassFacades).toBeLessThanOrEqual(112)
+    expect(counts.terraceAmenities).toBeGreaterThanOrEqual(24)
+    expect(counts.tallestBuildingHeight).toBeGreaterThanOrEqual(46)
+    expect(counts.expectedDrawCalls).toBeLessThanOrEqual(28)
+    expect(counts.windows).toBeGreaterThanOrEqual(1_800)
+    expect(counts.vehicles).toBeGreaterThanOrEqual(16)
     expect(district.framing.officeY).toBe(0)
     expect(district.framing.pitch).toBeGreaterThanOrEqual(0.6)
     expect(district.framing.portraitPitch).toBeGreaterThanOrEqual(0.8)
@@ -74,10 +76,12 @@ describe("agent office Edge District", () => {
     })
 
     // secondaryCount thumbnail = 22 → landmark + secondaries = 23.
-    expect(district.counts.buildings).toBe(23)
-    expect(district.counts.glassFacades).toBe(44)
-    expect(district.counts.vehicles).toBe(6)
-    expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
+    expect(district.counts).not.toBeNull()
+    const counts = district.counts!
+    expect(counts.buildings).toBe(23)
+    expect(counts.glassFacades).toBe(44)
+    expect(counts.vehicles).toBe(6)
+    expect(counts.expectedDrawCalls).toBeLessThanOrEqual(28)
     expect(district.framing.pitch).toBe(0.48)
     expect(district.framing.portraitPitch).toBe(0.48)
     expect(district.framing.portraitTargetLift).toBe(2.8)

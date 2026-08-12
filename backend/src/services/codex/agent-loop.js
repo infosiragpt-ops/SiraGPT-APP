@@ -33,6 +33,7 @@ const { createSandboxClient } = require('./sandbox-provider');
 const { localCliCommand } = require('./local-cli');
 const { scanBuffer } = require('../security/secret-scanner');
 const { redactString } = require('../../utils/secret-redactor');
+const { inspectSwarmRunState } = require('./swarm-run-state');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
@@ -1397,45 +1398,41 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
 
   let poolBudgetContext = null;
   if (run.departmentPoolId) {
-    if (!run.swarmTaskId || !prisma?.codexSwarmTask?.findUnique) {
-      const error = 'department pool budget preflight failed: swarm task attribution unavailable';
-      await eventStore.appendEvent(run.id, 'budget_status', {
-        allowed: false,
-        reason: 'department_pool_task_missing',
-        costTodayUsd: null,
-        dailyBudgetUsd: null,
-        remainingUsd: null,
-        scope: 'department_pool',
-      }, { prisma }).catch(() => {});
-      return { status: 'error', error };
-    }
-    const poolTask = await prisma.codexSwarmTask.findUnique({
-      where: { id: run.swarmTaskId },
-      select: { id: true, input: true },
-    }).catch(() => null);
-    const poolTaskInput = poolTask?.input
-      && typeof poolTask.input === 'object'
-      && !Array.isArray(poolTask.input)
-      ? poolTask.input
-      : {};
-    if (
-      !poolTask
-      || String(poolTaskInput.departmentPoolId || '') !== String(run.departmentPoolId)
-    ) {
-      const error = 'department pool budget preflight failed: swarm task attribution mismatch';
-      await eventStore.appendEvent(run.id, 'budget_status', {
-        allowed: false,
-        reason: 'department_pool_task_mismatch',
-        costTodayUsd: null,
-        dailyBudgetUsd: null,
-        remainingUsd: null,
-        scope: 'department_pool',
-      }, { prisma }).catch(() => {});
-      return { status: 'error', error };
+    let poolTaskInput = {};
+    if (run.swarmTaskId) {
+      const poolTask = prisma?.codexSwarmTask?.findUnique
+        ? await prisma.codexSwarmTask.findUnique({
+          where: { id: run.swarmTaskId },
+          select: { id: true, input: true },
+        }).catch(() => null)
+        : null;
+      poolTaskInput = poolTask?.input
+        && typeof poolTask.input === 'object'
+        && !Array.isArray(poolTask.input)
+        ? poolTask.input
+        : {};
+      if (
+        !poolTask
+        || String(poolTaskInput.departmentPoolId || '') !== String(run.departmentPoolId)
+      ) {
+        const error = 'department pool budget preflight failed: swarm task attribution mismatch';
+        await eventStore.appendEvent(run.id, 'budget_status', {
+          allowed: false,
+          reason: 'department_pool_task_mismatch',
+          costTodayUsd: null,
+          dailyBudgetUsd: null,
+          remainingUsd: null,
+          scope: 'department_pool',
+        }, { prisma }).catch(() => {});
+        return { status: 'error', error };
+      }
     }
     poolBudgetContext = {
       departmentPoolId: run.departmentPoolId,
-      swarmTaskId: run.swarmTaskId,
+      // A direct proactive run is pooled but has no reservation-owning swarm
+      // task. project-budget handles that safely by counting persisted usage
+      // and every live swarm reservation without excluding a task.
+      swarmTaskId: run.swarmTaskId || null,
       reservationUsd: Number.isFinite(Number(poolTaskInput.poolBudgetReservationUsd))
         ? Math.max(0, Number(poolTaskInput.poolBudgetReservationUsd))
         : null,
@@ -3746,6 +3743,20 @@ async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {
   });
 
   if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
+
+  const swarmState = await inspectSwarmRunState({ prisma: deps.prisma, run });
+  if (!swarmState.executable) {
+    if (swarmState.cancelled) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: 'No reanudé esta corrida porque su enjambre fue cancelado.',
+      }, { prisma: deps.prisma }).catch(() => {});
+      return { status: 'cancelled' };
+    }
+    return {
+      status: 'error',
+      error: `swarm state validation failed: ${swarmState.reason}`,
+    };
+  }
 
   if (run.mode === 'plan') {
     const companySoul = deps.companySoul != null

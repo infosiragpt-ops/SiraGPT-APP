@@ -2,6 +2,7 @@
 // Kept behind the codexApi facade so existing callers retain one stable import.
 
 import type {
+  CodexActiveRunCancellation,
   CodexRun,
   CodexSessionSnapshot,
   CodexTranscriptEntry,
@@ -9,7 +10,16 @@ import type {
 import { arrayOrEmpty, requestCodex as req } from "./core"
 
 export const runsCodexApi = {
-  createRun: (projectId: string, body: { mode: "plan" | "build"; prompt?: string; model?: string; tier?: string; reasoningEffort?: string; planRunId?: string; autoExecute?: boolean }) =>
+  createRun: (projectId: string, body: {
+    mode: "plan" | "build"
+    prompt?: string
+    model?: string
+    tier?: string
+    reasoningEffort?: string
+    planRunId?: string
+    autoExecute?: boolean
+    departmentPoolId?: string
+  }) =>
     req<{ run: CodexRun }>(`/projects/${projectId}/runs`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.run),
   listRuns: (projectId: string) =>
     req<{ runs?: unknown }>(`/projects/${projectId}/runs`, { cache: "no-store" })
@@ -19,6 +29,10 @@ export const runsCodexApi = {
   cancelRunFamily: (runId: string) => req<{ runs: CodexRun[]; cancelledRunIds: string[] }>(
     `/runs/${runId}/cancel-family`,
     { method: "POST" },
+  ),
+  cancelActiveRuns: (projectId: string) => req<CodexActiveRunCancellation>(
+    `/projects/${projectId}/runs/cancel-active`,
+    { method: "POST", timeoutMs: 60_000 },
   ),
   generateRunSummaryAudio: (runId: string) =>
     req<{

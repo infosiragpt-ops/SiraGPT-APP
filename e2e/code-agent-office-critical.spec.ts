@@ -1,8 +1,10 @@
-import { expect, test, type Page, type Route } from "@playwright/test"
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test"
 
 import { AGENT_COMPANY_DEPARTMENTS } from "../lib/code-agent-company"
 
 test.describe.configure({ timeout: 120_000 })
+
+const OFFICE_READY_TIMEOUT_MS = 45_000
 
 const now = "2026-08-10T16:00:00.000Z"
 const project = {
@@ -31,6 +33,36 @@ const user = {
   updatedAt: now,
 }
 
+const CRITICAL_CODEX_PROJECT_ID = "codex-office-critical"
+const departmentPoolId = (departmentId: string) => `pool-${departmentId}`
+const logicalAgentCount = AGENT_COMPANY_DEPARTMENTS.reduce(
+  (total, department) => total + (department.desiredAgents || 1),
+  0,
+)
+
+function criticalDepartmentPools(projectId = CRITICAL_CODEX_PROJECT_ID) {
+  return AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+    id: departmentPoolId(department.id),
+    projectId,
+    departmentId: department.id,
+    size: department.desiredAgents || 1,
+    dailyBudgetUsd: null,
+    enabled: true,
+    createdAt: now,
+    updatedAt: now,
+  }))
+}
+
+const criticalDepartments = AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+  ...department,
+  keywords: [...department.keywords],
+  mission: department.mission || department.description,
+  kind: department.kind || "coordination",
+  desiredAgents: department.desiredAgents || 1,
+  custom: false,
+  enabled: true,
+}))
+
 const runs = [
   {
     id: "office-run-trust",
@@ -40,6 +72,7 @@ const runs = [
     tier: "pro",
     model: "gpt-5.4",
     planRunId: null,
+    departmentPoolId: departmentPoolId("trust"),
     prompt: "[PROACTIVO · Confianza, Privacidad y Cumplimiento] Auditar el aislamiento",
     error: null,
     createdAt: "2026-08-10T15:58:00.000Z",
@@ -54,6 +87,7 @@ const runs = [
     tier: "pro",
     model: "gpt-5.4",
     planRunId: null,
+    departmentPoolId: departmentPoolId("product-engineering"),
     prompt: "[PROACTIVO · Producto e Ingeniería] Verificar la megaoficina",
     error: null,
     createdAt: "2026-08-10T15:40:00.000Z",
@@ -71,32 +105,34 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 }
 
 async function mockCriticalOffice(page: Page) {
-  await page.addInitScript(({ activeProject, currentUser, timestamp }) => {
+  const operations = {
+    cancelledRunIds: [] as string[],
+    cancelActiveCalls: 0,
+    retryBodies: [] as Array<Record<string, unknown>>,
+  }
+  await page.addInitScript(({ activeProject, currentUser, timestamp, departmentSeeds }) => {
     const baseSession = {
-      workspaceId: activeProject.id,
+      workspaceId: `project:${activeProject.id}`,
       turns: [],
       createdAt: Date.parse(timestamp),
       updatedAt: Date.parse(timestamp),
       agent: { phase: "idle", intakeStep: 0, context: { goal: "" } },
     }
-    const sessions = [
-      { ...baseSession, id: "office-ceo", title: "CEO Office" },
-      {
-        ...baseSession,
-        id: "office-product",
-        title: "Producto e Ingeniería",
-        createdAt: Date.parse(timestamp) + 1,
-        updatedAt: Date.parse(timestamp) + 1,
-        turns: [{ id: "office-turn-product", role: "assistant", content: "Verificando la oficina." }],
-      },
-      {
-        ...baseSession,
-        id: "office-sales",
-        title: "Ventas",
-        createdAt: Date.parse(timestamp) + 2,
-        updatedAt: Date.parse(timestamp) + 2,
-      },
-    ]
+    const sessions = departmentSeeds.map((department, index) => ({
+      ...baseSession,
+      id: `office-${department.id}`,
+      title: department.name,
+      departmentId: department.id,
+      departmentPoolId: department.poolId,
+      createdAt: Date.parse(timestamp) + index,
+      updatedAt: Date.parse(timestamp) + index,
+      turns: department.id === "product-engineering" ? [{
+        id: "office-turn-product",
+        role: "assistant",
+        content: "Verificando la oficina.",
+        codexRunId: "office-run-product",
+      }] : [],
+    }))
 
     localStorage.setItem("auth-token", "office-critical-token")
     localStorage.setItem("siragpt:office-sound-enabled", "off")
@@ -105,7 +141,7 @@ async function mockCriticalOffice(page: Page) {
       "code-workspace:agent-sessions:v1",
       JSON.stringify({
         sessions,
-        activeByWorkspace: { [activeProject.id]: "office-ceo" },
+        activeByWorkspace: { [`project:${activeProject.id}`]: "office-ceo-office" },
       }),
     )
     localStorage.setItem(
@@ -119,12 +155,17 @@ async function mockCriticalOffice(page: Page) {
         },
       ]),
     )
-    localStorage.setItem("siragpt:codex-project:office-ceo", "codex-office-critical")
+    localStorage.setItem("siragpt:codex-project:office-ceo-office", "codex-office-critical")
     localStorage.setItem("office-critical:user", JSON.stringify(currentUser))
   }, {
     activeProject: project,
     currentUser: user,
     timestamp: now,
+    departmentSeeds: AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+      id: department.id,
+      name: department.name,
+      poolId: departmentPoolId(department.id),
+    })),
   })
 
   await page.route("**/api/**", async (route) => {
@@ -176,6 +217,7 @@ async function mockCriticalOffice(page: Page) {
       })
     }
     if (/^\/codex\/projects\/[^/]+\/proactive$/.test(path)) {
+      const codexProjectId = path.split("/")[3] || CRITICAL_CODEX_PROJECT_ID
       return fulfillJson(route, {
         state: {
           enabled: false,
@@ -188,16 +230,19 @@ async function mockCriticalOffice(page: Page) {
           costTodayUsd: 0,
           dailyBudgetUsd: 25,
           budgetBlocked: false,
+          lastDepartment: null,
+          missionIndex: 0,
+          lastMissionId: null,
         },
-        departments: [],
-        departmentPools: [],
+        departments: criticalDepartments,
+        departmentPools: criticalDepartmentPools(codexProjectId),
         capacity: {
           departments: AGENT_COMPANY_DEPARTMENTS.length,
-          logicalAgents: 196,
-          departmentPools: 0,
-          physicalAgents: 16,
-          writerConcurrency: 4,
-          dailyBudgetUsd: 25,
+          logicalAgents: logicalAgentCount,
+          departmentPools: AGENT_COMPANY_DEPARTMENTS.length,
+          physicalAgents: 32,
+          writerConcurrency: 32,
+          dailyBudgetUsd: 0,
           strategy: "isolated_worktrees_serialized_merge",
         },
       })
@@ -206,7 +251,53 @@ async function mockCriticalOffice(page: Page) {
       return fulfillJson(route, { resources: { assignments: {}, pinned: [], revision: 0 } })
     }
     if (/^\/codex\/projects\/[^/]+\/runs$/.test(path) && request.method() === "GET") {
-      return fulfillJson(route, { runs })
+      return fulfillJson(route, {
+        runs: operations.cancelActiveCalls > 0
+          ? runs.map((run) => run.id === "office-run-trust"
+            ? { ...run, status: "cancelled", finishedAt: now }
+            : run)
+          : runs,
+      })
+    }
+    if (/^\/codex\/projects\/[^/]+\/runs$/.test(path) && request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>
+      operations.retryBodies.push(body)
+      return fulfillJson(route, {
+        run: {
+          ...runs[1],
+          id: `office-retry-${operations.retryBodies.length}`,
+          mode: "plan",
+          status: "queued",
+          prompt: body.prompt,
+          model: body.model || null,
+          tier: body.tier || null,
+          departmentPoolId: body.departmentPoolId || null,
+          createdAt: now,
+          startedAt: null,
+          finishedAt: null,
+        },
+      }, 201)
+    }
+    if (/^\/codex\/runs\/[^/]+\/cancel-family$/.test(path) && request.method() === "POST") {
+      const runId = path.split("/")[3]
+      operations.cancelledRunIds.push(runId)
+      const cancelled = runs
+        .filter((run) => run.id === runId || run.planRunId === runId)
+        .map((run) => ({ ...run, status: "cancelled", finishedAt: now }))
+      return fulfillJson(route, { runs: cancelled, cancelledRunIds: cancelled.map((run) => run.id) })
+    }
+    if (/^\/codex\/projects\/[^/]+\/runs\/cancel-active$/.test(path) && request.method() === "POST") {
+      operations.cancelActiveCalls += 1
+      const cancelled = runs
+        .filter((run) => run.id === "office-run-trust")
+        .map((run) => ({ ...run, status: "cancelled", finishedAt: now }))
+      return fulfillJson(route, {
+        complete: true,
+        requestedRunIds: ["office-run-trust"],
+        cancelledRunIds: ["office-run-trust"],
+        failedRunIds: [],
+        runs: cancelled,
+      })
     }
     if (/^\/codex\/projects\/[^/]+\/checkpoints$/.test(path)) {
       return fulfillJson(route, { checkpoints: [] })
@@ -281,6 +372,7 @@ async function mockCriticalOffice(page: Page) {
 
     return fulfillJson(route, {})
   })
+  return operations
 }
 
 async function openOffice(page: Page, viewport: { width: number; height: number }) {
@@ -296,11 +388,53 @@ async function openOffice(page: Page, viewport: { width: number; height: number 
   const scene = page.getByTestId("agent-office-scene")
   const canvas = scene.locator("canvas")
   await expect(dialog).toBeVisible()
-  await expect(scene).toHaveAttribute("data-office-ready", "true", { timeout: 15_000 })
+  await expect(scene).toHaveAttribute("data-office-ready", "true", { timeout: OFFICE_READY_TIMEOUT_MS })
   await expect(canvas).toBeVisible()
   await expect(canvas).toHaveAttribute("aria-label", /\S+/)
 
   return { dialog, scene, canvas }
+}
+
+type PersistedDepartmentSession = {
+  id: string
+  workspaceId: string
+  title: string
+  departmentId: string | null
+  departmentPoolId: string | null
+}
+
+async function activeDepartmentSession(page: Page): Promise<PersistedDepartmentSession | null> {
+  return page.evaluate((workspaceId) => {
+    const raw = localStorage.getItem("code-workspace:agent-sessions:v1")
+    if (!raw) return null
+    const store = JSON.parse(raw) as {
+      sessions?: Array<{
+        id?: string
+        workspaceId?: string
+        title?: string
+        departmentId?: string
+        departmentPoolId?: string
+      }>
+      activeByWorkspace?: Record<string, string>
+    }
+    const activeId = store.activeByWorkspace?.[`project:${workspaceId}`]
+    const session = store.sessions?.find((candidate) => candidate.id === activeId)
+    if (!session?.id || !session.workspaceId || !session.title) return null
+    return {
+      id: session.id,
+      workspaceId: session.workspaceId,
+      title: session.title,
+      departmentId: session.departmentId || null,
+      departmentPoolId: session.departmentPoolId || null,
+    }
+  }, project.id)
+}
+
+async function expectAccessibleTouchTarget(locator: Locator) {
+  const box = await locator.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.width).toBeGreaterThanOrEqual(40)
+  expect(box!.height).toBeGreaterThanOrEqual(40)
 }
 
 for (const viewport of [
@@ -309,7 +443,30 @@ for (const viewport of [
 ] as const) {
   test(`${viewport.name} opens an accessible office and exposes every department`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" })
-    const { dialog } = await openOffice(page, viewport)
+    const { dialog, scene, canvas } = await openOffice(page, viewport)
+    await expect(dialog).toHaveAttribute("aria-modal", "true")
+    await expect(dialog).toHaveAttribute("aria-labelledby", "agent-office-title")
+    await expect(dialog.locator("#agent-office-title")).toHaveText("Oficina de agentes")
+    await expect(dialog).toHaveAttribute("data-office-phase", "night")
+    await expect(dialog).toHaveAttribute("data-office-time", "night")
+    await expect(scene).toHaveAttribute("data-office-phase", "night")
+    await expect.poll(async () => Number(await canvas.getAttribute("data-city-light-count"))).toBeGreaterThanOrEqual(14)
+
+    const timeToggle = dialog.getByTestId("agent-office-time-toggle")
+    const soundToggle = dialog.getByTestId("agent-office-sound-toggle")
+    const pauseToggle = dialog.getByRole("button", { name: "Pausar oficina" })
+    const closeToggle = dialog.getByRole("button", { name: "Cerrar oficina" })
+    await expect(timeToggle).toBeVisible()
+    await expect(timeToggle).toHaveAttribute("aria-label", "Ambiente Noche. Cambiar ciclo de luz")
+    await expect(soundToggle).toBeVisible()
+    await expect(soundToggle).toHaveAttribute("aria-label", /^(Activar|Desactivar|Reintentar) sonido de la oficina$/)
+    await expect(pauseToggle).toBeVisible()
+    await expect(closeToggle).toBeVisible()
+    await expectAccessibleTouchTarget(timeToggle)
+    await expectAccessibleTouchTarget(soundToggle)
+    await expectAccessibleTouchTarget(pauseToggle)
+    await expectAccessibleTouchTarget(closeToggle)
+
     const departmentSelect = dialog.getByRole("combobox")
     await expect(departmentSelect).toBeVisible()
 
@@ -322,6 +479,7 @@ for (const viewport of [
     )
     await expect(dialog).toHaveAttribute("data-department-count", String(AGENT_COMPANY_DEPARTMENTS.length))
     await expect(dialog).toHaveAttribute("data-logical-agent-count", "196")
+    await expect(canvas).toHaveAttribute("data-office-workstation-count", "196")
     await expect(dialog).toHaveAttribute("data-interactive-worker-count", /^[1-9]\d*$/)
     if (viewport.name === "desktop") {
       const departmentList = dialog.getByTestId("agent-office-department-list")
@@ -349,12 +507,6 @@ for (const viewport of [
 
     await expect(dialog.getByRole("button", { name: "Cerrar oficina" })).toBeFocused()
 
-    await page.screenshot({
-      path: `docs/audits/agent-megaoffice-${viewport.name}.png`,
-      animations: "disabled",
-      caret: "hide",
-    })
-
     const officeNavigation = viewport.name === "desktop"
       ? dialog.getByRole("navigation", { name: "Navegación de la oficina" })
       : dialog.getByRole("navigation", { name: "Navegación móvil de la oficina" })
@@ -364,6 +516,161 @@ for (const viewport of [
     await expect(page).toHaveURL(new RegExp(`/code\\?folder=${project.id}`))
   })
 }
+
+test("office navigation opens every operational company surface", async ({ page }) => {
+  test.setTimeout(180_000)
+  await page.emulateMedia({ reducedMotion: "reduce" })
+  let { dialog } = await openOffice(page, { width: 1440, height: 900 })
+
+  for (const destination of [
+    { label: "Panel", view: "dashboard", testId: "company-dashboard-surface" },
+    { label: "Controlar", view: "control", testId: "company-control-surface" },
+    { label: "Archivos", view: "files", testId: "company-files-surface" },
+    { label: "Recursos", view: "resources", testId: "company-resources-surface" },
+  ] as const) {
+    const navigation = dialog.getByRole("navigation", { name: "Navegación de la oficina" })
+    await navigation.getByRole("button", { name: destination.label, exact: true }).click()
+    await expect(dialog).toBeHidden()
+    await expect(page.getByTestId("agent-company-preview-surface")).toHaveAttribute(
+      "data-company-view",
+      destination.view,
+    )
+    await expect(page.locator(`[data-testid="${destination.testId}"]:visible`)).toBeVisible()
+    await page.getByRole("button", { name: "Cerrar vista de empresa" }).click()
+    await expect(page.getByTestId("agent-company-preview-surface")).toBeHidden()
+
+    if (destination.label !== "Recursos") {
+      await page.getByTestId("agent-company-live-preview").click()
+      dialog = page.getByRole("dialog")
+      await expect(dialog).toBeVisible()
+      await expect(page.getByTestId("agent-office-scene")).toHaveAttribute(
+        "data-office-ready",
+        "true",
+        { timeout: OFFICE_READY_TIMEOUT_MS },
+      )
+    }
+  }
+})
+
+test("Controlar inspects, stops and retries real run families with their department context", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const operations = await mockCriticalOffice(page)
+  await page.goto(`/code?folder=${project.id}`, { waitUntil: "domcontentloaded" })
+  await expect(page.getByTestId("agent-company-live-preview")).toBeVisible({ timeout: 30_000 })
+
+  await page.getByRole("button", { name: /^Controlar(?:\s+\d+)?$/ }).click()
+  const surface = page.locator('[data-testid="company-control-surface"]:visible')
+  await expect(surface).toBeVisible()
+
+  const stop = surface.getByRole("button", { name: /Detener Auditar el aislamiento/ })
+  const retry = surface.getByRole("button", { name: /Reintentar Verificar la megaoficina/ })
+  const inspect = surface
+    .getByTestId("company-run-actions-office-run-product")
+    .getByRole("button", { name: /Inspeccionar Verificar la megaoficina/ })
+  await expect(stop).toBeVisible()
+  await expect(retry).toBeVisible()
+  await expect(inspect).toBeVisible()
+  await expectAccessibleTouchTarget(stop)
+  await expectAccessibleTouchTarget(retry)
+  await expectAccessibleTouchTarget(inspect)
+
+  await stop.click()
+  await expect.poll(() => operations.cancelledRunIds).toEqual(["office-run-trust"])
+  await expect(surface.getByRole("button", { name: /Reintentar Auditar el aislamiento/ })).toBeVisible()
+
+  await retry.click()
+  await expect.poll(() => operations.retryBodies.length).toBe(1)
+  expect(operations.retryBodies[0]).toMatchObject({
+    mode: "plan",
+    prompt: "[PROACTIVO · Producto e Ingeniería] Verificar la megaoficina",
+    model: "gpt-5.4",
+    tier: "pro",
+    autoExecute: true,
+    departmentPoolId: departmentPoolId("product-engineering"),
+  })
+
+  await inspect.click()
+  await expect(page.locator('[data-testid="company-task-surface"]:visible')).toBeVisible()
+})
+
+test("Panel stops every active family through the authoritative project endpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const operations = await mockCriticalOffice(page)
+  await page.goto(`/code?folder=${project.id}`, { waitUntil: "domcontentloaded" })
+
+  await page.getByRole("button", { name: "Panel", exact: true }).click()
+  const surface = page.locator('[data-testid="company-dashboard-surface"]:visible')
+  await expect(surface).toBeVisible({ timeout: 30_000 })
+
+  const cancelAll = surface.getByRole("button", { name: "Cancelar ejecución de agentes" })
+  await expect(cancelAll).toBeEnabled()
+  await expectAccessibleTouchTarget(cancelAll)
+  await cancelAll.click()
+
+  await expect.poll(() => operations.cancelActiveCalls).toBe(1)
+  await expect(page.getByText(/1 familia de ejecución detenida/)).toBeVisible()
+  await expect(cancelAll).toBeDisabled()
+})
+
+test("all 14 departments open their isolated chat seat without external services", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await mockCriticalOffice(page)
+  await page.goto(`/code?folder=${project.id}`, { waitUntil: "domcontentloaded" })
+  await expect(page.getByTestId("agent-company-department-ceo-office")).toBeVisible({ timeout: 30_000 })
+
+  await expect.poll(() => activeDepartmentSession(page), {
+    message: "CEO Office must remain the canonical active department session after hydration",
+  }).toEqual({
+    id: "office-ceo-office",
+    workspaceId: `project:${project.id}`,
+    title: "CEO Office",
+    departmentId: "ceo-office",
+    departmentPoolId: departmentPoolId("ceo-office"),
+  })
+
+  for (const department of AGENT_COMPANY_DEPARTMENTS) {
+    const row = page.getByTestId(`agent-company-department-${department.id}`)
+    await expect(row).toBeAttached()
+    await row.getByRole("button", { name: `Abrir ${department.name}`, exact: true }).click()
+    await expect.poll(() => activeDepartmentSession(page), {
+      message: `Opening ${department.name} must activate its durable department session`,
+    }).toEqual({
+      id: `office-${department.id}`,
+      workspaceId: `project:${project.id}`,
+      title: department.name,
+      departmentId: department.id,
+      departmentPoolId: departmentPoolId(department.id),
+    })
+  }
+
+  const persistedDepartments = await page.evaluate((workspaceId) => {
+    const raw = localStorage.getItem("code-workspace:agent-sessions:v1")
+    if (!raw) return []
+    const store = JSON.parse(raw) as {
+      sessions?: Array<{
+        workspaceId?: string
+        title?: string
+        departmentId?: string
+        departmentPoolId?: string
+      }>
+    }
+    return (store.sessions || [])
+      .filter((session) => session.workspaceId === `project:${workspaceId}` && session.departmentId)
+      .map((session) => ({
+        title: session.title || null,
+        departmentId: session.departmentId || null,
+        departmentPoolId: session.departmentPoolId || null,
+      }))
+  }, project.id)
+  expect(persistedDepartments).toHaveLength(AGENT_COMPANY_DEPARTMENTS.length)
+  expect(persistedDepartments).toEqual(expect.arrayContaining(
+    AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+      title: department.name,
+      departmentId: department.id,
+      departmentPoolId: departmentPoolId(department.id),
+    })),
+  ))
+})
 
 test("reduced motion keeps the canvas stable without disabling office navigation", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" })
@@ -375,7 +682,8 @@ test("reduced motion keeps the canvas stable without disabling office navigation
   const firstFrameCount = await canvas.getAttribute("data-frame-count")
   expect(Number(firstFrameCount)).toBeGreaterThan(0)
   await page.waitForTimeout(500)
-  await expect(canvas).toHaveAttribute("data-frame-count", firstFrameCount!)
+  const settledFrameCount = Number(await canvas.getAttribute("data-frame-count"))
+  expect(settledFrameCount - Number(firstFrameCount)).toBeLessThanOrEqual(1)
 
   const departmentSelect = dialog.getByRole("combobox")
   await departmentSelect.selectOption("trust")

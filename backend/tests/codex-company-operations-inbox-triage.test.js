@@ -12,6 +12,7 @@ function fakePrisma({
   const state = {
     items: [],
     actions: [],
+    usage: [],
     drafts: 0,
     project: {
       id: 'project-a',
@@ -36,6 +37,32 @@ function fakePrisma({
   };
   return {
     state,
+    codexDepartmentPool: {
+      findUnique: async ({ where }) => ({
+        id: 'pool-customer-success',
+        projectId: where.projectId_departmentId.projectId,
+        departmentId: where.projectId_departmentId.departmentId,
+        size: 2,
+        enabled: true,
+      }),
+    },
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        if (state.usage.some((row) => row.idempotencyKey === data.idempotencyKey)) {
+          const error = new Error('unique');
+          error.code = 'P2002';
+          throw error;
+        }
+        const row = { id: `usage-${state.usage.length + 1}`, ...data };
+        state.usage.push(row);
+        return structuredClone(row);
+      },
+      findUnique: async ({ where }) => state.usage.find(
+        (row) => row.idempotencyKey === where.idempotencyKey,
+      ) || null,
+      findMany: async () => state.usage.map((row) => structuredClone(row)),
+    },
+    codexRunMetric: { findMany: async () => [] },
     codexProject: {
       findFirst: async ({ where }) => (
         where.id === state.project.id
@@ -133,6 +160,7 @@ function fakePrisma({
 
 test('review mode creates one Gmail draft and one idempotent action', async () => {
   const prisma = fakePrisma();
+  let llmCalls = 0;
   const gmail = {
     getEmails: async () => [{
       id: 'gmail-1',
@@ -165,18 +193,28 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
       },
       readiness: { evidence: { gmailConnected: true } },
     },
-    chatComplete: async () => ({
-      content: JSON.stringify({
-        items: [{
-          id: 'gmail-1',
-          category: 'support',
-          urgency: 'high',
-          confidence: 0.9,
-          draftBody: 'Hola, revisaremos tu registro. ¿Puedes confirmar el correo usado?',
-          reason: 'Bloqueo de onboarding',
-        }],
-      }),
-    }),
+    chatComplete: async () => {
+      llmCalls += 1;
+      return {
+        content: JSON.stringify({
+          items: [{
+            id: 'gmail-1',
+            category: 'support',
+            urgency: 'high',
+            confidence: 0.9,
+            draftBody: 'Hola, revisaremos tu registro. ¿Puedes confirmar el correo usado?',
+            reason: 'Bloqueo de onboarding',
+          }],
+        }),
+        usage: {
+          tokensIn: 180,
+          tokensOut: 60,
+          provider: 'Anthropic',
+          model: 'claude-sonnet-4-6',
+          generationId: `inbox-triage-${llmCalls}`,
+        },
+      };
+    },
     gmailLoader: async () => ({ client: gmail }),
     env: { CODEX_EMAIL_REPLY_DAILY_LIMIT: '20' },
   };
@@ -193,6 +231,47 @@ test('review mode creates one Gmail draft and one idempotent action', async () =
   assert.equal(prisma.state.drafts, 1);
   assert.equal(prisma.state.items.length, 1);
   assert.equal(prisma.state.actions.length, 1);
+  assert.equal(prisma.state.usage.length, llmCalls);
+  assert.equal(prisma.state.usage.every((row) => row.source === 'inbox_triage'), true);
+  assert.equal(
+    prisma.state.usage.every((row) => row.departmentPoolId === 'pool-customer-success'),
+    true,
+  );
+});
+
+test('inbox triage budget zero blocks the LLM provider before spend', async () => {
+  const prisma = fakePrisma();
+  let llmCalls = 0;
+  await assert.rejects(
+    inbox.triageInbox({
+      prisma,
+      project: {
+        id: 'project-a',
+        userId: 'user-a',
+        brief: { proactive: { configuredDailyBudgetUsd: 0 } },
+      },
+      companyContext: {
+        profile: { autonomy: { emailReplies: 'review' } },
+        readiness: { evidence: { gmailConnected: true } },
+      },
+      gmailLoader: async () => ({
+        client: {
+          getEmails: async () => [{
+            id: 'gmail-budget-zero',
+            from: 'Cliente <cliente@example.com>',
+            subject: 'Ayuda',
+            snippet: 'Necesito soporte.',
+          }],
+        },
+      }),
+      chatComplete: async () => {
+        llmCalls += 1;
+        return { content: '{"items":[]}' };
+      },
+    }),
+    (error) => error?.code === 'company_daily_budget_exceeded' && error?.status === 429,
+  );
+  assert.equal(llmCalls, 0);
 });
 
 test('missing Gmail resource blocks inbox reads before loading the user account', async () => {

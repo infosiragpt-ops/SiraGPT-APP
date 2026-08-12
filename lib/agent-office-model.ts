@@ -573,11 +573,18 @@ export function buildAgentOfficeModel({
     (sum, department) => sum + (department.pool.poolId ? department.pool.size : 0),
     0,
   )
-  const physicalAgents = Math.max(
-    Number(capacity?.physicalAgents) || 0,
-    configuredPoolSize,
-    occupiedDesks,
-  )
+  const reportedPhysicalAgents = capacity?.physicalAgents
+  const serverPhysicalAgents = typeof reportedPhysicalAgents === "number"
+    && Number.isFinite(reportedPhysicalAgents)
+    && reportedPhysicalAgents >= 0
+    ? Math.floor(reportedPhysicalAgents)
+    : null
+  // The backend already applies the global physical-execution hard cap. When
+  // it reports a valid value (including zero), it is the source of truth;
+  // summing per-department pools can describe 196 logical seats while only 32
+  // agents may execute physically. Pool totals are only a legacy fallback.
+  // Occupancy remains a separate observation and must never expand capacity.
+  const physicalAgents = serverPhysicalAgents ?? configuredPoolSize
   const freeDesks = Math.max(0, physicalAgents - occupiedDesks)
   const costTodayUsd = Math.max(
     Number(proactive?.costTodayUsd) || 0,

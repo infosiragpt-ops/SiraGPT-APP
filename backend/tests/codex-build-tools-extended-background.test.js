@@ -207,16 +207,39 @@ test('real offline supervisor writes logs and task_stop terminates the process g
   const runner = {
     async exec(_project, cmd) {
       return new Promise((resolve) => {
-        const proc = spawn(cmd[0], cmd.slice(1), {
+        // The bundled Codex runtime is invoked by absolute path and does not
+        // necessarily expose a `node` shim in PATH. The real runner container
+        // does; this offline adapter must resolve that same logical command to
+        // the executable hosting the test. Leaving an ENOENT without an error
+        // listener can also trip Node 24's test-runner async-id assertion on
+        // macOS instead of reporting the actual spawn failure.
+        const executable = cmd[0] === 'node' ? process.execPath : cmd[0];
+        const proc = spawn(executable, cmd.slice(1), {
           cwd,
-          env: process.env,
+          env: {
+            ...process.env,
+            PATH: [path.dirname(process.execPath), process.env.PATH]
+              .filter(Boolean)
+              .join(path.delimiter),
+          },
           stdio: ['ignore', 'pipe', 'pipe'],
         });
         let stdout = '';
         let stderr = '';
+        let settled = false;
+        const finish = (result) => {
+          if (settled) return;
+          settled = true;
+          resolve(result);
+        };
         proc.stdout.on('data', (chunk) => { stdout += chunk; });
         proc.stderr.on('data', (chunk) => { stderr += chunk; });
-        proc.on('exit', (exitCode) => resolve({ exitCode, stdout, stderr }));
+        proc.on('error', (error) => finish({
+          exitCode: 127,
+          stdout,
+          stderr: `${stderr}${error.message}`,
+        }));
+        proc.on('exit', (exitCode) => finish({ exitCode, stdout, stderr }));
       });
     },
   };

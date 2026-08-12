@@ -2,6 +2,8 @@
 
 const externalActions = require('./external-actions');
 const resourceAccess = require('./company-resource-access');
+const departmentPools = require('../department-pools');
+const usageLedger = require('../usage-ledger');
 
 const CATEGORIES = new Set(['lead', 'support', 'billing', 'feedback', 'other']);
 const URGENCIES = new Set(['low', 'normal', 'high', 'critical']);
@@ -38,7 +40,13 @@ function safeDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-async function classifySocialInteractions({ interactions, profile, chatComplete }) {
+async function classifySocialInteractions({
+  interactions,
+  profile,
+  chatComplete,
+  usageContext = null,
+}) {
+  const callId = usageLedger.createUsageCallId();
   const completion = await chatComplete({
     messages: [
       {
@@ -70,6 +78,14 @@ async function classifySocialInteractions({ interactions, profile, chatComplete 
     temperature: 0.2,
     maxTokens: 2200,
   });
+  if (usageContext) {
+    await usageLedger.recordCompletionUsage({
+      ...usageContext,
+      source: 'social_triage',
+      completion,
+      callId,
+    });
+  }
   const parsed = extractJson(completion?.content || completion?.text);
   return Array.isArray(parsed?.items) ? parsed.items : [];
 }
@@ -86,6 +102,7 @@ async function triageSocialConversations({
   sendReply = null,
   fetchImpl = globalThis.fetch,
   vault = null,
+  departmentPoolId = null,
 }) {
   const list = listInteractions
     || require('../../social-company/conversations').listSocialInteractions;
@@ -155,10 +172,26 @@ async function triageSocialConversations({
     };
   }
 
+  const budget = await departmentPools.requireOperationBudget({
+    prisma,
+    project,
+    departmentId: resourceAccess.CUSTOMER_SUCCESS_DEPARTMENT_ID,
+    departmentPoolId,
+    env,
+    now: now(),
+  });
+  const usagePool = budget.pool;
   const classified = await classifySocialInteractions({
     interactions,
     profile: companyContext?.profile || {},
     chatComplete,
+    usageContext: {
+      prisma,
+      projectId: project.id,
+      departmentPoolId: usagePool?.id || null,
+      sourceId: `social-inbox:${project.id}`,
+      env,
+    },
   });
   const analysisByKey = new Map(
     classified.map((item) => [bounded(item?.key, 400), item]),

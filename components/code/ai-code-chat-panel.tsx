@@ -3450,6 +3450,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   reasoningEffort: resolveCodexReasoningEffort(selectedEffort),
                   // The backend owns continuation even when this tab closes.
                   autoExecute: true,
+                  departmentPoolId: activeCodeChatSession?.departmentPoolId || undefined,
                 }),
               ),
               // Session navigation only detaches the local controller. The
@@ -3777,7 +3778,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         explicitCodexStopTurnIdsRef.current.delete(assistantId)
       }
     },
-    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, beginCodexCancellation, detachCodexProjectForLocalFallback, files, markVoiced, recordCodexBackendConfirmation, recordCodexCancellationFailure, recordCodexEngineSettled, requestCodexCancellation, runDeterministicPromptInto, selectedEffort, setTurns, token],
+    [activeCodeChatSession?.departmentPoolId, activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, beginCodexCancellation, detachCodexProjectForLocalFallback, files, markVoiced, recordCodexBackendConfirmation, recordCodexCancellationFailure, recordCodexEngineSettled, requestCodexCancellation, runDeterministicPromptInto, selectedEffort, setTurns, token],
   )
 
   // Keep the resilience-fallback ref pointing at the freshest engine closure.

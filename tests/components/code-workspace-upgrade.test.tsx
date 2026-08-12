@@ -76,4 +76,39 @@ describe("WorkspaceTopBar upgrade flow", () => {
       expect(screen.queryByRole("dialog", { name: "Planes de SiraGPT" })).not.toBeInTheDocument()
     },
   )
+
+  it("exposes a roving, accessible workspace tablist", () => {
+    useAuthMock.mockReturnValue({ user: userWithPlan("PRO") })
+    const onTogglePanel = vi.fn()
+    render(
+      <WorkspaceTopBar
+        {...baseProps}
+        openPanels={new Set(["preview", "terminal"])}
+        activePanel="preview"
+        onTogglePanel={onTogglePanel}
+      />,
+    )
+
+    expect(screen.getByRole("tablist", { name: "Paneles del workspace" })).toBeInTheDocument()
+    const preview = screen.getByRole("tab", { name: "Preview" })
+    const shell = screen.getByRole("tab", { name: "Shell" })
+    expect(preview).toHaveAttribute("aria-selected", "true")
+    expect(preview).toHaveAttribute("tabindex", "0")
+    expect(shell).toHaveAttribute("aria-selected", "false")
+    expect(shell).toHaveAttribute("tabindex", "-1")
+    expect(screen.getByRole("button", { name: "Cerrar Shell" })).toHaveAttribute("tabindex", "-1")
+
+    fireEvent.keyDown(preview, { key: "ArrowRight" })
+    expect(onTogglePanel).toHaveBeenCalledWith("terminal")
+    expect(shell).toHaveFocus()
+  })
+
+  it("keeps secondary actions in an accessible compact menu trigger", () => {
+    useAuthMock.mockReturnValue({ user: userWithPlan("PRO") })
+    render(<WorkspaceTopBar {...baseProps} />)
+
+    const menu = screen.getByRole("button", { name: "Más acciones del workspace" })
+    expect(menu).toHaveAttribute("aria-haspopup", "menu")
+    expect(screen.getByRole("button", { name: "Publicar el proyecto" })).toBeInTheDocument()
+  })
 })

@@ -6,12 +6,44 @@ const {
 } = require('./swarm-orchestrator');
 const { buildEnterpriseSwarmTasks } = require('./enterprise-swarm-plan');
 const { configuredRunCap } = require('./run-service');
-const { listDepartmentPools } = require('./department-pools');
+const departmentPools = require('./department-pools');
+const usageLedger = require('./usage-ledger');
+const { BUILT_IN_DEPARTMENTS, readDepartments } = require('./company-departments');
+const { ensureFleetDepartmentPools } = require('./proactive-engine');
+
+const { listDepartmentPools } = departmentPools;
 
 const DEFAULT_PLANNER_TASKS = 64;
 // Matches swarm-orchestrator / enterprise-swarm-plan logical capacity (10k).
 const MAX_PLANNER_TASKS = 10_000;
 const DEFAULT_QA_EVERY = 5;
+const DEFAULT_DEPARTMENT_IDS = Object.freeze(
+  BUILT_IN_DEPARTMENTS.map((department) => department.id),
+);
+const DEPARTMENT_ALIASES = Object.freeze({
+  ceo: 'ceo-office',
+  strategy: 'ceo-office',
+  infrastructure: 'agent-infrastructure',
+  'agent-infra': 'agent-infrastructure',
+  engineering: 'product-engineering',
+  product: 'product-engineering',
+  software: 'product-engineering',
+  'engineering-1': 'engineering-01',
+  'engineering-2': 'engineering-02',
+  qa: 'engineering-02',
+  quality: 'engineering-02',
+  research: 'market-intelligence',
+  market: 'market-intelligence',
+  support: 'customer-success',
+  'customer-support': 'customer-success',
+  growth: 'growth-engines',
+  web: 'website-distribution',
+  website: 'website-distribution',
+  connectors: 'integrations',
+  security: 'trust',
+  compliance: 'trust',
+  'trust-quality': 'trust',
+});
 
 function boundedInteger(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
@@ -44,6 +76,105 @@ function extractJson(text) {
   }
 }
 
+function markFatalFleetPlannerError(error) {
+  const out = error instanceof Error ? error : new Error(String(error || 'fleet_planner_failed'));
+  out.fatalFleetPlanner = true;
+  return out;
+}
+
+function createBudgetedFleetPlanner({
+  planner,
+  prisma,
+  project,
+  departmentId = 'ceo-office',
+  env = process.env,
+  budgetService = departmentPools,
+  usageService = usageLedger,
+} = {}) {
+  if (typeof planner !== 'function') return planner;
+  return async function budgetedFleetPlanner(args) {
+    let budget;
+    try {
+      budget = await budgetService.requireOperationBudget({
+        prisma,
+        project,
+        departmentId,
+        env,
+        now: new Date(),
+      });
+    } catch (error) {
+      throw markFatalFleetPlannerError(error);
+    }
+    const callId = usageService.createUsageCallId();
+    const completion = await planner(args);
+    try {
+      await usageService.recordCompletionUsage({
+        prisma,
+        projectId: project.id,
+        departmentPoolId: budget?.pool?.id || null,
+        source: 'fleet_planner',
+        sourceId: `${project.id}:fleet-planner`,
+        completion,
+        callId,
+        env,
+      });
+    } catch (error) {
+      // Spending without durable accounting would bypass the company and pool
+      // kill switches on the next launch. Fail closed instead of falling back
+      // to an unaccounted swarm plan.
+      throw markFatalFleetPlannerError(error);
+    }
+    return completion;
+  };
+}
+
+function requireCompleteFleetDepartmentPools({ project, pools }) {
+  const expected = readDepartments(project)
+    .filter((department) => department && department.enabled !== false)
+    .map((department) => department.id);
+  const poolByDepartment = new Map(
+    (Array.isArray(pools) ? pools : []).map((pool) => [String(pool.departmentId), pool]),
+  );
+  const missingDepartmentIds = expected.filter((departmentId) => !poolByDepartment.has(departmentId));
+  const disabledDepartmentIds = expected.filter((departmentId) => (
+    poolByDepartment.get(departmentId)?.enabled === false
+  ));
+  if (missingDepartmentIds.length || disabledDepartmentIds.length) {
+    const error = new Error('fleet_department_pool_bootstrap_incomplete');
+    error.code = 'fleet_department_pool_bootstrap_incomplete';
+    error.status = 503;
+    error.details = {
+      missingDepartmentIds,
+      disabledDepartmentIds,
+    };
+    throw error;
+  }
+  return expected;
+}
+
+async function reloadFleetProject({ prisma, project }) {
+  if (!prisma?.codexProject?.findFirst || !project?.id || !project?.userId) {
+    const error = new Error('fleet_project_store_unavailable');
+    error.code = 'fleet_project_store_unavailable';
+    error.status = 503;
+    throw error;
+  }
+  const fresh = await prisma.codexProject.findFirst({
+    where: {
+      id: project.id,
+      userId: project.userId,
+      deletedAt: null,
+    },
+  });
+  if (!fresh) {
+    const error = new Error('codex_project_not_found');
+    error.code = 'codex_project_not_found';
+    error.status = 404;
+    throw error;
+  }
+  return fresh;
+}
+
 function roleFor(value) {
   const role = String(value || TASK_ROLES.WRITER).trim().toLowerCase().replace(/_/g, '-');
   if (['reviewer', 'qa', 'qa-reviewer'].includes(role)) return TASK_ROLES.REVIEWER;
@@ -52,7 +183,63 @@ function roleFor(value) {
   return TASK_ROLES.WRITER;
 }
 
-function normalizePlannerTasks(rawTasks, { maxTasks = MAX_PLANNER_TASKS } = {}) {
+function orderedDepartmentIds(departmentIds = DEFAULT_DEPARTMENT_IDS) {
+  const supplied = new Set(
+    (Array.isArray(departmentIds) ? departmentIds : [])
+      .map((departmentId) => slug(departmentId, ''))
+      .filter(Boolean),
+  );
+  if (supplied.size === 0) return [...DEFAULT_DEPARTMENT_IDS];
+  const ordered = DEFAULT_DEPARTMENT_IDS.filter((departmentId) => supplied.delete(departmentId));
+  return [...ordered, ...Array.from(supplied).sort()];
+}
+
+function invalidDepartmentError(value) {
+  const requested = slug(value, '') || 'missing';
+  const error = new Error(`fleet_planner_department_invalid:${requested}`);
+  error.code = 'fleet_planner_department_invalid';
+  error.departmentId = requested === 'missing' ? null : requested;
+  return error;
+}
+
+function normalizeDepartmentId(value, { departmentIds } = {}) {
+  const allowed = orderedDepartmentIds(departmentIds);
+  const requested = slug(value, '');
+  if (requested && allowed.includes(requested)) return requested;
+  const alias = DEPARTMENT_ALIASES[requested];
+  if (alias && allowed.includes(alias)) return alias;
+  throw invalidDepartmentError(requested);
+}
+
+function fallbackDepartmentRoute(value, {
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+  preferredDepartmentId = 'ceo-office',
+  reason = 'department_unavailable',
+} = {}) {
+  const allowed = orderedDepartmentIds(departmentIds);
+  const requested = slug(value, '');
+  let departmentId = null;
+  try {
+    departmentId = normalizeDepartmentId(requested, { departmentIds: allowed });
+  } catch {
+    const preferred = slug(preferredDepartmentId, '');
+    departmentId = allowed.includes(preferred) ? preferred : allowed[0];
+  }
+  return {
+    departmentId,
+    trace: {
+      source: 'fleet-fallback',
+      reason,
+      requestedDepartmentId: requested || null,
+      assignedDepartmentId: departmentId,
+    },
+  };
+}
+
+function normalizePlannerTasks(rawTasks, {
+  maxTasks = MAX_PLANNER_TASKS,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+} = {}) {
   if (!Array.isArray(rawTasks) || rawTasks.length === 0) {
     throw new Error('fleet_planner_tasks_required');
   }
@@ -83,7 +270,28 @@ function normalizePlannerTasks(rawTasks, { maxTasks = MAX_PLANNER_TASKS } = {}) 
       : [];
     const externalEffect = Boolean(source.externalEffect || source.external_effect);
     const role = externalEffect ? TASK_ROLES.REVIEWER : roleFor(source.role);
-    const departmentId = slug(source.departmentId || source.deptId || source.department || 'product-engineering');
+    const requestedDepartmentId = source.departmentId || source.deptId || source.department;
+    let departmentId;
+    let departmentRouting = null;
+    if (requestedDepartmentId) {
+      departmentId = normalizeDepartmentId(requestedDepartmentId, { departmentIds });
+      const requestedSlug = slug(requestedDepartmentId, '');
+      if (departmentId !== requestedSlug) {
+        departmentRouting = {
+          source: 'explicit-alias',
+          requestedDepartmentId: requestedSlug,
+          assignedDepartmentId: departmentId,
+        };
+      }
+    } else {
+      const fallback = fallbackDepartmentRoute(null, {
+        departmentIds,
+        preferredDepartmentId: 'product-engineering',
+        reason: 'department_missing',
+      });
+      departmentId = fallback.departmentId;
+      departmentRouting = fallback.trace;
+    }
     const acceptance = Array.isArray(source.acceptance)
       ? source.acceptance.map((item) => String(item).trim()).filter(Boolean).slice(0, 12)
       : [];
@@ -104,13 +312,35 @@ function normalizePlannerTasks(rawTasks, { maxTasks = MAX_PLANNER_TASKS } = {}) 
         acceptance,
         externalEffect,
         agent: role === TASK_ROLES.REVIEWER ? 'qa_reviewer' : source.agent || null,
+        ...(departmentRouting ? { departmentRouting } : {}),
       },
     };
   });
 }
 
-function addQaCheckpoints(tasks, { every = DEFAULT_QA_EVERY } = {}) {
+function addQaCheckpoints(tasks, {
+  every = DEFAULT_QA_EVERY,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+  taskLimit = MAX_PLANNER_TASKS,
+} = {}) {
   const qaEvery = boundedInteger(every, DEFAULT_QA_EVERY, 1, 50);
+  const totalTaskLimit = boundedInteger(taskLimit, MAX_PLANNER_TASKS, 1, MAX_PLANNER_TASKS);
+  if (!Array.isArray(tasks) || tasks.length > totalTaskLimit) {
+    const error = new Error('fleet_qa_task_budget_exceeded');
+    error.code = 'fleet_qa_task_budget_exceeded';
+    error.details = {
+      baseTasks: Array.isArray(tasks) ? tasks.length : 0,
+      totalTasks: Array.isArray(tasks) ? tasks.length : 0,
+      taskLimit: totalTaskLimit,
+    };
+    throw error;
+  }
+  const qaRoute = fallbackDepartmentRoute('trust', {
+    departmentIds,
+    preferredDepartmentId: 'engineering-02',
+    reason: 'qa_department_unavailable',
+  });
+  const qaDepartmentId = qaRoute.departmentId;
   const output = [];
   let previousQa = null;
   let batch = [];
@@ -139,7 +369,10 @@ function addQaCheckpoints(tasks, { every = DEFAULT_QA_EVERY } = {}) {
           maxAttempts: 3,
           input: {
             agent: 'qa_reviewer',
-            departmentId: 'trust-quality',
+            departmentId: qaDepartmentId,
+            ...(qaRoute.trace.requestedDepartmentId === qaDepartmentId
+              ? {}
+              : { departmentRouting: qaRoute.trace }),
             instruction: 'Revisa el diff acumulado desde el último checkpoint de QA. Reporta fallos concretos, regresiones, seguridad y pruebas faltantes; los hallazgos deben convertirse en trabajo corregible.',
             acceptance: ['Pruebas relevantes en verde', 'Sin regresiones bloqueantes', 'Hallazgos con evidencia y rutas'],
           },
@@ -162,31 +395,66 @@ function addQaCheckpoints(tasks, { every = DEFAULT_QA_EVERY } = {}) {
       maxAttempts: 3,
       input: {
         agent: 'qa_reviewer',
-        departmentId: 'trust-quality',
+        departmentId: qaDepartmentId,
+        ...(qaRoute.trace.requestedDepartmentId === qaDepartmentId
+          ? {}
+          : { departmentRouting: qaRoute.trace }),
         instruction: 'Valida el resultado integrado, ejecuta la revisión final y devuelve hallazgos verificables. No inventes pruebas ni modifiques archivos.',
         acceptance: ['Resultado integrado revisado', 'Gates y riesgos documentados'],
       },
     });
   }
+  if (output.length > totalTaskLimit) {
+    const error = new Error('fleet_qa_task_budget_exceeded');
+    error.code = 'fleet_qa_task_budget_exceeded';
+    error.details = {
+      baseTasks: tasks.length,
+      qaTasks: output.length - tasks.length,
+      totalTasks: output.length,
+      taskLimit: totalTaskLimit,
+    };
+    throw error;
+  }
   return output;
 }
 
-function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
+function fallbackFleetTasks({
+  companyPlan,
+  objective,
+  logicalTasks,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+}) {
   const legacy = buildEnterpriseSwarmTasks({
     plan: companyPlan,
     objective,
     logicalTasks,
   });
   return legacy.map((task) => {
-    if (task.role === TASK_ROLES.INTEGRATOR) return task;
+    const requestedDepartmentId = task.input?.departmentId || task.input?.workstreamId;
+    const route = fallbackDepartmentRoute(requestedDepartmentId, {
+      departmentIds,
+      preferredDepartmentId: 'ceo-office',
+      reason: 'planner_fallback',
+    });
+    const fallbackInput = {
+      ...(task.input || {}),
+      departmentId: route.departmentId,
+      fallback: true,
+      departmentRouting: route.trace,
+    };
+    if (task.role === TASK_ROLES.INTEGRATOR) {
+      return {
+        ...task,
+        input: fallbackInput,
+      };
+    }
     if (task.input?.kind === 'draft') {
       return {
         ...task,
         role: TASK_ROLES.WRITER,
         stage: 'work',
         input: {
-          ...task.input,
-          departmentId: task.input.workstreamId || 'product-engineering',
+          ...fallbackInput,
           instruction: String(task.input.instruction || '').replace(
             /no modifiques archivos\.?/i,
             'implementa el entregable en el workspace y verifica los cambios.',
@@ -194,8 +462,38 @@ function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
         },
       };
     }
-    return task;
+    return {
+      ...task,
+      input: fallbackInput,
+    };
   });
+}
+
+function addFallbackQaWithinBudget(tasks, options = {}) {
+  const taskLimit = boundedInteger(
+    options.taskLimit,
+    MAX_PLANNER_TASKS,
+    1,
+    MAX_PLANNER_TASKS,
+  );
+  try {
+    return addQaCheckpoints(tasks, { ...options, taskLimit });
+  } catch (error) {
+    if (error?.code !== 'fleet_qa_task_budget_exceeded') throw error;
+    const excess = Math.max(1, Number(error.details?.totalTasks || tasks.length) - taskLimit);
+    const removable = tasks
+      .filter((task) => task.role === TASK_ROLES.READ_ONLY && /^parallel-audit-/.test(task.key))
+      .slice(-excess);
+    if (removable.length < excess) throw error;
+    const removedKeys = new Set(removable.map((task) => task.key));
+    const budgeted = tasks
+      .filter((task) => !removedKeys.has(task.key))
+      .map((task) => ({
+        ...task,
+        dependsOn: (task.dependsOn || []).filter((dependency) => !removedKeys.has(dependency)),
+      }));
+    return addQaCheckpoints(budgeted, { ...options, taskLimit });
+  }
 }
 
 /**
@@ -204,7 +502,11 @@ function fallbackFleetTasks({ companyPlan, objective, logicalTasks }) {
  * research shards so activation of 100–10_000 agents is real, not cosmetic.
  * Writers / integrators stay untouched; shards never write the workspace.
  */
-function padFleetToLogicalCapacity(tasks, { objective, targetCount } = {}) {
+function padFleetToLogicalCapacity(tasks, {
+  objective,
+  targetCount,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+} = {}) {
   const current = Array.isArray(tasks) ? tasks.slice() : [];
   const target = boundedInteger(targetCount, current.length, 1, MAX_PLANNER_TASKS);
   if (current.length >= target) return current;
@@ -212,6 +514,7 @@ function padFleetToLogicalCapacity(tasks, { objective, targetCount } = {}) {
   const used = new Set(current.map((task) => task.key));
   const normalizedObjective = String(objective || '').trim().slice(0, 4_000)
     || 'Cumplir el objetivo de la empresa de agentes.';
+  const departments = orderedDepartmentIds(departmentIds);
   let shard = 0;
   while (current.length < target) {
     shard += 1;
@@ -243,7 +546,7 @@ function padFleetToLogicalCapacity(tasks, { objective, targetCount } = {}) {
       maxAttempts: 2,
       input: {
         agent: 'explorer',
-        departmentId: 'product-engineering',
+        departmentId: departments[(shard - 1) % departments.length],
         objective: normalizedObjective,
         perspective,
         instruction: [
@@ -258,6 +561,164 @@ function padFleetToLogicalCapacity(tasks, { objective, targetCount } = {}) {
   return current;
 }
 
+function terminalTaskKeys(tasks) {
+  const dependedOn = new Set(
+    (Array.isArray(tasks) ? tasks : [])
+      .flatMap((task) => (Array.isArray(task.dependsOn) ? task.dependsOn : [])),
+  );
+  return (Array.isArray(tasks) ? tasks : [])
+    .map((task) => task.key)
+    .filter((key) => key && !dependedOn.has(key));
+}
+
+function hierarchicalReducerCount(inputCount, fanIn) {
+  let width = Math.max(0, Number(inputCount) || 0);
+  if (width === 0) return 0;
+  if (width === 1) return 1;
+  let count = 0;
+  while (width > 1) {
+    width = Math.ceil(width / fanIn);
+    count += width;
+  }
+  return count;
+}
+
+function addHierarchicalFleetVerdict(tasks, {
+  objective,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+  fanIn = 50,
+} = {}) {
+  const output = Array.isArray(tasks) ? tasks.slice() : [];
+  let frontier = terminalTaskKeys(output);
+  if (!frontier.length) return output;
+  const boundedFanIn = boundedInteger(fanIn, 50, 2, MAX_PLANNER_TASKS);
+  const used = new Set(output.map((task) => task.key));
+  const route = fallbackDepartmentRoute('trust', {
+    departmentIds,
+    preferredDepartmentId: 'engineering-02',
+    reason: 'fleet_reduction_department_unavailable',
+  });
+  const normalizedObjective = String(objective || '').trim().slice(0, 4_000)
+    || 'Emitir un veredicto verificable para la flota.';
+  let level = 0;
+
+  // Even one terminal node receives a final QA verdict so the graph never
+  // ends in an unreviewed research shard or writer.
+  do {
+    level += 1;
+    const next = [];
+    for (let start = 0; start < frontier.length; start += boundedFanIn) {
+      const dependencies = frontier.slice(start, start + boundedFanIn);
+      let key = `fleet-reduce-${level}-${Math.floor(start / boundedFanIn) + 1}`;
+      let suffix = 2;
+      while (used.has(key)) {
+        key = `fleet-reduce-${level}-${Math.floor(start / boundedFanIn) + 1}-${suffix}`;
+        suffix += 1;
+      }
+      used.add(key);
+      output.push({
+        key,
+        title: frontier.length <= boundedFanIn
+          ? 'Veredicto final de la flota'
+          : `Reducción jerárquica de evidencia · nivel ${level}`,
+        role: TASK_ROLES.REVIEWER,
+        stage: 'reduce',
+        priority: 1_000_000 + level,
+        dependsOn: dependencies,
+        maxAttempts: 3,
+        input: {
+          agent: 'qa_reviewer',
+          departmentId: route.departmentId,
+          ...(route.trace.requestedDepartmentId === route.departmentId
+            ? {}
+            : { departmentRouting: route.trace }),
+          objective: normalizedObjective,
+          reductionLevel: level,
+          instruction: dependencies.length === 1 && frontier.length === 1
+            ? 'Emite el veredicto final verificable, confirma criterios, riesgos y pruebas a partir del resultado precedente.'
+            : 'Reduce este lote de evidencias sin perder hallazgos, elimina duplicados y produce conclusiones trazables para el siguiente nivel de QA.',
+          acceptance: ['Evidencia trazable', 'Riesgos priorizados', 'Veredicto verificable'],
+        },
+      });
+      next.push(key);
+    }
+    frontier = next;
+  } while (frontier.length > 1);
+
+  return output;
+}
+
+function scaleFleetWithHierarchicalVerdict(tasks, {
+  objective,
+  targetCount,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
+  fanIn = 50,
+} = {}) {
+  const base = Array.isArray(tasks) ? tasks.slice() : [];
+  const target = boundedInteger(targetCount, base.length, 1, MAX_PLANNER_TASKS);
+  if (base.length >= target) return base;
+  const boundedFanIn = boundedInteger(fanIn, 50, 2, 100);
+  const baseSinks = Math.max(1, terminalTaskKeys(base).length);
+  let paddingCount = target - base.length;
+  while (
+    paddingCount > 0
+    && base.length
+      + paddingCount
+      + hierarchicalReducerCount(baseSinks + paddingCount, boundedFanIn)
+      > target
+  ) {
+    paddingCount -= 1;
+  }
+
+  let scaled = padFleetToLogicalCapacity(base, {
+    objective,
+    targetCount: base.length + paddingCount,
+    departmentIds,
+  });
+  const reducerCount = hierarchicalReducerCount(
+    Math.max(1, terminalTaskKeys(scaled).length),
+    boundedFanIn,
+  );
+  // A planner can consume nearly the whole target with independent sinks. If
+  // there is not enough room for a bounded tree, one final verdict still
+  // connects every sink rather than leaving work orphaned.
+  const effectiveFanIn = scaled.length + reducerCount <= target
+    ? boundedFanIn
+    : Math.max(2, terminalTaskKeys(scaled).length);
+  scaled = addHierarchicalFleetVerdict(scaled, {
+    objective,
+    departmentIds,
+    fanIn: effectiveFanIn,
+  });
+
+  // Fill rare arithmetic gaps with a serial final-verdict chain. Every added
+  // node remains reviewed by the next and the last node is the sole sink.
+  while (scaled.length < target) {
+    const finalKey = terminalTaskKeys(scaled)[0];
+    const extension = addHierarchicalFleetVerdict([
+      ...scaled,
+    ], {
+      objective,
+      departmentIds,
+      fanIn: Math.max(2, terminalTaskKeys(scaled).length),
+    });
+    const added = extension.slice(scaled.length);
+    if (!added.length) break;
+    const next = added[0];
+    next.key = `fleet-verdict-extension-${scaled.length + 1}`;
+    next.dependsOn = [finalKey];
+    next.title = 'Verificación final complementaria de la flota';
+    scaled.push(next);
+  }
+  if (scaled.length !== target) {
+    const error = new Error('fleet_reduction_task_budget_mismatch');
+    error.code = 'fleet_reduction_task_budget_mismatch';
+    error.details = { totalTasks: scaled.length, taskLimit: target };
+    throw error;
+  }
+  return scaled;
+}
+
 async function planFleetTasks({
   objective,
   companyPlan,
@@ -266,8 +727,10 @@ async function planFleetTasks({
   desiredTasks = DEFAULT_PLANNER_TASKS,
   qaEvery = DEFAULT_QA_EVERY,
   model = null,
+  departmentIds = DEFAULT_DEPARTMENT_IDS,
 } = {}) {
   const maxTasks = boundedInteger(desiredTasks, DEFAULT_PLANNER_TASKS, 1, MAX_PLANNER_TASKS);
+  const allowedDepartments = orderedDepartmentIds(departmentIds);
   let rawTasks = explicitTasks;
   let source = explicitTasks ? 'explicit' : 'fallback';
   let plannerError = null;
@@ -281,6 +744,7 @@ async function planFleetTasks({
             content: [
               'Eres el planner de una flota de ingeniería. Devuelve SOLO JSON válido.',
               'Esquema: {"tasks":[{"id":"kebab","title":"...","description":"...","departmentId":"...","role":"writer|read-only|reviewer|integrator","dependsOn":[],"acceptance":["..."]}]}.',
+              `departmentId debe ser uno de: ${allowedDepartments.join(', ')}.`,
               'Descompón en un DAG pequeño y ejecutable. Las tareas que cambian código usan role=writer. Investigación usa read-only. Efectos externos nunca son writer. Evita dos writers sobre el mismo archivo en el mismo nivel o explicita su dependencia.',
             ].join(' '),
           },
@@ -301,40 +765,57 @@ async function planFleetTasks({
       rawTasks = parsed?.tasks;
       source = 'planner';
     } catch (error) {
+      if (error?.fatalFleetPlanner === true) throw error;
       plannerError = String(error?.message || error).slice(0, 1_000);
     }
   }
 
   let normalized;
   try {
-    normalized = normalizePlannerTasks(rawTasks, { maxTasks });
+    normalized = normalizePlannerTasks(rawTasks, {
+      maxTasks,
+      departmentIds: allowedDepartments,
+    });
   } catch (error) {
     plannerError = plannerError || String(error?.message || error).slice(0, 1_000);
     normalized = fallbackFleetTasks({
       companyPlan,
       objective,
       logicalTasks: Math.max(maxTasks, 8),
+      departmentIds: allowedDepartments,
     });
     source = 'fallback';
   }
+  // QA consumes the same hard 10k task budget as every other logical agent.
+  // Add checkpoints before scale padding so read-only shards fill only the
+  // capacity that remains; never produce 10k base tasks plus extra QA tasks.
+  let tasksWithQa = source === 'fallback'
+    ? addFallbackQaWithinBudget(normalized, {
+      every: qaEvery,
+      departmentIds: allowedDepartments,
+      taskLimit: MAX_PLANNER_TASKS,
+    })
+    : addQaCheckpoints(normalized, {
+      every: qaEvery,
+      departmentIds: allowedDepartments,
+      taskLimit: MAX_PLANNER_TASKS,
+    });
   // Scale logical agents honestly: planner DAGs are small; pad research capacity
-  // so "activar 100 / 10_000 agentes" actually queues that many tasks.
-  if (source !== 'fallback' && normalized.length < maxTasks) {
-    normalized = padFleetToLogicalCapacity(normalized, {
+  // so "activar 100 / 10_000 agentes" actually queues that many tasks. Every
+  // padded shard is then reduced through bounded QA layers to one final verdict.
+  if (source !== 'fallback' && tasksWithQa.length < maxTasks) {
+    tasksWithQa = scaleFleetWithHierarchicalVerdict(tasksWithQa, {
       objective,
       targetCount: maxTasks,
+      departmentIds: allowedDepartments,
     });
     source = source === 'planner' ? 'planner+scale' : source;
   }
   return {
-    tasks: addQaCheckpoints(normalized, { every: qaEvery }),
+    tasks: tasksWithQa,
     source,
     plannerError,
   };
-}
-
-function poolDepartmentId(departmentId) {
-  return departmentId === 'trust-quality' ? 'trust' : departmentId;
 }
 
 function assignDepartmentPools(tasks, pools) {
@@ -343,21 +824,30 @@ function assignDepartmentPools(tasks, pools) {
   );
   const counts = new Map();
   for (const task of tasks) {
-    const departmentId = poolDepartmentId(String(task?.input?.departmentId || ''));
+    const departmentId = String(task?.input?.departmentId || '');
     const pool = byDepartment.get(departmentId);
-    // `pool?.enabled !== false` passed for MISSING pools too (undefined !==
-    // false) and then crashed on pool.id — which killed every fleet launch on
-    // a project that had never opened a department. No pool → no reservation
-    // to count; the mapper below already passes those tasks through unchanged.
+    // `pool?.enabled !== false` once passed for MISSING pools too (undefined !==
+    // false) and then crashed on pool.id. A completely fresh project remains a
+    // supported no-pool case; when pools exist, the mapper below treats them as
+    // authoritative and fails closed on any unmatched department.
     if (pool && pool.enabled !== false) counts.set(pool.id, (counts.get(pool.id) || 0) + 1);
   }
   return tasks.map((task) => {
     const input = task?.input && typeof task.input === 'object' && !Array.isArray(task.input)
       ? task.input
       : {};
-    const departmentId = poolDepartmentId(String(input.departmentId || ''));
+    const departmentId = String(input.departmentId || '');
     const pool = byDepartment.get(departmentId);
-    if (!pool) return task;
+    if (!pool) {
+      // A non-empty pool list is the runtime's routing authority. Never let an
+      // LLM-invented department bypass capacity/budget accounting.
+      if (byDepartment.size > 0) {
+        const error = new Error(`department_pool_unavailable:${departmentId || 'missing'}`);
+        error.code = 'department_pool_unavailable';
+        throw error;
+      }
+      return task;
+    }
     if (pool.enabled === false) {
       const error = new Error(`department_pool_disabled:${departmentId}`);
       error.code = 'department_pool_disabled';
@@ -397,17 +887,40 @@ async function createFleetSwarm({
   tier = null,
   env = process.env,
 } = {}) {
+  // A fresh project has no durable pool rows yet, but the fleet planner is a
+  // CEO Office operation and its fail-closed budget preflight requires a real
+  // pool for attribution. Bootstrap the existing company departments first;
+  // the helper uses the unique (projectId, departmentId) upsert and is safe to
+  // replay after a timeout or concurrent launch. This only creates capacity —
+  // requireOperationBudget below still decides whether provider spend is
+  // allowed (including an explicit zero company/pool budget).
+  await ensureFleetDepartmentPools({ prisma, project });
+  // Pool provisioning mutates the project capacity and an operator may change
+  // the company budget while those durable writes run. Never authorize the
+  // provider with the stale route snapshot.
+  const freshProject = await reloadFleetProject({ prisma, project });
+  const pools = await listDepartmentPools({ prisma, projectId: freshProject.id });
+  // The proactive bootstrap is intentionally best-effort for a background
+  // ticker. A user-requested launch cannot inherit that tolerance: verify the
+  // durable rows after all upserts and abort before the planner if even one
+  // enabled company department lacks usable capacity.
+  const departmentIds = requireCompleteFleetDepartmentPools({ project: freshProject, pools });
   const planned = await planFleetTasks({
     objective,
     companyPlan,
     explicitTasks,
-    planner,
+    planner: createBudgetedFleetPlanner({
+      planner,
+      prisma,
+      project: freshProject,
+      env,
+    }),
     desiredTasks: logicalTasks,
     qaEvery,
     model,
+    departmentIds,
   });
-  const runCap = configuredRunCap(project, env);
-  const pools = await listDepartmentPools({ prisma, projectId: project.id });
+  const runCap = configuredRunCap(freshProject, env);
   const plannedTasks = assignDepartmentPools(planned.tasks, pools);
   const writerCap = Math.min(
     maxConcurrency,
@@ -417,8 +930,8 @@ async function createFleetSwarm({
   const orchestrator = new CodexSwarmOrchestrator({ prisma });
   const swarm = await orchestrator.createSwarm({
     userId,
-    projectId: project.id,
-    name: `Fleet · ${project.name}`.slice(0, 300),
+    projectId: freshProject.id,
+    name: `Fleet · ${freshProject.name}`.slice(0, 300),
     strategy: 'dag',
     tasks: plannedTasks,
     taskLimit: plannedTasks.length,
@@ -450,13 +963,20 @@ async function createFleetSwarm({
 module.exports = {
   DEFAULT_PLANNER_TASKS,
   DEFAULT_QA_EVERY,
+  DEFAULT_DEPARTMENT_IDS,
   MAX_PLANNER_TASKS,
   padFleetToLogicalCapacity,
   addQaCheckpoints,
   assignDepartmentPools,
   createFleetSwarm,
+  createBudgetedFleetPlanner,
   extractJson,
   fallbackFleetTasks,
   normalizePlannerTasks,
+  normalizeDepartmentId,
+  orderedDepartmentIds,
   planFleetTasks,
+  requireCompleteFleetDepartmentPools,
+  scaleFleetWithHierarchicalVerdict,
+  terminalTaskKeys,
 };

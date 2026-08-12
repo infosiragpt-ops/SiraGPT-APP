@@ -4,6 +4,7 @@
 import type {
   CodexCompanyContext,
   CodexEnterpriseCommandCenter,
+  CodexSwarmResumeResponse,
   CodexSwarmSummary,
 } from "./types"
 import { requestCodex as req } from "./core"
@@ -36,7 +37,7 @@ export const swarmsCodexApi = {
       { method: "POST" },
     ),
   resumeSwarm: (projectId: string, swarmId: string) =>
-    req<{ swarm: CodexSwarmSummary }>(
+    req<CodexSwarmResumeResponse>(
       `/projects/${projectId}/swarms/${swarmId}/resume`,
       { method: "POST" },
     ),

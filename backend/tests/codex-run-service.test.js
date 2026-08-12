@@ -152,6 +152,31 @@ test('pooled swarm runs persist lineage and replay idempotently', async () => {
   assert.equal(db._runs[0].idempotencyKey, 'swarm-task:task-1:plan');
 });
 
+test('a direct department run accepts a validated pool without requiring a swarm task', async () => {
+  const db = makeDb({ projects: [PROJECT] });
+  db.codexDepartmentPool = {
+    async findFirst({ where }) {
+      return where.id === 'pool-support'
+        && where.projectId === PROJECT.id
+        && where.enabled === true
+        ? { id: 'pool-support' }
+        : null;
+    },
+  };
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'plan',
+    prompt: 'mejora el soporte',
+    departmentPoolId: 'pool-support',
+    db,
+    queue: fakeQueue(),
+  });
+
+  assert.equal(run.departmentPoolId, 'pool-support');
+  assert.equal(run.swarmTaskId, null);
+});
+
 test('swarm lineage validation fails closed and build continuations cannot switch pools', async () => {
   const noStore = makeDb({ projects: [PROJECT] });
   await assert.rejects(
@@ -457,7 +482,14 @@ test('advisory-lock path still enforces single-active inside the transaction', a
 });
 
 test('cancelRun flips to cancelled, removes the job, and emits one terminal event', async () => {
-  const db = makeDb({ projects: [PROJECT], runs: [{ id: 'r1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running' }] });
+  const db = makeDb({ projects: [PROJECT], runs: [{
+    id: 'r1',
+    projectId: 'p1',
+    userId: 'u1',
+    mode: 'build',
+    status: 'running',
+    jobId: 'r1:qr123',
+  }] });
   const calls = [];
   const events = [];
   const aborts = [];
@@ -472,7 +504,7 @@ test('cancelRun flips to cancelled, removes the job, and emits one terminal even
   assert.equal(run.status, 'cancelled');
   assert.ok(run.finishedAt);
   assert.deepEqual(aborts, ['r1']);
-  assert.deepEqual(calls.find((c) => c[0] === 'cancelQueued'), ['cancelQueued', 'r1']);
+  assert.deepEqual(calls.find((c) => c[0] === 'cancelQueued'), ['cancelQueued', 'r1:qr123']);
   assert.deepEqual(events, [{ runId: 'r1', type: 'run_status', data: { status: 'cancelled' } }]);
 });
 

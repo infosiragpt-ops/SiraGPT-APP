@@ -411,7 +411,9 @@ async function fanoutCancelledRun({
   abortRun,
   env,
 }) {
-  await queue.cancelQueuedCodexRun(run.id).catch(() => {});
+  // Recovery jobs use a unique BullMQ id to escape a lingering dead record;
+  // cancel the persisted job id rather than assuming jobId === runId.
+  await queue.cancelQueuedCodexRun(run.jobId || run.id).catch(() => {});
   try {
     const abort = abortRun || require('./run-processor').abortRun;
     if (typeof abort === 'function') abort(run.id, new Error('codex run cancelled'));
@@ -632,7 +634,9 @@ async function resolveToolPermission({
   try {
     const job = await queue.enqueueCodexRun({
       runId: run.id,
-      jobId: `${run.id}:permission:${clock().getTime()}`,
+      // BullMQ rejects custom IDs containing `:`. A unique valid generation
+      // lets the approved run bypass any dead job record left in Redis.
+      jobId: `${run.id}-permission-${clock().getTime()}`,
     });
     if (job?.id) {
       await prisma.codexRun.update({ where: { id: run.id }, data: { jobId: String(job.id) } });

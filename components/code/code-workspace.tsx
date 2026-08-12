@@ -127,23 +127,6 @@ export function CodeWorkspace() {
     }
   }, [previewOpen])
 
-  const toggleTerminal = React.useCallback(() => {
-    setTerminalOpen((value) => {
-      const next = !value
-      if (next) {
-        setOpenPanels((prev) => new Set(prev).add("terminal"))
-        setActivePanel("terminal")
-      } else {
-        setOpenPanels((prev) => {
-          const panels = new Set(prev)
-          panels.delete("terminal")
-          return panels
-        })
-      }
-      return next
-    })
-  }, [])
-
   const handleTogglePanel = React.useCallback((id: WorkspacePanelId) => {
     // Focusing a real tab dismisses the "Nueva pestaña" picker (it overlays
     // the main area, so the switch would otherwise be invisible).
@@ -179,6 +162,16 @@ export function CodeWorkspace() {
       setActiveTool((current) => (current === id ? null : current))
     }
   }, [])
+
+  const toggleTerminal = React.useCallback(() => {
+    if (terminalOpen) {
+      handleClosePanel("terminal")
+      return
+    }
+    setTerminalOpen(true)
+    setOpenPanels((prev) => new Set(prev).add("terminal"))
+    setActivePanel("terminal")
+  }, [handleClosePanel, terminalOpen])
 
   const openComposer = React.useCallback(() => {
     setChatOpen(true)
@@ -479,7 +472,7 @@ export function CodeWorkspace() {
   }, [commands, paletteQuery])
 
   return (
-    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
+    <div className="flex h-[var(--app-viewport-height,100dvh)] min-h-0 min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WorkspaceTopBar
         openPanels={openPanels}
         activePanel={activePanel}
@@ -577,7 +570,7 @@ export function CodeWorkspace() {
                     <>
                       <ResizableHandle withHandle />
                       <ResizablePanel defaultSize={TERMINAL_DEFAULT_SIZE} minSize={TERMINAL_MIN_SIZE} maxSize={70}>
-                        <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+                        <TerminalPanel open={terminalOpen} onClose={() => handleClosePanel("terminal")} />
                       </ResizablePanel>
                     </>
                   ) : null}
@@ -615,23 +608,43 @@ export function CodeWorkspace() {
             return (
               <div className="flex h-full min-h-0 flex-col">
                 <div className="relative min-h-0 flex-1 overflow-hidden">
-                  <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
+                  <div
+                    id="code-mobile-panel-chat"
+                    role="tabpanel"
+                    aria-labelledby="code-mobile-tab-chat"
+                    hidden={mobileView !== "chat"}
+                    className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}
+                  >
                     <MemoAgentCompanyPanel />
                   </div>
-                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
+                  <div
+                    id="code-mobile-panel-preview"
+                    role="tabpanel"
+                    aria-labelledby="code-mobile-tab-preview"
+                    hidden={mobileView !== "preview"}
+                    className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}
+                  >
                     {mainArea}
                   </div>
                 </div>
-                <div className="flex shrink-0 border-t border-border/60 bg-background">
+                <div
+                  className="flex shrink-0 border-t border-border/60 bg-background pb-[env(safe-area-inset-bottom)]"
+                  role="tablist"
+                  aria-label="Vista móvil del workspace"
+                >
                   {([
                     { id: "chat", label: "Empresa" },
                     { id: "preview", label: "Preview" },
                   ] as const).map((tab) => (
                     <button
                       key={tab.id}
+                      id={`code-mobile-tab-${tab.id}`}
                       type="button"
+                      role="tab"
                       onClick={() => setMobileView(tab.id)}
-                      aria-pressed={mobileView === tab.id}
+                      aria-selected={mobileView === tab.id}
+                      aria-controls={`code-mobile-panel-${tab.id}`}
+                      tabIndex={mobileView === tab.id ? 0 : -1}
                       className={cn(
                         "flex-1 px-3 py-2.5 text-xs font-medium transition-colors",
                         mobileView === tab.id

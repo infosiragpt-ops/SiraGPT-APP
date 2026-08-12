@@ -37,6 +37,7 @@ export type AgentCompanyRunLike = {
   createdAt?: string | Date | null
   startedAt?: string | Date | null
   finishedAt?: string | Date | null
+  departmentPoolId?: string | null
 }
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "waiting_approval"])
@@ -254,7 +255,14 @@ function normalizedMatchText(value: string): string {
 export function departmentIdForRun(
   run: AgentCompanyRunLike,
   departments: readonly AgentDepartmentDefinition[] = AGENT_COMPANY_DEPARTMENTS,
+  departmentByPoolId?: ReadonlyMap<string, string>,
 ): string {
+  const durableDepartmentId = run.departmentPoolId
+    ? departmentByPoolId?.get(run.departmentPoolId)
+    : null
+  if (durableDepartmentId && departments.some((department) => department.id === durableDepartmentId)) {
+    return durableDepartmentId
+  }
   const prompt = String(run.prompt || "")
   const proactiveDepartment = /^\s*\[PROACTIVO\s*·\s*([^\]]+)\]/i.exec(prompt)?.[1]
   if (proactiveDepartment) {
@@ -310,6 +318,8 @@ export function countWorkspaceResources(files: Record<string, WorkspaceFileLike>
 
 export function rootCodeSessionId(sessions: readonly CodeChatSession[]): string | null {
   if (sessions.length === 0) return null
+  const durableCeoOffice = sessions.find((session) => session.departmentId === "ceo-office")
+  if (durableCeoOffice) return durableCeoOffice.id
   const ceoOffice = sessions.find((session) => session.title.trim().toLowerCase() === "ceo office")
   if (ceoOffice) return ceoOffice.id
   return [...sessions].sort((a, b) => a.createdAt - b.createdAt)[0]?.id ?? null
@@ -325,6 +335,9 @@ export function departmentIdForSession(
   rootSessionId: string | null,
   departments: readonly AgentDepartmentDefinition[] = AGENT_COMPANY_DEPARTMENTS,
 ): string {
+  if (session.departmentId && departments.some((department) => department.id === session.departmentId)) {
+    return session.departmentId
+  }
   if (session.id === rootSessionId) return "ceo-office"
   const haystack = sessionSearchText(session)
   let bestMatch: { id: string; score: number } | null = null

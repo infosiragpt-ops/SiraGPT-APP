@@ -148,7 +148,8 @@ test('tool permission resolution is ownership scoped and requeues the same run',
   });
   assert.equal(run.status, 'queued');
   assert.equal(enqueued.runId, 'r1');
-  assert.match(enqueued.jobId, /permission/);
+  assert.equal(enqueued.jobId, 'r1-permission-1000');
+  assert.equal(enqueued.jobId.includes(':'), false);
   assert.equal(events.some((event) => event.type === 'tool_permission_resolved'), true);
 });
 

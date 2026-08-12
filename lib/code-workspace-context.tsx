@@ -70,6 +70,7 @@ import {
   listSessionsForWorkspace,
   readCodeChatStore,
   setActiveCodeChatSession as setActiveCodeChatSessionRecord,
+  updateCodeChatSessionDepartment,
   updateCodeChatSessionTurns,
   updateCodeChatSessionAgent,
 } from "./code-chat-sessions"
@@ -258,8 +259,16 @@ export type CodeWorkspaceContextValue = {
   codeChatSessions: CodeChatSession[]
   activeCodeChatSessionId: string | null
   activeCodeChatSession: CodeChatSession | null
-  createCodeChatSession: (opts?: { title?: string }) => string
+  createCodeChatSession: (opts?: {
+    title?: string
+    departmentId?: string
+    departmentPoolId?: string
+  }) => string
   setActiveCodeChatSession: (sessionId: string) => void
+  assignCodeChatSessionDepartment: (
+    sessionId: string,
+    department: { departmentId: string; departmentPoolId?: string | null },
+  ) => void
   patchCodeChatSessionTurns: (
     sessionId: string,
     updater: (prev: CodeChatTurn[]) => CodeChatTurn[],
@@ -872,7 +881,11 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     [chatSessionStore],
   )
 
-  const createCodeChatSession = React.useCallback((opts?: { title?: string }) => {
+  const createCodeChatSession = React.useCallback((opts?: {
+    title?: string
+    departmentId?: string
+    departmentPoolId?: string
+  }) => {
     const sessionId = createCodeChatSessionId()
     setChatSessionStore((prev) =>
       createCodeChatSessionRecord(workspaceSessionKey, { ...opts, id: sessionId }, prev).store,
@@ -880,6 +893,13 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     focusChat()
     return sessionId
   }, [focusChat, workspaceSessionKey])
+
+  const assignCodeChatSessionDepartment = React.useCallback((
+    sessionId: string,
+    department: { departmentId: string; departmentPoolId?: string | null },
+  ) => {
+    setChatSessionStore((prev) => updateCodeChatSessionDepartment(sessionId, department, prev))
+  }, [])
 
   const setActiveCodeChatSession = React.useCallback(
     (sessionId: string) => {
@@ -1001,6 +1021,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       activeCodeChatSession,
       createCodeChatSession,
       setActiveCodeChatSession,
+      assignCodeChatSessionDepartment,
       patchCodeChatSessionTurns,
       patchAgentState,
       listCodeChatSessionsForWorkspace,
@@ -1036,6 +1057,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       activeCodeChatSession,
       createCodeChatSession,
       setActiveCodeChatSession,
+      assignCodeChatSessionDepartment,
       patchCodeChatSessionTurns,
       patchAgentState,
       listCodeChatSessionsForWorkspace,

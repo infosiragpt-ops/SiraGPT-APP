@@ -4,6 +4,8 @@ const { createHash } = require('node:crypto');
 const externalActions = require('./external-actions');
 const resourceAccess = require('./company-resource-access');
 const { loadGmailClientForUser } = require('../../gmail-user-client');
+const departmentPools = require('../department-pools');
+const usageLedger = require('../usage-ledger');
 
 function bounded(value, max = 500) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -110,6 +112,8 @@ async function researchLeads({
   chatComplete,
   webSearch = defaultSearch,
   now = () => new Date(),
+  departmentPoolId = null,
+  env = process.env,
 }) {
   const profile = companyContext?.profile || {};
   if (profile.autonomy?.research === false) {
@@ -146,6 +150,16 @@ async function researchLeads({
   }
   if (!sourceRows.length) return { action: 'no_results', leads: [], queries };
 
+  const budget = await departmentPools.requireOperationBudget({
+    prisma,
+    project,
+    departmentId: resourceAccess.SALES_DEPARTMENT_ID,
+    departmentPoolId,
+    env,
+    now: now(),
+  });
+  const usagePool = budget.pool;
+  const callId = usageLedger.createUsageCallId();
   const completion = await chatComplete({
     messages: [
       {
@@ -169,6 +183,16 @@ async function researchLeads({
     ],
     temperature: 0.2,
     maxTokens: 1200,
+  });
+  await usageLedger.recordCompletionUsage({
+    prisma,
+    projectId: project.id,
+    departmentPoolId: usagePool?.id || null,
+    source: 'sales_research',
+    sourceId: `lead-research:${project.id}`,
+    completion,
+    callId,
+    env,
   });
   const parsed = extractJson(completion?.content || completion?.text);
   const byUrl = new Map(sourceRows.map((row) => [row.url, row]));
@@ -217,6 +241,7 @@ async function prepareLeadOutreach({
   gmailLoader = loadGmailClientForUser,
   env = process.env,
   now = () => new Date(),
+  departmentPoolId = null,
 }) {
   const lead = await prisma.codexCompanyLead.findFirst({
     where: { id: leadId, projectId: project.id, userId: project.userId },
@@ -250,6 +275,16 @@ async function prepareLeadOutreach({
   }
 
   const profile = companyContext?.profile || {};
+  const budget = await departmentPools.requireOperationBudget({
+    prisma,
+    project,
+    departmentId: resourceAccess.SALES_DEPARTMENT_ID,
+    departmentPoolId,
+    env,
+    now: now(),
+  });
+  const usagePool = budget.pool;
+  const callId = usageLedger.createUsageCallId();
   const completion = await chatComplete({
     messages: [
       {
@@ -274,6 +309,16 @@ async function prepareLeadOutreach({
     ],
     temperature: 0.3,
     maxTokens: 800,
+  });
+  await usageLedger.recordCompletionUsage({
+    prisma,
+    projectId: project.id,
+    departmentPoolId: usagePool?.id || null,
+    source: 'sales_outreach',
+    sourceId: `lead-outreach:${lead.id}`,
+    completion,
+    callId,
+    env,
   });
   const parsed = extractJson(completion?.content || completion?.text);
   const subject = safeSubject(parsed?.subject);

@@ -57,6 +57,13 @@ export interface CodexRun {
   finishedAt: string | null
   metric?: CodexRunMetric
 }
+export interface CodexActiveRunCancellation {
+  complete: boolean
+  requestedRunIds: string[]
+  cancelledRunIds: string[]
+  failedRunIds: string[]
+  runs: CodexRun[]
+}
 export interface CodexRunMetric { timeWorkedMs: number; actionsCount: number; itemsReadLines: number; additions: number; deletions: number; tokensIn: number; tokensOut: number; model: string | null; costUsd: number; costSource: string; costOriginalUsd: number; costAppliedUsd: number; costInputUsd: number; costOutputUsd: number }
 export interface CodexCheckpointDiff { ok: boolean; commitSha: string; diff: string; truncated: boolean; additions: number; deletions: number; filesChanged: number }
 export interface CodexCheckpoint { id: string; commitSha: string; shortSha: string; title: string; createdAt: string; additions: number | null; deletions: number | null }
@@ -637,6 +644,24 @@ export interface CodexSwarmSummary {
   maxConcurrency: number
   totalTaskCount: number
   updatedAt: string
+}
+export interface CodexSwarmRunRecoverySweep {
+  scanned: number
+  reenqueued: number
+  live: number
+  leaseLost: number
+  skipped: number
+  failed: number
+}
+export interface CodexSwarmRunRecovery extends CodexSwarmRunRecoverySweep {
+  complete: boolean
+  attemptCount: number
+  attempts: CodexSwarmRunRecoverySweep[]
+}
+export interface CodexSwarmResumeResponse {
+  complete: boolean
+  swarm: CodexSwarmSummary
+  runRecovery: CodexSwarmRunRecovery
 }
 export interface CodexEnterpriseCommandCenter {
   readiness: {

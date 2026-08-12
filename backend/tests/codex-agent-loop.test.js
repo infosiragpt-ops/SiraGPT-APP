@@ -792,6 +792,11 @@ test('a pooled run stops at its own reservation before executing proposed tools'
     codexSwarmTask: {
       findUnique: async () => ({
         id: 'task-qa',
+        swarm: {
+          id: 'swarm-qa',
+          status: 'running',
+          cancelRequestedAt: null,
+        },
         input: {
           departmentPoolId: 'pool-trust',
           poolBudgetReservationUsd: 0.5,
@@ -838,6 +843,87 @@ test('a pooled run stops at its own reservation before executing proposed tools'
     event.type === 'budget_status' && event.data.scope === 'department_pool'
   ));
   assert.equal(poolStatuses.at(-1).data.reason, 'department_pool_run_reservation_exceeded');
+});
+
+test('a direct proactive run can use a department pool without a swarm reservation', async () => {
+  const poolChecks = [];
+  const f = fakeDeps({
+    projectBudget: {
+      checkProjectBudget: async () => ({
+        allowed: true,
+        reason: 'not_configured',
+        dailyBudgetUsd: null,
+      }),
+      checkDepartmentPoolBudget: async (args) => {
+        poolChecks.push(args);
+        return {
+          allowed: true,
+          reason: 'department_pool_unlimited',
+          dailyBudgetUsd: null,
+          costTodayUsd: 0,
+          remainingUsd: null,
+        };
+      },
+    },
+    llmTurn: scriptedLlm([{ text: 'La mejora quedó verificada.', toolCalls: [] }]),
+  });
+
+  const res = await runAgentLoop({
+    run: {
+      id: 'r-direct-pool',
+      userId: 'u1',
+      mode: 'build',
+      prompt: 'mejora el panel',
+      departmentPoolId: 'pool-engineering',
+      swarmTaskId: null,
+    },
+    project: { id: 'p1', name: 'X' },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'done');
+  assert.ok(poolChecks.length >= 2, 'pool budget is checked before and during the run');
+  assert.ok(poolChecks.every((check) => check.departmentPoolId === 'pool-engineering'));
+  assert.ok(poolChecks.every((check) => check.swarmTaskId === null));
+});
+
+test('a linked run never executes after its swarm is cancelled', async () => {
+  let llmCalls = 0;
+  const f = fakeDeps({
+    prisma: {
+      codexSwarmTask: {
+        findUnique: async () => ({
+          id: 'task-cancelled',
+          swarm: {
+            id: 'swarm-cancelled',
+            status: 'cancelled',
+            cancelRequestedAt: new Date('2026-08-11T12:00:00.000Z'),
+          },
+        }),
+      },
+    },
+    llmTurn: async () => {
+      llmCalls += 1;
+      return { text: 'must not run', toolCalls: [] };
+    },
+  });
+
+  const res = await runAgentLoop({
+    run: {
+      id: 'r-cancelled-swarm',
+      mode: 'build',
+      prompt: 'continúa',
+      swarmTaskId: 'task-cancelled',
+    },
+    project: { id: 'p1', name: 'X' },
+    deps: f.deps,
+  });
+
+  assert.equal(res.status, 'cancelled');
+  assert.equal(llmCalls, 0);
+  assert.ok(f.events.some((event) => (
+    event.type === 'narrative_delta' && /enjambre fue cancelado/i.test(event.data.text)
+  )));
 });
 
 test('a blocking LLM error (402) emits action_required before the run errors', async () => {

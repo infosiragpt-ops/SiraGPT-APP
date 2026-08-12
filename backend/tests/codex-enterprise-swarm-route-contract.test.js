@@ -54,23 +54,54 @@ test('swarm start hands a bounded worktree-isolated fleet to the durable queue',
   assert.match(fleetSource, /isolatedWriterWorktrees: true/);
   assert.match(fleetSource, /serializedBaseMerges: true/);
   assert.match(fleetSource, /MAX_PLANNER_TASKS = 10_000/);
-  assert.match(routeSource, /enqueueSwarm\(\{\s*swarmId: swarm\.id/);
-  assert.match(routeSource, /swarm_queue_unavailable/);
+  assert.match(routeSource, /swarmLifecycle\.launchFleetSafely\(\{/);
+  assert.match(routeSource, /createFleet: \(\) => createFleetSwarm\(\{/);
+  assert.match(routeSource, /enqueueSwarm: \(\{ swarmId \}\)/);
+  assert.match(routeSource, /hasActiveRun: \(\) => runService\.hasActiveRun/);
 });
 
-test('pause, resume and cancel controls are exposed and cancellation reaches linked Codex runs', () => {
+test('pause, resume and cancel controls are exposed and cancellation reaches every task run family', () => {
   for (const action of ['pause', 'resume', 'cancel']) {
     assert.match(
       routeSource,
       new RegExp(`'/projects/:id/swarms/:swarmId/${action}'`),
     );
   }
+  assert.match(routeSource, /const linkedTasks = await codexDb\.codexSwarmTask\.findMany/);
+  assert.match(routeSource, /where: \{ swarmId: swarm\.id \}/);
+  assert.doesNotMatch(routeSource, /where: \{ swarmId: swarm\.id, role: 'integrator' \}/);
+  assert.match(routeSource, /swarmTaskId: \{ in: linkedTaskIds \}/);
+  assert.match(routeSource, /status: \{ in: runService\.ACTIVE_STATUSES \}/);
   assert.match(routeSource, /planRunIds/);
-  assert.match(routeSource, /runService\.cancelRun\(/);
+  assert.match(routeSource, /runService\.cancelRunFamily\(/);
+  assert.match(routeSource, /swarmLifecycle\.cancelRunFamiliesReliably\(\{/);
+  assert.match(routeSource, /codex_swarm_cancel_incomplete/);
+  assert.match(routeSource, /res\.status\(503\)/);
+  assert.match(
+    routeSource,
+    /resumeSwarm\([\s\S]*resumeDeferredSwarmRunsReliably\([\s\S]*enqueueSwarm/,
+    'resume must publish deferred Codex runs before restarting swarm workers',
+  );
+  assert.match(routeSource, /res\.status\(runRecovery\.complete \? 200 : 207\)/);
+  assert.match(routeSource, /complete: runRecovery\.complete[\s\S]*runRecovery/);
 });
 
 test('backend boot recovers swarms and shutdown closes their BullMQ runtime', () => {
   assert.match(indexSource, /startSwarmWorker\(\)/);
   assert.match(indexSource, /recoverSwarmJobs\(\)/);
   assert.match(indexSource, /closeSwarmRuntime\(\)/);
+});
+
+test('project-wide stop is authoritative, owned and independent from paginated run history', () => {
+  assert.match(
+    routeSource,
+    /'\/projects\/:id\/runs\/cancel-active',\s*authenticateToken,\s*requireCodexAgentAccess/,
+  );
+  assert.match(routeSource, /const project = await loadOwnedProjectRecord\(req, res\)/);
+  assert.match(routeSource, /const activeRuns = await codexDb\.codexRun\.findMany\(\{/);
+  assert.match(routeSource, /status: \{ in: runService\.ACTIVE_STATUSES \}/);
+  assert.match(routeSource, /requestedRunIds/);
+  assert.match(routeSource, /cancelledRunIds/);
+  assert.match(routeSource, /failedRunIds/);
+  assert.match(routeSource, /res\.status\(cancellation\.complete \? 200 : 207\)/);
 });

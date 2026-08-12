@@ -140,7 +140,11 @@ import {
   requestProactiveSeedPrompt,
   setProactiveCompanyEnabled,
 } from "@/lib/code-agent-company-proactive"
-import type { CodeChatSession } from "@/lib/code-chat-sessions"
+import {
+  codeChatSessionMatchesDepartment,
+  findCodeChatSessionForDepartment,
+  type CodeChatSession,
+} from "@/lib/code-chat-sessions"
 import type { CodeFile, CodeFiles } from "@/lib/code-workspace-utils"
 import { useAuth } from "@/lib/auth-context-integrated"
 import {
@@ -535,10 +539,14 @@ function enterpriseSwarmSummary(runs: readonly CodexRun[]): EnterpriseSwarmSumma
 function enterpriseDepartments(
   departments: readonly AgentDepartmentDefinition[],
   runs: readonly CodexRun[],
+  departmentPools: readonly CodexDepartmentPool[] = [],
 ): EnterpriseDepartment[] {
+  const departmentByPoolId = new Map(
+    departmentPools.map((pool) => [pool.id, pool.departmentId] as const),
+  )
   return departments.map((department) => {
     const assigned = runs
-      .filter((run) => departmentIdForRun(run, departments) === department.id)
+      .filter((run) => departmentIdForRun(run, departments, departmentByPoolId) === department.id)
       .sort((a, b) => runActivityAt(b) - runActivityAt(a))
     const active = assigned.filter((run) => codeRunIsActive(run))
     const completed = assigned.filter((run) => String(run.status).toLowerCase() === "done")
@@ -638,6 +646,7 @@ export function AgentCompanyPanel() {
     activeCodeChatSessionId,
     createCodeChatSession,
     setActiveCodeChatSession,
+    assignCodeChatSessionDepartment,
     listCodeChatSessionsForWorkspace,
     switchCodexWorkspace,
     forgetWorkspace,
@@ -694,6 +703,7 @@ export function AgentCompanyPanel() {
   const [associationCandidateId, setAssociationCandidateId] = React.useState("")
   const [associationConnectorIds, setAssociationConnectorIds] = React.useState<string[]>([])
   const [codexRuns, setCodexRuns] = React.useState<CodexRun[]>([])
+  const [runMutationId, setRunMutationId] = React.useState<string | null>(null)
   const [projectActivity, setProjectActivity] = React.useState<CodexProjectActivity[]>([])
   const [checkpointCount, setCheckpointCount] = React.useState(0)
   const [codexAccess, setCodexAccess] = React.useState<CodexAccess | null>(null)
@@ -1261,11 +1271,31 @@ export function AgentCompanyPanel() {
     ],
   )
 
+  const poolIdByDepartment = React.useMemo(
+    () => new Map(departmentPools.map((pool) => [pool.departmentId, pool.id] as const)),
+    [departmentPools],
+  )
+
+  const ensureDepartmentSession = React.useCallback((departmentId: string, title: string) => {
+    // Undefined means the pool catalog is still hydrating; session helpers
+    // preserve any durable pool until this becomes a concrete server id.
+    const departmentPoolId = poolIdByDepartment.get(departmentId)
+    const identity = { departmentId, departmentPoolId }
+    const existingSession = findCodeChatSessionForDepartment(codeChatSessions, departmentId, title)
+    if (!existingSession) return createCodeChatSession({ title, departmentId, departmentPoolId })
+    if (!codeChatSessionMatchesDepartment(existingSession, identity)) {
+      assignCodeChatSessionDepartment(existingSession.id, identity)
+    }
+    return existingSession.id
+  }, [
+    assignCodeChatSessionDepartment,
+    codeChatSessions,
+    createCodeChatSession,
+    poolIdByDepartment,
+  ])
+
   const openCeoOffice = React.useCallback(() => {
-    let rootSessionId = codeChatSessions.find(
-      (session) => session.title.trim().toLowerCase() === "ceo office",
-    )?.id
-    if (!rootSessionId) rootSessionId = createCodeChatSession({ title: "CEO Office" })
+    const rootSessionId = ensureDepartmentSession("ceo-office", "CEO Office")
     setActiveCodeChatSession(rootSessionId)
     if (chatLivesInWorkspaceColumn) {
       setView("home")
@@ -1275,8 +1305,7 @@ export function AgentCompanyPanel() {
     setView("chat")
   }, [
     chatLivesInWorkspaceColumn,
-    createCodeChatSession,
-    codeChatSessions,
+    ensureDepartmentSession,
     setActiveCodeChatSession,
   ])
 
@@ -1288,10 +1317,7 @@ export function AgentCompanyPanel() {
     const department = allDepartments.find((entry) => entry.id === departmentId)
     if (!department) return
     const title = departmentBootstrapTitle(department)
-    let sessionId = codeChatSessions.find(
-      (session) => session.title.trim().toLowerCase() === title.toLowerCase(),
-    )?.id
-    if (!sessionId) sessionId = createCodeChatSession({ title })
+    const sessionId = ensureDepartmentSession(departmentId, title)
     setSelectedDepartmentId(departmentId)
     setActiveCodeChatSession(sessionId)
     if (chatLivesInWorkspaceColumn) {
@@ -1303,8 +1329,7 @@ export function AgentCompanyPanel() {
   }, [
     allDepartments,
     chatLivesInWorkspaceColumn,
-    codeChatSessions,
-    createCodeChatSession,
+    ensureDepartmentSession,
     openCeoOffice,
     setActiveCodeChatSession,
   ])
@@ -1325,33 +1350,78 @@ export function AgentCompanyPanel() {
     setView("department")
   }, [chatLivesInWorkspaceColumn, setActiveCodeChatSession])
 
+  // React state updates are batched. Two callers can therefore enter the
+  // bootstrap in the same tick with the same stale session snapshot. Keep the
+  // first reconciliation authoritative until that batch is reflected back in
+  // codeChatSessions; later callers reuse its CEO id instead of creating a
+  // second copy of every department chat.
+  const departmentSessionBootstrapRef = React.useRef<{
+    inFlight: boolean
+    rootSessionId: string | null
+  }>({ inFlight: false, rootSessionId: null })
+
   const ensureDepartmentSessions = React.useCallback(() => {
-    const existingTitles = new Set(codeChatSessions.map((session) => session.title.trim().toLowerCase()))
-    let rootSessionId = codeChatSessions.find(
-      (session) => session.title.trim().toLowerCase() === "ceo office",
-    )?.id
-    if (!rootSessionId) {
-      rootSessionId = createCodeChatSession({ title: "CEO Office" })
-      existingTitles.add("ceo office")
+    if (
+      departmentSessionBootstrapRef.current.inFlight
+      && departmentSessionBootstrapRef.current.rootSessionId
+    ) {
+      return departmentSessionBootstrapRef.current.rootSessionId
     }
+    departmentSessionBootstrapRef.current.inFlight = true
+
+    const rootSessionId = ensureDepartmentSession("ceo-office", "CEO Office")
+    departmentSessionBootstrapRef.current.rootSessionId = rootSessionId
     // Full fleet: every enabled department (built-in + custom) gets a chat seat
     // so PROACTIVO can assign work without a missing-session race.
     const fleet = allDepartments.length > 0 ? allDepartments : PROACTIVE_CORE_DEPARTMENTS
     for (const department of fleet) {
       if (department.id === "ceo-office" || department.enabled === false) continue
       const title = departmentBootstrapTitle(department)
-      if (existingTitles.has(title.toLowerCase())) continue
-      createCodeChatSession({ title })
-      existingTitles.add(title.toLowerCase())
+      ensureDepartmentSession(department.id, title)
     }
     return rootSessionId
-  }, [allDepartments, codeChatSessions, createCodeChatSession])
+  }, [
+    allDepartments,
+    ensureDepartmentSession,
+  ])
+
+  const departmentSessionsReady = React.useMemo(() => {
+    const fleet = allDepartments.length > 0 ? allDepartments : PROACTIVE_CORE_DEPARTMENTS
+    return fleet
+      .filter((department) => department.enabled !== false)
+      .every((department) => {
+        const title = departmentBootstrapTitle(department)
+        const session = findCodeChatSessionForDepartment(codeChatSessions, department.id, title)
+        if (!session) return false
+        // Missing pool data is a hydration wildcard, not a request to clear
+        // the session's durable budget attribution. A concrete pool id is
+        // reconciled on the render where the server catalog arrives.
+        return codeChatSessionMatchesDepartment(session, {
+          departmentId: department.id,
+          departmentPoolId: poolIdByDepartment.get(department.id),
+        })
+      })
+  }, [allDepartments, codeChatSessions, poolIdByDepartment])
+
+  React.useEffect(() => {
+    departmentSessionBootstrapRef.current = { inFlight: false, rootSessionId: null }
+  }, [activeFolder?.id])
+
+  React.useEffect(() => {
+    // A committed readiness transition means React has consumed the previous
+    // batch. Clear the same-tick lock both when the fleet becomes ready and
+    // when a new/changed department makes it incomplete again.
+    departmentSessionBootstrapRef.current.inFlight = false
+  }, [departmentSessionsReady])
 
   // Keep department chats warm whenever PROACTIVO is on (toggle or server hydrate).
   React.useEffect(() => {
-    if (!proactiveOn) return
+    // Do not call the reconciler again after its first render has established
+    // CEO + the complete enabled fleet. This guard, together with idempotent
+    // persistence, prevents store events from re-entering the effect.
+    if (!proactiveOn || departmentSessionsReady) return
     ensureDepartmentSessions()
-  }, [proactiveOn, ensureDepartmentSessions])
+  }, [departmentSessionsReady, proactiveOn, ensureDepartmentSessions])
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn
@@ -1447,9 +1517,40 @@ export function AgentCompanyPanel() {
       ensureDepartmentSessions()
 
       if (commandCenter?.swarm?.status === "paused") {
-        await codexApi.resumeSwarm(projectId, commandCenter.swarm.id)
-        await refreshCommandCenter(projectId)
-        toast.success("Ejecución empresarial reanudada desde el último estado persistido.")
+        const swarmId = commandCenter.swarm.id
+        async function resumePersistedSwarm(): Promise<void> {
+          const resume = await codexApi.resumeSwarm(projectId, swarmId)
+          // A 207 response is still a valid response body. Refresh the visible
+          // command center, but do not claim success while durable runs remain
+          // without a live queue job.
+          await refreshCommandCenter(projectId)
+          if (!resume.complete) {
+            const pendingRuns =
+              resume.runRecovery.failed
+              + resume.runRecovery.leaseLost
+              + resume.runRecovery.skipped
+            toast.warning(
+              pendingRuns > 0
+                ? `Reanudación parcial: ${pendingRuns} tarea${pendingRuns === 1 ? "" : "s"} sigue${pendingRuns === 1 ? "" : "n"} pendiente${pendingRuns === 1 ? "" : "s"}.`
+                : "Reanudación parcial: todavía hay tareas pendientes de recuperar.",
+              {
+                duration: 12_000,
+                action: {
+                  label: "Reintentar recuperación",
+                  onClick: () => {
+                    setProactiveBusy(true)
+                    void resumePersistedSwarm()
+                      .catch(() => toast.error("No se pudo completar la recuperación del enjambre."))
+                      .finally(() => setProactiveBusy(false))
+                  },
+                },
+              },
+            )
+            return
+          }
+          toast.success("Ejecución empresarial reanudada desde el último estado persistido.")
+        }
+        await resumePersistedSwarm()
         return
       }
 
@@ -1537,38 +1638,113 @@ export function AgentCompanyPanel() {
 
   const cancelCompanyExecution = React.useCallback(async () => {
     const codexProjectId = associatedCodexProjectId
-    const activeRun = [...codexRuns]
-      .filter((run) => codeRunIsActive(run))
-      .sort((a, b) => runActivityAt(b) - runActivityAt(a))[0]
-    if (!codexProjectId && !activeRun) {
+    const activeRuns = codexRuns.filter((run) => codeRunIsActive(run))
+    const runtimeProjectId = codexProjectId || activeRuns[0]?.projectId || null
+    const cancellableSwarm = commandCenter?.swarm
+      && ["queued", "running", "paused", "cancelling"].includes(commandCenter.swarm.status)
+      ? commandCenter.swarm
+      : null
+    if (!runtimeProjectId && !cancellableSwarm && !proactiveOn) {
       toast.info("No hay una ejecución activa.")
       return
     }
 
     setProactiveBusy(true)
     proactiveMutationVersionRef.current += 1
+    const operationFailures: string[] = []
+    const syncFailures: string[] = []
+    let controlOperationsSucceeded = 0
+    let cancellation: Awaited<ReturnType<typeof codexApi.cancelActiveRuns>> | null = null
+
     try {
-      if (codexProjectId && commandCenter?.swarm?.id) {
-        await codexApi.cancelSwarm(
-          codexProjectId,
-          commandCenter.swarm.id,
-          "cancelled_by_user",
+      // Freeze producers before cancelling their current work so a new family
+      // cannot immediately replace one that was just stopped.
+      if (runtimeProjectId && proactiveOn) {
+        try {
+          const result = await codexApi.setProactive(runtimeProjectId, false)
+          setProactiveState(normalizeProactiveState(result.state))
+          setProactiveOn(false)
+          setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
+          controlOperationsSucceeded += 1
+        } catch {
+          operationFailures.push("modo proactivo")
+        }
+      }
+
+      if (runtimeProjectId && cancellableSwarm) {
+        try {
+          await codexApi.cancelSwarm(
+            runtimeProjectId,
+            cancellableSwarm.id,
+            "cancelled_by_user",
+          )
+          controlOperationsSucceeded += 1
+        } catch {
+          operationFailures.push("enjambre")
+        }
+      }
+
+      // This endpoint queries every active run in the project (not the paged
+      // list visible in the panel), deduplicates plan/build roots, and retries
+      // each family server-side before returning an authoritative verdict.
+      if (runtimeProjectId) {
+        try {
+          cancellation = await codexApi.cancelActiveRuns(runtimeProjectId)
+          if (cancellation.runs.length > 0) {
+            const cancelledRuns = cancellation.runs
+            const updates = new Map(cancelledRuns.map((run) => [run.id, run] as const))
+            setCodexRuns((current) => [
+              ...current.map((run) => updates.get(run.id) || run),
+              ...cancelledRuns.filter((run) => !current.some((currentRun) => currentRun.id === run.id)),
+            ])
+          }
+        } catch {
+          operationFailures.push("familias de ejecución")
+        }
+      }
+
+      // Resync only updates presentation. The success verdict above comes from
+      // cancel-active, never from this paginated list.
+      if (runtimeProjectId) {
+        try {
+          setCodexRuns(await codexApi.listRuns(runtimeProjectId))
+        } catch {
+          syncFailures.push("la lista de ejecuciones")
+        }
+        try {
+          await refreshCommandCenter(runtimeProjectId)
+        } catch {
+          syncFailures.push("el centro de mando")
+        }
+      }
+
+      const requested = cancellation?.requestedRunIds.length || 0
+      const failed = cancellation?.failedRunIds.length || 0
+      const confirmedFamilies = Math.max(0, requested - failed)
+      const complete = cancellation?.complete === true && operationFailures.length === 0
+      const hadEnterpriseWork = requested > 0 || Boolean(cancellableSwarm) || proactiveOn
+
+      if (complete && hadEnterpriseWork) {
+        const message = requested > 0
+          ? `${requested} ${requested === 1 ? "familia de ejecución detenida" : "familias de ejecución detenidas"}; operación empresarial pausada.`
+          : "Ejecución empresarial cancelada y operación proactiva pausada."
+        if (syncFailures.length > 0) {
+          toast.warning(`${message} Quedó pendiente actualizar ${syncFailures.join(" y ")}.`)
+        } else {
+          toast.success(message)
+        }
+      } else if (complete && !hadEnterpriseWork) {
+        toast.info("No hay una ejecución activa.")
+      } else if (confirmedFamilies > 0 || controlOperationsSucceeded > 0) {
+        const progress = requested > 0
+          ? `${confirmedFamilies}/${requested} familias confirmadas${failed > 0 ? `; ${failed} pendientes` : ""}.`
+          : "Los productores se detuvieron, pero faltó confirmar todas las familias."
+        toast.warning(
+          `Cancelación parcial: ${progress} Revisa el estado operativo y reintenta.`,
         )
-        await refreshCommandCenter(codexProjectId)
+      } else {
+        toast.error("No se pudo cancelar la ejecución empresarial. Revisa el estado operativo antes de reintentar.")
       }
-      if (codexProjectId && proactiveOn) {
-        const result = await codexApi.setProactive(codexProjectId, false)
-        setProactiveState(normalizeProactiveState(result.state))
-        setProactiveOn(false)
-        setProactiveCompanyEnabled(false, { workspaceId: activeFolder?.id || null })
-      }
-      if (activeRun) {
-        const cancelled = await codexApi.cancelRun(activeRun.id)
-        setCodexRuns((current) => current.map((run) => run.id === cancelled.id ? cancelled : run))
-      }
-      toast.success("Ejecución cancelada y operación proactiva pausada.")
-    } catch {
-      toast.error("No se pudo cancelar toda la ejecución. Revisa el estado operativo antes de reintentar.")
     } finally {
       setProactiveBusy(false)
     }
@@ -1576,10 +1752,143 @@ export function AgentCompanyPanel() {
     activeFolder?.id,
     associatedCodexProjectId,
     codexRuns,
-    commandCenter?.swarm?.id,
+    commandCenter?.swarm,
     proactiveOn,
     refreshCommandCenter,
   ])
+
+  const sessionForRun = React.useCallback((run: CodexRun) => {
+    const familyIds = new Set(
+      [run.id, run.planRunId]
+        .map((value) => String(value || "").trim())
+        .filter(Boolean),
+    )
+    const related = codexRuns.filter(
+      (candidate) => candidate.id === run.planRunId || candidate.planRunId === run.id,
+    )
+    related.forEach((candidate) => {
+      familyIds.add(candidate.id)
+      if (candidate.planRunId) familyIds.add(candidate.planRunId)
+    })
+    return codeChatSessions.find((session) =>
+      session.turns.some((turn) => Boolean(turn.codexRunId && familyIds.has(turn.codexRunId))),
+    ) || null
+  }, [codeChatSessions, codexRuns])
+
+  const inspectCompanyRun = React.useCallback((run: CodexRun, placement: "panel" | "preview") => {
+    const openSession = (session: CodeChatSession) => {
+      setSelectedTaskId(session.id)
+      if (placement === "preview") setPreviewView("task")
+      else setView("task")
+    }
+    const session = sessionForRun(run)
+    if (session) {
+      openSession(session)
+      return
+    }
+
+    const departmentId = departmentIdForRun(
+      run,
+      allDepartments,
+      new Map(departmentPools.map((pool) => [pool.id, pool.departmentId] as const)),
+    )
+    if (departmentId) {
+      const departmentSession = codeChatSessions.find(
+        (candidate) => departmentIdForSession(
+          candidate,
+          snapshot.rootSessionId,
+          allDepartments,
+        ) === departmentId,
+      )
+      if (departmentSession) {
+        openSession(departmentSession)
+        toast.info("Abrimos la memoria persistente del departamento responsable.")
+        return
+      }
+      if (placement === "preview") setPreviewView(null)
+      openDepartmentChat(departmentId)
+      toast.info("Abrimos el departamento responsable; esta ejecución aún no tiene conversación enlazada.")
+      return
+    }
+    toast.info("Esta ejecución no tiene una conversación o departamento enlazado todavía.")
+  }, [
+    allDepartments,
+    codeChatSessions,
+    departmentPools,
+    openDepartmentChat,
+    sessionForRun,
+    snapshot.rootSessionId,
+  ])
+
+  const cancelCompanyRun = React.useCallback(async (run: CodexRun) => {
+    if (!codeRunIsActive(run)) {
+      toast.info("Esta ejecución ya terminó.")
+      return
+    }
+    if (runMutationId) return
+    setRunMutationId(run.id)
+    try {
+      const result = await codexApi.cancelRunFamily(run.id)
+      setCodexRuns((current) => {
+        const updates = new Map(result.runs.map((entry) => [entry.id, entry] as const))
+        return current.map((entry) => updates.get(entry.id) || entry)
+      })
+      toast.success(
+        result.cancelledRunIds.length === 1
+          ? "Ejecución detenida."
+          : `${result.cancelledRunIds.length} ejecuciones relacionadas detenidas.`,
+      )
+    } catch {
+      toast.error("No se pudo detener la ejecución y su familia. Actualiza el estado antes de volver a intentar.")
+    } finally {
+      setRunMutationId(null)
+    }
+  }, [runMutationId])
+
+  const retryCompanyRun = React.useCallback(async (run: CodexRun) => {
+    if (runMutationId) return
+    if (codexAccess?.canRun === false) {
+      toast.error("La ejecución está protegida. Un administrador debe habilitar este workspace.")
+      return
+    }
+    const planSource = run.prompt?.trim()
+      ? run
+      : codexRuns.find((candidate) => candidate.id === run.planRunId && candidate.prompt?.trim()) || null
+    const prompt = planSource?.prompt?.trim()
+    const projectId = run.projectId || planSource?.projectId || associatedCodexProjectId
+    if (!projectId || !prompt) {
+      toast.error("No se puede reintentar porque falta el objetivo original de esta ejecución.")
+      return
+    }
+
+    setRunMutationId(run.id)
+    try {
+      const retried = await codexApi.createRun(projectId, {
+        mode: "plan",
+        prompt,
+        ...(run.model || planSource?.model ? { model: run.model || planSource?.model || undefined } : {}),
+        ...(run.tier || planSource?.tier ? { tier: run.tier || planSource?.tier || undefined } : {}),
+        ...(run.reasoningEffort || planSource?.reasoningEffort
+          ? { reasoningEffort: run.reasoningEffort || planSource?.reasoningEffort || undefined }
+          : {}),
+        autoExecute: true,
+        ...(run.departmentPoolId || planSource?.departmentPoolId
+          ? { departmentPoolId: run.departmentPoolId || planSource?.departmentPoolId || undefined }
+          : {}),
+      })
+      setCodexRuns((current) => [retried, ...current.filter((entry) => entry.id !== retried.id)])
+      toast.success("Reintento iniciado con el objetivo, modelo y departamento originales.")
+    } catch (error) {
+      const status = (error as { status?: number })?.status
+      toast.error(
+        status === 409
+          ? "Ya existe una ejecución incompatible en curso. Deténla antes de reintentar."
+          : "No se pudo iniciar el reintento.",
+      )
+    } finally {
+      setRunMutationId(null)
+    }
+  }, [associatedCodexProjectId, codexAccess?.canRun, codexRuns, runMutationId])
 
   const selectCompany = React.useCallback(
     async (option: CompanyOption) => {
@@ -2384,6 +2693,7 @@ export function AgentCompanyPanel() {
             commandCenter={commandCenter}
             activity={projectActivity}
             departments={allDepartments}
+            departmentPools={departmentPools}
             departmentCount={allDepartments.length}
             rootSessionId={snapshot.rootSessionId}
             onStart={() => void startEnterpriseExecution()}
@@ -2406,12 +2716,17 @@ export function AgentCompanyPanel() {
             checkpointCount={checkpointCount}
             proactiveState={proactiveState}
             departments={allDepartments}
+            departmentPools={departmentPools}
             activeSessionId={activeCodeChatSessionId}
             onOpenCeo={openCeoOffice}
             onOpenTask={(sessionId) => {
               setSelectedTaskId(sessionId)
               setView("task")
             }}
+            onInspectRun={(run) => inspectCompanyRun(run, "panel")}
+            onCancelRun={(run) => void cancelCompanyRun(run)}
+            onRetryRun={(run) => void retryCompanyRun(run)}
+            runMutationId={runMutationId}
           />
         ) : view === "files" ? (
           <FilesView
@@ -2887,6 +3202,7 @@ export function AgentCompanyPanel() {
           commandCenter={commandCenter}
           activity={projectActivity}
           departments={allDepartments}
+          departmentPools={departmentPools}
           departmentCount={allDepartments.length}
           rootSessionId={snapshot.rootSessionId}
           onStart={() => void startEnterpriseExecution()}
@@ -2915,6 +3231,7 @@ export function AgentCompanyPanel() {
           checkpointCount={checkpointCount}
           proactiveState={proactiveState}
           departments={allDepartments}
+          departmentPools={departmentPools}
           activeSessionId={activeCodeChatSessionId}
           onOpenCeo={() => {
             setPreviewView(null)
@@ -2924,6 +3241,10 @@ export function AgentCompanyPanel() {
             setSelectedTaskId(sessionId)
             setPreviewView("task")
           }}
+          onInspectRun={(run) => inspectCompanyRun(run, "preview")}
+          onCancelRun={(run) => void cancelCompanyRun(run)}
+          onRetryRun={(run) => void retryCompanyRun(run)}
+          runMutationId={runMutationId}
         />
       ) : previewView === "files" ? (
         <FilesView
@@ -5311,6 +5632,7 @@ function CompanyDashboardSurface({
   commandCenter,
   activity,
   departments,
+  departmentPools,
   departmentCount,
   rootSessionId,
   onStart,
@@ -5330,6 +5652,7 @@ function CompanyDashboardSurface({
   commandCenter: CodexEnterpriseCommandCenter | null
   activity: CodexProjectActivity[]
   departments: readonly AgentDepartmentDefinition[]
+  departmentPools: readonly CodexDepartmentPool[]
   departmentCount: number
   rootSessionId: string | null
   onStart: () => void
@@ -5356,7 +5679,7 @@ function CompanyDashboardSurface({
         ...department,
         currentWork: department.currentWork || undefined,
       }))
-    : enterpriseDepartments(departments, runs)
+    : enterpriseDepartments(departments, runs, departmentPools)
   const commandEvents: EnterpriseLiveEvent[] = commandCenter?.liveEvents
     ?? enterpriseLiveEvents(activity)
   const commandExecutiveSummary = commandCenter?.executiveSummary ?? {
@@ -5608,6 +5931,78 @@ function CompanyDashboardSurface({
   )
 }
 
+function CompanyRunActions({
+  run,
+  layout,
+  runMutationId,
+  onInspectRun,
+  onCancelRun,
+  onRetryRun,
+}: {
+  run: CodexRun
+  layout: "surface" | "compact"
+  runMutationId: string | null
+  onInspectRun: (run: CodexRun) => void
+  onCancelRun: (run: CodexRun) => void
+  onRetryRun: (run: CodexRun) => void
+}) {
+  const compact = layout === "compact"
+  const title = runTitle(run)
+  const busy = runMutationId === run.id
+  const active = codeRunIsActive(run)
+  return (
+    <div
+      className={compact ? "mt-2 flex justify-end gap-1.5 pl-11" : "mt-3 grid grid-cols-2 gap-2"}
+      data-testid={`company-run-actions-${run.id}`}
+    >
+      <Button
+        type="button"
+        variant={compact ? "ghost" : "outline"}
+        size={compact ? "sm" : undefined}
+        className={compact ? "h-11 px-3 text-[11px]" : "h-11 justify-center rounded-md px-3 text-xs"}
+        onClick={() => onInspectRun(run)}
+        aria-label={`Inspeccionar ${title}`}
+      >
+        <ExternalLink className={compact ? "mr-1.5 h-3.5 w-3.5" : "mr-2 h-3.5 w-3.5"} />
+        Inspeccionar
+      </Button>
+      {active ? (
+        <Button
+          type="button"
+          variant={compact ? "ghost" : "outline"}
+          size={compact ? "sm" : undefined}
+          className={compact
+            ? "h-11 px-3 text-[11px] text-red-700 hover:bg-red-50 hover:text-red-800 dark:text-red-300 dark:hover:bg-red-950/40"
+            : "h-11 justify-center rounded-md border-red-200 px-3 text-xs text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-900/70 dark:text-red-300 dark:hover:bg-red-950/40"}
+          onClick={() => onCancelRun(run)}
+          disabled={Boolean(runMutationId)}
+          aria-label={`Detener ${title}`}
+        >
+          {busy
+            ? <Loader2 className={compact ? "mr-1.5 h-3.5 w-3.5 animate-spin" : "mr-2 h-3.5 w-3.5 animate-spin"} />
+            : <X className={compact ? "mr-1.5 h-3.5 w-3.5" : "mr-2 h-3.5 w-3.5"} />}
+          Detener
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          variant={compact ? "ghost" : "outline"}
+          size={compact ? "sm" : undefined}
+          className={compact ? "h-11 px-3 text-[11px]" : "h-11 justify-center rounded-md px-3 text-xs"}
+          onClick={() => onRetryRun(run)}
+          disabled={Boolean(runMutationId)}
+          aria-label={`Reintentar ${title}`}
+        >
+          {busy
+            ? <Loader2 className={compact ? "mr-1.5 h-3.5 w-3.5 animate-spin" : "mr-2 h-3.5 w-3.5 animate-spin"} />
+            : <RefreshCw className={compact ? "mr-1.5 h-3.5 w-3.5" : "mr-2 h-3.5 w-3.5"} />}
+          Reintentar
+        </Button>
+      )}
+    </div>
+  )
+}
+
 function CompanyControlSurface({
   companyName,
   rootSessionId,
@@ -5616,9 +6011,14 @@ function CompanyControlSurface({
   checkpointCount,
   proactiveState,
   departments,
+  departmentPools,
   activeSessionId,
   onOpenCeo,
   onOpenTask,
+  onInspectRun,
+  onCancelRun,
+  onRetryRun,
+  runMutationId,
 }: {
   companyName: string
   rootSessionId: string | null
@@ -5627,14 +6027,23 @@ function CompanyControlSurface({
   checkpointCount: number
   proactiveState: CodexProactiveState
   departments: readonly AgentDepartmentDefinition[]
+  departmentPools: readonly CodexDepartmentPool[]
   activeSessionId: string | null
   onOpenCeo: () => void
   onOpenTask: (sessionId: string) => void
+  onInspectRun: (run: CodexRun) => void
+  onCancelRun: (run: CodexRun) => void
+  onRetryRun: (run: CodexRun) => void
+  runMutationId: string | null
 }) {
+  const departmentByPoolId = new Map(
+    departmentPools.map((pool) => [pool.id, pool.departmentId] as const),
+  )
   const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
   const objective = companyObjective(sessions, rootSessionId)
   const activeCount = orderedRuns.filter(codeRunIsActive).length
-  const attentionCount = orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())).length
+  const attentionStatuses = new Set(["error", "waiting_approval", "cancelled"])
+  const attentionCount = orderedRuns.filter((run) => attentionStatuses.has(String(run.status).toLowerCase())).length
   const completedCount = orderedRuns.filter((run) => String(run.status).toLowerCase() === "done").length
   const columns = [
     {
@@ -5646,7 +6055,7 @@ function CompanyControlSurface({
     {
       id: "attention",
       label: "Requieren atención",
-      rows: orderedRuns.filter((run) => ["error", "waiting_approval"].includes(String(run.status).toLowerCase())),
+      rows: orderedRuns.filter((run) => attentionStatuses.has(String(run.status).toLowerCase())),
       tone: "bg-amber-500",
     },
     {
@@ -5709,7 +6118,7 @@ function CompanyControlSurface({
             </div>
             <div className="mt-3 space-y-2">
               {column.rows.map((run) => {
-                const departmentId = departmentIdForRun(run, departments)
+                const departmentId = departmentIdForRun(run, departments, departmentByPoolId)
                 const department = departments.find((entry) => entry.id === departmentId)
                 const status = codeRunStatus(run)
                 return (
@@ -5730,6 +6139,14 @@ function CompanyControlSurface({
                       <span>{status.label}</span>
                       <span>{relativeActivity(runActivityAt(run))}</span>
                     </div>
+                    <CompanyRunActions
+                      run={run}
+                      layout="surface"
+                      runMutationId={runMutationId}
+                      onInspectRun={onInspectRun}
+                      onCancelRun={onCancelRun}
+                      onRetryRun={onRetryRun}
+                    />
                   </article>
                 )
               })}
@@ -5791,6 +6208,7 @@ function DashboardView({
   commandCenter,
   activity,
   departments,
+  departmentPools,
   departmentCount,
   rootSessionId,
   onStart,
@@ -5811,6 +6229,7 @@ function DashboardView({
   commandCenter: CodexEnterpriseCommandCenter | null
   activity: CodexProjectActivity[]
   departments: readonly AgentDepartmentDefinition[]
+  departmentPools: readonly CodexDepartmentPool[]
   departmentCount: number
   rootSessionId: string | null
   onStart: () => void
@@ -5840,6 +6259,7 @@ function DashboardView({
         commandCenter={commandCenter}
         activity={activity}
         departments={departments}
+        departmentPools={departmentPools}
         departmentCount={departmentCount}
         rootSessionId={rootSessionId}
         onStart={onStart}
@@ -5912,9 +6332,14 @@ function ControlView({
   checkpointCount,
   proactiveState,
   departments,
+  departmentPools,
   activeSessionId,
   onOpenCeo,
   onOpenTask,
+  onInspectRun,
+  onCancelRun,
+  onRetryRun,
+  runMutationId,
   surface = false,
 }: {
   companyName: string
@@ -5924,11 +6349,19 @@ function ControlView({
   checkpointCount: number
   proactiveState: CodexProactiveState
   departments: readonly AgentDepartmentDefinition[]
+  departmentPools: readonly CodexDepartmentPool[]
   activeSessionId: string | null
   onOpenCeo: () => void
   onOpenTask: (sessionId: string) => void
+  onInspectRun: (run: CodexRun) => void
+  onCancelRun: (run: CodexRun) => void
+  onRetryRun: (run: CodexRun) => void
+  runMutationId: string | null
   surface?: boolean
 }) {
+  const departmentByPoolId = new Map(
+    departmentPools.map((pool) => [pool.id, pool.departmentId] as const),
+  )
   const ordered = [...sessions].sort((a, b) => a.createdAt - b.createdAt)
   const orderedRuns = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
   const activeWorkers = orderedRuns.filter(codeRunIsActive).length
@@ -5942,9 +6375,14 @@ function ControlView({
         checkpointCount={checkpointCount}
         proactiveState={proactiveState}
         departments={departments}
+        departmentPools={departmentPools}
         activeSessionId={activeSessionId}
         onOpenCeo={onOpenCeo}
         onOpenTask={onOpenTask}
+        onInspectRun={onInspectRun}
+        onCancelRun={onCancelRun}
+        onRetryRun={onRetryRun}
+        runMutationId={runMutationId}
       />
     )
   }
@@ -5966,10 +6404,11 @@ function ControlView({
       <div className="divide-y divide-border/45" data-testid="agent-company-worker-list">
         {orderedRuns.slice(0, 12).map((run) => {
           const status = codeRunStatus(run)
-          const departmentId = departmentIdForRun(run, departments)
+          const departmentId = departmentIdForRun(run, departments, departmentByPoolId)
           const department = departments.find((entry) => entry.id === departmentId)
           return (
-            <div key={run.id} className="flex items-start gap-3 py-3">
+            <div key={run.id} className="py-3" data-testid={`company-run-row-${run.id}`}>
+              <div className="flex items-start gap-3">
               <span className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border/55 bg-background">
                 <DepartmentGlyph departmentId={departmentId} className="h-3.5 w-3.5 text-muted-foreground" />
                 <span
@@ -5993,6 +6432,15 @@ function ControlView({
               <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
                 {relativeActivity(runActivityAt(run))}
               </span>
+              </div>
+              <CompanyRunActions
+                run={run}
+                layout="compact"
+                runMutationId={runMutationId}
+                onInspectRun={onInspectRun}
+                onCancelRun={onCancelRun}
+                onRetryRun={onRetryRun}
+              />
             </div>
           )
         })}

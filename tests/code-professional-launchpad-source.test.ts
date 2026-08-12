@@ -26,4 +26,27 @@ describe("professional /code launchpad", () => {
     assert.match(workspaceSource, /previewOpen \? \(\s*<MemoPreviewPane \/>/)
     assert.match(workspaceSource, /handleTogglePanel\("preview"\)/)
   })
+
+  it("closes Shell through the canonical panel lifecycle", () => {
+    assert.match(
+      workspaceSource,
+      /<TerminalPanel open=\{terminalOpen\} onClose=\{\(\) => handleClosePanel\("terminal"\)\} \/>/,
+    )
+    assert.doesNotMatch(
+      workspaceSource,
+      /<TerminalPanel open=\{terminalOpen\} onClose=\{\(\) => setTerminalOpen\(false\)\} \/>/,
+    )
+    assert.match(
+      workspaceSource,
+      /if \(terminalOpen\) \{\s*handleClosePanel\("terminal"\)/,
+    )
+  })
+
+  it("uses the dynamic app viewport and safe mobile navigation", () => {
+    assert.match(workspaceSource, /h-\[var\(--app-viewport-height,100dvh\)\]/)
+    assert.match(workspaceSource, /pb-\[env\(safe-area-inset-bottom\)\]/)
+    assert.match(workspaceSource, /role="tablist"/)
+    assert.match(workspaceSource, /role="tabpanel"/)
+    assert.match(workspaceSource, /aria-selected=\{mobileView === tab\.id\}/)
+  })
 })

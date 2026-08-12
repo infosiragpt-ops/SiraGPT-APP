@@ -163,6 +163,74 @@ test("buildAgentOfficeModel preserves every built-in and custom department with 
   assert.equal(model.departments.find((department) => department.id === "product-engineering")?.activeCount, 1)
 })
 
+test("server physical capacity stays authoritative for 196 logical seats and 51 observed workers", () => {
+  const departmentPools: CodexDepartmentPool[] = AGENT_COMPANY_DEPARTMENTS.map((department) => ({
+    id: `pool-${department.id}`,
+    projectId: "office-scale",
+    departmentId: department.id,
+    size: department.desiredAgents || 1,
+    dailyBudgetUsd: null,
+    enabled: true,
+    createdAt: "2026-08-10T15:00:00.000Z",
+    updatedAt: "2026-08-10T15:00:00.000Z",
+  }))
+  const configuredLogicalSeats = departmentPools.reduce((sum, pool) => sum + pool.size, 0)
+  assert.equal(configuredLogicalSeats, 196)
+
+  const observedRuns = AGENT_COMPANY_DEPARTMENTS.flatMap((department) => (
+    Array.from({
+      length: (department.desiredAgents || 1) - (department.id === "ceo-office" ? 1 : 0),
+    }, (_, index) => run({
+      id: `scale-${department.id}-${index}`,
+      departmentPoolId: `pool-${department.id}`,
+      prompt: `[PROACTIVO · ${department.name}] Ejecución sintética ${index + 1}`,
+      status: "running",
+    }))
+  )).slice(0, 50)
+  assert.equal(observedRuns.length, 50)
+
+  const model = buildAgentOfficeModel({
+    departments: AGENT_COMPANY_DEPARTMENTS,
+    sessions: [session({
+      id: "ceo-scale",
+      title: "CEO Office",
+      agent: { phase: "generating", intakeStep: 0, context: { goal: "app" } },
+    })],
+    runs: observedRuns,
+    rootSessionId: "ceo-scale",
+    departmentPools,
+    capacity: {
+      departments: AGENT_COMPANY_DEPARTMENTS.length,
+      logicalAgents: configuredLogicalSeats,
+      departmentPools: departmentPools.length,
+      physicalAgents: 32,
+      writerConcurrency: 32,
+      dailyBudgetUsd: 0,
+      strategy: "isolated_worktrees_serialized_merge",
+    },
+  })
+
+  assert.equal(model.totalCount, 51)
+  assert.equal(model.activeCount, 51)
+  assert.equal(
+    model.departments.reduce((sum, department) => sum + department.pool.size, 0),
+    196,
+  )
+  assert.equal(model.truth.physicalAgents, 32)
+  assert.equal(model.truth.writerConcurrency, 32)
+  assert.equal(model.truth.occupiedDesks, 51)
+  assert.equal(model.truth.freeDesks, 0)
+
+  const legacyFallback = buildAgentOfficeModel({
+    departments: AGENT_COMPANY_DEPARTMENTS,
+    sessions: [],
+    runs: [],
+    rootSessionId: null,
+    departmentPools,
+  })
+  assert.equal(legacyFallback.truth.physicalAgents, configuredLogicalSeats)
+})
+
 test("a linked pooled run stays authoritative and is represented by only its session worker", () => {
   const departmentPools: CodexDepartmentPool[] = [{
     id: "pool-product",

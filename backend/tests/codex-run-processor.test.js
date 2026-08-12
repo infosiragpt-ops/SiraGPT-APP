@@ -108,6 +108,132 @@ test('build run: queued → running → done with run_status events in order', a
   assert.deepEqual(statuses, ['running', 'done']);
 });
 
+test('a queued run linked to a paused swarm stays deferred without claiming or executing', async () => {
+  const d = makeDeps({ run: { swarmTaskId: 'task-paused' } });
+  d.prisma.codexSwarmTask = {
+    async findUnique() {
+      return {
+        id: 'task-paused',
+        swarm: {
+          id: 'swarm-paused',
+          status: 'paused',
+          cancelRequestedAt: null,
+        },
+      };
+    },
+  };
+  let loopCalls = 0;
+  const result = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: async () => {
+      loopCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+  });
+
+  assert.deepEqual(result, {
+    status: 'queued',
+    skipped: true,
+    deferred: true,
+    reason: 'swarm_paused',
+  });
+  assert.equal(loopCalls, 0);
+  assert.equal(d.runRow.status, 'queued');
+  assert.equal(d.runRow.startedAt, undefined);
+  assert.deepEqual(d.events, []);
+});
+
+for (const scenario of [
+  {
+    name: 'cancelled swarm',
+    reason: 'swarm_cancelled',
+    install(prisma) {
+      prisma.codexSwarmTask = {
+        async findUnique() {
+          return {
+            id: 'task-blocked',
+            swarm: { id: 'swarm-1', status: 'cancelled', cancelRequestedAt: new Date() },
+          };
+        },
+      };
+    },
+  },
+  {
+    name: 'terminal swarm',
+    reason: 'swarm_terminal',
+    install(prisma) {
+      prisma.codexSwarmTask = {
+        async findUnique() {
+          return {
+            id: 'task-blocked',
+            swarm: { id: 'swarm-1', status: 'completed', cancelRequestedAt: null },
+          };
+        },
+      };
+    },
+  },
+  {
+    name: 'unavailable swarm store',
+    reason: 'swarm_state_store_unavailable',
+    install() {},
+  },
+  {
+    name: 'failed swarm state query',
+    reason: 'swarm_state_query_failed',
+    install(prisma) {
+      prisma.codexSwarmTask = {
+        async findUnique() { throw new Error('database unavailable'); },
+      };
+    },
+  },
+]) {
+  test(`${scenario.name} blocks a queued linked run before claim or adapter execution`, async () => {
+    const d = makeDeps({ run: { swarmTaskId: 'task-blocked' } });
+    scenario.install(d.prisma);
+    const originalUpdateMany = d.prisma.codexRun.updateMany;
+    let claimCalls = 0;
+    let adapterResolves = 0;
+    let loopCalls = 0;
+    d.prisma.codexRun.updateMany = async (args) => {
+      if (args?.data?.status === 'running') claimCalls += 1;
+      return originalUpdateMany(args);
+    };
+
+    const result = await processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore: d.eventStore,
+      agentAdapterRegistry: {
+        resolveImplementer() {
+          adapterResolves += 1;
+          return { execute() { throw new Error('must not execute'); } };
+        },
+      },
+      runAgentLoop: async () => {
+        loopCalls += 1;
+        return { status: 'done' };
+      },
+      clock: d.clock,
+    });
+
+    assert.deepEqual(result, {
+      status: 'queued',
+      skipped: true,
+      blocked: true,
+      reason: scenario.reason,
+    });
+    assert.equal(claimCalls, 0);
+    assert.equal(adapterResolves, 0);
+    assert.equal(loopCalls, 0);
+    assert.equal(d.runRow.status, 'queued');
+    assert.equal(d.runRow.startedAt, undefined);
+    assert.deepEqual(d.events, []);
+  });
+}
+
 test('fleet QA starts only after the merged run is durably terminal', async () => {
   const d = makeDeps();
   const reviews = [];

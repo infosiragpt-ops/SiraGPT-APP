@@ -66,6 +66,7 @@ const EXPECTED_METHODS = [
   "getRun",
   "cancelRun",
   "cancelRunFamily",
+  "cancelActiveRuns",
   "generateRunSummaryAudio",
   "resolveToolPermission",
   "getTranscript",
@@ -81,9 +82,9 @@ const EXPECTED_METHODS = [
   "rollbackPublication",
 ] as const
 
-function jsonResponse(body: unknown): Response {
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json" },
   })
 }
@@ -218,5 +219,72 @@ describe("codexApi compatibility facade", () => {
     expect(publicationRequest.url.pathname).toBe("/api/codex/projects/project-1/publication")
     expect(publicationRequest.init.method).toBe("POST")
     expect(publicationRequest.body).toEqual({ checkpointId: "checkpoint-9" })
+  })
+
+  it("preserves authoritative complete and partial project-wide cancellation results", async () => {
+    const complete = {
+      complete: true,
+      requestedRunIds: ["plan-1", "plan-2"],
+      cancelledRunIds: ["plan-1", "build-1", "plan-2"],
+      failedRunIds: [],
+      runs: [
+        { id: "plan-1", status: "cancelled" },
+        { id: "build-1", status: "cancelled", planRunId: "plan-1" },
+        { id: "plan-2", status: "cancelled" },
+      ],
+    }
+    const partial = {
+      complete: false,
+      requestedRunIds: ["plan-1", "plan-2"],
+      cancelledRunIds: ["plan-1", "build-1"],
+      failedRunIds: ["plan-2"],
+      runs: [
+        { id: "plan-1", status: "cancelled" },
+        { id: "build-1", status: "cancelled", planRunId: "plan-1" },
+        { id: "plan-2", status: "running" },
+      ],
+    }
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(complete))
+      .mockResolvedValueOnce(jsonResponse(partial, 207))
+
+    await expect(codexApi.cancelActiveRuns("project-1")).resolves.toEqual(complete)
+    await expect(codexApi.cancelActiveRuns("project-1")).resolves.toEqual(partial)
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (let index = 0; index < 2; index += 1) {
+      const request = requestAt(fetchMock, index)
+      expect(request.url.pathname).toBe("/api/codex/projects/project-1/runs/cancel-active")
+      expect(request.init.method).toBe("POST")
+      expect(request.init.body).toBeUndefined()
+    }
+  })
+
+  it("returns the typed partial recovery body for an HTTP 207 swarm resume", async () => {
+    const partialResume = {
+      complete: false,
+      swarm: { id: "swarm-1", status: "running" },
+      runRecovery: {
+        complete: false,
+        attemptCount: 2,
+        scanned: 3,
+        reenqueued: 1,
+        live: 1,
+        leaseLost: 0,
+        skipped: 0,
+        failed: 1,
+        attempts: [],
+      },
+    }
+    fetchMock.mockResolvedValueOnce(jsonResponse(partialResume, 207))
+
+    const result = await codexApi.resumeSwarm("project-1", "swarm-1")
+
+    expect(result).toEqual(partialResume)
+    expect(result.complete).toBe(false)
+    expect(result.runRecovery.failed).toBe(1)
+    const request = requestAt(fetchMock, 0)
+    expect(request.url.pathname).toBe("/api/codex/projects/project-1/swarms/swarm-1/resume")
+    expect(request.init.method).toBe("POST")
   })
 })

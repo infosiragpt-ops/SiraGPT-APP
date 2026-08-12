@@ -2,24 +2,30 @@ import assert from "node:assert/strict"
 import { describe, it, beforeEach, afterEach } from "node:test"
 
 import {
+  codeChatSessionMatchesDepartment,
   codexWorkspaceSessionKey,
   createCodeChatSession,
   deriveCodeChatSessionTitle,
   ensureDefaultSession,
+  findCodeChatSessionForDepartment,
   listSessionsForWorkspace,
   readCodeChatStore,
   setActiveCodeChatSession,
+  updateCodeChatSessionDepartment,
   updateCodeChatSessionTurns,
 } from "../lib/code-chat-sessions"
 
 describe("code-chat-sessions", () => {
   const storage = new Map<string, string>()
+  let storageWrites = 0
 
   beforeEach(() => {
     storage.clear()
+    storageWrites = 0
     ;(globalThis as { localStorage: Storage }).localStorage = {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => {
+        storageWrites += 1
         storage.set(key, value)
       },
       removeItem: (key) => {
@@ -146,6 +152,288 @@ describe("code-chat-sessions", () => {
     const ids = listSessionsForWorkspace("local:company", engineering.store).map((session) => session.id)
     assert.ok(ids.includes("ceo-id"))
     assert.ok(ids.includes("engineering-id"))
+  })
+
+  it("retains all 14 department sessions plus CEO and ordinary chats", () => {
+    let store = ensureDefaultSession("local:full-company")
+    const departmentIds = Array.from({ length: 14 }, (_, index) => `department-${index + 1}`)
+    for (const id of departmentIds) {
+      store = createCodeChatSession(
+        "local:full-company",
+        { title: `Departamento ${id}`, id },
+        store,
+      ).store
+    }
+    for (let index = 1; index <= 4; index += 1) {
+      store = createCodeChatSession(
+        "local:full-company",
+        { title: `Conversación ${index}`, id: `ordinary-${index}` },
+        store,
+      ).store
+    }
+
+    const sessions = listSessionsForWorkspace("local:full-company", store)
+    assert.equal(sessions.length, 19)
+    for (const id of departmentIds) {
+      assert.ok(sessions.some((session) => session.id === id), `${id} must remain available`)
+    }
+    assert.ok(sessions.some((session) => session.title === "CEO Office"))
+    assert.equal(sessions.filter((session) => session.id.startsWith("ordinary-")).length, 4)
+  })
+
+  it("persists durable department and pool attribution independently of the title", () => {
+    let store = ensureDefaultSession("local:attribution")
+    const created = createCodeChatSession("local:attribution", {
+      title: "Equipo Comercial",
+      id: "sales-session",
+      departmentId: "sales",
+      departmentPoolId: "pool-sales",
+    }, store)
+    store = created.store
+    assert.equal(created.session.departmentId, "sales")
+    assert.equal(created.session.departmentPoolId, "pool-sales")
+
+    store = updateCodeChatSessionDepartment("sales-session", {
+      departmentId: "customer-success",
+      departmentPoolId: "pool-support",
+    }, store)
+    const assigned = store.sessions.find((session) => session.id === "sales-session")
+    assert.equal(assigned?.title, "Equipo Comercial")
+    assert.equal(assigned?.departmentId, "customer-success")
+    assert.equal(assigned?.departmentPoolId, "pool-support")
+  })
+
+  it("does not mutate, persist, timestamp or notify when department identity already matches", () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
+    let notificationsScheduled = 0
+    let notificationsDispatched = 0
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        setTimeout: () => {
+          notificationsScheduled += 1
+          return 1
+        },
+        dispatchEvent: () => {
+          notificationsDispatched += 1
+          return true
+        },
+      },
+    })
+
+    try {
+      let store = ensureDefaultSession("local:idempotent-department")
+      const created = createCodeChatSession("local:idempotent-department", {
+        title: "Ventas",
+        id: "sales-idempotent",
+        departmentId: "sales",
+        departmentPoolId: "pool-sales",
+      }, store)
+      store = created.store
+      const beforeSession = store.sessions.find((session) => session.id === "sales-idempotent")
+      assert.ok(beforeSession)
+
+      storageWrites = 0
+      notificationsScheduled = 0
+      notificationsDispatched = 0
+      const result = updateCodeChatSessionDepartment("sales-idempotent", {
+        departmentId: " sales ",
+        departmentPoolId: " pool-sales ",
+      }, store)
+
+      assert.equal(result, store, "the no-op must preserve store identity")
+      assert.equal(
+        result.sessions.find((session) => session.id === "sales-idempotent"),
+        beforeSession,
+        "the no-op must preserve session identity and updatedAt",
+      )
+      assert.equal(storageWrites, 0)
+      assert.equal(notificationsScheduled, 0)
+      assert.equal(notificationsDispatched, 0)
+
+      const missing = updateCodeChatSessionDepartment("missing-session", {
+        departmentId: "sales",
+        departmentPoolId: "pool-sales",
+      }, store)
+      assert.equal(missing, store)
+      assert.equal(storageWrites, 0)
+      assert.equal(notificationsScheduled, 0)
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
+  })
+
+  it("preserves a durable pool during slow hydration and reconciles the confirmed pool later", () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
+    let notificationsScheduled = 0
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        setTimeout: () => {
+          notificationsScheduled += 1
+          return 1
+        },
+        dispatchEvent: () => true,
+      },
+    })
+
+    try {
+      const workspaceId = "local:slow-pool-hydration"
+      let store = ensureDefaultSession(workspaceId)
+      store = createCodeChatSession(workspaceId, {
+        title: "Ventas",
+        id: "sales-with-durable-pool",
+        departmentId: "sales",
+        departmentPoolId: "pool-sales-durable",
+      }, store).store
+      const before = store.sessions.find((session) => session.id === "sales-with-durable-pool")
+      assert.ok(before)
+
+      storageWrites = 0
+      notificationsScheduled = 0
+      const whilePoolsAreEmpty = updateCodeChatSessionDepartment(
+        "sales-with-durable-pool",
+        { departmentId: "sales", departmentPoolId: undefined },
+        store,
+      )
+
+      assert.equal(whilePoolsAreEmpty, store)
+      assert.equal(
+        whilePoolsAreEmpty.sessions.find((session) => session.id === "sales-with-durable-pool"),
+        before,
+      )
+      assert.equal(before.departmentPoolId, "pool-sales-durable")
+      assert.equal(
+        codeChatSessionMatchesDepartment(before, { departmentId: "sales" }),
+        true,
+        "readiness must treat a not-yet-hydrated pool as a preserve wildcard",
+      )
+      assert.equal(storageWrites, 0)
+      assert.equal(notificationsScheduled, 0)
+
+      const afterHydration = updateCodeChatSessionDepartment(
+        "sales-with-durable-pool",
+        { departmentId: "sales", departmentPoolId: "pool-sales-confirmed" },
+        whilePoolsAreEmpty,
+      )
+      const hydratedSession = afterHydration.sessions.find(
+        (session) => session.id === "sales-with-durable-pool",
+      )
+      assert.notEqual(afterHydration, whilePoolsAreEmpty)
+      assert.equal(hydratedSession?.departmentPoolId, "pool-sales-confirmed")
+      assert.equal(storageWrites, 1)
+      assert.equal(notificationsScheduled, 1)
+
+      storageWrites = 0
+      notificationsScheduled = 0
+      const repeatedHydration = updateCodeChatSessionDepartment(
+        "sales-with-durable-pool",
+        { departmentId: "sales", departmentPoolId: "pool-sales-confirmed" },
+        afterHydration,
+      )
+      assert.equal(repeatedHydration, afterHydration)
+      assert.equal(storageWrites, 0)
+      assert.equal(notificationsScheduled, 0)
+
+      const explicitlyCleared = updateCodeChatSessionDepartment(
+        "sales-with-durable-pool",
+        { departmentId: "sales", departmentPoolId: null },
+        repeatedHydration,
+      )
+      assert.equal(
+        explicitlyCleared.sessions.find((session) => session.id === "sales-with-durable-pool")?.departmentPoolId,
+        undefined,
+      )
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
+  })
+
+  it("repeating the full 54-department bootstrap neither evicts seats nor rewrites the store", () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
+    let notificationsScheduled = 0
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        setTimeout: () => {
+          notificationsScheduled += 1
+          return 1
+        },
+        dispatchEvent: () => true,
+      },
+    })
+
+    try {
+      const workspaceId = "local:full-idempotent-company"
+      const seats = [
+        { departmentId: "ceo-office", title: "CEO Office", departmentPoolId: "pool-ceo" },
+        ...Array.from({ length: 13 }, (_, index) => ({
+          departmentId: `builtin-${index + 1}`,
+          title: `Departamento base ${index + 1}`,
+          departmentPoolId: `pool-builtin-${index + 1}`,
+        })),
+        ...Array.from({ length: 40 }, (_, index) => ({
+          departmentId: `custom-${index + 1}`,
+          title: `Departamento personalizado ${index + 1}`,
+          departmentPoolId: `pool-custom-${index + 1}`,
+        })),
+      ]
+      const reconcile = (current: ReturnType<typeof ensureDefaultSession>) => {
+        let next = current
+        for (const seat of seats) {
+          const existing = findCodeChatSessionForDepartment(
+            listSessionsForWorkspace(workspaceId, next),
+            seat.departmentId,
+            seat.title,
+          )
+          if (existing) {
+            next = updateCodeChatSessionDepartment(existing.id, seat, next)
+            continue
+          }
+          next = createCodeChatSession(workspaceId, seat, next).store
+        }
+        return next
+      }
+
+      // Fill substantial ordinary history before provisioning the complete
+      // backend-supported company. Once the 96-session bound is reached, only
+      // ordinary history may be evicted; all 54 runtime seats must remain.
+      let initial = ensureDefaultSession(workspaceId)
+      for (let index = 1; index <= 60; index += 1) {
+        initial = createCodeChatSession(workspaceId, {
+          title: `Conversación ordinaria ${index}`,
+          id: `ordinary-before-bootstrap-${index}`,
+        }, initial).store
+      }
+      const bootstrapped = reconcile(initial)
+      const sessions = listSessionsForWorkspace(workspaceId, bootstrapped)
+      assert.equal(seats.length, 54)
+      assert.equal(sessions.length, 96)
+      assert.ok(seats.every((seat) => {
+        const session = findCodeChatSessionForDepartment(sessions, seat.departmentId, seat.title)
+        return Boolean(session && codeChatSessionMatchesDepartment(session, seat))
+      }))
+      assert.equal(
+        sessions.filter((session) => session.id.startsWith("ordinary-before-bootstrap-")).length,
+        42,
+      )
+      const references = new Map(sessions.map((session) => [session.id, session] as const))
+
+      storageWrites = 0
+      notificationsScheduled = 0
+      const repeated = reconcile(bootstrapped)
+
+      assert.equal(repeated, bootstrapped, "a fully prepared fleet must be a store-level no-op")
+      assert.equal(listSessionsForWorkspace(workspaceId, repeated).length, 96)
+      assert.ok(repeated.sessions.every((session) => references.get(session.id) === session))
+      assert.equal(storageWrites, 0)
+      assert.equal(notificationsScheduled, 0)
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow)
+      else Reflect.deleteProperty(globalThis, "window")
+    }
   })
 
   it("derives title from first user message", () => {

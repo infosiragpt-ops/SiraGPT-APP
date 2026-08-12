@@ -99,6 +99,37 @@ test('POST /projects/:id/runs forwards model, tier and reasoning effort', async 
   assert.equal(call.reasoningEffort, 'max');
 });
 
+test('POST /projects/:id/runs forwards department lineage but rejects internal swarm linkage', async () => {
+  const res = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({
+      mode: 'plan',
+      prompt: 'implementa el módulo asignado',
+      departmentPoolId: 'pool-engineering',
+    });
+  assert.equal(res.status, 201);
+  const call = calls.find((entry) => entry[0] === 'createRun')[1];
+  assert.equal(call.departmentPoolId, 'pool-engineering');
+  assert.equal(Object.prototype.hasOwnProperty.call(call, 'swarmTaskId'), false);
+
+  const empty = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', departmentPoolId: '   ' });
+  assert.equal(empty.status, 400);
+  assert.equal(empty.body.error, 'validation_failed');
+
+  const createCallsBeforeForbidden = calls.filter((entry) => entry[0] === 'createRun').length;
+  const forbidden = await request(app())
+    .post('/api/codex/projects/p1/runs')
+    .send({ mode: 'plan', swarmTaskId: 'task-engineering-1' });
+  assert.equal(forbidden.status, 400);
+  assert.equal(forbidden.body.error, 'validation_failed');
+  assert.equal(
+    calls.filter((entry) => entry[0] === 'createRun').length,
+    createCallsBeforeForbidden,
+  );
+});
+
 test('createRun service errors are mapped to their HTTP status', async () => {
   createImpl = async () => { throw new RunServiceError('run_in_progress', 'busy', 409); };
   const res = await request(app()).post('/api/codex/projects/p1/runs').send({ mode: 'plan' });

@@ -45,6 +45,38 @@ function fakePrisma({ project, activeRun = null, recentRuns = [] } = {}) {
 
 const PROJECT = { id: 'p1', userId: 'u1', name: 'SiraGPT.COM', brief: { proactive: { enabled: true } } };
 
+test('legacy PROACTIVO ticker never starts work beside an active durable swarm', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  prisma.codexSwarm = {
+    findFirst: async ({ where, select }) => {
+      assert.equal(where.projectId, PROJECT.id);
+      assert.deepEqual(where.status.in, ['queued', 'running', 'paused', 'cancelling']);
+      assert.equal(where.cancelRequestedAt, null);
+      assert.deepEqual(select, { id: true, status: true });
+      return { id: 'swarm-active', status: 'running' };
+    },
+  };
+  let created = false;
+  const result = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async () => { created = true; },
+      },
+      chatComplete: async () => {
+        assert.fail('the legacy planner must not run beside a durable swarm');
+      },
+    },
+  });
+  assert.deepEqual(result, {
+    action: 'skipped_durable_swarm',
+    swarmId: 'swarm-active',
+    swarmStatus: 'running',
+  });
+  assert.equal(created, false);
+});
+
 test('readProactiveState defaults + setProactive persists into brief JSON', async () => {
   assert.equal(engine.readProactiveState({ brief: null }).enabled, false);
   assert.equal(engine.readProactiveState({ brief: null }).dailyBudgetUsd, null);
@@ -154,8 +186,51 @@ test('cycle phase 1: proposes a department task as a [PROACTIVO] plan run', asyn
   assert.equal(p.deptIndex, 1, 'round-robin advances');
 });
 
+test('cycle phase 1 attributes the plan to its department pool and optional swarm task', async () => {
+  const prisma = fakePrisma({ project: PROJECT });
+  const created = [];
+  const res = await engine.runCycle({
+    project: PROJECT,
+    deps: {
+      prisma,
+      runService: {
+        createRun: async (args) => {
+          created.push(args);
+          return { id: 'run-attributed' };
+        },
+      },
+      departmentPools: {
+        checkDepartmentPoolBudget: async () => ({
+          allowed: true,
+          reason: 'within_budget',
+          pool: { id: 'pool-ceo', departmentId: 'ceo-office' },
+        }),
+      },
+      swarmTaskId: 'task-proactive-1',
+      chatComplete: async () => ({
+        content: '{"title":"Plan atribuido","goal":"Ejecuta una mejora verificable."}',
+      }),
+    },
+  });
+
+  assert.equal(res.action, 'proposed');
+  assert.equal(created[0].departmentPoolId, 'pool-ceo');
+  assert.equal(created[0].swarmTaskId, 'task-proactive-1');
+});
+
 test('proposal retries an open failed task and only accepts a different remediation', async () => {
   const calls = [];
+  const usageRows = [];
+  const prisma = {
+    codexUsageEntry: {
+      create: async ({ data }) => {
+        const row = { id: `usage-${usageRows.length + 1}`, ...data };
+        usageRows.push(row);
+        return row;
+      },
+      findUnique: async () => null,
+    },
+  };
   const proposal = await engine.proposeTask({
     project: { id: 'p-ledger', name: 'SiraGPT', brief: {} },
     department: { id: 'product-engineering', name: 'Producto', mission: 'Mejora el producto.' },
@@ -176,11 +251,32 @@ test('proposal retries an open failed task and only accepts a different remediat
       if (calls.length === 1) {
         return {
           content: '{"title":"Corrige checkout roto","goal":"Repite el cambio anterior."}',
+          usage: {
+            tokensIn: 100,
+            tokensOut: 20,
+            provider: 'Anthropic',
+            model: 'claude-sonnet-4-6',
+            generationId: 'proposal-initial',
+          },
         };
       }
       return {
         content: '{"title":"Valida moneda antes del pago","goal":"Añade validación previa de currency y una prueba de regresión."}',
+        usage: {
+          tokensIn: 140,
+          tokensOut: 30,
+          provider: 'Anthropic',
+          model: 'claude-sonnet-4-6',
+          generationId: 'proposal-retry',
+        },
       };
+    },
+    usageContext: {
+      prisma,
+      projectId: 'p-ledger',
+      departmentPoolId: 'pool-product',
+      sourceId: '2026-07-25:product-engineering:cycle-2',
+      env: {},
     },
   });
 
@@ -189,6 +285,16 @@ test('proposal retries an open failed task and only accepts a different remediat
   assert.match(calls[0][1].content, /failureKey=corrige-checkout-roto/);
   assert.match(calls[1].at(-1).content, /PROPUESTA RECHAZADA/);
   assert.equal(proposal.title, 'Valida moneda antes del pago');
+  assert.equal(usageRows.length, 2);
+  assert.deepEqual(usageRows.map((row) => row.source), [
+    'proactive_proposal',
+    'proactive_proposal',
+  ]);
+  assert.deepEqual(usageRows.map((row) => row.sourceId), [
+    '2026-07-25:product-engineering:cycle-2:initial',
+    '2026-07-25:product-engineering:cycle-2:retry',
+  ]);
+  assert.equal(usageRows.every((row) => row.departmentPoolId === 'pool-product'), true);
 });
 
 test('proposal is skipped when the model repeats the same open failure twice', async () => {
@@ -813,7 +919,14 @@ test('custom departments participate in the persisted round-robin', async () => 
 });
 
 test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)', async () => {
-  const ownPlan = { id: 'plan-9', mode: 'plan', status: 'waiting_approval', prompt: '[PROACTIVO · CEO Office] X: y' };
+  const ownPlan = {
+    id: 'plan-9',
+    mode: 'plan',
+    status: 'waiting_approval',
+    prompt: '[PROACTIVO · CEO Office] X: y',
+    departmentPoolId: 'pool-ceo',
+    swarmTaskId: 'task-ceo-1',
+  };
   const prisma = fakePrisma({ project: PROJECT, activeRun: ownPlan });
   const created = [];
   const runService = { createRun: async (args) => { created.push(args); return { id: 'build-1' }; } };
@@ -822,6 +935,8 @@ test('cycle phase 2: auto-approves ONLY its own waiting plan (creates the build)
   assert.equal(res.action, 'approved_plan');
   assert.equal(created[0].mode, 'build');
   assert.equal(created[0].planRunId, 'plan-9');
+  assert.equal(created[0].departmentPoolId, 'pool-ceo');
+  assert.equal(created[0].swarmTaskId, 'task-ceo-1');
 });
 
 test('cycle never approves a HUMAN plan; operational depts still work beside busy builds', async () => {
