@@ -126,6 +126,46 @@ describe('PPTX — add_slide appends real content preserving the deck', () => {
     return Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).length;
   }
 
+  test('user phrasing with typos plans 5 slides and last bibliography — never ANEXOS dump', () => {
+    const ops = editor.INTERNAL.planGenericOfficeOperations({
+      requestText: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
+      format: 'pptx',
+      sourceText: 'BRIEFING EJECUTIVO\nGestión administrativa\nEl ciclo directivo reduce incertidumbre',
+      originalName: 'Gestion_amdinistrativa.pptx',
+    });
+    assert.equal(ops.length, 5);
+    assert.ok(ops.every((op) => op.kind === 'add_slide'));
+    assert.match(ops[4].title, /referencias bibliogr[aá]ficas/i);
+    const joined = JSON.stringify(ops);
+    assert.doesNotMatch(joined, /Contenido agregado según solicitud/i);
+    assert.doesNotMatch(joined, /Documento base:/i);
+    assert.doesNotMatch(joined, /ANEXOS/);
+    assert.doesNotMatch(joined, /slaind|bibliografi\b/i);
+    assert.match(joined, /Caso|ejemplo|Pyme|formaliz/i);
+  });
+
+  test('executes the 5-slide examples+bibliography request without dumping the prompt', async () => {
+    const input = await buildDeckFixture();
+    const ops = editor.INTERNAL.planGenericOfficeOperations({
+      requestText: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografia',
+      format: 'pptx',
+      sourceText: 'Gestión administrativa\nEl ciclo directivo reduce incertidumbre',
+      originalName: 'Gestion_amdinistrativa.pptx',
+    });
+    const { buffer, steps } = executePptxOperations({ input, ops, blocks: [] });
+    assert.equal(steps.filter((step) => step.kind === 'add_slide').length, 5);
+    assert.equal(slideCount(buffer), 6);
+    const zip = new PizZip(buffer);
+    assert.match(zip.file('ppt/slides/slide1.xml').asText(), /Portada original/);
+    assert.match(zip.file('ppt/slides/slide6.xml').asText(), /Referencias bibliogr/i);
+    const all = Object.keys(zip.files)
+      .filter((name) => /slide\d+\.xml$/.test(name))
+      .map((name) => zip.file(name).asText())
+      .join('\n');
+    assert.doesNotMatch(all, /Contenido agregado seg[uú]n solicitud/i);
+    assert.doesNotMatch(all, /Documento base:/i);
+  });
+
   test('add_slide appends a titled bullet slide; original slide intact', async () => {
     const input = await buildDeckFixture();
     assert.equal(slideCount(input), 1);

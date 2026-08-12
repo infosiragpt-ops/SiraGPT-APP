@@ -41,6 +41,10 @@ const DIRECT_FIXES = new Map(Object.entries({
   cuestionaro: 'cuestionario',
   analsis: 'análisis', analisi: 'análisis',
   profeisonal: 'profesional', profeiosnal: 'profesional', profesinal: 'profesional',
+  slaind: 'slides', slainds: 'slides', slied: 'slides',
+  bliografia: 'bibliografía', bibliografi: 'bibliografía',
+  amdinistrativa: 'administrativa', amdinistrativo: 'administrativo',
+  adminstrativa: 'administrativa', adminstrativo: 'administrativo',
   porfavor: 'por favor', porfa: 'por favor',
   tabal: 'tabla', tabl: 'tabla',
   correo: 'correo', corregir: 'corregir', corrgir: 'corregir', corregri: 'corregir',
@@ -53,6 +57,7 @@ const DIRECT_FIXES = new Map(Object.entries({
 const DOMAIN_VOCAB = [
   'documento', 'documentos', 'resumen', 'imagen', 'imágenes', 'palabras',
   'página', 'páginas', 'lámina', 'láminas', 'diapositiva', 'diapositivas',
+  'slides', 'bibliografía', 'administrativa', 'administrativo',
   'presentación', 'gráfico', 'gráficos', 'tabla', 'tablas', 'archivo',
   'archivos', 'análisis', 'investigación', 'instrumento', 'instrumentos',
   'cuestionario', 'encuesta', 'columna', 'celda', 'fórmula', 'moneda',

@@ -14,6 +14,7 @@ const pipeline = require('../src/services/document-pipeline/advanced-document-pi
 const { normalizeIntent } = require('../src/services/document-pipeline/content/parse-document-request');
 
 const { buildPlan } = pipeline;
+const { buildPptxContentPlan } = require('../src/services/document-pipeline/pptx-content-planner');
 
 test('deterministic: slide count + courtesy + quality phrases never reach the title', () => {
   const plan = buildPlan({ prompt: 'crea una ppt de la gestión administrativa en 10 láminas por favor de forma muy profesional', format: 'pptx', template: 'business', complexity: 'standard' });
@@ -24,7 +25,19 @@ test('deterministic: slide count + courtesy + quality phrases never reach the ti
 test('deterministic: diapositivas/slides variants parse as slideTarget', () => {
   assert.equal(buildPlan({ prompt: 'presentación de ventas en 8 diapositivas', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, 8);
   assert.equal(buildPlan({ prompt: 'deck about churn in 12 slides', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, 12);
+  assert.equal(buildPlan({ prompt: 'ppt en 10 slaind sobre logística', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, 10);
   assert.equal(buildPlan({ prompt: 'ppt sobre logística', format: 'pptx', template: 'business', complexity: 'standard' }).slideTarget, null);
+});
+
+test('gestión administrativa (and typos) uses the professional administration deck', () => {
+  const plan = buildPptxContentPlan({
+    title: 'Gestion amdinistrativa',
+    prompt: 'crea una ppt profesional de gestion administrativa',
+  });
+  assert.equal(plan.source, 'domain:business-administration');
+  assert.match(plan.thesis, /Administrar empresas/i);
+  assert.doesNotMatch(plan.thesis, /se presenta con narrativa ejecutiva/i);
+  assert.ok(!/amdinistrativ/i.test(plan.topic));
 });
 
 test('deterministic: courtesy stripped even when constraint word is typo\'d', () => {

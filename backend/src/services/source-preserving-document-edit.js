@@ -23,6 +23,11 @@ const {
   resolveContentClients,
   hasAnyContentKey,
 } = require('./document-pipeline/content/llm-client');
+const {
+  buildAddSlideOperations,
+  looksLikePromptDump,
+  parseOfficeUserIntent,
+} = require('./document-editing/user-intent-parser');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
 const execFileAsync = promisify(execFile);
@@ -933,7 +938,33 @@ function buildInstrumentAppendix(options = {}) {
   ];
 }
 
-function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' } = {}) {
+function buildPptxContinuationBlocks({ prompt = '', sourceText = '', originalName = '' } = {}) {
+  const intent = parseOfficeUserIntent(prompt, { format: 'pptx' }) || {
+    kind: 'add_slides',
+    count: 1,
+    topic: '',
+    lastIsBibliography: false,
+    wantsBibliography: false,
+  };
+  const slides = buildAddSlideOperations(intent, {
+    sourceText,
+    originalName,
+    requestText: prompt,
+  });
+  const first = slides[0] || {
+    title: inferDocumentTitle(sourceText, originalName) || 'Continuación',
+    bullets: ['Decisión, evidencia y próximo paso, sin copiar la petición del usuario.'],
+  };
+  return [
+    block('heading1', first.title),
+    ...(first.bullets || []).map((item) => block('normal', `• ${item}`)),
+  ];
+}
+
+function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '', format = '' } = {}) {
+  if (format === 'pptx') {
+    return buildPptxContinuationBlocks({ prompt, sourceText, originalName });
+  }
   const title = inferDocumentTitle(sourceText, originalName);
   return [
     block('pageBreak', ''),
@@ -945,7 +976,7 @@ function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '' 
 }
 
 function buildAppendixBlocks(options = {}) {
-  if (requestWantsInstrument(options.prompt)) {
+  if (requestWantsInstrument(options.prompt) && options.format !== 'pptx') {
     return buildInstrumentAppendix(options);
   }
   return buildGenericAppendix(options);
@@ -3526,7 +3557,7 @@ function sourceDocumentParallelism() {
 async function buildCombinedSourceText(sourceFiles = []) {
   const chunks = await mapWithConcurrency(sourceFiles, sourceDocumentParallelism(), async (file) => {
     const name = file.originalName || file.filename || file.id || 'documento';
-    const text = compact(await extractTextFromFile(file), 5000);
+    const text = compact(await extractTextFromFile(file), 24000);
     if (!text) return '';
     return `Fuente: ${name}\n${text}`;
   });
@@ -4606,6 +4637,14 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: stylesHasCode && Number(op.cellsChanged || 0) > 0,
         details: { formatCode: op.formatCode || null, cellsChanged: op.cellsChanged || 0, sheetName: op.sheetName || null },
       });
+    } else if (op.kind === 'add_slide' && format === 'pptx') {
+      const titleOk = op.title ? normalizedTextIncludes(text, String(op.title).slice(0, 120)) : false;
+      checks.push({
+        id: 'pptx_slide_added',
+        label: 'Diapositiva PowerPoint agregada',
+        passed: titleOk,
+        details: { title: compact(op.title, 120) },
+      });
     } else if (op.kind === 'append_generic' && format === 'pptx') {
       const hasAnyAddedText = nonPageBreakBlocks(blocks)
         .map((item) => item.text)
@@ -5397,7 +5436,7 @@ function buildOperationFromClause(clauseNorm, documentXml) {
 }
 
 function operationKey(op) {
-  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || '')}:${op.scope || ''}:${op.address || ''}:${op.slideNumber || ''}`;
+  return `${op.kind}:${op.target ? op.target.label : ''}:${normalizeText(op.sectionTitle || '')}:${op.wantsInstrument ? 'instr' : ''}:${op.tableKind || ''}:${op.contentKind || ''}:${normalizeText(op.needle || '')}:${normalizeText(op.replacement || '')}:${normalizeText(op.newTitle || op.title || '')}:${op.scope || ''}:${op.address || ''}:${op.slideNumber || ''}:${normalizeText((op.bullets || []).join('|'))}`;
 }
 
 const BULK_FILL_SCOPE_RE = /\b(tablas?|anexos?|secciones?|cuadros?|matrices?|matriz|vac[ií]as?|vac[ií]os?|faltantes?|pendientes?|todo|todos|todas|que\s+falt\w*)\b/;
@@ -7083,7 +7122,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
   try {
     let summary = '';
     if (format === 'xlsx') summary = await buildXlsxSummaryForPrompt(input);
-    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 3500);
+    else if (format === 'pptx') summary = String(extractTextFromPptxBuffer(input) || '').slice(0, 8000);
     const opsCatalog = format === 'xlsx'
       ? [
         '{"kind":"replace_text","needle":"texto exacto","replacement":"texto nuevo"}',
@@ -7107,6 +7146,8 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
           content: [
             `Eres el cerebro de un editor de archivos ${format === 'xlsx' ? 'Excel' : 'PowerPoint'} que PRESERVA el archivo original.`,
             'Convierte la petición del usuario en un plan de operaciones concretas sobre el archivo; cuando la petición requiera CONTENIDO (filas, viñetas, valores), redáctalo tú con datos fieles a la petición y al archivo.',
+            'Si el usuario pide N diapositivas, emite N operaciones add_slide (máximo 15). Si pide bibliografía como última, la última add_slide se titula "Referencias bibliográficas".',
+            'NUNCA copies la petición del usuario como contenido. NUNCA uses títulos ANEXOS ni "Contenido agregado según solicitud". NUNCA inventes URLs.',
             'Usa needles EXACTOS copiados del contenido actual. No inventes hojas/celdas que no existan salvo en add_sheet/add_slide/append_rows.',
           ].join(' '),
         },
@@ -7139,7 +7180,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
   }
 }
 
-function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
+function planGenericOfficeOperations({ requestText = '', format = '', sourceText = '', originalName = '' } = {}) {
   const clauses = splitRequestClauses(requestText);
   const ops = [];
   const seen = new Set();
@@ -7167,6 +7208,13 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
       add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
     }
   }
+  const slideIntent = format === 'pptx' ? parseOfficeUserIntent(requestText, { format }) : null;
+  if (slideIntent?.kind === 'add_slides') {
+    for (const slideOp of buildAddSlideOperations(slideIntent, { sourceText, originalName, requestText })) {
+      add(slideOp);
+    }
+  }
+  const plannedNewSlides = ops.some((op) => op.kind === 'add_slide');
   for (const clause of clauses) {
     if (format === 'xlsx') {
       const cellWrite = extractXlsxCellWrite(clause);
@@ -7188,6 +7236,9 @@ function planGenericOfficeOperations({ requestText = '', format = '' } = {}) {
         add({ kind: 'delete_text', needle, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
         continue;
       }
+    }
+    if (plannedNewSlides && (clauseIsAppend(clause) || clauseWantsInstrument(clause))) {
+      continue;
     }
     if (clauseIsAppend(clause) || clauseIsFill(clause) || clauseWantsInstrument(clause)) {
       add({ kind: 'append_generic', wantsInstrument: clauseWantsInstrument(clause) });
@@ -7264,8 +7315,15 @@ function executePptxOperations({ input, ops, blocks }) {
       validationBlocks.push(...slideBlocks);
       steps.push({ kind: 'add_slide', mode: 'pptx_new_slide', label: op.title });
     } else {
-      buffer = appendToPptxBuffer(buffer, appendBlocks);
-      validationBlocks.push(...appendBlocks);
+      const dump = looksLikePromptDump(appendBlocks.map((item) => item.text).join('\n'));
+      const safeBlocks = dump
+        ? [
+          block('heading1', op.title || 'Continuación profesional'),
+          block('normal', '• Decisión, evidencia y próximo paso — sin copiar la petición del usuario.'),
+        ]
+        : appendBlocks;
+      buffer = appendToPptxBuffer(buffer, safeBlocks);
+      validationBlocks.push(...safeBlocks);
       steps.push({ kind: 'append_generic', mode: 'pptx_new_slide' });
     }
   }
@@ -7528,6 +7586,7 @@ async function generateSourcePreservingDocumentEdit({
       prompt: requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
       originalName: sourceFile.originalName || sourceFile.filename,
+      format: isPptxFile(sourceFile) ? 'pptx' : isXlsxFile(sourceFile) ? 'xlsx' : isPdfFile(sourceFile) ? 'pdf' : 'docx',
     });
     validationBlocks = blocks;
     if (isXlsxFile(sourceFile)) {
@@ -7613,7 +7672,17 @@ async function generateSourcePreservingDocumentEdit({
         explanation = `Se conservó el PPTX original; ${pptxResult.summary}.`;
         content = `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
       } else {
-      operations = planGenericOfficeOperations({ requestText, format });
+      const livePptxText = [
+        sourceFile.extractedText,
+        sourceText,
+        extractTextFromPptxBuffer(input),
+      ].filter(Boolean).join('\n');
+      operations = planGenericOfficeOperations({
+        requestText,
+        format,
+        sourceText: livePptxText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+      });
       if (operations.every((op) => op.kind === 'append_generic')) {
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;
@@ -8011,6 +8080,7 @@ module.exports = {
   loadEditableSourceFiles,
   parseImageEditRequest,
   parsePdfEditRequest,
+  parseOfficeUserIntent,
   parsePresentationEditRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
@@ -8075,6 +8145,7 @@ module.exports = {
     isTargetedSectionFillRequest,
     locateCronogramaTable,
     locateSectionTable,
+    parseOfficeUserIntent,
     planGenericOfficeOperations,
     planSourcePreservingOperations,
     clauseWantsBibliography,
