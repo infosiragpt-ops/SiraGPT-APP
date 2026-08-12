@@ -29,12 +29,17 @@ function hasGenericPlaceholderText(value = '') {
 
 function isBusinessAdministrationTopic(prompt = '', title = '') {
   const text = normalize(`${prompt} ${title}`);
-  return /\b(administracion|gestion|direccion)\s+(de\s+)?(empresas|empresarial|negocios|organizaciones)\b/.test(text)
-    || /\bempresa(s)?\b/.test(text) && /\b(administracion|gestion|direccion)\b/.test(text);
+  return /\b(administracion|gestion|direccion)\s+(de\s+)?(empresas|empresarial|negocios|organizaciones|publica|publicas|administrativa|administrativo)\b/.test(text)
+    || /\bgestion\s+administrativ\w*\b/.test(text)
+    || /\b(?:amdinistrativ\w*|adminstrativ\w*|adminitrativ\w*)\b/.test(text)
+    || (/\bempresa(s)?\b/.test(text) && /\b(administracion|gestion|direccion)\b/.test(text));
 }
 
 function extractTopic({ prompt = '', title = '' } = {}) {
   const raw = String(title || prompt || 'Tema profesional')
+    .replace(/\bamdinistrativ/gi, 'administrativ')
+    .replace(/\badminstrativ/gi, 'administrativ')
+    .replace(/\badminitrativ/gi, 'administrativ')
     .replace(/\b(crea|crear|genera|generar|haz|hacer|prepara|elabora|pptx?|powerpoint|presentaci[oó]n|diapositivas|slides?)\b/gi, ' ')
     .replace(/\s+/g, ' ')
     .trim();

@@ -3026,9 +3026,10 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(result.validation.passed, true);
     assert.equal(result.validation.checks.operation_criteria, true);
     assert.match(result.content, /reemplacé el texto específico/);
-    assert.match(result.content, /agregué una diapositiva nueva/);
+    assert.match(result.content, /agregué la diapositiva/);
     assert.equal(result.orchestration.operations.some((op) => op.kind === 'replace_text'), true);
-    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'add_slide'), true);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), false);
 
     const edited = fs.readFileSync(result.artifact.path);
     const text = extractTextFromPptxBuffer(edited);
@@ -3037,6 +3038,44 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.match(text, /Título nuevo/);
     assert.doesNotMatch(text, /Título viejo/);
     assert.match(text, /matriz de riesgos/i);
+  });
+
+  it('adds 5 professional slides to the same PPT; last is bibliography, never an ANEXOS dump', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pptx-examples-'));
+    const originalPath = path.join(tmp, 'retencion-cohortes.pptx');
+    fs.writeFileSync(originalPath, await makePptxBuffer());
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: {
+        id: 'file-pptx-any-topic',
+        path: originalPath,
+        originalName: 'retencion-cohortes.pptx',
+        filename: 'retencion-cohortes.pptx',
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        extractedText: 'Retención de cohortes\nEl churn del canal orgánico bajó en marzo',
+      },
+      prompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
+      displayPrompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
+      userId: 'user-office',
+      chatId: 'chat-office-examples',
+    });
+
+    assert.equal(result.format, 'pptx');
+    assert.equal(result.validation.passed, true);
+    assert.equal(result.orchestration.operations.filter((op) => op.kind === 'add_slide').length, 5);
+    assert.equal(result.orchestration.operations.some((op) => op.kind === 'append_generic'), false);
+    assert.match(result.content, /Referencias bibliogr/i);
+
+    const edited = fs.readFileSync(result.artifact.path);
+    const text = extractTextFromPptxBuffer(edited);
+    const slides = Object.keys(new PizZip(edited).files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name));
+    assert.equal(slides.length, 6);
+    assert.match(text, /Título viejo/);
+    assert.match(text, /Referencias bibliogr/i);
+    assert.match(text, /Ejemplo|churn|cohortes/i);
+    assert.doesNotMatch(text, /Contenido agregado seg[uú]n solicitud/i);
+    assert.doesNotMatch(text, /Documento base:/i);
+    assert.doesNotMatch(text, /ANEXOS/);
   });
 
   it('fails closed for PDF text replacement or deletion instead of rebuilding and losing formatting', async () => {
