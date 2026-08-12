@@ -130,6 +130,11 @@ describe("professional chat composer surface source contract", () => {
       /\.composer-plus-liquid-button\s*\{[\s\S]{0,220}width: 2\.75rem !important;[\s\S]{0,160}height: 2\.75rem !important;/,
       "the attachment control should align with the other 44px actions"
     )
+    assert.match(
+      globals,
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: #0a0a0a !important;[\s\S]{0,80}color: #ffffff !important;/,
+      "the send disc must stay solid black with a white arrow"
+    )
   })
 
   it("keeps one uninterrupted surface while preserving accessible controls", () => {
