@@ -5629,15 +5629,20 @@ footer {
   }
 }
 
-/* Single-row professional composer (Claude / ChatGPT control bar):
-   [+]  [textarea grows with content]  [model · mic · send]
-   Short prompts stay compact; multi-line text grows between the side
-   controls with the action cluster bottom-aligned. */
+/* Professional composer capsule.
+   Idle / single line:
+     [+]  [textarea]  [model · mic · send]
+   Stacked (wrapped text or explicit newline):
+     [full-width textarea]
+     [+]                    [model · mic · send]
+   The model picker always sits on the footer once the prompt stacks so
+   growing text is captured inside the capsule instead of pushing the
+   selector sideways. */
 .composer-input-row {
-  display: flex !important;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: flex-end;
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "leading text actions";
+  align-items: end;
   column-gap: 0.35rem;
   row-gap: 0;
   min-height: 3.35rem;
@@ -5657,12 +5662,16 @@ footer {
   max-height: min(12rem, 28vh);
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 0.625rem 0.75rem 0.125rem;
+  padding: 0.7rem 0.75rem 0.2rem;
   border: none;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
   scrollbar-width: thin;
+}
+
+.composer-attachment-rail {
+  background: transparent;
 }
 
 .composer-context-tray > .bg-background {
@@ -5674,25 +5683,48 @@ footer {
   padding: 0.25rem 0 0.375rem;
 }
 
-.composer-input-row > :first-child {
-  flex: 0 0 auto;
-  align-self: flex-end;
+.composer-leading-controls {
+  grid-area: leading;
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 0.25rem;
+  min-width: 0;
 }
 
 .composer-input-row .composer-textarea-shell {
-  flex: 1 1 auto;
+  grid-area: text;
   width: auto;
   min-width: 0;
   align-self: center;
 }
 
 .composer-input-row .composer-toolbar-actions {
-  flex: 0 0 auto;
+  grid-area: actions;
   justify-self: end;
-  align-self: flex-end;
+  align-self: end;
   min-height: 2.75rem;
   max-width: 100%;
   gap: 0.25rem !important;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-input-row {
+  grid-template-areas:
+    "text text text"
+    "leading leading actions";
+  align-items: end;
+  row-gap: 0.45rem;
+  padding: 0.7rem 0.7rem 0.4rem 0.45rem !important;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell {
+  align-self: stretch;
+  width: 100%;
+}
+
+.composer-surface[data-composer-stacked="true"] .composer-textarea-shell .composer-textarea,
+.composer-surface[data-composer-stacked="true"] .composer-textarea-highlights {
+  padding: 0.05rem 0.35rem 0.15rem 0.55rem !important;
 }
 
 .composer-input-row .composer-toolbar-actions > button {
@@ -5720,11 +5752,10 @@ footer {
 
 .composer-inline-active-tools {
   flex: 0 1 auto;
-  align-self: flex-end;
+  align-self: center;
   min-width: 0;
   max-width: min(42vw, 18rem);
   overflow: visible;
-  margin-bottom: 0.15rem;
 }
 
 .composer-footer-active-tools {
@@ -5827,10 +5858,10 @@ footer {
   /* Kill base Textarea `flex` so the first line sits on the top of the shell
      instead of optically floating mid-band with a white gap above. */
   display: block !important;
-  height: 1.65rem !important;
+  height: auto;
   min-height: 1.65rem !important;
   max-height: min(12.5rem, 42vh) !important;
-  overflow-y: hidden !important;
+  overflow-y: hidden;
   /* Comfortable single-line rhythm; stays optically centered with 44px actions. */
   padding: 0.2rem 0.35rem 0.2rem 0.2rem !important;
   font-size: 0.9375rem;
@@ -6043,12 +6074,16 @@ button.anti-bribery-context-chip:not(:disabled):active {
     min-height: 2.75rem;
   }
   .composer-textarea-shell .composer-textarea {
-    height: 1.65rem !important;
+    height: auto;
     min-height: 1.65rem !important;
     max-height: min(10.5rem, 38vh) !important;
     padding: 0.18rem 0.25rem 0.18rem 0.15rem !important;
     font-size: 1rem;
     line-height: 1.5;
+  }
+  .composer-surface[data-composer-stacked="true"] .composer-input-row {
+    padding: 0.6rem 0.55rem 0.35rem 0.35rem !important;
+    row-gap: 0.35rem;
   }
   .composer-textarea-shell {
     min-height: 1.65rem;
