@@ -24,6 +24,7 @@ const {
   hasAnyContentKey,
 } = require('./document-pipeline/content/llm-client');
 const {
+  buildAddSectionOperations,
   buildAddSlideOperations,
   looksLikePromptDump,
   parseOfficeUserIntent,
@@ -5457,6 +5458,18 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
   if (rawTitleChange) add({ kind: 'set_document_title', ...rawTitleChange });
   const rawNamedSection = extractNamedSectionAppend(requestText);
   if (rawNamedSection) add({ kind: 'append_section', ...rawNamedSection });
+  const xmlPlainText = String(documentXml || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const structuralIntent = !rawNamedSection
+    ? parseOfficeUserIntent(requestText, { format: 'docx' })
+    : null;
+  if (structuralIntent?.kind === 'add_sections' && (structuralIntent.count > 1 || structuralIntent.lastIsBibliography)) {
+    for (const section of buildAddSectionOperations(structuralIntent, {
+      requestText,
+      sourceText: xmlPlainText,
+    })) {
+      add(section);
+    }
+  }
   // All quoted replace pairs from the ORIGINAL prompt (casing preserved).
   // Doing this before the normalized-clause loop means compound prompts keep
   // "APROBADO" instead of collapsing to "aprobado".
@@ -5487,6 +5500,10 @@ function planSourcePreservingOperations({ requestText = '', documentXml = '', re
     // page. Once the title assignment was parsed, that same clause is fully
     // accounted for and must not also append generic content.
     if (rawTitleChange && operation?.kind === 'append_generic' && extractDocxTitleChange(clause)) continue;
+    if (operation?.kind === 'append_generic' && !operation.wantsInstrument
+      && ops.some((item) => item.kind === 'append_section')) {
+      continue;
+    }
     add(operation);
   }
 
@@ -5955,7 +5972,13 @@ function requestedSectionPointCount(requestText = '', fallback = 2) {
   return Math.max(1, Math.min(10, value));
 }
 
-function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourceText = '' } = {}) {
+function namedSectionFallbackBlocks({ sectionTitle = '', requestText = '', sourceText = '', bullets = [] } = {}) {
+  if (Array.isArray(bullets) && bullets.length) {
+    return [
+      block('heading1', sectionTitle),
+      ...bullets.map((item) => block('bullet', item)),
+    ];
+  }
   const normalizedTitle = normalizeText(sectionTitle);
   if (normalizedTitle.includes('recomendacion')) {
     const recommendations = [
@@ -6015,6 +6038,7 @@ async function runAppendSectionOperation({ buffer, op, requestText, sourceText, 
       sectionTitle: op.sectionTitle,
       requestText,
       sourceText: sourceText || sourceFile.extractedText || '',
+      bullets: op.bullets,
     });
   }
   blocks = normalizeNamedSectionBlocks(blocks, {

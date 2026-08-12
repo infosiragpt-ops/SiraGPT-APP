@@ -1,13 +1,12 @@
 'use strict';
 
 /**
- * Sensitive Office-edit intent parser.
+ * Format-agnostic Office-edit intent parser.
  *
- * Users type fast, informal Spanish (and English) with typos:
- *   "en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi"
- * The generic planner used to treat ANY "agrega…" as append_generic and dump
- * the raw prompt onto an ANEXOS slide. This module turns those requests into
- * concrete operations (N add_slide, last bibliography) without calling an LLM.
+ * Turns informal requests (any topic, any Office file) into a precise
+ * structural plan: add N units, last bibliography, keep the same file.
+ * Content is grounded in the attached document + the requested topic.
+ * Nothing here is specialised to a single deck or subject.
  */
 
 const SPANISH_COUNTS = Object.freeze({
@@ -44,11 +43,14 @@ const OFFICE_TYPO_FIXES = [
   [/\bprofeiosnal\w*\b/g, 'profesional'],
 ];
 
-const ADD_VERB_RE = /\b(agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*|coloc\w*|sum\w*|pon(?:er|ga|le|me)?)\b/;
-const SLIDE_NOUN_RE = /\b(slides?|diapositiv\w*|laminas?|pptx?|powerpoint|presentacion(?:es)?)\b/;
+const ADD_VERB_RE = /\b(agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*|coloc\w*|sum\w*|pon(?:er|ga|le|me)?|add|append)\b/;
+const SLIDE_NOUN_RE = /\b(slides?|diapositiv\w*|laminas?|pptx?|powerpoint|presentacion(?:es)?|deck)\b/;
+const SECTION_NOUN_RE = /\b(secciones?|apartados?|capitulos?|secciones?)\b/;
+const ROW_NOUN_RE = /\b(filas?|rows?)\b/;
 const BIBLIOGRAPHY_RE = /\b(referencias?(?:\s+bibliografic\w*)?|bibliograf\w*|citas?\s+bibliografic\w*|fuentes?\s+bibliografic\w*)\b/;
-const SAME_DECK_RE = /\b(esta|este|la)\s+misma\s+(ppt|pptx|presentacion|diapositiva|archivo|deck)\b|\ben esta\s+(ppt|pptx|presentacion)\b|\bsin\s+(crear|generar|hacer)\s+(otra|un\s+nuevo|una\s+nueva)\b/;
+const SAME_FILE_RE = /\b(esta|este|la|el)\s+mism[oa]\s+(ppt|pptx|presentacion|diapositiva|archivo|deck|documento|word|docx|excel|xlsx|pdf)\b|\ben est[ea]\s+(ppt|pptx|presentacion|documento|archivo|word|excel)\b|\bsin\s+(crear|generar|hacer)\s+(otra|otro|un\s+nuevo|una\s+nueva)\b/;
 const PROMPT_DUMP_RE = /\bcontenido agregado segun solicitud\b|\bdocumento base:\b|^\s*anexos\s*$/im;
+const WEAK_LINE_RE = /^(titulo|portada|agenda|indice|briefing ejecutivo|contenido base|slide \d+|diapositiva \d+|untitled|nueva diapositiva)(?:\s+\d+)?$/;
 
 function normalizeText(value = '') {
   return String(value || '')
@@ -73,103 +75,130 @@ function parseCountToken(token = '') {
   return SPANISH_COUNTS[raw] || null;
 }
 
-function clampSlideCount(n) {
+function clampCount(n, max = 15) {
   if (!Number.isInteger(n) || n < 1) return null;
-  return Math.min(15, n);
+  return Math.min(max, n);
+}
+
+function clip(value = '', max = 140) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 1);
+  const at = cut.lastIndexOf(' ');
+  return `${cut.slice(0, at > 40 ? at : cut.length).trim()}…`;
+}
+
+function titleCase(value = '') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function cleanTopic(raw = '') {
   return String(raw || '')
-    .replace(/\b(esta misma ppt|en esta ppt|al final|por favor|porfavor|profesional\w*|mas|mas slides?|adicionales?)\b/g, ' ')
+    .replace(/\b(esta misma ppt|en esta ppt|este mismo (?:documento|archivo|word|excel)|al final|por favor|porfavor|profesional\w*|mas|mas slides?|adicionales?)\b/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-function extractSlideTopic(text = '') {
+function extractRequestedTopic(text = '') {
   const sobre = text.match(/\bsobre\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s+y\s+la\s+ultima|\s*$)/);
   if (sobre) return cleanTopic(sobre[1]);
-  const afterNoun = text.match(/\b(?:slides?|diapositiv\w*|laminas?)\s+(?:mas\s+)?(?:de|con)\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s*$)/);
+  const afterNoun = text.match(/\b(?:slides?|diapositiv\w*|laminas?|secciones?|apartados?|capitulos?|filas?)\s+(?:mas\s+)?(?:de|con)\s+(.+?)(?:\s+y\s+(?:1|un|una)\s+de\s+bibl|\s*$)/);
   if (afterNoun) return cleanTopic(afterNoun[1]);
   return '';
 }
 
-function extractSlideCount(text = '') {
+function extractRequestedCount(text = '') {
   const countWords = Object.keys(SPANISH_COUNTS).join('|');
+  const unit = '(?:slides?|diapositiv\\w*|laminas?|secciones?|apartados?|capitulos?|filas?|rows?)';
   const patterns = [
-    new RegExp(`\\b(\\d{1,2}|${countWords})\\s+(?:slides?|diapositiv\\w*|laminas?)\\b`),
-    new RegExp(`\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|coloc\\w*)\\s+(\\d{1,2}|${countWords})\\b`),
+    new RegExp(`\\b(\\d{1,2}|${countWords})\\s+${unit}\\b`),
+    new RegExp(`\\b(?:agreg\\w*|anad\\w*|insert\\w*|inclu\\w*|coloc\\w*|add)\\s+(\\d{1,2}|${countWords})\\b`),
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (!match) continue;
-    const count = clampSlideCount(parseCountToken(match[1]));
+    const count = clampCount(parseCountToken(match[1]));
     if (count) return count;
   }
-  if (/\b(?:una|un)\s+(?:nueva\s+)?(?:slide|diapositiva|lamina)\b/.test(text)) return 1;
+  if (/\b(?:una|un|a)\s+(?:nueva\s+)?(?:slide|diapositiva|lamina|seccion|apartado|fila)\b/.test(text)) return 1;
   return null;
 }
 
-/**
- * "5 slides sobre ejemplos y 1 de bibliografía" is how users ask for
- * 5 slides whose LAST one is bibliography (owner clarification).
- * Two explicit counts greater than 1 stay compositional (5 + 2).
- */
 function parseBibliographyPlacement(text = '', count) {
   const wantsBibliography = BIBLIOGRAPHY_RE.test(text);
   if (!wantsBibliography) {
-    return { wantsBibliography: false, lastIsBibliography: false, extraBibliographySlides: 0 };
+    return { wantsBibliography: false, lastIsBibliography: false, extraBibliographyUnits: 0 };
   }
   const lastCue = /\b(?:la\s+)?ultima(?:\s+es|\s+de)?\b/.test(text)
     || /\bde las\s+\d{1,2}\s+la ultima\b/.test(text)
     || /\bcierre\s+(?:con\s+)?(?:bibl|referenc)/.test(text);
-  const extraCount = text.match(/\by\s+(\d{1,2}|un|una)\s+(?:slides?|diapositiv\w*|laminas?\s+)?(?:de\s+)?(?:bibl|referenc)/);
+  const extraCount = text.match(/\by\s+(\d{1,2}|un|una)\s+(?:slides?|diapositiv\w*|laminas?|secciones?|apartados?\s+)?(?:de\s+)?(?:bibl|referenc)/);
   const extraN = extraCount ? parseCountToken(extraCount[1]) : null;
   if (lastCue || extraN === 1 || (count && extraN == null)) {
-    return { wantsBibliography: true, lastIsBibliography: true, extraBibliographySlides: 0 };
+    return { wantsBibliography: true, lastIsBibliography: true, extraBibliographyUnits: 0 };
   }
   if (Number.isInteger(extraN) && extraN > 1) {
-    return { wantsBibliography: true, lastIsBibliography: false, extraBibliographySlides: extraN };
+    return { wantsBibliography: true, lastIsBibliography: false, extraBibliographyUnits: extraN };
   }
-  return { wantsBibliography: true, lastIsBibliography: Boolean(count), extraBibliographySlides: 0 };
+  return { wantsBibliography: true, lastIsBibliography: Boolean(count), extraBibliographyUnits: 0 };
 }
 
-function parseAddSlidesIntent(requestText = '') {
-  const text = repairOfficeTypos(requestText);
-  if (!text) return null;
-  const hasAddVerb = ADD_VERB_RE.test(text);
-  const hasSlideNoun = SLIDE_NOUN_RE.test(text);
-  const sameDocument = SAME_DECK_RE.test(text);
-  if (!hasAddVerb) return null;
-  if (!hasSlideNoun && !sameDocument) return null;
+function inferUnit(text = '', format = '') {
+  if (SLIDE_NOUN_RE.test(text) || format === 'pptx') return 'slide';
+  if (SECTION_NOUN_RE.test(text) || format === 'docx') return 'section';
+  if (ROW_NOUN_RE.test(text) || format === 'xlsx') return 'row';
+  return format || null;
+}
 
-  const count = extractSlideCount(text);
-  const topic = extractSlideTopic(text);
+function parseStructuralAppendIntent(requestText = '', { format = '' } = {}) {
+  const text = repairOfficeTypos(requestText);
+  if (!text || !ADD_VERB_RE.test(text)) return null;
+  const sameDocument = SAME_FILE_RE.test(text);
+  const hasUnitNoun = SLIDE_NOUN_RE.test(text) || SECTION_NOUN_RE.test(text) || ROW_NOUN_RE.test(text);
+  if (!hasUnitNoun && !sameDocument) return null;
+
+  const count = extractRequestedCount(text);
+  const topic = extractRequestedTopic(text);
   const bib = parseBibliographyPlacement(text, count);
   if (!count && !bib.wantsBibliography) return null;
 
   let total = count || (bib.wantsBibliography ? 1 : 0);
-  if (bib.extraBibliographySlides) total += bib.extraBibliographySlides;
-  total = clampSlideCount(total);
+  if (bib.extraBibliographyUnits) total += bib.extraBibliographyUnits;
+  total = clampCount(total);
   if (!total) return null;
 
+  const unit = inferUnit(text, format);
   const lastIsBibliography = bib.lastIsBibliography || (bib.wantsBibliography && total === 1);
   return {
-    kind: 'add_slides',
+    kind: unit === 'section' ? 'add_sections' : unit === 'row' ? 'add_rows' : 'add_slides',
+    unit: unit || 'slide',
     count: total,
     topic: topic || '',
     lastIsBibliography,
     wantsBibliography: bib.wantsBibliography,
     sameDocument,
-    confidence: hasSlideNoun || sameDocument ? 'high' : 'medium',
+    confidence: hasUnitNoun || sameDocument ? 'high' : 'medium',
   };
 }
 
+function parseAddSlidesIntent(requestText = '') {
+  const intent = parseStructuralAppendIntent(requestText, { format: 'pptx' });
+  return intent && intent.kind === 'add_slides' ? intent : null;
+}
+
 function parseOfficeUserIntent(requestText = '', { format = '' } = {}) {
-  if (!format || format === 'pptx') {
-    const slides = parseAddSlidesIntent(requestText);
-    if (slides) return slides;
+  const intent = parseStructuralAppendIntent(requestText, { format });
+  if (!intent) return null;
+  if (format === 'pptx' && intent.kind !== 'add_slides') return null;
+  if (format === 'docx' && intent.kind !== 'add_sections' && !intent.sameDocument) {
+    if (intent.kind === 'add_slides') return { ...intent, kind: 'add_sections', unit: 'section' };
   }
-  return null;
+  if (format && format === 'docx' && intent.kind === 'add_slides' && !SLIDE_NOUN_RE.test(repairOfficeTypos(requestText))) {
+    return { ...intent, kind: 'add_sections', unit: 'section' };
+  }
+  return intent;
 }
 
 function looksLikePromptDump(text = '') {
@@ -180,7 +209,7 @@ function isWeakThemeLine(line = '') {
   const n = normalizeText(line);
   if (!n || n.length < 6) return true;
   if (/\btitulo viejo\b/.test(n) || /\bcontenido base\b/.test(n)) return true;
-  return /^(titulo|portada|agenda|indice|briefing ejecutivo|slide \d+|diapositiva \d+)(?:\s+\d+)?$/.test(n);
+  return WEAK_LINE_RE.test(n);
 }
 
 function inferTheme(sourceText = '', originalName = '', requestText = '') {
@@ -188,24 +217,22 @@ function inferTheme(sourceText = '', originalName = '', requestText = '') {
     .replace(/\.[a-z0-9]+$/i, '')
     .replace(/[_-]+/g, ' ')
     .trim();
-  const repairedName = repairOfficeTypos(name).replace(/\b(editado|con anexos|completado)\b/g, '').trim();
+  const repairedName = repairOfficeTypos(name)
+    .replace(/\b(editado|con anexos|completado|copy|final|v\d+)\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const nameLooksTopical = repairedName && !isWeakThemeLine(repairedName);
   const lines = String(sourceText || '')
     .split(/\n+/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => line.length >= 8 && line.length <= 90 && !isWeakThemeLine(line))
     .slice(0, 24);
-  const topicalHeading = lines.find((line) => /gestion|administr|empresa|estrateg|planific|operacion|finanza/i.test(line));
-  const heading = topicalHeading || lines[0] || '';
-  const fromRequest = extractSlideTopic(repairOfficeTypos(requestText));
-  const preferName = nameLooksTopical && (
-    /administrativ|gestion|empresa/.test(normalizeText(repairedName))
-    || !heading
-  );
-  const raw = preferName
+  const heading = lines[0] || '';
+  const fromRequest = extractRequestedTopic(repairOfficeTypos(requestText));
+  const raw = (nameLooksTopical && !heading)
     ? repairedName
-    : (heading || repairedName || fromRequest || 'gestión profesional');
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
+    : (heading || repairedName || fromRequest || 'el documento');
+  return titleCase(raw);
 }
 
 function existingTitles(sourceText = '') {
@@ -216,198 +243,260 @@ function existingTitles(sourceText = '') {
 }
 
 function uniqueTitle(title, taken) {
-  const base = String(title || 'Nueva diapositiva').trim();
+  const base = String(title || 'Continuación').trim();
   if (!taken.has(normalizeText(base))) return base;
-  const alt = `${base} — caso aplicado`;
+  const alt = `${base} — ampliación`;
   return taken.has(normalizeText(alt)) ? `${base} (${taken.size + 1})` : alt;
 }
 
-function administrationExampleSlides() {
+function extractSourceAnchors(sourceText = '', limit = 8) {
+  const seen = new Set();
+  const anchors = [];
+  for (const raw of String(sourceText || '').split(/\n+/)) {
+    const line = raw.replace(/\s+/g, ' ').trim();
+    if (line.length < 18 || line.length > 160 || isWeakThemeLine(line) || looksLikePromptDump(line)) continue;
+    const key = normalizeText(line).slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    anchors.push(line);
+    if (anchors.length >= limit) break;
+  }
+  return anchors;
+}
+
+function extractSourceCitations(sourceText = '', limit = 5) {
+  const seen = new Set();
+  const citations = [];
+  const pattern = /([A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñü.''-]{2,40}(?:,\s*[A-Z]\.)?(?:\s+y\s+[A-ZÁÉÍÓÚÑ][\wÁÉÍÓÚÑáéíóúñü.''-]{2,40})?)\s*\(((?:19|20)\d{2})\)/g;
+  let match;
+  while ((match = pattern.exec(String(sourceText || ''))) && citations.length < limit) {
+    const item = `${match[1].trim()} (${match[2]})`;
+    const key = normalizeText(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    citations.push(item);
+  }
+  return citations;
+}
+
+function isGenericExamplesTopic(topic = '') {
+  return /^(ejemplos?|examples?|casos?(?:\s+de\s+estudio)?|casuistica)$/.test(normalizeText(topic));
+}
+
+function exampleAngles(subject, theme, anchors = []) {
+  const lower = String(subject || theme || 'el tema').toLowerCase();
   return [
     {
-      title: 'Caso 1 — Pyme comercial que formaliza su gestión',
-      bullets: [
-        'Diagnóstico: compras, tesorería e inventario dependen de personas, no de procesos.',
-        'Decisión: implantar un ciclo semanal de planificación, ejecución y control de caja.',
-        'Evidencia: tablero con días de cobro, quiebre de stock y cumplimiento de presupuesto.',
-        'Aprendizaje: formalizar no frena la venta; reduce improvisación y pérdidas invisibles.',
-      ],
+      title: `Ejemplo 1 — ${titleCase(subject)}`,
+      bulletsFor(anchor) {
+        return [
+          anchor
+            ? `Punto de partida del documento: «${clip(anchor, 140)}».`
+            : `Definir un caso real de ${lower} con actor, contexto y restricción.`,
+          `Decisión: qué se cambia, quién lo ejecuta y en qué plazo.`,
+          `Evidencia: dato, hito o entrega que demuestra que la decisión funcionó.`,
+          `Aprendizaje transferible a otros casos de ${theme}.`,
+        ];
+      },
     },
     {
-      title: 'Caso 2 — Área pública que alinea servicio y control',
-      bullets: [
-        'Problema: trámites sin dueño, tiempos opacos y quejas que no se convierten en mejora.',
-        'Diseño: mapa de proceso, responsables, plazos y umbral de escalamiento.',
-        'Indicadores: tiempo de ciclo, porcentaje de expedientes completos y retrabajo.',
-        'Gobierno: reunión breve de seguimiento con acuerdos escritos y fecha de cierre.',
-      ],
+      title: `Ejemplo 2 — Cómo se aplica ${lower}`,
+      bulletsFor(anchor) {
+        return [
+          anchor ? `Tomar «${clip(anchor, 120)}» y convertirlo en un flujo con dueño.` : `Asignar dueño, recursos y primera entrega visible.`,
+          'Documentar el paso crítico para no depender de una sola persona.',
+          'Acordar umbrales: qué se aprueba en el equipo y qué escala.',
+          'Revisar avance en ciclos cortos y registrar desviaciones.',
+        ];
+      },
     },
     {
-      title: 'Caso 3 — Operaciones de servicios con ritmo 30-60-90',
-      bullets: [
-        '30 días: diagnosticar cuellos de botella, roles reales y datos que ya existen.',
-        '60 días: rediseñar responsabilidades, tablero y cadencia de revisión.',
-        '90 días: estandarizar el proceso crítico y retirar excepciones injustificadas.',
-        'Criterio: cada iniciativa tiene dueño, métrica, fecha y evidencia de cierre.',
-      ],
+      title: `Ejemplo 3 — Indicadores de ${lower}`,
+      bulletsFor(anchor) {
+        return [
+          'Medir resultado, no solo actividad: costo, tiempo, calidad e impacto.',
+          anchor ? `Vincular un indicador a «${clip(anchor, 110)}».` : `Elegir pocos indicadores que disparen una acción concreta.`,
+          'Mostrar tendencia y causa probable, no un número aislado.',
+          'Retirar métricas que no cambian ninguna decisión.',
+        ];
+      },
     },
     {
-      title: 'Caso 4 — Empresa en crecimiento que protege la velocidad',
-      bullets: [
-        'Riesgo: el crecimiento diluye control de costos, calidad y caja.',
-        'Control proporcional: alertas tempranas, no burocracia extra.',
-        'Finanzas y operación se revisan juntas: margen, capacidad y promesa al cliente.',
-        'Resultado: decisiones más rápidas porque el criterio ya está escrito.',
-      ],
+      title: `Ejemplo 4 — Riesgos de no gestionar ${lower}`,
+      bulletsFor() {
+        return [
+          'Improvisación: costos ocultos, retrabajo y promesas incumplidas.',
+          'Dependencia de personas clave sin respaldo de proceso.',
+          'Decisiones tardías porque la información llega tarde o incompleta.',
+          'Control desproporcionado que aparece solo después de la crisis.',
+        ];
+      },
     },
     {
-      title: 'Caso 5 — Comité que convierte indicadores en decisiones',
-      bullets: [
-        'Un tablero útil muestra causa probable y acción, no solo semáforos.',
-        'Pocos KPI: productividad, caja, calidad de servicio y cumplimiento de plan.',
-        'Cada desviación exige dueño, plazo y evidencia de corrección.',
-        'La reunión dura menos cuando los datos llegan antes, no durante.',
-      ],
+      title: `Ejemplo 5 — Plan 30-60-90 para ${lower}`,
+      bulletsFor() {
+        return [
+          '30 días: diagnóstico, datos actuales y un proceso crítico priorizado.',
+          '60 días: roles, tablero y cadencia de seguimiento.',
+          '90 días: estandarizar, medir y ajustar con evidencia.',
+          'Cierre: tres compromisos con dueño, fecha y medio de verificación.',
+        ];
+      },
     },
   ];
 }
 
-function topicDrivenSlides(topic, theme, count) {
+function topicDrivenAngles(topic, theme) {
   const subject = topic || theme;
   const lower = String(subject || 'el tema').toLowerCase();
-  const bank = [
+  return [
     {
-      title: subject.charAt(0).toUpperCase() + subject.slice(1),
-      bullets: [
-        `Definir el problema real de ${lower} y el criterio con el que se decidirá.`,
-        `Separar hechos, supuestos y restricciones de ${theme}.`,
-        'Traducir el diagnóstico en 2 o 3 decisiones ejecutables.',
-        'Dejar visible qué evidencia confirmará que la decisión funcionó.',
-      ],
+      title: titleCase(subject),
+      bulletsFor(anchor) {
+        return [
+          `Definir el problema real de ${lower} y el criterio con el que se decidirá.`,
+          anchor ? `Anclar la lectura en «${clip(anchor, 140)}».` : `Separar hechos, supuestos y restricciones de ${theme}.`,
+          'Traducir el diagnóstico en 2 o 3 decisiones ejecutables.',
+          'Dejar visible qué evidencia confirmará que la decisión funcionó.',
+        ];
+      },
     },
     {
       title: `Cómo se implementa ${lower}`,
-      bullets: [
-        'Asignar dueño, recursos y fecha de la primera entrega visible.',
-        'Documentar el flujo crítico para no depender de una sola persona.',
-        'Acordar umbrales: qué se aprueba en el equipo y qué escala.',
-        'Revisar avance en ciclos cortos y registrar desviaciones.',
-      ],
+      bulletsFor() {
+        return [
+          'Asignar dueño, recursos y fecha de la primera entrega visible.',
+          'Documentar el flujo crítico para no depender de una sola persona.',
+          'Acordar umbrales: qué se aprueba en el equipo y qué escala.',
+          'Revisar avance en ciclos cortos y registrar desviaciones.',
+        ];
+      },
     },
     {
       title: `Indicadores para ${lower}`,
-      bullets: [
-        'Medir resultado, no solo actividad: costo, tiempo, calidad e impacto.',
-        'Elegir pocos indicadores que disparen una acción concreta.',
-        'Mostrar tendencia y causa probable, no un número aislado.',
-        'Retirar métricas que no cambian ninguna decisión.',
-      ],
+      bulletsFor() {
+        return [
+          'Medir resultado, no solo actividad: costo, tiempo, calidad e impacto.',
+          'Elegir pocos indicadores que disparen una acción concreta.',
+          'Mostrar tendencia y causa probable, no un número aislado.',
+          'Retirar métricas que no cambian ninguna decisión.',
+        ];
+      },
     },
     {
       title: `Riesgos de no gestionar ${lower}`,
-      bullets: [
-        'Improvisación: costos ocultos, retrabajo y promesas incumplidas.',
-        'Dependencia de personas clave sin respaldo de proceso.',
-        'Decisiones tardías porque la información llega tarde o incompleta.',
-        'Control desproporcionado que aparece solo después de la crisis.',
-      ],
+      bulletsFor() {
+        return [
+          'Improvisación: costos ocultos, retrabajo y promesas incumplidas.',
+          'Dependencia de personas clave sin respaldo de proceso.',
+          'Decisiones tardías porque la información llega tarde o incompleta.',
+          'Control desproporcionado que aparece solo después de la crisis.',
+        ];
+      },
     },
     {
       title: `Plan 30-60-90 para ${lower}`,
-      bullets: [
-        '30 días: diagnóstico, datos actuales y priorización de un proceso crítico.',
-        '60 días: rediseño de roles, tablero y cadencia de seguimiento.',
-        '90 días: estandarizar, medir y ajustar con evidencia.',
-        'Cierre: tres compromisos con dueño, fecha y medio de verificación.',
-      ],
+      bulletsFor() {
+        return [
+          '30 días: diagnóstico, datos actuales y priorización de un proceso crítico.',
+          '60 días: rediseño de roles, tablero y cadencia de seguimiento.',
+          '90 días: estandarizar, medir y ajustar con evidencia.',
+          'Cierre: tres compromisos con dueño, fecha y medio de verificación.',
+        ];
+      },
     },
   ];
-  return bank.slice(0, Math.max(1, count));
 }
 
-function bibliographySlide(theme = '') {
-  const text = normalizeText(`${theme}`);
-  const admin = /\b(administrativ|gestion|empresa|directiv|organizacion)\b/.test(text);
-  if (admin) {
-    return {
-      title: 'Referencias bibliográficas',
-      bullets: [
-        'Chiavenato, I. (2019). Introducción a la teoría general de la administración. McGraw-Hill.',
-        'Robbins, S. P. y Coulter, M. (2021). Administración. Pearson.',
-        'Koontz, H., Weihrich, H. y Cannice, M. Administración: una perspectiva global. McGraw-Hill.',
-        'Mintzberg, H. (2009). Managing. Berrett-Koehler.',
-        'ISO 9001:2015. Sistemas de gestión de la calidad. Requisitos.',
-      ],
-    };
-  }
-  return {
-    title: 'Referencias bibliográficas',
-    bullets: [
+function bibliographySlide(theme = '', sourceText = '') {
+  const citations = extractSourceCitations(sourceText);
+  const bullets = citations.length
+    ? [
+      ...citations.map((item) => `${item}. Conservar la cita tal como aparece en el documento base.`),
+      'Completar título, editorial u organismo solo cuando figure en la fuente original.',
+      'No inventar URLs, DOI ni años ausentes del expediente.',
+    ]
+    : [
       `Fuentes primarias del tema «${theme || 'el documento'}»: normas, reportes institucionales y literatura del campo.`,
       'Citar autor, año, título y editorial u organismo emisor.',
       'Priorizar ediciones recientes y documentos verificables; no inventar URLs ni cifras.',
       'Separar fuentes académicas, normativas y evidencia interna de la organización.',
-    ],
-  };
+    ];
+  return { title: 'Referencias bibliográficas', bullets: bullets.slice(0, 6) };
 }
 
-function isAdministrationTheme(theme = '', topic = '') {
-  const text = normalizeText(`${theme} ${topic}`);
-  return /\b(administrativ|gestion|empresa|pyme|municipal|organizacion|directiv)\b/.test(text);
-}
-
-function planContentSlides(intent, ctx = {}) {
+function planContentUnits(intent, ctx = {}) {
   const theme = inferTheme(ctx.sourceText, ctx.originalName, ctx.requestText);
   const topic = intent.topic || '';
   const lastBib = Boolean(intent.lastIsBibliography);
   const contentCount = lastBib ? Math.max(0, intent.count - 1) : intent.count;
   const taken = new Set(existingTitles(ctx.sourceText));
-  const useExamples = /\bejemplos?\b/.test(normalizeText(topic)) || (!topic && isAdministrationTheme(theme));
-  const bank = useExamples && isAdministrationTheme(theme, topic)
-    ? administrationExampleSlides()
-    : topicDrivenSlides(topic || theme, theme, Math.max(contentCount, 1));
-  const slides = [];
+  const anchors = extractSourceAnchors(ctx.sourceText);
+  const subject = isGenericExamplesTopic(topic) ? theme : (topic || theme);
+  const angles = isGenericExamplesTopic(topic) || !topic
+    ? exampleAngles(subject, theme, anchors)
+    : topicDrivenAngles(subject, theme);
+
+  const units = [];
   for (let i = 0; i < contentCount; i += 1) {
-    const raw = bank[i] || bank[i % bank.length] || topicDrivenSlides(topic || theme, theme, 1)[0];
-    const title = uniqueTitle(raw.title, taken);
+    const angle = angles[i] || angles[i % angles.length];
+    const anchor = anchors[i] || anchors[0] || '';
+    const title = uniqueTitle(angle.title, taken);
     taken.add(normalizeText(title));
-    slides.push({
+    units.push({
       title,
-      bullets: (raw.bullets || []).filter(Boolean).slice(0, 6),
+      bullets: (typeof angle.bulletsFor === 'function' ? angle.bulletsFor(anchor) : angle.bullets || [])
+        .filter(Boolean)
+        .slice(0, 6),
     });
   }
-  if (lastBib || (intent.wantsBibliography && slides.length < intent.count)) {
-    const bib = bibliographySlide(theme);
-    slides.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
+  if (lastBib || (intent.wantsBibliography && units.length < intent.count)) {
+    const bib = bibliographySlide(theme, ctx.sourceText);
+    units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
   }
-  while (slides.length < intent.count) {
-    if (lastBib && slides.length === intent.count - 1) {
-      const bib = bibliographySlide(theme);
-      slides.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
+  while (units.length < intent.count) {
+    if (lastBib && units.length === intent.count - 1) {
+      const bib = bibliographySlide(theme, ctx.sourceText);
+      units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
       continue;
     }
-    const extra = topicDrivenSlides(topic || theme, theme, 5)[slides.length % 5];
-    slides.push({ title: uniqueTitle(extra.title, taken), bullets: extra.bullets });
+    const extra = (isGenericExamplesTopic(topic) ? exampleAngles(subject, theme) : topicDrivenAngles(subject, theme))[units.length % 5];
+    units.push({
+      title: uniqueTitle(extra.title, taken),
+      bullets: extra.bulletsFor(anchors[units.length] || ''),
+    });
   }
-  return slides.slice(0, intent.count);
+  return units.slice(0, intent.count);
 }
 
 function buildAddSlideOperations(intent, ctx = {}) {
-  if (!intent || intent.kind !== 'add_slides' || !intent.count) return [];
-  return planContentSlides(intent, ctx).map((slide) => ({
+  if (!intent || (intent.kind !== 'add_slides' && intent.unit !== 'slide') || !intent.count) return [];
+  return planContentUnits(intent, ctx).map((slide) => ({
     kind: 'add_slide',
     title: String(slide.title || 'Nueva diapositiva').slice(0, 120),
     bullets: (slide.bullets || []).map((item) => String(item).slice(0, 220)).filter(Boolean).slice(0, 8),
   }));
 }
 
+function buildAddSectionOperations(intent, ctx = {}) {
+  if (!intent || (intent.kind !== 'add_sections' && intent.unit !== 'section') || !intent.count) return [];
+  return planContentUnits(intent, ctx).map((section) => ({
+    kind: 'append_section',
+    sectionTitle: String(section.title || 'Nueva sección').slice(0, 120),
+    bullets: (section.bullets || []).map((item) => String(item).slice(0, 220)).filter(Boolean).slice(0, 8),
+  }));
+}
+
 module.exports = {
   BIBLIOGRAPHY_RE,
+  buildAddSectionOperations,
   buildAddSlideOperations,
+  extractSourceAnchors,
   inferTheme,
   looksLikePromptDump,
   normalizeText,
   parseAddSlidesIntent,
   parseOfficeUserIntent,
+  parseStructuralAppendIntent,
   repairOfficeTypos,
 };

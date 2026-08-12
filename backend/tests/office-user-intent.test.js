@@ -5,20 +5,22 @@ const assert = require('node:assert/strict');
 const {
   parseAddSlidesIntent,
   parseOfficeUserIntent,
+  parseStructuralAppendIntent,
   buildAddSlideOperations,
+  buildAddSectionOperations,
   repairOfficeTypos,
   looksLikePromptDump,
 } = require('../src/services/document-editing/user-intent-parser');
 
-describe('office user-intent parser — PPT slide append', () => {
-  test('repairs slaind / bibliografi / amdinistrativa', () => {
-    const repaired = repairOfficeTypos('5 slaind de gestion amdinistrativa y bliografia');
+describe('office user-intent parser — general structural append', () => {
+  test('repairs common office typos without assuming a subject', () => {
+    const repaired = repairOfficeTypos('5 slaind y bliografia de forma profeiosnal');
     assert.match(repaired, /slides/);
-    assert.match(repaired, /administrativa/);
     assert.match(repaired, /bibliografia/);
+    assert.match(repaired, /profesional/);
   });
 
-  test('owner phrasing: 5 slides on examples, last is bibliography', () => {
+  test('owner phrasing: N slides, last bibliography, same file', () => {
     const intent = parseAddSlidesIntent(
       'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
     );
@@ -29,48 +31,71 @@ describe('office user-intent parser — PPT slide append', () => {
     assert.match(intent.topic, /ejemplos/);
   });
 
-  test('explicit "la última es bibliografía" keeps count at 5', () => {
-    const intent = parseAddSlidesIntent(
-      'agrega 5 diapositivas de ejemplos y de las 5 la ultima es bibliografia',
-    );
-    assert.equal(intent.count, 5);
-    assert.equal(intent.lastIsBibliography, true);
+  test('works for any topic — marketing, onboarding, clinical', () => {
+    const marketing = parseAddSlidesIntent('en esta misma ppt agrega 4 slides sobre funnel de conversion');
+    assert.equal(marketing.count, 4);
+    assert.equal(marketing.lastIsBibliography, false);
+    assert.match(marketing.topic, /funnel de conversion/);
+
+    const clinic = parseAddSlidesIntent('agrega 3 diapositivas sobre triaje pediatrico y la ultima es bibliografia');
+    assert.equal(clinic.count, 3);
+    assert.equal(clinic.lastIsBibliography, true);
+    assert.match(clinic.topic, /triaje pediatrico/);
   });
 
-  test('single new slide about a topic', () => {
+  test('single new slide about a precise topic', () => {
     const intent = parseAddSlidesIntent('agrega una diapositiva sobre matriz de riesgos de IA');
     assert.equal(intent.count, 1);
     assert.equal(intent.lastIsBibliography, false);
     assert.match(intent.topic, /matriz de riesgos/);
   });
 
-  test('filename gestión administrativa wins over generic slide titles', () => {
+  test('filename topic wins over generic placeholder titles for any subject', () => {
     const intent = parseAddSlidesIntent('en esta misma ppt agrega 5 slides mas sobre ejemplos y 1 de bibliografia');
     const ops = buildAddSlideOperations(intent, {
       sourceText: 'Título viejo\nContenido base',
-      originalName: 'Gestion_amdinistrativa.pptx',
+      originalName: 'Funnel_conversion_Q3.pptx',
     });
     assert.equal(ops.length, 5);
-    assert.ok(ops.slice(0, 4).every((op) => /Caso/.test(op.title)));
+    assert.match(ops[0].title, /Funnel|conversion|Ejemplo/i);
+    assert.equal(ops[4].title, 'Referencias bibliográficas');
     assert.doesNotMatch(JSON.stringify(ops), /Título viejo/);
+    assert.doesNotMatch(JSON.stringify(ops), /Chiavenato|Pyme comercial/);
   });
 
-  test('builds 5 professional slides grounded in gestión administrativa', () => {
+  test('grounds example slides in the source document, not a hardcoded domain pack', () => {
     const intent = parseOfficeUserIntent(
       'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografia',
       { format: 'pptx' },
     );
     const ops = buildAddSlideOperations(intent, {
-      sourceText: 'BRIEFING EJECUTIVO\nGestión administrativa',
-      originalName: 'Gestion_amdinistrativa.pptx',
+      sourceText: 'Retención de cohortes\nEl churn del canal orgánico bajó 4 puntos en marzo\nSmith (2022)',
+      originalName: 'retencion-cohortes.pptx',
     });
     assert.equal(ops.length, 5);
     assert.equal(ops[4].title, 'Referencias bibliográficas');
-    assert.ok(ops[4].bullets.some((item) => /Chiavenato|Robbins|ISO 9001/.test(item)));
-    assert.ok(ops.slice(0, 4).every((op) => /Caso/.test(op.title)));
+    assert.match(JSON.stringify(ops.slice(0, 4)), /churn|cohortes|Retenci/i);
+    assert.match(ops[4].bullets.join(' '), /Smith \(2022\)/);
     const blob = JSON.stringify(ops);
     assert.equal(looksLikePromptDump(blob), false);
-    assert.doesNotMatch(blob, /Contenido agregado/);
+    assert.doesNotMatch(blob, /Contenido agregado|Chiavenato|ANEXOS/);
+  });
+
+  test('Word: N sections + last bibliography on the same document', () => {
+    const intent = parseStructuralAppendIntent(
+      'en este mismo word agrega 5 secciones sobre ejemplos y 1 de bibliografia',
+      { format: 'docx' },
+    );
+    assert.equal(intent.kind, 'add_sections');
+    assert.equal(intent.count, 5);
+    assert.equal(intent.lastIsBibliography, true);
+    const ops = buildAddSectionOperations(intent, {
+      sourceText: 'Protocolo de alta temprana\nCriterio de seguridad al egreso',
+      originalName: 'protocolo-alta.docx',
+    });
+    assert.equal(ops.length, 5);
+    assert.ok(ops.every((op) => op.kind === 'append_section'));
+    assert.equal(ops[4].sectionTitle, 'Referencias bibliográficas');
   });
 
   test('replace+append requests still parse the add-slide half', () => {

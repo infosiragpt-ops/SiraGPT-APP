@@ -3042,17 +3042,17 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
 
   it('adds 5 professional slides to the same PPT; last is bibliography, never an ANEXOS dump', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-pptx-examples-'));
-    const originalPath = path.join(tmp, 'Gestion_amdinistrativa.pptx');
+    const originalPath = path.join(tmp, 'retencion-cohortes.pptx');
     fs.writeFileSync(originalPath, await makePptxBuffer());
 
     const result = await generateSourcePreservingDocumentEdit({
       sourceFile: {
-        id: 'file-pptx-admin',
+        id: 'file-pptx-any-topic',
         path: originalPath,
-        originalName: 'Gestion_amdinistrativa.pptx',
-        filename: 'Gestion_amdinistrativa.pptx',
+        originalName: 'retencion-cohortes.pptx',
+        filename: 'retencion-cohortes.pptx',
         mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        extractedText: 'BRIEFING EJECUTIVO\nGestión administrativa\nEl ciclo directivo reduce incertidumbre',
+        extractedText: 'Retención de cohortes\nEl churn del canal orgánico bajó en marzo',
       },
       prompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
       displayPrompt: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
@@ -3072,7 +3072,7 @@ describe('source-preserving Office edit — generic XLSX/PPTX operations', () =>
     assert.equal(slides.length, 6);
     assert.match(text, /Título viejo/);
     assert.match(text, /Referencias bibliogr/i);
-    assert.match(text, /Caso|Pyme|formaliz/i);
+    assert.match(text, /Ejemplo|churn|cohortes/i);
     assert.doesNotMatch(text, /Contenido agregado seg[uú]n solicitud/i);
     assert.doesNotMatch(text, /Documento base:/i);
     assert.doesNotMatch(text, /ANEXOS/);

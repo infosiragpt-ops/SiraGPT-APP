@@ -130,8 +130,8 @@ describe('PPTX — add_slide appends real content preserving the deck', () => {
     const ops = editor.INTERNAL.planGenericOfficeOperations({
       requestText: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografi',
       format: 'pptx',
-      sourceText: 'BRIEFING EJECUTIVO\nGestión administrativa\nEl ciclo directivo reduce incertidumbre',
-      originalName: 'Gestion_amdinistrativa.pptx',
+      sourceText: 'Retención de cohortes\nEl churn del canal orgánico bajó en marzo',
+      originalName: 'retencion-cohortes.pptx',
     });
     assert.equal(ops.length, 5);
     assert.ok(ops.every((op) => op.kind === 'add_slide'));
@@ -141,7 +141,7 @@ describe('PPTX — add_slide appends real content preserving the deck', () => {
     assert.doesNotMatch(joined, /Documento base:/i);
     assert.doesNotMatch(joined, /ANEXOS/);
     assert.doesNotMatch(joined, /slaind|bibliografi\b/i);
-    assert.match(joined, /Caso|ejemplo|Pyme|formaliz/i);
+    assert.match(joined, /Ejemplo|churn|cohortes/i);
   });
 
   test('executes the 5-slide examples+bibliography request without dumping the prompt', async () => {
@@ -149,8 +149,8 @@ describe('PPTX — add_slide appends real content preserving the deck', () => {
     const ops = editor.INTERNAL.planGenericOfficeOperations({
       requestText: 'en esta misma ppt agrega 5 slaind mas sobre ejemplos y 1 de bibliografia',
       format: 'pptx',
-      sourceText: 'Gestión administrativa\nEl ciclo directivo reduce incertidumbre',
-      originalName: 'Gestion_amdinistrativa.pptx',
+      sourceText: 'Retención de cohortes\nEl churn del canal orgánico bajó en marzo',
+      originalName: 'retencion-cohortes.pptx',
     });
     const { buffer, steps } = executePptxOperations({ input, ops, blocks: [] });
     assert.equal(steps.filter((step) => step.kind === 'add_slide').length, 5);
