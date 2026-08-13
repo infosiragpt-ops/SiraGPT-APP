@@ -142,12 +142,14 @@ describe("code preview resilience", () => {
     )
 
     assert.match(runApp, /codexPreviewProjectIdRef\.current = codexProjectId/)
-    assert.match(lifecycle, /if \(modeRef\.current === "codex"\)/)
+    assert.match(lifecycle, /const mode = modeRef\.current/)
     assert.match(
       lifecycle,
       /codexPreviewProjectIdRef\.current \|\| getActiveCodexProject\(\)/,
     )
     assert.match(lifecycle, /codexApi\.stopPreview\(codexProjectId\)/)
+    assert.match(lifecycle, /previewOwnerGeneration !== generation/)
+    assert.match(lifecycle, /window\.setTimeout\(\(\) => \{/)
   })
 
   it("auto-retries against the Codex runner when its project link rehydrates after mount", () => {
@@ -173,6 +175,13 @@ describe("code preview resilience", () => {
       previewSource,
       /\[activeCodexProjectId, autoRunSignal, canRunProject, projectSignature\]/,
       "the post-mount auto-run gate must react to Codex project rehydration",
+    )
+  })
+
+  it("treats a Codex-only workspace as runnable from the manual Run event", () => {
+    assert.match(
+      previewSource,
+      /Boolean\(getGitBinding\(activeFolderIdRef\.current\)\) \|\|\s*Boolean\(getActiveCodexProject\(\)\)/,
     )
   })
 

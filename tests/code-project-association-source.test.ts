@@ -62,6 +62,11 @@ test("association-required is an identity block with an association CTA, never a
   assert.match(chat, /data-testid="code-identity-error"/)
   assert.match(chat, /CODE_OPEN_COMPANY_ASSOCIATION_EVENT/)
   assert.match(chat, /CODE_COMPANY_ASSOCIATION_CHANGED_EVENT/)
+  assert.match(chat, /setCompanyAssociationResolved\(true\)/)
+  assert.match(
+    chat,
+    /codexAvailable && \(!companyWorkspace \|\| companyAssociationResolved\)/,
+  )
   assert.match(chat, /associationEpoch/)
   assert.match(company, /window\.addEventListener\(CODE_OPEN_COMPANY_ASSOCIATION_EVENT/)
   assert.match(company, /notifyCompanyAssociationChanged\(\)/)

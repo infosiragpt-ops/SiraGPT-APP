@@ -78,7 +78,7 @@ describe("professional /code composer split-pane layout", () => {
     assert.match(chat, /className="code-composer__plan-label"/)
     assert.match(
       chat,
-      /el\.style\.height = `\$\{Math\.min\(140, Math\.max\(28, el\.scrollHeight\)\)\}px`/,
+      /el\.style\.height = "0px"[\s\S]{0,80}Math\.min\(Math\.max\(el\.scrollHeight, 28\), 140\)/,
       "the /code composer must grow with the prompt instead of staying one row",
     )
   })

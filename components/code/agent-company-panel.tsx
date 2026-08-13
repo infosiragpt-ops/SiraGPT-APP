@@ -93,7 +93,7 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { useIsMobile } from "@/hooks/use-mobile"
+import { useResolvedMobile } from "@/hooks/use-mobile"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -629,7 +629,7 @@ function replaceCompanyWorkspaceUrl(option: CompanyOption | null) {
 
 export function AgentCompanyPanel() {
   const { user } = useAuth()
-  const isMobile = useIsMobile()
+  const isMobile = useResolvedMobile()
   const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(null)
   const {
@@ -972,8 +972,8 @@ export function AgentCompanyPanel() {
 
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
   React.useEffect(() => subscribeAgentCompanyPreviewSlot(setPreviewSlot), [])
-  const dockedInAppsRail = !isMobile && Boolean(dockSlot)
-  const chatLivesInWorkspaceColumn = dockedInAppsRail
+  const dockedInAppsRail = isMobile === false && Boolean(dockSlot)
+  const chatLivesInWorkspaceColumn = isMobile === false
 
   const snapshot = React.useMemo(
     () => buildAgentCompanySnapshot(codeChatSessions, files, codexRuns),
@@ -2376,7 +2376,7 @@ export function AgentCompanyPanel() {
           />
         ) : view === "dashboard" ? (
           <DashboardView
-            surface={isMobile}
+            surface={isMobile === true}
             companyName={companyName}
             snapshot={snapshot}
             sessions={codeChatSessions}
@@ -2401,7 +2401,7 @@ export function AgentCompanyPanel() {
           />
         ) : view === "control" ? (
           <ControlView
-            surface={isMobile}
+            surface={isMobile === true}
             companyName={companyName}
             rootSessionId={snapshot.rootSessionId}
             sessions={codeChatSessions}
@@ -2418,7 +2418,7 @@ export function AgentCompanyPanel() {
           />
         ) : view === "files" ? (
           <FilesView
-            surface={isMobile}
+            surface={isMobile === true}
             companyName={companyName}
             codexProjectId={activeCodexProjectId}
             files={files}
@@ -2431,7 +2431,7 @@ export function AgentCompanyPanel() {
           />
         ) : view === "resources" ? (
           <ResourcesView
-            surface={isMobile}
+            surface={isMobile === true}
             companyName={companyName}
             workspaceId={activeFolder?.id || null}
             companyProjectId={companyProjectId}
@@ -2447,7 +2447,7 @@ export function AgentCompanyPanel() {
         ) : view === "department" && selectedDepartment ? (
           <DepartmentView row={selectedDepartment} onOpenCeo={openCeoOffice} />
         ) : view === "task" && selectedTask ? (
-          <TaskView surface={isMobile} session={selectedTask} onOpenCeo={openCeoOffice} />
+          <TaskView surface={isMobile === true} session={selectedTask} onOpenCeo={openCeoOffice} />
         ) : null}
       </div>
 

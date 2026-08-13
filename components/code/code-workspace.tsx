@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { useIsMobile } from "@/hooks/use-mobile"
+import { useResolvedMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import {
   ResizableHandle,
@@ -104,7 +104,7 @@ export function CodeWorkspace() {
   // Mobile: the desktop side-by-side resizable split crams the chat and the
   // preview into two unusable columns on a phone. Instead, show ONE panel at a
   // time with a bottom toggle (Empresa ↔ Preview).
-  const isMobile = useIsMobile()
+  const isMobile = useResolvedMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
 
@@ -607,6 +607,12 @@ export function CodeWorkspace() {
               />
             </>
           )
+
+          // Wait for the first width measurement so a phone never mounts the
+          // desktop split (that would start Preview and then unmount it).
+          if (isMobile === null) {
+            return <div className="h-full min-h-0 bg-background" data-testid="code-workspace-layout-pending" />
+          }
 
           // ── Mobile: one panel at a time + a bottom Agente/Preview toggle ──
           // The desktop horizontal resizable split is unusable on a phone
