@@ -32,10 +32,25 @@ const {
 } = require('./queue');
 
 const MAX_OUTPUT_RETRIES = 3;
-const OFFICE_HELPERS_PY = fs.readFileSync(
-  path.join(__dirname, 'office_helpers.py'),
-  'utf8',
-);
+
+// office_helpers.py is loaded LAZY and FAIL-OPEN. An eager readFileSync at
+// module top used to throw ENOENT in production builds that did not copy the
+// .py file — requiring agent-runner crashed, and /doc/generate silently fell
+// back to the dark document pipeline. Without helpers the agent still works
+// (it writes its own zipfile code); with them it is just faster.
+let officeHelpersPyCache;
+function loadOfficeHelpersPy({ dir } = {}) {
+  const fromDefaultDir = !dir;
+  if (fromDefaultDir && officeHelpersPyCache !== undefined) return officeHelpersPyCache;
+  let text = null;
+  try {
+    text = fs.readFileSync(path.join(dir || __dirname, 'office_helpers.py'), 'utf8');
+  } catch (_) {
+    text = null;
+  }
+  if (fromDefaultDir) officeHelpersPyCache = text;
+  return text;
+}
 
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
@@ -54,21 +69,14 @@ function inferColorFromText(text) {
   return null;
 }
 
-function inferTopic(text) {
-  return String(text || '')
-    .replace(CREATE_DOC_RE, ' ')
-    .replace(DOC_NOUN_RE, ' ')
-    .replace(/\b(color|de|del|la|el|las|los|una|un|todas?|todos?)\b/gi, ' ')
-    .replace(/#[0-9a-fA-F]{6}/g, ' ')
-    .replace(/\b(blanco|blanca|rosado|rosada|rosa|azul|negro|roja?|verde|gris)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80) || 'Presentación';
-}
-
-
-const STYLE_EDIT_RE = /\b(ponlas|p[ií]ntalas|uniformisa|uniformiza|c[aá]mbialas|cambia(?:rles)?|fondo|hex)\b/i;
-const COLOR_WORD_RE = /\b(color|rosad[oa]s?|rosa|blanc[oa]s?|azul(?:es)?|negr[oa]s?|verde(?:s)?|gris(?:es)?|#([0-9a-fA-F]{6}))\b/i;
+const STYLE_EDIT_RE = /\b(ponlas?|p[ií]ntalas?|colorea|uniformisa|uniformiza|c[aá]mbialas|cambia(?:rles)?|fondo|hex)\b/i;
+// Any named color from the shared palette (naranja, turquesa, dorado, …),
+// the word "color", or a #hex — kept in sync with tools.NAMED_COLORS so a
+// style follow-up in ANY color routes into the runner.
+const COLOR_WORD_RE = new RegExp(
+  `\\b(color|${Object.keys(NAMED_COLORS).join('|')})\\b|#[0-9a-fA-F]{6}`,
+  'i',
+);
 const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|gracias|thanks|inserta|reemplaza|borra|elimina)\b/i;
 
 function shouldRunAgentRunner({
@@ -176,7 +184,10 @@ async function runAgentRunner({
       if (f.isPriorArtifact) priorNames.push(name);
     }
     await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
-    await sandbox.writeFile('tmp/office_helpers.py', OFFICE_HELPERS_PY);
+    const officeHelpersPy = loadOfficeHelpersPy();
+    if (officeHelpersPy) {
+      try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
+    }
 
     const system = buildAgentRunnerPrompt({ fileNames: names, priorArtifactNames: priorNames });
     const messages = [
@@ -186,13 +197,16 @@ async function runAgentRunner({
 
     const executors = makeToolExecutors(sandbox);
 
-    // Deterministic high-level color path (optional tool, not a hardcoded
-    // intent router). The generic loop still handles thanks-slides, commas,
-    // rewrites, and anything the shortcut cannot prove.
+    // Deterministic fast-paths are allowed ONLY for exact edits on an
+    // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
+    // deck must ALWAYS go through the LLM loop so the slide copy answers the
+    // user's actual topic — a "crea una ppt + color" stub with filler bullets
+    // is exactly the quality failure Phase 1 removes.
     const color = inferColorFromText(task);
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
+    const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     let fastPathUsed = false;
-    if (color && pptxUpload) {
+    if (color && pptxUpload && !isCreateRequest) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -203,23 +217,6 @@ async function runAgentRunner({
         label: 'Verificando resultado',
       });
       fastPathUsed = !String(painted).startsWith('ERROR:');
-    } else if (color && CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task)) {
-      const topic = inferTopic(task);
-      onEvent({ type: 'tool_call', tool: 'create_presentation', label: 'Ejecutando código', preview: topic });
-      const created = await executors.create_presentation({
-        topic,
-        title: topic,
-        color: `#${color}`,
-        slides: 8,
-      });
-      onEvent({
-        type: 'tool_result',
-        tool: 'create_presentation',
-        ok: !String(created).startsWith('ERROR:'),
-        preview: created,
-        label: 'Verificando resultado',
-      });
-      fastPathUsed = !String(created).startsWith('ERROR:');
     } else if (
       pptxUpload
       && /\b(gracias|thanks)\b/i.test(task)
@@ -405,8 +402,14 @@ async function runAgentRunnerForChat({
  */
 async function executeAgentRunnerTurn(params = {}) {
   const instruction = String(params.instruction || '');
+  // Without an LLM only the PAINT fast-path can deliver: a color plus a style
+  // edit ("ponlas rosadas") or an attached/prior pptx to repaint. Creating a
+  // NEW deck always requires the LLM (content must match the topic), so a
+  // create-doc request with a dummy key is honestly skipped, never stubbed.
+  const hasTurnFiles = (Array.isArray(params.fileIds) && params.fileIds.length > 0)
+    || (Array.isArray(params.attachedFiles) && params.attachedFiles.length > 0);
   const colorFastPath = Boolean(inferColorFromText(instruction))
-    && (CREATE_DOC_RE.test(instruction) || STYLE_EDIT_RE.test(instruction) || DOC_NOUN_RE.test(instruction));
+    && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
   if (!colorFastPath && !canCallLlm(params) && !params.client) {
     return {
       ok: false,
@@ -449,6 +452,78 @@ function onEventSafe(onEvent, ev) {
   try { if (typeof onEvent === 'function') onEvent(ev); } catch (_) { /* ignore */ }
 }
 
+/**
+ * /api/doc/generate entry — AgentRunner FIRST, pipeline as fallback.
+ * Returns `{ content, file, format, artifacts }` in the exact shape the doc
+ * route streams to the client, or `null` when the runner does not apply /
+ * yields no file (the caller then falls through to the source-preserving
+ * editor and the advanced-document-pipeline).
+ */
+async function runAgentRunnerForDocRoute({
+  prisma,
+  userId,
+  chatId = null,
+  prompt,
+  fileIds = [],
+  model,
+  client,
+  signal,
+  driver,
+  maxIterations,
+  onStage = () => {},
+} = {}) {
+  const text = String(prompt || '').trim();
+  if (!text) return null;
+  let prior = false;
+  if (prisma && userId && chatId) {
+    try {
+      prior = await hasConversationArtifacts(prisma, { userId, chatId });
+    } catch (_) { prior = false; }
+  }
+  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, text })) return null;
+  const ran = await executeAgentRunnerTurn({
+    prisma,
+    userId,
+    chatId,
+    fileIds,
+    instruction: text,
+    model,
+    client,
+    signal,
+    driver,
+    maxIterations,
+    onEvent: (ev) => {
+      if (!ev) return;
+      if (ev.label || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'retry') {
+        onEventSafe(onStage, {
+          label: ev.label
+            || (ev.type === 'tool_call' ? 'Ejecutando código' : 'Verificando resultado'),
+          tool: ev.tool || 'agent_runner',
+        });
+      }
+    },
+  });
+  if (!ran || !ran.ok || !Array.isArray(ran.artifacts) || !ran.artifacts.length) return null;
+  const artifact = ran.artifacts.find((a) => a && a.downloadUrl) || ran.artifacts[0];
+  if (!artifact || !artifact.downloadUrl) return null;
+  return {
+    content: ran.summary,
+    format: artifact.format,
+    file: {
+      type: 'doc',
+      format: artifact.format,
+      title: artifact.filename,
+      explanation: 'Generado y verificado por el agente.',
+      filename: artifact.filename,
+      url: artifact.downloadUrl,
+      dataUrl: null,
+      mime: artifact.mime,
+      size: artifact.sizeBytes,
+    },
+    artifacts: ran.artifacts,
+  };
+}
+
 async function loadFilesByIds({ prisma, userId, fileIds }) {
   if (!prisma?.file || !userId) return [];
   const ids = fileIds.map(String).filter(Boolean);
@@ -482,12 +557,15 @@ module.exports = {
   shouldRunAgentRunner,
   runAgentRunner,
   runAgentRunnerForChat,
+  runAgentRunnerForDocRoute,
   executeAgentRunnerTurn,
   canCallLlm,
   defaultModel,
+  loadOfficeHelpersPy,
   MAX_ITERATIONS_DEFAULT,
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,
   DOC_NOUN_RE,
+  STYLE_EDIT_RE,
   hasConversationArtifacts,
 };
