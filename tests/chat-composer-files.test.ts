@@ -3,10 +3,12 @@ import { describe, it } from "node:test"
 
 import {
   buildAgentFileMetadata,
+  collectMessageFileIds,
   collectUploadFileIds,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
   isComposerFileUploadPending,
+  parseMessageFiles,
   shouldWaitForDocumentProcessing,
 } from "../lib/chat/composer-files"
 
@@ -19,6 +21,19 @@ describe("chat composer files", () => {
       { attachmentId: "attachment-id" },
       { id: "" },
     ]), ["direct-id", "server-id", "file-id", "attachment-id"])
+  })
+
+  it("extracts file ids from persisted JSON strings and fileId aliases", () => {
+    assert.deepEqual(parseMessageFiles('[{"fileId":"persisted-1"},{"id":"persisted-1"},{"attachmentId":"persisted-2"}]'), [
+      { fileId: "persisted-1" },
+      { id: "persisted-1" },
+      { attachmentId: "persisted-2" },
+    ])
+    assert.deepEqual(
+      collectMessageFileIds('[{"fileId":"persisted-1"},{"id":"persisted-1"},{"attachmentId":"persisted-2"}]'),
+      ["persisted-1", "persisted-2"],
+    )
+    assert.deepEqual(collectMessageFileIds([{ id: "live-id" }, { fileId: "alias-id" }]), ["live-id", "alias-id"])
   })
 
   it("distinguishes transport uploads from document processing", () => {

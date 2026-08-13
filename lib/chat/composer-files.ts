@@ -77,6 +77,32 @@ export function collectUploadFileIds(files: readonly unknown[] = []): string[] {
   return files.map(resolveUploadFileId).filter((id): id is string => Boolean(id))
 }
 
+export function parseMessageFiles(files: unknown): unknown[] {
+  if (!files) return []
+  if (Array.isArray(files)) return files
+  if (typeof files === "string") {
+    try {
+      const parsed = JSON.parse(files)
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
+export function collectMessageFileIds(files: unknown): string[] {
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const file of parseMessageFiles(files)) {
+    const id = resolveUploadFileId(file)
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+  }
+  return ids
+}
+
 export function attachmentHasPreviewSource(attachment: unknown): boolean {
   const candidate = asComposerFile(attachment)
   return Boolean(candidate?.file || candidate?.url || candidate?.extractedText)

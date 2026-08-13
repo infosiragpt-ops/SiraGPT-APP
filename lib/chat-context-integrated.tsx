@@ -12,6 +12,8 @@ import { apiClient } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
+import { collectMessageFileIds } from "./chat/composer-files"
+import { resolveCatalogModel } from "./chat/catalog-model"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
@@ -1198,6 +1200,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Generate/persist the backend turn identity BEFORE the first attempt.
       // Offline/reload retries pass reusePending=true and reuse this exact key
       // instead of replacing the durable draft with a fresh stream identity.
+      const catalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      if (catalogModel.replaced) {
+        setSelectedModel(catalogModel.name);
+        if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
+      }
+
       const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
         ? options.idempotencyKey.trim()
         : '';
@@ -1210,8 +1218,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
         ? { ...options.requestEnvelope }
         : {
-            provider: selectProvider,
-            model: selectedModel,
+            provider: catalogModel.provider,
+            model: catalogModel.name,
             reasoningEffort: selectedEffort,
           };
       const pendingMessage = options?.reusePending
@@ -1418,7 +1426,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generateArtifactStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -1495,7 +1503,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const docRequest = buildDocumentChatRequest({
               prompt: content,
               chatId: activeChat.id,
-              model: selectedModel,
+              model: catalogModel.name,
               fileIds: requestFileIds,
             });
             throwIfTurnCancelled();
@@ -1585,7 +1593,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generateVizStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -1665,7 +1673,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.solveMathStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -1754,7 +1762,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generatePlanStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -2237,7 +2245,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, markChatStreaming, markChatIdle]
   );
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage): Promise<PendingRetryResult> => {
@@ -2857,14 +2865,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     try {
       // Call the streaming function with the original user message
       throwIfRegenerationCancelled();
+      const regenCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      if (regenCatalogModel.replaced) {
+        setSelectedModel(regenCatalogModel.name);
+        if (regenCatalogModel.provider) setSelectedProivder(regenCatalogModel.provider);
+      }
       await apiClient.generateAIStream(
         {
-          provider: selectProvider,
-          model: selectedModel,
+          provider: regenCatalogModel.provider,
+          model: regenCatalogModel.name,
           reasoningEffort: selectedEffort,
           prompt: originalUserMessage.content,
           chatId: currentChat.id,
-          files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
+          files: (() => {
+            const attached = collectMessageFileIds(originalUserMessage.files);
+            if (attached.length > 0) return attached;
+            return collectRecentDocumentContextIds(messagesBeforeRegeneration);
+          })(),
           streamId: streamId,
           regenerate: true,
           regenerationAttempt: nextRegenerationAttempt,
@@ -3130,7 +3147,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // el gate de aclaración ("¿qué formato quieres?") y la instrucción de
       // edición se perdería — exactamente el bug de "reenviar" reportado.
       const editFilesArr: any[] = Array.isArray(parsedFiles) ? parsedFiles : [];
-      const editFileIds = editFilesArr.map((f: any) => String(f?.id || f?.fileId || '')).filter(Boolean);
+      const editFileIds = collectMessageFileIds(parsedFiles);
       const editHasDocAttachment = editFilesArr.some((f: any) => {
         const name = String(f?.name || f?.originalName || f?.filename || '');
         const mime = String(f?.mimeType || f?.type || '');
@@ -3241,14 +3258,23 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       // Now, generate the new response
       throwIfEditRegenerationCancelled();
+      const editCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      if (editCatalogModel.replaced) {
+        setSelectedModel(editCatalogModel.name);
+        if (editCatalogModel.provider) setSelectedProivder(editCatalogModel.provider);
+      }
       await apiClient.generateAIStream(
         {
-          provider: selectProvider,
-          model: selectedModel,
+          provider: editCatalogModel.provider,
+          model: editCatalogModel.name,
           reasoningEffort: selectedEffort,
           prompt: newContent,
           chatId: currentChat.id,
-          files: Array.isArray(parsedFiles) ? parsedFiles : [], // Pass file IDs
+          files: (() => {
+            const attached = collectMessageFileIds(parsedFiles);
+            if (attached.length > 0) return attached;
+            return collectRecentDocumentContextIds(messagesUpToEdit);
+          })(),
           streamId: streamId,
           regenerate: true,
         },
@@ -3429,7 +3455,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // latest closure is captured at call time, so listing it would
     // re-create the callback on every keystroke that flips the flag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
+  }, [currentChat, isLoading, selectProvider, selectedModel, availableModels, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
 
   const pollVideoStatus = useCallback((
     operationId: string,

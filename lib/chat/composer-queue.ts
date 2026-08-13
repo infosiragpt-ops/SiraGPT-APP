@@ -101,6 +101,35 @@ export function serializeComposerQueueFiles(files: unknown[]): PersistedComposer
   })
 }
 
+export function isUnboundComposerQueueChatId(chatId: string | null | undefined): boolean {
+  if (chatId == null) return true
+  const value = String(chatId).trim()
+  return !value || value.startsWith("temp-chat-")
+}
+
+export function adoptUnboundComposerQueueItems(
+  items: PersistedComposerQueueItem[],
+  realChatId: string,
+  previousChatId: string | null = null,
+): { items: PersistedComposerQueueItem[]; changed: boolean } {
+  const nextId = String(realChatId || "").trim()
+  if (!nextId || isUnboundComposerQueueChatId(nextId)) {
+    return { items, changed: false }
+  }
+  let changed = false
+  const adopted = items.map((item) => {
+    if (
+      isUnboundComposerQueueChatId(item.chatId)
+      || (previousChatId && item.chatId === previousChatId)
+    ) {
+      changed = true
+      return { ...item, chatId: nextId }
+    }
+    return item
+  })
+  return { items: adopted, changed }
+}
+
 export function createPersistedComposerQueueItem(input: {
   id: string
   ownerId: string

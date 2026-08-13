@@ -448,9 +448,10 @@ export function isImageOnlyAttachmentTurn(files: any[] = []): boolean {
 }
 
 export function hasDocumentAttachmentContext(conversationHistory: any[] = []): boolean {
-  return (Array.isArray(conversationHistory) ? conversationHistory : []).some((message) =>
-    parseFilesFromMessage(message).some(isDocumentLikeAttachment)
-  )
+  return (Array.isArray(conversationHistory) ? conversationHistory : []).some((item) => {
+    if (isDocumentLikeAttachment(item)) return true
+    return parseFilesFromMessage(item).some(isDocumentLikeAttachment)
+  })
 }
 
 export function shouldEditExistingDocument(
