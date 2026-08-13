@@ -356,11 +356,14 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
     || require('../document-editing/pptx-adapter').setSlideBackgrounds;
 
   return {
-    async execute_python(args) {
+    // Executors take an optional per-call context `{ signal }` (F3): the loop
+    // forwards the turn's AbortSignal so a Stop mid-command kills the
+    // in-flight sandbox process, not just the next iteration.
+    async execute_python(args, ctx = {}) {
       const code = String(args?.code || '').trim();
       if (!code) return 'ERROR: empty code';
       const wrapped = `python3 - <<'PY'\n${code}\nPY`;
-      const r = await sandbox.exec(wrapped, { timeoutMs: CMD_TIMEOUT_MS });
+      const r = await sandbox.exec(wrapped, { timeoutMs: CMD_TIMEOUT_MS, signal: ctx.signal });
       const parts = [];
       if (r.stdout) parts.push(r.stdout);
       if (r.stderr) parts.push(`[stderr] ${r.stderr}`);
@@ -372,10 +375,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
       return output;
     },
 
-    async execute_bash(args) {
+    async execute_bash(args, ctx = {}) {
       const command = String(args?.command || '').trim();
       if (!command) return 'ERROR: empty command';
-      const r = await sandbox.exec(command, { timeoutMs: CMD_TIMEOUT_MS });
+      const r = await sandbox.exec(command, { timeoutMs: CMD_TIMEOUT_MS, signal: ctx.signal });
       const parts = [];
       if (r.stdout) parts.push(r.stdout);
       if (r.stderr) parts.push(`[stderr] ${r.stderr}`);
@@ -393,26 +396,26 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
     str_replace: (args) => doc.str_replace(args),
     edit_file: (args) => doc.str_replace(args),
 
-    async glob(args) {
+    async glob(args, ctx = {}) {
       const pattern = String(args?.pattern || '').trim();
       if (!pattern) return 'ERROR: pattern is required';
       if (/[;&|`$]/.test(pattern)) return 'ERROR: pattern must be a plain glob, not a shell expression';
       const r = await sandbox.exec(
         `cd /workspace && find . -type f -path ${JSON.stringify(`./${pattern.replace(/^\.\//, '')}`)} -exec ls -la {} + 2>/dev/null | head -200`,
-        { timeoutMs: 30_000 },
+        { timeoutMs: 30_000, signal: ctx.signal },
       );
       const out = String(r.stdout || '').trim();
       if (Number(r.exitCode) !== 0 && !out) return `ERROR: glob failed\n${r.stderr || ''}`;
       return cap(out || '(no matches)');
     },
 
-    async grep(args) {
+    async grep(args, ctx = {}) {
       const pattern = String(args?.pattern || '');
       if (!pattern) return 'ERROR: pattern is required';
       const rel = String(args?.path || '.').replace(/^\/workspace\/?/, '') || '.';
       const r = await sandbox.exec(
         `cd /workspace && grep -rnE --binary-files=without-match -m 50 ${JSON.stringify(pattern)} ${JSON.stringify(rel)} 2>/dev/null | head -200`,
-        { timeoutMs: 30_000 },
+        { timeoutMs: 30_000, signal: ctx.signal },
       );
       const out = String(r.stdout || '').trim();
       if (out) return cap(out);
@@ -420,15 +423,15 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
       return `ERROR: grep failed\n${r.stderr || ''}`;
     },
 
-    async render_preview(args) {
+    async render_preview(args, ctx = {}) {
       const rel = String(args?.path || '').replace(/^\/workspace\/?/, '');
       if (!rel) return 'ERROR: path is required';
       const src = rel.startsWith('/') ? rel : `/workspace/${rel}`;
       try {
-        await sandbox.exec('mkdir -p /workspace/previews', { timeoutMs: 10_000 });
+        await sandbox.exec('mkdir -p /workspace/previews', { timeoutMs: 10_000, signal: ctx.signal });
         const conv = await sandbox.exec(
           `soffice --headless --convert-to png --outdir /workspace/previews ${JSON.stringify(src)}`,
-          { timeoutMs: CMD_TIMEOUT_MS },
+          { timeoutMs: CMD_TIMEOUT_MS, signal: ctx.signal },
         );
         if (Number(conv.exitCode) !== 0) {
           const blob = `${conv.stdout || ''}\n${conv.stderr || ''}`;

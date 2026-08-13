@@ -10,6 +10,7 @@
 
 const QUEUE_NAME = process.env.AGENT_RUNNER_QUEUE_NAME || 'siragpt-agent-runner';
 const CHANNEL_PREFIX = 'agent-runner:events:';
+const CANCEL_CHANNEL_PREFIX = 'agent-runner:cancel:';
 
 function isLikelyTestProcess(env = process.env) {
   if (env.SIRAGPT_AGENT_RUNNER_IN_TESTS === '1') return false;
@@ -30,6 +31,52 @@ function isAsyncEnabled(env = process.env) {
 
 function eventChannel(jobId) {
   return `${CHANNEL_PREFIX}${jobId}`;
+}
+
+function cancelChannel(jobId) {
+  return `${CANCEL_CHANNEL_PREFIX}${jobId}`;
+}
+
+/**
+ * F3 — cancel a running AgentRunner BullMQ job from any process.
+ *
+ * Publishes on the job's cancel channel; the worker holds a per-job
+ * AbortController and aborts the in-flight loop + sandbox when the message
+ * arrives. Best-effort by contract (a dead Redis just means the job runs to
+ * its own timeout); never throws.
+ */
+async function requestAgentRunnerJobCancel({ jobId, connection, publish } = {}) {
+  if (!jobId) return false;
+  const payload = JSON.stringify({ type: 'cancel', jobId: String(jobId), at: Date.now() });
+  try {
+    if (typeof publish === 'function') {
+      await publish(cancelChannel(jobId), payload);
+      return true;
+    }
+    if (connection && typeof connection.publish === 'function') {
+      await connection.publish(cancelChannel(jobId), payload);
+      return true;
+    }
+  } catch (_) { /* best-effort */ }
+  return false;
+}
+
+/** Default worker-side cancel listener: one duplicated Redis sub per job. */
+function defaultSubscribeCancel(connection, jobId, onCancel) {
+  if (!connection || typeof connection.duplicate !== 'function') return () => {};
+  let sub = null;
+  try {
+    sub = connection.duplicate();
+    sub.subscribe(cancelChannel(jobId), () => {});
+    sub.on('message', (ch) => {
+      if (ch === cancelChannel(jobId)) {
+        try { onCancel(); } catch (_) { /* abort must never throw */ }
+      }
+    });
+  } catch (_) {
+    return () => {};
+  }
+  return () => { try { sub.disconnect(); } catch (_) { /* ignore */ } };
 }
 
 async function enqueueAgentRunnerJob(data, { QueueImpl, connection, queueName = QUEUE_NAME } = {}) {
@@ -58,6 +105,7 @@ function startAgentRunnerWorker({
   queueName = QUEUE_NAME,
   run = null,
   publish = null,
+  subscribeCancel = null,
 } = {}) {
   if (!WorkerImpl) {
     const { Worker } = require('bullmq');
@@ -75,6 +123,14 @@ function startAgentRunnerWorker({
         await connection.publish(eventChannel(jobId), JSON.stringify(ev));
       }
     };
+    // F3: per-job AbortController. The chat side publishes on the cancel
+    // channel when the user hits Stop; aborting here stops the LLM loop and
+    // the in-flight sandbox command, and the runner destroys the sandbox in
+    // its own finally — no leaked process.
+    const controller = new AbortController();
+    const unsubscribeCancel = typeof subscribeCancel === 'function'
+      ? subscribeCancel(jobId, () => controller.abort())
+      : defaultSubscribeCancel(connection, jobId, () => controller.abort());
     await emit({ type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' });
     let prisma = null;
     try { prisma = require('../../config/database'); } catch (_) { prisma = null; }
@@ -82,14 +138,28 @@ function startAgentRunnerWorker({
       const result = await runner({
         prisma,
         ...job.data,
+        signal: controller.signal,
         onEvent: (ev) => { emit(ev).catch(() => {}); },
       });
+      if (controller.signal.aborted) {
+        // The runner settled with a result AFTER the cancel arrived — do not
+        // claim success for a partially-done turn.
+        await emit({ type: 'job_cancelled', label: 'Cancelado', message: 'cancelled_by_user' });
+        throw Object.assign(new Error('agent_runner_job_cancelled'), { name: 'AbortError' });
+      }
       await emit({ type: 'final', label: 'Listo', summary: result.summary, artifacts: result.artifacts });
       await emit({ type: 'job_done', result, label: 'Listo' });
       return result;
     } catch (err) {
+      if (err?.name === 'AbortError' && err?.message === 'agent_runner_job_cancelled') throw err;
+      if (controller.signal.aborted) {
+        await emit({ type: 'job_cancelled', label: 'Cancelado', message: 'cancelled_by_user' });
+        throw Object.assign(new Error('agent_runner_job_cancelled'), { name: 'AbortError' });
+      }
       await emit({ type: 'job_error', message: err?.message || String(err), label: 'Error' });
       throw err;
+    } finally {
+      try { unsubscribeCancel(); } catch (_) { /* ignore */ }
     }
   }, {
     connection,
@@ -108,16 +178,30 @@ async function waitForAgentRunnerJob({
   onEvent = () => {},
   signal,
   timeoutMs = 10 * 60 * 1000,
+  requestCancel = null,
 } = {}) {
   if (!connection || typeof connection.duplicate !== 'function') {
     throw new Error('waitForAgentRunnerJob: redis connection is required');
   }
   const channel = eventChannel(jobId);
   const sub = connection.duplicate();
+  // Stop button (F3): aborting the wait must also cancel the WORKER-side job,
+  // otherwise the loop keeps burning tokens/sandbox time with nobody watching.
+  const propagateCancel = () => {
+    const req = typeof requestCancel === 'function'
+      ? requestCancel
+      : () => requestAgentRunnerJobCancel({ jobId, connection });
+    Promise.resolve()
+      .then(() => req())
+      .catch(() => { /* best-effort */ });
+  };
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => finish(new Error('agent_runner_job_timeout')), timeoutMs);
-    const onAbort = () => finish(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    const onAbort = () => {
+      propagateCancel();
+      finish(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    };
     function finish(err, result) {
       if (settled) return;
       settled = true;
@@ -128,6 +212,7 @@ async function waitForAgentRunnerJob({
       else resolve(result);
     }
     if (signal?.aborted) {
+      propagateCancel();
       finish(Object.assign(new Error('aborted'), { name: 'AbortError' }));
       return;
     }
@@ -140,6 +225,9 @@ async function waitForAgentRunnerJob({
       try { ev = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return; }
       try { onEvent(ev); } catch (_) { /* UI must never fail the wait */ }
       if (ev && ev.type === 'job_done') finish(null, ev.result);
+      if (ev && ev.type === 'job_cancelled') {
+        finish(Object.assign(new Error('agent_runner_job_cancelled'), { name: 'AbortError' }));
+      }
       if (ev && ev.type === 'job_error') finish(new Error(ev.message || 'agent_runner_job_failed'));
     });
   });
@@ -148,9 +236,12 @@ async function waitForAgentRunnerJob({
 module.exports = {
   QUEUE_NAME,
   CHANNEL_PREFIX,
+  CANCEL_CHANNEL_PREFIX,
   isAsyncEnabled,
   isLikelyTestProcess,
   eventChannel,
+  cancelChannel,
+  requestAgentRunnerJobCancel,
   enqueueAgentRunnerJob,
   startAgentRunnerWorker,
   waitForAgentRunnerJob,

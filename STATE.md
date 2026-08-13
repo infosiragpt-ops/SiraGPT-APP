@@ -8,17 +8,22 @@
 
 ## Fase activa
 
-**F2 — Routing completo (runner primario en TODAS las entradas de documentos).**
-Estado: **COMPLETED (pendiente de merge/deploy)** — los tests de routing F2
-están verdes (`tests/agent-runner-f2-routing.test.js`, 10 tests) junto con las
-suites F1 existentes (agent-runner-routing / e2e / agentic-chat-stream). El
-gate "ningún pedido de documento entra al pipeline sin haber pasado por el
-runner" queda cubierto por código + tests + telemetría (ver abajo). Falta el
-merge del PR y la verificación de CI/producción por Luis.
+**F3 — SSE traces + cancel end-to-end.**
+Estado: **COMPLETED (pendiente de merge/deploy)** — trazas SSE uniformes por
+paso del AgentRunner (`type: 'stage'`, labels en español + tool) y cancelación
+end-to-end (Stop → AbortSignal → loop + sandbox + job BullMQ). Tests verdes:
+`tests/agent-runner-f3-traces.test.js` (14) + las suites F1/F2 existentes
+(agent-runner / routing / f2-routing / e2e / agentic-chat-stream / doc-agent /
+sandbox — 146 tests, todos verdes en local). Falta el merge del PR y la
+verificación de CI/producción por Luis.
+
+F2 (routing completo): **COMPLETED** — mergeado a `production-main` en el
+PR #281 (junto con el hardening F1 del PR #279) y hotpatcheado en siragpt.com
+el 2026-08-13. Telemetría `[doc-routing]` activa en las 4 entradas.
 
 F1 (core agéntico): **COMPLETED** — el hardening del 2026-08-13 (PR #279)
 cerró el fallback silencioso al pipeline genérico en chat y `/api/doc/generate`
-con errores honestos (`agent_runner_failed` / `no_llm` / `llm_402`).
+con errores honestos (`agent_runner_failed` / `no_llm` / `llm_402`). Mergeado.
 
 F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
@@ -90,16 +95,54 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
     bajo `NODE_ENV=test` (`AGENT_TASK_AGENT_RUNNER=1`), igual que las demás
     features del runner que tocan red.
 
+- **F3 — SSE traces + cancel end-to-end (este PR).**
+  - **Trazas uniformes** (`agent-runner/trace.js` → `toStageEvent`): TODO
+    evento del runner (tool_call / tool_result / retry / thought /
+    iteration_start / sandbox_ready / final / cancelled / error) se normaliza
+    a UN solo shape SSE `{ type: 'stage', step, label, tool, iteration?,
+    attempt?, ok?, preview? }` con labels en español ("Pensando", "Ejecutando
+    código", "Verificando resultado", "Reintentando", "Listo", "Cancelado") +
+    nombre de tool. El contrato `type: 'stage'` que la UI ya consume no
+    cambia — solo se rellenan los huecos (antes `error` y los eventos sin
+    label se perdían). Consumidores: chat (`agentic-chat-stream.js`),
+    `/api/doc/generate` (`runAgentRunnerForDocRoute` → `onStage` reenvía
+    label + tool + step), worker BullMQ (pub/sub → mismo mapeo en el chat).
+  - **Cancel end-to-end**: Stop (`POST /api/ai/stop-stream` →
+    `controller.abort()`) aborta (1) el loop in-process — `bail()` en
+    `loop.js` emite UN evento `cancelled` ("Cancelado") y corta antes de la
+    siguiente llamada LLM/tool; (2) el comando sandbox EN VUELO — el loop pasa
+    `{ signal }` a cada executor y `execute_python/bash/render_preview/glob/
+    grep` lo reenvían a `sandbox.exec` (kill de process-group en local; en
+    docker el driver reenvía `opts.signal` — fix — y `destroy()` hace
+    `docker rm -f`, así que nunca queda proceso vivo); (3) el job BullMQ si
+    `AGENT_RUNNER_ASYNC=1` — canal Redis `agent-runner:cancel:<jobId>`
+    (`requestAgentRunnerJobCancel`), el worker mantiene un AbortController
+    por job, publica `job_cancelled` (nunca `job_done`: sin éxito declarado
+    para un turno parcial) y `waitForAgentRunnerJob` propaga el cancel al
+    abortar además de tratar `job_cancelled` como AbortError. El path async
+    abortado ya NO cae al camino in-process (antes reiniciaba el turno).
+  - **Reanudación de stream**: sin cambios de contrato — el chat sigue
+    montado sobre el stream-resume de `/api/ai/generate` (Last-Event-ID +
+    `activeResumeStreams`); las trazas `stage` son efímeras por diseño y el
+    contenido se reanuda como hasta ahora.
+  - **Tests** (`tests/agent-runner-f3-traces.test.js`, 14): (a) loop mockeado
+    emite stages en orden con labels/tool; (b) abort a mitad de loop no hace
+    más llamadas LLM/tool y traza "Cancelado" una sola vez; (c) el sandbox
+    respeta señal Y timeout, y una cancelación de `runAgentRunner` a mitad de
+    comando no deja ningún proceso vivo (verificado contra `ps`); (d) cancel
+    BullMQ: publish → worker aborta → `job_cancelled`, y el wait aborta +
+    propaga. Suites F1/F2 existentes verdes sin cambios.
+
 ## En progreso
 
-- Nada fuera de F2. F3+ NO se inicia (SSE cancel, planner, gVisor, Playwright,
-  memoria, LoRA, SSO, MinIO quedan secuenciados en `ROADMAP.md`).
+- Nada fuera de F3. F4+ NO se inicia (planner, gVisor, Playwright, memoria,
+  LoRA, SSO, MinIO quedan secuenciados en `ROADMAP.md`).
 
 ## Pendiente
 
-- **F3 en adelante**, según `ROADMAP.md`: SSE traces + cancel →
-  orquestador → sandbox hardening → search/browser → multimodal → memoria/skills/MCP
-  → evals/optimizer → flywheel (router aprendido + LoRA/vLLM) → enterprise
+- **F4 en adelante**, según `ROADMAP.md`: orquestador → sandbox hardening →
+  search/browser → multimodal → memoria/skills/MCP → evals/optimizer →
+  flywheel (router aprendido + LoRA/vLLM) → enterprise
   (SSO/SCIM/Stripe/marketplace) → plataforma y superficies (MinIO/OTel/canary,
   voz/cron/email/CLI/PWA, i18n, migración Prisma→Drizzle).
 

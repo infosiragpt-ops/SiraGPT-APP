@@ -173,6 +173,17 @@ async function runAgentRunner({
     timeoutMs: resolveMaxRuntimeMs(process.env.SIRAGPT_AGENT_RUNNER_MAX_RUNTIME_MS),
     timeoutReason: 'agent_runner_timeout',
   });
+  // F3: guarantee exactly ONE 'cancelled' trace per aborted run, no matter
+  // where the abort lands (inside the loop, between phases, in the sandbox).
+  const rawOnEvent = onEvent;
+  let cancelledSeen = false;
+  onEvent = (ev) => {
+    if (ev && ev.type === 'cancelled') {
+      if (cancelledSeen) return;
+      cancelledSeen = true;
+    }
+    rawOnEvent(ev);
+  };
   let sandbox = null;
   try {
     throwIfAborted(abortScope.signal);
@@ -345,7 +356,14 @@ async function runAgentRunner({
 
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
     return { ...result, outputs, driver: sandbox.driver, model: resolvedModel };
+  } catch (err) {
+    if (abortScope.signal.aborted) {
+      try { onEvent({ type: 'cancelled', label: 'Cancelado' }); } catch (_) { /* trace only */ }
+    }
+    throw err;
   } finally {
+    // Cancel path included: destroy() removes the docker container / kills
+    // the local process group, so a Stop never leaks a sandbox process.
     try { if (sandbox) await sandbox.destroy(); } finally { abortScope.cleanup(); }
   }
 }
@@ -488,6 +506,9 @@ async function executeAgentRunnerTurn(params = {}) {
         signal: params.signal,
       });
     } catch (err) {
+      // User cancellation must unwind, NEVER restart the turn in-process —
+      // waitForAgentRunnerJob has already propagated the cancel to the worker.
+      if (params.signal?.aborted || err?.name === 'AbortError') throw err;
       try { console.warn('[agent-runner] async path failed, in-process:', err && err.message); } catch (_) { /* ignore */ }
     }
   }
@@ -565,14 +586,10 @@ async function runAgentRunnerForDocRoute({
     driver,
     maxIterations,
     onEvent: (ev) => {
-      if (!ev) return;
-      if (ev.label || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'retry') {
-        onEventSafe(onStage, {
-          label: ev.label
-            || (ev.type === 'tool_call' ? 'Ejecutando código' : 'Verificando resultado'),
-          tool: ev.tool || 'agent_runner',
-        });
-      }
+      // F3: one canonical stage shape for every runner step (tool_call /
+      // tool_result / retry / thought / cancelled), Spanish label + tool name.
+      const stage = toStageEvent(ev);
+      if (stage) onEventSafe(onStage, stage);
     },
   });
   const failure = (reason, detail) => ({
@@ -636,12 +653,15 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
 }
 
 const { logDocumentRouting, DOCUMENT_ROUTING_PATHS } = require('./telemetry');
+const { toStageEvent, STAGE_LABELS } = require('./trace');
 
 module.exports = {
   shouldRunAgentRunner,
   isRunnerOnlyDocumentTurn,
   logDocumentRouting,
   DOCUMENT_ROUTING_PATHS,
+  toStageEvent,
+  STAGE_LABELS,
   runAgentRunner,
   runAgentRunnerForChat,
   runAgentRunnerForDocRoute,
