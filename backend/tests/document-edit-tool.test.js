@@ -349,6 +349,8 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isDocumentEditRequest('actualiza el informe con los datos nuevos'), true);
   assert.equal(isDocumentEditRequest('corrige la ortografía del archivo'), true);
   assert.equal(isDocumentEditRequest('aplica correcciones minimas al documento porfavor'), true);
+  assert.equal(isDocumentEditRequest('uniformisa el color de la ppts todas de color blanco'), true);
+  assert.equal(isDocumentEditRequest('pon todas las diapositivas de color rosado'), true);
   // negatives — plain Q&A / summaries stay fast
   assert.equal(isDocumentEditRequest('resume este documento'), false);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
@@ -362,6 +364,9 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
   assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
   assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', docx), true);
+  const pptx = [{ name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }];
+  assert.equal(isSourcePreservingEditRequest('uniformisa el color de la ppts todas de color blanco', pptx), true);
+  assert.equal(isSourcePreservingEditRequest('agrega una ppt de gracias', pptx), true);
   assert.equal(isSourcePreservingEditRequest('edita estos documentos y devuélvemelos en el mismo formato', docx), true);
   assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
   assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
