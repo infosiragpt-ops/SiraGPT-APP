@@ -184,6 +184,7 @@ async function runOpenAIComputerUseLoop(options) {
       step,
       mode,
       engine: 'openai_computer',
+      url: typeof page?.url === 'function' ? page.url() : null,
     });
 
     response = await openai.responses.create({
@@ -261,6 +262,7 @@ async function resumeOpenAIComputerUseLoop(options) {
     image: screenshot,
     mode,
     engine: 'openai_computer',
+    url: typeof page?.url === 'function' ? page.url() : null,
   });
 
   const response = await openai.responses.create({
@@ -359,7 +361,13 @@ async function continueOpenAIComputerUseLoop(options) {
     await page.waitForLoadState('networkidle', { timeout: 6000 }).catch(() => {});
     const screenshot = await capturePageScreenshot(page);
     session.lastScreenshot = screenshot;
-    onEvent('screenshot', { image: screenshot, step, mode, engine: 'openai_computer' });
+    onEvent('screenshot', {
+      image: screenshot,
+      step,
+      mode,
+      engine: 'openai_computer',
+      url: typeof page?.url === 'function' ? page.url() : null,
+    });
 
     response = await openai.responses.create({
       model,

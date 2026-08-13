@@ -3,6 +3,11 @@ import { toast } from 'sonner'
 import { getNormalizedApiBaseUrl } from '@/lib/api'
 import { authenticatedFetch } from '@/lib/authenticated-fetch'
 import { devLog } from '@/lib/dev-log'
+import {
+  collectActionLabels,
+  normalizeBrowserUrl,
+  type BrowserControllerAction,
+} from '@/lib/chat/browser-controller'
 
 interface ReasoningStep {
   text: string
@@ -28,8 +33,13 @@ interface ComputerUseHookReturn {
   reasoning: ReasoningStep[]
   extractedData: ExtractedData | null
   finalUrl: string | null
+  currentUrl: string | null
+  actions: BrowserControllerAction[]
+  takeoverState: 'agent' | 'user' | 'required' | null
   startComputerUse: (task: string, chatId?: string, userId?: string, mode?: 'browser' | 'chrome' | 'computer') => Promise<void>
   stopComputerUse: () => Promise<void>
+  sendControllerCommand: (type: 'pause-session' | 'takeover-start' | 'takeover-end', extra?: Record<string, unknown>) => void
+  sendUserAction: (action: Record<string, unknown>) => void
   addReasoningStep: (text: string, action?: string) => void
   clearReasoning: () => void
 }
@@ -41,9 +51,13 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   const [reasoning, setReasoning] = useState<ReasoningStep[]>([])
   const [extractedData, setExtractedData] = useState<ExtractedData | null>(null)
   const [finalUrl, setFinalUrl] = useState<string | null>(null)
+  const [currentUrl, setCurrentUrl] = useState<string | null>(null)
+  const [actions, setActions] = useState<BrowserControllerAction[]>([])
+  const [takeoverState, setTakeoverState] = useState<'agent' | 'user' | 'required' | null>(null)
   const [pendingCallId, setPendingCallId] = useState<string | null>(null)
 
   const wsRef = useRef<WebSocket | null>(null)
+  const actionSeqRef = useRef(0)
 
   // Generate unique session ID
   const generateSessionId = useCallback(() => {
@@ -65,33 +79,73 @@ export const useComputerUse = (): ComputerUseHookReturn => {
     setReasoning([])
     setExtractedData(null)
     setFinalUrl(null)
+    setCurrentUrl(null)
+    setActions([])
+    setTakeoverState(null)
+    actionSeqRef.current = 0
+  }, [])
+
+  const pushActions = useCallback((labels: string[], manual = false) => {
+    if (labels.length === 0) return
+    setActions((prev) => {
+      const next = [...prev]
+      for (const label of labels) {
+        actionSeqRef.current += 1
+        next.push({
+          id: `act-${actionSeqRef.current}`,
+          label,
+          timestamp: Date.now(),
+          manual,
+        })
+      }
+      return next.slice(-40)
+    })
   }, [])
 
   // Handle WebSocket messages
   const handleWebSocketMessage = useCallback((data: any) => {
+    const payload = data?.data || {}
+    const url = normalizeBrowserUrl(payload.url || payload.currentUrl || payload.finalUrl)
+    if (url) {
+      setCurrentUrl(url)
+    }
+
     switch (data.type) {
       case 'session-started':
-        setScreenshot(data.data.initialScreenshot)
+        if (payload.initialScreenshot) setScreenshot(payload.initialScreenshot)
         addReasoningStep('Session started, analyzing task...')
         break
 
       case 'reasoning':
-        addReasoningStep(data.data.reasoning, data.data.action)
+        addReasoningStep(payload.reasoning, payload.action)
+        pushActions(collectActionLabels(payload))
+        break
+
+      case 'action':
+        pushActions(collectActionLabels(payload), Boolean(payload.manual))
         break
 
       case 'screenshot':
-        setScreenshot(data.data.image)
+        setScreenshot(payload.image)
+        break
+
+      case 'takeover-required':
+      case 'takeover-state':
+        setTakeoverState(payload.takeoverState || (data.type === 'takeover-required' ? 'required' : null))
+        if (payload.status) setStatus(payload.status === 'paused' ? 'running' : payload.status)
+        if (payload.message) addReasoningStep(payload.message)
         break
 
       case 'task-completed':
         setStatus('completed')
-        setScreenshot(data.data.finalScreenshot)
-        if (data.data.extractedData) {
-          setExtractedData(data.data.extractedData)
-          devLog('Extracted data received:', data.data.extractedData)
+        setScreenshot(payload.finalScreenshot)
+        setTakeoverState('agent')
+        if (payload.extractedData) {
+          setExtractedData(payload.extractedData)
+          devLog('Extracted data received:', payload.extractedData)
         }
-        if (data.data.finalUrl) {
-          setFinalUrl(data.data.finalUrl)
+        if (payload.finalUrl) {
+          setFinalUrl(payload.finalUrl)
         }
         const completionMessage = data.data.extractedData?.success
           ? '\u2705 Task completed! Relevant information extracted and saved to chat.'
@@ -133,7 +187,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
       default:
         devLog('Unknown message type:', data.type)
     }
-  }, [addReasoningStep])
+  }, [addReasoningStep, pushActions])
 
   // Connect to WebSocket
   const connectWebSocket = useCallback((sessionId: string) => {
@@ -287,14 +341,39 @@ export const useComputerUse = (): ComputerUseHookReturn => {
     }
   }, [sessionId])
 
+  const sendControllerCommand = useCallback((
+    type: 'pause-session' | 'takeover-start' | 'takeover-end',
+    extra: Record<string, unknown> = {},
+  ) => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      toast.error('El controlador del navegador no está conectado.')
+      return
+    }
+    socket.send(JSON.stringify({ type, ...extra }))
+    if (type === 'takeover-start') setTakeoverState('user')
+    if (type === 'takeover-end') setTakeoverState('agent')
+  }, [])
+
+  const sendUserAction = useCallback((action: Record<string, unknown>) => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    socket.send(JSON.stringify({ type: 'user-action', action }))
+  }, [])
+
   return {
     status,
     screenshot,
     reasoning,
     extractedData,
     finalUrl,
+    currentUrl,
+    actions,
+    takeoverState,
     startComputerUse,
     stopComputerUse,
+    sendControllerCommand,
+    sendUserAction,
     addReasoningStep,
     clearReasoning
   }

@@ -5936,6 +5936,11 @@ function ChatInterfaceContent() {
     finalUrl: computerUseFinalUrl,
     startComputerUse,
     stopComputerUse,
+    sendControllerCommand,
+    sendUserAction,
+    currentUrl: computerUseCurrentUrl,
+    actions: computerUseActions,
+    takeoverState: computerUseTakeoverState,
     addReasoningStep,
     clearReasoning
   } = useComputerUse();
@@ -12920,7 +12925,17 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             <ComputerUseInterface
               screenshot={computerUseScreenshot}
               status={computerUseStatus}
+              currentUrl={computerUseCurrentUrl || computerUseFinalUrl}
+              actions={computerUseActions}
+              takeoverState={computerUseTakeoverState}
+              onStop={() => { void stopComputerUse(); }}
+              onPause={() => sendControllerCommand("pause-session")}
+              onTakeover={() => sendControllerCommand("takeover-start")}
+              onRelease={() => sendControllerCommand("takeover-end")}
+              onUserClick={(point) => sendUserAction({ type: "click", x: point.x, y: point.y })}
+              onUserType={(text) => sendUserAction({ type: "type", text })}
               onClose={() => {
+                void stopComputerUse();
                 setIsComputerUseActive(false);
                 setComputerUseAppMode(null);
                 setChatType('text');
