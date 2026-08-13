@@ -326,3 +326,26 @@ describe('pptx surgical edit — end to end', () => {
     assert.ok(fs.readFileSync(p).equals(original));
   });
 });
+
+test('color + add thanks slide both apply on the same follow-up', { skip: sharpSkip }, async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pptx-combo-'));
+  const pth = path.join(tmp, 'deck.pptx');
+  const original = await makeDeck({ slides: 2 });
+  fs.writeFileSync(pth, original);
+  const result = await generateSourcePreservingDocumentEdit({
+    sourceFile: { id: 'f-combo', path: pth, originalName: 'deck.pptx', mimeType: PPTX_MIME },
+    prompt: 'pon todas las diapositivas de color blanco y agrega una ppt de gracias',
+    displayPrompt: 'pon todas las diapositivas de color blanco y agrega una ppt de gracias',
+    userId: 'user-1',
+    chatId: 'chat-combo',
+  });
+  assert.equal(result.format, 'pptx');
+  assert.equal(result.validation.passed, true, JSON.stringify(result.validation.checks));
+  const edited = fs.readFileSync(result.artifact.path);
+  const slides = adapter.listPptxSlides(edited);
+  assert.equal(slides.length, 3);
+  assert.match(slides[2].title || slides[2].textSnippet, /gracias/i);
+  const zip = new PizZip(edited);
+  assert.match(zip.file('ppt/slides/slide1.xml').asText(), /val="FFFFFF"/);
+});
+

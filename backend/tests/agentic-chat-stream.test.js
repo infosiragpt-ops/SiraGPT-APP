@@ -238,6 +238,11 @@ test('isHandledAgenticChatResult keeps a successful Office edit off the plain st
     stoppedReason: 'source_preserving_document_edit',
     finalAnswer: '',
   }), false);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'agent_runner',
+    finalAnswer: 'Listo. Generé deck-editado.pptx.',
+    artifacts: [{ id: 'art-1' }],
+  }), true);
 });
 
 test('shouldUseAgenticChat routes same-deck "agrega N ppts" as an attachment edit', () => {
@@ -247,6 +252,12 @@ test('shouldUseAgenticChat routes same-deck "agrega N ppts" as an attachment edi
     files: [{ id: 'pptx-1', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }],
   }), true);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: live, files: [] }), true);
+});
+
+test('shouldUseAgenticChat routes "crea una ppt del embarazo de color rosado"', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'crea una ppt del embarazo de color rosado la ppt',
+  }), true);
 });
 
 test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {

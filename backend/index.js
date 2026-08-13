@@ -1557,6 +1557,13 @@ async function startServer() {
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
+    try {
+      const { startAgentRunnerWorker } = require('./src/services/agent-runner/queue');
+      const { createRedisConnection } = require('./src/services/agents/agent-task-queue');
+      startAgentRunnerWorker({ connection: createRedisConnection({ label: 'agent-runner' }) });
+    } catch (err) {
+      logger.warn({ err: err && err.message }, 'agent_runner_worker_not_started');
+    }
     startGoalWorker();
     // Codex V2: validate config, recover interrupted runs, then start the worker
     // (all no-op when the flag is off). Fire-and-forget recovery never throws;

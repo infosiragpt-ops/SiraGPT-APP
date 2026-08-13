@@ -1401,6 +1401,7 @@ model GeneratedArtifact {
 
   @@index([userId, createdAt])
   @@index([taskId, createdAt])
+  @@index([userId, chatId, createdAt])
   @@map("generated_artifacts")
 }
 

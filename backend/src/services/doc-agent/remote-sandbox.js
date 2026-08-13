@@ -14,7 +14,7 @@
 const DEFAULT_TIMEOUT_MS = 130_000;
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 
-function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal } = {}) {
+function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey } = {}) {
   const base = String(baseUrl || process.env.SANDBOX_SERVICE_URL || '').replace(/\/+$/, '');
   const key = apiKey || process.env.SANDBOX_API_KEY || '';
   const doFetch = fetchImpl || globalThis.fetch;
@@ -52,9 +52,12 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal } = {}) {
     }
   }
 
+  const persistKey = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
+
   async function ensureSession() {
     if (sessionId) return sessionId;
-    const r = await call('POST', '/v1/sessions', {}, { timeoutMs: 40_000 });
+    const body = persistKey ? { workspaceKey: persistKey } : {};
+    const r = await call('POST', '/v1/sessions', body, { timeoutMs: 40_000 });
     sessionId = r.sessionId;
     if (!sessionId) throw new Error('sandbox service returned no sessionId');
     return sessionId;
@@ -62,6 +65,8 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal } = {}) {
 
   return {
     driver: 'remote',
+    persistent: Boolean(persistKey),
+    persistKey,
     root: '/workspace',
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');

@@ -45,6 +45,20 @@ const CMD_TIMEOUT_MS = clampInt(process.env.SIRAGPT_DOC_SANDBOX_CMD_TIMEOUT_MS, 
 const MAX_OUTPUT_BYTES = clampInt(process.env.SIRAGPT_DOC_SANDBOX_MAX_OUTPUT_BYTES, 256 * 1024, 4 * 1024, 4 * 1024 * 1024);
 const DOCKER_IMAGE = process.env.SIRAGPT_DOC_SANDBOX_IMAGE || 'siragpt-doc-sandbox:latest';
 
+/** Sanitize a conversation id so it is safe as a dir / docker volume name. */
+function safePersistKey(key) {
+  const s = String(key || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+  return s || null;
+}
+
+function persistentWorkspaceRoot(persistKey) {
+  const key = safePersistKey(persistKey);
+  if (!key) return null;
+  const base = process.env.SIRAGPT_AGENT_WORKSPACE_DIR
+    || path.join(os.tmpdir(), 'sira-agent-workspaces');
+  return path.join(base, key);
+}
+
 function clampInt(value, fallback, min, max) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -126,9 +140,11 @@ function runProcess(cmd, args, { timeoutMs = CMD_TIMEOUT_MS, cwd, env, input, si
 
 /* ── local driver ───────────────────────────────────────────────────────── */
 
-async function createLocalSandbox({ signal } = {}) {
+async function createLocalSandbox({ signal, persistKey } = {}) {
   throwIfAborted(signal);
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-doc-sandbox-'));
+  const key = safePersistKey(persistKey);
+  const persistentRoot = key ? persistentWorkspaceRoot(key) : null;
+  const root = persistentRoot || await fs.mkdtemp(path.join(os.tmpdir(), 'sira-doc-sandbox-'));
   await fs.mkdir(path.join(root, 'uploads'), { recursive: true });
   await fs.mkdir(path.join(root, 'outputs'), { recursive: true });
   let destroyed = false;
@@ -143,6 +159,8 @@ async function createLocalSandbox({ signal } = {}) {
 
   return {
     driver: 'local',
+    persistent: Boolean(key),
+    persistKey: key,
     root,
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
@@ -203,6 +221,9 @@ async function createLocalSandbox({ signal } = {}) {
     async destroy() {
       if (destroyed) return;
       destroyed = true;
+      // Persistent workspaces survive the task so follow-ups reopen the
+      // last files. Ephemeral ones are wiped.
+      if (key) return;
       try { fsSync.rmSync(root, { recursive: true, force: true }); } catch (_) { /* best effort */ }
     },
   };
@@ -215,10 +236,11 @@ async function dockerAvailable(signal) {
   return r.exitCode === 0;
 }
 
-async function createDockerSandbox({ signal, processRunner = runProcess } = {}) {
+async function createDockerSandbox({ signal, processRunner = runProcess, persistKey } = {}) {
   throwIfAborted(signal);
+  const key = safePersistKey(persistKey);
   const name = `sira-doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const run = await processRunner('docker', [
+  const dockerArgs = [
     'run', '-d', '--rm',
     '--name', name,
     '--network', 'none',
@@ -226,9 +248,10 @@ async function createDockerSandbox({ signal, processRunner = runProcess } = {}) 
     '--cpus', '1',
     '--pids-limit', '256',
     '--read-only=false',
-    DOCKER_IMAGE,
-    'sleep', 'infinity',
-  ], { timeoutMs: 30_000, env: process.env, signal });
+  ];
+  if (key) dockerArgs.push('-v', `sira-ws-${key}:/workspace`);
+  dockerArgs.push(DOCKER_IMAGE, 'sleep', 'infinity');
+  const run = await processRunner('docker', dockerArgs, { timeoutMs: 30_000, env: process.env, signal });
   if (run.exitCode !== 0) {
     // docker run may have reached the daemon before its CLI was cancelled.
     // Removing by the preselected name is harmless when no container exists
@@ -265,6 +288,8 @@ async function createDockerSandbox({ signal, processRunner = runProcess } = {}) 
 
   return {
     driver: 'docker',
+    persistent: Boolean(key),
+    persistKey: key,
     root: '/workspace',
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
@@ -326,24 +351,38 @@ async function createDockerSandbox({ signal, processRunner = runProcess } = {}) 
 async function createSandbox(opts = {}) {
   const requested = String(opts.driver || process.env.SIRAGPT_DOC_SANDBOX_DRIVER || 'auto').toLowerCase();
   const hasRemote = Boolean(process.env.SANDBOX_SERVICE_URL && process.env.SANDBOX_API_KEY);
-  if (requested === 'remote') return require('./remote-sandbox').createRemoteSandbox({ signal: opts.signal });
-  if (requested === 'local') return createLocalSandbox({ signal: opts.signal });
-  if (requested === 'docker') return createDockerSandbox({ signal: opts.signal });
+  const persistKey = opts.persistKey || opts.workspaceKey || null;
+  if (requested === 'remote') {
+    return require('./remote-sandbox').createRemoteSandbox({
+      signal: opts.signal,
+      workspaceKey: persistKey,
+    });
+  }
+  if (requested === 'local') return createLocalSandbox({ signal: opts.signal, persistKey });
+  if (requested === 'docker') return createDockerSandbox({ signal: opts.signal, persistKey });
   // auto: the remote sandbox microservice wins when configured (this is how a
   // Docker-less host like Replit gets real container isolation); then a local
   // Docker daemon; then the in-process local workspace fallback.
-  if (hasRemote) return require('./remote-sandbox').createRemoteSandbox({ signal: opts.signal });
-  if (await dockerAvailable(opts.signal)) {
-    try { return await createDockerSandbox({ signal: opts.signal }); } catch (_) { /* image missing etc. → local */ }
+  if (hasRemote) {
+    return require('./remote-sandbox').createRemoteSandbox({
+      signal: opts.signal,
+      workspaceKey: persistKey,
+    });
   }
-  return createLocalSandbox({ signal: opts.signal });
+  if (await dockerAvailable(opts.signal)) {
+    try { return await createDockerSandbox({ signal: opts.signal, persistKey }); } catch (_) { /* image missing etc. → local */ }
+  }
+  return createLocalSandbox({ signal: opts.signal, persistKey });
 }
 
 module.exports = {
   createSandbox,
   resolveInWorkspace, // exported for unit tests
+  safePersistKey,
+  persistentWorkspaceRoot,
   CMD_TIMEOUT_MS,
   MAX_OUTPUT_BYTES,
   DOCKER_IMAGE,
   _createDockerSandbox: createDockerSandbox,
+  _createLocalSandbox: createLocalSandbox,
 };

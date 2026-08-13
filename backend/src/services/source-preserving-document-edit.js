@@ -8057,7 +8057,13 @@ async function generateSourcePreservingDocumentEdit({
       const slideEdit = parsePresentationEditRequest(requestText);
       const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
       const deckStyle = (!slideEdit && !pptxImageEdit) ? parseDeckStyleRequest(requestText) : null;
-      if (slideEdit || pptxImageEdit || deckStyle) {
+      const addSlidesIntent = (!slideEdit && !pptxImageEdit)
+        ? parseOfficeUserIntent(requestText, { format: 'pptx' })
+        : null;
+      // Color + "agrega una de gracias" must both run. The exclusive style
+      // fast-path used to paint backgrounds and drop the new slide.
+      const exclusiveStyleOnly = Boolean(deckStyle) && !(addSlidesIntent && addSlidesIntent.kind === 'add_slides');
+      if (slideEdit || pptxImageEdit || exclusiveStyleOnly) {
         const pptxResult = slideEdit
           ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
           : pptxImageEdit

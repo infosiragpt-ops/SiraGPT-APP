@@ -439,6 +439,7 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   'source_preserving_document_validation_failed',
   'source_preserving_document_edit_failed',
   'image_edit_clarification_needed',
+  'agent_runner',
 ]);
 
 /**
@@ -470,11 +471,15 @@ function isHandledAgenticChatResult(result) {
  *     into the prompt; the loop adds latency without adding capability).
  * Operators can restore agent-first behavior with SIRAGPT_AGENT_FIRST=1.
  */
-function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null } = {}) {
+function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null, hasPriorArtifacts = false } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
   if (DIRECT_ONLY_PROMPT.test(text)) return false;
+  try {
+    const { shouldRunAgentRunner } = require('./agent-runner');
+    if (shouldRunAgentRunner({ files, text, hasPriorArtifacts })) return true;
+  } catch (_) { /* agent-runner optional at load */ }
   const customGptPolicy = resolveCustomGptAgentPolicy({
     prompt: text,
     capabilities: customGptCapabilities,
@@ -750,6 +755,62 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         artifacts,
       };
     };
+    // Generic AgentRunner: create/edit any document without hardcoded routes
+    // ("crea una ppt rosada", "ponlas blancas", follow-up "ahora rosadas").
+    try {
+      const {
+        shouldRunAgentRunner,
+        executeAgentRunnerTurn,
+        hasConversationArtifacts,
+      } = require('./agent-runner');
+      let prior = false;
+      if (toolContext.prisma && toolContext.userId && toolContext.chatId) {
+        try {
+          prior = await hasConversationArtifacts(toolContext.prisma, {
+            userId: toolContext.userId,
+            chatId: toolContext.chatId,
+          });
+        } catch (_) { prior = false; }
+      }
+      if (shouldRunAgentRunner({
+        fileIds: preloopFileIds,
+        hasPriorArtifacts: prior,
+        text: userQuery,
+      })) {
+        await writeSse(res, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' });
+        const ran = await executeAgentRunnerTurn({
+          prisma: toolContext.prisma,
+          userId: toolContext.userId,
+          chatId: toolContext.chatId || null,
+          fileIds: preloopFileIds,
+          instruction: userQuery,
+          model,
+          signal,
+          onEvent: (ev) => {
+            Promise.resolve((async () => {
+              if (ev.type === 'file_artifact' && ev.artifact) {
+                await writeSse(res, { type: 'file_artifact', artifact: ev.artifact });
+                return;
+              }
+              if (ev.label || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'retry' || ev.type === 'thought') {
+                await writeSse(res, {
+                  type: 'stage',
+                  label: ev.label || (ev.type === 'tool_call' ? 'Ejecutando código' : ev.type === 'thought' ? 'Pensando' : 'Verificando resultado'),
+                  tool: ev.tool || 'agent_runner',
+                  preview: ev.preview,
+                });
+              }
+            })()).catch(() => {});
+          },
+        });
+        if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
+          await writeSse(res, { replace: true, content: ran.summary });
+          return finishSourcePreservingPreloop('agent_runner', ran.summary, ran.artifacts);
+        }
+      }
+    } catch (agentRunnerErr) {
+      try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
+    }
     if (
       // fileIds may be empty on a follow-up that only names ## file.pptx —
       // tryGenerate recovers the recent chat attachment via chatId.

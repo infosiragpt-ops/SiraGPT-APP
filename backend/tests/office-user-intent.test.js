@@ -159,3 +159,23 @@ describe('office user-intent parser — general structural append', () => {
     assert.match(intent.topic, /matriz de riesgos/);
   });
 });
+
+test('agrega una ppt de gracias → one closing slide named Gracias', () => {
+  const intent = parseAddSlidesIntent('agrega una ppt de gracias');
+  assert.equal(intent.kind, 'add_slides');
+  assert.equal(intent.count, 1);
+  assert.match(intent.topic, /gracias/i);
+  const ops = buildAddSlideOperations(intent, {
+    sourceText: 'Gestión administrativa\nEl ciclo planificar-organizar-dirigir-controlar',
+    originalName: 'deck.pptx',
+    requestText: 'agrega una ppt de gracias',
+  });
+  assert.equal(ops.length, 1);
+  assert.match(ops[0].title, /gracias/i);
+});
+
+test('ppts counts as a slide noun', () => {
+  const intent = parseAddSlidesIntent('agrega 2 ppts de cierre');
+  assert.equal(intent.count, 2);
+});
+
