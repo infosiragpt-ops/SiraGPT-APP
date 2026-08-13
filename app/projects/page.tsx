@@ -451,7 +451,7 @@ function AppProjectCard({
       <button
         type="button"
         aria-busy={opening || restoring}
-        aria-label={inTrash ? `Restaurar empresa ${project.name}` : `Abrir proyecto ${project.name}`}
+        aria-label={inTrash ? `Restaurar empresa ${project.name}` : `Abrir empresa ${project.name}`}
         disabled={opening || restoring}
         onClick={inTrash ? onRestore : onOpen}
         className={styles.previewButton}
@@ -502,7 +502,7 @@ function AppProjectRow({
         className={styles.rowThumb}
         onClick={inTrash ? onRestore : onOpen}
         disabled={restoring}
-        aria-label={inTrash ? `Restaurar empresa ${project.name}` : `Abrir proyecto ${project.name}`}
+        aria-label={inTrash ? `Restaurar empresa ${project.name}` : `Abrir empresa ${project.name}`}
       >
         <AppPreview project={project} compact />
       </button>

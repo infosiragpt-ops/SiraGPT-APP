@@ -27,75 +27,75 @@
     "today": "Today",
     "last7Days": "Last 7 days",
     "older": "Older",
-    "projects": "Projects",
+    "projects": "Companies",
     "searchBrain": "Search",
     "post": "POST",
     "design": "Design",
     "code": "Code"
   },
   "projects": {
-    "title": "Projects",
-    "newProject": "New project",
-    "searchPlaceholder": "Search projects…",
+    "title": "Companies",
+    "newProject": "New company",
+    "searchPlaceholder": "Search companies…",
     "sortBy": "Sort by",
     "sort": {
       "activity": "Recent activity",
       "edited": "Last edited",
       "created": "Created date"
     },
-    "createTitle": "Create a personal project",
+    "createTitle": "Create a company",
     "whatWorkingOn": "What are you working on?",
-    "namePlaceholder": "Name your project",
+    "namePlaceholder": "Name your company",
     "whatTryingAchieve": "What are you trying to achieve?",
-    "descriptionPlaceholder": "Describe your project, goals, topic, etc.",
+    "descriptionPlaceholder": "Describe your company, goals, topic, etc.",
     "cancel": "Cancel",
-    "create": "Create project",
+    "create": "Create company",
     "creating": "Creating…",
-    "createFailed": "Failed to create project",
-    "listFailed": "Failed to load projects",
-    "emptyTitle": "No projects yet",
-    "emptyDesc": "Create a project to collect files and instructions for a focused chat.",
-    "noMatchTitle": "No matching projects",
+    "createFailed": "Failed to create company",
+    "listFailed": "Failed to load companies",
+    "emptyTitle": "No companies yet",
+    "emptyDesc": "Create a company to collect files and instructions for a focused chat.",
+    "noMatchTitle": "No matching companies",
     "noMatchDesc": "Try a different search term.",
     "updatedRel": "Updated {rel}",
-    "allProjects": "All projects",
+    "allProjects": "All companies",
     "star": "Star",
     "editInstructions": "Edit instructions",
-    "deleteProject": "Delete project",
+    "deleteProject": "Delete company",
     "deleteConfirm": "Delete \"{name}\"? This cannot be undone.",
-    "deleted": "Project deleted",
-    "deleteFailed": "Failed to delete project",
+    "deleted": "Company deleted",
+    "deleteFailed": "Failed to delete company",
     "launchFailed": "Failed to launch chat",
     "composerPlaceholder": "How can I help you today?",
     "send": "Send",
-    "startConversation": "Start a conversation to keep your chats organized and reuse project knowledge.",
-    "chatsInProject": "Chats in this project",
+    "startConversation": "Start a conversation to keep your chats organized and reuse company knowledge.",
+    "chatsInProject": "Chats in this company",
     "memory": "Memory",
     "onlyYou": "Only you",
-    "memoryDesc": "Project memory will show here after a few chats.",
+    "memoryDesc": "Company memory will show here after a few chats.",
     "instructions": "Instructions",
-    "instructionsDesc": "Add instructions to personalise Claude's responses in this project.",
+    "instructionsDesc": "Add instructions to personalise Claude's responses in this company.",
     "instructionsPlaceholder": "e.g. Always cite sources. Write in formal English.",
     "instructionsSaved": "Instructions saved",
     "saveFailed": "Save failed",
     "updateFailed": "Update failed",
     "files": "Files",
     "attachFile": "Attach file",
-    "filesEmpty": "Add PDFs, documents or other text to reference in this project.",
+    "filesEmpty": "Add PDFs, documents or other text to reference in this company.",
     "uploadFailed": "Upload failed",
     "filesAttached": "{count} file(s) attached",
     "detachFailed": "Detach failed",
     "detachFile": "Detach file",
     "save": "Save",
     "saving": "Saving…",
-    "detailLoadFailed": "Failed to load project",
-    "notFoundTitle": "Project not found",
+    "detailLoadFailed": "Failed to load company",
+    "notFoundTitle": "Company not found",
     "notFoundDesc": "It may have been deleted or you may not have access.",
     "forgetFact": "Forget",
     "memoryDeleteFailed": "Failed to forget fact",
-    "share": "Share project",
-    "shareTitle": "Share this project",
-    "shareDesc": "Anyone with the link can see the project name, description, and file list (read-only). Chats and instructions stay private.",
+    "share": "Share company",
+    "shareTitle": "Share this company",
+    "shareDesc": "Anyone with the link can see the company name, description, and file list (read-only). Chats and instructions stay private.",
     "shareNotEnabled": "Sharing is off.",
     "enableShare": "Enable share link",
     "enabling": "Enabling…",
@@ -111,7 +111,7 @@
   },
   "marcoTeorico": {
     "title": "Theoretical framework",
-    "subtitle": "Search, validate, and synthesise academic sources into an APA 7 draft for this project.",
+    "subtitle": "Search, validate, and synthesise academic sources into an APA 7 draft for this company.",
     "topic": "Research topic",
     "topicPlaceholder": "e.g. Reliability of Likert scales in higher education",
     "yearFrom": "From",
@@ -123,15 +123,10 @@
     "cancel": "Cancel",
     "pipeline": "Pipeline",
     "phase": {
-
       "search": "Search academic sources",
-
       "validate": "Validate DOIs",
-
       "synthesize": "Write cited markdown",
-
       "format": "Build reference list"
-
     },
     "searchRunning": "Querying OpenAlex…",
     "validateRunning": "Checking CrossRef…",
@@ -150,8 +145,8 @@
     "warmingUp": "Searching…",
     "topicTooShort": "Topic is too short",
     "generateFailed": "Generation failed",
-    "loadFailed": "Could not load project",
-    "projectNotFound": "Project not found",
+    "loadFailed": "Could not load company",
+    "projectNotFound": "Company not found",
     "backToProject": "← {name}"
   },
   "chat": {
@@ -182,34 +177,118 @@
     "saving": "Saving…",
     "saved": "Saved",
     "offline": "Offline — local changes",
-
     "sections": {
-      "general":         { "label": "General",         "desc": "Appearance, language and accessibility" },
-      "models":          { "label": "AI Models",       "desc": "Available models and favorites" },
-      "notifications":   { "label": "Notifications",   "desc": "Channels and alerts" },
-      "personalization": { "label": "Personalization", "desc": "Style, tone and capabilities" },
-      "apps":            { "label": "Apps",            "desc": "Connections and connectors" },
-      "schedules":       { "label": "Schedules",       "desc": "Scheduled runs" },
-      "data":            { "label": "Data controls",   "desc": "Privacy, history and data" },
-      "security":        { "label": "Security",        "desc": "MFA and sessions" },
-      "account":         { "label": "Account",         "desc": "Builder profile" }
+      "general": {
+        "label": "General",
+        "desc": "Appearance, language and accessibility"
+      },
+      "models": {
+        "label": "AI Models",
+        "desc": "Available models and favorites"
+      },
+      "notifications": {
+        "label": "Notifications",
+        "desc": "Channels and alerts"
+      },
+      "personalization": {
+        "label": "Personalization",
+        "desc": "Style, tone and capabilities"
+      },
+      "apps": {
+        "label": "Apps",
+        "desc": "Connections and connectors"
+      },
+      "schedules": {
+        "label": "Schedules",
+        "desc": "Scheduled runs"
+      },
+      "data": {
+        "label": "Data controls",
+        "desc": "Privacy, history and data"
+      },
+      "security": {
+        "label": "Security",
+        "desc": "MFA and sessions"
+      },
+      "account": {
+        "label": "Account",
+        "desc": "Builder profile"
+      }
     },
-
     "general": {
-      "display": { "title": "Display", "desc": "Visual appearance of the application" },
-      "theme": { "label": "Theme", "desc": "Light, dark or system theme", "light": "Light", "dark": "Dark", "system": "System" },
-      "accent": { "label": "Accent color", "desc": "Primary color used for buttons and accents" },
-      "fontSize": { "label": "Font size", "desc": "Base typography size", "small": "Small", "medium": "Medium", "large": "Large" },
-      "density": { "label": "Density", "desc": "Vertical spacing of the UI", "compact": "Compact", "comfortable": "Comfortable", "spacious": "Spacious" },
-      "region": { "title": "Language & region", "desc": "Date, time zone and language formatting" },
+      "display": {
+        "title": "Display",
+        "desc": "Visual appearance of the application"
+      },
+      "theme": {
+        "label": "Theme",
+        "desc": "Light, dark or system theme",
+        "light": "Light",
+        "dark": "Dark",
+        "system": "System"
+      },
+      "accent": {
+        "label": "Accent color",
+        "desc": "Primary color used for buttons and accents"
+      },
+      "fontSize": {
+        "label": "Font size",
+        "desc": "Base typography size",
+        "small": "Small",
+        "medium": "Medium",
+        "large": "Large"
+      },
+      "density": {
+        "label": "Density",
+        "desc": "Vertical spacing of the UI",
+        "compact": "Compact",
+        "comfortable": "Comfortable",
+        "spacious": "Spacious"
+      },
+      "region": {
+        "title": "Language & region",
+        "desc": "Date, time zone and language formatting"
+      },
       "interfaceLanguage": "Interface language",
-      "spokenLanguage": { "label": "Spoken language", "desc": "For voice recognition", "automatic": "Automatic" },
+      "spokenLanguage": {
+        "label": "Spoken language",
+        "desc": "For voice recognition",
+        "automatic": "Automatic"
+      },
       "dateFormat": "Date format",
-      "timeZone": { "label": "Time zone", "desc": "Detected automatically" },
-      "timeFormat": { "label": "Time format", "h12": "12-hour", "h24": "24-hour" },
-      "voice": { "title": "Voice & audio", "assistantVoice": "Assistant voice", "autoPlay": "Auto-play replies", "autoPlayDesc": "Read responses aloud", "standalone": "Standalone voice mode", "standaloneDesc": "Full screen with no visual elements" },
-      "aiModels": { "title": "AI Models", "showExtras": "Show additional models", "showExtrasDesc": "See every available model", "stream": "Stream responses", "streamDesc": "See responses as they're generated" },
-      "accessibility": { "title": "Accessibility", "shortcuts": "Keyboard shortcuts", "shortcutsDesc": "Enable keyboard navigation", "reduceMotion": "Reduce motion", "reduceMotionDesc": "Minimize animations across the app", "highContrast": "High contrast", "highContrastDesc": "Improve element visibility" }
+      "timeZone": {
+        "label": "Time zone",
+        "desc": "Detected automatically"
+      },
+      "timeFormat": {
+        "label": "Time format",
+        "h12": "12-hour",
+        "h24": "24-hour"
+      },
+      "voice": {
+        "title": "Voice & audio",
+        "assistantVoice": "Assistant voice",
+        "autoPlay": "Auto-play replies",
+        "autoPlayDesc": "Read responses aloud",
+        "standalone": "Standalone voice mode",
+        "standaloneDesc": "Full screen with no visual elements"
+      },
+      "aiModels": {
+        "title": "AI Models",
+        "showExtras": "Show additional models",
+        "showExtrasDesc": "See every available model",
+        "stream": "Stream responses",
+        "streamDesc": "See responses as they're generated"
+      },
+      "accessibility": {
+        "title": "Accessibility",
+        "shortcuts": "Keyboard shortcuts",
+        "shortcutsDesc": "Enable keyboard navigation",
+        "reduceMotion": "Reduce motion",
+        "reduceMotionDesc": "Minimize animations across the app",
+        "highContrast": "High contrast",
+        "highContrastDesc": "Improve element visibility"
+      }
     }
   },
   "auth": {
@@ -261,29 +340,45 @@
     "subtitle": "Manage your account settings and preferences.",
     "synced": "Synced",
     "admin": "Admin",
-    "personalInfo": { "title": "Personal information", "desc": "Your profile details in siraGPT" },
+    "personalInfo": {
+      "title": "Personal information",
+      "desc": "Your profile details in siraGPT"
+    },
     "fullName": "Full name",
     "fullNamePlaceholder": "Your name",
     "emailImmutable": "Email can't be changed for security reasons.",
     "discard": "Discard",
     "save": "Save changes",
     "saving": "Saving…",
-    "security": { "title": "Security", "desc": "Update your password periodically" },
+    "security": {
+      "title": "Security",
+      "desc": "Update your password periodically"
+    },
     "currentPassword": "Current password",
     "newPassword": "New password",
     "confirmPassword": "Confirm password",
     "minChars": "At least 8 characters",
     "updatePassword": "Update password",
     "updatingPassword": "Updating…",
-    "subscription": { "title": "Subscription", "desc": "Plan and billing" },
+    "subscription": {
+      "title": "Subscription",
+      "desc": "Plan and billing"
+    },
     "nextBilling": "Next billing",
     "manageSubscription": "Manage subscription",
-    "usage": { "title": "Monthly usage", "subtitleCalls": "Calls used", "subtitleTokens": "Tokens used" },
+    "usage": {
+      "title": "Monthly usage",
+      "subtitleCalls": "Calls used",
+      "subtitleTokens": "Tokens used"
+    },
     "used": "used",
     "remaining": "remaining",
     "usageWarning": "You've passed 70% of your monthly quota.",
     "usageDanger": "You're running low on quota this month. Consider upgrading to avoid interruptions.",
-    "adminAccess": { "title": "Admin access", "desc": "Privileges active" },
+    "adminAccess": {
+      "title": "Admin access",
+      "desc": "Privileges active"
+    },
     "openAdmin": "Open admin panel"
   },
   "messageActions": {

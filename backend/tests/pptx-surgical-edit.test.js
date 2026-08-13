@@ -15,8 +15,10 @@ const adapter = require('../src/services/document-editing/pptx-adapter');
 const editor = require('../src/services/source-preserving-document-edit');
 const {
   parsePresentationEditRequest,
+  parseDeckStyleRequest,
   generateSourcePreservingDocumentEdit,
   tryGenerateSourcePreservingDocumentEdit,
+  isSourcePreservingEditRequest,
 } = editor;
 
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
@@ -36,7 +38,8 @@ async function makeDeck({ slides = 2, withImageOnSlide = null } = {}) {
   const imageBytes = withImageOnSlide != null ? await makeSolidPng({ r: 220, g: 38, b: 38 }) : null;
   for (let i = 1; i <= slides; i += 1) {
     const slide = pptx.addSlide();
-    slide.addText(`Título diapositiva ${i}`, { x: 0.5, y: 0.4, w: 8, h: 1, fontSize: 28, bold: true });
+    slide.background = { color: '0B1220' };
+    slide.addText(`Título diapositiva ${i}`, { x: 0.5, y: 0.4, w: 8, h: 1, fontSize: 28, bold: true, color: 'FFFFFF' });
     slide.addText(`Cuerpo de la diapositiva ${i}`, { x: 0.5, y: 2, w: 8, h: 1, fontSize: 14 });
     if (withImageOnSlide === i) {
       slide.addImage({ data: `data:image/png;base64,${imageBytes.toString('base64')}`, x: 1, y: 3, w: 2, h: 1.5 });
@@ -176,6 +179,40 @@ describe('parsePresentationEditRequest', () => {
   });
 });
 
+describe('parseDeckStyleRequest — any color, all slides or one', () => {
+  test('live typo: uniformisa el color de la ppts todas de color blanco', () => {
+    const r = parseDeckStyleRequest('uniformisa el color de la ppts todas de color blanco');
+    assert.equal(r.kind, 'set_slide_background');
+    assert.equal(r.color, 'FFFFFF');
+    assert.equal(r.allSlides, true);
+    assert.equal(r.colorName, 'blanco');
+  });
+
+  test('another user can ask for pink or a hex', () => {
+    assert.equal(parseDeckStyleRequest('pon todas las diapositivas de color rosado').color, 'F8BBD0');
+    assert.equal(parseDeckStyleRequest('cambia el fondo de la ppt a #112233').color, '112233');
+  });
+
+  test('read-only questions do not match', () => {
+    assert.equal(parseDeckStyleRequest('qué color tiene la portada'), null);
+    assert.equal(parseDeckStyleRequest('resume la presentación'), null);
+  });
+});
+
+describe('pptx-adapter — setSlideBackgrounds', () => {
+  test('paints every slide white and keeps slide count', { skip: sharpSkip }, async () => {
+    const buf = await makeDeck({ slides: 3 });
+    const result = adapter.setSlideBackgrounds({ buffer: buf, color: 'FFFFFF', allSlides: true });
+    assert.equal(result.changed, 3);
+    const zip = new PizZip(result.buffer);
+    for (let i = 1; i <= 3; i += 1) {
+      const xml = zip.file(`ppt/slides/slide${i}.xml`).asText();
+      assert.match(xml, /<p:bg[\s\S]*val="FFFFFF"/);
+    }
+    assert.equal(adapter.listPptxSlides(result.buffer).length, 3);
+  });
+});
+
 describe('pptx surgical edit — end to end', () => {
   test('multi-slide + no slide number → clarification listing slides, no artifact', { skip: sharpSkip }, async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pptx-ambig-'));
@@ -263,4 +300,52 @@ describe('pptx surgical edit — end to end', () => {
     assert.ok(b > r, 'image is blue-dominant after the edit');
     assert.ok(fs.readFileSync(p).equals(original));
   });
+
+  test('uniform white background on every slide from messy Spanish', { skip: sharpSkip }, async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pptx-white-bg-'));
+    const p = path.join(tmp, 'deck.pptx');
+    const original = await makeDeck({ slides: 3 });
+    fs.writeFileSync(p, original);
+
+    const result = await generateSourcePreservingDocumentEdit({
+      sourceFile: { id: 'f-white', path: p, originalName: 'deck.pptx', mimeType: PPTX_MIME },
+      prompt: 'uniformisa el color de la ppts todas de color blanco',
+      displayPrompt: 'uniformisa el color de la ppts todas de color blanco',
+      userId: 'user-1',
+      chatId: 'chat-white',
+    });
+
+    assert.equal(result.format, 'pptx');
+    assert.equal(result.validation.passed, true, JSON.stringify(result.validation.checks));
+    assert.match(result.content, /fondo|blanco/i);
+    const zip = new PizZip(fs.readFileSync(result.artifact.path));
+    for (let i = 1; i <= 3; i += 1) {
+      assert.match(zip.file(`ppt/slides/slide${i}.xml`).asText(), /val="FFFFFF"/);
+    }
+    assert.equal(adapter.listPptxSlides(fs.readFileSync(result.artifact.path)).length, 3);
+    assert.ok(fs.readFileSync(p).equals(original));
+  });
 });
+
+test('follow-up "uniformisa…blanco" is a source-preserving PPTX edit even without a new upload', () => {
+  const prompt = 'uniformisa el color de la ppts todas de color blanco';
+  assert.equal(isSourcePreservingEditRequest(prompt, []), true);
+  assert.equal(parseDeckStyleRequest(prompt).allSlides, true);
+});
+
+test('setSlideBackgrounds also paints a full-bleed backdrop shape', { skip: sharpSkip }, async () => {
+  const buf = await makeDeck({ slides: 1 });
+  const zip = new PizZip(buf);
+  const name = 'ppt/slides/slide1.xml';
+  let xml = zip.file(name).asText();
+  const backdrop = '<p:sp><p:nvSpPr><p:cNvPr id="99" name="Backdrop"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/></a:xfrm><a:solidFill><a:srgbClr val="0B1220"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:p/></p:txBody></p:sp>';
+  if (!xml.includes('</p:spTree>')) throw new Error('slide xml missing spTree');
+  xml = xml.replace('</p:spTree>', `${backdrop}</p:spTree>`);
+  zip.file(name, xml);
+  const dirty = zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' });
+  const result = adapter.setSlideBackgrounds({ buffer: dirty, color: 'FFFFFF', allSlides: true });
+  const out = new PizZip(result.buffer).file(name).asText();
+  assert.match(out, /<p:bg[\s\S]*val="FFFFFF"/);
+  assert.match(out, /cx="12192000"[\s\S]{0,200}val="FFFFFF"/);
+});
+

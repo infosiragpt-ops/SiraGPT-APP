@@ -211,6 +211,13 @@ function classifyMode(requestText, estimatedWords, format, files = [], options =
   if (Array.isArray(files) && files.length > 0 && SOURCE_MAP_CHAT_RE.test(requestText) && !explicitFileFormat) {
     return 'chat_only';
   }
+  // Read/inquiry about an attached Word (resume, lee, cuál es el título)
+  // must win over source-preserving-edit heuristics. "Resume el Word adjunto
+  // en el chat" is an answer request, not a rewrite, unless an edit verb
+  // is also present.
+  const inquiryOnly = DOCUMENT_INQUIRY_RE.test(requestText) && !explicitOutput
+    && !/\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|modific\w*|edit\w*|corrig\w*|correg\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|mejor\w*|arregl\w*)\b/i.test(requestText);
+  if (inquiryOnly) return 'chat_only';
   // A source-preserving edit needs an actual source file to preserve. Without
   // an attachment, transform phrasings like "resume el word" are read/answer
   // intent, not an edit, and must fall through to the inquiry short-circuit

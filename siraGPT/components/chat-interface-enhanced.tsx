@@ -3135,7 +3135,7 @@ const NavbarModelSelector = ({
   }, [currentChat?.customGpt?.id, currentChat?.customGptId, currentChat?.id, gptFeedback, gptRating, gptReport]);
 
   const project = currentChat?.project;
-  const projectName = project?.name || String(currentChat?.title || "Proyecto").replace(/^Chat in\s+/i, "");
+  const projectName = project?.name || String(currentChat?.title || "Empresa").replace(/^Chat in\s+/i, "");
   const activeProjectModelName = currentChat?.model || selectedModel;
   const selectedProjectModel = React.useMemo(() => {
     return availableModels.find((m: any) => m.name === activeProjectModelName);
@@ -3156,9 +3156,9 @@ const NavbarModelSelector = ({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo del proyecto actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${model.displayName || model.name}`);
     } catch {
-      toast.error("No se pudo actualizar el modelo del proyecto");
+      toast.error("No se pudo actualizar el modelo de la empresa");
     }
   }, [currentChat?.id, setCurrentChat, setSelectedModel, setSelectedProvider]);
 
@@ -3180,11 +3180,11 @@ const NavbarModelSelector = ({
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat del proyecto");
+      if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat de la empresa");
       localStorage.setItem("currentChatId", data.chat.id);
       window.location.href = `/chat?id=${data.chat.id}`;
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat del proyecto");
+      toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
     }
   }, [currentChat?.project?.id, currentChat?.projectId, projectName, activeProjectModelName]);
 
@@ -3193,9 +3193,9 @@ const NavbarModelSelector = ({
     if (!projectId) return;
     try {
       await navigator.clipboard.writeText(`${window.location.origin}/projects/${projectId}`);
-      toast.success("Enlace del proyecto copiado");
+      toast.success("Enlace de la empresa copiado");
     } catch {
-      toast.error("No se pudo copiar el enlace del proyecto. Cópialo manualmente.");
+      toast.error("No se pudo copiar el enlace de la empresa. Cópialo manualmente.");
     }
   }, [currentChat?.project?.id, currentChat?.projectId]);
 
@@ -3380,7 +3380,7 @@ const NavbarModelSelector = ({
               <DropdownMenuPortal>
                 <DropdownMenuSubContent sideOffset={10} className="w-[360px] rounded-3xl border-border/70 p-2 shadow-2xl">
                   <div className="px-3 pb-2 pt-1 text-[13px] font-medium text-muted-foreground">
-                    Modelos disponibles para este proyecto
+                    Modelos disponibles para esta empresa
                   </div>
                   <ScrollArea className="h-[420px] pr-1">
                     {gptModelsByProvider.length > 0 ? (
@@ -3428,7 +3428,7 @@ const NavbarModelSelector = ({
 
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); startNewProjectChat(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <PenSquare className="mr-3 h-5 w-5" />
-              Nuevo chat en proyecto
+              Nuevo chat en empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); setProjectDialog("about"); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Info className="mr-3 h-5 w-5" />
@@ -3443,7 +3443,7 @@ const NavbarModelSelector = ({
               className="h-12 rounded-2xl px-3 text-[15px]"
             >
               <FolderOpen className="mr-3 h-5 w-5" />
-              Abrir proyecto
+              Abrir empresa
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={(event) => { event.preventDefault(); copyProjectLink(); }} className="h-12 rounded-2xl px-3 text-[15px]">
               <Link2 className="mr-3 h-5 w-5" />
@@ -3457,7 +3457,7 @@ const NavbarModelSelector = ({
             <DialogHeader>
               <DialogTitle>{projectName}</DialogTitle>
               <DialogDescription>
-                Este chat usa instrucciones, archivos, documentos y memoria aislados del proyecto.
+                Este chat usa instrucciones, archivos, documentos y memoria aislados de la empresa.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3 text-sm">
@@ -3486,7 +3486,7 @@ const NavbarModelSelector = ({
               <Button variant="outline" onClick={() => setProjectDialog(null)}>Cerrar</Button>
               {(currentChat?.project?.id || currentChat?.projectId) && (
                 <Button onClick={() => { window.location.href = `/projects/${currentChat?.project?.id || currentChat?.projectId}` }}>
-                  Abrir proyecto
+                  Abrir empresa
                 </Button>
               )}
             </DialogFooter>

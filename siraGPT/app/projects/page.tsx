@@ -5,7 +5,7 @@
  *
  * Shape mirrors the Claude Projects UX from the user's reference
  * screenshots:
- *   - Title row: "Proyectos" + "+ Nuevo proyecto" CTA
+ *   - Title row: "Empresas" + "+ Nueva empresa" CTA
  *   - Full-width search bar
  *   - Right-aligned sort dropdown ("Actividad reciente" / "Última
  *     edición" / "Fecha de creación")
@@ -295,7 +295,7 @@ function ProjectCard({
       }}
       role="button"
       tabIndex={0}
-      aria-label={`Abrir proyecto ${project.name}`}
+      aria-label={`Abrir empresa ${project.name}`}
       data-testid={`project-card-${project.id}`}
       className={cn(
         "group/project relative cursor-pointer transition-shadow duration-150 hover:shadow-md",
@@ -396,7 +396,7 @@ function EditProjectDialog({
         description: cleanDesc || null,
       })
       onSaved(updated)
-      toast.success("Proyecto actualizado")
+      toast.success("Empresa actualizada")
       onOpenChange(false)
     } catch (err: any) {
       toast.error(err?.message || t("updateFailed"))

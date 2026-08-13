@@ -481,6 +481,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   });
   if (/^\s*\/(goal|plan)\b/i.test(text)) return true;
   if (isCognitionUpgradeRequest(text)) return true;
+  if (isDocumentEditRequest(text)) return true;
   // ── Attachment turns ──────────────────────────────────────────────────
   // A doc is attached: its text is ALREADY injected into the prompt
   // (`Attached files:` / RAG evidence), so the answer comes FROM the doc.

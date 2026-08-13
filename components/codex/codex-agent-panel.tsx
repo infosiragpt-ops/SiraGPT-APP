@@ -290,14 +290,14 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
     void syncWorkspaceFiles()
   }, [project?.id])
 
-  async function createProject(nameHint?: string, opts?: { manageBusy?: boolean }): Promise<CodexProject | null> {
+  async function createProject(nameHint?: string, opts?: { manageBusy?: boolean; brief?: string }): Promise<CodexProject | null> {
     const manageBusy = opts?.manageBusy !== false
     if (manageBusy) setBusy(true)
     try {
       const defaultName = t(surface === "apps" ? "panel.defaultAppName" : "panel.defaultProjectName", {
         n: (projects?.length || 0) + 1,
       })
-      const p = await codexApi.createProject(nameHint?.trim() || defaultName)
+      const p = await codexApi.createProject(nameHint?.trim() || defaultName, opts?.brief)
       setProjects((cur) => [p, ...(cur || [])])
       setProject(p)
       return p
@@ -346,7 +346,7 @@ export function CodexAgentPanel({ surface = "code" }: { surface?: "code" | "apps
           .slice(0, 48)
           .replace(/[.,;:!?]+$/g, "")
           .trim()
-        target = await createProject(hint || undefined, { manageBusy: false })
+        target = await createProject(hint || undefined, { manageBusy: false, brief: fullPrompt })
         if (!target) return
       }
       const run = await codexApi.createRun(target.id, {
