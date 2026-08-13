@@ -57,3 +57,16 @@ describe("code workspace lifecycle contracts", () => {
     assert.doesNotMatch(contextSource, /let (?:changed|isNew|didRename|didDelete) = false/)
   })
 })
+
+describe("code chat orphan recovery", () => {
+  it("waits before treating a trailing user bubble as an orphan", () => {
+    const chat = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
+    assert.match(chat, /}, 800\)/)
+    assert.match(chat, /currentLast\.role !== "user"/)
+    assert.match(chat, /busyRef\.current \|\| buildingAppRef\.current/)
+    assert.match(
+      chat,
+      /if \(recoveredOrphanTurnRef\.current\.has\(last\.id\)\) return\s+recoveredOrphanTurnRef\.current\.add\(last\.id\)/,
+    )
+  })
+})

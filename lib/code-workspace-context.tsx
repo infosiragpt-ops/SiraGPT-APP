@@ -96,6 +96,12 @@ export const CODE_SELECT_CHAT_SESSION_EVENT = "siragpt:code-select-chat-session"
 export const CODE_OPEN_TOOL_EVENT = "siragpt:code-open-tool"
 export const CODE_OPEN_TOOL_LAUNCHER_EVENT = "siragpt:code-open-tool-launcher"
 export const CODE_OPEN_COMPANY_ASSOCIATION_EVENT = "siragpt:code-open-company-association"
+export const CODE_COMPANY_ASSOCIATION_CHANGED_EVENT = "siragpt:code-company-association-changed"
+
+export function notifyCompanyAssociationChanged(): void {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT))
+}
 // Broadcast the host-runner run id whenever a real dev server starts/stops, so
 // the Shell tool can exec real commands against that run's workspace. detail:
 // { runId: string | null } — null means no live host run (fall back to the

@@ -214,6 +214,22 @@ describe("parseCodeBlocks", () => {
     assert.equal(mixed[0].path, "a.ts")
   })
 
+  it("parses filepath / File / filename= comments and a heading above the fence", () => {
+    const filepath = parseCodeBlocks("```tsx\n// filepath: src/App.tsx\nexport default function App() { return null }\n```")
+    assert.equal(filepath[0].path, "src/App.tsx")
+    assert.ok(filepath[0].content.includes("export default"))
+    assert.ok(!filepath[0].content.includes("filepath"))
+
+    const fileLabel = parseCodeBlocks("```ts\n// File: lib/math.ts\nexport const n = 1\n```")
+    assert.equal(fileLabel[0].path, "lib/math.ts")
+
+    const named = parseCodeBlocks("```tsx filename=components/Hero.tsx\nexport function Hero() { return null }\n```")
+    assert.equal(named[0].path, "components/Hero.tsx")
+
+    const heading = parseCodeBlocks("### `pages/index.tsx`\n```tsx\nexport default function Page() { return null }\n```")
+    assert.equal(heading[0].path, "pages/index.tsx")
+  })
+
   it("still closes plain language-only blocks at the first bare ```", () => {
     const out = parseCodeBlocks("```ts\nconst x = 1\n```\ntexto suelto\n```css\nb {}\n```")
     assert.equal(out.length, 2)

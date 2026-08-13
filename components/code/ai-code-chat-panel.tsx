@@ -107,7 +107,9 @@ import {
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
 import {
+  CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  notifyCompanyAssociationChanged,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   setActiveCodexProject,
   useCodeWorkspace,
@@ -1025,6 +1027,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const codexProjectRef = React.useRef<Record<string, string>>({})
   const [durableCompanyCodexProjectId, setDurableCompanyCodexProjectId] = React.useState<string | null>(null)
   const [companyAssociationResolved, setCompanyAssociationResolved] = React.useState(false)
+  const [associationEpoch, setAssociationEpoch] = React.useState(0)
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const bump = () => setAssociationEpoch((value) => value + 1)
+    window.addEventListener(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT, bump)
+    return () => window.removeEventListener(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT, bump)
+  }, [])
   React.useEffect(() => {
     const workspaceId = String(activeFolder?.id || "")
     const companyProjectId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })
@@ -1055,7 +1064,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     return () => {
       cancelled = true
     }
-  }, [activeFolder?.id])
+  }, [activeFolder?.id, associationEpoch])
   const detachCodexProjectForLocalFallback = React.useCallback(
     (sid: string) => {
       delete codexProjectRef.current[sid]
@@ -3399,6 +3408,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               "created_for_company",
             )
             setDurableCompanyCodexProjectId(project.id)
+            notifyCompanyAssociationChanged()
           }
         }
         codexProjectRef.current[sid] = projectId
@@ -4457,6 +4467,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // Orphan-turn recovery: if the browser persisted a user message but the
   // assistant turn was never created/completed (tab reload, stale busy latch,
   // or a previous build that swallowed the submit), retry it automatically.
+  // Wait a beat before slicing the user bubble — an in-flight sendPrompt
+  // commits the assistant on the next paint, and cancelling a 0ms timer
+  // (Strict Mode / turns changing) used to delete the message without
+  // re-dispatching it.
   const recoveredOrphanTurnRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
     if (busy || buildingApp) return
@@ -4464,12 +4478,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     if (!last || last.role !== "user") return
     const text = last.content.trim()
     if (!text || recoveredOrphanTurnRef.current.has(last.id)) return
-
-    recoveredOrphanTurnRef.current.add(last.id)
-    setTurns((prev) => (prev[prev.length - 1]?.id === last.id ? prev.slice(0, -1) : prev))
     const timer = window.setTimeout(() => {
+      if (busyRef.current || buildingAppRef.current) return
+      const currentLast = turnsRef.current[turnsRef.current.length - 1]
+      if (!currentLast || currentLast.id !== last.id || currentLast.role !== "user") return
+      if (recoveredOrphanTurnRef.current.has(last.id)) return
+      recoveredOrphanTurnRef.current.add(last.id)
+      setTurns((prev) => (prev[prev.length - 1]?.id === last.id ? prev.slice(0, -1) : prev))
       void dispatchRef.current?.(text)
-    }, 0)
+    }, 800)
     return () => window.clearTimeout(timer)
   }, [busy, buildingApp, setTurns, turns])
 

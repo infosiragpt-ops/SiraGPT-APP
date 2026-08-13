@@ -61,5 +61,8 @@ test("association-required is an identity block with an association CTA, never a
   assert.ok(required >= 0 && fallback > required)
   assert.match(chat, /data-testid="code-identity-error"/)
   assert.match(chat, /CODE_OPEN_COMPANY_ASSOCIATION_EVENT/)
+  assert.match(chat, /CODE_COMPANY_ASSOCIATION_CHANGED_EVENT/)
+  assert.match(chat, /associationEpoch/)
   assert.match(company, /window\.addEventListener\(CODE_OPEN_COMPANY_ASSOCIATION_EVENT/)
+  assert.match(company, /notifyCompanyAssociationChanged\(\)/)
 })
