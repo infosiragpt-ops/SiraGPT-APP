@@ -164,6 +164,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(imageUrl)",
   },
   {
+    file: "components/mobile/android-download-card.tsx",
+    reason: "Public same-origin mobile release catalog GET used before login.",
+    accepts: (text) =>
+      text === 'fetch("/api/mobile/releases", { signal: controller.signal })'
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
     file: "components/search-brain/UniversalSearchPanel.tsx",
     reason: "Public SearchBrain provider catalog GET.",
     accepts: (text) =>
@@ -264,6 +273,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     reason: "Public GPT category catalog GET.",
     accepts: (text) =>
       text.includes("${this.baseUrl}/categories")
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
+    file: "lib/mobile-releases.ts",
+    reason: "Server-side public GitHub release catalog GET with no Sira credentials.",
+    accepts: (text) =>
+      text === "fetch(RELEASES_API, requestInit)"
       && isNonMutatingFetchCall(text)
       && isCredentialFreePublicFetch(text),
     required: true,
