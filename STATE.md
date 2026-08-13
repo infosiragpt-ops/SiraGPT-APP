@@ -8,13 +8,17 @@
 
 ## Fase activa
 
-**F1 — Core agéntico (AgentRunner: loop + tools + artefactos + verificación).**
-Estado: **DEPLOYED_AWAITING_GATES** — el runner está desplegado pero los gates de
-F1 aún no cierran: la evidencia de producción del 2026-08-13 ("crea una ppt del
-embarazo de color celeste/rosado" seguía contestando la plantilla genérica de
-8 diapositivas) mostró que el routing caía en silencio al
-`advanced-document-pipeline` cuando el runner fallaba (OpenRouter 402 /
-Anthropic sin créditos / sin LLM). F1 NO está completa.
+**F2 — Routing completo (runner primario en TODAS las entradas de documentos).**
+Estado: **COMPLETED (pendiente de merge/deploy)** — los tests de routing F2
+están verdes (`tests/agent-runner-f2-routing.test.js`, 10 tests) junto con las
+suites F1 existentes (agent-runner-routing / e2e / agentic-chat-stream). El
+gate "ningún pedido de documento entra al pipeline sin haber pasado por el
+runner" queda cubierto por código + tests + telemetría (ver abajo). Falta el
+merge del PR y la verificación de CI/producción por Luis.
+
+F1 (core agéntico): **COMPLETED** — el hardening del 2026-08-13 (PR #279)
+cerró el fallback silencioso al pipeline genérico en chat y `/api/doc/generate`
+con errores honestos (`agent_runner_failed` / `no_llm` / `llm_402`).
 
 F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
@@ -56,17 +60,44 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
     saldo bajo aún complete un loop corto.
   - Tests: `tests/agent-runner-routing.test.js` (402/no_llm/no_output → nunca
     pipeline) + casos nuevos en `agentic-chat-stream.test.js`.
+- **F2 — routing completo (este PR).** Auditoría de TODAS las entradas que
+  pueden crear/editar pptx/docx/xlsx y cierre del último gap:
+  - **`/api/agent/task` (agent-task-runner) es ahora runner-first.** El
+    classifier de intención del chat UI enruta los turnos 'ppt'/documento a
+    esta entrada, que hasta ahora creaba documentos vía `create_document` o
+    `generateAutoDocument` (advanced pipeline) SIN consultar al AgentRunner.
+    Preloop nuevo: turno reclamado → archivo verificado del runner o (turnos
+    crear-doc / estilo-color) error honesto `agent_runner_failed`. Los turnos
+    de EDICIÓN reclamados conservan el rescate quirúrgico source-preserving,
+    pero `create_document` y el auto-document pipeline quedan prohibidos por
+    el resto del run (la prohibición sobrevive al rebuild post-loop de
+    `documentPolicy`). Los fast-paths deterministas que responden desde los
+    archivos REALES del usuario (transcripción plana, matriz Vancouver,
+    respuestas de adjuntos chat-only) conservan prioridad — nunca tocan la
+    plantilla genérica.
+  - **Chat**: un turno reclamado que falla y continúa como edición quirúrgica
+    ya no puede alcanzar `create_document` en el loop.
+  - **Telemetría F2** (`agent-runner/telemetry.js` → `logDocumentRouting`):
+    cada entrada (chat, `/api/doc/generate`, gate de `/api/ai/generate`,
+    `/api/agent/task`) emite una línea estructurada `[doc-routing]` + counter
+    `document_turn_path_total` con el camino que respondió:
+    `agent_runner | agent_runner_failed | source_preserving_edit |
+    advanced_pipeline | skipped`.
+  - Tests: `tests/agent-runner-f2-routing.test.js` (10) — frases crear-ppt y
+    follow-ups de estilo SIEMPRE reclaman el runner; fallo reclamado NUNCA
+    invoca el pipeline genérico ni `create_document`; "hola" no entra al
+    runner; preloop de agent-task e2e con runner stub. El preloop es opt-in
+    bajo `NODE_ENV=test` (`AGENT_TASK_AGENT_RUNNER=1`), igual que las demás
+    features del runner que tocan red.
 
 ## En progreso
 
-- Nada fuera de F1. Este PR es un **hardening de F1** (routing runner-first sin
-  fallback al pipeline genérico + errores honestos de créditos). F1 sigue
-  DEPLOYED_AWAITING_GATES; NO se marca completa y NO se inicia F2 (retiro del
-  classifier en todos los entry points + dashboard de telemetría quedan para F2).
+- Nada fuera de F2. F3+ NO se inicia (SSE cancel, planner, gVisor, Playwright,
+  memoria, LoRA, SSO, MinIO quedan secuenciados en `ROADMAP.md`).
 
 ## Pendiente
 
-- **F2 en adelante**, según `ROADMAP.md`: routing completo → SSE traces + cancel →
+- **F3 en adelante**, según `ROADMAP.md`: SSE traces + cancel →
   orquestador → sandbox hardening → search/browser → multimodal → memoria/skills/MCP
   → evals/optimizer → flywheel (router aprendido + LoRA/vLLM) → enterprise
   (SSO/SCIM/Stripe/marketplace) → plataforma y superficies (MinIO/OTel/canary,
