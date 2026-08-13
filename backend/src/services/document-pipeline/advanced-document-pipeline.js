@@ -3132,6 +3132,53 @@ async function buildDocumentFile({ plan, outputDir }) {
   return { filename, outputPath, buffer, mime: MIME[ext] || 'application/octet-stream' };
 }
 
+function highSeverityVisualDefects(critique) {
+  if (!critique || critique.skipped || !critique.report) return [];
+  return (critique.report.defects || []).filter((d) => d && d.severity === 'high' && d.defect);
+}
+
+const BLANKISH_VISUAL_RE = /blanc[oa]|blank|vac[ií]a|empty|half.?empty|mitad\s+(?:inferior|superior)/i;
+
+function applyVisualCritiqueToPlan(plan, critique) {
+  const defects = highSeverityVisualDefects(critique);
+  const notes = defects.map((d) => {
+    const hint = String(d.suggestion || d.defect || '').trim();
+    return hint ? `p${d.page}: ${hint}` : '';
+  }).filter(Boolean);
+  const next = {
+    ...plan,
+    complexity: plan.complexity === 'standard' ? 'high' : plan.complexity,
+    visualRepairNotes: notes,
+    repairedFromVisual: true,
+  };
+  if (plan.format === 'pptx' && plan.slidePlan && Array.isArray(plan.slidePlan.slides)) {
+    const blankPages = new Set(
+      defects
+        .filter((d) => BLANKISH_VISUAL_RE.test(`${d.defect || ''} ${d.suggestion || ''}`))
+        .map((d) => Number(d.page) || 0),
+    );
+    if (blankPages.size) {
+      const slides = plan.slidePlan.slides.filter((_, i) => !blankPages.has(i + 1));
+      if (slides.length >= 2) {
+        const contentSlides = slides.filter((slide) => {
+          const role = String(slide?.role || slide?.type || '').toLowerCase();
+          return role !== 'cover' && role !== 'agenda' && role !== 'title' && role !== 'closing';
+        }).length;
+        next.slidePlan = {
+          ...plan.slidePlan,
+          slides,
+          manifest: {
+            ...(plan.slidePlan.manifest || {}),
+            totalSlides: slides.length,
+            contentSlides,
+          },
+        };
+      }
+    }
+  }
+  return next;
+}
+
 function repairPlan(plan, validation) {
   const sections = Array.from(new Set(plan.sections));
   const groundedResearchDeck = plan.format === 'pptx'
@@ -3444,28 +3491,61 @@ async function runAdvancedDocumentPipeline({
   // artifact with soffice, have a vision model adversarially inspect the
   // pages and attach the findings to validation.details. Best-effort and
   // budgeted — it can only ADD observability, never fail a delivery.
+  // High-severity defects trigger one extra rebuild (still never fails delivery).
+  let visualCritique = { skipped: true, reason: 'not-run' };
   try {
-    const critique = await runRenderCritique({
+    visualCritique = await runRenderCritique({
       filePath: artifact.outputPath,
       format: plan.format,
       expectation: `${plan.title} (${plan.template}, ${plan.format}) — solicitud: ${String(plan.userRequest || '').slice(0, 300)}`,
     });
-    if (!critique.skipped) {
-      validation.details = { ...(validation.details || {}), visualCritique: critique.report };
-      const defectCount = critique.report.defects.length;
+    if (!visualCritique.skipped) {
+      validation.details = { ...(validation.details || {}), visualCritique: visualCritique.report };
+      const defectCount = visualCritique.report.defects.length;
       emit(
         events,
         'document_design',
-        critique.report.overall === 'pass' ? 'complete' : 'warning',
-        critique.report.overall === 'pass'
-          ? `Revisión visual aprobada (${critique.pagesRendered} página(s) inspeccionadas)`
-          : `Revisión visual: ${defectCount} observación(es) — ${critique.report.summary}`,
-        { pagesRendered: critique.pagesRendered, defects: critique.report.defects, durationMs: critique.durationMs },
+        visualCritique.report.overall === 'pass' ? 'complete' : 'warning',
+        visualCritique.report.overall === 'pass'
+          ? `Revisión visual aprobada (${visualCritique.pagesRendered} página(s) inspeccionadas)`
+          : `Revisión visual: ${defectCount} observación(es) — ${visualCritique.report.summary}`,
+        { pagesRendered: visualCritique.pagesRendered, defects: visualCritique.report.defects, durationMs: visualCritique.durationMs },
       );
     } else {
-      emit(events, 'document_design', 'complete', 'Revisión visual omitida', { reason: critique.reason });
+      emit(events, 'document_design', 'complete', 'Revisión visual omitida', { reason: visualCritique.reason });
     }
   } catch { /* never blocks delivery */ }
+
+  const highVisual = highSeverityVisualDefects(visualCritique);
+  if (highVisual.length > 0 && maxRepairAttempts > 0) {
+    try {
+      emit(events, 'qa', 'warning', 'Revisión visual encontró defectos graves; regenerando', { defects: highVisual });
+      plan = repairPlan(applyVisualCritiqueToPlan(plan, visualCritique), {
+        ...validation,
+        details: { ...(validation.details || {}), visualCritique: visualCritique.report },
+      });
+      emit(events, 'refactor', 'complete', 'Plan reforzado con hallazgos visuales', {
+        notes: plan.visualRepairNotes,
+        sections: plan.sections.length,
+      });
+      artifact = await buildDocumentFile({ plan, outputDir });
+      const expectedVisual = expectedFor(plan.format, plan.template, plan.complexity, plan);
+      validation = validateDocument({ format: plan.format, buffer: artifact.buffer, expected: expectedVisual });
+      validation.details = {
+        ...(validation.details || {}),
+        visualCritique: visualCritique.report,
+        visualRepaired: true,
+      };
+      attemptRecords.push({ attempt: 'visual', validation, expected: expectedVisual });
+      emit(
+        events,
+        'file_validation',
+        validation.passed ? 'complete' : 'warning',
+        'Validación post-reparación visual',
+        { score: validation.overallScore },
+      );
+    } catch { /* keep the original artifact */ }
+  }
 
   if (!events.some((event) => event.role === 'qa')) {
     emit(events, 'qa', validation.passed ? 'complete' : 'warning', validation.passed ? 'QA sin fallos bloqueantes' : 'QA detectó advertencias persistentes', { passed: validation.passed });
@@ -3762,6 +3842,8 @@ module.exports = {
     buildDocumentFile,
     inspectXlsxCorporateStyle,
     repairPlan,
+    highSeverityVisualDefects,
+    applyVisualCritiqueToPlan,
     zipEntries,
     writeTelemetry,
     extractSourceContent,
