@@ -6150,10 +6150,18 @@ router.post(
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
               const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+              // Count Office/PDF attachments even when vision images were
+              // stripped from filesForVision. The document-edit preloop needs
+              // this gate, not the vision subset.
+              let documentEditRequested = false;
+              try {
+                documentEditRequested = require('../services/agents/agentic-trigger')
+                  .isDocumentEditRequest(prompt);
+              } catch (_) { documentEditRequested = false; }
               const shouldRunAgentic = agenticStream.shouldUseAgenticChat({
                 prompt,
                 history: priorHistory,
-                files: filesForVision || [],
+                files: processedFiles || [],
                 customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
               });
               // Tool-calling fallback ladder: 'native' (OpenAI-style
@@ -6174,7 +6182,12 @@ router.post(
                 // disableAgentic flag.
                 && !__publicWebReadonly
                 && __toolCallMode !== 'none'
-                && !hasImages
+                // Images used to skip the whole agentic path. That also
+                // skipped the deterministic Office editor, so "agrega 5
+                // slides a esta ppt" on a vision model fell through to the
+                // LLM and invented "limitaciones técnicas". Document edits
+                // do not need vision — keep the preloop.
+                && (!hasImages || documentEditRequested)
               );
               // U3: shadow turn-policy snapshot (observe by default). Never
               // overrides routing/tool decisions in this unit.
@@ -6189,7 +6202,7 @@ router.post(
                       ? 'caller_disabled'
                       : (__toolCallMode === 'none'
                         ? 'tool_call_mode_none'
-                        : (hasImages
+                        : ((hasImages && !documentEditRequested)
                           ? 'images_attached'
                           : (shouldRunAgentic ? null : 'routing_gate')))));
                 __turnPolicy = turnPolicyService.buildTurnPolicy({
@@ -6349,15 +6362,14 @@ router.post(
                     ),
                   },
                 });
-                // The agentic loop reports success via stoppedReason:
-                // 'finalized' (model called the finalize tool) or
-                // 'plain_text_finalize' (model answered directly). ANY other
-                // reason (max_steps / model_error / no_message / aborted /
-                // runtime_budget_exhausted / degraded_no_finalize / tool_*) is
-                // a degraded run whose finalAnswer is empty OR a generic
-                // apology ("No logré cerrar la tarea…"). Returning either of
-                // those is what surfaced "El asistente dejó de responder" /
-                // the apology on perfectly simple prompts.
+                // The agentic loop reports success via isHandledAgenticChatResult:
+                // finalize, last-step rescue, AND the document-edit preloop
+                // (source_preserving_document_edit*). Anything else
+                // (max_steps / model_error / no_message / aborted /
+                // runtime_budget_exhausted / tool_*) is degraded and falls
+                // through to the plain stream. The old 3-reason allowlist
+                // treated a successful Office edit as degraded, wiped the
+                // file_artifact card, and let the LLM invent a refusal.
                 const __agenticAnswer = (agenticResult && typeof agenticResult.finalAnswer === 'string')
                   ? agenticResult.finalAnswer.trim()
                   : '';
@@ -6367,13 +6379,7 @@ router.post(
                 // degraded-but-real answer) both carry a genuine answer — treat
                 // them as success so the route delivers it instead of discarding
                 // it and re-generating via the plain stream.
-                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize', 'finalized_last_step_guard_override']);
-                const __agenticReason = String((agenticResult && agenticResult.stoppedReason) || '');
-                const __agenticOk =
-                  agenticResult
-                  && (__SUCCESS_REASONS.has(agenticResult.stoppedReason) || __agenticReason.startsWith('finalized_guard_breaker'))
-                  && __agenticAnswer.length > 0
-                  && __agenticAnswer !== '(agent returned empty message)';
+                const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
                 if (__agenticOk) {
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.

@@ -316,6 +316,10 @@ describe('source-preserving document edit', () => {
       'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
       ['file-pptx'],
     ), true);
+    assert.equal(isSourcePreservingEditRequest(
+      'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      [],
+    ), true, 'same-deck follow-up must recover the prior PPT even without current-turn fileIds');
     assert.equal(isSourcePreservingEditRequest('edita mi presentacion y corrige la ortografia', ['file-pptx']), true);
     assert.equal(isSourcePreservingEditRequest('reemplaza BORRADOR por APROBADO en los documentos adjuntos y devuelve un DOCX completo', ['file-docx', 'file-xlsx']), true);
     assert.equal(isSourcePreservingEditRequest('completa el anexo 3', ['file-docx']), true);
@@ -485,6 +489,55 @@ describe('source-preserving document edit', () => {
     assert.equal(files.length, 1);
     assert.equal(files[0].id, 'file-new');
     assert.equal(files[0].path, newPath);
+  });
+
+  it('recovers the ##-named PPTX from recent chat attachments when fileIds are empty', async () => {
+    const prompt = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
+    assert.deepEqual(
+      sourcePreservingInternals.extractReferencedSourceFilenames(prompt),
+      ['gestion_amdinistrativa.pptx'],
+    );
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'source-preserving-named-pptx-'));
+    const pptxPath = path.join(tmp, 'Gestion_amdinistrativa.pptx');
+    const otherPath = path.join(tmp, 'informe.docx');
+    fs.writeFileSync(pptxPath, 'pptx');
+    fs.writeFileSync(otherPath, 'docx');
+    const prisma = {
+      message: {
+        async findMany() {
+          return [{
+            id: 'm1',
+            files: [
+              { id: 'file-docx', originalName: 'informe.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+              { id: 'file-pptx', originalName: 'Gestion_amdinistrativa.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+            ],
+          }];
+        },
+      },
+      file: {
+        async findMany(query) {
+          assert.deepEqual(query.where.id.in, ['file-pptx']);
+          return [{
+            id: 'file-pptx',
+            filename: 'Gestion_amdinistrativa.pptx',
+            originalName: 'Gestion_amdinistrativa.pptx',
+            mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            size: 12,
+            path: pptxPath,
+            extractedText: 'Gestión administrativa',
+          }];
+        },
+      },
+    };
+    const files = await loadEditableSourceFiles(prisma, {
+      userId: 'user-1',
+      chatId: 'chat-1',
+      fileIds: [],
+      prompt,
+    });
+    assert.equal(files.length, 1);
+    assert.equal(files[0].id, 'file-pptx');
+    assert.equal(files[0].source, 'recent_attachment');
   });
 
   it('uses the latest generated DOCX as the main document and current uploads as reference material', async () => {

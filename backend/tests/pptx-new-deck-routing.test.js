@@ -10,6 +10,7 @@ const {
 const {
   isArtifactDeliverableRequest,
   isAgenticActionRequest,
+  isDocumentEditRequest,
 } = require('../src/services/agents/agentic-trigger');
 
 // Avoid loading source-preserving-document-edit here (heavy OOXML deps).
@@ -38,6 +39,7 @@ describe('new PPTX deck routing (thesis + images → .pptx)', () => {
   it('does not treat "agrega N ppts más en estas mismas diapositivas" as a new deck', () => {
     const live = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
     assert.equal(wantsNewPresentationDeliverable(live), false);
+    assert.equal(isDocumentEditRequest(live), true);
     assert.equal(wantsNewPresentationDeliverable('agrega 5 slides mas en esta misma ppt'), false);
   });
 

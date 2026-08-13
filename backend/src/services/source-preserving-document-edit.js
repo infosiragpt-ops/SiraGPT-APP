@@ -163,9 +163,13 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     || (/\b(extrae\w*|extract|divide\w*|separa\w*|split)\b/.test(text) && /\bp[aá]ginas?\b/.test(text))
     || (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(text) && /\bpdfs?\b/.test(text));
   const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || professionalEditingIntent || imageEditIntent || pdfOpIntent;
-  const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
-  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);
-  const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva)\b/.test(text);
+  const existingDocRef = /\b(mi|mism[oa]s?|mim[oa]s|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
+  const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
+  const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva|nuevas?\s+diapositiv\w*)\b/.test(text);
+  const sameDocumentCue = /\b(?:estas?|estos?)\s+(?:mism[oa]s?|mim[oa]s)\s+(?:ppt|pptx|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|laminas?|archivo|documento|word|docx|excel|xlsx|pdf)\b/.test(text)
+    || /\ben\s+(?:estas?|estos?|la|el|mi)\s+(?:mism[oa]s?|mim[oa]s\s+)?(?:ppt|pptx|diapositiv\w*|presentaci[oó]n|documento|archivo|word|excel)\b/.test(text)
+    || /##\s*\S+\.(?:pptx?|docx?|xlsx?|pdf)\b/.test(text)
+    || /\b(?:agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*)\s+\d+\s+(?:ppt|ppts?|slides?|diapositiv\w*|laminas?)\s+m[aá]s\b/.test(text);
   const preservation = /\b(sin cambiar|no cambies|no modificar lo demas|mismo word|mismo documento|conservar|preservar|mantener)\b/.test(text);
   const explicitFreshDeliverable = /\b(?:genera(?:r|me)?|crea(?:r|me)?|haz(?:me)?|realiz(?:a|ar|ame)?|dame|prepara(?:r|me)?|redacta(?:r|me)?|elabora(?:r|me)?|devu[eé]lv(?:e|eme|elo)|entr[eé]ga(?:r|me)?|dise[nñ]a(?:r|me)?)\b[^.?!]{0,160}\b(?:un\s+|una\s+|el\s+|la\s+)?(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?|slides?)\b/.test(text)
     || /\b(?:quiero|necesito)\s+(?:un\s+|una\s+|el\s+|la\s+)(?:word|docx|documento|informe|reporte|tesis|monografia|ensayo|ppt|pptx|powerpoint|presentaci[oó]n|diapositivas?)\b/.test(text)
@@ -175,9 +179,9 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     || (documentNoun && /\b(corrig\w*|correg\w*|modific\w*|edit\w*|actualiz\w*|cambi(?:a\w*|e\w*))\b/.test(editVerbHay))
   );
   const instrument = requestWantsInstrument(text) || /\banexos?\b/.test(text);
-  const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiva|pagina|seccion|capitulo)\b/.test(text);
+  const documentRegion = /\b(portada|caratula|t[ií]tulo|encabezado|pie de pagina|indice|tabla|hoja|celda|fila|columna|diapositiv\w*|slides?|pagina|seccion|capitulo)\b/.test(text);
   const strongImplicitFollowUp = appendLocation && (instrument || preservation || /\btesis\b/.test(text));
-  const continuationDocRef = /\b(mi|mismo|misma|documento|archivo|word|docx|tesis|general|principal)\b/.test(text);
+  const continuationDocRef = /\b(mi|mism[oa]s?|mim[oa]s|documento|archivo|word|docx|tesis|general|principal|pptx?|presentaci[oó]n|diapositiv\w*)\b/.test(text);
   const followUpDocumentEdit = continuationDocRef
     && primaryEditVerb
     && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
@@ -192,6 +196,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // enumeración de creación ("genera un word: incluye tabla, índice…") no.
   const concreteEditTarget = hasFiles && Boolean(parseTargetSectionRequest(text));
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
+  if (sameDocumentCue && (structuralEditVerb || strongStructuralVerb)) return true;
   if (hasFiles) {
     if (professionalEditingIntent) return true;
     if (editorialCorrectionIntent) return true;
@@ -377,6 +382,33 @@ function isPotentialEditableAttachmentRef(file) {
     || /\b(word|wordprocessingml|spreadsheet|excel|presentation|powerpoint|pdf|csv|plain|markdown|html|svg|json|xml|yaml)\b/.test(mime);
 }
 
+function extractReferencedSourceFilenames(prompt = '') {
+  const names = [];
+  const re = /##\s*([^\n#]+?\.(?:pptx?|docx?|xlsx?|pdf))\b/gi;
+  let match = re.exec(String(prompt || ''));
+  while (match) {
+    const name = String(match[1] || '').trim().toLowerCase();
+    if (name) names.push(name);
+    match = re.exec(String(prompt || ''));
+  }
+  return names;
+}
+
+function fileNameMatchesReference(fileName = '', referencedNames = []) {
+  const name = String(fileName || '').trim().toLowerCase();
+  if (!name || !Array.isArray(referencedNames) || referencedNames.length === 0) return false;
+  return referencedNames.some((ref) => name === ref || name.endsWith(ref) || ref.endsWith(name));
+}
+
+function matchReferencedSourceFile(files = [], requestText = '') {
+  const referenced = extractReferencedSourceFilenames(requestText);
+  if (!referenced.length) return null;
+  return (files || []).find((file) => fileNameMatchesReference(
+    file && (file.originalName || file.filename || file.name),
+    referenced,
+  )) || null;
+}
+
 async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
   if (!chatId || !prisma?.message?.findMany || !isSourcePreservingEditRequest(prompt, [])) return [];
   const messages = await prisma.message.findMany({
@@ -386,18 +418,25 @@ async function resolveRecentEditableFileIds(prisma, { chatId, prompt } = {}) {
     take: 25,
   }).catch(() => []);
   const seen = new Set();
-  const ids = [];
+  const candidates = [];
   for (const message of messages) {
     for (const file of parseMessageFiles(message.files)) {
       if (!isPotentialEditableAttachmentRef(file)) continue;
       const id = fileRefId(file);
       if (!id || seen.has(id)) continue;
       seen.add(id);
-      ids.push(id);
-      if (ids.length >= MAX_SIMULTANEOUS_DOCUMENTS) return ids;
+      candidates.push({
+        id,
+        name: String(file.name || file.originalName || file.filename || '').trim().toLowerCase(),
+      });
     }
   }
-  return ids;
+  const referenced = extractReferencedSourceFilenames(prompt);
+  const preferred = referenced.length
+    ? candidates.filter((item) => fileNameMatchesReference(item.name, referenced))
+    : [];
+  const chosen = preferred.length ? preferred : candidates;
+  return chosen.map((item) => item.id).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 }
 
 function isImageAttachmentRow(row = {}) {
@@ -690,7 +729,14 @@ function selectSourcePreservingDocumentSet({ requestText = '', sourceFiles = [],
 
   let sourceFile = null;
   let selectionReason = 'first_supported_file';
-  if (targetedSection && currentDocx.length) {
+  const referencedFile = (!wantsGeneral && !wantsReferenceIntegration)
+    ? (matchReferencedSourceFile(currentSupported, requestText)
+      || matchReferencedSourceFile(priorSupported, requestText))
+    : null;
+  if (referencedFile) {
+    sourceFile = referencedFile;
+    selectionReason = 'referenced_filename';
+  } else if (targetedSection && currentDocx.length) {
     sourceFile = currentDocx[0];
     selectionReason = 'current_docx_target_section';
   } else if (hasExplicitCurrentUpload && !wantsReferenceIntegration && currentDocx.length) {
@@ -8125,6 +8171,8 @@ module.exports = {
     planOfficeOperationsSmart,
     sanitizeOfficeOperations,
     buildCombinedSourceText,
+    extractReferencedSourceFilenames,
+    matchReferencedSourceFile,
     buildBatchEditResult,
     buildCronogramaAnexo3Plan,
     buildDocumentFormattingTemplate,
