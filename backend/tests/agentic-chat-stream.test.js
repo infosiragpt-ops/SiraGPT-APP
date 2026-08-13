@@ -203,6 +203,52 @@ test('shouldUseAgenticChat keeps simple doc Q&A / summaries on the reliable plai
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'que dice el documento sobre el presupuesto?', files: [{ id: 'f1' }] }), false);
 });
 
+test('isHandledAgenticChatResult keeps a successful Office edit off the plain stream', () => {
+  const liveAnswer = 'Listo. Conservé el documento original y apliqué la edición solicitada.';
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit',
+    finalAnswer: liveAnswer,
+    artifacts: [{ id: 'art-1' }],
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_validation_failed',
+    finalAnswer: 'No entregué el documento editado porque ninguna copia generada superó la validación de integridad.',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit_failed',
+    finalAnswer: 'No pude aplicar el cambio en el documento adjunto.',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'image_edit_clarification_needed',
+    finalAnswer: '¿Cuál imagen quieres reemplazar?',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'finalized',
+    finalAnswer: 'hola',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'finalized_guard_breaker_unsatisfiable',
+    finalAnswer: 'respuesta real',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'max_steps',
+    finalAnswer: 'No logré cerrar la tarea',
+  }), false);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit',
+    finalAnswer: '',
+  }), false);
+});
+
+test('shouldUseAgenticChat routes same-deck "agrega N ppts" as an attachment edit', () => {
+  const live = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: live,
+    files: [{ id: 'pptx-1', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }],
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: live, files: [] }), true);
+});
+
 test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {
   // These previously slipped past AGENTIC_PROMPT_HINT and answered as
   // plain text instead of producing the artifact the user asked for.
@@ -1033,8 +1079,83 @@ test('runAgenticChat source-preserving pre-loop short-circuits edit turns before
     assert.equal(result.stoppedReason, 'source_preserving_document_edit');
     assert.match(result.finalAnswer, /Conservé el DOCX original/);
     assert.equal(result.artifacts[0].id, 'art-preloop');
+    assert.match(String(result.persistedContent || ''), /art-preloop/);
+    assert.equal(agenticStream.isHandledAgenticChatResult(result), true);
     const body = frames();
     assert.ok(body.some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-preloop'));
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat source-preserving pre-loop runs from chatId when this turn has no fileIds', async () => {
+  let llmCalls = 0;
+  let receivedFileIds = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async (args) => {
+          receivedFileIds = args.fileIds;
+          return {
+            content: 'Listo. Conservé el PPT original y agregué las diapositivas.',
+            artifact: {
+              id: 'art-followup',
+              filename: 'Gestion_amdinistrativa_editado.pptx',
+              format: 'pptx',
+              mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              sizeBytes: 2048,
+              downloadUrl: '/api/agent/artifact/art-followup',
+            },
+            validation: { passed: true },
+          };
+        },
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: [],
+        prisma: {},
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.deepEqual(receivedFileIds, []);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.equal(result.artifacts[0].id, 'art-followup');
+    assert.equal(fresh.isHandledAgenticChatResult(result), true);
+    assert.ok(frames().some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-followup'));
   } finally {
     Module._load = originalLoad;
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];

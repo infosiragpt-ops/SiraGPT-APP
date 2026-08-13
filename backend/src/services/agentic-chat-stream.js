@@ -427,6 +427,37 @@ const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buen
 const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 
+// Stop reasons that already delivered a user-facing answer (and often
+// file_artifact cards). /api/ai/generate MUST keep these — treating them as
+// "degraded" wiped the edited Office file and let the plain LLM invent
+// "No puedo crear la presentación debido a limitaciones técnicas".
+const HANDLED_AGENTIC_STOP_REASONS = new Set([
+  'finalized',
+  'plain_text_finalize',
+  'finalized_last_step_guard_override',
+  'source_preserving_document_edit',
+  'source_preserving_document_validation_failed',
+  'source_preserving_document_edit_failed',
+  'image_edit_clarification_needed',
+]);
+
+/**
+ * True when the agentic turn already finished honestly and the chat route
+ * must persist that answer instead of falling through to the plain stream.
+ *
+ * @param {{ stoppedReason?: string, finalAnswer?: string } | null} result
+ * @returns {boolean}
+ */
+function isHandledAgenticChatResult(result) {
+  if (!result || typeof result !== 'object') return false;
+  const reason = String(result.stoppedReason || '').trim();
+  if (!reason) return false;
+  const answer = typeof result.finalAnswer === 'string' ? result.finalAnswer.trim() : '';
+  if (!answer || answer === '(agent returned empty message)') return false;
+  if (HANDLED_AGENTIC_STOP_REASONS.has(reason)) return true;
+  return reason.startsWith('finalized_guard_breaker');
+}
+
 /**
  * Decide whether a normal chat turn should enter the agentic loop.
  *
@@ -679,8 +710,29 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const { wantsNewPresentationDeliverable } = require('./agents/document-delivery-policy');
       wantsNewDeckDeliverable = wantsNewPresentationDeliverable(userQuery);
     } catch (_) { /* best-effort */ }
+    const finishSourcePreservingPreloop = (stoppedReason, answer, artifacts = []) => {
+      const finalAnswer = String(answer || '').trim();
+      return {
+        finalAnswer,
+        persistedContent: buildPersistedContent({
+          meta: { goal: userQuery, model, tools: ['document_edit'] },
+          steps: [],
+          artifacts,
+          approvals: [],
+          checkpoints: [],
+          qualityGates: [],
+          repairs: [],
+          finalText: finalAnswer,
+          done: true,
+        }, finalAnswer),
+        stoppedReason,
+        artifacts,
+      };
+    };
     if (
-      preloopFileIds.length > 0
+      // fileIds may be empty on a follow-up that only names ## file.pptx —
+      // tryGenerate recovers the recent chat attachment via chatId.
+      (preloopFileIds.length > 0 || Boolean(toolContext.chatId))
       && toolContext.prisma
       && toolContext.userId
       && customGptCapabilities?.documents !== false
@@ -707,15 +759,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             signal,
           });
           if (preserved?.clarification) {
+            const answer = String(preserved.content || '').trim();
             await writeSse(res, {
               replace: true,
-              content: String(preserved.content || '').trim(),
+              content: answer,
             });
-            return {
-              finalAnswer: String(preserved.content || '').trim(),
-              stoppedReason: 'image_edit_clarification_needed',
-              artifacts: [],
-            };
+            return finishSourcePreservingPreloop('image_edit_clarification_needed', answer, []);
           }
           const preservedResults = Array.isArray(preserved?.results) && preserved.results.length
             ? preserved.results
@@ -746,22 +795,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               ? `Listo. Entregué ${artifactEvents.length} archivo(s) que superaron la validación. No entregué ${rejectedResultCount} archivo(s) inválido(s).`
               : String(preserved.content || fallbackAnswer).trim();
             await writeSse(res, { replace: true, content: answer });
-            return {
-              finalAnswer: answer,
-              stoppedReason: 'source_preserving_document_edit',
-              artifacts: artifactEvents,
-            };
+            return finishSourcePreservingPreloop(
+              'source_preserving_document_edit',
+              answer,
+              artifactEvents,
+            );
           }
           if (preservedResults.length) {
             // The source-preserving editor handled the request but could not
             // prove any output safe. Never fall through to the LLM/tool loop:
             // that path can regenerate a plausible but different document.
             await writeSse(res, { replace: true, content: SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE });
-            return {
-              finalAnswer: SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE,
-              stoppedReason: 'source_preserving_document_validation_failed',
-              artifacts: [],
-            };
+            return finishSourcePreservingPreloop(
+              'source_preserving_document_validation_failed',
+              SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE,
+              [],
+            );
           }
         }
       } catch (preErr) {
@@ -775,11 +824,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (isSourcePreservingValidationError(preErr)) {
           const answer = SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE;
           await writeSse(res, { replace: true, content: answer });
-          return {
-            finalAnswer: answer,
-            stoppedReason: 'source_preserving_document_validation_failed',
-            artifacts: [],
-          };
+          return finishSourcePreservingPreloop(
+            'source_preserving_document_validation_failed',
+            answer,
+            [],
+          );
         }
         if (
           code === 'REPLACE_TEXT_NOT_FOUND'
@@ -791,11 +840,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           const answer = message
             || 'No pude aplicar el cambio en el documento adjunto. Indica el texto exacto a reemplazar (entre comillas) y lo edito de forma quirúrgica.';
           await writeSse(res, { replace: true, content: answer });
-          return {
-            finalAnswer: answer,
-            stoppedReason: 'source_preserving_document_edit_failed',
-            artifacts: [],
-          };
+          return finishSourcePreservingPreloop(
+            'source_preserving_document_edit_failed',
+            answer,
+            [],
+          );
         }
       }
     }
@@ -2149,6 +2198,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     runAgentTurn: runAgenticChat,
     isEnabled,
     shouldUseAgenticChat,
+    isHandledAgenticChatResult,
     modelSupportsFunctionCalling,
     resolveToolCallMode,
     promptedToolsEnabled,
