@@ -16,6 +16,7 @@ const EDIT_TOOLS = new Set([
   'bash',
   'write_file',
   'str_replace',
+  'edit_file',
   'set_slide_background',
   'create_presentation',
 ]);

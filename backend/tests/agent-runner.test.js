@@ -6,11 +6,19 @@ const { parseReact } = require('../src/services/agent-runner/react');
 const { runAgentLoop } = require('../src/services/agent-runner/loop');
 const {
   normalizeHex,
+  normalizeOutline,
   NAMED_COLORS,
+  DEFAULT_DECK_COLOR,
   TOOL_DEFINITIONS,
   makeToolExecutors,
 } = require('../src/services/agent-runner/tools');
-const { shouldRunAgentRunner, canCallLlm } = require('../src/services/agent-runner');
+const {
+  shouldRunAgentRunner,
+  canCallLlm,
+  executeAgentRunnerTurn,
+  runAgentRunnerForDocRoute,
+  loadOfficeHelpersPy,
+} = require('../src/services/agent-runner');
 const { persistOutputs, resolveTurnFiles } = require('../src/services/agent-runner/artifacts');
 const {
   needsVerification,
@@ -91,6 +99,32 @@ test('shouldRunAgentRunner catches create-a-pink-ppt and follow-up artifacts', (
   }), true);
 });
 
+test('shouldRunAgentRunner routes style follow-ups in ANY named color or hex', () => {
+  assert.equal(shouldRunAgentRunner({ text: 'ponlas todas moradas' }), true);
+  assert.equal(shouldRunAgentRunner({ text: 'cámbialas a turquesa' }), true);
+  assert.equal(shouldRunAgentRunner({ text: 'píntalas de dorado' }), true);
+  assert.equal(shouldRunAgentRunner({ text: 'uniformisa el color de la ppts todas de color blanco' }), true);
+  assert.equal(shouldRunAgentRunner({ text: 'cámbialas al hex #1E3A8A' }), true);
+  assert.equal(shouldRunAgentRunner({ text: 'qué es la fotosíntesis' }), false);
+});
+
+test('create-doc request WITHOUT an LLM is skipped honestly — never a stub deck', async () => {
+  const prevKey = process.env.OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = 'ci-dummy';
+  try {
+    const ran = await executeAgentRunnerTurn({
+      instruction: 'crea una ppt del embarazo de color rosado la ppt',
+    });
+    assert.equal(ran.skipped, true);
+    assert.equal(ran.ok, false);
+    assert.equal(ran.stoppedReason, 'no_llm');
+    assert.deepEqual(ran.artifacts, []);
+  } finally {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  }
+});
+
 test('appendTextSlide clones last slide and writes Gracias', async () => {
   const { appendTextSlide } = require('../src/services/agent-runner/office-helpers');
   const PptxGenJS = require('pptxgenjs');
@@ -110,6 +144,50 @@ test('normalizeHex understands named colors and hex', () => {
   assert.equal(normalizeHex('rosado'), NAMED_COLORS.rosado);
   assert.equal(normalizeHex('#1E3A8A'), '1E3A8A');
   assert.equal(normalizeHex('nope'), null);
+});
+
+test('normalizeHex expands the full palette: ANY color the user names', () => {
+  assert.equal(normalizeHex('naranja'), 'F97316');
+  assert.equal(normalizeHex('morado'), '7C3AED');
+  assert.equal(normalizeHex('moradas'), '7C3AED');
+  assert.equal(normalizeHex('lila'), 'C8A2C8');
+  assert.equal(normalizeHex('fucsia'), 'D946EF');
+  assert.equal(normalizeHex('celeste'), '87CEEB');
+  assert.equal(normalizeHex('turquesa'), '40E0D0');
+  assert.equal(normalizeHex('beige'), 'F5F5DC');
+  assert.equal(normalizeHex('dorado'), 'FFD700');
+  assert.equal(normalizeHex('doradas'), 'FFD700');
+  assert.equal(normalizeHex('coral'), 'FF7F50');
+  assert.equal(normalizeHex('vino'), '722F37');
+  assert.equal(normalizeHex('amarillo'), 'FACC15');
+  assert.equal(normalizeHex('amarillas'), 'FACC15');
+  assert.equal(normalizeHex('salmón'), 'FA8072');
+});
+
+test('default deck color is a clean LIGHT theme, never pink', () => {
+  assert.equal(DEFAULT_DECK_COLOR, 'F8FAFC');
+  assert.notEqual(DEFAULT_DECK_COLOR, 'FFC0CB');
+});
+
+test('loadOfficeHelpersPy is lazy and fail-open (ENOENT never crashes the module)', () => {
+  const helpers = loadOfficeHelpersPy();
+  assert.ok(String(helpers).includes('xml_has_hex'));
+  // A missing file returns null instead of throwing — the ENOENT that used to
+  // divert /doc/generate into the dark pipeline.
+  assert.equal(loadOfficeHelpersPy({ dir: '/nonexistent-dir-agent-runner' }), null);
+});
+
+test('normalizeOutline accepts objects and strings, drops empties', () => {
+  const out = normalizeOutline([
+    { title: 'Primer trimestre', bullets: ['Controles prenatales', '', 'Ácido fólico'] },
+    'Señales de alerta',
+    { title: '   ' },
+    null,
+  ]);
+  assert.equal(out.length, 2);
+  assert.deepEqual(out[0].bullets, ['Controles prenatales', 'Ácido fólico']);
+  assert.equal(out[1].title, 'Señales de alerta');
+  assert.deepEqual(normalizeOutline('not-an-array'), []);
 });
 
 test('parseReact reads Action/Action Input and fenced tool JSON', () => {
@@ -302,6 +380,130 @@ test('makeToolExecutors execute_python execute_bash render_preview set_slide_bac
   assert.ok([...files.keys()].some((k) => k.startsWith('outputs/')));
 });
 
+test('edit_file / glob / grep executors', async () => {
+  const files = new Map();
+  files.set('tmp/x/slide1.xml', Buffer.from('<a:solidFill><a:srgbClr val="111111"/></a:solidFill>'));
+  const execCalls = [];
+  const sandbox = {
+    async exec(cmd) {
+      execCalls.push(String(cmd));
+      if (String(cmd).includes('find .')) {
+        return { stdout: '-rw-r--r-- 1 u u 120 ago 13 ./tmp/x/slide1.xml', stderr: '', exitCode: 0 };
+      }
+      if (String(cmd).includes('grep -rnE')) {
+        if (String(cmd).includes('NOPE')) return { stdout: '', stderr: '', exitCode: 1 };
+        return { stdout: 'tmp/x/slide1.xml:1:<a:srgbClr val="111111"/>', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+    async readFile(p) {
+      const buf = files.get(p);
+      if (!buf) throw new Error(`ENOENT: ${p}`);
+      return buf;
+    },
+    async writeFile(p, c) { files.set(p, Buffer.isBuffer(c) ? c : Buffer.from(String(c))); },
+    async listFiles() { return []; },
+  };
+  const executors = makeToolExecutors(sandbox, { setSlideBackgrounds: () => ({ buffer: Buffer.from('x') }) });
+
+  // edit_file = exact string replace, exactly once
+  const edited = await executors.edit_file({
+    path: 'tmp/x/slide1.xml',
+    old_str: 'val="111111"',
+    new_str: 'val="FFC0CB"',
+  });
+  assert.equal(edited.startsWith('ERROR:'), false);
+  assert.ok(files.get('tmp/x/slide1.xml').toString().includes('FFC0CB'));
+  const missing = await executors.edit_file({
+    path: 'tmp/x/slide1.xml',
+    old_str: 'no-such-text',
+    new_str: 'y',
+  });
+  assert.ok(missing.startsWith('ERROR:'));
+
+  const globbed = await executors.glob({ pattern: 'tmp/x/*.xml' });
+  assert.ok(globbed.includes('slide1.xml'));
+  assert.ok((await executors.glob({ pattern: 'a; rm -rf /' })).startsWith('ERROR:'));
+
+  const found = await executors.grep({ pattern: 'srgbClr', path: 'tmp/x' });
+  assert.ok(found.includes('slide1.xml:1'));
+  assert.equal(await executors.grep({ pattern: 'NOPE' }), '(no matches)');
+});
+
+async function createDeckViaExecutor(args) {
+  const files = new Map();
+  const sandbox = {
+    async exec() { return { stdout: '', stderr: '', exitCode: 0 }; },
+    async readFile(p) { return files.get(p) || Buffer.from('x'); },
+    async writeFile(p, c) { files.set(p, Buffer.isBuffer(c) ? c : Buffer.from(String(c))); },
+    async listFiles() { return []; },
+  };
+  const executors = makeToolExecutors(sandbox, { setSlideBackgrounds: () => ({ buffer: Buffer.from('x') }) });
+  const result = await executors.create_presentation(args);
+  const outName = [...files.keys()].find((k) => k.startsWith('outputs/'));
+  return { result, buffer: outName ? files.get(outName) : null };
+}
+
+function deckXmlBlob(buffer) {
+  const zip = require('pizzip')(buffer);
+  return Object.keys(zip.files)
+    .filter((n) => /ppt\/slides\/slide\d+\.xml$/.test(n))
+    .map((n) => zip.file(n).asText())
+    .join('\n');
+}
+
+test('create_presentation writes the MODEL outline (real content, no filler)', async () => {
+  const { result, buffer } = await createDeckViaExecutor({
+    topic: 'embarazo',
+    title: 'Embarazo saludable',
+    color: 'rosado',
+    outline: [
+      { title: 'Primer trimestre', bullets: ['Controles prenatales', 'Ácido fólico diario'] },
+      { title: 'Señales de alerta', bullets: ['Sangrado o dolor intenso: acudir a urgencias'] },
+      { title: 'Gracias', bullets: [] },
+    ],
+    filename: 'embarazo.pptx',
+  });
+  assert.equal(result.startsWith('ERROR:'), false, result);
+  const parsed = JSON.parse(result);
+  assert.equal(parsed.color, '#FFC0CB');
+  assert.equal(parsed.outlineProvided, true);
+  const blob = deckXmlBlob(buffer);
+  assert.ok(blob.includes('FFC0CB'), 'requested color painted on slides');
+  assert.ok(blob.includes('Primer trimestre'), 'topic-specific slide title');
+  assert.ok(blob.includes('Controles prenatales'), 'topic-specific bullet');
+  assert.equal(blob.includes('Puntos clave'), false, 'no boilerplate filler');
+  assert.equal(blob.includes('Información clara, verificable'), false, 'no boilerplate filler');
+});
+
+test('create_presentation without color uses the light default — NEVER pink', async () => {
+  const { result, buffer } = await createDeckViaExecutor({
+    topic: 'finanzas',
+    title: 'Finanzas personales',
+    outline: [{ title: 'Presupuesto mensual', bullets: ['Regla 50/30/20'] }],
+    filename: 'finanzas.pptx',
+  });
+  const parsed = JSON.parse(result);
+  assert.equal(parsed.color, `#${DEFAULT_DECK_COLOR}`);
+  assert.equal(parsed.defaultColor, true);
+  const blob = deckXmlBlob(buffer);
+  assert.ok(blob.includes(DEFAULT_DECK_COLOR));
+  assert.equal(blob.includes('FFC0CB'), false, 'pink must not appear unless requested');
+});
+
+test('create_presentation honors an explicit #hex over any default', async () => {
+  const { result, buffer } = await createDeckViaExecutor({
+    topic: 'plan comercial',
+    color: '#1E3A8A',
+    outline: [{ title: 'Metas Q1', bullets: ['Crecer 15% en ventas'] }],
+    filename: 'plan.pptx',
+  });
+  assert.equal(JSON.parse(result).color, '#1E3A8A');
+  const blob = deckXmlBlob(buffer);
+  assert.ok(blob.includes('1E3A8A'));
+  assert.equal(blob.includes('FFC0CB'), false);
+});
+
 test('resolveTurnFiles prefers the latest artifact over a new upload', async () => {
   const prisma = {
     generatedArtifact: {
@@ -403,6 +605,65 @@ test('persistOutputs saves via saveArtifact and emits file_artifact', async () =
   assert.equal(saved.length, 1);
   assert.equal(saved[0].filename, 'embarazo.pptx');
   assert.equal(events[0].type, 'file_artifact');
+});
+
+test('runAgentRunnerForDocRoute: runner-first result in the doc-route file shape', async () => {
+  const upserts = [];
+  const prisma = {
+    generatedArtifact: {
+      findMany: async () => [],
+      upsert: async (args) => { upserts.push(args); return args.create; },
+    },
+  };
+  const client = scriptedClient([
+    {
+      toolCalls: [{
+        name: 'create_presentation',
+        args: {
+          topic: 'embarazo',
+          title: 'Embarazo saludable',
+          color: 'rosado',
+          outline: [
+            { title: 'Primer trimestre', bullets: ['Controles prenatales'] },
+            { title: 'Gracias', bullets: [] },
+          ],
+          filename: 'embarazo.pptx',
+        },
+      }],
+    },
+    { toolCalls: [{ name: 'render_preview', args: { path: 'outputs/embarazo.pptx' } }] },
+    { content: 'Listo. Presentación del embarazo en rosado: embarazo.pptx' },
+  ]);
+  const stages = [];
+  const result = await runAgentRunnerForDocRoute({
+    prisma,
+    userId: 'u-doc-route',
+    chatId: 'c-doc-route',
+    prompt: 'crea una ppt del embarazo de color rosado la ppt',
+    client,
+    driver: 'local',
+    maxIterations: 8,
+    onStage: (ev) => stages.push(ev),
+  });
+  assert.ok(result, 'runner must win when it produced a verified file');
+  assert.equal(result.format, 'pptx');
+  assert.equal(result.file.type, 'doc');
+  assert.equal(result.file.filename, 'embarazo.pptx');
+  assert.ok(String(result.file.url).startsWith('/api/agent/artifact/'));
+  assert.ok(String(result.content).includes('embarazo'));
+  assert.equal(upserts.length, 1, 'artifact persisted for follow-ups');
+  assert.ok(stages.length >= 1, 'stage events streamed to the doc route');
+
+  // Not a document request → null, the route falls through to the pipeline.
+  const none = await runAgentRunnerForDocRoute({
+    prisma,
+    userId: 'u-doc-route',
+    chatId: 'c-doc-route',
+    prompt: 'hola, ¿cómo estás?',
+    client,
+    driver: 'local',
+  });
+  assert.equal(none, null);
 });
 
 test('BullMQ enqueue + worker streams step events', async () => {

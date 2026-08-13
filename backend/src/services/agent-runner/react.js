@@ -24,7 +24,10 @@ const KNOWN = new Set([
   'bash',
   'read_file',
   'write_file',
+  'edit_file',
   'list_files',
+  'glob',
+  'grep',
   'render_preview',
   'set_slide_background',
   'create_presentation',
@@ -64,6 +67,8 @@ function parseReact(text) {
       if (name === 'execute_python') args = { code: args.__raw };
       else if (name === 'execute_bash' || name === 'bash') args = { command: args.__raw };
       else if (name === 'read_file' || name === 'list_files' || name === 'render_preview') args = { path: args.__raw };
+      else if (name === 'glob') args = { pattern: args.__raw };
+      else if (name === 'grep') args = { pattern: args.__raw };
       else if (name === 'set_slide_background') args = { color: args.__raw };
       else args = { input: args.__raw };
     }

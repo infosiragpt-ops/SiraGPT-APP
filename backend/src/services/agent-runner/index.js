@@ -19,7 +19,7 @@ const { isValidOoxml, createOpenRouterClient, DEFAULT_MODEL, resolveMaxRuntimeMs
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
-const { runAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
+const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./loop');
 const {
   resolveTurnFiles,
   persistOutputs,
@@ -32,10 +32,25 @@ const {
 } = require('./queue');
 
 const MAX_OUTPUT_RETRIES = 3;
-const OFFICE_HELPERS_PY = fs.readFileSync(
-  path.join(__dirname, 'office_helpers.py'),
-  'utf8',
-);
+
+// office_helpers.py is loaded LAZY and FAIL-OPEN. An eager readFileSync at
+// module top used to throw ENOENT in production builds that did not copy the
+// .py file — requiring agent-runner crashed, and /doc/generate silently fell
+// back to the dark document pipeline. Without helpers the agent still works
+// (it writes its own zipfile code); with them it is just faster.
+let officeHelpersPyCache;
+function loadOfficeHelpersPy({ dir } = {}) {
+  const fromDefaultDir = !dir;
+  if (fromDefaultDir && officeHelpersPyCache !== undefined) return officeHelpersPyCache;
+  let text = null;
+  try {
+    text = fs.readFileSync(path.join(dir || __dirname, 'office_helpers.py'), 'utf8');
+  } catch (_) {
+    text = null;
+  }
+  if (fromDefaultDir) officeHelpersPyCache = text;
+  return text;
+}
 
 const CREATE_DOC_RE = /\b(crea|creame|créame|genera|hazme|hazme|arma|diseña|designa|make|create)\b/i;
 const DOC_NOUN_RE = /\b(ppt|pptx|ppts|powerpoint|presentaci[oó]n|diapositiva|slides?|word|docx|documento|excel|xlsx|pdf)\b/i;
@@ -54,21 +69,14 @@ function inferColorFromText(text) {
   return null;
 }
 
-function inferTopic(text) {
-  return String(text || '')
-    .replace(CREATE_DOC_RE, ' ')
-    .replace(DOC_NOUN_RE, ' ')
-    .replace(/\b(color|de|del|la|el|las|los|una|un|todas?|todos?)\b/gi, ' ')
-    .replace(/#[0-9a-fA-F]{6}/g, ' ')
-    .replace(/\b(blanco|blanca|rosado|rosada|rosa|azul|negro|roja?|verde|gris)\b/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80) || 'Presentación';
-}
-
-
-const STYLE_EDIT_RE = /\b(ponlas|p[ií]ntalas|uniformisa|uniformiza|c[aá]mbialas|cambia(?:rles)?|fondo|hex)\b/i;
-const COLOR_WORD_RE = /\b(color|rosad[oa]s?|rosa|blanc[oa]s?|azul(?:es)?|negr[oa]s?|verde(?:s)?|gris(?:es)?|#([0-9a-fA-F]{6}))\b/i;
+const STYLE_EDIT_RE = /\b(ponlas?|p[ií]ntalas?|colorea|uniformisa|uniformiza|c[aá]mbialas|cambia(?:rles)?|fondo|hex)\b/i;
+// Any named color from the shared palette (naranja, turquesa, dorado, …),
+// the word "color", or a #hex — kept in sync with tools.NAMED_COLORS so a
+// style follow-up in ANY color routes into the runner.
+const COLOR_WORD_RE = new RegExp(
+  `\\b(color|${Object.keys(NAMED_COLORS).join('|')})\\b|#[0-9a-fA-F]{6}`,
+  'i',
+);
 const WORK_RE = /\b(crea|creame|créame|genera|hazme|arma|diseña|make|create|edita|modifica|cambia|ponlas|p[ií]ntalas|uniformi[sz]a|agrega|añade|anade|corrige|arregla|fondo|hex|gracias|thanks|inserta|reemplaza|borra|elimina)\b/i;
 
 function shouldRunAgentRunner({
@@ -80,11 +88,26 @@ function shouldRunAgentRunner({
   const hasFiles = (Array.isArray(files) && files.length > 0)
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
+  if (isRunnerOnlyDocumentTurn(t)) return true;
+  const work = WORK_RE.test(t);
+  if ((hasFiles || hasPriorArtifacts) && work) return true;
+  return false;
+}
+
+/**
+ * The claim triggers whose ONLY correct fulfilment is an AgentRunner file:
+ * create-a-document requests ("crea una ppt del embarazo celeste") and
+ * style/color follow-ups ("ponlas todas rosadas"). When the runner fails on
+ * one of these, the chat must show an honest error — falling through to the
+ * LLM loop / generic document pipeline produced the 8-slide template decks.
+ * (Edit turns claimed via attached files + a work verb are NOT runner-only:
+ * the surgical document_edit path may still legitimately handle them.)
+ */
+function isRunnerOnlyDocumentTurn(text) {
+  const t = String(text || '');
   if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
-  const work = WORK_RE.test(t);
-  if ((hasFiles || hasPriorArtifacts) && work) return true;
   return false;
 }
 
@@ -176,7 +199,10 @@ async function runAgentRunner({
       if (f.isPriorArtifact) priorNames.push(name);
     }
     await sandbox.exec('mkdir -p /workspace/outputs /workspace/previews /workspace/tmp /workspace/uploads', { timeoutMs: 10_000 });
-    await sandbox.writeFile('tmp/office_helpers.py', OFFICE_HELPERS_PY);
+    const officeHelpersPy = loadOfficeHelpersPy();
+    if (officeHelpersPy) {
+      try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
+    }
 
     const system = buildAgentRunnerPrompt({ fileNames: names, priorArtifactNames: priorNames });
     const messages = [
@@ -186,13 +212,16 @@ async function runAgentRunner({
 
     const executors = makeToolExecutors(sandbox);
 
-    // Deterministic high-level color path (optional tool, not a hardcoded
-    // intent router). The generic loop still handles thanks-slides, commas,
-    // rewrites, and anything the shortcut cannot prove.
+    // Deterministic fast-paths are allowed ONLY for exact edits on an
+    // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
+    // deck must ALWAYS go through the LLM loop so the slide copy answers the
+    // user's actual topic — a "crea una ppt + color" stub with filler bullets
+    // is exactly the quality failure Phase 1 removes.
     const color = inferColorFromText(task);
     const pptxUpload = names.find((n) => /\.pptx$/i.test(n));
+    const isCreateRequest = CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task);
     let fastPathUsed = false;
-    if (color && pptxUpload) {
+    if (color && pptxUpload && !isCreateRequest) {
       onEvent({ type: 'tool_call', tool: 'set_slide_background', label: 'Ejecutando código', preview: color });
       const painted = await executors.set_slide_background({ path: `uploads/${pptxUpload}`, color: `#${color}` });
       onEvent({
@@ -203,23 +232,6 @@ async function runAgentRunner({
         label: 'Verificando resultado',
       });
       fastPathUsed = !String(painted).startsWith('ERROR:');
-    } else if (color && CREATE_DOC_RE.test(task) && DOC_NOUN_RE.test(task)) {
-      const topic = inferTopic(task);
-      onEvent({ type: 'tool_call', tool: 'create_presentation', label: 'Ejecutando código', preview: topic });
-      const created = await executors.create_presentation({
-        topic,
-        title: topic,
-        color: `#${color}`,
-        slides: 8,
-      });
-      onEvent({
-        type: 'tool_result',
-        tool: 'create_presentation',
-        ok: !String(created).startsWith('ERROR:'),
-        preview: created,
-        label: 'Verificando resultado',
-      });
-      fastPathUsed = !String(created).startsWith('ERROR:');
     } else if (
       pptxUpload
       && /\b(gracias|thanks)\b/i.test(task)
@@ -296,6 +308,9 @@ async function runAgentRunner({
     let outputAttempt = 1;
     while (
       !abortScope.signal.aborted
+      // Out of credits (OpenRouter/Anthropic 402): another loop pass costs
+      // latency and cannot succeed — stop retrying and surface the reason.
+      && result.stoppedReason !== 'llm_402'
       && outputs.filter((o) => o.valid !== false).length === 0
       && outputAttempt < MAX_OUTPUT_RETRIES
     ) {
@@ -387,6 +402,10 @@ async function runAgentRunnerForChat({
     || (artifacts.length
       ? `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`
       : 'No pude generar el archivo. Intenta de nuevo con más detalle.');
+  // A loop that "finished" without a deliverable is a no_output failure for
+  // the caller — 'final'/'fast_path' only describe HOW the loop stopped.
+  let failReason = run.stoppedReason || 'no_output';
+  if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
     ok: artifacts.length > 0,
     summary,
@@ -394,9 +413,33 @@ async function runAgentRunnerForChat({
     steps: run.steps || [],
     iterations: run.iterations,
     driver: run.driver,
-    stoppedReason: artifacts.length ? 'agent_runner' : (run.stoppedReason || 'no_output'),
+    stoppedReason: artifacts.length ? 'agent_runner' : failReason,
+    errorMessage: artifacts.length ? null : (run.errorMessage || null),
     priorArtifactId: resolved.latest?.id || null,
   };
+}
+
+/**
+ * Honest Spanish failure copy per skip/fail reason. Shown to the user when
+ * the runner claimed the turn but could not deliver a verified file —
+ * NEVER replaced by the generic 8-slide pipeline template.
+ */
+const AGENT_RUNNER_FAILURE_COPY = {
+  no_llm: 'no hay un modelo de IA disponible para el agente (falta configurar o habilitar la clave del proveedor)',
+  llm_402: 'el proveedor de IA rechazó la petición por falta de créditos (HTTP 402); recarga créditos del modelo y vuelve a intentarlo',
+  no_output: 'el agente terminó sin producir un archivo verificado',
+  verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
+  max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
+  exception: 'el agente falló con un error inesperado',
+};
+
+function buildAgentRunnerFailureMessage(reason, detail) {
+  const key = String(reason || 'no_output');
+  const why = AGENT_RUNNER_FAILURE_COPY[key] || `el agente no pudo completar la tarea (${key})`;
+  const extra = detail ? ` Detalle técnico: ${String(detail).slice(0, 300)}` : '';
+  return `No pude generar el documento: ${why}. `
+    + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. '
+    + `Corrige la causa e inténtalo de nuevo.${extra ? `\n\n${extra.trim()}` : ''}`;
 }
 
 /**
@@ -405,8 +448,14 @@ async function runAgentRunnerForChat({
  */
 async function executeAgentRunnerTurn(params = {}) {
   const instruction = String(params.instruction || '');
+  // Without an LLM only the PAINT fast-path can deliver: a color plus a style
+  // edit ("ponlas rosadas") or an attached/prior pptx to repaint. Creating a
+  // NEW deck always requires the LLM (content must match the topic), so a
+  // create-doc request with a dummy key is honestly skipped, never stubbed.
+  const hasTurnFiles = (Array.isArray(params.fileIds) && params.fileIds.length > 0)
+    || (Array.isArray(params.attachedFiles) && params.attachedFiles.length > 0);
   const colorFastPath = Boolean(inferColorFromText(instruction))
-    && (CREATE_DOC_RE.test(instruction) || STYLE_EDIT_RE.test(instruction) || DOC_NOUN_RE.test(instruction));
+    && (STYLE_EDIT_RE.test(instruction) || hasTurnFiles);
   if (!colorFastPath && !canCallLlm(params) && !params.client) {
     return {
       ok: false,
@@ -442,11 +491,119 @@ async function executeAgentRunnerTurn(params = {}) {
       try { console.warn('[agent-runner] async path failed, in-process:', err && err.message); } catch (_) { /* ignore */ }
     }
   }
-  return runAgentRunnerForChat(params);
+  try {
+    return await runAgentRunnerForChat(params);
+  } catch (err) {
+    // User cancellation is not a runner failure — let the caller unwind.
+    if (params.signal?.aborted) throw err;
+    // Never throw for real failures: the routes need the reason to show an
+    // honest error instead of silently falling back to the generic pipeline.
+    const reason = isLlmCreditError(err) ? 'llm_402' : 'exception';
+    try { console.warn('[agent-runner] turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
+    return {
+      ok: false,
+      skipped: false,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: reason,
+      errorMessage: err?.message || String(err),
+    };
+  }
 }
 
 function onEventSafe(onEvent, ev) {
   try { if (typeof onEvent === 'function') onEvent(ev); } catch (_) { /* ignore */ }
+}
+
+/**
+ * /api/doc/generate entry — AgentRunner FIRST, pipeline ONLY when the runner
+ * does not claim the request.
+ *
+ * Returns:
+ *   - `null` when the request is NOT an AgentRunner turn (the caller then
+ *     falls through to the source-preserving editor and the pipeline);
+ *   - `{ content, file, format, artifacts }` when the runner delivered a
+ *     verified file (exact shape the doc route streams to the client);
+ *   - `{ agentRunnerClaimed: true, failed: true, reason, message }` when the
+ *     runner claimed the turn but could not deliver. The caller MUST surface
+ *     `message` as an honest error and MUST NOT fall back to the generic
+ *     8-slide pipeline template — that silent fallback is exactly the
+ *     production failure this shape removes.
+ */
+async function runAgentRunnerForDocRoute({
+  prisma,
+  userId,
+  chatId = null,
+  prompt,
+  fileIds = [],
+  model,
+  client,
+  signal,
+  driver,
+  maxIterations,
+  onStage = () => {},
+} = {}) {
+  const text = String(prompt || '').trim();
+  if (!text) return null;
+  let prior = false;
+  if (prisma && userId && chatId) {
+    try {
+      prior = await hasConversationArtifacts(prisma, { userId, chatId });
+    } catch (_) { prior = false; }
+  }
+  if (!shouldRunAgentRunner({ fileIds, hasPriorArtifacts: prior, text })) return null;
+  const ran = await executeAgentRunnerTurn({
+    prisma,
+    userId,
+    chatId,
+    fileIds,
+    instruction: text,
+    model,
+    client,
+    signal,
+    driver,
+    maxIterations,
+    onEvent: (ev) => {
+      if (!ev) return;
+      if (ev.label || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'retry') {
+        onEventSafe(onStage, {
+          label: ev.label
+            || (ev.type === 'tool_call' ? 'Ejecutando código' : 'Verificando resultado'),
+          tool: ev.tool || 'agent_runner',
+        });
+      }
+    },
+  });
+  const failure = (reason, detail) => ({
+    agentRunnerClaimed: true,
+    failed: true,
+    reason: String(reason || 'no_output'),
+    message: buildAgentRunnerFailureMessage(reason, detail),
+  });
+  if (!ran || !ran.ok || !Array.isArray(ran.artifacts) || !ran.artifacts.length) {
+    return failure(ran?.stoppedReason || 'no_output', ran?.errorMessage || null);
+  }
+  const artifact = ran.artifacts.find((a) => a && a.downloadUrl) || ran.artifacts[0];
+  if (!artifact || !artifact.downloadUrl) {
+    return failure('no_output', 'artifact sin downloadUrl');
+  }
+  return {
+    content: ran.summary,
+    format: artifact.format,
+    file: {
+      type: 'doc',
+      format: artifact.format,
+      title: artifact.filename,
+      explanation: 'Generado y verificado por el agente.',
+      filename: artifact.filename,
+      url: artifact.downloadUrl,
+      dataUrl: null,
+      mime: artifact.mime,
+      size: artifact.sizeBytes,
+    },
+    artifacts: ran.artifacts,
+  };
 }
 
 async function loadFilesByIds({ prisma, userId, fileIds }) {
@@ -480,14 +637,19 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
 
 module.exports = {
   shouldRunAgentRunner,
+  isRunnerOnlyDocumentTurn,
   runAgentRunner,
   runAgentRunnerForChat,
+  runAgentRunnerForDocRoute,
   executeAgentRunnerTurn,
+  buildAgentRunnerFailureMessage,
   canCallLlm,
   defaultModel,
+  loadOfficeHelpersPy,
   MAX_ITERATIONS_DEFAULT,
   MAX_OUTPUT_RETRIES,
   CREATE_DOC_RE,
   DOC_NOUN_RE,
+  STYLE_EDIT_RE,
   hasConversationArtifacts,
 };
