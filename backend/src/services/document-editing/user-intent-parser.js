@@ -142,6 +142,12 @@ function parseCitationStyle(text = '') {
   return null;
 }
 
+function parseRequestedSourceCount(text = '') {
+  const match = String(text || '').match(/\b(\d{1,2}|un|una|dos|tres|cuatro|cinco|seis)\s+fuentes?\b/);
+  if (!match) return null;
+  return clampCount(parseCountToken(match[1]), 10);
+}
+
 function parseBibliographyPlacement(text = '', count) {
   const wantsBibliography = BIBLIOGRAPHY_RE.test(text);
   if (!wantsBibliography) {
@@ -195,6 +201,7 @@ function parseStructuralAppendIntent(requestText = '', { format = '' } = {}) {
     lastIsBibliography,
     wantsBibliography: bib.wantsBibliography,
     citationStyle: parseCitationStyle(text),
+    sourceCount: parseRequestedSourceCount(text),
     sameDocument,
     confidence: hasUnitNoun || sameDocument ? 'high' : 'medium',
   };
@@ -226,6 +233,8 @@ function isWeakThemeLine(line = '') {
   const n = normalizeText(line);
   if (!n || n.length < 6) return true;
   if (/\btitulo viejo\b/.test(n) || /\bcontenido base\b/.test(n)) return true;
+  if (/^fuente:\s+\S+\.(pptx?|docx?|xlsx?|pdf)\b/.test(n)) return true;
+  if (/^slide \d+$/.test(n) || /^diapositiva \d+$/.test(n)) return true;
   return WEAK_LINE_RE.test(n);
 }
 
@@ -317,213 +326,86 @@ function polishEs(value = '') {
     .replace(/\bdiapositiva\b/gi, 'diapositiva');
 }
 
-function successCaseAngles(theme) {
-  const field = theme || 'la organización';
-  return [
-    {
-      title: `Caso de éxito 1 — Resultado medible en ${field}`,
-      bulletsFor(anchor) {
-        return [
-          anchor
-            ? `Situación inicial tomada del documento: «${clip(anchor, 140)}».`
-            : `Situación inicial: un proceso crítico de ${field} sin dueño, evidencia ni cadencia.`,
-          'Intervención: se definió un responsable, un indicador y una revisión semanal.',
-          'Resultado: menos retrabajo, tiempos más cortos y decisiones con evidencia.',
-          'Transferencia: el mismo esquema (dueño + métrica + cadencia) se replica en otros procesos.',
-        ];
-      },
-    },
-    {
-      title: `Caso de éxito 2 — Coordinación entre áreas de ${field}`,
-      bulletsFor(anchor) {
-        return [
-          'Problema: cada área optimizaba lo propio y el resultado conjunto se deterioraba.',
-          anchor ? `El documento señala: «${clip(anchor, 130)}».` : 'Se armó un tablero compartido con tres indicadores comunes.',
-          'Acuerdo: umbrales de escalamiento y una reunión breve de desbloqueo.',
-          'Aprendizaje: la coordinación mejora cuando el criterio de éxito es el mismo para todos.',
-        ];
-      },
-    },
-    {
-      title: `Caso de éxito 3 — Control proporcional en ${field}`,
-      bulletsFor() {
-        return [
-          'Riesgo evitado: controles tardíos que solo aparecen después de la crisis.',
-          'Diseño: alertas tempranas, no formularios extra ni burocracia.',
-          'Evidencia: desviaciones se ven en el ciclo, no al cierre del periodo.',
-          'Criterio: cada control tiene dueño, umbral y acción predefinida.',
-        ];
-      },
-    },
-    {
-      title: `Caso de éxito 4 — Ejecución 30-60-90 en ${field}`,
-      bulletsFor() {
-        return [
-          '30 días: diagnóstico honesto, datos actuales y un proceso crítico priorizado.',
-          '60 días: roles, tablero y cadencia de seguimiento ya en marcha.',
-          '90 días: el hábito queda estandarizado y se retiran excepciones injustificadas.',
-          'Cierre: tres compromisos con fecha, responsable y medio de verificación.',
-        ];
-      },
-    },
-  ];
+function extractDocumentFacts(sourceText = '', limit = 20) {
+  const seen = new Set();
+  const facts = [];
+  for (const raw of String(sourceText || '').split(/\n+/)) {
+    const line = raw.replace(/\s+/g, ' ').replace(/^[•\-–—*]\s+/, '').trim();
+    if (line.length < 18 || line.length > 240 || isWeakThemeLine(line) || looksLikePromptDump(line)) continue;
+    const key = normalizeText(line).slice(0, 90);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    facts.push(line);
+    if (facts.length >= limit) break;
+  }
+  return facts;
 }
 
-function exampleAngles(subject, theme, anchors = []) {
-  const lower = String(subject || theme || 'el tema').toLowerCase();
-  return [
-    {
-      title: `Ejemplo 1 — ${titleCase(subject)}`,
-      bulletsFor(anchor) {
-        return [
-          anchor
-            ? `Punto de partida del documento: «${clip(anchor, 140)}».`
-            : `Definir un caso real de ${lower} con actor, contexto y restricción.`,
-          `Decisión: qué se cambia, quién lo ejecuta y en qué plazo.`,
-          `Evidencia: dato, hito o entrega que demuestra que la decisión funcionó.`,
-          `Aprendizaje transferible a otros casos de ${theme}.`,
-        ];
-      },
-    },
-    {
-      title: `Ejemplo 2 — Cómo se aplica ${lower}`,
-      bulletsFor(anchor) {
-        return [
-          anchor ? `Tomar «${clip(anchor, 120)}» y convertirlo en un flujo con dueño.` : `Asignar dueño, recursos y primera entrega visible.`,
-          'Documentar el paso crítico para no depender de una sola persona.',
-          'Acordar umbrales: qué se aprueba en el equipo y qué escala.',
-          'Revisar avance en ciclos cortos y registrar desviaciones.',
-        ];
-      },
-    },
-    {
-      title: `Ejemplo 3 — Indicadores de ${lower}`,
-      bulletsFor(anchor) {
-        return [
-          'Medir resultado, no solo actividad: costo, tiempo, calidad e impacto.',
-          anchor ? `Vincular un indicador a «${clip(anchor, 110)}».` : `Elegir pocos indicadores que disparen una acción concreta.`,
-          'Mostrar tendencia y causa probable, no un número aislado.',
-          'Retirar métricas que no cambian ninguna decisión.',
-        ];
-      },
-    },
-    {
-      title: `Ejemplo 4 — Riesgos de no gestionar ${lower}`,
-      bulletsFor() {
-        return [
-          'Improvisación: costos ocultos, retrabajo y promesas incumplidas.',
-          'Dependencia de personas clave sin respaldo de proceso.',
-          'Decisiones tardías porque la información llega tarde o incompleta.',
-          'Control desproporcionado que aparece solo después de la crisis.',
-        ];
-      },
-    },
-    {
-      title: `Ejemplo 5 — Plan 30-60-90 para ${lower}`,
-      bulletsFor() {
-        return [
-          '30 días: diagnóstico, datos actuales y un proceso crítico priorizado.',
-          '60 días: roles, tablero y cadencia de seguimiento.',
-          '90 días: estandarizar, medir y ajustar con evidencia.',
-          'Cierre: tres compromisos con dueño, fecha y medio de verificación.',
-        ];
-      },
-    },
-  ];
+function shortTitleFromFact(fact = '', max = 78) {
+  const cleaned = String(fact || '').replace(/^[•\-\d.)\s]+/, '').trim();
+  const clause = cleaned.split(/[.:;—–]/)[0].trim();
+  if (clause.length >= 12 && clause.length <= max) return titleCase(clause);
+  return titleCase(clip(cleaned, max).replace(/…$/, ''));
 }
 
-function topicDrivenAngles(topic, theme) {
-  const subject = topic || theme;
-  const lower = String(subject || 'el tema').toLowerCase();
-  return [
-    {
-      title: titleCase(subject),
-      bulletsFor(anchor) {
-        return [
-          `Definir el problema real de ${lower} y el criterio con el que se decidirá.`,
-          anchor ? `Anclar la lectura en «${clip(anchor, 140)}».` : `Separar hechos, supuestos y restricciones de ${theme}.`,
-          'Traducir el diagnóstico en 2 o 3 decisiones ejecutables.',
-          'Dejar visible qué evidencia confirmará que la decisión funcionó.',
-        ];
-      },
-    },
-    {
-      title: `Cómo se implementa ${lower}`,
-      bulletsFor() {
-        return [
-          'Asignar dueño, recursos y fecha de la primera entrega visible.',
-          'Documentar el flujo crítico para no depender de una sola persona.',
-          'Acordar umbrales: qué se aprueba en el equipo y qué escala.',
-          'Revisar avance en ciclos cortos y registrar desviaciones.',
-        ];
-      },
-    },
-    {
-      title: `Indicadores para ${lower}`,
-      bulletsFor() {
-        return [
-          'Medir resultado, no solo actividad: costo, tiempo, calidad e impacto.',
-          'Elegir pocos indicadores que disparen una acción concreta.',
-          'Mostrar tendencia y causa probable, no un número aislado.',
-          'Retirar métricas que no cambian ninguna decisión.',
-        ];
-      },
-    },
-    {
-      title: `Riesgos de no gestionar ${lower}`,
-      bulletsFor() {
-        return [
-          'Improvisación: costos ocultos, retrabajo y promesas incumplidas.',
-          'Dependencia de personas clave sin respaldo de proceso.',
-          'Decisiones tardías porque la información llega tarde o incompleta.',
-          'Control desproporcionado que aparece solo después de la crisis.',
-        ];
-      },
-    },
-    {
-      title: `Plan 30-60-90 para ${lower}`,
-      bulletsFor() {
-        return [
-          '30 días: diagnóstico, datos actuales y priorización de un proceso crítico.',
-          '60 días: rediseño de roles, tablero y cadencia de seguimiento.',
-          '90 días: estandarizar, medir y ajustar con evidencia.',
-          'Cierre: tres compromisos con dueño, fecha y medio de verificación.',
-        ];
-      },
-    },
-  ];
+function unitLabel(topic = '', index = 0) {
+  if (isSuccessCaseTopic(topic)) return `Caso ${index + 1}`;
+  if (isGenericExamplesTopic(topic)) return `Ejemplo ${index + 1}`;
+  return '';
 }
 
-function bibliographySlide(theme = '', sourceText = '', citationStyle = null) {
-  const citations = extractSourceCitations(sourceText);
+function isSpecificRequestedTopic(topic = '') {
+  const t = normalizeText(topic);
+  if (!t || t.length < 4) return false;
+  if (isGenericExamplesTopic(t) || isSuccessCaseTopic(t)) return false;
+  return true;
+}
+
+function titleFromDocument(fact, topic, theme, index, contentCount) {
+  if (isSpecificRequestedTopic(topic)) {
+    return contentCount > 1 ? `${titleCase(topic)} (${index + 1})` : titleCase(topic);
+  }
+  if (fact) {
+    const core = shortTitleFromFact(fact);
+    const label = unitLabel(topic, index);
+    return label ? `${label}: ${core}` : core;
+  }
+  if (topic) {
+    return contentCount > 1 ? `${titleCase(topic)} (${index + 1})` : titleCase(topic);
+  }
+  return `${theme || 'Continuación'} (${index + 1})`;
+}
+
+function bulletsFromDocument({ fact, related = [], topic = '', theme = '' }) {
+  const bullets = [];
+  if (fact) bullets.push(clip(fact, 200));
+  for (const line of related) {
+    if (bullets.length >= 4) break;
+    if (normalizeText(line) === normalizeText(fact)) continue;
+    bullets.push(clip(line, 180));
+  }
+  if (!bullets.length && topic) {
+    bullets.push(`Desarrollar «${clip(topic, 80)}» con hechos de este documento, no con una plantilla genérica.`);
+  }
+  if (bullets.length < 2 && theme) {
+    bullets.push(`Anclado al documento «${clip(theme, 80)}».`);
+  }
+  return bullets.slice(0, 6);
+}
+
+function bibliographyUnit(theme = '', sourceText = '', { citationStyle = null, sourceCount = null } = {}) {
+  const wanted = Number.isInteger(sourceCount) && sourceCount > 0 ? sourceCount : 5;
+  const citations = extractSourceCitations(sourceText, wanted);
   const apa = citationStyle === 'apa7';
   const title = apa ? 'Referencias (APA 7.ª edición)' : 'Referencias bibliográficas';
-  const fromSource = citations.map((item) => (
-    apa
-      ? `${item}. Formato APA 7: Apellido, A. A. (Año). Título en oración. Fuente.`
-      : `${item}. Conservar la cita tal como aparece en el documento base.`
-  ));
-  const bullets = apa
-    ? [
-      'American Psychological Association. (2020). Publication manual of the American Psychological Association (7.ª ed.).',
-      ...fromSource,
-      `Incluir solo fuentes verificables del campo «${theme || 'el documento'}»; no inventar DOI, URLs ni años.`,
-      'Libro: Apellido, A. A. (Año). Título en cursiva (ed.). Editorial.',
-      'Artículo: Apellido, A. A., y Apellido, B. B. (Año). Título del artículo. Revista, volumen(número), pp. xx–xx. https://doi.org/xx',
-    ]
-    : (fromSource.length
-      ? [
-        ...fromSource,
-        'Completar título, editorial u organismo solo cuando figure en la fuente original.',
-        'No inventar URLs, DOI ni años ausentes del expediente.',
-      ]
-      : [
-        `Fuentes primarias del tema «${theme || 'el documento'}»: normas, reportes institucionales y literatura del campo.`,
-        'Citar autor, año, título y editorial u organismo emisor.',
-        'Priorizar ediciones recientes y documentos verificables; no inventar URLs ni cifras.',
-        'Separar fuentes académicas, normativas y evidencia interna de la organización.',
-      ]);
-  return { title, bullets: bullets.filter(Boolean).slice(0, 6) };
+  const bullets = citations.length
+    ? citations.map((item) => (apa ? `${item}.` : item))
+    : [`No hay citas verificables dentro del documento «${theme || 'adjunto'}». No se inventan autor, año ni DOI.`];
+  return {
+    title,
+    bullets: bullets.slice(0, 8),
+    needsVerifiedSources: Math.max(0, (Number.isInteger(sourceCount) ? sourceCount : 0) - citations.length),
+  };
 }
 
 function planContentUnits(intent, ctx = {}) {
@@ -532,44 +414,48 @@ function planContentUnits(intent, ctx = {}) {
   const lastBib = Boolean(intent.lastIsBibliography);
   const contentCount = lastBib ? Math.max(0, intent.count - 1) : intent.count;
   const taken = new Set(existingTitles(ctx.sourceText));
-  const anchors = extractSourceAnchors(ctx.sourceText);
-  const subject = (isGenericExamplesTopic(topic) || isSuccessCaseTopic(topic)) ? theme : (topic || theme);
-  const angles = isSuccessCaseTopic(topic)
-    ? successCaseAngles(subject)
-    : (isGenericExamplesTopic(topic) || !topic
-      ? exampleAngles(subject, theme, anchors)
-      : topicDrivenAngles(subject, theme));
-
+  const facts = extractDocumentFacts(ctx.sourceText);
   const units = [];
+
   for (let i = 0; i < contentCount; i += 1) {
-    const angle = angles[i] || angles[i % angles.length];
-    const anchor = anchors[i] || anchors[0] || '';
-    const title = uniqueTitle(angle.title, taken);
+    const fact = facts[i] || facts[i % Math.max(facts.length, 1)] || '';
+    const related = facts.filter((line, idx) => idx !== i).slice(i, i + 3);
+    const title = uniqueTitle(titleFromDocument(fact, topic, theme, i, contentCount), taken);
     taken.add(normalizeText(title));
     units.push({
       title,
-      bullets: (typeof angle.bulletsFor === 'function' ? angle.bulletsFor(anchor) : angle.bullets || [])
-        .filter(Boolean)
-        .slice(0, 6),
+      bullets: bulletsFromDocument({ fact, related, topic, theme }),
     });
   }
   if (lastBib || (intent.wantsBibliography && units.length < intent.count)) {
-    const bib = bibliographySlide(theme, ctx.sourceText, intent.citationStyle);
-    units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
+    const bib = bibliographyUnit(theme, ctx.sourceText, {
+      citationStyle: intent.citationStyle,
+      sourceCount: intent.sourceCount,
+    });
+    units.push({
+      title: uniqueTitle(bib.title, taken),
+      bullets: bib.bullets,
+      needsVerifiedSources: bib.needsVerifiedSources,
+    });
   }
   while (units.length < intent.count) {
     if (lastBib && units.length === intent.count - 1) {
-      const bib = bibliographySlide(theme, ctx.sourceText, intent.citationStyle);
-      units.push({ title: uniqueTitle(bib.title, taken), bullets: bib.bullets });
+      const bib = bibliographyUnit(theme, ctx.sourceText, {
+        citationStyle: intent.citationStyle,
+        sourceCount: intent.sourceCount,
+      });
+      units.push({
+        title: uniqueTitle(bib.title, taken),
+        bullets: bib.bullets,
+        needsVerifiedSources: bib.needsVerifiedSources,
+      });
       continue;
     }
-    const extraBank = isSuccessCaseTopic(topic)
-      ? successCaseAngles(subject)
-      : (isGenericExamplesTopic(topic) ? exampleAngles(subject, theme) : topicDrivenAngles(subject, theme));
-    const extra = extraBank[units.length % extraBank.length];
+    const extraIdx = units.length;
+    const fact = facts[extraIdx % Math.max(facts.length, 1)] || '';
     units.push({
-      title: uniqueTitle(extra.title, taken),
-      bullets: extra.bulletsFor(anchors[units.length] || ''),
+      title: uniqueTitle(titleFromDocument(fact, topic, theme, extraIdx, intent.count), taken),
+      bullets: bulletsFromDocument({ fact, related: facts, topic, theme }),
     });
   }
   return units.slice(0, intent.count);
@@ -581,6 +467,7 @@ function buildAddSlideOperations(intent, ctx = {}) {
     kind: 'add_slide',
     title: String(slide.title || 'Nueva diapositiva').slice(0, 120),
     bullets: (slide.bullets || []).map((item) => String(item).slice(0, 220)).filter(Boolean).slice(0, 8),
+    needsVerifiedSources: slide.needsVerifiedSources || 0,
   }));
 }
 
@@ -590,19 +477,36 @@ function buildAddSectionOperations(intent, ctx = {}) {
     kind: 'append_section',
     sectionTitle: String(section.title || 'Nueva sección').slice(0, 120),
     bullets: (section.bullets || []).map((item) => String(item).slice(0, 220)).filter(Boolean).slice(0, 8),
+    needsVerifiedSources: section.needsVerifiedSources || 0,
+  }));
+}
+
+function buildAddRowOperations(intent, ctx = {}) {
+  if (!intent || (intent.kind !== 'add_rows' && intent.unit !== 'row') || !intent.count) return [];
+  return planContentUnits(intent, ctx).map((row) => ({
+    kind: 'append_rows',
+    rows: [[
+      String(row.title || '').slice(0, 120),
+      ...(row.bullets || []).slice(0, 4).map((item) => String(item).slice(0, 180)),
+    ]],
   }));
 }
 
 module.exports = {
   BIBLIOGRAPHY_RE,
+  buildAddRowOperations,
   buildAddSectionOperations,
   buildAddSlideOperations,
+  extractDocumentFacts,
   extractSourceAnchors,
+  extractSourceCitations,
   inferTheme,
   looksLikePromptDump,
   normalizeText,
   parseAddSlidesIntent,
   parseOfficeUserIntent,
+  parseRequestedSourceCount,
   parseStructuralAppendIntent,
+  planContentUnits,
   repairOfficeTypos,
 };

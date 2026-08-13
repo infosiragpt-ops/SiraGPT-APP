@@ -24,10 +24,15 @@ const {
   hasAnyContentKey,
 } = require('./document-pipeline/content/llm-client');
 const {
+  buildAddRowOperations,
   buildAddSectionOperations,
   buildAddSlideOperations,
+  extractSourceCitations,
+  inferTheme,
   looksLikePromptDump,
   parseOfficeUserIntent,
+  parseRequestedSourceCount,
+  planContentUnits,
 } = require('./document-editing/user-intent-parser');
 
 const BACKEND_ROOT = path.resolve(__dirname, '..', '..');
@@ -1014,6 +1019,20 @@ function buildPptxContinuationBlocks({ prompt = '', sourceText = '', originalNam
 function buildGenericAppendix({ prompt = '', sourceText = '', originalName = '', format = '' } = {}) {
   if (format === 'pptx') {
     return buildPptxContinuationBlocks({ prompt, sourceText, originalName });
+  }
+  const intent = parseOfficeUserIntent(prompt, { format: format === 'xlsx' ? 'xlsx' : 'docx' });
+  if (intent && intent.count) {
+    const units = planContentUnits(intent, {
+      sourceText,
+      originalName,
+      requestText: prompt,
+    });
+    const blocks = [];
+    for (const unit of units) {
+      blocks.push(block('heading2', unit.title));
+      for (const bullet of unit.bullets || []) blocks.push(block('normal', `• ${bullet}`));
+    }
+    if (blocks.length) return blocks;
   }
   const title = inferDocumentTitle(sourceText, originalName);
   return [
@@ -6135,6 +6154,131 @@ function formatReferenceApa(paper) {
     .join(' ');
 }
 
+function isBibliographyOfficeOp(op = {}) {
+  return /referenc|bibliograf/i.test(String(op.title || op.sectionTitle || ''));
+}
+
+async function fillVerifiedBibliographyOp(op, { requestText, sourceText, originalName, signal }) {
+  if (!op || !isBibliographyOfficeOp(op)) return op;
+  const wanted = Number(op.needsVerifiedSources)
+    || parseRequestedSourceCount(requestText)
+    || 0;
+  const fromDoc = extractSourceCitations(sourceText, wanted || 5);
+  const target = wanted > 0 ? wanted : (fromDoc.length ? fromDoc.length : 2);
+  const remaining = Math.max(0, target - fromDoc.length);
+  const topic = inferTheme(sourceText, originalName, requestText);
+  const papers = remaining > 0
+    ? await fetchVerifiedReferences({ topic, count: remaining, signal })
+    : [];
+  const bullets = [
+    ...fromDoc.map((item) => `${item}.`),
+    ...papers.map(formatReferenceApa),
+  ].filter(Boolean);
+  if (!bullets.length) return op;
+  return { ...op, bullets: bullets.slice(0, 8), needsVerifiedSources: 0 };
+}
+
+async function rewriteOfficeUnitsWithLlm({ ops, requestText, sourceText, format, signal }) {
+  if (String(process.env.NODE_ENV) === 'test' && process.env.SIRAGPT_OFFICE_CONTENT_LLM !== '1') return null;
+  if (!hasAnyContentKey()) return null;
+  const contentOps = (ops || []).filter((op) => op.kind === 'add_slide' || op.kind === 'append_section');
+  if (!contentOps.length) return null;
+  const resolved = resolveContentClient();
+  if (!resolved) return null;
+  const context = String(sourceText || '').replace(/\s+/g, ' ').slice(0, 8000);
+  try {
+    const completion = await resolved.client.chat.completions.create({
+      model: resolved.model,
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Editas el CONTENIDO de unidades nuevas (diapositivas o secciones) de un archivo Office existente.',
+            'Cada unidad debe nacer de ESTE documento y de ESTE pedido. Prohibido rellenar con plantillas pregrabadas',
+            '(no "coordinación entre áreas", "control proporcional", "plan 30-60-90", recetarios APA, ni el prompt copiado).',
+            'Si un hecho no está en el extracto, no lo inventes. No inventes DOI, URLs, autores ni años.',
+            'La bibliografía solo lista citas que ya aparecen en el extracto; si no hay, deja un único aviso honesto.',
+            'Responde SOLO JSON: {"units":[{"title":"...","bullets":["..."]}]} con exactamente el mismo número de unidades.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            `Formato: ${format || 'office'}`,
+            `Pedido: ${String(requestText || '').slice(0, 1500)}`,
+            '',
+            'Extracto del documento adjunto:',
+            context || '(sin texto extraído)',
+            '',
+            'Unidades estructurales a redactar (conserva el orden; la última es bibliografía si el título lo indica):',
+            JSON.stringify(contentOps.map((op) => ({
+              title: op.title || op.sectionTitle || '',
+              bibliography: isBibliographyOfficeOp(op),
+            }))),
+          ].join('\n'),
+        },
+      ],
+      temperature: 0.3,
+    }, { ...(signal ? { signal } : {}), timeout: 25_000 });
+    const parsed = JSON.parse(completion?.choices?.[0]?.message?.content || '{}');
+    const units = Array.isArray(parsed?.units) ? parsed.units : [];
+    if (units.length !== contentOps.length) return null;
+    return units.map((unit, index) => {
+      const title = String(unit?.title || contentOps[index].title || contentOps[index].sectionTitle || '').trim().slice(0, 120);
+      const bullets = (Array.isArray(unit?.bullets) ? unit.bullets : [])
+        .map((item) => String(item || '').trim().slice(0, 220))
+        .filter(Boolean)
+        .slice(0, 8);
+      if (!title || looksLikePromptDump(`${title} ${bullets.join(' ')}`)) return null;
+      return { title, bullets };
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function enrichOfficeContentOperations(operations, {
+  requestText = '',
+  sourceText = '',
+  originalName = '',
+  format = '',
+  signal,
+} = {}) {
+  const ops = Array.isArray(operations) ? operations.map((op) => ({ ...op })) : [];
+  const rewritable = ops.filter((op) => op.kind === 'add_slide' || op.kind === 'append_section');
+  const rewritten = await rewriteOfficeUnitsWithLlm({
+    ops: rewritable,
+    requestText,
+    sourceText,
+    format,
+    signal,
+  });
+  if (rewritten) {
+    let cursor = 0;
+    for (const op of ops) {
+      if (op.kind !== 'add_slide' && op.kind !== 'append_section') continue;
+      const next = rewritten[cursor];
+      cursor += 1;
+      if (!next) continue;
+      if (op.kind === 'add_slide') op.title = next.title;
+      if (op.kind === 'append_section') op.sectionTitle = next.title;
+      if (next.bullets.length) op.bullets = next.bullets;
+    }
+  }
+  for (let i = 0; i < ops.length; i += 1) {
+    if (!isBibliographyOfficeOp(ops[i])) continue;
+    // eslint-disable-next-line no-await-in-loop
+    ops[i] = await fillVerifiedBibliographyOp(ops[i], {
+      requestText,
+      sourceText,
+      originalName,
+      signal,
+    });
+  }
+  return ops;
+}
+
 async function runAppendReferencesOperation({ buffer, op, sourceText, sourceFile, signal }) {
   const originalName = sourceFile.originalName || sourceFile.filename || '';
   const topic = compact(String(originalName).replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' '), 140)
@@ -7220,7 +7364,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
             `Eres el cerebro de un editor de archivos ${format === 'xlsx' ? 'Excel' : 'PowerPoint'} que PRESERVA el archivo original.`,
             'Convierte la petición del usuario en un plan de operaciones concretas sobre el archivo; cuando la petición requiera CONTENIDO (filas, viñetas, valores), redáctalo tú con datos fieles a la petición y al archivo.',
             'Si el usuario pide N diapositivas, emite N operaciones add_slide (máximo 15). Si pide bibliografía como última, la última add_slide se titula "Referencias bibliográficas".',
-            'NUNCA copies la petición del usuario como contenido. NUNCA uses títulos ANEXOS ni "Contenido agregado según solicitud". NUNCA inventes URLs.',
+            'NUNCA copies la petición del usuario como contenido. NUNCA uses títulos ANEXOS ni "Contenido agregado según solicitud". NUNCA inventes URLs, DOI ni plantillas pregrabadas (coordinación entre áreas, control proporcional, 30-60-90) si no están en el archivo.',
             'Usa needles EXACTOS copiados del contenido actual. No inventes hojas/celdas que no existan salvo en add_sheet/add_slide/append_rows.',
           ].join(' '),
         },
@@ -7281,13 +7425,21 @@ function planGenericOfficeOperations({ requestText = '', format = '', sourceText
       add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
     }
   }
-  const slideIntent = format === 'pptx' ? parseOfficeUserIntent(requestText, { format }) : null;
-  if (slideIntent?.kind === 'add_slides') {
-    for (const slideOp of buildAddSlideOperations(slideIntent, { sourceText, originalName, requestText })) {
+  const officeIntent = parseOfficeUserIntent(requestText, { format });
+  if (officeIntent?.kind === 'add_slides') {
+    for (const slideOp of buildAddSlideOperations(officeIntent, { sourceText, originalName, requestText })) {
       add(slideOp);
     }
+  } else if (officeIntent?.kind === 'add_sections') {
+    for (const sectionOp of buildAddSectionOperations(officeIntent, { sourceText, originalName, requestText })) {
+      add(sectionOp);
+    }
+  } else if (officeIntent?.kind === 'add_rows') {
+    for (const rowOp of buildAddRowOperations(officeIntent, { sourceText, originalName, requestText })) {
+      add(rowOp);
+    }
   }
-  const plannedNewSlides = ops.some((op) => op.kind === 'add_slide');
+  const plannedStructuralAppend = ops.some((op) => ['add_slide', 'append_section', 'append_rows'].includes(op.kind));
   for (const clause of clauses) {
     if (format === 'xlsx') {
       const cellWrite = extractXlsxCellWrite(clause);
@@ -7310,7 +7462,7 @@ function planGenericOfficeOperations({ requestText = '', format = '', sourceText
         continue;
       }
     }
-    if (plannedNewSlides && (clauseIsAppend(clause) || clauseWantsInstrument(clause))) {
+    if (plannedStructuralAppend && (clauseIsAppend(clause) || clauseWantsInstrument(clause))) {
       continue;
     }
     if (clauseIsAppend(clause) || clauseIsFill(clause) || clauseWantsInstrument(clause)) {
@@ -7606,6 +7758,13 @@ async function generateSourcePreservingDocumentEdit({
         .join('\n\n--- CONTEXTO ADICIONAL ---\n\n');
       const refs = referenceFiles?.length ? referenceFiles : referenceSourceFiles(allSourceFiles, sourceFile);
       operations = await planSourcePreservingOperationsSmart({ requestText, documentXml, referenceFiles: refs, signal });
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: docxSourceText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format: 'docx',
+        signal,
+      });
       const execution = await executeDocxOperations({
         input,
         ops: operations,
@@ -7689,7 +7848,12 @@ async function generateSourcePreservingDocumentEdit({
         content = `Listo. Conservé el XLSX original: ${xlsxResult.summary}, sin tocar el resto de las hojas, gráficos ni fórmulas.`;
         // fall through to persistence below (skip the ExcelJS text flow)
       } else {
-      operations = planGenericOfficeOperations({ requestText, format });
+      operations = planGenericOfficeOperations({
+        requestText,
+        format,
+        sourceText: sourceText || sourceFile.extractedText || '',
+        originalName: sourceFile.originalName || sourceFile.filename,
+      });
       // When the regexes only produced the generic-appendix fallback, let the
       // LLM planner read the real workbook and build a concrete plan
       // (set_cell / append_rows / add_sheet / replace_text). Heuristic hits
@@ -7698,6 +7862,13 @@ async function generateSourcePreservingDocumentEdit({
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;
       }
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: sourceText || sourceFile.extractedText || '',
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format,
+        signal,
+      });
       const execution = await executeXlsxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
@@ -7760,6 +7931,13 @@ async function generateSourcePreservingDocumentEdit({
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;
       }
+      operations = await enrichOfficeContentOperations(operations, {
+        requestText,
+        sourceText: livePptxText,
+        originalName: sourceFile.originalName || sourceFile.filename,
+        format,
+        signal,
+      });
       const execution = executePptxOperations({ input, ops: operations, blocks });
       output = execution.buffer;
       validationBlocks = execution.validationBlocks;
