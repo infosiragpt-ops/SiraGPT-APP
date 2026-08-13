@@ -116,6 +116,11 @@ function humanizePreviewError(raw?: string | null): string {
   }
   return value
 }
+
+// Layout remounts (phone first paint, sidebar dock) must not stop a preview
+// that a successor instance is about to claim.
+let previewOwnerGeneration = 0
+
 // A dead remote project/run: the codex mapping is stale (project wiped, or
 // created in another session). Self-heal by dropping the mapping and re-running
 // locally instead of showing a scary error.
@@ -706,7 +711,8 @@ export function PreviewPane() {
       }
       const hasRunnableProject =
         Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p)) ||
-        Boolean(getGitBinding(activeFolderIdRef.current))
+        Boolean(getGitBinding(activeFolderIdRef.current)) ||
+        Boolean(getActiveCodexProject())
       if (hasRunnableProject) {
         void runAppRef.current()
       }
@@ -914,6 +920,7 @@ export function PreviewPane() {
         /* best-effort — the idle reaper is the safety net */
       }
     }
+    previewOwnerGeneration += 1
     window.addEventListener("pagehide", beaconStop)
     return () => {
       window.removeEventListener("pagehide", beaconStop)
@@ -922,14 +929,19 @@ export function PreviewPane() {
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
       clearPoll()
-      // Component teardown (e.g. switching away from the preview): actively stop
-      // the dev server instead of leaking it to the reaper.
-      if (modeRef.current === "codex") {
-        const codexProjectId = codexPreviewProjectIdRef.current || getActiveCodexProject()
-        codexPreviewProjectIdRef.current = null
-        if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
-      } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
-      else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+      const generation = previewOwnerGeneration
+      const mode = modeRef.current
+      const codexProjectId = mode === "codex"
+        ? (codexPreviewProjectIdRef.current || getActiveCodexProject())
+        : null
+      const runId = runIdRef.current
+      codexPreviewProjectIdRef.current = null
+      window.setTimeout(() => {
+        if (previewOwnerGeneration !== generation) return
+        if (mode === "codex" && codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
+        else if (mode === "github" && runId) void githubService.stop(runId)
+        else if (runId) void hostRunnerService.stop(runId)
+      }, 400)
     }
   }, [clearPoll, deactivatePreviewResourceLease])
 

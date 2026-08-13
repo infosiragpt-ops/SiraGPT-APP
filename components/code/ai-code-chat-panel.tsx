@@ -1056,9 +1056,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         if (!cancelled) {
           setDurableCompanyCodexProjectId(null)
           setIdentityIssue(codexIdentityIssue(error))
-          // Keep the current Codex identity visible until the user can act on
-          // the association error; do not turn a 404 into a silent clear.
-          setCompanyAssociationResolved(false)
+          // The banner stays, but the gate must resolve so local/host preview
+          // is not stuck on a stale module-level Codex project id.
+          setCompanyAssociationResolved(true)
         }
       })
     return () => {
@@ -1091,7 +1091,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       )
     if (companyWorkspace && !companyAssociationResolved) return
     if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
-    setActiveCodexProject(codexAvailable && companyAssociationResolved ? projectId : null)
+    setActiveCodexProject(
+      codexAvailable && (!companyWorkspace || companyAssociationResolved) ? projectId : null,
+    )
   }, [
     activeFolder?.id,
     codexAvailable,
@@ -1209,13 +1211,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     inputRef.current?.blur()
     toast("Selecciona en el preview la parte que quieres modificar.")
   }, [selectingTarget])
-
-  React.useEffect(() => {
-    const el = inputRef.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(140, Math.max(28, el.scrollHeight))}px`
-  }, [input])
 
   React.useEffect(() => {
     codeAttachmentsRef.current = codeAttachments
@@ -1554,6 +1549,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     setBuildingApp(false)
     pendingInputRef.current = []
     repairInFlightRef.current = false
+    return () => {
+      abortRef.current?.abort()
+      abortRef.current = null
+    }
   }, [sessionId])
 
   React.useEffect(() => {
@@ -1725,6 +1724,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     abortRef.current?.abort()
     abortRef.current = null
     setBusy(false)
+    setBuildingApp(false)
     setTurns((prev) =>
       prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
     )
@@ -1933,6 +1933,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             )
           },
           () => {
+            if (controller.signal.aborted || abortRef.current !== controller) {
+              return
+            }
             // Agentic write modes (app/build, plus debug/patch via explicit
             // override) = Replit-style "presented output": the agent applies the
             // generated files itself and opens the live preview, with NO manual
@@ -2443,6 +2446,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // model available it edits the code (SRE system prompt + autoApply); offline it
   // runs the deterministic SRE (classifies the build log and auto-patches
   // package.json overrides when the fix is deterministic).
+  const dispatchingRef = React.useRef(false)
   const busyRef = React.useRef(false)
   busyRef.current = busy
   const buildingAppRef = React.useRef(false)
@@ -4019,7 +4023,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       const text = expandCodexSlashCommand(displayText).prompt
       const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
       const effectiveMode = opts?.mode ?? composerMode
-      if (busy || buildingApp) {
+      if (dispatchingRef.current || busy || buildingApp) {
         // The live dev server can fire a BACKGROUND auto-repair turn (it failed
         // to boot, e.g. a cold install over the 90s timeout) that holds the busy
         // latch. The user's explicit message must NEVER be lost to it: cancel a
@@ -4043,6 +4047,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         toast.error("Abre o crea un chat de código (la carpeta/agente no está activo). Recarga si abriste una carpeta local que no montó.")
         return
       }
+      dispatchingRef.current = true
+      try {
       if (effectiveMode !== composerModeRef.current) {
         setComposerMode(effectiveMode)
       }
@@ -4338,6 +4344,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             mode: effectiveMode,
           })
           return
+      }
+      } finally {
+        dispatchingRef.current = false
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

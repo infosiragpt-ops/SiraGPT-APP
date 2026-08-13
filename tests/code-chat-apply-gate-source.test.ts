@@ -26,6 +26,15 @@ describe("code chat apply-gate source contract", () => {
     )
   })
 
+  it("does not apply streamed files after the user stops the turn", () => {
+    assert.match(
+      panel,
+      /if \(controller\.signal\.aborted \|\| abortRef\.current !== controller\) \{\s*return/,
+    )
+    assert.match(panel, /setBuildingApp\(false\)/)
+    assert.match(panel, /dispatchingRef\.current/)
+  })
+
   it("does not apply streamed files that fail structural validation", () => {
     const applyBlock = panel.indexOf("if (b.path) applyBlock(b.path, b.content)")
     const reject = panel.indexOf("if (!streamCheck.valid && override?.spokenKind !== \"debug\")")
