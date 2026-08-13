@@ -83,6 +83,19 @@ export const opencodeService = {
     return json.result
   },
 
+  /** Stop an in-flight OpenCode session so Detener actually halts engine writes. */
+  async abortSession(sessionId: string): Promise<void> {
+    try {
+      await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/abort`, {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+      })
+    } catch {
+      /* engine offline or already idle */
+    }
+  },
+
   /**
    * List + read EVERY file the agent wrote in its workspace (recursive), so the
    * UI can show a real multi-file project. Returns [] on any failure.

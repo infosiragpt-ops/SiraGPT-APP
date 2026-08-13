@@ -7,6 +7,7 @@
  *   GET  /api/opencode/health            → { ok, configured, baseUrl }  (public)
  *   POST /api/opencode/session           → { session }                  (auth)
  *   POST /api/opencode/session/:id/prompt→ { result }                   (auth)
+ *   POST /api/opencode/session/:id/abort → { ok }                       (auth)
  *   GET  /api/opencode/events            → SSE proxy of the engine stream(auth)
  *
  * Degrades to 503 when OPENCODE_SERVER_URL isn't set, so the route is safe to
@@ -82,6 +83,16 @@ router.post(
     }
   },
 );
+
+// Stop an in-flight engine turn so the /code Stop button actually halts writes.
+router.post('/session/:id/abort', authenticateToken, requireConfigured, async (req, res) => {
+  try {
+    const result = await createOpencodeClient().abortSession(req.params.id);
+    return res.json({ ok: true, result: result ?? null });
+  } catch (err) {
+    return upstreamFail(res, err);
+  }
+});
 
 // Read a file the agent wrote in the engine's workspace → { path, content }.
 // Used by the /code UI to surface engine edits in the editor/preview.

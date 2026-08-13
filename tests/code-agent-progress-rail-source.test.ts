@@ -101,7 +101,7 @@ describe("code-agent progress rail — buildApp inline wiring", () => {
     const fn = buildApp()
     assert.match(
       fn,
-      /await intakeService\.generate\(text\)/,
+      /await intakeService\.generate\(text,\s*controller\.signal\)/,
       "buildApp must use the backend builder that returns index.html for APPS",
     )
     assert.match(

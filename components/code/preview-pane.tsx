@@ -714,6 +714,10 @@ export function PreviewPane() {
         Boolean(getGitBinding(activeFolderIdRef.current)) ||
         Boolean(getActiveCodexProject())
       if (hasRunnableProject) {
+        if (phaseRef.current === "starting") {
+          pendingAutoRunRef.current = true
+          return
+        }
         void runAppRef.current()
       }
     }
