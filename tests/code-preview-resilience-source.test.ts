@@ -67,6 +67,14 @@ describe("code preview resilience", () => {
       runApp,
       /codexApi\.startPreview\(codexProjectId,\s*startController\.signal\)/,
     )
+    assert.match(
+      runApp,
+      /githubService\.run\(boundRepo,\s*runtimeEnv,\s*startController\.signal\)/,
+    )
+    assert.match(
+      runApp,
+      /hostRunnerService\.start\(fileMap,\s*hostRunId,\s*runtimeEnv,\s*startController\.signal\)/,
+    )
     assert.match(runApp, /startPreviewWithCleanupFence\(/)
     assert.match(runApp, /cleanup: \(\) => codexApi\.stopPreview\(codexProjectId\)/)
     assert.match(runApp, /if \(fencedStart\.stale\) return/)
@@ -186,10 +194,31 @@ describe("code preview resilience", () => {
   })
 
   it("queues a second Run while a start is already in flight", () => {
+    const runApp = sliceBetween(
+      previewSource,
+      "const runApp = React.useCallback(",
+      "// Mirror the latest values into refs",
+    )
     assert.match(
       previewSource,
       /if \(phaseRef\.current === "starting"\) \{\s*pendingAutoRunRef\.current = true/,
     )
+    assert.match(runApp, /phaseRef\.current = "starting"/)
+    assert.match(runApp, /waitForPreviousPreviewStart\(previousStart\)/)
+    assert.match(runApp, /previewStartInFlightRef\.current = startFlight\.flight/)
+    assert.match(runApp, /startFlight\.settle\(\)/)
+  })
+
+  it("threads AbortSignal into GitHub and host runner starts", () => {
+    const github = readFileSync("lib/github-service.ts", "utf8")
+    const host = readFileSync("lib/code-runner/host-runner-service.ts", "utf8")
+    assert.match(
+      github,
+      /run: \(id: string, env\?: Record<string, string>, signal\?: AbortSignal\)/,
+    )
+    assert.match(github, /send<RunStatus & \{ ok: boolean \}>\(\s*"POST",\s*`\/connected\/\$\{id\}\/run`,\s*env \? \{ env \} : undefined,\s*signal,?\s*\)/)
+    assert.match(host, /signal\?: AbortSignal/)
+    assert.match(host, /signal,\s*\}\)/)
   })
 
   it("honors a forced preview restart from the composer apply event", () => {

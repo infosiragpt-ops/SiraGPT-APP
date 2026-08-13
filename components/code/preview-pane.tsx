@@ -65,6 +65,8 @@ import {
 import {
   shouldCleanupStalePreviewStart,
   startPreviewWithCleanupFence,
+  trackPreviewStartFlight,
+  waitForPreviousPreviewStart,
   type PreviewResourceLease,
 } from "@/lib/code-preview-start-fence"
 import {
@@ -273,6 +275,7 @@ export function PreviewPane() {
   // Codex response can never resurrect a preview the user already stopped.
   const previewRunGenerationRef = React.useRef(0)
   const previewStartAbortRef = React.useRef<AbortController | null>(null)
+  const previewStartInFlightRef = React.useRef<Promise<void> | null>(null)
   const previewResourceLeaseRef = React.useRef<PreviewResourceLease | null>(null)
   const pendingAutoRunRef = React.useRef(false)
   const forceAutoRunRef = React.useRef(false)
@@ -461,6 +464,9 @@ export function PreviewPane() {
 
   const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
     const auto = opts?.auto ?? false
+    const previousStart = previewStartInFlightRef.current
+    const startFlight = trackPreviewStartFlight()
+    previewStartInFlightRef.current = startFlight.flight
     previewStartAbortRef.current?.abort()
     const startController = new AbortController()
     previewStartAbortRef.current = startController
@@ -468,8 +474,14 @@ export function PreviewPane() {
     previewRunGenerationRef.current = generation
     const isCurrentRun = () =>
       previewRunGenerationRef.current === generation && !startController.signal.aborted
+    // Listeners read phaseRef before the next paint. Mark starting now so a
+    // second ▶ / event queues instead of overlapping /start on the same runId.
+    phaseRef.current = "starting"
     clearPoll()
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    try {
+    await waitForPreviousPreviewStart(previousStart)
+    if (!isCurrentRun()) return
     if (!runIdRef.current) {
       try {
         runIdRef.current = crypto.randomUUID()
@@ -486,7 +498,7 @@ export function PreviewPane() {
       const resourceKey = `github:${boundRepo}`
       previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
       const fencedStart = await startPreviewWithCleanupFence({
-        start: () => githubService.run(boundRepo, runtimeEnv).catch((err) => ({
+        start: () => githubService.run(boundRepo, runtimeEnv, startController.signal).catch((err) => ({
           error: err instanceof Error ? err.message : "runner unreachable",
         })),
         isCurrent: isCurrentRun,
@@ -581,6 +593,7 @@ export function PreviewPane() {
           modeRef.current = "host"
           codexPreviewProjectIdRef.current = null
           setLiveRun({ phase: "starting", devUrl: "", note: "Recuperando el proyecto…" })
+          startFlight.settle()
           await runAppRef.current({ auto })
           return
         }
@@ -610,7 +623,7 @@ export function PreviewPane() {
     const resourceKey = `host:${hostRunId}`
     previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
     const fencedStart = await startPreviewWithCleanupFence({
-      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv),
+      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv, startController.signal),
       isCurrent: isCurrentRun,
       cleanup: () => hostRunnerService.stop(hostRunId),
       shouldCleanup: () => shouldCleanupStalePreviewStart(
@@ -656,6 +669,9 @@ export function PreviewPane() {
       started.devUrl || "",
       generation,
     )
+    } finally {
+      startFlight.settle()
+    }
   }, [activeCodexProjectId, activeFolder?.id, clearPoll, deactivatePreviewResourceLease, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered

@@ -4,6 +4,8 @@ import { describe, it } from "node:test"
 import {
   shouldCleanupStalePreviewStart,
   startPreviewWithCleanupFence,
+  trackPreviewStartFlight,
+  waitForPreviousPreviewStart,
   type PreviewResourceLease,
 } from "../lib/code-preview-start-fence"
 import { startSerializedPreviewPoll } from "../lib/code-preview-poll"
@@ -315,6 +317,52 @@ describe("preview start cleanup fence", () => {
     assert.equal(reads, 1)
     assert.equal(scheduled, 1, "a terminal value must not queue another read")
     assert.equal(activeTimers, 0)
+  })
+
+  it("does not issue start B until start A settles", async () => {
+    const delayedA = deferred<void>()
+    let current: Promise<void> | null = null
+    let starts = 0
+    let concurrent = 0
+    let maxConcurrent = 0
+
+    const run = async (work: Promise<void>) => {
+      const previous = current
+      const flight = trackPreviewStartFlight()
+      current = flight.flight
+      try {
+        await waitForPreviousPreviewStart(previous)
+        starts += 1
+        concurrent += 1
+        maxConcurrent = Math.max(maxConcurrent, concurrent)
+        await work
+        concurrent -= 1
+      } finally {
+        flight.settle()
+      }
+    }
+
+    const first = run(delayedA.promise)
+    const second = run(Promise.resolve())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(starts, 1, "the successor must wait for the first /start fetch")
+    delayedA.resolve()
+    await Promise.all([first, second])
+    assert.equal(starts, 2)
+    assert.equal(maxConcurrent, 1)
+  })
+
+  it("lets a successor start after a rejected predecessor", async () => {
+    const rejected = Promise.reject(new Error("aborted"))
+    rejected.catch(() => {})
+    await waitForPreviousPreviewStart(rejected)
+    let started = false
+    const flight = trackPreviewStartFlight()
+    flight.settle()
+    flight.settle()
+    await flight.flight
+    started = true
+    assert.equal(started, true)
   })
 
   it("does not patch state or re-arm after ownership is cleared during an in-flight read", async () => {

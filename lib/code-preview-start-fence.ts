@@ -22,7 +22,35 @@ export function shouldCleanupStalePreviewStart(
   )
 }
 
-/** Discards a slow status response once a newer poll has already been issued. */
+/** Wait for an earlier /start so two runner boots never overlap. */
+export async function waitForPreviousPreviewStart(
+  previous: Promise<unknown> | null | undefined,
+): Promise<void> {
+  if (!previous) return
+  try {
+    await previous
+  } catch {
+    // A rejected predecessor must not block the successor /start.
+  }
+}
+
+/** One in-flight start slot. settle() is idempotent so self-heal can re-enter runApp. */
+export function trackPreviewStartFlight(): { flight: Promise<void>; settle: () => void } {
+  let settled = false
+  let release = () => {}
+  const flight = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  return {
+    flight,
+    settle() {
+      if (settled) return
+      settled = true
+      release()
+    },
+  }
+}
+
 /**
  * A stop/unmount request can reach the backend before a slow start request
  * finishes creating its server. Once that start settles, compensate again if
