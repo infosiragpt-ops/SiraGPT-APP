@@ -352,9 +352,12 @@ router.post(
 
       // AgentRunner FIRST (F1): el loop genérico intenta resolver el pedido
       // (crear o editar) escribiendo su propio código, con verificación
-      // obligatoria. Solo gana si entrega un archivo válido; si no aplica o
-      // no produce archivo, seguimos con el editor preservador y el pipeline
-      // clásico como fallback. Un fallo del runner NUNCA rompe la ruta.
+      // obligatoria. Si el runner RECLAMA el turno (shouldRunAgentRunner=true)
+      // hay solo dos salidas: un archivo verificado o un error honesto — el
+      // pipeline genérico de 8 diapositivas queda RESERVADO a los pedidos que
+      // el runner no reclama. El fallback silencioso al pipeline era la razón
+      // por la que producción seguía contestando con la plantilla genérica
+      // incluso con el runner desplegado.
       let agentRunnerResult = null;
       try {
         const { runAgentRunnerForDocRoute } = require('../services/agent-runner');
@@ -369,13 +372,26 @@ router.post(
           onStage: (ev) => send({ type: 'stage', label: ev.label || 'Agente trabajando' }),
         });
       } catch (agentRunnerErr) {
-        console.warn('[doc] agent-runner failed, falling back to pipeline:', agentRunnerErr?.message || agentRunnerErr);
+        if (controller.signal.aborted) throw agentRunnerErr;
+        console.warn('[doc] agent-runner unavailable, module-level failure:', agentRunnerErr?.message || agentRunnerErr);
       }
-      if (agentRunnerResult) {
+      if (agentRunnerResult && agentRunnerResult.file) {
         send({ type: 'stage', label: 'Documento generado y verificado por el agente', pct: 92 });
         content = agentRunnerResult.content;
         file = agentRunnerResult.file;
         format = agentRunnerResult.format;
+      } else if (agentRunnerResult && agentRunnerResult.agentRunnerClaimed) {
+        // El runner reclamó el turno pero no entregó archivo (sin créditos,
+        // sin modelo, verificación fallida…). Error honesto en español con la
+        // razón — NUNCA la plantilla genérica.
+        errorMsg = agentRunnerResult.message;
+        publicError = {
+          code: 'agent_runner_failed',
+          reason: agentRunnerResult.reason || 'no_output',
+          message: String(agentRunnerResult.message || ''),
+          error: String(agentRunnerResult.message || ''),
+          retryable: agentRunnerResult.reason !== 'no_llm',
+        };
       } else {
 
       // Devuelve un edit preservador SOLO cuando hay un archivo base/artefacto

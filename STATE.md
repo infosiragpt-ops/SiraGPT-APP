@@ -9,8 +9,12 @@
 ## Fase activa
 
 **F1 — Core agéntico (AgentRunner: loop + tools + artefactos + verificación).**
-Estado: **IN_PROGRESS** — implementación en este PR; cierra cuando los gates de F1
-(unit + e2e verdes) pasen en revisión y el PR se mergee.
+Estado: **DEPLOYED_AWAITING_GATES** — el runner está desplegado pero los gates de
+F1 aún no cierran: la evidencia de producción del 2026-08-13 ("crea una ppt del
+embarazo de color celeste/rosado" seguía contestando la plantilla genérica de
+8 diapositivas) mostró que el routing caía en silencio al
+`advanced-document-pipeline` cuando el runner fallaba (OpenRouter 402 /
+Anthropic sin créditos / sin LLM). F1 NO está completa.
 
 F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
@@ -33,12 +37,32 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 - **Crear-PPT ya NO tiene fast-path stub**: los decks nuevos pasan por el loop LLM
   para que el contenido sea del tema pedido; el fast-path determinista queda solo
   para PINTAR un pptx existente.
+- **F1 hardening (este PR): sin fallback al pipeline genérico cuando el runner
+  reclama el turno.**
+  - `/api/doc/generate`: si `shouldRunAgentRunner` es true y el runner no entrega
+    archivo, la ruta NO llama a `tryGenerateSourcePreservingDocumentEdit` ni a
+    `streamAdvancedDocumentPipeline` — persiste y devuelve un error honesto en
+    español con la razón (`no_llm`, `llm_402`, `no_output`, excepción). El
+    pipeline queda SOLO para pedidos que el runner no reclama.
+  - Chat (`agentic-chat-stream`): los turnos de documento runner-only (crear-doc
+    y follow-ups de estilo/color) terminan en error honesto
+    (`agent_runner_failed`) en vez de caer al loop LLM / pipeline genérico. Los
+    turnos de EDICIÓN con archivos conservan el camino quirúrgico
+    `document_edit` (nunca toca el pipeline genérico).
+  - Créditos: 402 de OpenRouter / "credit balance is too low" de Anthropic
+    detienen el loop de inmediato (`llm_402`, sin reintentos) y la razón viaja
+    hasta las rutas. `max_tokens` del loop bajó de la reserva implícita de 8192
+    a 3072 (env `SIRAGPT_AGENT_RUNNER_MAX_TOKENS`, clamp 256–8192) para que un
+    saldo bajo aún complete un loop corto.
+  - Tests: `tests/agent-runner-routing.test.js` (402/no_llm/no_output → nunca
+    pipeline) + casos nuevos en `agentic-chat-stream.test.js`.
 
 ## En progreso
 
-- Nada fuera de F1. (F1 = este PR: tools nuevas `edit_file`/`glob`/`grep`,
-  `create_presentation` con outline + cualquier color sin default rosado, prompt de
-  calidad de contenido, tests e2e de frases reales.)
+- Nada fuera de F1. Este PR es un **hardening de F1** (routing runner-first sin
+  fallback al pipeline genérico + errores honestos de créditos). F1 sigue
+  DEPLOYED_AWAITING_GATES; NO se marca completa y NO se inicia F2 (retiro del
+  classifier en todos los entry points + dashboard de telemetría quedan para F2).
 
 ## Pendiente
 

@@ -19,7 +19,7 @@ const { isValidOoxml, createOpenRouterClient, DEFAULT_MODEL, resolveMaxRuntimeMs
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
-const { runAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
+const { runAgentLoop, MAX_ITERATIONS_DEFAULT, isLlmCreditError } = require('./loop');
 const {
   resolveTurnFiles,
   persistOutputs,
@@ -88,11 +88,26 @@ function shouldRunAgentRunner({
   const hasFiles = (Array.isArray(files) && files.length > 0)
     || (Array.isArray(fileIds) && fileIds.length > 0);
   const t = String(text || '');
+  if (isRunnerOnlyDocumentTurn(t)) return true;
+  const work = WORK_RE.test(t);
+  if ((hasFiles || hasPriorArtifacts) && work) return true;
+  return false;
+}
+
+/**
+ * The claim triggers whose ONLY correct fulfilment is an AgentRunner file:
+ * create-a-document requests ("crea una ppt del embarazo celeste") and
+ * style/color follow-ups ("ponlas todas rosadas"). When the runner fails on
+ * one of these, the chat must show an honest error — falling through to the
+ * LLM loop / generic document pipeline produced the 8-slide template decks.
+ * (Edit turns claimed via attached files + a work verb are NOT runner-only:
+ * the surgical document_edit path may still legitimately handle them.)
+ */
+function isRunnerOnlyDocumentTurn(text) {
+  const t = String(text || '');
   if (CREATE_DOC_RE.test(t) && DOC_NOUN_RE.test(t)) return true;
   // Follow-ups like "ponlas todas de color rosado" with no new upload.
   if (STYLE_EDIT_RE.test(t) && COLOR_WORD_RE.test(t)) return true;
-  const work = WORK_RE.test(t);
-  if ((hasFiles || hasPriorArtifacts) && work) return true;
   return false;
 }
 
@@ -293,6 +308,9 @@ async function runAgentRunner({
     let outputAttempt = 1;
     while (
       !abortScope.signal.aborted
+      // Out of credits (OpenRouter/Anthropic 402): another loop pass costs
+      // latency and cannot succeed — stop retrying and surface the reason.
+      && result.stoppedReason !== 'llm_402'
       && outputs.filter((o) => o.valid !== false).length === 0
       && outputAttempt < MAX_OUTPUT_RETRIES
     ) {
@@ -384,6 +402,10 @@ async function runAgentRunnerForChat({
     || (artifacts.length
       ? `Listo. Generé ${artifacts.map((a) => a.filename).join(', ')}.`
       : 'No pude generar el archivo. Intenta de nuevo con más detalle.');
+  // A loop that "finished" without a deliverable is a no_output failure for
+  // the caller — 'final'/'fast_path' only describe HOW the loop stopped.
+  let failReason = run.stoppedReason || 'no_output';
+  if (failReason === 'final' || failReason === 'fast_path') failReason = 'no_output';
   return {
     ok: artifacts.length > 0,
     summary,
@@ -391,9 +413,33 @@ async function runAgentRunnerForChat({
     steps: run.steps || [],
     iterations: run.iterations,
     driver: run.driver,
-    stoppedReason: artifacts.length ? 'agent_runner' : (run.stoppedReason || 'no_output'),
+    stoppedReason: artifacts.length ? 'agent_runner' : failReason,
+    errorMessage: artifacts.length ? null : (run.errorMessage || null),
     priorArtifactId: resolved.latest?.id || null,
   };
+}
+
+/**
+ * Honest Spanish failure copy per skip/fail reason. Shown to the user when
+ * the runner claimed the turn but could not deliver a verified file —
+ * NEVER replaced by the generic 8-slide pipeline template.
+ */
+const AGENT_RUNNER_FAILURE_COPY = {
+  no_llm: 'no hay un modelo de IA disponible para el agente (falta configurar o habilitar la clave del proveedor)',
+  llm_402: 'el proveedor de IA rechazó la petición por falta de créditos (HTTP 402); recarga créditos del modelo y vuelve a intentarlo',
+  no_output: 'el agente terminó sin producir un archivo verificado',
+  verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
+  max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
+  exception: 'el agente falló con un error inesperado',
+};
+
+function buildAgentRunnerFailureMessage(reason, detail) {
+  const key = String(reason || 'no_output');
+  const why = AGENT_RUNNER_FAILURE_COPY[key] || `el agente no pudo completar la tarea (${key})`;
+  const extra = detail ? ` Detalle técnico: ${String(detail).slice(0, 300)}` : '';
+  return `No pude generar el documento: ${why}. `
+    + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. '
+    + `Corrige la causa e inténtalo de nuevo.${extra ? `\n\n${extra.trim()}` : ''}`;
 }
 
 /**
@@ -445,7 +491,25 @@ async function executeAgentRunnerTurn(params = {}) {
       try { console.warn('[agent-runner] async path failed, in-process:', err && err.message); } catch (_) { /* ignore */ }
     }
   }
-  return runAgentRunnerForChat(params);
+  try {
+    return await runAgentRunnerForChat(params);
+  } catch (err) {
+    // User cancellation is not a runner failure — let the caller unwind.
+    if (params.signal?.aborted) throw err;
+    // Never throw for real failures: the routes need the reason to show an
+    // honest error instead of silently falling back to the generic pipeline.
+    const reason = isLlmCreditError(err) ? 'llm_402' : 'exception';
+    try { console.warn('[agent-runner] turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
+    return {
+      ok: false,
+      skipped: false,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: reason,
+      errorMessage: err?.message || String(err),
+    };
+  }
 }
 
 function onEventSafe(onEvent, ev) {
@@ -453,11 +517,19 @@ function onEventSafe(onEvent, ev) {
 }
 
 /**
- * /api/doc/generate entry — AgentRunner FIRST, pipeline as fallback.
- * Returns `{ content, file, format, artifacts }` in the exact shape the doc
- * route streams to the client, or `null` when the runner does not apply /
- * yields no file (the caller then falls through to the source-preserving
- * editor and the advanced-document-pipeline).
+ * /api/doc/generate entry — AgentRunner FIRST, pipeline ONLY when the runner
+ * does not claim the request.
+ *
+ * Returns:
+ *   - `null` when the request is NOT an AgentRunner turn (the caller then
+ *     falls through to the source-preserving editor and the pipeline);
+ *   - `{ content, file, format, artifacts }` when the runner delivered a
+ *     verified file (exact shape the doc route streams to the client);
+ *   - `{ agentRunnerClaimed: true, failed: true, reason, message }` when the
+ *     runner claimed the turn but could not deliver. The caller MUST surface
+ *     `message` as an honest error and MUST NOT fall back to the generic
+ *     8-slide pipeline template — that silent fallback is exactly the
+ *     production failure this shape removes.
  */
 async function runAgentRunnerForDocRoute({
   prisma,
@@ -503,9 +575,19 @@ async function runAgentRunnerForDocRoute({
       }
     },
   });
-  if (!ran || !ran.ok || !Array.isArray(ran.artifacts) || !ran.artifacts.length) return null;
+  const failure = (reason, detail) => ({
+    agentRunnerClaimed: true,
+    failed: true,
+    reason: String(reason || 'no_output'),
+    message: buildAgentRunnerFailureMessage(reason, detail),
+  });
+  if (!ran || !ran.ok || !Array.isArray(ran.artifacts) || !ran.artifacts.length) {
+    return failure(ran?.stoppedReason || 'no_output', ran?.errorMessage || null);
+  }
   const artifact = ran.artifacts.find((a) => a && a.downloadUrl) || ran.artifacts[0];
-  if (!artifact || !artifact.downloadUrl) return null;
+  if (!artifact || !artifact.downloadUrl) {
+    return failure('no_output', 'artifact sin downloadUrl');
+  }
   return {
     content: ran.summary,
     format: artifact.format,
@@ -555,10 +637,12 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
 
 module.exports = {
   shouldRunAgentRunner,
+  isRunnerOnlyDocumentTurn,
   runAgentRunner,
   runAgentRunnerForChat,
   runAgentRunnerForDocRoute,
   executeAgentRunnerTurn,
+  buildAgentRunnerFailureMessage,
   canCallLlm,
   defaultModel,
   loadOfficeHelpersPy,
