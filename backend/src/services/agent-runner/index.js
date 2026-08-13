@@ -635,9 +635,13 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
   return out;
 }
 
+const { logDocumentRouting, DOCUMENT_ROUTING_PATHS } = require('./telemetry');
+
 module.exports = {
   shouldRunAgentRunner,
   isRunnerOnlyDocumentTurn,
+  logDocumentRouting,
+  DOCUMENT_ROUTING_PATHS,
   runAgentRunner,
   runAgentRunnerForChat,
   runAgentRunnerForDocRoute,

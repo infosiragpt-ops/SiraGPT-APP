@@ -759,6 +759,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         artifacts,
       };
     };
+    // F2 telemetry: one structured line per document turn stating which path
+    // served it. Best-effort — never breaks the turn.
+    const logDocRouting = (routePath, reason) => {
+      try {
+        require('./agent-runner/telemetry').logDocumentRouting({
+          entry: 'chat',
+          path: routePath,
+          reason,
+          chatId: toolContext.chatId || null,
+        });
+      } catch (_) { /* telemetry is best-effort */ }
+    };
     // Generic AgentRunner: create/edit any document without hardcoded routes
     // ("crea una ppt rosada", "ponlas blancas", follow-up "ahora rosadas").
     // When the runner CLAIMS the turn there are exactly two outcomes: a
@@ -817,6 +829,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         });
         if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
           await writeSse(res, { replace: true, content: ran.summary });
+          logDocRouting('agent_runner');
           return finishSourcePreservingPreloop('agent_runner', ran.summary, ran.artifacts);
         }
         agentRunnerFailure = {
@@ -900,6 +913,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
               ? `Listo. Entregué ${artifactEvents.length} archivo(s) que superaron la validación. No entregué ${rejectedResultCount} archivo(s) inválido(s).`
               : String(preserved.content || fallbackAnswer).trim();
             await writeSse(res, { replace: true, content: answer });
+            logDocRouting('source_preserving_edit', agentRunnerFailure ? `rescued_after_${agentRunnerFailure.reason}` : undefined);
             return finishSourcePreservingPreloop(
               'source_preserving_document_edit',
               answer,
@@ -911,6 +925,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             // prove any output safe. Never fall through to the LLM/tool loop:
             // that path can regenerate a plausible but different document.
             await writeSse(res, { replace: true, content: SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE });
+            logDocRouting('source_preserving_edit', 'validation_failed');
             return finishSourcePreservingPreloop(
               'source_preserving_document_validation_failed',
               SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE,
@@ -929,6 +944,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         if (isSourcePreservingValidationError(preErr)) {
           const answer = SOURCE_PRESERVING_VALIDATION_FAILURE_MESSAGE;
           await writeSse(res, { replace: true, content: answer });
+          logDocRouting('source_preserving_edit', 'validation_failed');
           return finishSourcePreservingPreloop(
             'source_preserving_document_validation_failed',
             answer,
@@ -945,6 +961,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           const answer = message
             || 'No pude aplicar el cambio en el documento adjunto. Indica el texto exacto a reemplazar (entre comillas) y lo edito de forma quirúrgica.';
           await writeSse(res, { replace: true, content: answer });
+          logDocRouting('source_preserving_edit', 'edit_failed');
           return finishSourcePreservingPreloop(
             'source_preserving_document_edit_failed',
             answer,
@@ -975,8 +992,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
       if (runnerOnly) {
         await writeSse(res, { replace: true, content: answer });
+        logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
         return finishSourcePreservingPreloop('agent_runner_failed', answer, []);
       }
+      // Claimed EDIT turn continuing into the loop: document_edit (surgical)
+      // stays available, but the failed-runner turn must never fabricate a
+      // NEW generic document. Telemetry only — the tool ban happens below
+      // once the toolset is assembled.
+      logDocRouting('agent_runner_failed', `${agentRunnerFailure.reason}_edit_continues_loop`);
     }
 
     const customGptAgentPolicy = resolveCustomGptAgentPolicy({
@@ -1266,6 +1289,14 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         'docintel_compare',
       ]);
       tools = tools.filter((t) => t && t.name && !blockedOnEdit.has(t.name));
+    }
+    // F2: the AgentRunner claimed this turn and failed, and the surgical
+    // editor did not rescue it either — the loop may still serve the EDIT
+    // via document_edit, but create_document (a brand-new generic document)
+    // is banned for the rest of the turn. Exception preserved: NEW decks
+    // from PDF/images (wantsNewDeckDeliverable) still require create_document.
+    if (agentRunnerFailure && !wantsNewDeckDeliverable && Array.isArray(tools)) {
+      tools = tools.filter((t) => !(t && t.name === 'create_document'));
     }
     // Force create_document first for new multi-slide decks so weak models
     // cannot answer with a preserved PDF annex.
