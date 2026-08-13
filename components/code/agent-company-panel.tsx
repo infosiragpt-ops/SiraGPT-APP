@@ -154,6 +154,7 @@ import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  notifyCompanyAssociationChanged,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
   setActiveCodexProject,
@@ -948,6 +949,7 @@ export function AgentCompanyPanel() {
         "manual",
       )
       await refreshCompanyAssociation()
+      notifyCompanyAssociationChanged()
       setAssociationWizardOpen(false)
       toast.success("Entorno y conectores asociados de forma persistente.")
     } catch (error) {
@@ -1240,6 +1242,7 @@ export function AgentCompanyPanel() {
           [],
           "created_for_company",
         )
+        notifyCompanyAssociationChanged()
         if (workspaceId === activeFolder?.id) await refreshCompanyAssociation()
         persistWorkspaceCodexProject(workspaceId, project.id)
         setActiveCodexProject(project.id)

@@ -712,10 +712,15 @@ export function PreviewPane() {
       }
     }
     window.addEventListener("siragpt:code-run-app", onRun)
-    window.addEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    const onQueuedPreviewRun = (event: Event) => {
+      const detail = (event as CustomEvent<{ force?: boolean }>).detail
+      if (detail?.force) forceAutoRunRef.current = true
+      queueAutoRun()
+    }
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     return () => {
       window.removeEventListener("siragpt:code-run-app", onRun)
-      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     }
   }, [])
 

@@ -175,4 +175,9 @@ describe("code preview resilience", () => {
       "the post-mount auto-run gate must react to Codex project rehydration",
     )
   })
+
+  it("honors a forced preview restart from the composer apply event", () => {
+    assert.match(previewSource, /window\.addEventListener\(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun\)/)
+    assert.match(previewSource, /if \(detail\?\.force\) forceAutoRunRef\.current = true/)
+  })
 })
