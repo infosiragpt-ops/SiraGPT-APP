@@ -6826,8 +6826,9 @@ router.post(
           // duplicate-guarded; needs no live socket) so the partial answer is
           // still there after a reload — instead of silently vanishing.
           try {
-            const abortedContent = (fullResponseContent || '').trim();
-            if (abortedContent.length >= 40 && canPersist) {
+            const { resolveAbortedAssistantContent } = require('../services/chat-abort-persistence');
+            const abortedContent = resolveAbortedAssistantContent(fullResponseContent);
+            if (canPersist) {
               const savedChat = await saveChatAndTrackUsage(
                 userId,
                 chatId,

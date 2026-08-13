@@ -176,6 +176,17 @@ describe("ai-service · deterministic intent routing", () => {
     )
   })
 
+  it("treats current-turn file objects as document context for first-send edits", () => {
+    const ppt = {
+      id: "file-pptx-live",
+      name: "Gestion.pptx",
+      mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    assert.equal(shouldEditExistingDocument("agrega 5 diapositivas", [ppt]), true)
+    assert.equal(shouldEditExistingDocument("corrige la ortografía", [ppt]), true)
+    assert.equal(shouldEditExistingDocument("edita esta presentación", [ppt]), true)
+  })
+
   it("routes targeted edits of an uploaded Word document to the agentic document editor", async () => {
     const history = [
       {

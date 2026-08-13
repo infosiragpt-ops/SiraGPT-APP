@@ -287,6 +287,7 @@ import {
   resolveUploadFileId,
 } from "@/lib/chat/composer-files"
 import {
+  adoptUnboundComposerQueueItems,
   createPersistedComposerQueueItem,
   readPersistedComposerQueue,
   writePersistedComposerQueue,
@@ -8592,6 +8593,25 @@ But first, you need to connect your Spotify account securely using the button be
     writePersistedComposerQueue(queueOwnerId, pendingMsgQueueRef.current);
   }, [queueOwnerId]);
 
+  const prevComposerChatIdRef = React.useRef<string | null>(currentChat?.id ?? null);
+  React.useEffect(() => {
+    const previousChatId = prevComposerChatIdRef.current;
+    const nextChatId = currentChat?.id ?? null;
+    prevComposerChatIdRef.current = nextChatId;
+    if (!nextChatId || String(nextChatId).startsWith("temp-chat-")) return;
+    const fromNewChat = previousChatId == null || String(previousChatId).startsWith("temp-chat-");
+    if (!fromNewChat) return;
+    const adopted = adoptUnboundComposerQueueItems(
+      pendingMsgQueueRef.current,
+      nextChatId,
+      previousChatId,
+    );
+    if (!adopted.changed) return;
+    pendingMsgQueueRef.current = adopted.items;
+    persistComposerQueue();
+    syncQueuedCount(nextChatId);
+  }, [currentChat?.id, persistComposerQueue, syncQueuedCount]);
+
   // Hydrate tasks that the user explicitly queued while another turn was
   // running. Unlike a plain ref, this survives refreshes and browser restarts.
   React.useEffect(() => {
@@ -9033,7 +9053,6 @@ But first, you need to connect your Spotify account securely using the button be
     // blocks sending here. The per-message idempotency key below handles retry
     // safety once the send payload has been built.
     const sendLatchKey = currentChat?.id ?? '__new__';
-    if (sendInFlightChatsRef.current.has(sendLatchKey)) return;
 
     // ── Slash-command intercept ────────────────────────────────────────
     // Slash commands use their dedicated backend routes. `/research` owns its

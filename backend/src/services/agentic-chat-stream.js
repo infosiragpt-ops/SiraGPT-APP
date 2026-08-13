@@ -704,6 +704,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const preloopFileIds = Array.isArray(toolContext.fileIds)
       ? toolContext.fileIds.map(String).filter(Boolean)
       : [];
+    if (
+      preloopFileIds.length === 0
+      && toolContext.prisma
+      && toolContext.userId
+      && toolContext.chatId
+    ) {
+      try {
+        const recoveredIds = await require('./message-attachments').resolveChatDocumentFileIds(
+          toolContext.prisma,
+          {
+            userId: toolContext.userId,
+            chatId: toolContext.chatId,
+            providedFileIds: [],
+          },
+        );
+        if (Array.isArray(recoveredIds) && recoveredIds.length > 0) {
+          preloopFileIds.push(...recoveredIds.map(String).filter(Boolean));
+          toolContext.fileIds = [...preloopFileIds];
+        }
+      } catch (_) { /* recovery is best-effort */ }
+    }
     let documentEditPreloopAttempted = false;
     let wantsNewDeckDeliverable = false;
     try {

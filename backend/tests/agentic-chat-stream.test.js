@@ -1162,6 +1162,84 @@ test('runAgenticChat source-preserving pre-loop runs from chatId when this turn 
   }
 });
 
+test('runAgenticChat recovers chat attachment ids when this turn sends empty fileIds', async () => {
+  let llmCalls = 0;
+  let receivedFileIds = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async (args) => {
+          receivedFileIds = args.fileIds;
+          return {
+            content: 'Listo. Conservé el documento original y apliqué la edición solicitada.',
+            artifact: {
+              id: 'art-recovered',
+              filename: 'deck_editado.pptx',
+              format: 'pptx',
+              mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              sizeBytes: 1024,
+              downloadUrl: '/api/agent/artifact/art-recovered',
+            },
+            validation: { passed: true },
+          };
+        },
+      };
+    }
+    if (request === './message-attachments' || request.endsWith('/message-attachments')) {
+      return {
+        resolveChatDocumentFileIds: async () => ['recovered-file-1'],
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  const attachmentsPath = require.resolve('../src/services/message-attachments');
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  delete require.cache[attachmentsPath];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'agrega 5 diapositivas a esta presentacion',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: [],
+        prisma: { chat: {}, message: {} },
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.deepEqual(receivedFileIds, ['recovered-file-1']);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+    delete require.cache[attachmentsPath];
+  }
+});
+
 test('runAgenticChat source-preserving pre-loop streams every batch artifact without duplicating the singular alias', async () => {
   let llmCalls = 0;
   const openai = {
