@@ -52,7 +52,7 @@ const OFFICE_TYPO_FIXES = [
 ];
 
 const ADD_VERB_RE = /\b(agreg\w*|anad\w*|insert\w*|inclu\w*|incorpor\w*|coloc\w*|sum\w*|pon(?:er|ga|le|me)?|add|append)\b/;
-const SLIDE_NOUN_RE = /\b(slides?|diapositiv\w*|laminas?|pptx?|powerpoint|presentacion(?:es)?|deck)\b/;
+const SLIDE_NOUN_RE = /\b(slides?|diapositiv\w*|laminas?|ppt(?:x|s)?|powerpoint|presentacion(?:es)?|deck)\b/;
 const SECTION_NOUN_RE = /\b(secciones?|apartados?|capitulos?|secciones?)\b/;
 const ROW_NOUN_RE = /\b(filas?|rows?)\b/;
 const BIBLIOGRAPHY_RE = /\b(referencias?(?:\s+bibliografic\w*)?|bibliograf\w*|citas?\s+bibliografic\w*|fuentes?\s+bibliografic\w*)\b/;
@@ -130,7 +130,7 @@ function extractRequestedCount(text = '') {
     const count = clampCount(parseCountToken(match[1]));
     if (count) return count;
   }
-  if (/\b(?:una|un|a)\s+(?:nueva\s+)?(?:slide|diapositiva|lamina|seccion|apartado|fila)\b/.test(text)) return 1;
+  if (/\b(?:una|un|a)\s+(?:nueva\s+)?(?:slide|diapositiva|lamina|ppt|ppts?|seccion|apartado|fila)\b/.test(text)) return 1;
   return null;
 }
 

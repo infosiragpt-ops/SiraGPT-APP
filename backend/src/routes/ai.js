@@ -6164,6 +6164,13 @@ router.post(
                 files: processedFiles || [],
                 customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
               });
+              let createDocRequested = false;
+              try {
+                createDocRequested = require('../services/agent-runner').shouldRunAgentRunner({
+                  files: processedFiles || [],
+                  text: prompt,
+                });
+              } catch (_) { createDocRequested = false; }
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
               // fenced-JSON calls parsed back — lets ANY model drive the
@@ -6171,23 +6178,11 @@ router.post(
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && shouldRunAgentic
-                // Callers that want a plain LLM stream (e.g. the /code chat,
-                // which generates code blocks and must never detour into the
-                // web_search/artifact agentic loop) set disableAgentic:true.
+                && (shouldRunAgentic || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
-                // Deterministic public-web grounding is intentionally a
-                // read-only, non-agentic mode. Enforce that server-side even
-                // if a client accidentally (or maliciously) omits the
-                // disableAgentic flag.
                 && !__publicWebReadonly
-                && __toolCallMode !== 'none'
-                // Images used to skip the whole agentic path. That also
-                // skipped the deterministic Office editor, so "agrega 5
-                // slides a esta ppt" on a vision model fell through to the
-                // LLM and invented "limitaciones técnicas". Document edits
-                // do not need vision — keep the preloop.
-                && (!hasImages || documentEditRequested)
+                && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
+                && (!hasImages || documentEditRequested || createDocRequested)
               );
               // U3: shadow turn-policy snapshot (observe by default). Never
               // overrides routing/tool decisions in this unit.
