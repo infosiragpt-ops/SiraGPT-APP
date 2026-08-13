@@ -350,6 +350,34 @@ router.post(
         return arr.findIndex(other => (other.id || `${other.originalName}:${other.mimeType}`) === key) === index;
       }).slice(0, MAX_SIMULTANEOUS_DOCUMENTS);
 
+      // AgentRunner FIRST (F1): el loop genérico intenta resolver el pedido
+      // (crear o editar) escribiendo su propio código, con verificación
+      // obligatoria. Solo gana si entrega un archivo válido; si no aplica o
+      // no produce archivo, seguimos con el editor preservador y el pipeline
+      // clásico como fallback. Un fallo del runner NUNCA rompe la ruta.
+      let agentRunnerResult = null;
+      try {
+        const { runAgentRunnerForDocRoute } = require('../services/agent-runner');
+        agentRunnerResult = await runAgentRunnerForDocRoute({
+          prisma,
+          userId: req.user.id,
+          chatId,
+          prompt,
+          fileIds: requestedFileIds,
+          model: req.body.model,
+          signal: controller.signal,
+          onStage: (ev) => send({ type: 'stage', label: ev.label || 'Agente trabajando' }),
+        });
+      } catch (agentRunnerErr) {
+        console.warn('[doc] agent-runner failed, falling back to pipeline:', agentRunnerErr?.message || agentRunnerErr);
+      }
+      if (agentRunnerResult) {
+        send({ type: 'stage', label: 'Documento generado y verificado por el agente', pct: 92 });
+        content = agentRunnerResult.content;
+        file = agentRunnerResult.file;
+        format = agentRunnerResult.format;
+      } else {
+
       // Devuelve un edit preservador SOLO cuando hay un archivo base/artefacto
       // compatible que conservar. Si no hay nada que preservar devuelve null y
       // generamos un documento NUEVO desde cero (no rechazamos la petición). Si
@@ -439,6 +467,7 @@ router.post(
             send(ev);
           }
         }
+      }
       }
     } catch (err) {
       publicError = buildPublicStreamError(err, { req, surface: 'doc.generate' });

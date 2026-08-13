@@ -9,6 +9,8 @@ Full-stack AI platform (Next.js 14 + Express.js) with multi-agent orchestration,
 visual content generation, deep-document pipelines, scientific-search, and
 Manus-like research agents.
 
+> Frontier-agent program: see [`ROADMAP.md`](ROADMAP.md) (phases), [`STATE.md`](STATE.md) (active phase) and [`ARCHITECTURE.md`](ARCHITECTURE.md) (AgentRunner design).
+
 ## Features
 
 - **Multi-LLM**: OpenAI, Anthropic Claude, xAI Grok, DeepSeek, Google Gemini

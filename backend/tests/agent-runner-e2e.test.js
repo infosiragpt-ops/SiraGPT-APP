@@ -209,61 +209,98 @@ test('E2E: follow-up uses prior artifact bytes, not the original upload', async 
   slideXmlHasHex(out.buffer, 'FFC0CB');
 });
 
-test('E2E: "crea una ppt del embarazo de color rosado" via create_presentation', async () => {
-  const py = `
-from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
-prs = Presentation()
-prs.slide_width = Inches(13.333)
-prs.slide_height = Inches(7.5)
-blank = prs.slide_layouts[6]
-for title in ["Embarazo", "Primer trimestre", "Cuidados", "Gracias"]:
-    sl = prs.slides.add_slide(blank)
-    shape = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), prs.slide_width, prs.slide_height)
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = RGBColor(0xFF, 0xC0, 0xCB)
-    shape.line.fill.background()
-    box = sl.shapes.add_textbox(Inches(0.6), Inches(2.5), Inches(12), Inches(1.2))
-    tf = box.text_frame
-    tf.text = title
-    tf.paragraphs[0].font.size = Pt(36)
-    tf.paragraphs[0].font.color.rgb = RGBColor(0x4A, 0x1C, 0x40)
-prs.save("/workspace/outputs/embarazo-rosado.pptx")
-print("wrote embarazo-rosado.pptx")
-`.trim();
+test('E2E: "crea una ppt del embarazo de color rosado" — LLM outline drives content, FFC0CB paints every slide', async () => {
+  // NO fast-path for create+color: the deck below only exists if the LLM loop
+  // ran and the model passed its own outline (topic-specific slide copy).
   const client = scriptedClient([
-    { toolCalls: [{ name: 'create_presentation', args: { topic: 'embarazo', title: 'Embarazo', color: 'rosado', slides: 8, filename: 'embarazo-rosado.pptx' } }] },
+    {
+      toolCalls: [{
+        name: 'create_presentation',
+        args: {
+          topic: 'embarazo',
+          title: 'Embarazo saludable',
+          color: 'rosado',
+          outline: [
+            { title: 'Primer trimestre', bullets: ['Controles prenatales mensuales', 'Ácido fólico diario'] },
+            { title: 'Segundo trimestre', bullets: ['Ecografía morfológica (semana 20)'] },
+            { title: 'Señales de alerta', bullets: ['Sangrado o dolor intenso: acudir a urgencias'] },
+            { title: 'Gracias', bullets: [] },
+          ],
+          filename: 'embarazo-rosado.pptx',
+        },
+      }],
+    },
     { toolCalls: [{ name: 'render_preview', args: { path: 'outputs/embarazo-rosado.pptx' } }] },
     { content: 'Listo. Presentación del embarazo en rosado: embarazo-rosado.pptx' },
   ]);
-  let result;
-  try {
-    result = await runAgentRunner({
-      files: [],
-      instruction: 'crea una ppt del embarazo de color rosado la ppt',
-      client,
-      model: 'test',
-      driver: 'local',
-      maxIterations: 8,
-    });
-  } catch (err) {
-    const msg = String(err && err.message || err);
-    if (/python-pptx|No module named pptx/i.test(msg)) {
-      // Local sandbox without python-pptx: skip the create path; XML tests above still cover color.
-      return;
-    }
-    throw err;
-  }
+  const result = await runAgentRunner({
+    files: [],
+    instruction: 'crea una ppt del embarazo de color rosado la ppt',
+    client,
+    model: 'test',
+    driver: 'local',
+    maxIterations: 8,
+  });
   const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
-  if (!out) {
-    // execute_python returned ERROR (missing python-pptx). That's a sandbox
-    // image issue, not an AgentRunner bug — color XML tests still hold.
-    return;
-  }
+  assert.ok(out, 'produced a pptx');
+  assert.notEqual(result.stoppedReason, 'fast_path', 'new decks must go through the LLM loop');
   slideXmlHasHex(out.buffer, 'FFC0CB');
   assert.ok(zipHasText(out.buffer, 'Embarazo') || zipHasText(out.buffer, 'embarazo'));
+  assert.ok(zipHasText(out.buffer, 'trimestre'), 'content must be pregnancy-specific, not filler');
+  assert.equal(zipHasText(out.buffer, 'Puntos clave'), false, 'no boilerplate filler');
+});
+
+test('E2E: "crea una ppt … #1E3A8A" must NOT come out pink', async () => {
+  const client = scriptedClient([
+    {
+      toolCalls: [{
+        name: 'create_presentation',
+        args: {
+          topic: 'plan comercial',
+          title: 'Plan comercial 2027',
+          color: '#1E3A8A',
+          outline: [{ title: 'Metas del trimestre', bullets: ['Crecer 15% en ventas'] }],
+          filename: 'plan-azul.pptx',
+        },
+      }],
+    },
+    { toolCalls: [{ name: 'render_preview', args: { path: 'outputs/plan-azul.pptx' } }] },
+    { content: 'Listo. Plan comercial en azul #1E3A8A.' },
+  ]);
+  const result = await runAgentRunner({
+    files: [],
+    instruction: 'crea una ppt del plan comercial de color #1E3A8A',
+    client,
+    model: 'test',
+    driver: 'local',
+    maxIterations: 8,
+  });
+  const out = (result.outputs || []).find((o) => o.valid !== false && /\.pptx$/i.test(o.name));
+  assert.ok(out, 'produced a pptx');
+  slideXmlHasHex(out.buffer, '1E3A8A');
+  assert.equal(zipHasText(out.buffer, 'FFC0CB'), false, 'pink must not leak into a blue deck');
+});
+
+test('E2E: create+color with a model that produces nothing yields NO stub deck', async () => {
+  // Before Phase 1 the color fast-path fabricated an 8-slide filler deck for
+  // any "crea una ppt + color". Now: if the LLM does not actually create the
+  // file, there is no file — an honest failure instead of a stub.
+  const client = scriptedClient([
+    { content: 'No pude crear la presentación.' },
+    { content: 'No pude crear la presentación.' },
+    { content: 'No pude crear la presentación.' },
+  ]);
+  const result = await runAgentRunner({
+    files: [],
+    instruction: 'crea una ppt del embarazo de color rosado la ppt',
+    client,
+    model: 'test',
+    driver: 'local',
+    maxIterations: 4,
+  });
+  const valid = (result.outputs || []).filter((o) => o.valid !== false);
+  assert.equal(valid.length, 0, 'no stub deck may be fabricated');
+  assert.notEqual(result.stoppedReason, 'fast_path');
 });
 
 test('E2E PNG brightness is high after painting white (when soffice exists)', async () => {
