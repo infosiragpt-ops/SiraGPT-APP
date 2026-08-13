@@ -57,7 +57,7 @@ test('listPptxThemes exposes id/label/description only', () => {
 
 test('pickPptxTheme: requested color beats premium/boardroom default', () => {
   const pink = pickPptxTheme({ template: 'premium', prompt: 'crea una ppt del embarazo de color rosado la ppt' });
-  assert.equal(pink.id, 'user-color');
+  assert.equal(pink.id, 'user-color:FFC0CB');
   assert.equal(pink.palette.bg, 'FFC0CB');
   assert.equal(pink.palette.coverBg, 'FFC0CB');
   assert.equal(pink.palette.sectionBg, 'FFC0CB');
@@ -67,6 +67,12 @@ test('pickPptxTheme: requested color beats premium/boardroom default', () => {
   assert.equal(navy.palette.bg, '1E3A8A');
   const white = pickPptxTheme({ template: 'premium', prompt: 'uniformisa el color de las ppts todas de color blanco' });
   assert.equal(white.palette.bg, 'FFFFFF');
+  const despiteBoardroom = pickPptxTheme({
+    template: 'premium',
+    prompt: 'crea una ppt del embarazo de color rosado la ppt',
+    themeId: 'boardroom',
+  });
+  assert.equal(despiteBoardroom.palette.bg, 'FFC0CB');
 });
 
 test('pickPptxTheme: prompt styling keywords override the template default', () => {

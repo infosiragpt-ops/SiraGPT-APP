@@ -203,10 +203,24 @@ const NAMED_SLIDE_COLORS = {
   amarillo: 'FDE047', yellow: 'FDE047',
 };
 
+const COLOR_ALIAS_RES = [
+  { re: /rosad[oa]s?|\brosa\b|\bpink\b/i, hex: 'FFC0CB' },
+  { re: /blanc[oa]s?|\bwhite\b/i, hex: 'FFFFFF' },
+  { re: /\bazul(?:es)?\b|\bblue\b/i, hex: '3B82F6' },
+  { re: /negr[oa]s?|\bblack\b/i, hex: '111827' },
+  { re: /verde(?:s)?|\bgreen\b/i, hex: '22C55E' },
+  { re: /gris(?:es)?|\bgr[ae]y\b/i, hex: 'E5E7EB' },
+  { re: /roj[oa]s?|\bred\b/i, hex: 'EF4444' },
+  { re: /amarill[oa]s?|\byellow\b/i, hex: 'FDE047' },
+];
+
 function inferRequestedHex(prompt) {
   const text = String(prompt || '');
   const hex = text.match(/#([0-9a-fA-F]{6})/);
   if (hex) return hex[1].toUpperCase();
+  for (const alias of COLOR_ALIAS_RES) {
+    if (alias.re.test(text)) return alias.hex;
+  }
   const names = Object.keys(NAMED_SLIDE_COLORS).sort((a, b) => b.length - a.length);
   for (const name of names) {
     if (new RegExp('\\b' + name + '\\b', 'i').test(text)) return NAMED_SLIDE_COLORS[name];
@@ -230,7 +244,7 @@ function themeFromRequestedColor(hex) {
   const muted = light ? '57534E' : 'E2E8F0';
   const surface = light ? 'FFFFFF' : color;
   return {
-    id: 'user-color',
+    id: `user-color:${color}`,
     label: 'Color pedido',
     description: `Paleta generada desde el color #${color} pedido por el usuario.`,
     fonts: { display: 'Aptos Display', body: 'Aptos' },
@@ -260,10 +274,15 @@ function themeFromRequestedColor(hex) {
 }
 
 function pickPptxTheme({ template = '', prompt = '', themeId = null } = {}) {
-  if (themeId && THEMES[themeId]) return THEMES[themeId];
   const text = String(prompt || '');
   const requestedHex = inferRequestedHex(text);
   if (requestedHex) return themeFromRequestedColor(requestedHex);
+  const themeKey = String(themeId || '');
+  if (themeKey.startsWith('user-color:')) {
+    const hex = themeKey.slice('user-color:'.length);
+    if (/^[0-9A-Fa-f]{6}$/.test(hex)) return themeFromRequestedColor(hex);
+  }
+  if (themeId && THEMES[themeId]) return THEMES[themeId];
   for (const rule of PROMPT_THEME_RULES) {
     if (rule.re.test(text)) return THEMES[rule.theme];
   }
