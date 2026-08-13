@@ -1552,6 +1552,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     return () => {
       abortRef.current?.abort()
       abortRef.current = null
+      const engineSession = sessionId ? engineSessionRef.current[sessionId] : null
+      if (engineSession) void opencodeService.abortSession(engineSession).catch(() => {})
     }
   }, [sessionId])
 
@@ -1723,12 +1725,17 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     // Non-Codex engines have no durable backend run to confirm.
     abortRef.current?.abort()
     abortRef.current = null
+    const engineSession = sessionId ? engineSessionRef.current[sessionId] : null
+    if (engineSession) {
+      if (sessionId) delete engineSessionRef.current[sessionId]
+      void opencodeService.abortSession(engineSession).catch(() => {})
+    }
     setBusy(false)
     setBuildingApp(false)
     setTurns((prev) =>
       prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
     )
-  }, [beginCodexCancellation, requestCodexCancellation, setTurns])
+  }, [beginCodexCancellation, requestCodexCancellation, sessionId, setTurns])
 
   // runCodexEngine is defined AFTER sendPrompt; the resilience fallback in
   // sendPrompt's catch reaches it through this ref (kept fresh by an effect).
@@ -1737,7 +1744,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         text: string,
         sid: string,
         opts?: CodexEngineOptions,
-      ) => Promise<void | "workspace_sync_failed">)
+      ) => Promise<void | "workspace_sync_failed" | "cancelled">)
     | null
   >(null)
 
@@ -1883,6 +1890,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       let assistantText = ""
       let applied: Array<{ path: string; content: string }> = []
       let rejectedStream: { issue?: string; retryInstruction?: string } | null = null
+      let cancelled = false
       const startedAt = Date.now()
       // Real token usage (+ optional USD cost) from the stream's `usage` frame,
       // delivered just before onClose so it's available when we build metrics.
@@ -1934,6 +1942,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           },
           () => {
             if (controller.signal.aborted || abortRef.current !== controller) {
+              cancelled = true
               return
             }
             // Agentic write modes (app/build, plus debug/patch via explicit
@@ -2166,6 +2175,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
         if (aborted) {
+          cancelled = true
           patchAssistant({
             streaming: false,
             agentLabel: "Generación detenida",
@@ -2224,10 +2234,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           abortRef.current = null
           setBusy(false)
         }
+        if (cancelled) return { applied: [] as Array<{ path: string; content: string }>, cancelled: true }
       }
       return {
         applied,
         rejected: rejectedStream || undefined,
+        cancelled: cancelled || controller.signal.aborted,
       }
     },
     [
@@ -2263,7 +2275,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // omitUserTurn: engine fallbacks (runCodexEngine/runEngine) already
       // rendered the user's message in their own turn — don't duplicate it.
       opts?: { omitUserTurn?: boolean },
-    ) => {
+    ): Promise<void | "cancelled"> => {
       const text = prompt.trim()
       if (!text || busy || buildingApp) return
       if (!user) {
@@ -2276,11 +2288,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       }
 
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
       setTurns((prev) => [
         ...prev,
         ...(opts?.omitUserTurn ? [] : [{ id, role: "user", content: text } as CodeChatTurn]),
         {
-          id: `${id}-a`,
+          id: assistantId,
           role: "assistant",
           content: "⚙️ Analizando el brief y activando herramientas de construcción…",
           streaming: true,
@@ -2294,14 +2307,37 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       ])
       setInput("")
       setBuildingApp(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
       const startedAt = Date.now()
+      const finishStopped = () =>
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  content: "_Generación detenida._",
+                  streaming: false,
+                  agentLabel: "Generación detenida",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "done", detail: "Detenida por el usuario" },
+                  }),
+                }
+              : t,
+          ),
+        )
 
       try {
         let appliedFiles: Array<{ path: string; content: string }>
         let summary: string
         let toastMsg: string
         try {
-          const result = await intakeService.generate(text)
+          const result = await intakeService.generate(text, controller.signal)
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
           appliedFiles = result.files || []
           if (appliedFiles.length === 0) {
             throw new Error("La generación no devolvió archivos.")
@@ -2309,6 +2345,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           summary = generatedFileSummary(result, appliedFiles)
           toastMsg = "Software generado — abriendo preview →"
         } catch {
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
           appliedFiles = buildLocalIndexFallbackFiles(text, ctx)
           summary = [
             `✅ App generada localmente — ${appliedFiles.length} archivo(s).`,
@@ -2320,6 +2360,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             `Estoy abriendo **localhost / index.html** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
           ].join("\n")
           toastMsg = "App generada localmente — abriendo index.html →"
+        }
+        if (cancelledTurn()) {
+          finishStopped()
+          return "cancelled"
         }
         // Keep the active editor aligned with the runnable entry: app/page.tsx
         // for generated Next apps, index.html for static fallbacks.
@@ -2349,10 +2393,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           entities: (ctx?.dataEntities || "").trim(),
           pending: spokenPending,
         })
-        markVoiced(`${id}-a`)
+        markVoiced(assistantId)
         setTurns((prev) =>
           prev.map((t) =>
-            t.id === `${id}-a`
+            t.id === assistantId
               ? {
                   ...t,
                   content: summary,
@@ -2374,10 +2418,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )
         toast.success(toastMsg)
       } catch (err: any) {
+        if (cancelledTurn()) {
+          finishStopped()
+          return "cancelled"
+        }
         const msg = err?.message || "No se pudo generar la app"
         setTurns((prev) =>
           prev.map((t) =>
-            t.id === `${id}-a`
+            t.id === assistantId
               ? {
                   ...t,
                   content: `_${msg}_`,
@@ -2392,7 +2440,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )
         toast.error(msg)
       } finally {
-        setBuildingApp(false)
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBuildingApp(false)
+        }
       }
     },
     [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, user],
@@ -2599,6 +2650,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       prompt: string,
       ctx?: AgentBuildContext,
       isCancelled?: () => boolean,
+      signal?: AbortSignal,
     ): Promise<Array<{ path: string; content: string }>> => {
       const throwIfCancelled = () => {
         if (!isCancelled?.()) return
@@ -2609,15 +2661,20 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       throwIfCancelled()
       try {
-        const result = await intakeService.generate(prompt)
+        const result = await intakeService.generate(prompt, signal)
         const files = result.files || []
         if (files.length > 0) {
           throwIfCancelled()
           applyFilesToWorkspace(files)
           return files
         }
-      } catch {
+      } catch (err: any) {
         throwIfCancelled()
+        if (err?.name === "AbortError" && signal?.aborted) {
+          const error = new Error("Generación detenida.")
+          error.name = "AbortError"
+          throw error
+        }
         /* backend unreachable -> offline index.html shell below */
       }
       throwIfCancelled()
@@ -2635,8 +2692,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     async (
       ctx: AgentBuildContext,
       isCancelled?: () => boolean,
+      signal?: AbortSignal,
     ): Promise<Array<{ path: string; content: string }>> =>
-      runDeterministicPromptInto(promptFromContext(ctx), ctx, isCancelled),
+      runDeterministicPromptInto(promptFromContext(ctx), ctx, isCancelled, signal),
     [runDeterministicPromptInto],
   )
 
@@ -2697,7 +2755,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // yields no usable code (or errors), it falls back to the deterministic
   // builder in the SAME turn — so a build always produces a result.
   const runEngine = React.useCallback(
-    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean; displayText?: string }) => {
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean; displayText?: string }): Promise<void | "cancelled"> => {
       const ctx = opts?.buildContext
       const isBuild = !!ctx
       const iterate = !!opts?.iterate
@@ -2726,7 +2784,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // events stream below) do NOT touch the ref — so `abortRef !== controller`
       // unambiguously means THIS turn was cancelled/superseded and must neither
       // apply files nor run fallbacks nor touch the shared busy latch.
-      const cancelledTurn = () => abortRef.current !== controller
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
 
       // Live progress rail for the Motor (OpenCode) path — mirrors the
       // deterministic buildApp/sendPrompt rail so Motor turns show the same
@@ -2797,13 +2855,15 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       // Terminal turn state when the user pressed Detener: no files applied,
       // no deterministic fallback — the cancelled work must stay cancelled.
-      const finishStopped = () =>
+      const finishStopped = (): "cancelled" => {
         finish("_Generación detenida._", {
           label: "Generación detenida",
           phases: buildCodeAgentPhases("generate", {
             generate: { status: "done", detail: "Detenida por el usuario" },
           }),
         })
+        return "cancelled"
+      }
 
       try {
         let esid = engineSessionRef.current[sid]
@@ -2841,7 +2901,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         // "Detener" aborts the controller: resolve `idle` right away so the
         // race below exits immediately instead of zombie-waiting the full
         // engine timeout (up to 150s) and then applying files post-cancel.
-        controller.signal.addEventListener("abort", () => resolveIdle(), { once: true })
+        if (controller.signal.aborted) resolveIdle()
+        else controller.signal.addEventListener("abort", () => resolveIdle(), { once: true })
         const assistantText = () =>
           order
             .map((pid) => byId.get(pid) || "")
@@ -2875,6 +2936,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
         // Kick off the turn (fire-and-forget; content comes via events) and wait
         // for idle, with a safety timeout so we never hang the UI.
+        if (cancelledTurn()) {
+          void opencodeService.abortSession(esid).catch(() => {})
+          if (engineSessionRef.current[sid] === esid) delete engineSessionRef.current[sid]
+          finishStopped()
+          return "cancelled"
+        }
         opencodeService.prompt(esid, sendText).catch(() => {})
         // Safety net only: the engine resolves `idle` as soon as it finishes, so
         // simple builds return in seconds and we never wait the full window.
@@ -2890,8 +2957,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         controller.abort() // close the events stream
         await streamP.catch(() => {})
         if (stoppedByUser) {
+          void opencodeService.abortSession(esid).catch(() => {})
+          if (engineSessionRef.current[sid] === esid) delete engineSessionRef.current[sid]
           finishStopped()
-          return
+          return "cancelled"
         }
 
         const reply = assistantText()
@@ -2939,7 +3008,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // Cancelled while reading the tree back → never apply post-cancel.
           if (cancelledTurn()) {
             finishStopped()
-            return
+            return "cancelled"
           }
           // Accept a real project: a runnable/known entry, or simply ≥2 files.
           const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
@@ -2953,7 +3022,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             return
           }
           // Engine produced nothing usable → reliable deterministic fallback.
-          const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
+          const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn, controller.signal)
           finish(
             reply
               ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
@@ -2979,7 +3048,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }
           if (cancelledTurn()) {
             finishStopped()
-            return
+            return "cancelled"
           }
           if (synced.length > 0) {
             applyFilesToWorkspace(synced)
@@ -3008,12 +3077,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         // build the app the user just stopped) nor render a fake error.
         if (cancelledTurn()) {
           finishStopped()
-          return
+          return "cancelled"
         }
         if (ctx) {
           // Engine unreachable/error during a build → still deliver via the builder.
           try {
-            const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn)
+            const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn, controller.signal)
             finish(`✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El motor no respondió.`, {
               written: fallbackFiles,
             })
@@ -3061,7 +3130,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       text: string,
       sid: string,
       opts?: CodexEngineOptions,
-    ) => {
+    ): Promise<void | "workspace_sync_failed" | "cancelled"> => {
       const resuming = !!opts?.resume
       const iterate = resuming || !!opts?.iterate
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -3317,21 +3386,22 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       // Terminal turn state for Detener: streamRun RESOLVES on close() (it does
       // not reject), so without an explicit cancelled check the flow would fall
       // into the deterministic fallback and build the app the user just stopped.
-      const finishStopped = () => {
+      const finishStopped = (): "cancelled" => {
         const cancellation = codexCancellationRef.current
         if (cancellation?.turnId === assistantId) {
           recordCodexEngineSettled(assistantId, cancellation.attempt)
-          return
+          return "cancelled"
         }
         // Session navigation intentionally detaches without cancelling the
         // backend. Its old async engine must not terminalize the persisted turn.
-        if (activeCodexTurnIdRef.current !== assistantId) return
+        if (activeCodexTurnIdRef.current !== assistantId) return "cancelled"
         finish("_Generación detenida._", {
           label: "Generación detenida",
           phases: buildCodeAgentPhases("generate", {
             generate: { status: "done", detail: "Detenida por el usuario" },
           }),
         })
+        return "cancelled"
       }
 
       const runWithProjectSlot = <T,>(projectId: string, operation: () => Promise<T>) =>
@@ -3457,8 +3527,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               )
             } catch (err: any) {
               if (cancelledTurn()) {
-                finishStopped()
-                return
+                return finishStopped()
               }
               const detail = err?.message || "no se pudo sincronizar el workspace"
               finish(
@@ -3475,8 +3544,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               return "workspace_sync_failed"
             }
             if (cancelledTurn()) {
-              finishStopped()
-              return
+              return finishStopped()
             }
           }
         }
@@ -3572,16 +3640,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }
             // cancelStream already owns and is confirming the resume target.
             // finishStopped supplies the engine-settled half of the gate.
-            finishStopped()
-            return
+            return finishStopped()
           }
           const seed = initialCodexEngineFold()
           if (opts?.resume) seed.status = planRun.status
           bindAssistantToRun(projectId, planRun.id)
           fold = await streamRun(planRun.id, "plan", seed)
           if (cancelledTurn()) {
-            finishStopped()
-            return
+            return finishStopped()
           }
           if (fold.status === "waiting_approval") {
             // Idempotent: if the backend already continued this plan, the same
@@ -3628,8 +3694,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   },
                 ).catch(() => {})
               }
-              finishStopped()
-              return
+              return finishStopped()
             }
             completedBuildRunId = buildRun.id
             bindAssistantToRun(projectId, buildRun.id)
@@ -3642,8 +3707,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         }
         // Detener during the build stream: same shape — no files, no fallback.
         if (cancelledTurn()) {
-          finishStopped()
-          return
+          return finishStopped()
         }
 
         const narrative = `${codexLiveContent(fold)}${codexExecutiveSummaryMarkdown(fold)}`.trim()
@@ -3681,8 +3745,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           )
           // Cancelled while pulling the files back → never apply post-cancel.
           if (cancelledTurn()) {
-            finishStopped()
-            return
+            return finishStopped()
           }
           // Iterate edits an EXISTING project: applying a partial tree mixes
           // stale local files with the remote edit — worse than not touching
@@ -3750,6 +3813,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             text,
             { goal: "app", productType: text },
             cancelledTurn,
+            controller.signal,
           )
           finish(
             narrative
@@ -3768,7 +3832,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
         if (aborted) {
-          finishStopped()
+          return finishStopped()
         } else if (errorCode === "company_project_not_found" || errorCode === "project_not_found") {
           const { code, message } = codexIdentityIssue(err, "project_not_found")
           setIdentityIssue({ code, message })
@@ -3802,6 +3866,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               text,
               { goal: "app", productType: text },
               cancelledTurn,
+              controller.signal,
             )
             finish(
               `✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El Agente Codex no respondió.`,
@@ -3810,8 +3875,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             toast.success("App generada (builder determinista) →")
           } catch (fallbackError: any) {
             if (cancelledTurn() || fallbackError?.name === "AbortError") {
-              finishStopped()
-              return
+              return finishStopped()
             }
             finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
               label: "Error en el turno",
@@ -4160,8 +4224,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         })
         if (direct.type === "generate") {
           patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: direct.context }))
-          await buildApp(promptFromContext(direct.context), { ...direct.context, productType: buildText })
-          patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          const out = await buildApp(promptFromContext(direct.context), { ...direct.context, productType: buildText })
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: out === "cancelled" ? "idle" : "preview",
+            generator: "deterministic",
+          }))
           return
         }
       }
@@ -4191,7 +4259,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           // local scaffold still produces niche-coherent copy.
           const buildCtx = hasIntake ? action.context : { ...action.context, productType: buildText }
           if (attachedFileIds.length > 0 && activeModelName && !opts?.forceDeterministic) {
-            await sendPrompt(buildText, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            const promptResult = await sendPrompt(buildText, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            if (promptResult.cancelled) {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
             return
           }
@@ -4199,7 +4271,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
             // run whose file writes are read back into the workspace, with a
             // deterministic buildApp fallback inside so a build always lands.
-            await runCodexEngine(buildText, sid, { displayText })
+            const out = await runCodexEngine(buildText, sid, { displayText })
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
             // OpenCode agent (only truly available in Docker AND opt-in via the
@@ -4207,7 +4283,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // a funded model and runEngine reads them back — deterministic
             // fallback inside. Without an explicit Motor opt-in the deterministic
             // builder below is the primary path (fast, no ~30s GCLB stream cut).
-            await runEngine(buildText, sid, { buildContext: action.context, displayText: text })
+            const out = await runEngine(buildText, sid, { buildContext: action.context, displayText: text })
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
           } else {
             // First build → the deterministic builder is the PRIMARY path. It is
@@ -4217,7 +4297,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // forever on the Reserved VM.
             // (This branch previously streamed the whole project from the chat
             // model — the source of the hang/errors the user reported.)
-            await buildApp(genPrompt, buildCtx)
+            const out = await buildApp(genPrompt, buildCtx)
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
             patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
           }
           return
@@ -4241,22 +4325,38 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           let instruction = action.instruction
           let retryAttempt = 0
           let lastVerdict: { ok: boolean; retryInstruction?: string } = { ok: true }
+          let cancelledWork = false
           for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
             lastAppliedFilesRef.current = []
-            let promptResult: { applied: Array<{ path: string; content: string }>; rejected?: { issue?: string; retryInstruction?: string } } | undefined
+            let promptResult: { applied: Array<{ path: string; content: string }>; rejected?: { issue?: string; retryInstruction?: string }; cancelled?: boolean } | undefined
             if (attachedFileIds.length > 0 && activeModelName) {
               promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
             } else if (runDeterministicPatch(instruction, sid)) {
               // patched deterministically
             } else if (codexAvailable) {
               const out = await runCodexEngine(instruction, sid, { iterate: true })
+              if (out === "cancelled") {
+                cancelledWork = true
+                lastVerdict = { ok: false }
+                break
+              }
               if (out === "workspace_sync_failed") {
                 promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
               }
             } else if (engineMode && engineAvailable) {
-              await runEngine(instruction, sid, { iterate: true })
+              const out = await runEngine(instruction, sid, { iterate: true })
+              if (out === "cancelled") {
+                cancelledWork = true
+                lastVerdict = { ok: false }
+                break
+              }
             } else {
               promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            }
+            if (promptResult?.cancelled) {
+              cancelledWork = true
+              lastVerdict = { ok: false }
+              break
             }
             // Prefer files the executor just wrote (React `files` is still the
             // previous render). A rejected stream is a failed turn even when
@@ -4277,11 +4377,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           }
           const doneAgent = activeCodeChatSession?.agent
           const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
-            status: lastVerdict.ok ? "completed" : "blocked",
+            status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
           })
           patchAgentState(sid, (s) => ({
             ...s,
-            phase: lastVerdict.ok ? "preview" : "debugging",
+            phase: cancelledWork ? "idle" : lastVerdict.ok ? "preview" : "debugging",
             tasks: patchedTasks,
           }))
           return

@@ -185,6 +185,13 @@ describe("code preview resilience", () => {
     )
   })
 
+  it("queues a second Run while a start is already in flight", () => {
+    assert.match(
+      previewSource,
+      /if \(phaseRef\.current === "starting"\) \{\s*pendingAutoRunRef\.current = true/,
+    )
+  })
+
   it("honors a forced preview restart from the composer apply event", () => {
     assert.match(previewSource, /window\.addEventListener\(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun\)/)
     assert.match(previewSource, /if \(detail\?\.force\) forceAutoRunRef\.current = true/)

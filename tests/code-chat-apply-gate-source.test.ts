@@ -29,10 +29,12 @@ describe("code chat apply-gate source contract", () => {
   it("does not apply streamed files after the user stops the turn", () => {
     assert.match(
       panel,
-      /if \(controller\.signal\.aborted \|\| abortRef\.current !== controller\) \{\s*return/,
+      /if \(controller\.signal\.aborted \|\| abortRef\.current !== controller\) \{\s*cancelled = true\s*return/,
     )
     assert.match(panel, /setBuildingApp\(false\)/)
     assert.match(panel, /dispatchingRef\.current/)
+    assert.match(panel, /await intakeService\.generate\(text,\s*controller\.signal\)/)
+    assert.match(panel, /opencodeService\.abortSession\(/)
   })
 
   it("does not apply streamed files that fail structural validation", () => {
@@ -43,7 +45,7 @@ describe("code chat apply-gate source contract", () => {
     assert.ok(reject >= 0 && rejectedAssign > reject, "a failed stream must be recorded as rejected")
     assert.ok(applyElse > rejectedAssign && applyBlock > applyElse, "applyBlock must sit in the valid branch")
     assert.match(panel, /Validación bloqueó la aplicación/)
-    assert.match(panel, /status: lastVerdict\.ok \? "completed" : "blocked"/)
+    assert.match(panel, /status: cancelledWork \|\| !lastVerdict\.ok \? "blocked" : "completed"/)
     assert.match(panel, /promptResult\?\.rejected/)
     assert.match(panel, /lastAppliedFilesRef\.current/)
   })

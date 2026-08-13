@@ -87,6 +87,16 @@ test('POST /session/:id/prompt validates that text is present', async () => {
   assert.equal(res.body.error, 'validation_failed');
 });
 
+test('POST /session/:id/abort forwards the abort to the engine', async () => {
+  process.env[URL_ENV] = 'http://127.0.0.1:4096';
+  const calls = stubFetch({ ok: true });
+  const res = await request(buildApp()).post('/api/opencode/session/s1/abort').send({});
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(calls[0].url, 'http://127.0.0.1:4096/session/s1/abort');
+  assert.equal(calls[0].init.method, 'POST');
+});
+
 test('POST /session/:id/prompt forwards the prompt to the engine', async () => {
   process.env[URL_ENV] = 'http://127.0.0.1:4096';
   const calls = stubFetch({ id: 'msg-1' });
