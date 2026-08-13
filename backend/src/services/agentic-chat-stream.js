@@ -440,6 +440,10 @@ const HANDLED_AGENTIC_STOP_REASONS = new Set([
   'source_preserving_document_edit_failed',
   'image_edit_clarification_needed',
   'agent_runner',
+  // The AgentRunner claimed the turn but could not deliver a verified file
+  // (credits/model/verification). The honest Spanish error IS the final
+  // answer — never fall through to the plain stream or the generic pipeline.
+  'agent_runner_failed',
 ]);
 
 /**
@@ -757,6 +761,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     };
     // Generic AgentRunner: create/edit any document without hardcoded routes
     // ("crea una ppt rosada", "ponlas blancas", follow-up "ahora rosadas").
+    // When the runner CLAIMS the turn there are exactly two outcomes: a
+    // verified file, or an honest error (agentRunnerFailure below). The
+    // surgical source-preserving editor may still rescue an EDIT turn, but a
+    // claimed turn never falls through to the LLM loop / generic document
+    // pipeline — that silent fallback produced the 8-slide template decks.
+    let agentRunnerClaimedTurn = false;
+    let agentRunnerFailure = null;
     try {
       const {
         shouldRunAgentRunner,
@@ -777,6 +788,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         hasPriorArtifacts: prior,
         text: userQuery,
       })) {
+        agentRunnerClaimedTurn = true;
         await writeSse(res, { type: 'stage', label: 'Agente trabajando', tool: 'agent_runner' });
         const ran = await executeAgentRunnerTurn({
           prisma: toolContext.prisma,
@@ -807,9 +819,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           await writeSse(res, { replace: true, content: ran.summary });
           return finishSourcePreservingPreloop('agent_runner', ran.summary, ran.artifacts);
         }
+        agentRunnerFailure = {
+          reason: ran?.stoppedReason || 'no_output',
+          detail: ran?.errorMessage || null,
+        };
       }
     } catch (agentRunnerErr) {
+      if (signal?.aborted) throw agentRunnerErr;
       try { console.warn('[agentic-chat] agent-runner failed:', agentRunnerErr && agentRunnerErr.message || agentRunnerErr); } catch (_) {}
+      if (agentRunnerClaimedTurn) {
+        agentRunnerFailure = {
+          reason: 'exception',
+          detail: agentRunnerErr?.message || String(agentRunnerErr),
+        };
+      }
     }
     if (
       // fileIds may be empty on a follow-up that only names ## file.pptx —
@@ -928,6 +951,31 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             [],
           );
         }
+      }
+    }
+
+    // HARD STOP: the AgentRunner claimed this DOCUMENT turn (create-a-doc or
+    // style/color follow-up) but did not deliver a file, and the surgical
+    // editor above did not rescue it either. Continuing into the LLM loop
+    // lets create_document fabricate a generic filler deck — exactly the
+    // silent 8-slide-template fallback F1 removes. Honest Spanish error
+    // instead. (Edit turns claimed via attached files keep the loop: the
+    // forced document_edit path edits the user's REAL file and never touches
+    // the generic document pipeline.)
+    if (agentRunnerFailure) {
+      let runnerOnly = true;
+      let answer = null;
+      try {
+        const { isRunnerOnlyDocumentTurn, buildAgentRunnerFailureMessage } = require('./agent-runner');
+        runnerOnly = isRunnerOnlyDocumentTurn(userQuery);
+        answer = buildAgentRunnerFailureMessage(agentRunnerFailure.reason, agentRunnerFailure.detail);
+      } catch (_) {
+        answer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
+          + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
+      }
+      if (runnerOnly) {
+        await writeSse(res, { replace: true, content: answer });
+        return finishSourcePreservingPreloop('agent_runner_failed', answer, []);
       }
     }
 

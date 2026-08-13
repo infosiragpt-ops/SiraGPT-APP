@@ -648,7 +648,10 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
   const result = await agenticStream.runAgenticChat({
     openai,
     model: 'gpt-4o-mini',
-    userQuery: 'Crea el informe en Word y PDF',
+    // "Prepara" (not "crea") keeps this multi-artifact turn OUT of the
+    // AgentRunner claim — a claimed turn without a runner file now ends in
+    // an honest error instead of reaching the loop under test here.
+    userQuery: 'Prepara el informe en Word y PDF',
     res,
     customGptCapabilities: { agentMode: 'auto', multipleArtifacts: true, maxArtifactsPerTurn: 6 },
     toolsOverride: [
@@ -1629,4 +1632,190 @@ test('turnPolicy observe mode attaches summary without changing behaviour', asyn
   assert.equal(foundPolicy.toolCallMode, 'native');
   assert.equal(foundPolicy.shouldRunAgentic, true);
   cognitiveMetrics.reset();
+});
+
+// ── F1 hardening: claimed document turns NEVER fall through to the ──────
+// generic pipeline when the AgentRunner cannot deliver a file.
+
+function withStubbedAgentRunner(overrides, fn) {
+  const realAgentRunner = require('../src/services/agent-runner');
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './agent-runner' || request.endsWith('/agent-runner')) {
+      return { ...realAgentRunner, ...overrides };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  const restore = () => {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  };
+  return fn(fresh).finally(restore);
+}
+
+test('runAgenticChat: "crea una ppt … celeste" + runner 402 → honest error, LLM loop NEVER runs', async () => {
+  let llmCalls = 0;
+  let createDocumentCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  await withStubbedAgentRunner({
+    executeAgentRunnerTurn: async () => ({
+      ok: false,
+      skipped: false,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: 'llm_402',
+      errorMessage: 'This request requires more credits… can only afford 694.',
+    }),
+    hasConversationArtifacts: async () => false,
+  }, async (fresh) => {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'crea una ppt del embarazo de color celeste la ppt',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: [], prisma: {} },
+      toolsOverride: [{
+        name: 'create_document',
+        description: 'create a NEW document (generic pipeline entry)',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } } },
+        execute: async () => {
+          createDocumentCalls += 1;
+          return { ok: true };
+        },
+      }],
+    });
+    assert.equal(llmCalls, 0, 'the LLM loop must never run for a claimed create-doc turn without a runner file');
+    assert.equal(createDocumentCalls, 0, 'create_document (generic pipeline) must never be reachable');
+    assert.equal(result.stoppedReason, 'agent_runner_failed');
+    assert.match(result.finalAnswer, /créditos/);
+    assert.match(result.finalAnswer, /402/);
+    assert.match(result.finalAnswer, /plantilla genérica/);
+    assert.equal(fresh.isHandledAgenticChatResult(result), true, 'the honest error must not fall back to the plain stream');
+    const last = frames().filter((f) => f && f.replace).pop();
+    assert.match(String(last?.content || ''), /plantilla genérica/);
+  });
+});
+
+test('runAgenticChat: style follow-up "ponlas todas de color celeste" + runner no_llm → honest error, no loop', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  await withStubbedAgentRunner({
+    executeAgentRunnerTurn: async () => ({
+      ok: false,
+      skipped: true,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: 'no_llm',
+    }),
+    hasConversationArtifacts: async () => true,
+  }, async (fresh) => {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'ponlas todas de color celeste',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: [], prisma: {} },
+      toolsOverride: [],
+    });
+    assert.equal(llmCalls, 0);
+    assert.equal(result.stoppedReason, 'agent_runner_failed');
+    assert.match(result.finalAnswer, /modelo de IA/);
+    assert.match(result.finalAnswer, /plantilla genérica/);
+  });
+});
+
+test('runAgenticChat: claimed EDIT turn with files keeps the surgical loop when the runner fails', async () => {
+  // "edita … cambia el título" + attached file claims the runner via
+  // WORK_RE + files, but it is NOT runner-only: when the runner cannot
+  // deliver, the forced document_edit path must still be able to edit the
+  // user's REAL file (it never touches the generic pipeline).
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('Listo, edité el documento.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  const realAgentRunner = require('../src/services/agent-runner');
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './agent-runner' || request.endsWith('/agent-runner')) {
+      return {
+        ...realAgentRunner,
+        executeAgentRunnerTurn: async () => ({
+          ok: false,
+          skipped: false,
+          summary: '',
+          artifacts: [],
+          steps: [],
+          stoppedReason: 'llm_402',
+          errorMessage: '402',
+        }),
+        hasConversationArtifacts: async () => false,
+      };
+    }
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => false,
+        tryGenerateSourcePreservingDocumentEdit: async () => null,
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'], prisma: {} },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit attached document',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } }, required: ['instruction'] },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.ok(llmCalls >= 1, 'edit turns must keep the surgical document_edit loop');
+    assert.notEqual(result.stoppedReason, 'agent_runner_failed');
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
 });

@@ -2,8 +2,9 @@
 
 /**
  * Generic AgentRunner tools. Small set, model-agnostic:
- *   execute_python, execute_bash, read_file, write_file, list_files,
- *   render_preview, set_slide_background (optional high-level).
+ *   execute_python, execute_bash, read_file, write_file, edit_file,
+ *   list_files, glob, grep, render_preview,
+ *   create_presentation / set_slide_background (optional high-level).
  *
  * Bound to ONE sandbox session. Errors return `ERROR: …` strings so the loop
  * never throws on a tool failure.
@@ -14,16 +15,69 @@ const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
 const MAX_TOOL_RESULT_CHARS = 30_000;
 const CMD_TIMEOUT_MS = 120_000;
 
-const NAMED_COLORS = {
-  blanco: 'FFFFFF', white: 'FFFFFF', blanca: 'FFFFFF', blancos: 'FFFFFF', blancas: 'FFFFFF',
-  rosado: 'FFC0CB', rosa: 'FFC0CB', pink: 'FFC0CB', rosada: 'FFC0CB',
-  rosados: 'FFC0CB', rosadas: 'FFC0CB',
-  negro: '000000', black: '000000', negra: '000000', negros: '000000', negras: '000000',
-  azul: '1E3A8A', blue: '1E3A8A', azules: '1E3A8A',
-  rojo: 'DC2626', red: 'DC2626', roja: 'DC2626', rojos: 'DC2626', rojas: 'DC2626',
-  verde: '16A34A', green: '16A34A', verdes: '16A34A',
-  gris: '6B7280', gray: '6B7280', grey: '6B7280', grises: '6B7280',
-};
+// Clean light default for NEW decks when the user did not ask for a color.
+// NEVER pink: FFC0CB is only used when the user actually asked for rosado.
+const DEFAULT_DECK_COLOR = 'F8FAFC';
+
+/**
+ * Expand a Spanish/English color word into its gender/plural forms:
+ * "morado" -> morado/morada/morados/moradas, "lila" -> lila/lilas,
+ * "coral" -> coral/corales.
+ */
+function colorWordForms(word) {
+  const w = String(word).toLowerCase();
+  const forms = new Set([w]);
+  if (w.endsWith('o')) {
+    const stem = w.slice(0, -1);
+    forms.add(`${stem}a`);
+    forms.add(`${stem}os`);
+    forms.add(`${stem}as`);
+  } else if (/[aeiouáéíóú]$/.test(w)) {
+    forms.add(`${w}s`);
+  } else {
+    forms.add(`${w}es`);
+    forms.add(`${w}s`);
+  }
+  return [...forms];
+}
+
+// Compact spec -> expanded lookup. ANY of these names (or any #hex) is a valid
+// user-chosen deck color; there is no privileged palette.
+const COLOR_SPECS = [
+  [['blanco', 'white'], 'FFFFFF'],
+  [['rosado', 'rosa', 'pink'], 'FFC0CB'],
+  [['negro', 'black'], '000000'],
+  [['azul', 'blue'], '1E3A8A'],
+  [['rojo', 'red'], 'DC2626'],
+  [['verde', 'green'], '16A34A'],
+  [['gris', 'gray', 'grey'], '6B7280'],
+  [['naranja', 'anaranjado', 'orange'], 'F97316'],
+  [['morado', 'purpura', 'púrpura', 'purple'], '7C3AED'],
+  [['violeta', 'violet'], '8B5CF6'],
+  [['lila', 'lilac'], 'C8A2C8'],
+  [['fucsia', 'fuchsia'], 'D946EF'],
+  [['celeste'], '87CEEB'],
+  [['turquesa', 'turquoise'], '40E0D0'],
+  [['beige'], 'F5F5DC'],
+  [['dorado', 'gold'], 'FFD700'],
+  [['plateado', 'plata', 'silver'], 'C0C0C0'],
+  [['coral'], 'FF7F50'],
+  [['vino', 'burdeos', 'burgundy', 'wine'], '722F37'],
+  [['amarillo', 'yellow'], 'FACC15'],
+  [['crema', 'cream'], 'FFFDD0'],
+  [['marron', 'marrón', 'cafe', 'café', 'brown'], '8B4513'],
+  [['cian', 'cyan', 'aqua'], '06B6D4'],
+  [['salmon', 'salmón'], 'FA8072'],
+  [['lavanda', 'lavender'], 'E6E6FA'],
+  [['menta', 'mint'], '98FF98'],
+];
+
+const NAMED_COLORS = {};
+for (const [names, hex] of COLOR_SPECS) {
+  for (const name of names) {
+    for (const form of colorWordForms(name)) NAMED_COLORS[form] = hex;
+  }
+}
 
 function cap(s) {
   const str = String(s == null ? '' : s);
@@ -38,6 +92,40 @@ function normalizeHex(raw) {
   if (named) return named;
   const m = s.match(/^#?([0-9a-fA-F]{6})$/);
   return m ? m[1].toUpperCase() : null;
+}
+
+/** Accepts [{title,bullets}] or plain strings; drops empties, caps at 20. */
+function normalizeOutline(raw) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const item of raw.slice(0, 20)) {
+    if (typeof item === 'string') {
+      const t = item.trim();
+      if (t) out.push({ title: t.slice(0, 200), bullets: [] });
+      continue;
+    }
+    if (!item || typeof item !== 'object') continue;
+    const t = String(item.title || '').trim();
+    if (!t) continue;
+    const bullets = (Array.isArray(item.bullets) ? item.bullets : [])
+      .map((b) => String(b || '').trim())
+      .filter(Boolean)
+      .slice(0, 10)
+      .map((b) => b.slice(0, 300));
+    out.push({ title: t.slice(0, 200), bullets });
+  }
+  return out;
+}
+
+/** Minimal skeleton when no outline was provided — NO filler bullets. */
+function buildSkeletonPlan({ title, topic, slides } = {}) {
+  const n = Math.max(2, Math.min(20, Number(slides) || 4));
+  const plan = [];
+  for (let i = 1; i < n - 1; i += 1) {
+    plan.push({ title: `${topic || title} — sección ${i}`, bullets: [] });
+  }
+  plan.push({ title: 'Gracias', bullets: [] });
+  return plan;
 }
 
 const TOOL_DEFINITIONS = [
@@ -139,16 +227,80 @@ const TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
+      name: 'edit_file',
+      description:
+        'Surgical text edit: replace old_str with new_str in a workspace text file. old_str MUST occur exactly once (include surrounding context to make it unique). For OOXML parts, unzip first and edit the extracted XML.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path relative to /workspace.' },
+          old_str: { type: 'string', description: 'Exact existing text to replace (unique in the file).' },
+          new_str: { type: 'string', description: 'Replacement text.' },
+        },
+        required: ['path', 'old_str', 'new_str'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        'Find workspace files whose path matches a shell glob pattern (e.g. "*.pptx", "tmp/x/ppt/slides/*.xml"). Returns matching paths with sizes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Glob pattern, relative to /workspace.' },
+        },
+        required: ['pattern'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'grep',
+      description:
+        'Search text/regex inside workspace files (grep -rn). Use it to locate a hex, a phrase or an XML attribute before editing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Text or extended regex to search for.' },
+          path: { type: 'string', description: 'File or directory relative to /workspace (default ".").' },
+        },
+        required: ['pattern'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'create_presentation',
       description:
-        'Create a NEW PowerPoint from scratch (topic + theme color). Use this when the user asks to CREATE a ppt, not to edit an uploaded file. Color: hex or named (rosado, blanco, azul). Writes /workspace/outputs/<file>.pptx.',
+        'Create a NEW PowerPoint from scratch. REQUIRED: pass `outline` with the REAL slide content (titles + bullets) answering the user\'s request — never generic filler. Color: ANY #hex or color name the user asked for (rosado, naranja, turquesa, #1E3A8A…); omit `color` for a clean light theme — the default is NEVER pink. Writes /workspace/outputs/<file>.pptx.',
       parameters: {
         type: 'object',
         properties: {
           topic: { type: 'string', description: 'Subject of the deck, e.g. embarazo.' },
           title: { type: 'string', description: 'Title slide text.' },
-          color: { type: 'string', description: 'Theme color: rosado, blanco, #1E3A8A…' },
-          slides: { type: 'integer', description: 'Number of slides (4-16, default 8).' },
+          color: { type: 'string', description: 'User-requested color: name or #hex. Omit if the user did not ask for one.' },
+          outline: {
+            type: 'array',
+            description: 'Slides with REAL content from the user\'s request: [{title, bullets: ["…"]}, …].',
+            items: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                bullets: { type: 'array', items: { type: 'string' } },
+              },
+              required: ['title'],
+              additionalProperties: false,
+            },
+          },
+          slides: { type: 'integer', description: 'Slide count when no outline is given (2-20).' },
           filename: { type: 'string', description: 'Output filename ending in .pptx' },
         },
         required: ['topic'],
@@ -239,6 +391,34 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
     write_file: (args) => doc.write_file(args),
     list_files: (args) => doc.list_files(args),
     str_replace: (args) => doc.str_replace(args),
+    edit_file: (args) => doc.str_replace(args),
+
+    async glob(args) {
+      const pattern = String(args?.pattern || '').trim();
+      if (!pattern) return 'ERROR: pattern is required';
+      if (/[;&|`$]/.test(pattern)) return 'ERROR: pattern must be a plain glob, not a shell expression';
+      const r = await sandbox.exec(
+        `cd /workspace && find . -type f -path ${JSON.stringify(`./${pattern.replace(/^\.\//, '')}`)} -exec ls -la {} + 2>/dev/null | head -200`,
+        { timeoutMs: 30_000 },
+      );
+      const out = String(r.stdout || '').trim();
+      if (Number(r.exitCode) !== 0 && !out) return `ERROR: glob failed\n${r.stderr || ''}`;
+      return cap(out || '(no matches)');
+    },
+
+    async grep(args) {
+      const pattern = String(args?.pattern || '');
+      if (!pattern) return 'ERROR: pattern is required';
+      const rel = String(args?.path || '.').replace(/^\/workspace\/?/, '') || '.';
+      const r = await sandbox.exec(
+        `cd /workspace && grep -rnE --binary-files=without-match -m 50 ${JSON.stringify(pattern)} ${JSON.stringify(rel)} 2>/dev/null | head -200`,
+        { timeoutMs: 30_000 },
+      );
+      const out = String(r.stdout || '').trim();
+      if (out) return cap(out);
+      if (Number(r.exitCode) === 1 || !r.stderr) return '(no matches)';
+      return `ERROR: grep failed\n${r.stderr || ''}`;
+    },
 
     async render_preview(args) {
       const rel = String(args?.path || '').replace(/^\/workspace\/?/, '');
@@ -280,8 +460,10 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
     async create_presentation(args) {
       const topic = String(args?.topic || args?.title || 'Presentación').trim();
       const title = String(args?.title || topic).trim();
-      const hex = normalizeHex(args?.color) || 'FFC0CB';
-      const n = Math.max(4, Math.min(16, Number(args?.slides) || 8));
+      // The color is whatever the USER asked for (any name or #hex). When the
+      // request has no color, fall back to a clean LIGHT theme — never pink.
+      const hex = normalizeHex(args?.color) || DEFAULT_DECK_COLOR;
+      const outline = normalizeOutline(args?.outline);
       const filename = String(args?.filename || `${topic.replace(/[^\w\-]+/g, '-').slice(0, 40) || 'presentacion'}.pptx`).replace(/\.pptx$/i, '') + '.pptx';
       try {
         const PptxGenJS = require('pptxgenjs');
@@ -298,26 +480,36 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
             fill: { color: hex }, line: { color: hex },
           });
         };
-        const titles = [title, `Qué es ${topic}`, 'Etapas', 'Cuidados y recomendaciones', 'Señales de alerta', 'Alimentación', 'Preguntas frecuentes', 'Gracias'];
-        while (titles.length < n) titles.splice(titles.length - 1, 0, `${topic} (${titles.length})`);
-        const used = titles.slice(0, n - 1).concat(['Gracias']);
-        used.forEach((t, i) => {
+        // Slide plan: the model's outline IS the content. Without an outline we
+        // only emit a minimal title/closing skeleton — deliberately WITHOUT
+        // filler bullets ("puntos clave sobre X") so a stub can never pass for
+        // real content; the prompt instructs the model to always send outline.
+        const plan = outline.length
+          ? outline
+          : buildSkeletonPlan({ title, topic, slides: args?.slides });
+        const titleSlide = pptx.addSlide();
+        paint(titleSlide);
+        titleSlide.addText(title, {
+          x: 0.7, y: 2.6, w: 12, h: 1.3,
+          fontSize: 40, bold: true, color: ink, align: 'left',
+        });
+        for (const item of plan) {
           const slide = pptx.addSlide();
           paint(slide);
-          slide.addText(t, {
-            x: 0.7, y: i === 0 || t === 'Gracias' ? 2.6 : 0.55,
-            w: 12, h: 1.1,
-            fontSize: i === 0 || t === 'Gracias' ? 36 : 26,
-            bold: true, color: ink, align: 'left',
+          slide.addText(item.title, {
+            x: 0.7, y: 0.55, w: 12, h: 1.1,
+            fontSize: 26, bold: true, color: ink, align: 'left',
           });
-          if (t !== 'Gracias' && i !== 0) {
-            slide.addText([
-              { text: `Puntos clave sobre ${topic}`, options: { bullet: true, breakLine: true } },
-              { text: 'Información clara, verificable y útil', options: { bullet: true, breakLine: true } },
-              { text: 'Consulta siempre con un profesional de salud', options: { bullet: true } },
-            ], { x: 0.85, y: 1.9, w: 11.2, h: 3.6, fontSize: 18, color: ink });
+          if (item.bullets.length) {
+            slide.addText(
+              item.bullets.map((text, idx) => ({
+                text,
+                options: { bullet: true, breakLine: idx < item.bullets.length - 1 },
+              })),
+              { x: 0.85, y: 1.9, w: 11.2, h: 4.6, fontSize: 18, color: ink },
+            );
           }
-        });
+        }
         const buffer = await pptx.write('nodebuffer');
         const outRel = `outputs/${filename}`;
         await sandbox.writeFile(outRel, buffer);
@@ -325,7 +517,9 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
           ok: true,
           path: `/workspace/${outRel}`,
           color: `#${hex}`,
-          slides: used.length,
+          defaultColor: !normalizeHex(args?.color),
+          slides: plan.length + 1,
+          outlineProvided: outline.length > 0,
           filename,
         }));
       } catch (err) {
@@ -370,6 +564,8 @@ module.exports = {
   TOOL_DEFINITIONS,
   makeToolExecutors,
   normalizeHex,
+  normalizeOutline,
   NAMED_COLORS,
+  DEFAULT_DECK_COLOR,
   CMD_TIMEOUT_MS,
 };

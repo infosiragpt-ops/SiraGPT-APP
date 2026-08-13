@@ -10,6 +10,35 @@ const {
 
 const MAX_ITERATIONS_DEFAULT = 25;
 
+// Keep tool-call turns SHORT. OpenRouter charges/reserves max_tokens up
+// front: with a low credit balance a 8192-token reservation gets rejected
+// with 402 ("You requested up to 8192 tokens, but can only afford …") even
+// though the actual turn needs a few hundred tokens. 3072 is plenty for a
+// tool call + arguments and lets a low balance still complete a short loop.
+const MAX_TOKENS_DEFAULT = 3072;
+
+function resolveAgentRunnerMaxTokens(env = process.env) {
+  const raw = Number(env.SIRAGPT_AGENT_RUNNER_MAX_TOKENS);
+  if (Number.isFinite(raw) && raw > 0) {
+    return Math.max(256, Math.min(8192, Math.floor(raw)));
+  }
+  return MAX_TOKENS_DEFAULT;
+}
+
+/**
+ * Out-of-credit detection for OpenRouter (HTTP 402 / "can only afford") and
+ * Anthropic ("credit balance is too low"). These are NOT transient: retrying
+ * burns latency without any chance of success, so the loop must stop
+ * immediately and surface the reason.
+ */
+function isLlmCreditError(err) {
+  if (!err) return false;
+  const status = Number(err.status || err.statusCode || err.response?.status || (err.code === 402 ? 402 : NaN));
+  if (status === 402) return true;
+  const message = String(err.message || err.error?.message || '').toLowerCase();
+  return /\b402\b|credit balance is too low|insufficient credits?|requires more credits|can only afford|payment required/i.test(message);
+}
+
 function previewOf(value, max = 200) {
   const s = typeof value === 'string' ? value : JSON.stringify(value);
   if (!s) return '';
@@ -32,13 +61,15 @@ function asNativeCalls(calls, iteration) {
   }));
 }
 
-async function callModel({ client, model, messages, tools, signal }) {
+async function callModel({ client, model, messages, tools, signal, maxTokens }) {
+  const max_tokens = maxTokens || resolveAgentRunnerMaxTokens();
   try {
     return await client.chat.completions.create({
       model,
       messages,
       tools,
       tool_choice: 'auto',
+      max_tokens,
     }, signal ? { signal } : undefined);
   } catch (err) {
     if (signal && signal.aborted) throw err;
@@ -46,6 +77,7 @@ async function callModel({ client, model, messages, tools, signal }) {
     return client.chat.completions.create({
       model,
       messages,
+      max_tokens,
     }, signal ? { signal } : undefined);
   }
 }
@@ -83,6 +115,19 @@ async function runAgentLoop({
     } catch (err) {
       if (signal?.aborted) throwIfAborted(signal);
       onEvent({ type: 'error', message: err?.message || String(err) });
+      if (isLlmCreditError(err)) {
+        // Out of credits: no retry can succeed. Stop the loop NOW and hand
+        // the reason to the caller so the user gets an honest message
+        // instead of a silent fallback to the generic pipeline.
+        return {
+          finalText: '',
+          iterations: iteration,
+          steps,
+          stoppedReason: 'llm_402',
+          verificationAttempts,
+          errorMessage: err?.message || String(err),
+        };
+      }
       throw err;
     }
 
@@ -205,4 +250,11 @@ async function runAgentLoop({
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
 }
 
-module.exports = { runAgentLoop, MAX_ITERATIONS_DEFAULT, MAX_VERIFICATION_RETRIES };
+module.exports = {
+  runAgentLoop,
+  MAX_ITERATIONS_DEFAULT,
+  MAX_VERIFICATION_RETRIES,
+  MAX_TOKENS_DEFAULT,
+  resolveAgentRunnerMaxTokens,
+  isLlmCreditError,
+};
