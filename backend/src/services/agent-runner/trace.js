@@ -31,6 +31,14 @@ const STAGE_LABELS = {
   done: 'Listo',
   cancelled: 'Cancelado',
   error: 'Error',
+  // F4 — orchestrator stages
+  planning: 'Planificando',
+  planReady: 'Plan listo',
+  delegating: 'Delegando a sub-agente',
+  subagentDone: 'Sub-agente listo',
+  replanning: 'Replanificando',
+  budgetExceeded: 'Presupuesto agotado',
+  steered: 'Instrucción recibida',
 };
 
 /** Tools whose whole purpose is verification, not mutation. */
@@ -89,6 +97,22 @@ function toStageEvent(ev) {
     case 'cancelled':
     case 'job_cancelled':
       return { ...base, label: ev.label || STAGE_LABELS.cancelled };
+    // F4 — orchestrator events (planner + sub-agent delegation).
+    case 'orchestrator_start':
+    case 'plan_start':
+      return { ...base, label: ev.label || STAGE_LABELS.planning };
+    case 'plan_ready':
+      return { ...base, label: ev.label || STAGE_LABELS.planReady };
+    case 'node_start':
+      return { ...base, label: ev.label || STAGE_LABELS.delegating };
+    case 'node_done':
+      return { ...base, label: ev.label || STAGE_LABELS.subagentDone };
+    case 'replanning':
+      return { ...base, label: ev.label || STAGE_LABELS.replanning };
+    case 'budget_exceeded':
+      return { ...base, label: ev.label || STAGE_LABELS.budgetExceeded };
+    case 'steered':
+      return { ...base, label: ev.label || STAGE_LABELS.steered };
     case 'error':
       return {
         ...base,
