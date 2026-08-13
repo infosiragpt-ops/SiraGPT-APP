@@ -2864,12 +2864,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Call the streaming function with the original user message
-      throwIfRegenerationCancelled();
       const regenCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
       if (regenCatalogModel.replaced) {
         setSelectedModel(regenCatalogModel.name);
         if (regenCatalogModel.provider) setSelectedProivder(regenCatalogModel.provider);
       }
+      throwIfRegenerationCancelled();
       await apiClient.generateAIStream(
         {
           provider: regenCatalogModel.provider,
@@ -3257,12 +3257,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       streamBuffersRef.current.set(currentChat.id, editBuffer);
 
       // Now, generate the new response
-      throwIfEditRegenerationCancelled();
       const editCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
       if (editCatalogModel.replaced) {
         setSelectedModel(editCatalogModel.name);
         if (editCatalogModel.provider) setSelectedProivder(editCatalogModel.provider);
       }
+      throwIfEditRegenerationCancelled();
       await apiClient.generateAIStream(
         {
           provider: editCatalogModel.provider,
