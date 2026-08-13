@@ -53,6 +53,13 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import {
+  getSpeechRecognitionCtor,
+  isIgnorableSpeechError,
+  isSpeechPermissionError,
+  resolveDictationLanguage,
+  shouldRestartNativeDictation,
+} from "@/lib/chat/composer-dictation"
 import { motion, AnimatePresence } from "framer-motion"
 import { dedupeMessages, mergeChatPreservingUserMessages } from "@/lib/message-preservation"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -4990,7 +4997,7 @@ function ChatInterfaceContent() {
   const dictationAudioChunksRef = React.useRef<Blob[]>([])
   const dictationMediaRecorderRef = React.useRef<MediaRecorder | null>(null)
   const dictationModeRef = React.useRef<"idle" | "native" | "recorder">("idle")
-  const dictationPermissionReadyRef = React.useRef(false)
+  const dictationWantListeningRef = React.useRef(false)
   const dictationNativeFallbackStartedRef = React.useRef(false)
   const dictationShouldTranscribeRecordingRef = React.useRef(false)
   const [searchActivities, setSearchActivities] = React.useState<Record<string, SearchActivityState>>({})
@@ -7186,22 +7193,6 @@ But first, you need to connect your Spotify account securely using the button be
     );
   }, []);
 
-  const ensureMicrophonePermission = React.useCallback(async () => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("getUserMedia unsupported");
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
-    stream.getTracks().forEach(track => track.stop());
-    dictationPermissionReadyRef.current = true;
-  }, []);
-
   const transcribeRecordedDictation = React.useCallback(async (audioBlob: Blob) => {
     if (!audioBlob.size) {
       setIsRecording(false);
@@ -7301,18 +7292,18 @@ But first, you need to connect your Spotify account securely using the button be
   }, [showMicrophonePermissionError, transcribeRecordedDictation]);
 
   React.useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition = getSpeechRecognitionCtor(window as any);
 
     if (SpeechRecognition) {
       setIsSpeechSupported(true);
-      const recognition = new SpeechRecognition();
+      const recognition = new (SpeechRecognition as any)();
       recognition.continuous = true;
       recognition.interimResults = true;
-      const preferredLanguage = navigator.languages?.find(lang => lang.toLowerCase().startsWith("es"))
-        || navigator.language
-        || document.documentElement.lang
-        || "es-ES";
-      recognition.lang = preferredLanguage.toLowerCase().startsWith("en") ? "es-ES" : preferredLanguage;
+      recognition.lang = resolveDictationLanguage({
+        languages: navigator.languages,
+        language: navigator.language,
+        documentLang: document.documentElement.lang,
+      });
 
       recognition.onresult = (event: SpeechRecognitionEvent) => {
         let finalTranscript = '';
@@ -7335,23 +7326,27 @@ But first, you need to connect your Spotify account securely using the button be
 
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error("Speech recognition error:", event.error);
-        const permissionErrors = new Set(["not-allowed", "service-not-allowed"]);
+        if (isIgnorableSpeechError(event.error)) {
+          return;
+        }
+
         if (
-          permissionErrors.has(event.error)
-          && dictationPermissionReadyRef.current
+          (isSpeechPermissionError(event.error) || event.error === "network")
           && !dictationNativeFallbackStartedRef.current
         ) {
           dictationNativeFallbackStartedRef.current = true;
+          dictationWantListeningRef.current = false;
           toast.info("El dictado nativo no se activó. Usaré grabación y transcripción al detener.");
           void startRecorderDictation();
           return;
         }
 
-        if (permissionErrors.has(event.error)) {
+        if (isSpeechPermissionError(event.error)) {
           toast.error("El micrófono está bloqueado. Actívalo en los permisos del navegador y vuelve a intentarlo.");
-        } else if (event.error !== "no-speech" && event.error !== "aborted") {
+        } else {
           toast.error("No se pudo iniciar el dictado. Inténtalo de nuevo.");
         }
+        dictationWantListeningRef.current = false;
         dictationModeRef.current = "idle";
         setIsRecording(false);
       };
@@ -7359,12 +7354,22 @@ But first, you need to connect your Spotify account securely using the button be
       recognition.onend = () => {
         if (dictationModeRef.current === "recorder") return;
 
+        if (shouldRestartNativeDictation(dictationModeRef.current, dictationWantListeningRef.current)) {
+          try {
+            recognition.start();
+            return;
+          } catch (error: any) {
+            if (error?.name === "InvalidStateError") return;
+          }
+        }
+
         const committedDraft = buildDictationDraft(dictationInterimRef.current);
         if (committedDraft) {
           setInput(committedDraft);
           inputRef.current = committedDraft;
         }
         resetDictationTranscript();
+        dictationWantListeningRef.current = false;
         dictationModeRef.current = "idle";
         setIsRecording(false);
       };
@@ -7373,6 +7378,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     return () => {
+      dictationWantListeningRef.current = false;
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
@@ -7383,12 +7389,13 @@ But first, you need to connect your Spotify account securely using the button be
     };
   }, [buildDictationDraft, normalizeDictationText, resetDictationTranscript, startRecorderDictation]);
 
-  const handleMicClick = async () => {
+  const handleMicClick = () => {
     const recognition = recognitionRef.current;
 
     if (isDictationTranscribing) return;
 
     if (isRecording) {
+      dictationWantListeningRef.current = false;
       if (dictationModeRef.current === "recorder") {
         dictationShouldTranscribeRecordingRef.current = true;
         dictationMediaRecorderRef.current?.stop();
@@ -7401,15 +7408,7 @@ But first, you need to connect your Spotify account securely using the button be
     dictationBaseRef.current = inputRef.current;
     dictationFinalRef.current = "";
     dictationInterimRef.current = "";
-    dictationPermissionReadyRef.current = false;
     dictationNativeFallbackStartedRef.current = false;
-
-    try {
-      await ensureMicrophonePermission();
-    } catch (error) {
-      showMicrophonePermissionError(error);
-      return;
-    }
 
     if (!recognition) {
       void startRecorderDictation();
@@ -7418,15 +7417,18 @@ But first, you need to connect your Spotify account securely using the button be
 
     try {
       dictationModeRef.current = "native";
+      dictationWantListeningRef.current = true;
       recognition.start();
       setIsRecording(true);
     } catch (error: any) {
       if (error?.name === "InvalidStateError") {
+        dictationWantListeningRef.current = true;
         setIsRecording(true);
         return;
       }
 
       console.error("Speech recognition start error:", error);
+      dictationWantListeningRef.current = false;
       toast.info("El dictado nativo no inició. Usaré grabación y transcripción al detener.");
       void startRecorderDictation();
     }
@@ -7460,6 +7462,7 @@ But first, you need to connect your Spotify account securely using the button be
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
+          type="button"
           variant="ghost"
           size="icon"
           onClick={handleMicClick}
