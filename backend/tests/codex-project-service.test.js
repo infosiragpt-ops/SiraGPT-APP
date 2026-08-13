@@ -57,6 +57,9 @@ test('hasFullStackIntent detects Spanish and English server/data product briefs'
     'Debe ser multiusuario con roles',
     'Create a multi-user production-ready application',
     'Ship this as a full-stack application',
+    'Crea un software como ChatGPT',
+    'Haz un CRM con todas las capas',
+    'Quiero un ERP de facturacion',
   ];
 
   for (const brief of fullStackBriefs) {

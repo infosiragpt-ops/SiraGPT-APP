@@ -1,14 +1,14 @@
 "use client"
 
 /**
- * CreateProjectDialog — modal matching the "Crear un proyecto
- * personal" screenshot: two-field form (name + description) and a
- * Cancelar / Crear proyecto button row.
+ * CreateProjectDialog — modal matching the "Crear una empresa"
+ * screenshot: two-field form (name + description) and a
+ * Cancelar / Crear empresa button row.
  *
  * Uses the shared Dialog primitive so it inherits the app's overlay,
  * focus-trap, and close-on-escape behaviour. Controlled from the
  * parent via `open` + `onOpenChange` so the list page can trigger it
- * from the "+ Nuevo proyecto" button AND from the empty-state CTA.
+ * from the "+ Nueva empresa" button AND from the empty-state CTA.
  *
  * Submission semantics:
  *   - Disabled while the API call is in flight (prevents double-submit).

@@ -108,7 +108,7 @@ export function DocumentsSection({ projectId }: Props) {
             <FileText className="h-4 w-4 text-muted-foreground" />
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Crea un documento para redactar tesis, notas o borradores dentro del proyecto.
+            Crea un documento para redactar tesis, notas o borradores dentro de la empresa.
           </p>
         </div>
       ) : (

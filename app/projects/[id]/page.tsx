@@ -960,7 +960,7 @@ function DeleteProjectDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>Mover proyecto a Papelera</DialogTitle>
+          <DialogTitle>Mover empresa a Papelera</DialogTitle>
           <DialogDescription>
             "{project.name}" seguirá perteneciendo solo a tu cuenta y podrás restaurarlo durante 30 días.
           </DialogDescription>
@@ -974,7 +974,7 @@ function DeleteProjectDialog({
                 <div>
                   <p className="font-semibold">No se borra definitivamente.</p>
                   <p className="mt-1 text-muted-foreground">
-                    El proyecto queda en Papelera, se revocan enlaces públicos y puedes restaurarlo desde Empresas.
+                    La empresa queda en Papelera, se revocan enlaces públicos y puedes restaurarla desde Empresas.
                   </p>
                 </div>
               </div>

@@ -176,7 +176,7 @@ export default function ProjectDocumentPage() {
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors shrink-0"
           >
             <ArrowLeft className="h-4 w-4" />
-            <span className="hidden sm:inline">Proyecto</span>
+            <span className="hidden sm:inline">Empresa</span>
           </button>
 
           <div className="h-5 w-px bg-border shrink-0" />

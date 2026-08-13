@@ -94,6 +94,11 @@ function hasFullStackIntent(brief) {
     /\b(?:real|production ready)\s+(?:products?|applications?|apps?|software|systems?)\b/,
     // Preserve the useful persistence phrases handled by the previous detector.
     /\b(?:que guarde|guardar datos|persistencia|persistente|persistir|store data|persist data)\b/,
+    // APPS chat: "haz un CRM / software como ChatGPT / todas las capas"
+    // must provision Express+SQLite, not the visual SPA starter.
+    /\b(?:crm|erp|saas|pos|inventario|facturacion|nomina|rrhh)\b/,
+    /\b(?:chatgpt|chat gpt|claude(?: code)?|todas las capas|multi capa|app completa|producto completo|fabrica de software)\b/,
+    /\bcomo\s+(?:claude|chatgpt)\b/,
   ].some((pattern) => pattern.test(text));
 }
 

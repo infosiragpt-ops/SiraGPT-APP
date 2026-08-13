@@ -137,7 +137,7 @@ export async function generateMetadata(): Promise<Metadata> {
   },
   // Web App Manifest — lets the browser surface the "Install" /
   // "Add to Home Screen" affordance with our branded icon, name and
-  // launcher shortcuts (Nuevo chat / Biblioteca / Proyectos).
+  // launcher shortcuts (Nuevo chat / Biblioteca / Empresas).
   manifest: "/manifest.webmanifest",
   // Sets the apple-mobile-web-app-* meta tags so iOS treats the
   // installed PWA-style shortcut as a full-screen app, hiding the
