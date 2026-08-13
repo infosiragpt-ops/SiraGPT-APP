@@ -161,13 +161,18 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // conjugación del prompt del bug ("deseo que lo reemplaces por color azul").
   const imageEditVerb = /\b(reempla[zc]\w*|cambi\w*|recolor\w*|pinta\w*|sustitu\w*|pon(?:er|ga|gan|la|lo|le|me)?)\b/.test(editVerbHay);
   const imageEditIntent = imageNoun && imageEditVerb;
+  const styleEditIntent = /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*|deja\w*|aplica\w*|pasa\w*|pon(?:er|ga|le|me|lo|la)?|cambia\w*)\b/.test(editVerbHay)
+    && (
+      /\b(color(?:es)?|fondo|fondos|background|paleta|tipograf\w*)\b/.test(text)
+      || (/\btema\b/.test(text) && /\b(ppt|pptx|ppts?|diapositiv\w*|presentaci[oó]n|slides?)\b/.test(text))
+    );
   // PDF page-level safe ops (rota/gira/extrae/divide/une/combina las páginas…)
   // — their verbs aren't in the generic edit lists, so a "rota la página 2 del
   // pdf" used to fall through to plain chat.
   const pdfOpIntent = /\b(rota\w*|gira\w*|rotate)\b/.test(text)
     || (/\b(extrae\w*|extract|divide\w*|separa\w*|split)\b/.test(text) && /\bp[aá]ginas?\b/.test(text))
     || (/\b(une|unir|junta\w*|combina\w*|fusiona\w*|merge)\b/.test(text) && /\bpdfs?\b/.test(text));
-  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || professionalEditingIntent || imageEditIntent || pdfOpIntent;
+  const editVerb = primaryEditVerb || adjuntarAction || editorialCorrectionIntent || professionalEditingIntent || imageEditIntent || pdfOpIntent || styleEditIntent;
   const existingDocRef = /\b(mi|mism[oa]s?|mim[oa]s|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
   const documentNoun = /\b(documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx?|ppts?|powerpoint|presentaci[oó]n|diapositiv\w*|slides?|pdf|tesis)\b/.test(text);
   const appendLocation = /\b(al final|final|anexo|anexos|apendice|ultima pagina|ultima hoja|nueva hoja|nueva pagina|nueva diapositiva|nuevas?\s+diapositiv\w*)\b/.test(text);
@@ -208,6 +213,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
     // only editable image surface the user can mean is inside the attachment.
     if (imageEditIntent) return true;
+    if (styleEditIntent) return true;
     // PDF page ops on an attachment turn target the attached PDF.
     if (pdfOpIntent) return true;
     if (appendLocation || preservation || instrument || documentRegion) return true;
@@ -224,6 +230,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     // "traduce esta frase" / "cambia de tema" stay normal chat answers.
     return structuralEditVerb && existingDocRef;
   }
+  if (styleEditIntent && (existingDocRef || documentNoun)) return true;
   return preservation
     || followUpDocumentEdit
     || (existingDocRef && (appendLocation || instrument || documentRegion))
@@ -4667,6 +4674,24 @@ async function validateOfficeOperationCriteria(buffer, format, operations = [], 
         passed: normalizedTextIncludes(text, op.title),
         details: { slideNumber: op.slideNumber || null, title: compact(op.title, 120) },
       });
+    } else if (op.kind === 'set_slide_background' && format === 'pptx') {
+      let passed = false;
+      let hit = 0;
+      try {
+        const zip = new PizZip(buffer);
+        const hex = String(op.color || '').replace(/^#/, '').toUpperCase();
+        for (const name of Object.keys(zip.files)) {
+          if (!/^ppt\/slides\/slide\d+\.xml$/.test(name)) continue;
+          if ((zip.file(name)?.asText() || '').includes(`val="${hex}"`)) hit += 1;
+        }
+        passed = hit > 0 && (!op.changed || hit >= Number(op.changed));
+      } catch { passed = false; }
+      checks.push({
+        id: 'pptx_slide_background_changed',
+        label: 'Fondo de diapositivas actualizado',
+        passed,
+        details: { color: op.color || null, colorName: op.colorName || null, slidesWithColor: hit },
+      });
     } else if ((op.kind === 'recolor_image' || op.kind === 'replace_image') && format === 'pptx') {
       // Byte-level proof on the final buffer: the target media part must hold
       // different bytes (recolor) / exactly the replacement bytes (replace).
@@ -7004,6 +7029,105 @@ function parsePresentationEditRequest(requestText = '') {
   return { kind: 'set_slide_title', slideNumber, title };
 }
 
+const DECK_COLOR_HEX = Object.freeze({
+  blanco: 'FFFFFF',
+  white: 'FFFFFF',
+  negro: '111111',
+  black: '111111',
+  rosado: 'F8BBD0',
+  rosa: 'F48FB1',
+  pink: 'F48FB1',
+  rojo: 'C62828',
+  red: 'C62828',
+  azul: '1565C0',
+  blue: '1565C0',
+  verde: '2E7D32',
+  green: '2E7D32',
+  amarillo: 'F9A825',
+  yellow: 'F9A825',
+  naranja: 'EF6C00',
+  orange: 'EF6C00',
+  morado: '6A1B9A',
+  violeta: '7B1FA2',
+  purple: '6A1B9A',
+  gris: '757575',
+  gray: '757575',
+  grey: '757575',
+  crema: 'FFF8E1',
+  beige: 'F5F5DC',
+});
+
+function parseNamedColor(text = '') {
+  const hex = /#([0-9a-fA-F]{6})\b/.exec(text);
+  if (hex) return { hex: hex[1].toUpperCase(), name: `#${hex[1].toUpperCase()}` };
+  const t = normalizeText(text);
+  for (const [name, value] of Object.entries(DECK_COLOR_HEX)) {
+    if (new RegExp(`\\b${name}\\b`).test(t)) return { hex: value, name };
+  }
+  return null;
+}
+
+function parseDeckStyleRequest(requestText = '') {
+  const text = normalizeText(requestText);
+  if (!text) return null;
+  // Image recolor ("cambia la imagen a azul") stays on the image parser.
+  if (/\b(imagen(?:es)?|foto\w*|logo\w*|logotipo\w*|picture|image)\b/.test(text)) return null;
+  const color = parseNamedColor(requestText);
+  if (!color) return null;
+  const styleCue = /\b(color(?:es)?|fondo|fondos|background|paleta)\b/.test(text)
+    || /\b(uniformi[zs]\w*|unific\w*|pinta\w*|colorea\w*)\b/.test(text)
+    || (/\btema\b/.test(text) && /\b(ppt|pptx|diapositiv\w*|presentaci[oó]n)\b/.test(text));
+  if (!styleCue) return null;
+  const slideMatch = SLIDE_NOUN_RE.exec(text);
+  const allSlides = /\b(todas?|todos|entera|completo|whole|every|todas las ppts?|todas las diapositiv)\b/.test(text)
+    || !slideMatch;
+  return {
+    kind: 'set_slide_background',
+    color: color.hex,
+    colorName: color.name,
+    allSlides,
+    slideNumber: slideMatch ? Number(slideMatch[1]) : null,
+    contrastText: true,
+  };
+}
+
+async function runPptxStyleEditFlow({ input, styleEdit, sourceFile }) {
+  const adapter = pptxAdapterModule();
+  const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
+  if (!adapter?.setSlideBackgrounds) {
+    return { clarification: true, message: 'La edición de estilo de presentaciones no está disponible en este despliegue.' };
+  }
+  try {
+    const result = adapter.setSlideBackgrounds({
+      buffer: input,
+      color: styleEdit.color,
+      allSlides: styleEdit.allSlides !== false,
+      slideNumber: styleEdit.slideNumber,
+      contrastText: styleEdit.contrastText !== false,
+    });
+    const scope = result.changed === 1 && styleEdit.slideNumber
+      ? `la diapositiva ${styleEdit.slideNumber}`
+      : `las ${result.changed} diapositivas`;
+    return {
+      buffer: result.buffer,
+      operation: {
+        kind: 'set_slide_background',
+        color: result.color,
+        colorName: styleEdit.colorName,
+        allSlides: styleEdit.allSlides !== false,
+        slideNumber: styleEdit.slideNumber,
+        changed: result.changed,
+      },
+      steps: [{ kind: 'set_slide_background', label: scope, color: result.color, colorName: styleEdit.colorName }],
+      suffix: 'fondo_actualizado',
+      titleSuffix: 'fondo actualizado',
+      summary: `uniformé el fondo de ${scope} a ${styleEdit.colorName || `#${result.color}`} y ajusté el contraste del texto`,
+    };
+  } catch (err) {
+    return { clarification: true, message: `No pude cambiar el color de «${docName}»: ${err?.message || 'error desconocido'}.` };
+  }
+}
+
 async function runPptxSurgicalEditFlow({ input, slideEdit, sourceFile }) {
   const adapter = pptxAdapterModule();
   const docName = sourceFile?.originalName || sourceFile?.filename || 'la presentación';
@@ -7329,6 +7453,19 @@ function sanitizeOfficeOperations(rawOps, format) {
       const title = str(raw.title, 120);
       const bullets = (Array.isArray(raw.bullets) ? raw.bullets : []).slice(0, 12).map((b) => str(b, 220)).filter(Boolean);
       if (title || bullets.length) ops.push({ kind: 'add_slide', title: title || 'Nueva diapositiva', bullets });
+    } else if (format === 'pptx' && kind === 'set_slide_background') {
+      const parsed = parseNamedColor(str(raw.colorName || raw.color || raw.value, 40));
+      const hex = String(raw.color || parsed?.hex || '').replace(/^#/, '').toUpperCase();
+      if (/^[0-9A-F]{6}$/.test(hex)) {
+        ops.push({
+          kind: 'set_slide_background',
+          color: hex,
+          colorName: str(raw.colorName || parsed?.name || hex, 40),
+          allSlides: raw.allSlides !== false,
+          slideNumber: scopedSlide,
+          contrastText: raw.contrastText !== false,
+        });
+      }
     }
   }
   return ops.length ? ops : null;
@@ -7352,6 +7489,7 @@ async function planOfficeOperationsSmart({ requestText = '', format = '', input,
         '{"kind":"replace_text","slideNumber":3,"needle":"texto exacto","replacement":"texto nuevo"}  // limita el cambio a una diapositiva cuando el usuario la indique',
         '{"kind":"delete_text","slideNumber":3,"needle":"texto exacto"}  // elimina solo dentro de esa diapositiva',
         '{"kind":"add_slide","title":"Riesgos del proyecto","bullets":["Riesgo 1...","Riesgo 2..."]}  // diapositiva NUEVA al final',
+        '{"kind":"set_slide_background","color":"FFFFFF","colorName":"blanco","allSlides":true}  // fondo de TODAS o de una diapositiva',
       ];
     const { client, model: contentModel } = resolveContentClient();
     const completion = await client.chat.completions.create({
@@ -7425,6 +7563,8 @@ function planGenericOfficeOperations({ requestText = '', format = '', sourceText
       add({ kind: 'replace_text', ...rawReplacement, ...(pptxSlideNumber ? { slideNumber: pptxSlideNumber } : {}) });
     }
   }
+  const deckStyle = format === 'pptx' ? parseDeckStyleRequest(requestText) : null;
+  if (deckStyle) add(deckStyle);
   const officeIntent = parseOfficeUserIntent(requestText, { format });
   if (officeIntent?.kind === 'add_slides') {
     for (const slideOp of buildAddSlideOperations(officeIntent, { sourceText, originalName, requestText })) {
@@ -7539,6 +7679,22 @@ function executePptxOperations({ input, ops, blocks }) {
       buffer = appendToPptxBuffer(buffer, slideBlocks);
       validationBlocks.push(...slideBlocks);
       steps.push({ kind: 'add_slide', mode: 'pptx_new_slide', label: op.title });
+    } else if (op.kind === 'set_slide_background') {
+      const result = pptxAdapterModule().setSlideBackgrounds({
+        buffer,
+        color: op.color,
+        allSlides: op.allSlides !== false,
+        slideNumber: op.slideNumber,
+        contrastText: op.contrastText !== false,
+      });
+      buffer = result.buffer;
+      steps.push({
+        kind: 'set_slide_background',
+        mode: 'pptx_slide_background',
+        label: result.changed === 1 ? `diapositiva ${op.slideNumber || 1}` : `${result.changed} diapositivas`,
+        color: result.color,
+        colorName: op.colorName,
+      });
     } else {
       const dump = looksLikePromptDump(appendBlocks.map((item) => item.text).join('\n'));
       const safeBlocks = dump
@@ -7606,6 +7762,9 @@ function describeStep(step) {
       ? ` en ${step.label.replace(/^edici[oó]n profesional de\s+/i, '')}`
       : '';
     return `mejoré profesionalmente ${changed} párrafo(s)${scope}, conservando hechos, cifras, citas y estructura`;
+  }
+  if (step.kind === 'set_slide_background') {
+    return `uniformé el fondo de ${step.label || 'las diapositivas'} a ${step.colorName || step.color || 'el color pedido'} y ajusté el contraste del texto`;
   }
   if (step.kind === 'recolor_image') {
     const where = step.scope === 'header' ? ' del encabezado' : step.scope === 'footer' ? ' del pie de página' : '';
@@ -7897,10 +8056,13 @@ async function generateSourcePreservingDocumentEdit({
       // text deck-wide or append slides, so these degraded to appendices.
       const slideEdit = parsePresentationEditRequest(requestText);
       const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
-      if (slideEdit || pptxImageEdit) {
+      const deckStyle = (!slideEdit && !pptxImageEdit) ? parseDeckStyleRequest(requestText) : null;
+      if (slideEdit || pptxImageEdit || deckStyle) {
         const pptxResult = slideEdit
           ? await runPptxSurgicalEditFlow({ input, slideEdit, sourceFile })
-          : await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles });
+          : pptxImageEdit
+            ? await runPptxImageEditFlow({ input, imageEdit: pptxImageEdit, requestText, sourceFile, assetFiles })
+            : await runPptxStyleEditFlow({ input, styleEdit: deckStyle, sourceFile });
         if (pptxResult.clarification) {
           await sourceRead.cleanup().catch(() => {});
           return buildImageEditClarificationResult({ message: pptxResult.message, format });
@@ -7914,7 +8076,9 @@ async function generateSourcePreservingDocumentEdit({
         suffix = pptxResult.suffix;
         titleSuffix = pptxResult.titleSuffix;
         explanation = `Se conservó el PPTX original; ${pptxResult.summary}.`;
-        content = `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
+        content = deckStyle
+          ? `Listo. Conservé el PPTX original: ${pptxResult.summary}.`
+          : `Listo. Conservé el PPTX original: ${pptxResult.summary}, sin alterar el diseño, los fondos ni el resto de las diapositivas.`;
       } else {
       const livePptxText = [
         sourceFile.extractedText,
@@ -8333,6 +8497,7 @@ module.exports = {
   parsePdfEditRequest,
   parseOfficeUserIntent,
   parsePresentationEditRequest,
+  parseDeckStyleRequest,
   parseSpreadsheetEditRequest,
   parseTargetSectionRequest,
   readSourceBuffer,
