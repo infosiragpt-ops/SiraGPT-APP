@@ -6171,7 +6171,7 @@ router.post(
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && shouldRunAgentic
+                && (shouldRunAgentic || documentEditRequested)
                 // Callers that want a plain LLM stream (e.g. the /code chat,
                 // which generates code blocks and must never detour into the
                 // web_search/artifact agentic loop) set disableAgentic:true.
@@ -6181,7 +6181,7 @@ router.post(
                 // if a client accidentally (or maliciously) omits the
                 // disableAgentic flag.
                 && !__publicWebReadonly
-                && __toolCallMode !== 'none'
+                && (__toolCallMode !== 'none' || documentEditRequested)
                 // Images used to skip the whole agentic path. That also
                 // skipped the deterministic Office editor, so "agrega 5
                 // slides a esta ppt" on a vision model fell through to the

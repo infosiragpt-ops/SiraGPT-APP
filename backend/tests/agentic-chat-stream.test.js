@@ -1619,3 +1619,13 @@ test('turnPolicy observe mode attaches summary without changing behaviour', asyn
   assert.equal(foundPolicy.shouldRunAgentic, true);
   cognitiveMetrics.reset();
 });
+
+test('shouldUseAgenticChat routes messy PPT style follow-ups without a new attachment', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'uniformisa el color de la ppts todas de color blanco',
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'pon todas las diapositivas de color rosado',
+  }), true);
+});
+

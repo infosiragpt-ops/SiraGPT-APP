@@ -299,6 +299,89 @@ async function replacePptxImage({ buffer, imageIndex, replacementBytes, replacem
   };
 }
 
+function solidBackgroundXml(hex) {
+  const val = String(hex || 'FFFFFF').replace(/^#/, '').toUpperCase();
+  return `<p:bg><p:bgPr><a:solidFill><a:srgbClr val="${val}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg>`;
+}
+
+function recolorFullBleedShapes(slideXml, hex) {
+  const val = String(hex || 'FFFFFF').replace(/^#/, '').toUpperCase();
+  return String(slideXml).replace(/<p:sp\b[\s\S]*?<\/p:sp>/g, (shape) => {
+    const ext = /<a:ext\b[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"/.exec(shape)
+      || /<a:ext\b[^>]*\bcy="(\d+)"[^>]*\bcx="(\d+)"/.exec(shape);
+    if (!ext) return shape;
+    const a = Number(ext[1]);
+    const b = Number(ext[2]);
+    if (!(a >= 8_000_000 && b >= 4_000_000) && !(b >= 8_000_000 && a >= 4_000_000)) return shape;
+    let next = shape.replace(/<a:srgbClr val="[^"]+"\s*\/>/g, `<a:srgbClr val="${val}"/>`);
+    next = next.replace(/<a:schemeClr val="[^"]+"[^>]*\/>/g, `<a:srgbClr val="${val}"/>`);
+    next = next.replace(/<a:schemeClr val="[^"]+"[^>]*>[\s\S]*?<\/a:schemeClr>/g, `<a:srgbClr val="${val}"/>`);
+    return next;
+  });
+}
+
+function applySolidBackground(slideXml, hex) {
+  const bg = solidBackgroundXml(hex);
+  let xml = String(slideXml);
+  if (/<p:bg[\s>]/.test(xml)) {
+    xml = xml.replace(/<p:bg\b[\s\S]*?<\/p:bg>/, bg);
+  } else if (/<p:cSld\b[^>]*>/.test(xml)) {
+    xml = xml.replace(/(<p:cSld\b[^>]*>)/, `$1${bg}`);
+  }
+  return recolorFullBleedShapes(xml, hex);
+}
+
+function recolorTextRuns(slideXml, textHex) {
+  const fill = `<a:solidFill><a:srgbClr val="${String(textHex).replace(/^#/, '').toUpperCase()}"/></a:solidFill>`;
+  return String(slideXml).replace(/<a:rPr\b([^>]*)(?:\/>|>([\s\S]*?)<\/a:rPr>)/g, (full, attrs, inner) => {
+    if (inner == null) return `<a:rPr${attrs}>${fill}</a:rPr>`;
+    if (/<a:solidFill>/.test(inner)) {
+      return `<a:rPr${attrs}>${inner.replace(/<a:solidFill>[\s\S]*?<\/a:solidFill>/, fill)}</a:rPr>`;
+    }
+    return `<a:rPr${attrs}>${fill}${inner}</a:rPr>`;
+  });
+}
+
+function contrastTextHex(bgHex) {
+  const raw = String(bgHex || 'FFFFFF').replace(/^#/, '');
+  const n = Number.parseInt(raw, 16);
+  if (!Number.isFinite(n)) return '1A1A1A';
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.58 ? '1A1A1A' : 'FFFFFF';
+}
+
+function setSlideBackgrounds({ buffer, color, allSlides = true, slideNumber = null, contrastText = true } = {}) {
+  const hex = String(color || '').replace(/^#/, '').toUpperCase();
+  if (!/^[0-9A-F]{6}$/.test(hex)) {
+    throw new Error('color de fondo inválido');
+  }
+  const zip = new PizZip(buffer);
+  const slides = listPptxSlides(buffer);
+  if (!slides.length) throw new Error('la presentación no tiene diapositivas');
+  const targets = (!allSlides && Number.isInteger(Number(slideNumber)))
+    ? slides.filter((slide) => slide.number === Number(slideNumber))
+    : slides;
+  if (!targets.length) {
+    throw new Error(`no existe la diapositiva ${slideNumber}`);
+  }
+  const textHex = contrastText ? contrastTextHex(hex) : null;
+  for (const slide of targets) {
+    let xml = zip.file(slide.partName)?.asText() || '';
+    xml = applySolidBackground(xml, hex);
+    if (textHex) xml = recolorTextRuns(xml, textHex);
+    zip.file(slide.partName, xml);
+  }
+  return {
+    buffer: zip.generate({ type: 'nodebuffer', compression: 'DEFLATE' }),
+    changed: targets.length,
+    color: hex,
+    textColor: textHex,
+  };
+}
+
 module.exports = {
   listPptxSlides,
   listPptxImages,
@@ -306,5 +389,17 @@ module.exports = {
   replaceSlideText,
   recolorPptxImage,
   replacePptxImage,
-  INTERNAL: { findTitleShape, extractSlideTitle, extractAllText, parseRels, resolveSlideRelTarget, normalizeText, replaceVisibleText },
+  setSlideBackgrounds,
+  INTERNAL: {
+    findTitleShape,
+    extractSlideTitle,
+    extractAllText,
+    parseRels,
+    resolveSlideRelTarget,
+    normalizeText,
+    replaceVisibleText,
+    applySolidBackground,
+    recolorFullBleedShapes,
+    contrastTextHex,
+  },
 };
