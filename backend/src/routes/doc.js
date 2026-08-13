@@ -359,6 +359,19 @@ router.post(
       // por la que producción seguía contestando con la plantilla genérica
       // incluso con el runner desplegado.
       let agentRunnerResult = null;
+      // F2 telemetry: one structured line per turn stating which path served
+      // it (agent_runner | agent_runner_failed | source_preserving_edit |
+      // advanced_pipeline | skipped). Never throws.
+      const logRouting = (routePath, reason) => {
+        try {
+          require('../services/agent-runner/telemetry').logDocumentRouting({
+            entry: 'doc_generate',
+            path: routePath,
+            reason,
+            chatId,
+          });
+        } catch (_) { /* telemetry is best-effort */ }
+      };
       try {
         const { runAgentRunnerForDocRoute } = require('../services/agent-runner');
         agentRunnerResult = await runAgentRunnerForDocRoute({
@@ -374,9 +387,11 @@ router.post(
       } catch (agentRunnerErr) {
         if (controller.signal.aborted) throw agentRunnerErr;
         console.warn('[doc] agent-runner unavailable, module-level failure:', agentRunnerErr?.message || agentRunnerErr);
+        logRouting('skipped', 'agent_runner_unavailable');
       }
       if (agentRunnerResult && agentRunnerResult.file) {
         send({ type: 'stage', label: 'Documento generado y verificado por el agente', pct: 92 });
+        logRouting('agent_runner');
         content = agentRunnerResult.content;
         file = agentRunnerResult.file;
         format = agentRunnerResult.format;
@@ -384,6 +399,7 @@ router.post(
         // El runner reclamó el turno pero no entregó archivo (sin créditos,
         // sin modelo, verificación fallida…). Error honesto en español con la
         // razón — NUNCA la plantilla genérica.
+        logRouting('agent_runner_failed', agentRunnerResult.reason || 'no_output');
         errorMsg = agentRunnerResult.message;
         publicError = {
           code: 'agent_runner_failed',
@@ -414,6 +430,7 @@ router.post(
         // nueva): no hay archivo que entregar y la ruta de éxito exige `file`,
         // así que encaminamos la pregunta por el canal de fallo para que el
         // texto llegue íntegro al usuario en vez de un "resultado vacío".
+        logRouting('source_preserving_edit', 'clarification_required');
         errorMsg = preservedEdit.content;
         publicError = {
           code: 'clarification_required',
@@ -423,6 +440,7 @@ router.post(
         };
       } else if (preservedEdit) {
         send({ type: 'stage', label: 'Conservando documento original', pct: 40 });
+        logRouting('source_preserving_edit');
         content = preservedEdit.content;
         file = preservedEdit.file;
         format = preservedEdit.format;
@@ -435,6 +453,7 @@ router.post(
         const editIntent = isSourcePreservingEditRequest(prompt, requestedFileIds)
           || (requestedFileIds.length > 0 && isDocumentEditRequest(prompt));
         if (editIntent && requestedFileIds.length > 0) {
+          logRouting('source_preserving_edit', 'edit_failed');
           errorMsg = 'No pude editar el documento adjunto preservando su formato. Reintenta con una instrucción más concreta (por ejemplo: "borra el párrafo X", "cambia el título a Y") o vuelve a adjuntar el archivo.';
         } else {
           const effectivePrompt = previousAssistantContent
@@ -451,6 +470,9 @@ router.post(
             ? `${projectContext.promptPrefix}\n\nUSER DOCUMENT REQUEST:\n${effectivePrompt}`
             : effectivePrompt;
           const groundedPrompt = appendResearchGroundingInstructions(projectPrompt, researchArtifact.sources);
+          // El pipeline genérico solo es alcanzable cuando el runner NO
+          // reclamó el turno (runAgentRunnerForDocRoute devolvió null).
+          logRouting('advanced_pipeline', 'runner_did_not_claim');
           const pipelineOptions = {
             prompt: groundedPrompt,
             model: req.body.model,

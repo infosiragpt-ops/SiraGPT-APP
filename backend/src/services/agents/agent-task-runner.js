@@ -1588,6 +1588,21 @@ function shouldRunSourcePreservingEdit({
     || isSourcePreservingEditRequest(request, fileIds);
 }
 
+/**
+ * F2 — AgentRunner preloop gate for the durable /api/agent/task entry.
+ * The chat UI's intent classifier routes 'ppt' / document turns here, so
+ * this entry must be runner-first too. Default ON. Like the other
+ * network-touching features of this runner (model failover, LLM
+ * recovery), it is OFF under NODE_ENV=test unless a test opts in with
+ * AGENT_TASK_AGENT_RUNNER=1 — the preloop can reach OpenRouter.
+ */
+function agentTaskAgentRunnerEnabled(env = process.env) {
+  const raw = String(env.AGENT_TASK_AGENT_RUNNER || '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  if (raw === '1' || raw === 'true' || raw === 'on') return true;
+  return env.NODE_ENV !== 'test';
+}
+
 function isValidatedSourcePreservingDeliverable(item) {
   return Boolean(item?.artifact?.id && item?.validation?.passed === true);
 }
@@ -1973,7 +1988,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     executionProfile,
     universalTaskContract,
   });
-  const tools = buildTaskTools({
+  // `let`: the F2 AgentRunner preloop bans create_document for the rest of
+  // the turn when the runner claimed it and failed (see below).
+  let tools = buildTaskTools({
     skillContext: {
       clearance: user.clearance || 'authenticated',
       userId: user.id,
@@ -2292,14 +2309,154 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   if (externalSignal?.aborted) abortFromCaller();
   else externalSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
 
+  // F2 telemetry: which path served this document turn. Best-effort.
+  const logDocRouting = (routePath, reason) => {
+    try {
+      require('../agent-runner/telemetry').logDocumentRouting({
+        entry: 'agent_task',
+        path: routePath,
+        reason,
+        chatId,
+      });
+    } catch (_) { /* telemetry is best-effort */ }
+  };
+
   try {
+    // ── F2: AgentRunner PRIMARY on the durable agent-task entry ──────────
+    // The chat UI's intent classifier still routes 'ppt'/document turns to
+    // POST /api/agent/task, which used to create documents via the loop's
+    // create_document tool or generateAutoDocument (advanced pipeline)
+    // WITHOUT ever consulting the AgentRunner. Runner-first now: when
+    // shouldRunAgentRunner claims the turn there are exactly two outcomes —
+    // a runner-verified file, or (for create-doc / style-color turns) an
+    // honest Spanish error. The surgical source-preserving branch below may
+    // still rescue a claimed EDIT turn; the generic pipeline may not.
+    // Deterministic non-pipeline fast paths (plain transcription, Vancouver
+    // matrix, attachment chat answers) keep priority — they answer from the
+    // user's REAL files and never touch the generic template.
+    let agentRunnerFailure = null;
+    let agentRunnerRunnerOnly = false;
+    let agentRunnerClaimedTurn = false;
+    if (
+      agentTaskAgentRunnerEnabled()
+      && !plainTranscriptionRequest
+      && !deterministicVancouverRequest
+      && !deterministicAttachmentAnswer
+    ) {
+      try {
+        const agentRunner = require('../agent-runner');
+        const runnerText = String(displayGoal || goal || '');
+        let priorArtifacts = false;
+        if (prisma && chatId) {
+          try {
+            priorArtifacts = await agentRunner.hasConversationArtifacts(prisma, {
+              userId: user.id,
+              chatId,
+            });
+          } catch (_) { priorArtifacts = false; }
+        }
+        if (agentRunner.shouldRunAgentRunner({
+          fileIds: files,
+          hasPriorArtifacts: priorArtifacts,
+          text: runnerText,
+        })) {
+          agentRunnerClaimedTurn = true;
+          agentRunnerRunnerOnly = agentRunner.isRunnerOnlyDocumentTurn(runnerText);
+          stepIdCounter += 1;
+          currentStepId = `s${stepIdCounter}`;
+          emit({ type: 'step_start', id: currentStepId, label: 'Agente de documentos trabajando', icon: 'python' });
+          const seenRunnerArtifactIds = new Set();
+          const ran = await agentRunner.executeAgentRunnerTurn({
+            prisma,
+            userId: user.id,
+            chatId,
+            fileIds: files,
+            instruction: runnerText,
+            signal: controller.signal,
+            onEvent: (ev) => {
+              if (!ev) return;
+              try {
+                if (ev.type === 'file_artifact' && ev.artifact) {
+                  seenRunnerArtifactIds.add(String(ev.artifact.id || ev.artifact.downloadUrl));
+                  upsertArtifactForDelivery(artifacts, ev.artifact);
+                  emit({ type: 'file_artifact', artifact: ev.artifact });
+                  void persistence.persistGeneratedArtifact({
+                    artifact: ev.artifact,
+                    task,
+                    validation: ev.artifact.validation || null,
+                  });
+                  return;
+                }
+                if (ev.type === 'tool_call') {
+                  emit({
+                    type: 'tool_call',
+                    stepId: currentStepId,
+                    tool: ev.tool || 'agent_runner',
+                    preview: String(ev.preview || ev.label || '').slice(0, 400),
+                  });
+                } else if (ev.type === 'tool_result') {
+                  emit({
+                    type: 'tool_output',
+                    stepId: currentStepId,
+                    tool: ev.tool || 'agent_runner',
+                    ok: ev.ok !== false,
+                    preview: String(ev.preview || '').slice(0, 400),
+                  });
+                }
+              } catch (_) { /* event fan-out must never break the run */ }
+            },
+          });
+          if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
+            // persistOutputs already emitted file_artifact for each output;
+            // merge defensively so the delivery list never misses one.
+            for (const artifact of ran.artifacts) {
+              if (!artifact || !artifact.downloadUrl) continue;
+              upsertArtifactForDelivery(artifacts, artifact);
+              if (!seenRunnerArtifactIds.has(String(artifact.id || artifact.downloadUrl))) {
+                emit({ type: 'file_artifact', artifact });
+              }
+            }
+            emit({ type: 'step_done', id: currentStepId, ok: true });
+            currentStepId = null;
+            logDocRouting('agent_runner');
+            return await finishDeterministicTask({
+              finalMarkdown: ran.summary,
+              stoppedReason: 'agent_runner',
+              steps: stepIdCounter,
+              artifactsList: artifacts,
+              metadata: { servedBy: 'agent_runner' },
+            });
+          }
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+          agentRunnerFailure = {
+            reason: ran?.stoppedReason || 'no_output',
+            detail: ran?.errorMessage || null,
+          };
+        }
+      } catch (agentRunnerErr) {
+        if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
+        console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
+        if (currentStepId) {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+        }
+        if (agentRunnerClaimedTurn) {
+          agentRunnerFailure = {
+            reason: 'exception',
+            detail: agentRunnerErr?.message || String(agentRunnerErr),
+          };
+        }
+      }
+    }
+
     // Editing the user's existing file is not the same as auto-generating a
     // new document. Prompts such as "devuélveme el mismo Word; no crees uno
     // nuevo" intentionally set autoGenerate=false, but must still enter this
     // source-preserving path before the thin-attachment guard.
     if (wantsSourcePreservingEdit) {
-      stepIdCounter = 1;
-      currentStepId = 's1';
+      stepIdCounter += 1;
+      currentStepId = `s${stepIdCounter}`;
       emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
       try {
         emit({
@@ -2419,6 +2576,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         });
         emit({ type: 'step_done', id: currentStepId, ok: deliverableResults.length > 0 });
         currentStepId = null;
+        logDocRouting('source_preserving_edit', agentRunnerFailure ? `rescued_after_${agentRunnerFailure.reason}` : undefined);
         return finishDeterministicTask({
           finalMarkdown: preserved.content,
           stoppedReason: 'source_preserving_document_edit',
@@ -2484,6 +2642,55 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           });
         }
       }
+    }
+
+    // F2 HARD STOP: the AgentRunner claimed this DOCUMENT turn (create-a-doc
+    // or style/color follow-up) but did not deliver a file, and the surgical
+    // editor above did not rescue it. Continuing into the LLM loop lets
+    // create_document / generateAutoDocument fabricate a generic filler
+    // document — the exact silent fallback F2 removes. Honest Spanish error
+    // instead.
+    if (agentRunnerFailure && agentRunnerRunnerOnly) {
+      let honestAnswer;
+      try {
+        honestAnswer = require('../agent-runner').buildAgentRunnerFailureMessage(
+          agentRunnerFailure.reason,
+          agentRunnerFailure.detail,
+        );
+      } catch (_) {
+        honestAnswer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
+          + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
+      }
+      logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
+      return await finishDeterministicTask({
+        finalMarkdown: honestAnswer,
+        stoppedReason: 'agent_runner_failed',
+        steps: stepIdCounter,
+        artifactsList: [],
+        metadata: {
+          servedBy: 'agent_runner_failed',
+          agentRunnerFailureReason: agentRunnerFailure.reason,
+        },
+      });
+    }
+    // Claimed EDIT turn continuing into the loop: the loop may still edit
+    // the user's REAL file (document_edit / source-preserving tools), but a
+    // failed-runner turn must never fabricate a NEW generic document — ban
+    // create_document and the auto-document pipeline for the rest of the run.
+    if (agentRunnerFailure) {
+      logDocRouting('agent_runner_failed', `${agentRunnerFailure.reason}_edit_continues_loop`);
+      // Direct assignment (not normalizeDocumentPolicyCoherence, which would
+      // flip autoGenerate back on for doc_required) — same pattern as the
+      // model-failure artifact guard below.
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        autoGenerate: false,
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          agentRunnerFailure: agentRunnerFailure.reason,
+        },
+      };
+      tools = tools.filter((tool) => !(tool && tool.name === 'create_document'));
     }
 
     if (plainTranscriptionRequest) {
@@ -3267,6 +3474,19 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           : null,
       });
     }
+    // F2: the rebuild above re-derives autoGenerate from the goal text — a
+    // runner-claimed turn that failed must keep the generic auto-document
+    // pipeline banned even after the rebuild.
+    if (agentRunnerFailure && documentPolicy) {
+      documentPolicy = {
+        ...documentPolicy,
+        autoGenerate: false,
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          agentRunnerFailure: agentRunnerFailure.reason,
+        },
+      };
+    }
     task.documentPolicy = documentPolicy;
     emit({ type: 'document_policy', policy: documentPolicy });
 
@@ -3627,4 +3847,5 @@ module.exports = {
   shouldRunSourcePreservingEdit,
   isValidatedSourcePreservingDeliverable,
   shouldUseDeterministicAttachmentAnswer,
+  agentTaskAgentRunnerEnabled,
 };

@@ -6184,6 +6184,24 @@ router.post(
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
               );
+              // F2 telemetry: a document turn (the AgentRunner would claim it)
+              // that does NOT enter the agentic loop is logged as 'skipped'
+              // with the gate that stopped it — the plain stream can only
+              // answer with text, never a file.
+              if (createDocRequested && !__agenticWillRun) {
+                try {
+                  require('../services/agent-runner/telemetry').logDocumentRouting({
+                    entry: 'ai_generate',
+                    path: 'skipped',
+                    reason: !agenticStream.isEnabled()
+                      ? 'agentic_disabled'
+                      : (req.body.disableAgentic === true
+                        ? 'caller_disabled'
+                        : (__publicWebReadonly ? 'public_web_readonly' : 'routing_gate')),
+                    chatId: canPersist ? chatId : null,
+                  });
+                } catch (_) { /* telemetry is best-effort */ }
+              }
               // U3: shadow turn-policy snapshot (observe by default). Never
               // overrides routing/tool decisions in this unit.
               let __turnPolicy = null;
