@@ -6,6 +6,18 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Next production release] — 2026-07-22
 
+### Added
+
+- Mobile downloads on `/descargas`: first-class iPhone section with the
+  Safari "Añadir a pantalla de inicio" steps and an iOS install coach
+  (Safari never fires `beforeinstallprompt`), a real Android APK download
+  backed by `/api/mobile/releases` + `/api/mobile/download` (latest public
+  GitHub QA/signed release, with a known-asset fallback), Chromium install
+  prompt wiring via `PWAInstallPrompt`, and an honest "App Store (nativa
+  Capacitor) — pendiente" status card listing the owner-only Apple steps
+  (issue #6). Google Play remains owner-gated (issue #5); no store URLs
+  are published until the listings exist.
+
 ### Changed
 
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
