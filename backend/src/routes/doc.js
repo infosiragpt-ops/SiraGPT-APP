@@ -382,7 +382,15 @@ router.post(
           fileIds: requestedFileIds,
           model: req.body.model,
           signal: controller.signal,
-          onStage: (ev) => send({ type: 'stage', label: ev.label || 'Agente trabajando' }),
+          // F3: ev ya es el stage canónico (label español + tool + step) —
+          // se reenvía completo para que la UI muestre la traza por paso.
+          onStage: (ev) => send({
+            type: 'stage',
+            label: ev.label || 'Agente trabajando',
+            tool: ev.tool,
+            step: ev.step,
+            ...(ev.preview != null ? { preview: ev.preview } : {}),
+          }),
         });
       } catch (agentRunnerErr) {
         if (controller.signal.aborted) throw agentRunnerErr;

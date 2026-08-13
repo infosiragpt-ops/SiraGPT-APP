@@ -294,7 +294,10 @@ async function createDockerSandbox({ signal, processRunner = runProcess, persist
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
       const timeoutMs = clampInt(opts.timeoutMs, CMD_TIMEOUT_MS, 1_000, 600_000);
-      return dexec(['exec', '-w', '/workspace', name, 'bash', '-c', String(command)], { timeoutMs });
+      // Forward the per-call signal (F3 cancel): killing the docker-exec CLI
+      // detaches the stream immediately; the in-container process is reaped
+      // by destroy() (`docker rm -f`), which the runner always runs.
+      return dexec(['exec', '-w', '/workspace', name, 'bash', '-c', String(command)], { timeoutMs, signal: opts.signal });
     },
     async putFile(relPath, buffer) {
       const safeRel = path.posix.normalize(String(relPath).replace(/^\/workspace\/?/, '')).replace(/^(\.\.\/?)+/, '');

@@ -104,16 +104,29 @@ async function runAgentLoop({
   let stoppedReason = 'max_iterations';
   let verificationAttempts = 0;
 
-  for (let iteration = 1; iteration <= cap; iteration += 1) {
+  // F3: a user cancel (Stop button → AbortSignal) must stop the loop AND
+  // leave a trace. `bail` emits exactly one 'cancelled' stage event before
+  // rethrowing so the SSE stream shows "Cancelado" instead of dying silently.
+  let cancelledEmitted = false;
+  const bail = (iteration) => {
+    if (!signal?.aborted) return;
+    if (!cancelledEmitted) {
+      cancelledEmitted = true;
+      try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+    }
     throwIfAborted(signal);
+  };
+
+  for (let iteration = 1; iteration <= cap; iteration += 1) {
+    bail(iteration);
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
 
     let response;
     try {
       response = await callModel({ client, model, messages, tools, signal });
-      throwIfAborted(signal);
+      bail(iteration);
     } catch (err) {
-      if (signal?.aborted) throwIfAborted(signal);
+      if (signal?.aborted) bail(iteration);
       onEvent({ type: 'error', message: err?.message || String(err) });
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
@@ -196,7 +209,7 @@ async function runAgentLoop({
     });
 
     for (const call of toolCalls) {
-      throwIfAborted(signal);
+      bail(iteration);
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
       const args = safeParseArgs(call?.function?.arguments);
@@ -218,15 +231,17 @@ async function runAgentLoop({
         result = `ERROR: tool arguments were not valid JSON: ${args.raw}`;
       } else {
         try {
-          throwIfAborted(signal);
-          result = await executor(args);
+          bail(iteration);
+          // The per-call signal lets an in-flight execute_python/bash sandbox
+          // command die WITH the Stop button, not just between tool calls.
+          result = await executor(args, { signal });
         } catch (err) {
-          if (signal?.aborted) throwIfAborted(signal);
+          if (signal?.aborted) bail(iteration);
           result = `ERROR: ${err?.message || String(err)}`;
         }
       }
 
-      throwIfAborted(signal);
+      bail(iteration);
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
       onEvent({
@@ -245,7 +260,7 @@ async function runAgentLoop({
     }
   }
 
-  throwIfAborted(signal);
+  bail(cap);
   onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
 }

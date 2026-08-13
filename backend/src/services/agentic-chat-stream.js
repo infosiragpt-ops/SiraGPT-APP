@@ -816,14 +816,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
                 await writeSse(res, { type: 'file_artifact', artifact: ev.artifact });
                 return;
               }
-              if (ev.label || ev.type === 'tool_call' || ev.type === 'tool_result' || ev.type === 'retry' || ev.type === 'thought') {
-                await writeSse(res, {
-                  type: 'stage',
-                  label: ev.label || (ev.type === 'tool_call' ? 'Ejecutando código' : ev.type === 'thought' ? 'Pensando' : 'Verificando resultado'),
-                  tool: ev.tool || 'agent_runner',
-                  preview: ev.preview,
-                });
-              }
+              // F3: uniform trace — every runner step (tool_call / tool_result
+              // / retry / thought / cancelled / error) becomes one canonical
+              // `type: 'stage'` SSE event with a Spanish label + tool name.
+              const stage = require('./agent-runner/trace').toStageEvent(ev);
+              if (stage) await writeSse(res, stage);
             })()).catch(() => {});
           },
         });
