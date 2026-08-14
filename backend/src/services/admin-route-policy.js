@@ -186,6 +186,7 @@ const ADMIN_ROUTE_POLICIES = Object.freeze({
   'GET /api/admin/api-keys/tombstoned': policy('admin.api_keys.read', true),
   'GET /api/admin/system-cron/jobs': policy('admin.system.read', true),
   'GET /api/admin/iag-metrics': policy('admin.metrics.read', true),
+  'GET /api/admin/evals/summary': policy('admin.metrics.read'),
   'GET /api/admin/stripe/invoices': policy('admin.billing.read'),
   'GET /api/admin/stripe/invoice/:invoiceId': policy('admin.billing.read'),
   'GET /api/admin/users/export/csv': policy('admin.users.export'),

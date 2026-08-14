@@ -2831,6 +2831,17 @@ router.get('/system-cron/jobs', requireSuperAdmin, (_req, res) => {
 // histogram, p95 duration, clarification rate. Useful for monitoring
 // the impact of attribution-graph-based prompt enrichment on production
 // chat traffic.
+// ── F9 · AgentRunner evals pass-rate dashboard ────────────────────────
+// Pass-rate by task category (create-ppt-color, style-followup, injection,
+// orchestrate, cancel, smalltalk) + per-prompt-variant A/B counts from the
+// offline evals harness. Fully mocked/scripted: serving this endpoint never
+// makes an LLM call. Auth: declarative admin route policy
+// (`GET /api/admin/evals/summary` → admin.metrics.read).
+router.get('/evals/summary', (req, res) => {
+  const { evalsSummaryHandler } = require('../services/agent-runner/evals/summary');
+  return evalsSummaryHandler(req, res);
+});
+
 router.get('/iag-metrics', requireSuperAdmin, (req, res) => {
   try {
     const adminMetrics = require('../services/intent-attribution-graph/admin-metrics');
