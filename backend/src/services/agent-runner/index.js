@@ -33,6 +33,52 @@ const {
 
 const MAX_OUTPUT_RETRIES = 3;
 
+/* ── F8 — memoria híbrida + skills + cliente MCP (hooks) ────────────────────
+ * Los módulos viven en ./memory, ./skills y ./mcp; este helper solo ORQUESTA:
+ * recall de memoria para el system prompt (como DATA, nunca instrucciones) y
+ * merge de tool defs + executors extra (load_skill / mcp_list_tools /
+ * mcp_call). Kill switches por módulo: SIRAGPT_AGENT_MEMORY /
+ * SIRAGPT_AGENT_SKILLS / SIRAGPT_AGENT_MCP (default ON en producción, OFF
+ * bajo NODE_ENV=test). Best-effort: cualquier fallo aquí degrada al runner
+ * base, jamás rompe el turno.
+ */
+async function prepareF8Extras({
+  userId = null,
+  chatId = null,
+  instruction = '',
+  prisma = null,
+  memoryStore = null,
+  mcpToolLoader = null,
+} = {}) {
+  const out = { memoryBlock: '', toolDefinitions: [], executors: {} };
+  try {
+    const memory = require('./memory');
+    if (userId && memory.memoryEnabled()) {
+      const memories = await memory.recallForTurn({
+        userId, chatId, query: instruction, store: memoryStore,
+      });
+      out.memoryBlock = memory.buildAgentMemoryBlock(memories);
+    }
+  } catch (_) { /* memory is best-effort */ }
+  try {
+    const skills = require('./skills');
+    if (skills.skillsEnabled()) {
+      out.toolDefinitions.push(...skills.extraToolDefinitions());
+      Object.assign(out.executors, skills.extraExecutors());
+    }
+  } catch (_) { /* skills are best-effort */ }
+  try {
+    const mcp = require('./mcp');
+    if (mcp.mcpEnabled()) {
+      const toolset = await mcp.loadMcpToolset({ userId, prisma, loader: mcpToolLoader });
+      out.toolDefinitions.push(...mcp.extraToolDefinitions(toolset));
+      Object.assign(out.executors, mcp.extraExecutors(toolset));
+    }
+  } catch (_) { /* mcp is best-effort */ }
+  return out;
+}
+
+
 // office_helpers.py is loaded LAZY and FAIL-OPEN. An eager readFileSync at
 // module top used to throw ENOENT in production builds that did not copy the
 // .py file — requiring agent-runner crashed, and /doc/generate silently fell
@@ -174,6 +220,14 @@ async function runAgentRunner({
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  // F8: cross-session memory + skills + per-user MCP. `prisma` is only used
+  // by the MCP loader (mcp_servers rows); `memoryStore` / `mcpToolLoader`
+  // are injectable for tests. `persistMemory` gates the post-turn episodic
+  // note (opt-in on top of the SIRAGPT_AGENT_MEMORY flag).
+  prisma = null,
+  memoryStore = null,
+  mcpToolLoader = null,
+  persistMemory = true,
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
@@ -231,7 +285,15 @@ async function runAgentRunner({
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
     }
 
-    const baseSystem = buildAgentRunnerPrompt({ fileNames: names, priorArtifactNames: priorNames });
+    // ── F8 hook: memoria recall (DATA) + tools extra (skills / MCP) ────────
+    const f8 = await prepareF8Extras({
+      userId, chatId, instruction: task, prisma, memoryStore, mcpToolLoader,
+    });
+    const baseSystem = buildAgentRunnerPrompt({
+      fileNames: names,
+      priorArtifactNames: priorNames,
+      memoryBlock: f8.memoryBlock,
+    });
     const system = systemAppend
       ? `${baseSystem}\n\n${String(systemAppend).trim()}`
       : baseSystem;
@@ -240,7 +302,7 @@ async function runAgentRunner({
       { role: 'user', content: task },
     ];
 
-    const executors = makeToolExecutors(sandbox);
+    const executors = { ...makeToolExecutors(sandbox), ...f8.executors };
 
     // Deterministic fast-paths are allowed ONLY for exact edits on an
     // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
@@ -343,12 +405,17 @@ async function runAgentRunner({
       });
       f7.applyToMessages(messages);
     } catch (_) { f7 = null; }
-    const loopTools = (f7 && f7.toolDefinitions.length)
-      ? [...TOOL_DEFINITIONS, ...f7.toolDefinitions]
+    const extraDefs = [
+      ...(f8.toolDefinitions || []),
+      ...((f7 && f7.toolDefinitions) || []),
+    ];
+    const loopTools = extraDefs.length
+      ? [...TOOL_DEFINITIONS, ...extraDefs]
       : TOOL_DEFINITIONS;
-    const loopExecutors = (f7 && Object.keys(f7.executors).length)
-      ? { ...executors, ...f7.executors }
-      : executors;
+    const loopExecutors = {
+      ...executors,
+      ...((f7 && f7.executors) || {}),
+    };
     // ── end F7 hook ──────────────────────────────────────────────────────
 
     let result = await runAgentLoop({
@@ -404,6 +471,19 @@ async function runAgentRunner({
     }
 
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
+    // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
+    // follow-up in a NEW conversation for the same user can recall this turn.
+    try {
+      await require('./memory').persistEpisode({
+        userId,
+        chatId,
+        instruction: task,
+        summary: result.finalText,
+        outputNames: outputs.filter((o) => o.valid !== false).map((o) => o.name),
+        store: memoryStore,
+        persist: persistMemory,
+      });
+    } catch (_) { /* memory is best-effort */ }
     return { ...result, outputs, driver: sandbox.driver, model: resolvedModel };
   } catch (err) {
     if (abortScope.signal.aborted) {
@@ -458,6 +538,9 @@ async function runAgentRunnerForChat({
     signal,
     chatId,
     userId,
+    // F8: prisma feeds the per-user MCP loader (mcp_servers rows); the
+    // injectables default to the real stores when absent.
+    prisma,
   });
   const valid = (run.outputs || []).filter((o) => o && o.valid !== false && o.buffer && o.buffer.length);
   const artifacts = await persistOutputs({
@@ -768,6 +851,7 @@ module.exports = {
   runAgentRunner,
   runAgentRunnerForChat,
   runAgentRunnerForDocRoute,
+  prepareF8Extras,
   executeAgentRunnerTurn,
   buildAgentRunnerFailureMessage,
   canCallLlm,
