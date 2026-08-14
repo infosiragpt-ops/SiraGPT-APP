@@ -241,6 +241,19 @@ async function runAgentLoop({
         }
       }
 
+      // ── F7 (multimodal) hook ────────────────────────────────────────────
+      // A tool may return an image payload instead of a plain string
+      // ({ __f7Image: { base64, mediaType }, text }). The text goes into the
+      // tool_result message as usual; the pixels are attached to the NEXT
+      // LLM call as a real vision content block, framed as DATA — never as
+      // instructions.
+      let f7Image = null;
+      if (result && typeof result === 'object' && result.__f7Image) {
+        f7Image = result.__f7Image;
+        result = String(result.text || '[imagen capturada]');
+      }
+      // ── end F7 hook ─────────────────────────────────────────────────────
+
       bail(iteration);
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
@@ -257,6 +270,13 @@ async function runAgentLoop({
         tool_call_id: call.id || `call_${iteration}_${mapped}`,
         content: String(result),
       });
+      // F7 (multimodal): hand the tool-produced image to the next LLM call.
+      if (f7Image) {
+        try {
+          const { buildImageDataMessage } = require('./multimodal');
+          messages.push(buildImageDataMessage([f7Image]));
+        } catch (_) { /* F7 module absent — the text result was delivered */ }
+      }
     }
   }
 
