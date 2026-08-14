@@ -1,6 +1,6 @@
 # STATE — Estado del programa Frontier Agent
 
-- **Última actualización:** 2026-08-13
+- **Última actualización:** 2026-08-14
 - **Owner:** SiraGPT / Luis Carrera
 - **Repo:** `infosiragpt-ops/SiraGPT-APP`
 
@@ -8,20 +8,42 @@
 
 ## Fase activa
 
-**F4 — Orquestador jerárquico (planner + sub-agentes especializados).**
-Estado: **COMPLETED (pendiente de merge/deploy — este PR)** — director que
-descompone un objetivo genuinamente multi-paso en un DAG de subtareas y
-delega cada nodo a un sub-agente especializado (cada sub-agente ES un loop
-AgentRunner con prompt de rol), con presupuestos duros por nodo y por run
-(iteraciones + tokens), blackboard compartido en memoria, steering a mitad
-de tarea (`steer(runId, mensaje)` → replan solo de los nodos restantes),
-pase único de verificador (generator-critic) y cancelación por el mismo
-AbortSignal de F3. Kill switch `SIRAGPT_AGENT_ORCHESTRATOR` (default ON en
-producción, OFF bajo test). Tests verdes:
-`tests/agent-runner-f4-orchestrator.test.js` (17) + las suites F1/F2/F3
-existentes (agent-runner / routing / f2-routing / f3-traces / e2e /
-agentic-chat-stream / doc-agent / sandbox). Falta el merge del PR y la
+**F5 — Sandbox hardening (gVisor, fail-closed, límites duros).**
+Estado: **COMPLETED (pendiente de merge/deploy — este PR)** — el driver
+docker del sandbox del doc-agent (`backend/src/services/doc-agent/sandbox.js`)
+sube de un contenedor Docker plano a aislamiento de producción: runtime
+gVisor (`--runtime runsc`) cuando el daemon lo tiene registrado, con
+selección HONESTA y fail-closed (`resolveSandboxRuntime`): en producción
+(`NODE_ENV=production`) o con `SIRAGPT_SANDBOX_REQUIRE_GVISOR=1`, un runsc
+ausente lanza `SandboxRuntimeError` en español ANTES de crear contenedor
+alguno — jamás degrada en silencio a runc ni al driver local; runc queda
+solo como opt-in explícito `SIRAGPT_SANDBOX_RUNTIME=runc` (CI/dev). Límites
+duros por sandbox, todos overridables por env: CPU, memoria (+memory-swap
+igual: sin swap), pids, tmpfs de /workspace con tamaño capado (efímero),
+ulimits (nofile, fsize), `--cap-drop ALL`, `no-new-privileges`, rootfs
+read-only (tmpfs /tmp, HOME=/workspace) y `--network none` SIEMPRE (sin
+opt-in de egreso — los allowlists llegan con F6). Un contenedor por tarea,
+nunca compartido entre usuarios. Se eliminó `docker cp` del camino de
+archivos (gVisor cachea directorios y no ve escrituras host-side de docker
+cp — FAQ de gvisor.dev): putFile/readFile van por streams de `docker exec`
+(`cat >` / `cat` binario), la misma estrategia de `kubectl cp`. Escapes:
+`resolveInWorkspace` sigue rechazando `..`/absolutos y el driver local
+ahora también rechaza symlinks que apuntan fuera (check de realpath);
+rutas crafteadas quedan single-quoted (nada de inyección vía nombres de
+archivo). El AbortSignal de F3 sigue matando el `docker exec` en vuelo y
+`destroy()` sigue haciendo `docker rm -f` con señal independiente. El
+driver local sigue existiendo para tests sin Docker y NUNCA se presenta
+como gVisor (`runtime:'none'`, `gvisor:false`). **Ojo deploy**: el VPS
+necesita gVisor instalado (https://gvisor.dev/docs/user_guide/install/) o,
+mientras tanto, `SIRAGPT_SANDBOX_RUNTIME=runc` explícito — con
+NODE_ENV=production y sin runsc, los turnos del runner fallan honesto.
+Tests verdes: `tests/agent-runner-f5-sandbox.test.js` (los asserts de
+aislamiento real corren solo con Docker presente y se saltan honesto si
+no) + suites F1/F2/F3/F4 sin cambios. Falta el merge del PR y la
 verificación de CI/producción por Luis.
+
+F4 (orquestador jerárquico): **COMPLETED** — mergeado y desplegado en
+siragpt.com el 2026-08-13 (PR #283, commit `bc831cc59`).
 
 F3 (SSE traces + cancel): **COMPLETED** — mergeado y desplegado en
 siragpt.com el 2026-08-13 (PR #282, commit `692420ebe`).
@@ -144,7 +166,60 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
   - **Deploy**: mergeado y desplegado en siragpt.com el 2026-08-13
     (PR #282, commit `692420ebe`).
 
-- **F4 — Orquestador jerárquico (este PR).** Todo vive en
+- **F5 — Sandbox hardening (este PR).** Todo vive en
+  `backend/src/services/doc-agent/sandbox.js` (+ tests); ni la UI ni el
+  esquema Prisma cambian.
+  - **Runtime gVisor con selección honesta** (`resolveSandboxRuntime`,
+    `SIRAGPT_SANDBOX_RUNTIME=auto|runsc|runc`): runsc cuando el daemon lo
+    registra; producción o `SIRAGPT_SANDBOX_REQUIRE_GVISOR=1` sin runsc →
+    `SandboxRuntimeError` honesto ANTES de `docker run` (nunca downgrade
+    silencioso a runc ni al driver local; `REQUIRE_GVISOR=1` deshabilita
+    incluso el opt-in runc y el driver local explícito). El probe de
+    runtimes (`docker info {{json .Runtimes}}`) se cachea 60s.
+  - **Límites duros por contenedor** (`sandboxLimitsFromEnv` +
+    `buildDockerRunArgs`, ambos puros y testeables sin daemon): `--cpus 1`,
+    `--memory 1g` + `--memory-swap` igual (sin swap), `--pids-limit 256`,
+    `--cap-drop ALL`, `--security-opt no-new-privileges`, `--ulimit nofile`
+    + `fsize` (256MB/archivo, también capa readFile), rootfs `--read-only`
+    con tmpfs `/tmp` y `HOME=/workspace`, workspace efímero = tmpfs con
+    tamaño capado (512m). Envs `SIRAGPT_SANDBOX_*` documentadas en
+    `backend/.env.example`; valores malformados caen al default (nada de
+    inyección vía env). `seccomp=unconfined` se rechaza siempre.
+  - **Red cerrada SIEMPRE** (`--network none`, no configurable): F5 no trae
+    opt-in de egreso; los allowlists son de F6.
+  - **Aislamiento por tarea/tenant**: un contenedor efímero por tarea con
+    nombre aleatorio; los workspaces persistentes son un volumen por
+    conversación (`sira-ws-<key>` con key saneada — un persistKey hostil
+    no puede montar docker.sock ni rutas del host).
+  - **Archivos por exec-stream, no `docker cp`**: gVisor cachea el
+    contenido de directorios y NO ve confiablemente los `docker cp` del
+    host (FAQ gvisor.dev; kubectl cp funciona porque copia con exec).
+    putFile = `docker exec -i sh -c 'mkdir -p … && cat > …'` con el buffer
+    por stdin; readFile = `docker exec cat` con stdout binario (sin
+    truncado utf8 — OOXML intacto) y tope de bytes honesto. Además el
+    workspace tmpfs vive DENTRO del sandbox y docker cp ni existe ahí.
+  - **Escapes**: `resolveInWorkspace` sigue rechazando `..`/absolutos; el
+    driver local ahora rechaza symlink-out por realpath
+    (`assertRealpathInWorkspace`); en el driver docker toda ruta crafteada
+    se confina bajo `/workspace` (`safeContainerRel`) y se single-quotea
+    (`shQuote`) — `$(…)`/`;` en nombres de archivo quedan como datos.
+  - **F3 intacto**: `opts.signal` sigue matando el `docker exec` en vuelo
+    (kill de process-group) y `destroy()` sigue con `docker rm -f` y señal
+    independiente; verificado contra `ps` en el gate F5.
+  - **Driver local honesto**: sigue para unit tests sin Docker; reporta
+    `runtime:'none'` / `gvisor:false` (y el evento `sandbox_ready` ahora
+    lleva runtime+gvisor); con `REQUIRE_GVISOR=1` se niega a arrancar.
+  - **Tests** (`tests/agent-runner-f5-sandbox.test.js`): traversal +
+    symlink-out + lecturas de /etc/passwd rechazadas; args de `docker run`
+    verificados contra un CLI stub (runsc/none/límites/cap-drop/read-only/
+    tmpfs; jamás docker.sock, `--network host` ni `--privileged`); matriz
+    completa de `resolveSandboxRuntime`; REQUIRE_GVISOR sin runsc falla
+    antes de crear contenedor; abort sin proceso leakeado; inyección por
+    rutas neutralizada; y una prueba de aislamiento REAL (red cerrada,
+    rootfs read-only, round-trip binario) que corre solo con Docker
+    presente y se salta honesto si no. Suites F1–F4 verdes sin cambios.
+
+- **F4 — Orquestador jerárquico (PR #283, desplegado 2026-08-13).** Todo vive en
   `backend/src/services/agent-runner/orchestrator/` y llama al AgentRunner
   real — el stack viejo ReAct/SE (`agents/planner.js`,
   `sub-agent-orchestrator.js`, `budget.js`, `subagent-registry.js`) NO se
@@ -215,17 +290,23 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- Nada fuera de F4. F5+ NO se inicia (gVisor/Firecracker, Playwright,
-  computer-use, memoria/MCP, evals, LoRA, SSO, MinIO, Drizzle quedan
-  secuenciados en `ROADMAP.md`).
+- Nada fuera de F5. F6+ NO se inicia (Playwright/web_search, computer-use,
+  voz, memoria/MCP, evals, LoRA, SSO, MinIO, Drizzle quedan secuenciados en
+  `ROADMAP.md`).
 
 ## Pendiente
 
-- **F5 en adelante**, según `ROADMAP.md`: sandbox hardening →
-  search/browser → multimodal → memoria/skills/MCP → evals/optimizer →
-  flywheel (router aprendido + LoRA/vLLM) → enterprise
-  (SSO/SCIM/Stripe/marketplace) → plataforma y superficies (MinIO/OTel/canary,
-  voz/cron/email/CLI/PWA, i18n, migración Prisma→Drizzle).
+- **F6 en adelante**, según `ROADMAP.md`: search/browser → multimodal →
+  memoria/skills/MCP → evals/optimizer → flywheel (router aprendido +
+  LoRA/vLLM) → enterprise (SSO/SCIM/Stripe/marketplace) → plataforma y
+  superficies (MinIO/OTel/canary, voz/cron/email/CLI/PWA, i18n, migración
+  Prisma→Drizzle).
+- **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
+  `/etc/docker/daemon.json` (https://gvisor.dev/docs/user_guide/install/);
+  hasta entonces, `SIRAGPT_SANDBOX_RUNTIME=runc` explícito mantiene el
+  comportamiento actual — con `NODE_ENV=production` y sin ninguna de las dos
+  cosas, los turnos del runner fallan con error honesto (fail-closed por
+  diseño).
 
 ## Cómo retoma una sesión futura
 
