@@ -163,6 +163,13 @@ async function runAgentRunner({
   chatId = null,
   userId = null,
   persist = persistOutputs,
+  // F4: optional system-prompt suffix (role prompt of an orchestrated
+  // sub-agent). Empty for normal single-runner turns.
+  systemAppend = '',
+  // F4: text-producing sub-agents (researcher/data_analyst/verifier) may
+  // legitimately finish without a file — skip the no-output retry loop for
+  // them. Single-runner document turns keep the default (true).
+  requireFileOutput = true,
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
@@ -215,7 +222,10 @@ async function runAgentRunner({
       try { await sandbox.writeFile('tmp/office_helpers.py', officeHelpersPy); } catch (_) { /* agent writes its own code */ }
     }
 
-    const system = buildAgentRunnerPrompt({ fileNames: names, priorArtifactNames: priorNames });
+    const baseSystem = buildAgentRunnerPrompt({ fileNames: names, priorArtifactNames: priorNames });
+    const system = systemAppend
+      ? `${baseSystem}\n\n${String(systemAppend).trim()}`
+      : baseSystem;
     const messages = [
       { role: 'system', content: system },
       { role: 'user', content: task },
@@ -318,7 +328,8 @@ async function runAgentRunner({
 
     let outputAttempt = 1;
     while (
-      !abortScope.signal.aborted
+      requireFileOutput
+      && !abortScope.signal.aborted
       // Out of credits (OpenRouter/Anthropic 402): another loop pass costs
       // latency and cannot succeed — stop retrying and surface the reason.
       && result.stoppedReason !== 'llm_402'
@@ -449,6 +460,9 @@ const AGENT_RUNNER_FAILURE_COPY = {
   verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
   max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
   exception: 'el agente falló con un error inesperado',
+  // F4 — orchestrator-specific honest failures
+  budget_exceeded: 'el agente superó el presupuesto de iteraciones/tokens asignado a la tarea y se detuvo para no seguir consumiendo recursos',
+  plan_failed: 'el director del agente no pudo construir un plan válido para la tarea multi-paso',
 };
 
 function buildAgentRunnerFailureMessage(reason, detail) {
@@ -483,6 +497,40 @@ async function executeAgentRunnerTurn(params = {}) {
       steps: [],
       stoppedReason: 'no_llm',
     };
+  }
+  // F4 — genuinely multi-step goals run the hierarchical orchestrator
+  // (planner → specialized sub-agents, each a full AgentRunner loop) instead
+  // of one single-runner call. Same outcome contract: verified artifacts or
+  // an honest failure reason — NEVER the generic pipeline. Kill switch:
+  // SIRAGPT_AGENT_ORCHESTRATOR (default ON in production, OFF under test).
+  let orchestrator = null;
+  try { orchestrator = require('./orchestrator'); } catch (_) { orchestrator = null; }
+  if (
+    orchestrator
+    && orchestrator.orchestratorEnabled()
+    && orchestrator.shouldOrchestrate(instruction, {
+      files: params.attachedFiles,
+      fileIds: params.fileIds,
+    })
+  ) {
+    try {
+      return await orchestrator.runOrchestratorForChat(params);
+    } catch (err) {
+      // User cancellation is not a runner failure — let the caller unwind.
+      if (params.signal?.aborted || err?.name === 'AbortError') throw err;
+      const reason = isLlmCreditError(err) ? 'llm_402' : 'exception';
+      try { console.warn('[agent-runner] orchestrated turn failed:', reason, err && err.message); } catch (_) { /* ignore */ }
+      return {
+        ok: false,
+        skipped: false,
+        orchestrated: true,
+        summary: '',
+        artifacts: [],
+        steps: [],
+        stoppedReason: reason,
+        errorMessage: err?.message || String(err),
+      };
+    }
   }
   if (isAsyncEnabled() && !params.forceSync && !params.client) {
     try {
@@ -655,9 +703,24 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
 const { logDocumentRouting, DOCUMENT_ROUTING_PATHS } = require('./telemetry');
 const { toStageEvent, STAGE_LABELS } = require('./trace');
 
+// F4 — orchestrator surface (lazy: ./orchestrator requires this module back).
+function shouldOrchestrate(text, ctx) {
+  return require('./orchestrator').shouldOrchestrate(text, ctx);
+}
+function steerAgentOrchestratorRun(runId, message) {
+  return require('./orchestrator').steer(runId, message);
+}
+function orchestratorEnabled(env) {
+  return require('./orchestrator').orchestratorEnabled(env);
+}
+
 module.exports = {
   shouldRunAgentRunner,
   isRunnerOnlyDocumentTurn,
+  shouldOrchestrate,
+  steerAgentOrchestratorRun,
+  orchestratorEnabled,
+  loadFilesByIds,
   logDocumentRouting,
   DOCUMENT_ROUTING_PATHS,
   toStageEvent,

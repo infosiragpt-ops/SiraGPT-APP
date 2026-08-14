@@ -8,14 +8,23 @@
 
 ## Fase activa
 
-**F3 — SSE traces + cancel end-to-end.**
-Estado: **COMPLETED (pendiente de merge/deploy)** — trazas SSE uniformes por
-paso del AgentRunner (`type: 'stage'`, labels en español + tool) y cancelación
-end-to-end (Stop → AbortSignal → loop + sandbox + job BullMQ). Tests verdes:
-`tests/agent-runner-f3-traces.test.js` (14) + las suites F1/F2 existentes
-(agent-runner / routing / f2-routing / e2e / agentic-chat-stream / doc-agent /
-sandbox — 146 tests, todos verdes en local). Falta el merge del PR y la
+**F4 — Orquestador jerárquico (planner + sub-agentes especializados).**
+Estado: **COMPLETED (pendiente de merge/deploy — este PR)** — director que
+descompone un objetivo genuinamente multi-paso en un DAG de subtareas y
+delega cada nodo a un sub-agente especializado (cada sub-agente ES un loop
+AgentRunner con prompt de rol), con presupuestos duros por nodo y por run
+(iteraciones + tokens), blackboard compartido en memoria, steering a mitad
+de tarea (`steer(runId, mensaje)` → replan solo de los nodos restantes),
+pase único de verificador (generator-critic) y cancelación por el mismo
+AbortSignal de F3. Kill switch `SIRAGPT_AGENT_ORCHESTRATOR` (default ON en
+producción, OFF bajo test). Tests verdes:
+`tests/agent-runner-f4-orchestrator.test.js` (17) + las suites F1/F2/F3
+existentes (agent-runner / routing / f2-routing / f3-traces / e2e /
+agentic-chat-stream / doc-agent / sandbox). Falta el merge del PR y la
 verificación de CI/producción por Luis.
+
+F3 (SSE traces + cancel): **COMPLETED** — mergeado y desplegado en
+siragpt.com el 2026-08-13 (PR #282, commit `692420ebe`).
 
 F2 (routing completo): **COMPLETED** — mergeado a `production-main` en el
 PR #281 (junto con el hardening F1 del PR #279) y hotpatcheado en siragpt.com
@@ -132,15 +141,87 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
     comando no deja ningún proceso vivo (verificado contra `ps`); (d) cancel
     BullMQ: publish → worker aborta → `job_cancelled`, y el wait aborta +
     propaga. Suites F1/F2 existentes verdes sin cambios.
+  - **Deploy**: mergeado y desplegado en siragpt.com el 2026-08-13
+    (PR #282, commit `692420ebe`).
+
+- **F4 — Orquestador jerárquico (este PR).** Todo vive en
+  `backend/src/services/agent-runner/orchestrator/` y llama al AgentRunner
+  real — el stack viejo ReAct/SE (`agents/planner.js`,
+  `sub-agent-orchestrator.js`, `budget.js`, `subagent-registry.js`) NO se
+  toca ni se enruta.
+  - **Gate `shouldOrchestrate(text, ctx)`**: orquesta SOLO objetivos
+    genuinamente multi-paso (≥2 señales de rol distintas — investigar,
+    analizar datos, código, redactar — más un conector secuencial o segundo
+    imperativo). "crea una ppt rosada" y los follow-ups de estilo/color se
+    quedan en el runner único; tests lo fijan.
+  - **Director/planner** (`orchestrator/planner.js`): UNA llamada LLM
+    (mockeada en tests) devuelve el DAG `{ nodes: [{ id, role, goal,
+    dependsOn[], budget: { maxIterations, maxTokens } }] }`. Validación dura
+    (ids únicos, roles conocidos, deps existentes, sin ciclos, budgets
+    presentes, máx nodos) + orden topológico Kahn. Plan inválido →
+    `plan_failed` honesto.
+  - **Sub-agentes especializados** (`orchestrator/roles.js`):
+    `document_editor`, `coder`, `researcher`, `data_analyst`, `verifier`.
+    Cada nodo corre `runAgentRunner` completo (sandbox + tools + contrato de
+    verificación) con un sufijo de system prompt por rol (param nuevo
+    `systemAppend`). El researcher NO tiene web_search (eso es F6): trabaja
+    con los archivos provistos. Los roles de texto corren con
+    `requireFileOutput: false` (sin retry de no-output).
+  - **Presupuestos duros** (`orchestrator/budget.js`): tracker por nodo Y
+    por run (iteraciones + tokens, `usage.total_tokens` o estimación chars/4)
+    aplicado en el boundary del cliente LLM — la llamada N+1 sobre el cap
+    lanza `BudgetExceededError` y corta el loop (probado contra un mock que
+    seguiría para siempre). Cap de run → toda la orquestación termina con
+    error honesto `budget_exceeded`. Sin retry-forever. Env:
+    `SIRAGPT_ORCHESTRATOR_MAX_NODES/_MAX_TOTAL_ITERATIONS/_MAX_TOTAL_TOKENS`.
+  - **Blackboard compartido** (`orchestrator/blackboard.js`): en memoria,
+    por run. Cada nodo terminado escribe texto final + outputs; los nodos
+    downstream reciben ese texto en su instrucción y los archivos upstream
+    como uploads reales de su sandbox. Nada se persiste fuera del run (sin
+    migración Prisma).
+  - **Steering**: `steer(runId, mensaje)` (exportado también como
+    `steerAgentOrchestratorRun`) inyecta una nota en un run vivo; entre nodos
+    se replanifica SOLO lo restante (segunda llamada al planner con
+    completados + steering) y los nodos completados jamás se reinician.
+  - **Cancel**: el AbortSignal de F3 corta planner y sub-agente en vuelo
+    (mismo signal compuesto), una sola traza "Cancelado", registro de runs
+    vivos limpio, sin loops filtrados. Nunca éxito sobre un run parcial: un
+    fallo de presupuesto/402 NO persiste artefactos de nodos previos.
+  - **Trazas F4** (`trace.js`): labels nuevos "Planificando" / "Plan listo" /
+    "Delegando a sub-agente" / "Sub-agente listo" / "Replanificando" /
+    "Presupuesto agotado" / "Instrucción recibida" — todo evento del
+    orquestador pasa por `toStageEvent`, el contrato SSE `type:'stage'` no
+    cambia.
+  - **Wiring**: la rama orquestada vive DENTRO de `executeAgentRunnerTurn`,
+    así chat, `/api/doc/generate` y el preloop de `/api/agent/task` la usan
+    sin cambios y persisten outputs igual que un turno de runner único.
+    Kill switch `SIRAGPT_AGENT_ORCHESTRATOR` (1=on, 0=off; unset = ON en
+    producción, OFF bajo NODE_ENV=test), documentado en `backend/.env.example`.
+  - **Generator-critic**: si el plan produce entregable de documento/código y
+    no declara verifier, se agrega UN nodo verifier al final (pase único; el
+    best-of-n / A/B es F9). Un verifier infeliz no destruye el resultado —
+    su veredicto va al resumen.
+  - **Fallo honesto**: razones nuevas `budget_exceeded` / `plan_failed` con
+    copy en español en `AGENT_RUNNER_FAILURE_COPY`; un turno reclamado que
+    falla orquestado jamás alcanza `advanced-document-pipeline` ni
+    `create_document` (test de chat e2e con el orquestador real fallando).
+  - **Tests** (`tests/agent-runner-f4-orchestrator.test.js`, 17): gate
+    single-runner vs multi-paso; DAG en orden topológico con sub-agentes
+    AgentRunner reales (LLM mockeado + sandbox local) y blackboard pasando
+    texto y archivos; caps de nodo y de run cortando un loop infinito;
+    steering que replanifica solo lo restante; abort a mitad de nodo y a
+    mitad de planning; kill switch; fallo orquestado → error honesto en chat
+    sin `create_document`. Suites F1/F2/F3 existentes verdes sin cambios.
 
 ## En progreso
 
-- Nada fuera de F3. F4+ NO se inicia (planner, gVisor, Playwright, memoria,
-  LoRA, SSO, MinIO quedan secuenciados en `ROADMAP.md`).
+- Nada fuera de F4. F5+ NO se inicia (gVisor/Firecracker, Playwright,
+  computer-use, memoria/MCP, evals, LoRA, SSO, MinIO, Drizzle quedan
+  secuenciados en `ROADMAP.md`).
 
 ## Pendiente
 
-- **F4 en adelante**, según `ROADMAP.md`: orquestador → sandbox hardening →
+- **F5 en adelante**, según `ROADMAP.md`: sandbox hardening →
   search/browser → multimodal → memoria/skills/MCP → evals/optimizer →
   flywheel (router aprendido + LoRA/vLLM) → enterprise
   (SSO/SCIM/Stripe/marketplace) → plataforma y superficies (MinIO/OTel/canary,
