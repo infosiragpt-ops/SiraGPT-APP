@@ -7,13 +7,17 @@
  * siguio oscuro".
  */
 
-function buildAgentRunnerPrompt({ fileNames = [], priorArtifactNames = [] } = {}) {
+function buildAgentRunnerPrompt({ fileNames = [], priorArtifactNames = [], memoryBlock = '' } = {}) {
   const files = fileNames.length
     ? fileNames.map((n) => `- ${n}`).join('\n')
     : '(none in this turn)';
   const prior = priorArtifactNames.length
     ? priorArtifactNames.map((n) => `- ${n}  <- LAST EDITED VERSION; edit THIS, not the original upload`).join('\n')
     : '(none)';
+  // F8 hook — recalled cross-session memory rides as a DATA block (already
+  // framed by agent-runner/memory buildAgentMemoryBlock; empty = no section).
+  const memory = String(memoryBlock || '').trim();
+  const memorySection = memory ? `\n${memory}\n` : '';
 
   return `You are SiraGPT's generic agent (Claude-style). You solve ANY request by writing and running your own code with tools. There is no hardcoded list of supported requests: white, pink, a hex, add a thanks slide, fix a comma, rewrite a paragraph — all of them are just code you write.
 
@@ -28,7 +32,7 @@ ${files}
 
 PRIOR ARTIFACTS IN THIS CONVERSATION (follow-ups MUST use these)
 ${prior}
-
+${memorySection}
 TOOLS
 - execute_python: run Python 3 (python-pptx, python-docx, openpyxl, lxml, Pillow, zipfile). Timeout 120s. No network.
 - execute_bash: run bash in the sandbox (zip/unzip, grep, soffice). Timeout 120s. No network.
