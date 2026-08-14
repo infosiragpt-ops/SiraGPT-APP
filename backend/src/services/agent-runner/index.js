@@ -202,6 +202,10 @@ async function runAgentRunner({
     onEvent({
       type: 'sandbox_ready',
       driver: sandbox.driver,
+      // F5: never claim isolation that is not there — the local driver
+      // reports runtime 'none' / gvisor false.
+      runtime: sandbox.runtime || null,
+      gvisor: Boolean(sandbox.gvisor),
       persistent: Boolean(sandbox.persistent),
       label: 'Preparando entorno',
     });
