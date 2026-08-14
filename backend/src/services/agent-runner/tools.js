@@ -8,9 +8,22 @@
  *
  * Bound to ONE sandbox session. Errors return `ERROR: …` strings so the loop
  * never throws on a tool failure.
+ *
+ * F6 — web tools (web_search / web_fetch / browser_act) are appended when
+ * the SIRAGPT_AGENT_WEB kill switch allows them (default ON, OFF under
+ * NODE_ENV=test). IMPORTANT split of worlds: the sandbox tools above run
+ * inside the F5 gVisor sandbox with `--network none`; the web tools run in
+ * the Node backend process (Playwright in its own child browser process)
+ * behind their own SSRF guard — see ./browser/web-tools.js. Everything they
+ * return is wrapped as UNTRUSTED DATA, never instructions.
  */
 
 const { makeToolExecutors: makeDocExecutors } = require('../doc-agent/tools');
+const {
+  webToolsEnabled,
+  WEB_TOOL_DEFINITIONS,
+  makeWebToolExecutors,
+} = require('./browser');
 
 const MAX_TOOL_RESULT_CHARS = 30_000;
 const CMD_TIMEOUT_MS = 120_000;
@@ -128,7 +141,7 @@ function buildSkeletonPlan({ title, topic, slides } = {}) {
   return plan;
 }
 
-const TOOL_DEFINITIONS = [
+const BASE_TOOL_DEFINITIONS = [
   {
     type: 'function',
     function: {
@@ -350,12 +363,12 @@ for p in files:
 print(json.dumps({"ok": True, "frames": report, "count": len(report)}))
 `.trim();
 
-function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
+function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
   const doc = makeDocExecutors(sandbox);
   const applyBg = setSlideBackgrounds
     || require('../document-editing/pptx-adapter').setSlideBackgrounds;
 
-  return {
+  const executors = {
     // Executors take an optional per-call context `{ signal }` (F3): the loop
     // forwards the turn's AbortSignal so a Stop mid-command kills the
     // in-flight sandbox process, not just the next iteration.
@@ -561,14 +574,50 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds } = {}) {
       }
     },
   };
+
+  // F6 — web tools run in the Node process, NOT inside the gVisor sandbox
+  // (the sandbox keeps --network none). `web.enabled` lets tests force the
+  // gate either way; `web` also carries the test injectables
+  // ({ search, fetch, lookup, browserAct, env }).
+  const webOpts = web || {};
+  const webEnabled = webOpts.enabled !== undefined
+    ? Boolean(webOpts.enabled)
+    : webToolsEnabled(webOpts.env || process.env);
+  if (webEnabled) Object.assign(executors, makeWebToolExecutors(webOpts));
+
+  return executors;
+}
+
+/**
+ * F6 — tool definitions for a run: the sandbox base set plus the web tools
+ * when the SIRAGPT_AGENT_WEB kill switch allows them.
+ */
+function buildToolDefinitions(env = process.env) {
+  return webToolsEnabled(env)
+    ? [...BASE_TOOL_DEFINITIONS, ...WEB_TOOL_DEFINITIONS]
+    : [...BASE_TOOL_DEFINITIONS];
 }
 
 module.exports = {
-  TOOL_DEFINITIONS,
   makeToolExecutors,
+  buildToolDefinitions,
+  BASE_TOOL_DEFINITIONS,
+  WEB_TOOL_DEFINITIONS,
+  webToolsEnabled,
   normalizeHex,
   normalizeOutline,
   NAMED_COLORS,
   DEFAULT_DECK_COLOR,
   CMD_TIMEOUT_MS,
 };
+
+// Live view: `TOOL_DEFINITIONS` reflects the CURRENT env each time it is
+// read, so `require('./tools').TOOL_DEFINITIONS` includes the web tools
+// exactly when the kill switch is on. (Consumers that destructure at module
+// load — e.g. agent-runner/index.js — capture the boot-time value, which is
+// the intended behavior for a process-level kill switch.)
+Object.defineProperty(module.exports, 'TOOL_DEFINITIONS', {
+  enumerable: true,
+  configurable: true,
+  get: () => buildToolDefinitions(),
+});
