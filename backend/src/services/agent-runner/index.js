@@ -170,6 +170,10 @@ async function runAgentRunner({
   // legitimately finish without a file — skip the no-output retry loop for
   // them. Single-runner document turns keep the default (true).
   requireFileOutput = true,
+  // F7 (multimodal) injectable seams — tests / provider routing only.
+  openaiClient = null,
+  synthesize = null,
+  computerDriver = null,
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
@@ -192,6 +196,7 @@ async function runAgentRunner({
     rawOnEvent(ev);
   };
   let sandbox = null;
+  let f7 = null; // F7 (multimodal) extras — cleaned up in finally
   try {
     throwIfAborted(abortScope.signal);
     sandbox = await createSandbox({
@@ -317,12 +322,41 @@ async function runAgentRunner({
 
     if (!llm) llm = createOpenRouterClient();
 
+    // ── F7 (multimodal) hook ─────────────────────────────────────────────
+    // Vision / voice / bounded computer-use extras. Kill switches:
+    // SIRAGPT_AGENT_VISION / _VOICE / _COMPUTER (default ON in production,
+    // OFF under NODE_ENV=test). Image attachments become real vision
+    // content blocks on the FIRST LLM call; tool-produced images are
+    // attached by the loop's own F7 hook. Fail-open: a broken multimodal
+    // module never blocks the core loop. When a prepareF8Extras sibling
+    // lands (memory/skills/MCP), merge its arrays the same way.
+    try {
+      const { prepareF7Extras } = require('./multimodal');
+      f7 = prepareF7Extras({
+        files,
+        sandbox,
+        client: llm,
+        model: resolvedModel,
+        openaiClient,
+        synthesize,
+        computerDriver,
+      });
+      f7.applyToMessages(messages);
+    } catch (_) { f7 = null; }
+    const loopTools = (f7 && f7.toolDefinitions.length)
+      ? [...TOOL_DEFINITIONS, ...f7.toolDefinitions]
+      : TOOL_DEFINITIONS;
+    const loopExecutors = (f7 && Object.keys(f7.executors).length)
+      ? { ...executors, ...f7.executors }
+      : executors;
+    // ── end F7 hook ──────────────────────────────────────────────────────
+
     let result = await runAgentLoop({
       client: llm,
       model: resolvedModel,
       messages,
-      tools: TOOL_DEFINITIONS,
-      executors,
+      tools: loopTools,
+      executors: loopExecutors,
       maxIterations,
       onEvent,
       signal: abortScope.signal,
@@ -359,8 +393,8 @@ async function runAgentRunner({
         client: llm,
         model: resolvedModel,
         messages,
-        tools: TOOL_DEFINITIONS,
-        executors,
+        tools: loopTools,
+        executors: loopExecutors,
         maxIterations: Math.min(maxIterations, 8),
         onEvent,
         signal: abortScope.signal,
@@ -377,6 +411,8 @@ async function runAgentRunner({
     }
     throw err;
   } finally {
+    // F7: release the computer-use driver (if one was materialised).
+    try { if (f7) await f7.cleanup(); } catch (_) { /* best effort */ }
     // Cancel path included: destroy() removes the docker container / kills
     // the local process group, so a Stop never leaks a sandbox process.
     try { if (sandbox) await sandbox.destroy(); } finally { abortScope.cleanup(); }
