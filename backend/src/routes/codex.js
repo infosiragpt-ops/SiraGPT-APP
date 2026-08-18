@@ -1270,11 +1270,39 @@ function boundedSwarmInteger(value, fallback, min, max) {
 }
 
 /** Effective swarm research concurrency. Writers stay capped by run isolation. */
+/**
+ * How many fleet tasks may run at once without starving the rest of the app of
+ * database connections.
+ *
+ * Every running task writes progress through Prisma, and Prisma's pool — shared
+ * with all HTTP traffic and background jobs — defaults to `cpus * 2 + 1` unless
+ * DATABASE_URL pins `connection_limit`. The previous fixed default of 128
+ * oversubscribed a 17-connection pool by 7.5x: transactions died with "Unable
+ * to start a transaction in the given time", the swarm job crashed, and the
+ * fleet auto-paused. Observed in production on a 300-agent fleet that paused
+ * and eventually failed with zero useful output.
+ *
+ * Half the pool goes to the fleet, half stays for user requests. Logical agent
+ * count is unaffected — 300 agents still run, just not 128 at the same instant.
+ */
+function databaseConcurrencyCeiling(env = process.env) {
+  const pinned = String(env.DATABASE_URL || '').match(/[?&]connection_limit=(\d+)/);
+  const parsed = pinned ? Number.parseInt(pinned[1], 10) : NaN;
+  let cpuCount = 4;
+  try { cpuCount = require('node:os').cpus().length || 4; } catch { /* keep default */ }
+  const pool = Number.isFinite(parsed) && parsed > 0 ? parsed : (cpuCount * 2) + 1;
+  return Math.max(4, Math.floor(pool / 2));
+}
+
 function swarmConcurrencyDefaults(env = process.env) {
-  const hardMax = boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_CONCURRENCY_HARD, 256, 32, 256);
+  const dbCeiling = databaseConcurrencyCeiling(env);
+  const hardMax = Math.min(
+    boundedSwarmInteger(env.SIRAGPT_SWARM_MAX_CONCURRENCY_HARD, 256, 32, 256),
+    dbCeiling,
+  );
   const defaultConcurrency = boundedSwarmInteger(
     env.SIRAGPT_SWARM_MAX_CONCURRENCY_DEFAULT,
-    128,
+    dbCeiling,
     1,
     hardMax,
   );
