@@ -1154,6 +1154,9 @@ export function AgentOfficeScene({
     camera.far = Math.max(
       280,
       edgeDistrict.framing.portraitDistance * 3,
+      edgeDistrict.framing.maxDistance * 2.4,
+      Math.abs(edgeDistrict.framing.groundY) * 2.8,
+      edgeDistrict.counts.tallestBuildingHeight * 2.2,
       totalWidth * 3,
       totalDepth * 3,
     )
@@ -1168,8 +1171,12 @@ export function AgentOfficeScene({
     renderer.domElement.dataset.cityTreeCount = String(edgeDistrict.counts.trees)
     renderer.domElement.dataset.cityMoverCount = String(edgeDistrict.counts.vehicles)
     renderer.domElement.dataset.cityLightCount = String(edgeDistrict.counts.lightFixtures)
+    renderer.domElement.dataset.hqStackedFloors = String(edgeDistrict.counts.hqStackedFloors)
+    renderer.domElement.dataset.hqFloorHeight = String(edgeDistrict.counts.hqFloorHeight)
     renderer.domElement.dataset.rooftopOffice = "true"
     host.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
+    host.dataset.hqStackedFloors = String(edgeDistrict.counts.hqStackedFloors)
+    host.dataset.hqFloorHeight = String(edgeDistrict.counts.hqFloorHeight)
 
     let needsRender = true
     let animationFrame = 0
