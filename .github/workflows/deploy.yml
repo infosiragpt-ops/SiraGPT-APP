@@ -521,6 +521,12 @@ jobs:
               exit 1
             fi
             (cd "${DEPLOY_TRANSFER_DIR}" && sha256sum --check --strict deploy.bundle.sha256)
+            # git bundle verify requires a repository. Interrupted or
+            # migrated VPS checkouts can leave APP_DIR without .git.
+            if [[ ! -d .git ]]; then
+              echo "[deploy-workflow] APP_DIR has no git metadata; initializing"
+              git init
+            fi
             git bundle verify "${DEPLOY_BUNDLE}"
             BUNDLE_SHA="$(git bundle list-heads "${DEPLOY_BUNDLE}" | awk '$2 == "HEAD" { print $1 }')"
             if [[ "${BUNDLE_SHA}" != "${TARGET_SHA}" ]]; then
@@ -606,7 +612,11 @@ jobs:
             echo "[deploy-workflow] Deploying ${TARGET_SHA} from ${PREV_SHA}"
             # Keep the persisted origin URL credential-free and pointing at
             # the repo this workflow actually deploys from.
-            git remote set-url origin "https://github.com/${{ github.repository }}.git"
+            if git remote get-url origin >/dev/null 2>&1; then
+              git remote set-url origin "https://github.com/${{ github.repository }}.git"
+            else
+              git remote add origin "https://github.com/${{ github.repository }}.git"
+            fi
             git fetch --no-tags "${DEPLOY_BUNDLE}" HEAD
             git cat-file -e "${TARGET_SHA}^{commit}"
             # A deploy checkout needs no merge semantics: the exact SHA is
