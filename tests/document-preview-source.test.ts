@@ -48,6 +48,37 @@ test("generated Office previews use the shared pdf.js renderer instead of a nati
   )
 })
 
+test("generated document preview opens as a full-screen overlay on compact viewports", () => {
+  const preview = readFileSync(generatedPreviewSourcePath, "utf8")
+  const chat = readFileSync(path.join(process.cwd(), "components/chat-interface-enhanced.tsx"), "utf8")
+  const hook = readFileSync(path.join(process.cwd(), "hooks/use-mobile.tsx"), "utf8")
+
+  assert.match(hook, /DOCUMENT_PREVIEW_OVERLAY_MAX_PX\s*=\s*879/, "split mins 420+460 cannot fit below 880px")
+  assert.match(hook, /export function useDocumentPreviewOverlay/)
+  assert.match(preview, /useDocumentPreviewOverlay/)
+  assert.match(preview, /createPortal\(shell, document\.body\)/)
+  assert.match(preview, /data-presentation=\{isOverlay \? "mobile-overlay" : "desktop-split"\}/)
+  assert.match(preview, /Más opciones del documento/)
+  assert.match(
+    readFileSync(path.join(process.cwd(), "components/viewers/UnifiedDocumentViewer.tsx"), "utf8"),
+    /data-presentation=\{isOverlay \? "mobile-overlay"/,
+  )
+  assert.match(
+    readFileSync(path.join(process.cwd(), "components/message-component.tsx"), "utf8"),
+    /data-testid="generated-document-card"/,
+  )
+  assert.match(
+    readFileSync(path.join(process.cwd(), "components/agentic-steps.tsx"), "utf8"),
+    /data-preview-openable="true"/,
+  )
+  assert.match(chat, /previewUsesOverlay/)
+  assert.match(
+    chat,
+    /documentPreviewOpen && !previewUsesOverlay/,
+    "the desktop split must stay off on phones so the overlay is not clipped off-screen",
+  )
+})
+
 test("DOCX server-conversion probing never blocks the client-side fallback preview", () => {
   const source = viewerSource()
 

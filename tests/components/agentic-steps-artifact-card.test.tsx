@@ -1,6 +1,6 @@
 import * as React from "react"
-import { cleanup, render, screen } from "@testing-library/react"
-import { afterEach, describe, expect, it } from "vitest"
+import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import {
@@ -42,9 +42,26 @@ describe("AgenticStepsRenderer · artifact cards", () => {
 
     const card = screen.getByTestId("agent-artifact-card")
     expect(card).toHaveAttribute("data-artifact-id", "artifact-1")
+    expect(card).toHaveAttribute("data-preview-openable", "true")
     expect(card).toHaveAccessibleName("Archivo: Modelo Informe editado.docx")
     expect(screen.getByText("Modelo Informe editado.docx")).toBeTruthy()
     expect(screen.queryByText("Documento Word")).toBeNull()
+  })
+
+  it("opens the document preview when the card is activated", () => {
+    const onDocumentPreview = vi.fn()
+    render(
+      <AgenticStepsRenderer
+        state={completedState([artifact()])}
+        onDocumentPreview={onDocumentPreview}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId("agent-artifact-card"))
+    expect(onDocumentPreview).toHaveBeenCalledOnce()
+    expect(onDocumentPreview.mock.calls[0][0]).toMatchObject({
+      filename: "Modelo Informe editado.docx",
+    })
   })
 
   it("names each document action with its artifact filename", () => {

@@ -31,7 +31,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
-import { downloadUrlAsFile } from "@/lib/utils"
+import { cn, downloadUrlAsFile } from "@/lib/utils"
 import { toast } from "sonner"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -158,7 +158,22 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
   return (
     <div className="overflow-hidden rounded-2xl border border-border/50 bg-background">
       {/* Header card — always visible */}
-      <div className="flex items-center gap-3 p-3">
+      <div
+        className={cn(
+          "flex items-center gap-3 p-3",
+          canPreview && "cursor-pointer active:bg-muted/40",
+        )}
+        role={canPreview ? "button" : undefined}
+        tabIndex={canPreview ? 0 : undefined}
+        data-preview-openable={canPreview ? "true" : undefined}
+        onClick={canPreview ? preview : undefined}
+        onKeyDown={canPreview ? (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            preview()
+          }
+        } : undefined}
+      >
         <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${meta.accent}`}>
           <Icon className="h-5 w-5" strokeWidth={1.75} />
         </div>
@@ -179,7 +194,7 @@ function DocCard({ doc, onDocumentPreview }: { doc: DocFile; onDocumentPreview?:
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
           {canPreview && (
             <Button
               variant="ghost" size="sm"

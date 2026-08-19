@@ -2210,16 +2210,41 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         };
 
         return (
-            <div className="flex gap-2 mt-4">
-                <Button size="sm" variant="default" onClick={previewPPT} className="bg-blue-600 hover:bg-blue-700">
-                    <Eye className="h-4 w-4 mr-2" />
-                    Preview
-                </Button>
-                <Button size="sm" variant="outline" onClick={downloadPPT}>
-                    <Download className="h-4 w-4 mr-2" />
-                    Download
-                </Button>
-            </div>
+            <Card
+                data-testid="generated-document-card"
+                data-preview-openable={onDocumentPreview ? "true" : undefined}
+                role={onDocumentPreview ? "button" : undefined}
+                tabIndex={onDocumentPreview ? 0 : undefined}
+                aria-label={`Previsualizar ${presentationData.filename}`}
+                onClick={onDocumentPreview ? previewPPT : undefined}
+                onKeyDown={onDocumentPreview ? (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault()
+                        previewPPT()
+                    }
+                } : undefined}
+                className="mt-3 cursor-pointer p-4 transition-colors hover:bg-muted/30 active:bg-muted/45"
+            >
+                <div className="flex items-center gap-3">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-950/40">
+                        <PresentationIcon className="h-6 w-6" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold">{presentationData.filename}</div>
+                        <div className="text-xs text-muted-foreground">Documento · PPTX</div>
+                    </div>
+                    <div className="flex shrink-0 gap-2" onClick={(event) => event.stopPropagation()}>
+                        <Button size="sm" variant="default" onClick={previewPPT} className="bg-blue-600 hover:bg-blue-700">
+                            <Eye className="h-4 w-4 mr-2" />
+                            Previsualizar
+                        </Button>
+                        <Button size="sm" variant="outline" onClick={downloadPPT}>
+                            <Download className="h-4 w-4 mr-2" />
+                            Descargar
+                        </Button>
+                    </div>
+                </div>
+            </Card>
         );
     };
 
@@ -2800,7 +2825,39 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 };
 
                                 return (
-                                    <Card key={index} className="p-5 hover:shadow-lg transition-all duration-200 border-2 border-border/50 hover:border-primary/30 bg-gradient-to-br from-card to-card/50">
+                                    <Card
+                                        key={index}
+                                        data-testid="generated-document-card"
+                                        data-preview-openable={canPreviewFile ? "true" : undefined}
+                                        role={canPreviewFile ? "button" : undefined}
+                                        tabIndex={canPreviewFile ? 0 : undefined}
+                                        aria-label={canPreviewFile ? `Previsualizar ${fileName}` : fileName}
+                                        onClick={canPreviewFile ? () => onDocumentPreview && onDocumentPreview({
+                                            url: previewUrl,
+                                            downloadUrl: resolvedDownloadUrl || undefined,
+                                            filename: fileName,
+                                            previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
+                                                ? `/api/files/${file.id}/render?target=pdf`
+                                                : undefined,
+                                        }) : undefined}
+                                        onKeyDown={canPreviewFile ? (event) => {
+                                            if (event.key === "Enter" || event.key === " ") {
+                                                event.preventDefault()
+                                                onDocumentPreview && onDocumentPreview({
+                                                    url: previewUrl,
+                                                    downloadUrl: resolvedDownloadUrl || undefined,
+                                                    filename: fileName,
+                                                    previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
+                                                        ? `/api/files/${file.id}/render?target=pdf`
+                                                        : undefined,
+                                                })
+                                            }
+                                        } : undefined}
+                                        className={cn(
+                                            "p-5 hover:shadow-lg transition-all duration-200 border-2 border-border/50 hover:border-primary/30 bg-gradient-to-br from-card to-card/50",
+                                            canPreviewFile && "cursor-pointer active:bg-muted/30",
+                                        )}
+                                    >
                                         <div className="flex items-start gap-4">
                                             <div className="flex-shrink-0 p-3 rounded-xl bg-primary/5">
                                                 {getFileIcon()}
@@ -2820,7 +2877,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     )}
                                                 </div>
 
-                                                <div className="flex flex-wrap gap-2">
+                                                <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
                                                     <Button
                                                         variant="outline"
                                                         size="sm"

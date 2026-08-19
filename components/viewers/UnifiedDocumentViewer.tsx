@@ -55,8 +55,16 @@ import {
   Maximize2,
   RefreshCw,
   Reply,
+  MoreHorizontal,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import {
   createAuthenticatedFetch,
@@ -337,6 +345,8 @@ export default function UnifiedDocumentViewer({
   // between a value and null) flips the hook count and throws
   // "rendered more/fewer hooks than during the previous render".
   const isDark = useIsDark()
+  const isOverlay = useDocumentPreviewOverlay()
+  const useFullscreenChrome = variant === "modal" || isOverlay
   // Retry counter used as React key on the renderer subtree — bumping
   // it forces a clean remount, which resets all internal state and
   // re-runs effects. The Retry button surfaced inside ErrorState calls
@@ -407,33 +417,100 @@ export default function UnifiedDocumentViewer({
     }
   }
 
+  const reuseInPrompt = () => {
+    if (typeof window === "undefined" || !attachment.id) return
+    window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
+      detail: {
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        size: attachment.size,
+        url: attachment.url,
+        extractedText: attachment.extractedText,
+      },
+    }))
+  }
+
   const shell = (
     <div
       className={cn(
-        variant === "panel" ? "flex h-full w-full min-w-0 flex-col overflow-hidden" : "fixed inset-0 z-[10000]",
+        useFullscreenChrome
+          ? "fixed inset-0 z-[10000]"
+          : "flex h-full w-full min-w-0 flex-col overflow-hidden",
         className,
       )}
     >
-      {variant === "modal" && (
+      {useFullscreenChrome && (
         <div
-          className="absolute inset-0 bg-black/80"
+          className={cn("absolute inset-0", isOverlay ? "bg-zinc-900/45 backdrop-blur-sm" : "bg-black/80")}
           aria-hidden="true"
           onClick={onClose}
         />
       )}
       <section
         role="dialog"
-        aria-modal={variant === "modal"}
+        aria-modal={useFullscreenChrome ? true : undefined}
         aria-labelledby="unified-document-viewer-title"
         data-testid="unified-document-viewer-dialog"
+        data-presentation={isOverlay ? "mobile-overlay" : (variant === "panel" ? "desktop-split" : "desktop-modal")}
         className={cn(
           "unified-doc-viewer flex flex-col overflow-hidden border border-border bg-background p-0",
-          variant === "panel"
-            ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
-            : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
+          isOverlay
+            ? "fixed inset-0 z-[10001] h-[100dvh] w-full rounded-none border-0 pb-[env(safe-area-inset-bottom)] shadow-none"
+            : variant === "panel"
+              ? "h-full w-full rounded-none border-y-0 border-r-0 shadow-none"
+              : "fixed left-1/2 top-1/2 z-[10001] h-[85vh] w-[min(96vw,64rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg shadow-lg",
         )}
         onClick={(e) => e.stopPropagation()}
       >
+        {isOverlay ? (
+          <div className="flex min-h-12 items-center gap-1 border-b border-black/5 bg-background/92 px-1 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:border-white/10">
+            <button
+              type="button"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-foreground"
+              onClick={onClose}
+              title="Cerrar"
+              aria-label="Cerrar"
+            >
+              <X className="h-5 w-5" />
+            </button>
+            <h2 id="unified-document-viewer-title" className="min-w-0 flex-1 truncate px-1 text-center text-[15px] font-semibold leading-5">
+              {attachment.name}
+            </h2>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-foreground"
+                  title="Más opciones"
+                  aria-label="Más opciones del documento"
+                >
+                  <MoreHorizontal className="h-5 w-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-44">
+                {canDownload && (
+                  <DropdownMenuItem onSelect={handleDownload}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Descargar
+                  </DropdownMenuItem>
+                )}
+                {downloadUrl && (
+                  <DropdownMenuItem onSelect={() => window.open(downloadUrl, "_blank", "noopener,noreferrer")}>
+                    <ExternalLink className="mr-2 h-4 w-4" />
+                    Abrir en una pestaña
+                  </DropdownMenuItem>
+                )}
+                {attachment.id && (
+                  <DropdownMenuItem onSelect={reuseInPrompt}>
+                    <Reply className="mr-2 h-4 w-4" />
+                    Reutilizar en prompt
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        ) : (
         <div className={cn(
           "relative isolate flex min-h-16 flex-row items-center gap-3 overflow-hidden px-4 py-2.5",
           liquidViewerHeaderClass,
@@ -480,27 +557,11 @@ export default function UnifiedDocumentViewer({
             </div>
           )}
 
-          {/* Reuse-in-prompt: re-attaches this file to the next composer
-              message via a window CustomEvent the chat shell listens to.
-              Only meaningful for attachments that already have a backend
-              id (i.e., already uploaded). */}
           {attachment.id && (
             <button
               type="button"
               className={liquidIconButtonClass}
-              onClick={() => {
-                if (typeof window === "undefined") return
-                window.dispatchEvent(new CustomEvent("sira:reuse-attachment", {
-                  detail: {
-                    id: attachment.id,
-                    name: attachment.name,
-                    mimeType: attachment.mimeType,
-                    size: attachment.size,
-                    url: attachment.url,
-                    extractedText: attachment.extractedText,
-                  },
-                }))
-              }}
+              onClick={reuseInPrompt}
               title="Reutilizar en prompt"
               aria-label="Reutilizar en prompt"
             >
@@ -539,6 +600,7 @@ export default function UnifiedDocumentViewer({
             <X className="h-4 w-4" />
           </button>
         </div>
+        )}
 
         {/* Renderer subtree, wrapped in a context that gives
             LoadingState/ErrorState access to attachment+kind+onRetry,
@@ -555,7 +617,7 @@ export default function UnifiedDocumentViewer({
     </div>
   )
 
-  if (variant === "panel") return shell
+  if (variant === "panel" && !isOverlay) return shell
   return createPortal(shell, document.body)
 }
 

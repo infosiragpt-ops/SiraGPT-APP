@@ -223,6 +223,7 @@ import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { SourcesPanel } from "@/components/sources-panel"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
+import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 // Panel "Computer Use": solo aparece cuando el usuario activa esa
@@ -11199,14 +11200,18 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   };
 
 
+  const previewUsesOverlay = useDocumentPreviewOverlay();
+  const documentPreviewOpen = Boolean(
+    documentPreviewUrl ||
+    composerPreviewAttachment ||
+    sidePreviewAttachment
+  );
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
     showAudioPanel ||
     searchActivityPanelOpen ||
-    documentPreviewUrl ||
+    (documentPreviewOpen && !previewUsesOverlay) ||
     sourcesPanelData ||
-    composerPreviewAttachment ||
-    sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
@@ -13078,13 +13083,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13098,7 +13103,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13153,6 +13158,43 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           </>
         )}
       </div>
+      {previewUsesOverlay && documentPreviewUrl && (
+        <DocumentPreview
+          url={documentPreviewUrl}
+          onClose={() => setDocumentPreviewUrl(null)}
+        />
+      )}
+      {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
+        <UnifiedDocumentViewer
+          variant="panel"
+          className="h-full"
+          open={true}
+          onClose={() => setComposerPreviewIndex(null)}
+          attachment={composerPreviewAttachment}
+          siblings={composerPreviewSiblings}
+          onNavigate={(next) => {
+            const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+            if (idx >= 0) setComposerPreviewIndex(idx);
+          }}
+        />
+      )}
+      {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+        <UnifiedDocumentViewer
+          variant="panel"
+          className="h-full"
+          open={true}
+          onClose={() => {
+            setSidePreviewAttachment(null);
+            setSidePreviewSiblings([]);
+          }}
+          attachment={sidePreviewAttachment}
+          siblings={sidePreviewSiblings}
+          onNavigate={(next) => {
+            const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
+            if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
+          }}
+        />
+      )}
     </div >
   )
 }

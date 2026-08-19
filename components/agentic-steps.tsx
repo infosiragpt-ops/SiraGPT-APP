@@ -787,11 +787,20 @@ function ArtifactCard({
   return (
     <>
     <div
-      className="my-2 w-full max-w-xl overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm sm:p-4"
+      className="my-2 w-full max-w-xl cursor-pointer overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm transition-colors hover:bg-muted/30 active:bg-muted/45 sm:p-4"
       data-testid="agent-artifact-card"
       data-artifact-id={artifact.id}
-      role="group"
+      data-preview-openable="true"
+      role="button"
+      tabIndex={0}
       aria-label={`Archivo: ${displayName}`}
+      onClick={preview}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          preview()
+        }
+      }}
     >
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
         <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -817,7 +826,10 @@ function ArtifactCard({
             </div>
           </div>
         </div>
-        <div className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0">
+        <div
+          className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0"
+          onClick={(event) => event.stopPropagation()}
+        >
           {artifact.sourceFileId && (
             <button
               type="button"

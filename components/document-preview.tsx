@@ -1,9 +1,17 @@
 "use client"
 
 import React from "react"
+import { createPortal } from "react-dom"
 import dynamic from "next/dynamic"
-import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus } from "lucide-react"
+import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus, MoreHorizontal } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import {
@@ -389,6 +397,8 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [zoom, setZoom] = React.useState(1)
   const [activePage, setActivePage] = React.useState(1)
   const [pageCount, setPageCount] = React.useState(1)
+  const isOverlay = useDocumentPreviewOverlay()
+  const overlayRef = React.useRef<HTMLDivElement | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const docxRootRef = React.useRef<HTMLDivElement | null>(null)
   const docxStyleRef = React.useRef<HTMLDivElement | null>(null)
@@ -558,6 +568,33 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     if (typeof window === "undefined") return
     window.open(downloadUrl, "_blank", "noopener,noreferrer")
   }, [downloadUrl])
+
+  React.useEffect(() => {
+    if (!isOverlay || typeof document === "undefined") return
+    const previouslyFocused = document.activeElement as HTMLElement | null
+    const node = overlayRef.current
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const focusable = node?.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )
+    ;(focusable ?? node)?.focus({ preventScroll: true })
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener("keydown", onKey, true)
+    return () => {
+      window.removeEventListener("keydown", onKey, true)
+      document.body.style.overflow = prevOverflow
+      if (previouslyFocused && typeof previouslyFocused.focus === "function") {
+        try { previouslyFocused.focus({ preventScroll: true }) } catch { /* noop */ }
+      }
+    }
+  }, [isOverlay, onClose])
 
   React.useEffect(() => {
     setZoom(1)
@@ -821,55 +858,100 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     }
   }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl])
 
-  return (
-    <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden bg-background">
-      <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center px-4", previewHeaderClass)}>
-        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
-            <FileText className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
-              {filename}
-            </span>
-            <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
-          </div>
+  const header = isOverlay ? (
+    <div
+      className="sticky top-0 z-30 flex min-h-12 w-full items-center gap-1 border-b border-black/5 bg-background/92 px-1 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:border-white/10"
+    >
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={onClose}
+        className="h-11 w-11 shrink-0 rounded-full text-foreground"
+        title="Cerrar"
+        aria-label="Cerrar previsualización"
+      >
+        <X className="h-5 w-5" />
+      </Button>
+      <div className="min-w-0 flex-1 px-1 text-center">
+        <h2 className="truncate text-[15px] font-semibold leading-5 text-foreground" title={filename}>
+          {filename}
+        </h2>
+      </div>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-11 w-11 shrink-0 rounded-full text-foreground"
+            title="Más opciones"
+            aria-label="Más opciones del documento"
+          >
+            <MoreHorizontal className="h-5 w-5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-44">
+          <DropdownMenuItem onSelect={download} disabled={isDownloading}>
+            <Download className="mr-2 h-4 w-4" />
+            {isDownloading ? "Descargando…" : "Descargar"}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={openInNewTab}>
+            <ExternalLink className="mr-2 h-4 w-4" />
+            Abrir en una pestaña
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  ) : (
+    <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center px-4", previewHeaderClass)}>
+      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
+        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
+          <FileText className="h-5 w-5" />
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={download}
-            disabled={isDownloading}
-            className={cn("shrink-0", previewIconButtonClass)}
-            title={isDownloading ? "Descargando" : "Descargar"}
-            aria-label={isDownloading ? "Descargando" : "Descargar"}
-          >
-            {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={openInNewTab}
-            className={cn("shrink-0", previewIconButtonClass)}
-            title="Abrir en una pestaña"
-            aria-label="Abrir documento en una pestaña"
-          >
-            <ExternalLink className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            className={cn("shrink-0", previewIconButtonClass)}
-            title="Cerrar"
-            aria-label="Cerrar previsualización"
-          >
-            <X className="h-4 w-4" />
-          </Button>
+        <div className="min-w-0">
+          <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
+            {filename}
+          </span>
+          <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
         </div>
       </div>
+      <div className="ml-auto flex shrink-0 items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={download}
+          disabled={isDownloading}
+          className={cn("shrink-0", previewIconButtonClass)}
+          title={isDownloading ? "Descargando" : "Descargar"}
+          aria-label={isDownloading ? "Descargando" : "Descargar"}
+        >
+          {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={openInNewTab}
+          className={cn("shrink-0", previewIconButtonClass)}
+          title="Abrir en una pestaña"
+          aria-label="Abrir documento en una pestaña"
+        >
+          <ExternalLink className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          className={cn("shrink-0", previewIconButtonClass)}
+          title="Cerrar"
+          aria-label="Cerrar previsualización"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      </div>
+    </div>
+  )
 
+  const body = (
+    <>
       <div
         ref={scrollRef}
         className={cn(
@@ -1026,6 +1108,40 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         </div>
       )}
+    </>
+  )
+
+  const shell = (
+    <div
+      ref={overlayRef}
+      role={isOverlay ? "dialog" : "region"}
+      aria-modal={isOverlay ? true : undefined}
+      aria-label={filename}
+      tabIndex={-1}
+      data-testid="document-preview-shell"
+      data-presentation={isOverlay ? "mobile-overlay" : "desktop-split"}
+      className={cn(
+        "relative flex min-w-0 flex-col overflow-hidden bg-background",
+        isOverlay
+          ? "fixed inset-0 z-[10050] h-[100dvh] w-full pb-[env(safe-area-inset-bottom)]"
+          : "h-full w-full",
+      )}
+    >
+      {isOverlay && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 bg-zinc-900/45 backdrop-blur-sm"
+        />
+      )}
+      <div className={cn("relative flex min-h-0 flex-1 flex-col", isOverlay && "bg-background")}>
+        {header}
+        {body}
+      </div>
     </div>
   )
+
+  if (isOverlay && typeof document !== "undefined") {
+    return createPortal(shell, document.body)
+  }
+  return shell
 }
