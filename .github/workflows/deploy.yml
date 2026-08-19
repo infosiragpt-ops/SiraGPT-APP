@@ -521,10 +521,12 @@ jobs:
               exit 1
             fi
             (cd "${DEPLOY_TRANSFER_DIR}" && sha256sum --check --strict deploy.bundle.sha256)
-            # git bundle verify requires a repository. Interrupted or
-            # migrated VPS checkouts can leave APP_DIR without .git.
-            if [[ ! -d .git ]]; then
-              echo "[deploy-workflow] APP_DIR has no git metadata; initializing"
+            # git bundle verify requires a usable repository. Interrupted or
+            # migrated VPS checkouts can leave APP_DIR without .git, or with
+            # a corrupt .git directory that is not a work tree.
+            if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+              echo "[deploy-workflow] APP_DIR is not a usable git work tree; reinitializing"
+              rm -rf .git
               git init
             fi
             git bundle verify "${DEPLOY_BUNDLE}"
