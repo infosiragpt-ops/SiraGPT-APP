@@ -1,0 +1,164 @@
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at Object.openZip (/home/runner/workspace/backend/node_modules/mammoth/lib/unzip.js:12:39)
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] From previous event:
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at Object.convertToHtml (/home/runner/workspace/backend/node_modules/mammoth/lib/index.js:23:12)
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at /home/runner/workspace/backend/node_modules/jszip/lib/load.js:48:24
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at reprocessIfNeeded (/home/runner/workspace/backend/src/services/document-intelligence.js:547:40)
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at FileProcessor.processWord (/home/runner/workspace/backend/src/services/fileProcessor.js:394:45)
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at ZipEntries.load (/home/runner/workspace/backend/node_modules/jszip/lib/zipEntries.js:255:14)
+2026-05-20 21:24:28.43
+ad38fa8d
+User
+[backend] at convert (/home/runner/workspace/backend/node_modules/mammoth/lib/index.js:35:18)
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/routes/files.js
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] Require stack:
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/index.js
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/services/fileProcessor.js
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/services/document-pipeline/parser-orchestrator.js
+2026-05-20 21:24:41.54
+ad38fa8d
+User
+[backend] [fileProcessor] external parser chain unavailable: Cannot find module '../../../orchestration/document-pipeline'
+2026-05-20 21:24:44.81
+ad38fa8d
+User
+[backend] sectionLevel: 1
+2026-05-20 21:24:44.81
+ad38fa8d
+User
+[backend] }
+2026-05-20 21:24:58.74
+ad38fa8d
+User
+[backend] [agent-task] enqueue failed, falling back to local runtime: ERR max requests limit exceeded. Limit: 500000, Usage: 500000. See https://upstash.com/docs/redis/troubleshooting/max_requests_limit for details
+2026-05-20 21:24:59.06
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:24:59.062Z","event":"agent_task_local_fallback_started","taskId":"ca75ad55-bee7-4b85-b526-52208c1d12da","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6anb00dg04f21c5bz4co","model":"gpt-4o-mini","traceId":"98046b18-f5ad-42a8-9ce0-0fc69dc50b3a","fallbackReason":"redis_unavailable","fallbackDetail":"ERR max requests limit exceeded. Limit: 500000, Usage: 500000. See https://upstash.com/docs/redis/troubleshooting/max_requests_limit for details","fileCount":1}
+2026-05-20 21:24:59.34
+ad38fa8d
+User
+[backend] [task-contract-resolver] LLM resolve failed: 400 Invalid schema for response_format 'TaskContract': In context=('properties', 'success_tests', 'items'), 'required' is required to be supplied and to be an array including every key in properties. Missing 'check'.
+2026-05-20 21:24:59.45
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:24:59.458Z","event":"agent_task_worker_started","taskId":"ca75ad55-bee7-4b85-b526-52208c1d12da","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6anb00dg04f21c5bz4co","model":"gpt-4o-mini","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":false,"queue":"siragpt-agent-tasks","jobId":"local-ca75ad55-bee7-4b85-b526-52208c1d12da","traceId":"98046b18-f5ad-42a8-9ce0-0fc69dc50b3a","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":264,"tableSignals":false,"fileCount":1,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":true},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/services/fileProcessor.js
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/services/document-pipeline/parser-orchestrator.js
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/index.js
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] - /home/runner/workspace/backend/src/routes/files.js
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] [fileProcessor] external parser chain unavailable: Cannot find module '../../../orchestration/document-pipeline'
+2026-05-20 21:25:10.86
+ad38fa8d
+User
+[backend] Require stack:
+2026-05-20 21:25:13.71
+ad38fa8d
+User
+[backend] },
+2026-05-20 21:25:13.71
+ad38fa8d
+User
+[backend] {
+2026-05-20 21:25:13.72
+ad38fa8d
+User
+[backend] sectionLevel: 1
+2026-05-20 21:25:13.72
+ad38fa8d
+User
+[backend] metadata: {
+2026-05-20 21:25:13.72
+ad38fa8d
+User
+[backend] text: "ciales. La tabla de categorización detallada se incluirá en el anexo correspondiente del presente trabajo investigativo.\n\nRespecto a la unidad de análisis, ésta estará constituida por los operadores jurídicos especializados en derecho penal y criminología que ejercen funciones en la jurisdicción de Moyobamba durante el año 2026, así como por las fuentes documentales pertinentes para el estudio. En cuanto a la población, Hernández y Mendoza (2018) definieron a la población como el conjunto total de elementos o sujetos que comparten características comunes susceptibles de ser estudiados sistemáticamente dentro de un proceso investigativo riguroso, debiendo delimitarse con criterios precisos de inclusión y exclusión que garanticen la pertinencia metodológica del estudio. Por lo cual, para la presente investigación se tomará como población a 130 operadores jurídicos especializados que desarrollan funciones en la jurisdicción de Moyobamba, conformados por fiscales, jueces, abogados litigantes en materia penal, psicólogos forenses y autoridades policiales vinculadas a la investigación de delitos contra la libertad sexual. Los criterios de inclusión comprenderán: profesionales con experiencia mínima de tres años en materia penal, especialistas que hayan intervenido en procesos sobre delitos sexuales, operadores con disponibilidad para participar voluntariamente, profesionales que ejerzan funciones activas en la jurisdicción y especialistas que cuenten con formación acreditada en criminología o derecho penal. Los criterios de exclusión incluirán: profesionales con licencias prolongadas o vacaciones durante la recolección, operadores sin experiencia directa en delitos sexuales, especialistas que se nieguen a participar voluntariamente y aquellos que presenten conflictos de interés con la investigación.\n\nEn cuanto a la muestra, Hernández y Mendoza (2018) la definieron como un subconjunto representativo de la población del cual se obtendrán los datos relevantes para la investigación, debiendo seleccionarse mediante criterios técnicos que garanticen la validez de los hallazgos obtenidos durante el proceso analítico interpretativo riguroso. Por lo cual, para la presente investigación se tomará como muestra a 15 operadores jurídicos especializados, considerando el principio de saturación teórica propio de los diseños cualitativos basados en teoría fundamentada, donde el tamaño muestral se determina por la suficiencia informativa más que por criterios estadísticos cuantitativos formales aplicables.\n\nRespecto al muestreo, éste será no probabilístico por conveniencia, en tanto los participantes serán seleccionados estratégicamente por su accesibilidad, disponibilidad y pertinencia respecto al objeto investigativo, conforme lo establecieron Hernández y Mendoza (2018), quienes sostuvieron que en investigaciones cualitativas el muestreo intencional resulta metodológicamente apropiado porque permite escoger casos que aporten información rica, profunda y significativa para la comprensión del fenómeno estudiado, priorizando la calidad informativa por encima de la representatividad estadística. Este tipo de muestreo se sustentará en la necesidad de acceder a operadores jurídicos cuya experiencia directa con delitos contra la libertad sexual garantice la profundidad analítica requerida para la teoría fundamentada, asegurando saturación categorial mediante la selección de informantes clave con conocimiento especializado vinculado al fenómeno criminógeno investigado.",
+2026-05-20 21:25:13.72
+ad38fa8d
+User
+[backend] }
+2026-05-20 21:25:18.40
+ad38fa8d
+User
+[backend] [task-contract-resolver] LLM resolve failed: 400 Invalid schema for response_format 'TaskContract': In context=('properties', 'success_tests', 'items'), 'required' is required to be supplied and to be an array including every key in properties. Missing 'check'.
+2026-05-20 21:25:18.49
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:25:18.494Z","event":"agent_task_worker_started","taskId":"4dca98e7-2816-4a75-9201-6c543376d08f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6pht00fr04f2ke2wzbv8","model":"gpt-4o-mini","runtimeModel":"gpt-4o-mini","runtimeProvider":"OpenAI","modelRemapped":false,"queue":"siragpt-agent-tasks","jobId":"local-4dca98e7-2816-4a75-9201-6c543376d08f","traceId":"f9a96017-1b04-42f0-ae19-6831c65543e7","documentPolicy":{"mode":"chat_only","format":"docx","template":"business","complexity":"simple","reason":"Solicitud de analisis documental; se responde primero en chat y se sugiere documento solo si hace falta.","autoGenerate":false,"thresholds":{"wordCount":0,"estimatedWords":264,"tableSignals":false,"fileCount":1,"transcriptionOnly":false,"explicitOutput":false,"documentUnderstanding":true},"palette":{"id":"business","label":"Business","colors":{"primary":"#0F172A","surface":"#F8FAFC","neutral":"#475569","accent":"#059669","warning":"#D97706"}}}}
+2026-05-20 21:25:19.79
+dd57947d
+User
+[backend] [agent-task-worker] connection ended (will not auto-reconnect from this state)
+2026-05-20 21:25:19.79
+dd57947d
+User
+[backend] [agent-task-queue] connection ended (will not auto-reconnect from this state)
+2026-05-20 21:25:30.97
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:25:30.970Z","event":"agent_task_worker_finished","taskId":"ca75ad55-bee7-4b85-b526-52208c1d12da","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6anb00dg04f21c5bz4co","status":"completed","stoppedReason":"finalized","steps":3,"artifacts":0,"durationMs":31907}
+2026-05-20 21:25:57.89
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:25:57.897Z","event":"agent_task_worker_finished","taskId":"4dca98e7-2816-4a75-9201-6c543376d08f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6pht00fr04f2ke2wzbv8","status":"completed","stoppedReason":"finalized","steps":5,"artifacts":0,"durationMs":39749}
+2026-05-20 21:25:57.89
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:25:57.897Z","event":"agent_task_worker_finished","taskId":"4dca98e7-2816-4a75-9201-6c543376d08f","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet6pht00fr04f2ke2wzbv8","status":"completed","stoppedReason":"finalized","steps":5,"artifacts":0,"durationMs":39749}
+2026-05-20 21:26:21.21
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:26:21.218Z","event":"agent_task_worker_finished","taskId":"f22e995e-f5b9-4083-b852-da0e53bd600c","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet3k28004304f2oy35e752","status":"completed","stoppedReason":"attachment_unreadable_empty_response_recovery","steps":80,"artifacts":0,"durationMs":209779}
+2026-05-20 21:26:21.21
+ad38fa8d
+User
+[backend] {"t":"2026-05-21T01:26:21.218Z","event":"agent_task_worker_finished","taskId":"f22e995e-f5b9-4083-b852-da0e53bd600c","userId":"cmpdbjuqh00001hfgayz771yu","chatId":"cmpet3k28004304f2oy35e752","status":"completed","stoppedReason":"attachment_unreadable_empty_response_recovery","steps":80,"artifacts":0,"durationMs":209779}

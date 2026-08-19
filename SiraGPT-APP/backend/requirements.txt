@@ -1,0 +1,42 @@
+# Python dependencies for the document-generation sandbox.
+#
+# The Node backend's `code-sandbox.js` runs short Python snippets via
+# the host `python3` interpreter, so every package the doc-generator
+# templates import (sgpt_docx, sgpt_xlsx, sgpt_pptx, sgpt_pdf,
+# sgpt_math_omml) must be available globally on the deploy machine.
+#
+# Pin to install via:
+#   pip3 install -r backend/requirements.txt
+# or in CI with `--user` if the runner has no system-wide site-packages.
+#
+# Keep the list short and load-bearing; add a comment for every package
+# explaining the document feature it backs.
+
+# Office document toolkit (already a transitive dep of docxtpl, but
+# pinning makes the doc-generator's "available libraries" preamble
+# truthful).
+python-docx>=1.1.0
+docxtpl>=0.16.0
+openpyxl>=3.1.0
+xlsxwriter>=3.2.0
+python-pptx>=0.6.23
+reportlab>=4.0.0
+pypdf>=4.0.0
+pdfplumber>=0.10.0
+pillow>=10.0.0
+
+# Math: matplotlib renders LaTeX → PNG (mathtext) for the universal
+# fallback path; latex2mathml + lxml drive the OMML path that turns
+# `apa_math(doc, r"\int…")` into a real editable Word equation.
+matplotlib>=3.7.0
+latex2mathml>=3.77.0
+lxml>=5.0.0
+
+# Numeric / scientific stack — referenced from the doc-generator
+# preamble's "also available" line. Document scripts rely on them
+# for psychometrics (Cronbach, Spearman) and chart embedding.
+numpy>=1.24.0
+scipy>=1.10.0
+sympy>=1.12
+pandas>=2.0.0
+seaborn>=0.13.0

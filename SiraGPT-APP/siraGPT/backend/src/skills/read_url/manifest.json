@@ -1,0 +1,25 @@
+{
+  "id": "read_url",
+  "name": "Read URL",
+  "version": "1.0.0",
+  "description": "Fetch a single public URL and extract its main readable content as clean markdown (Firefox Reader-style). Use after web_search when a snippet is not enough and you need the actual page text. Returns { title, byline, content_markdown, source_url, length }. Hard 8s timeout. 1 MB HTML cap, 50 000 char markdown cap. Respects robots.txt. Does NOT follow cross-domain redirects.",
+  "capabilities": ["net:outbound"],
+  "timeoutMs": 12000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "description": "Absolute http(s) URL of the page to read."
+      },
+      "maxChars": {
+        "type": "integer",
+        "minimum": 500,
+        "maximum": 50000,
+        "description": "Cap on returned markdown length. Default 12000."
+      }
+    },
+    "required": ["url"],
+    "additionalProperties": false
+  }
+}

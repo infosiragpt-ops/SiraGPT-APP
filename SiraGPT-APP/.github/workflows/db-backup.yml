@@ -1,0 +1,142 @@
+name: DB backup · pg_dump → S3
+
+# Runs daily at 03:00 UTC. SSHes to the VPS, executes
+# backend/scripts/backup-db.sh which produces a gzipped dump in
+# /opt/siragpt/backups/, then uploads it to S3-compatible
+# storage configured via the BACKUP_* secrets.
+#
+# Manual replay: trigger via the Actions tab (workflow_dispatch).
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+# Only one backup run at a time — avoids racing on the same retention
+# window and double-writing to S3.
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    name: pg_dump → gzip → S3
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Run backup on VPS and upload to S3
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 15m
+          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION
+          script: |
+            set -euo pipefail
+            cd /opt/siragpt
+
+            # Read the already-resolved runtime value without executing .env as shell.
+            # Production env files may contain application values that are not valid
+            # Bash assignments, and sourcing them can abort before pg_dump starts.
+            BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' | head -n 1 || true)"
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              BACKEND_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])backend([-_]|$)' | head -n 1 || true)"
+            fi
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              echo "::error::No running backend container was found; refusing to guess database credentials." >&2
+              exit 1
+            fi
+            DATABASE_URL="$(docker exec "${BACKEND_CONTAINER}" sh -lc 'printf "%s" "${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"')"
+            if [[ -z "${DATABASE_URL:-}" ]]; then
+              echo "::error::The running backend has no DATABASE_URL/PRISMA_DATABASE_URL." >&2
+              exit 1
+            fi
+            DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
+            export DATABASE_URL
+
+            if ! command -v pg_dump >/dev/null 2>&1; then
+              DB_CONTAINER="${POSTGRES_CONTAINER:-}"
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                DB_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=db' --format '{{.Names}}' | head -n 1 || true)"
+              fi
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                DB_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])db([-_]|$)|postgres' | head -n 1 || true)"
+              fi
+              if [[ -z "${DB_CONTAINER}" ]]; then
+                echo "::error::pg_dump is missing on the VPS and no Postgres Docker container was found." >&2
+                exit 1
+              fi
+              if ! docker exec "${DB_CONTAINER}" sh -lc 'command -v pg_dump >/dev/null 2>&1'; then
+                echo "::error::pg_dump is missing in detected Postgres container: ${DB_CONTAINER}" >&2
+                exit 1
+              fi
+
+              export SIRAGPT_DB_CONTAINER="${DB_CONTAINER}"
+              cat >/tmp/siragpt-pg-dump <<'EOF'
+            #!/usr/bin/env bash
+            set -euo pipefail
+            exec docker exec -i "${SIRAGPT_DB_CONTAINER:?}" pg_dump "$@"
+            EOF
+              chmod +x /tmp/siragpt-pg-dump
+              export PG_DUMP_BIN=/tmp/siragpt-pg-dump
+              echo "Using pg_dump from Docker container: ${DB_CONTAINER}"
+            fi
+
+            # 1. Run the backup script. Produces a fresh .sql.gz under ./backups/.
+            bash backend/scripts/backup-db.sh
+
+            # 2. Pick the newest backup file we just produced.
+            LATEST="$(ls -1t backups/siraGPT_*.sql.gz 2>/dev/null | head -n 1 || true)"
+            if [[ -z "${LATEST}" ]]; then
+              echo "::error::No backup file produced — aborting upload." >&2
+              exit 1
+            fi
+            if ! gzip -t "${LATEST}"; then
+              echo "::error::Backup gzip integrity check failed: ${LATEST}" >&2
+              exit 1
+            fi
+            sha256sum "${LATEST}" > "${LATEST}.sha256"
+            test -s "${LATEST}.sha256"
+
+            if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
+              echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
+              echo "Backup and checksum retained locally: ${LATEST}"
+              exit 0
+            fi
+
+            echo "Uploading ${LATEST} to s3://${BACKUP_BUCKET}/"
+
+            # 3. Upload via aws CLI (works for AWS S3 and S3-compatible
+            #    targets like Backblaze B2, R2, MinIO, etc.). Endpoint /
+            #    region are optional and only set when provided.
+            if ! command -v aws >/dev/null 2>&1; then
+              echo "Installing awscli…"
+              apt-get update -y && apt-get install -y --no-install-recommends awscli
+            fi
+
+            export AWS_ACCESS_KEY_ID="${BACKUP_ACCESS_KEY_ID}"
+            export AWS_SECRET_ACCESS_KEY="${BACKUP_SECRET_ACCESS_KEY}"
+            AWS_ARGS=()
+            if [[ -n "${BACKUP_S3_ENDPOINT:-}" ]]; then
+              AWS_ARGS+=(--endpoint-url "${BACKUP_S3_ENDPOINT}")
+            fi
+            if [[ -n "${BACKUP_S3_REGION:-}" ]]; then
+              AWS_ARGS+=(--region "${BACKUP_S3_REGION}")
+            fi
+
+            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}")" \
+              --only-show-errors
+            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}.sha256" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}.sha256")" \
+              --only-show-errors
+
+            echo "Backup and checksum uploaded: $(basename "${LATEST}")"
+        env:
+          # These are passed THROUGH to the remote shell via the `envs:`
+          # field above. They never appear in logs.
+          BACKUP_BUCKET: ${{ secrets.BACKUP_BUCKET }}
+          BACKUP_ACCESS_KEY_ID: ${{ secrets.BACKUP_ACCESS_KEY_ID }}
+          BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
+          BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
+          BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}

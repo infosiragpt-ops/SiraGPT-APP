@@ -1,0 +1,67 @@
+# Mirror every commit on `main` to the Replit project so the
+# Replit IDE always shows the latest code. Replit's GitHub
+# integration (Version Control → Connect with GitHub) can also do
+# this UI-side; this workflow is the fallback / parallel push for
+# repos that prefer an explicit git remote.
+#
+# Setup (one-time, by a repo admin):
+#   1. In Replit → "Account" → "Personal access tokens", create a
+#      token with "Read + Write" scope on the repl.
+#   2. Add two GitHub Actions secrets to this repo:
+#        REPLIT_REMOTE_URL  — the https://...replit.com/repls/<id>.git URL
+#                             shown under "Version Control" in the Replit IDE
+#        REPLIT_TOKEN       — the personal access token from step 1
+#   3. That's it — every push to `main` triggers this workflow which
+#      mirrors the same SHA to the Replit remote.
+#
+# The job is a no-op when REPLIT_REMOTE_URL / REPLIT_TOKEN are not
+# set, so adding this workflow to a fork without the secrets is
+# safe.
+
+name: Replit · mirror main
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: replit-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror to Replit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Skip when secrets missing
+        id: gate
+        run: |
+          if [ -z "${{ secrets.REPLIT_REMOTE_URL }}" ] || [ -z "${{ secrets.REPLIT_TOKEN }}" ]; then
+            echo "Replit secrets not configured — skipping mirror." >&2
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout (full history)
+        if: steps.gate.outputs.skip != '1'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Mirror push
+        if: steps.gate.outputs.skip != '1'
+        env:
+          REPLIT_REMOTE_URL: ${{ secrets.REPLIT_REMOTE_URL }}
+          REPLIT_TOKEN: ${{ secrets.REPLIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Build the auth-bearing URL on the fly so the token never
+          # appears in `git remote -v` output.
+          AUTHED_URL="${REPLIT_REMOTE_URL/https:\/\//https:\/\/x-access-token:${REPLIT_TOKEN}@}"
+          git remote add replit "$AUTHED_URL"
+          git push replit main --force-with-lease
+          echo "✓ mirrored $(git rev-parse --short HEAD) to Replit"

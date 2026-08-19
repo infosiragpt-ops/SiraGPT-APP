@@ -1,0 +1,131 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  EVENT_TYPES,
+  WIRE_ONLY_TYPES,
+  isKnownEventType,
+  isValidEvent,
+  isPersistedEventType,
+  buildEnvelope,
+} = require('../src/services/codex/event-types');
+
+// One valid payload per event type — the §5 catalog.
+const VALID = {
+  run_status: { status: 'running' },
+  plan_proposed: { architecture: 'Vite SPA', pages: ['/'], components: ['Nav'], tasks: [{ id: 't1' }] },
+  plan_updated: { tasks: [{ id: 't1', title: 'Estructura', status: 'in_progress' }, { id: 't2', title: 'Estilos', status: 'pending' }] },
+  reasoning_start: { blockId: 'b1', label: 'Planning' },
+  reasoning_delta: { blockId: 'b1', text: 'thinking…' },
+  reasoning_end: { blockId: 'b1', durationMs: 47000 },
+  action_start: { actionId: 'a1', kind: 'terminal', command: 'git status', groupId: 'g1' },
+  action_end: { actionId: 'a1', status: 'done', outputSummary: 'clean', durationMs: 120, linesRead: 0 },
+  narrative_delta: { text: 'Estoy creando el layout.' },
+  file_patch: { path: 'src/App.tsx', patch: '@@ -1 +1 @@\n-old\n+new', truncated: false },
+  file_delta: { path: 'src/App.tsx', hunk: '@@ -1 +1 @@\n-old\n+new', truncated: false },
+  budget_status: { allowed: true, reason: 'within_budget', costTodayUsd: 1.2, dailyBudgetUsd: 10, remainingUsd: 8.8 },
+  checkpoint_created: { checkpointId: 'c1', commitSha: 'abc1234', title: 'feat: layout', createdAt: '2026-06-13' },
+  run_summary: { metrics: { timeWorkedMs: 1000, actionsCount: 3, costSource: 'estimated' } },
+  run_audio: { audioUrl: '/api/elevenlabs/audio/run.mp3', mime: 'audio/mpeg', sizeBytes: 1024, characters: 120, voiceId: 'voice-1', modelId: 'model-1' },
+  executive_summary: {
+    status: 'passed',
+    department: 'CEO Office',
+    title: 'Mejorar el producto',
+    result: 'Trabajo completado y verificado.',
+    impact: '2 archivos cambiados, 10 adiciones y 1 eliminación.',
+    risks: [],
+    nextActions: ['Continuar con el siguiente objetivo priorizado.'],
+    evidence: ['type_check: ok', 'checkpoint: abc1234'],
+    audioText: 'Trabajo completado y verificado. Se cambiaron dos archivos.',
+    checkpointSha: 'abc1234',
+    diffstat: { filesChanged: 2, additions: 10, deletions: 1 },
+  },
+  action_required: { patternId: 'openrouter_402', title: 'Sin créditos', rawError: '402', blockedCapabilities: ['gen'], remediationUrl: 'https://x' },
+  context_snapshot: { summary: 'El proyecto compila.', tailMessages: [{ role: 'user', content: 'continúa' }], state: { step: 3 } },
+  tool_permission_required: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64), humanDescription: 'Ejecutar npm test', argsPreview: { command: 'npm test' } },
+  tool_permission_resolved: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64), decision: 'allow' },
+  tool_permission_consumed: { permissionId: 'perm-1', toolName: 'run_command', bindingHash: 'a'.repeat(64) },
+  heartbeat: {},
+};
+
+test('every catalog type has a valid example that passes isValidEvent', () => {
+  for (const type of EVENT_TYPES) {
+    assert.ok(type in VALID, `missing valid example for ${type}`);
+    assert.equal(isValidEvent(type, VALID[type]), true, `valid example for ${type} should pass`);
+  }
+});
+
+test('unknown event types are rejected', () => {
+  assert.equal(isKnownEventType('nope'), false);
+  assert.equal(isValidEvent('nope', {}), false);
+  assert.equal(isValidEvent('', {}), false);
+  assert.equal(isValidEvent(undefined, {}), false);
+});
+
+test('run_status rejects an invalid status', () => {
+  assert.equal(isValidEvent('run_status', { status: 'banana' }), false);
+  assert.equal(isValidEvent('run_status', {}), false);
+});
+
+test('action_start requires kind in the allowlist and a groupId', () => {
+  assert.equal(isValidEvent('action_start', { actionId: 'a', kind: 'rm', groupId: 'g' }), false);
+  assert.equal(isValidEvent('action_start', { actionId: 'a', kind: 'terminal' }), false); // no groupId
+  assert.equal(isValidEvent('action_start', { actionId: 'a', kind: 'file_read', groupId: 'g', path: 'x.js' }), true);
+});
+
+test('action_end requires status done|error', () => {
+  assert.equal(isValidEvent('action_end', { actionId: 'a', status: 'running' }), false);
+  assert.equal(isValidEvent('action_end', { actionId: 'a', status: 'error' }), true);
+});
+
+test('plan_proposed requires architecture + the three arrays', () => {
+  assert.equal(isValidEvent('plan_proposed', { architecture: 'x', pages: [], components: [], tasks: [] }), true);
+  assert.equal(isValidEvent('plan_proposed', { architecture: 'x', pages: 'no', components: [], tasks: [] }), false);
+  assert.equal(isValidEvent('plan_proposed', { pages: [], components: [], tasks: [] }), false);
+});
+
+test('plan_updated requires a tasks array of {id,title,status∈pending|in_progress|completed}', () => {
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ id: 't1', title: 'X', status: 'completed' }] }), true);
+  assert.equal(isValidEvent('plan_updated', { tasks: [] }), true); // empty list is a valid (if unusual) payload
+  assert.equal(isValidEvent('plan_updated', {}), false); // no tasks
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ id: 't1', title: 'X', status: 'doing' }] }), false); // bad status
+  assert.equal(isValidEvent('plan_updated', { tasks: [{ title: 'X', status: 'pending' }] }), false); // no id
+  assert.equal(isValidEvent('plan_updated', { tasks: 'nope' }), false);
+});
+
+test('reasoning_end requires a numeric durationMs', () => {
+  assert.equal(isValidEvent('reasoning_end', { blockId: 'b', durationMs: '47' }), false);
+  assert.equal(isValidEvent('reasoning_end', { blockId: 'b', durationMs: 47 }), true);
+});
+
+test('action_required requires patternId/title/rawError/blockedCapabilities', () => {
+  assert.equal(isValidEvent('action_required', { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: [] }), true);
+  assert.equal(isValidEvent('action_required', { patternId: 'p', title: 't', rawError: 'e', blockedCapabilities: 'no' }), false);
+});
+
+test('file_patch, file_delta and executive_summary reject incomplete evidence', () => {
+  assert.equal(isValidEvent('file_patch', { path: 'src/App.tsx', patch: '' }), true);
+  assert.equal(isValidEvent('file_patch', { path: '', patch: 'x' }), false);
+  assert.equal(isValidEvent('file_delta', { path: 'src/App.tsx', hunk: '' }), true);
+  assert.equal(isValidEvent('file_delta', { path: '', hunk: 'x' }), false);
+  assert.equal(isValidEvent('executive_summary', VALID.executive_summary), true);
+  assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, status: 'done' }), false);
+  assert.equal(isValidEvent('executive_summary', { ...VALID.executive_summary, audioText: '' }), false);
+});
+
+test('heartbeat is wire-only and not persistable; others are persistable', () => {
+  assert.deepEqual([...WIRE_ONLY_TYPES], ['heartbeat']);
+  assert.equal(isPersistedEventType('heartbeat'), false);
+  assert.equal(isPersistedEventType('run_status'), true);
+  assert.equal(isPersistedEventType('unknown'), false);
+});
+
+test('buildEnvelope wraps fields and defaults ts/data', () => {
+  const e = buildEnvelope({ runId: 'r1', seq: 3, type: 'narrative_delta', data: { text: 'hi' }, ts: '2026-06-13T00:00:00.000Z' });
+  assert.deepEqual(e, { runId: 'r1', seq: 3, ts: '2026-06-13T00:00:00.000Z', type: 'narrative_delta', data: { text: 'hi' } });
+  const d = buildEnvelope({ runId: 'r1', seq: 1, type: 'heartbeat' });
+  assert.deepEqual(d.data, {});
+  assert.equal(typeof d.ts, 'string');
+});

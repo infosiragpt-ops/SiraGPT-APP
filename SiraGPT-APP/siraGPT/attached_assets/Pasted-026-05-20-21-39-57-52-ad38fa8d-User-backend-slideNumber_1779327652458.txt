@@ -1,0 +1,20 @@
+026-05-20 21:39:57.52
+ad38fa8d
+User
+[backend] slideNumber: null,
+2026-05-20 21:39:57.52
+ad38fa8d
+User
+[backend] sectionLevel: 1,
+2026-05-20 21:39:57.52
+ad38fa8d
+User
+[backend] sourceLabel: "Introducción — parte 1",
+2026-05-20 21:39:57.52
+ad38fa8d
+User
+[backend] pageNumber: null,
+2026-05-20 21:39:57.52
+ad38fa8d
+User
+[backend] text: "# Introducción\nEn la presente investigación se analizará la ineficacia en la evaluación y fiscalización del Instrumento de Gestión Ambiental para la Formalización de Actividades de Pequeña Minería y Minería Artesanal, IGAFOM, por parte de las autoridades regionales y su impacto en la formalización minera integral y el derecho a un ambiente equilibrado en el Perú, periodo 2020-2026. No sólo se trata de una demora administrativa el problema, sino de una falla pública que puede debilitar el control ambiental, prolongar la informalidad minera y dejar sin protección efectiva a territorios donde la actividad extractiva avanza con baja supervisión estatal.\n\nA nivel internacional, la minería artesanal y de pequeña escala continuará siendo una actividad difícil de regular, ya que combina pobreza, empleo, extracción de oro y daño ambiental. Se ha estimado que este sector involucra a entre 10 y 15 millones de mineros, de los cuales 4 a 5 millones son mujeres y niños, y que representa el 37 % de las emisiones mundiales de mercurio a el aire, el agua y el suelo (Programa de las Naciones Unidas para el Medio Ambiente [PNUMA], 2026). La cifra demuestra que el problema de la informalidad minera no es menor, pues afecta salud, agua, suelos y la capacidad de control público.\n\nEn América Latina, la presión de la minería aurífera artesanal será más crítica, ya que se concentra en territorios amazónicos, ríos y zonas de escasa presencia estatal. Según Keane et al. (2023) el uso mundial anual de mercurio para esta actividad llegó a 2059 toneladas con 838 toneladas de emisiones al aire, mientras que Drace et al. (2024) señalan que en Sudamérica la minería artesanal de oro explica el 83 % de las emisiones antropogénicas de mercurio. En esa línea, la evaluación ambiental no puede quedar en papeles, porque la contaminación se mueve por cuencas, sedimentos y cadenas alimentarias.\n\nEn el Perú el problema será más grave porque el proceso de formalización minera integral ha acumulado tantas prórrogas, registros y cambios normativos y todavía arroja muy bajos resultados. El Registro Integral de Formalización Minera contaba con más de 84.000 inscritos, de los cuales solo el 2.4 % logró la formalización (Presidencia del Consejo de Ministros [PCM], 2025). Esa brecha muestra que el Estado ha mantenido la puerta abierta de la formalización, pero el avance real sigue siendo reducido frente al tamaño del padrón.\n\nSe complicó más la situación al ampliar el proceso hasta el 31 de diciembre de 2026. El Ministerio de Energía y Minas (MINEM) señaló que la Ley N.° 32537 prorrogó hasta esa fecha la vigencia de la formalización minera integral o hasta que entre en vigor la Ley de la Pequeña Minería y Minería Artesanal y su reglamento (MINEM, 2025). Esta prórroga no será neutra, porque puede servir para ordenar el proceso o, por el contrario, seguir alargando expedientes sin evaluación técnica suficiente, ni fiscalización territorial constante.\n\nEn el terreno ambiental, la minería aurífera en la Amazonía peruana presenta daños cuantificables, que no pueden manejarse como simples riesgos futuros. Según el Proyecto de Monitoreo de la Amazonía Andina, la deforestación por minería de oro en el Perú llegó a 139 169 hectáreas a mediados de 2025, con el 97.5 % de estas áreas localizadas en Madre de Dios (MAAP, 2025). Más aún, el mismo informe encontró afectación en 225 cuerpos de agua, ríos y quebradas, lo que demuestra que el control ambiental debe salir del expediente y llegar al territorio.",

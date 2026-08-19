@@ -1,0 +1,6070 @@
+"use client"
+
+/**
+ * AICodeChatPanel — coding chat column for the /code workspace. A focused
+ * coding chat that:
+ *
+ *   - Sends the user's prompt to the existing AI streaming endpoint
+ *     (`apiClient.generateAIStream`), reusing the same auth/ token
+ *     plumbing the rest of the app already uses.
+ *   - Auto-prepends a small system-style hint so the model knows it
+ *     is working inside an in-memory workspace and which files are
+ *     open. The user can opt-out with the "Sin contexto" toggle.
+ *   - Renders model output as markdown-ish text and parses fenced
+ *     code blocks. Each block becomes a card with copy + apply +
+ *     diff actions, mediated by the workspace context so the editor
+ *     and preview update atomically.
+ *
+ * We deliberately keep this self-contained: no shared state with the
+ * /chat page so a refresh on /code is fast and the user's main chat
+ * history is unaffected.
+ */
+
+import * as React from "react"
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowUp,
+  BookOpen,
+  BrainCircuit,
+  Bug,
+  Check,
+  ChevronDown,
+  Clock3,
+  CircleHelp,
+  ExternalLink,
+  FileText,
+  FileCode2,
+  History,
+  Image as ImageIcon,
+  LayoutGrid,
+  ListChecks,
+  Loader2,
+  PackagePlus,
+  Paperclip,
+  Plus,
+  RefreshCw,
+  Rocket,
+  ScanSearch,
+  Search,
+  Server,
+  Sparkles,
+  StopCircle,
+  X,
+} from "lucide-react"
+import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
+import { tierForModelChoice } from "@/lib/codex/model-tiers"
+import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
+import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
+import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
+import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
+import { toast } from "sonner"
+
+import { ComposerSendArrow } from "@/components/chat/ChatComposerSurface"
+import { DictationButton } from "@/components/codex/dictation-button"
+import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
+import { apiClient } from "@/lib/api"
+import {
+  extractFilesFromDataTransfer,
+  extractFromClipboardEvent,
+  filesToFileList,
+  logIngest,
+  validateBatch,
+} from "@/lib/attachment-ingest"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import { useAuth } from "@/lib/auth-context-integrated"
+import { useChat } from "@/lib/chat-context-integrated"
+import {
+  agentCompanyDisplayName,
+} from "@/lib/code-agent-company"
+import {
+  CODE_AGENT_REQUEST_EVENT,
+  CODE_AUTONOMOUS_STARTERS,
+  claimCodeAgentRequest,
+  claimPendingCodeAgentInstruction,
+  requestCodeAgentInstruction,
+} from "@/lib/code-autonomous-starters"
+import {
+  buildProactiveCompanySystemBlock,
+  claimPendingSeedPrompt,
+  getProactiveCompanyState,
+  setProactiveCompanyObjective,
+} from "@/lib/code-agent-company-proactive"
+import {
+  CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
+  CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  notifyCompanyAssociationChanged,
+  CODE_OPEN_TOOL_LAUNCHER_EVENT,
+  setActiveCodexProject,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
+import { intakeService, type GenerateResult, type ScaffoldFile } from "@/lib/builder/intake-service"
+import type { CodeAgentPhase, CodeChatTurn } from "@/lib/code-chat-sessions"
+import { computeLineDiff, parseCodeBlocks, type CodeBlock } from "@/lib/code-workspace-utils"
+import { detectBlocker } from "@/lib/code-chat-blocker"
+import { extractPlanLabel } from "@/lib/code-chat-plan-label"
+import {
+  buildWriteMetrics,
+  formatUsd,
+  formatWorked,
+  glyphForAction,
+  type CodeChatAction,
+  type CodeChatMetrics,
+} from "@/lib/code-chat-metrics"
+import {
+  defaultAgentState,
+  type AgentBuildContext,
+  type AgentPhase,
+  type BuildErrorVerdict,
+  type ComposerMode,
+} from "@/lib/code-agent/types"
+import {
+  buildCodeAttachmentPromptBlock,
+  codeAttachmentFileId,
+  codeAttachmentId,
+  codeAttachmentName,
+  codeAttachmentType,
+  composeCodePromptWithAttachments,
+  formatCodeAttachmentBytes,
+  type CodeComposerAttachment,
+} from "@/lib/code-agent/composer-attachments"
+import {
+  buildWebGroundingQuery,
+  classifyBuildError,
+  buildDeterministicPreviewPatches,
+  isBuildRequest,
+  isCodeInformationRequest,
+  isCodeWriteRequest,
+  briefFromConversation,
+  isBareBuildCommand,
+  isConversationalMessage,
+  isQuickGreeting,
+  mergeOverridesIntoPackageJson,
+  nextAgentAction,
+  promptFromContext,
+  renderFiveSections,
+  updateAgentTask,
+} from "@/lib/code-agent/orchestrator"
+import {
+  planAgentTasks,
+  nextWorkTaskAction,
+  stepIterationBudget,
+} from "@/lib/code-agent/autonomy"
+import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
+import { runQualityGate } from "@/lib/code-agent/quality-gate"
+import {
+  engineTransportInstructions,
+  landingSystemPrompt,
+  sreSystemPrompt,
+} from "@/lib/code-agent/prompts"
+import {
+  buildAppsModePrompt,
+} from "@/lib/code-agent/apps-mode-contract"
+import {
+  COMPOSER_MODE_INSTRUCTION,
+  COMPOSER_MODE_LABEL,
+  COMPOSER_PLACEHOLDER,
+} from "@/lib/code-agent/composer-mode-config"
+import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { opencodeService } from "@/lib/opencode/opencode-service"
+import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
+import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
+import { runWhenCodexProjectIdle } from "@/lib/codex/run-slot"
+import {
+  cancelCodexRunFamily,
+  createCodexRunWithCancellationFence,
+} from "@/lib/codex/cancel-run-family"
+import {
+  beginCodexCancellationAttempt,
+  canFinalizeCodexCancellation,
+  classifyCodexCancellationReloadStatus,
+  confirmCodexCancellationBackend,
+  failCodexCancellationBackend,
+  isCodexTurnCancellationLocked,
+  markCodexTurnCancelled,
+  markCodexTurnCancellationFailed,
+  markCodexTurnCancelling,
+  patchCodexTurnUnlessCancellationLocked,
+  reconcileCodexTurnAfterReload,
+  selectCodexCancellationReloadRun,
+  settleCodexCancellationEngine,
+  type CodexCancellationAttempt,
+  type CodexRunCancellationTarget,
+} from "@/lib/codex/turn-cancellation"
+import {
+  clearSessionCodexProject,
+  clearWorkspaceCodexProject,
+  linkedCodexProject,
+  persistSessionCodexProject,
+  persistSessionCodexSyncedRun,
+  persistWorkspaceCodexProject,
+  readSessionCodexSyncedRun,
+} from "@/lib/codex/codex-project-link"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
+import {
+  codexContinuityStreamTerminalStatuses,
+  selectCodexContinuityAssistantTurn,
+  selectCodexContinuityRun,
+  upsertCodexContinuityTurn,
+} from "@/lib/codex/run-continuity"
+import { openRunStream } from "@/lib/codex/run-stream"
+import { useCodexHealth } from "@/lib/codex/use-codex-health"
+import {
+  codexExecutiveSummaryMarkdown,
+  codexLiveActionsMarkdown,
+  codexLiveContent,
+  codexLivePatchMarkdown,
+  foldCodexEvent,
+  initialCodexEngineFold,
+  type CodexEngineFoldState,
+} from "@/lib/code-agent/codex-engine-mapping"
+import {
+  CODE_SELECT_TARGET_EVENT,
+  CODE_SELECTION_CANCEL_EVENT,
+  CODE_SELECTION_CAPTURED_EVENT,
+  buildSelectedElementPrompt,
+  extractInstructionFromComposer,
+  selectedElementChipLabel,
+  type CodePreviewSelectionCancelDetail,
+  type CodePreviewSelectionDetail,
+} from "@/lib/code-preview-selection"
+
+import { DiffView } from "./diff-view"
+
+import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
+import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
+
+const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
+const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+type CodeDispatchOptions = {
+  forceDeterministic?: boolean
+  files?: string[]
+  mode?: ComposerMode
+  /** True when this turn was dispatched by the proactive auto-continuation. */
+  fromWorkTask?: boolean
+}
+
+type PendingCodeInput = {
+  text: string
+  files?: string[]
+  mode?: ComposerMode
+}
+
+type CodexResumeTarget = {
+  projectId: string
+  runId: string
+  planRunId?: string | null
+  mode: "plan" | "build"
+  status: string
+}
+
+type CodexEngineOptions = {
+  iterate?: boolean
+  displayText?: string
+  omitUserTurn?: boolean
+  resume?: CodexResumeTarget
+}
+
+// Coalesce the (possibly many) file-apply batches an agent emits within a
+// single turn into ONE forced preview restart. We deliberately do NOT gate on
+// whether THIS batch contains a package.json: editing a file inside an
+// already-open Vite/Next project or a cloned GitHub repo must still refresh the
+// preview. PreviewPane owns the decision of whether a dev server is actually
+// needed (real node project / bound repo) vs a static srcdoc preview, so the
+// owner never has to press ▶ Ejecutar.
+let autoRunDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let autoRunKeySeq = 0
+
+function openPreviewAndMaybeRun(_files: Array<{ path: string; content: string }>): void {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
+  if (autoRunDebounceTimer) clearTimeout(autoRunDebounceTimer)
+  autoRunDebounceTimer = setTimeout(() => {
+    autoRunDebounceTimer = null
+    autoRunKeySeq += 1
+    const detail = { source: "agent", auto: true, force: true, runKey: autoRunKeySeq }
+    window.dispatchEvent(new CustomEvent(CODE_RUN_PREVIEW_EVENT, { detail }))
+    window.dispatchEvent(new CustomEvent("siragpt:code-run-app", { detail }))
+  }, 600)
+}
+
+function escapeGeneratedHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+}
+
+function safeJsonForScript(value: unknown): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c")
+}
+
+function compactGeneratedTitle(prompt: string, ctx?: AgentBuildContext): string {
+  const raw = ctx?.brand || ctx?.productType || prompt || "Nueva app"
+  const cleaned = raw
+    .replace(/\b(crea|crear|creame|crearme|hazme|hacer|construye|construir|genera|generar|quiero|necesito|dame|una|un|app|landing|pagina|página|web)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  const title = cleaned || raw || "Nueva app"
+  return title.length > 64 ? `${title.slice(0, 61)}...` : title
+}
+
+function buildLocalIndexFallbackFiles(prompt: string, ctx?: AgentBuildContext): Array<{ path: string; content: string }> {
+  const title = compactGeneratedTitle(prompt, ctx)
+  const description = prompt.trim() || "App creada desde el chat de APPS."
+  const featureText = ctx?.features || "Landing, captura de datos, estados claros y lista para iterar desde el chat"
+  const entityText = ctx?.dataEntities || "Registros"
+  const seedItems = [
+    { title: "Ajustar contenido principal", status: "En progreso" },
+    { title: "Agregar datos reales", status: "Pendiente" },
+    { title: "Publicar cuando este listo", status: "Pendiente" },
+  ]
+  const storageKey = `siragpt-apps-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "index"}`
+  const html = `<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeGeneratedHtml(title)}</title>
+  <style>
+    :root { --accent: #FF0000; --ink: #111113; --muted: #6f7178; --line: #e9e9ec; --soft: #fff5f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #fafafa; }
+    .shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+    header { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.86); backdrop-filter: blur(16px); }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: -.01em; }
+    .mark { width: 28px; height: 28px; border-radius: 8px; background: var(--accent); box-shadow: 0 12px 30px rgba(255,0,0,.2); }
+    .pill { border: 1px solid rgba(255,0,0,.18); background: var(--soft); color: #c40000; border-radius: 999px; padding: 7px 11px; font-size: 12px; font-weight: 700; }
+    main { width: min(1120px, calc(100vw - 40px)); margin: 0 auto; padding: 56px 0; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 28px; align-items: stretch; }
+    .hero-copy { padding: 34px 0; }
+    .eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 18px; color: #c40000; font-size: 12px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { max-width: 720px; margin: 0; font-size: clamp(42px, 7vw, 78px); line-height: .94; letter-spacing: -.055em; }
+    .lead { max-width: 620px; margin: 22px 0 0; color: var(--muted); font-size: 18px; line-height: 1.65; }
+    .actions { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 12px; }
+    .btn { border: 0; border-radius: 8px; background: var(--accent); color: white; padding: 13px 18px; font-weight: 800; box-shadow: 0 18px 34px rgba(255,0,0,.22); cursor: pointer; }
+    .btn.secondary { background: white; color: var(--ink); border: 1px solid var(--line); box-shadow: none; }
+    .panel { border: 1px solid var(--line); border-radius: 12px; background: white; box-shadow: 0 24px 70px rgba(17,17,19,.08); overflow: hidden; }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+    .panel-head strong { font-size: 14px; }
+    .status { display: inline-flex; align-items: center; gap: 7px; color: #0f9f5f; font-size: 12px; font-weight: 800; }
+    .dot { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+    form { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px; }
+    input { min-width: 0; height: 42px; border: 1px solid var(--line); border-radius: 8px; padding: 0 12px; font: inherit; outline: none; }
+    input:focus { border-color: rgba(255,0,0,.45); box-shadow: 0 0 0 3px rgba(255,0,0,.08); }
+    .list { display: grid; gap: 8px; padding: 0 16px 16px; }
+    .item { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fff; }
+    .item span:first-child { font-weight: 700; }
+    .tag { border-radius: 999px; background: #f4f4f5; color: var(--muted); padding: 5px 9px; font-size: 12px; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 28px; }
+    .metric { border: 1px solid var(--line); border-radius: 10px; background: white; padding: 16px; }
+    .metric b { display: block; font-size: 28px; letter-spacing: -.04em; }
+    .metric span { color: var(--muted); font-size: 13px; }
+    @media (max-width: 820px) { header { padding: 0 18px; } main { width: min(100vw - 28px, 1120px); padding: 34px 0; } .hero { grid-template-columns: 1fr; } .hero-copy { padding: 10px 0; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div class="brand"><span class="mark"></span><span>${escapeGeneratedHtml(title)}</span></div>
+      <span class="pill">Generado por chat · index.html</span>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="eyebrow">APPS · localhost / index.html</div>
+          <h1>${escapeGeneratedHtml(title)}</h1>
+          <p class="lead">${escapeGeneratedHtml(description)}</p>
+          <div class="actions">
+            <button class="btn" type="button" onclick="document.getElementById('quick-title').focus()">Agregar registro</button>
+            <button class="btn secondary" type="button" onclick="resetDemo()">Restablecer demo</button>
+          </div>
+          <div class="grid" aria-label="Resumen">
+            <div class="metric"><b id="metric-count">3</b><span>${escapeGeneratedHtml(entityText)}</span></div>
+            <div class="metric"><b>1</b><span>Archivo renderizado</span></div>
+            <div class="metric"><b>#FF0000</b><span>Color de marca</span></div>
+          </div>
+        </div>
+        <aside class="panel" aria-label="Panel funcional">
+          <div class="panel-head">
+            <strong>Panel operativo</strong>
+            <span class="status"><span class="dot"></span>Activo</span>
+          </div>
+          <form id="quick-form">
+            <input id="quick-title" autocomplete="off" placeholder="Nuevo item para ${escapeGeneratedHtml(title)}" />
+            <button class="btn" type="submit">Agregar</button>
+          </form>
+          <div class="list" id="items"></div>
+        </aside>
+      </section>
+      <p class="lead" style="font-size:14px;margin-top:28px">Funciones base: ${escapeGeneratedHtml(featureText)}. Pide otro cambio en el chat y el agente editará este workspace.</p>
+    </main>
+  </div>
+  <script>
+    const storageKey = ${safeJsonForScript(storageKey)};
+    const seedItems = ${safeJsonForScript(seedItems)};
+    let items = JSON.parse(localStorage.getItem(storageKey) || "null") || seedItems;
+    const list = document.getElementById("items");
+    const metric = document.getElementById("metric-count");
+    function htmlEscape(value){
+      return String(value).replace(/[&<>"']/g, function(char){
+        if (char === "&") return "&amp;";
+        if (char === "<") return "&lt;";
+        if (char === ">") return "&gt;";
+        if (char === '"') return "&quot;";
+        return "&#39;";
+      });
+    }
+    function persist(){ localStorage.setItem(storageKey, JSON.stringify(items)); }
+    function render(){
+      list.innerHTML = items.map((item, index) => '<div class="item"><span>' + htmlEscape(item.title) + '</span><button class="tag" onclick="toggleItem(' + index + ')">' + htmlEscape(item.status) + '</button></div>').join("");
+      metric.textContent = String(items.length);
+    }
+    function toggleItem(index){
+      items[index].status = items[index].status === "Listo" ? "Pendiente" : "Listo";
+      persist();
+      render();
+    }
+    function resetDemo(){
+      items = seedItems.slice();
+      persist();
+      render();
+    }
+    document.getElementById("quick-form").addEventListener("submit", function(event){
+      event.preventDefault();
+      const input = document.getElementById("quick-title");
+      const title = input.value.trim();
+      if (!title) return;
+      items.unshift({ title, status: "Pendiente" });
+      input.value = "";
+      persist();
+      render();
+    });
+    render();
+  </script>
+</body>
+</html>`
+  const readme = `# ${title}
+
+Generado desde el chat de APPS como \`index.html\` autocontenido.
+
+## Prompt
+${description}
+
+## Como verlo
+Abre \`index.html\` en el preview. No requiere instalar dependencias ni levantar un runner.
+`
+  return [
+    { path: "README.md", content: readme },
+    { path: "index.html", content: html },
+  ]
+}
+
+function hasGeneratedPath(files: Array<Pick<ScaffoldFile, "path">>, matcher: RegExp): boolean {
+  return files.some((file) => matcher.test(file.path))
+}
+
+function countGeneratedPaths(files: Array<Pick<ScaffoldFile, "path">>, matcher: RegExp): number {
+  return files.filter((file) => matcher.test(file.path)).length
+}
+
+function generatedFileSummary(result: GenerateResult, files: Array<Pick<ScaffoldFile, "path">>): string {
+  const entities = result.brief.dataEntities.map((e) => e.name).join(", ") || "sin entidades"
+  const hasPackage = hasGeneratedPath(files, /^package\.json$/i)
+  const hasDb = hasGeneratedPath(files, /^prisma\/schema\.prisma$/i)
+  const apiCount = countGeneratedPaths(files, /^app\/api\/[^/]+\/route\.tsx?$/i)
+  const pageCount = countGeneratedPaths(files, /^app\/.*page\.tsx$/i)
+  const projectLine = hasPackage
+    ? "proyecto Next.js 14 + TypeScript listo para ejecutar"
+    : "preview HTML autocontenido"
+  const dbLine = hasDb
+    ? "Prisma + PostgreSQL con schema.prisma, .env.example y docker-compose.yml"
+    : result.brief.platform === "landing"
+      ? "sin base de datos porque el brief es landing"
+      : "sin base de datos generada para este brief"
+  const backendLine = apiCount > 0
+    ? `${apiCount} route handler(s) en app/api`
+    : "sin rutas API porque no hay entidades persistentes"
+
+  return [
+    `✅ Software generado — ${files.length} archivo(s).`,
+    ``,
+    `- **Plataforma:** ${result.brief.platform}`,
+    `- **Arquitectura:** ${projectLine}`,
+    `- **Frontend:** ${pageCount || 1} pantalla(s) React/Next.js con preview automático del dev server`,
+    `- **Backend:** ${backendLine}`,
+    `- **Base de datos:** ${dbLine}`,
+    `- **Entidades:** ${entities}`,
+    ``,
+    hasPackage
+      ? `Estoy levantando el preview automático del proyecto Next.js. Para correr la app completa con base de datos, usa los comandos del \`README.md\`: \`docker compose up -d db\`, \`npm install\`, \`cp .env.example .env\`, \`npm run db:push\`, \`npm run db:seed\`, \`npm run dev\`.`
+      : `Estoy abriendo **localhost / index.html** automáticamente para validar la interfaz al instante.`,
+  ].join("\n")
+}
+
+function orderFilesForWorkspaceApply<T extends { path: string; content?: string }>(files: T[]): T[] {
+  const hasNextApp =
+    files.some((file) => /^app\/page\.tsx$/i.test(file.path)) ||
+    files.some((file) => /^package\.json$/i.test(file.path) && /"next"\s*:/.test(file.content || ""))
+  const priority = (path: string) => {
+    if (hasNextApp) {
+      if (/^index\.html?$/i.test(path)) return 10
+      if (/^app\/page\.tsx$/i.test(path)) return 100
+      return 50
+    }
+    return /^index\.html?$/i.test(path) ? 100 : 50
+  }
+  return [...files].sort((a, b) => priority(a.path) - priority(b.path))
+}
+
+// Gather config files from the workspace to give the SRE agent enough context
+// to propose real overrides (package.json, lockfile, next.config, tsconfig…).
+function collectConfigFiles(
+  files: Record<string, { path: string; language: string; content: string }>,
+): string {
+  const wanted = new Set([
+    "package.json",
+    "package-lock.json",
+    "next.config.mjs",
+    "next.config.js",
+    "vite.config.ts",
+    "vite.config.js",
+    "tsconfig.json",
+    ".npmrc",
+  ])
+  return Object.values(files)
+    .filter((f) => wanted.has(f.path.split("/").pop() || ""))
+    .map((f) => `// ${f.path}\n${f.content}`)
+    .join("\n\n")
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function lowerFirst(value: string): string {
+  return value ? value.charAt(0).toLowerCase() + value.slice(1) : value
+}
+
+function removePrismaPostinstall(pkgText: string): string | null {
+  try {
+    const pkg = JSON.parse(pkgText)
+    const postinstall = String(pkg?.scripts?.postinstall || "")
+    if (!/prisma\s+generate/i.test(postinstall)) return null
+    delete pkg.scripts.postinstall
+    return JSON.stringify(pkg, null, 2) + "\n"
+  } catch {
+    return null
+  }
+}
+
+function buildDeterministicSrePatches(
+  files: Record<string, { path: string; language: string; content: string }>,
+  verdict: BuildErrorVerdict,
+  log: string,
+): Array<{ path: string; content: string }> {
+  const patches: Array<{ path: string; content: string }> = []
+  const renames = Object.entries(verdict.suggestedPrismaModelRenames || {})
+
+  if (renames.length > 0) {
+    for (const file of Object.values(files)) {
+      if (!/\.(prisma|tsx?|jsx?)$/i.test(file.path)) continue
+      let next = file.content
+      for (const [fromModel, toModel] of renames) {
+        next = next.replace(
+          new RegExp(`\\bmodel\\s+${escapeRegExp(fromModel)}\\b`, "g"),
+          `model ${toModel}`,
+        )
+        next = next.replace(
+          new RegExp(`\\bprisma\\.${escapeRegExp(lowerFirst(fromModel))}\\b`, "g"),
+          `prisma.${lowerFirst(toModel)}`,
+        )
+      }
+      if (next !== file.content) patches.push({ path: file.path, content: next })
+    }
+  }
+
+  const pkg = files["package.json"]
+  if (pkg && /prisma\s+generate|postinstall|schema\.prisma/i.test(log)) {
+    const withoutPostinstall = removePrismaPostinstall(pkg.content)
+    if (withoutPostinstall && withoutPostinstall !== pkg.content) {
+      patches.push({ path: "package.json", content: withoutPostinstall })
+    }
+  }
+
+  return patches
+}
+
+// Agent-style narration block (docs/code/code-chat-agent-style-prompt.md): makes
+// every assistant reply read like the live-dashboard agent — first-person,
+// technical, step-by-step, validating env constraints by name. The badges /
+// action-glyph rows / Worked Summary are added by the UI from REAL data; the
+// model must NOT fabricate them.
+const AGENT_STYLE_BLOCK = [
+  "ESTILO DE RESPUESTA (obligatorio):",
+  "- Eres un Agente de Ingeniería de Software Senior: planificas, ejecutas y reportas como un dashboard de desarrollo en vivo.",
+  "- Escribe en PRIMERA PERSONA y en PRESENTE, con tono técnico, objetivo y proactivo: \"Analizo todos los errores en paralelo\", \"Veo los problemas claramente\", \"Tengo el panorama completo\", \"Los ordeno por prioridad\". Frases cortas (1-2 líneas), sin relleno.",
+  "- Abre SIEMPRE con una línea de planificación que empiece con un GERUNDIO y nombre la operación (\"Planificando la verificación de la migración…\", \"Revisando el código de memoria…\", \"Buscando las queries SQL…\"). Ponla como primera línea, sola, seguida del resto en líneas aparte.",
+  "- Narra PASO A PASO: una frase breve anuncia la acción → realizas la acción (generas el archivo / usas la herramienta) → describes lo que observas → siguiente acción. No vuelques un bloque de código gigante sin narrar.",
+  "- REVISA primero el código que YA existe en el proyecto antes de cambiar nada: nombra los archivos y carpetas que abres para entender la estructura (\"Reviso `src/App.tsx` y la carpeta `src/components/`…\"). Trabaja sobre lo que existe; NO reescribas la app entera por un cambio pequeño.",
+  "- Haz cambios QUIRÚRGICOS y mínimos: toca solo los archivos necesarios para lo que se pide. ANTES de editar, di EXPLÍCITAMENTE qué carpeta o archivo vas a modificar y por qué (\"Estoy modificando la carpeta `src/components` — edito `Button.tsx` para añadir el estado de carga…\"). Conserva intacto el resto del código.",
+  "- Antes de cambiar o ejecutar código, VALIDA los supuestos del entorno y NÓMBRALOS: columnas/tablas que quizá no existan (p. ej. column \"embedding\" does not exist), dependencias, variables. No asumas que algo existe sin verificarlo.",
+  "- Si la app necesita una API key o variable de entorno para funcionar (p. ej. `OPENAI_API_KEY`, `DATABASE_URL`, `STRIPE_SECRET_KEY`), DÍSELO al usuario con claridad: qué clave es, para qué sirve y dónde colocarla (`.env` / `.env.example`). Nunca inventes el valor de una clave: deja un placeholder y avisa que debe configurarla.",
+  "- Cierra con una síntesis del panorama (\"Tengo el panorama completo: identifico N problemas distintos. Los ordeno por prioridad:\").",
+  "- NO inventes resultados ni métricas (tiempo, acciones, líneas, tokens y costo se miden y se muestran solos). Si algo falla por falta de créditos/cuota/clave (402), detente, no reintentes en bucle, y explica qué quedó bloqueado.",
+].join("\n")
+
+// System prompt for the CONVERSATION tier: the user is talking to the agent
+// (question / doubt / meta), not asking it to build. The UI adds the real
+// action rows; the model must answer, not fabricate work.
+const CONVERSATION_SYSTEM_PROMPT = [
+  "[MODO CONVERSACIÓN]",
+  "Eres el agente de apps de SiraGPT dentro del workspace /code. El usuario NO pidió construir ni cambiar código: te está hablando (una pregunta, una duda o un comentario).",
+  "Responde útil, cercano y BREVE (2-6 frases), en el idioma del usuario.",
+  "Si pregunta qué sabes hacer: creas apps, landings y juegos desde una descripción; editas el proyecto actual; instalas dependencias npm cuando el proyecto lo necesita; lo ejecutas en vivo en el preview; lo corriges y lo publicas.",
+  "PROHIBIDO generar código, bloques de archivos, o afirmar que hiciste cambios — en este turno solo conversas.",
+  "Responde directo; invita a construir solo si aplica.",
+].join("\n")
+
+const CODE_AGENT_PHASE_BLUEPRINT = [
+  { key: "plan", label: "Plan" },
+  { key: "context", label: "Contexto" },
+  { key: "generate", label: "Generar" },
+  { key: "apply", label: "Aplicar" },
+  { key: "verify", label: "Verificar" },
+] as const
+
+type CodeAgentPhaseKey = (typeof CODE_AGENT_PHASE_BLUEPRINT)[number]["key"]
+
+function buildCodeAgentPhases(
+  activeKey: CodeAgentPhaseKey,
+  overrides: Partial<Record<CodeAgentPhaseKey, Partial<CodeAgentPhase>>> = {},
+): CodeAgentPhase[] {
+  const activeIndex = Math.max(0, CODE_AGENT_PHASE_BLUEPRINT.findIndex((phase) => phase.key === activeKey))
+  return CODE_AGENT_PHASE_BLUEPRINT.map((phase, index) => {
+    const override = overrides[phase.key]
+    const status =
+      override?.status ??
+      (index < activeIndex ? "done" : index === activeIndex ? "running" : "pending")
+    return {
+      key: phase.key,
+      label: phase.label,
+      status,
+      ...(override?.detail ? { detail: override.detail } : {}),
+    }
+  })
+}
+
+function buildSystemContext(
+  files: Record<string, { path: string; language: string; content: string }>,
+  activePath: string | null,
+  folder: { name: string; description?: string | null; instructions?: string | null } | null,
+  mode?: ComposerMode,
+  proactiveBlock?: string | null,
+) {
+  const fileList = Object.values(files)
+    .map((f) => `- ${f.path} (${f.language})`)
+    .join("\n")
+  const active = activePath && files[activePath] ? files[activePath] : null
+  const activeBlock = active
+    ? `\n\nArchivo activo: ${active.path}\n\n\u0060\u0060\u0060${active.language} ${active.path}\n${active.content}\n\u0060\u0060\u0060`
+    : ""
+  const folderBlock = folder
+    ? [
+        "",
+        `Carpeta activa: ${folder.name}`,
+        folder.description ? `Descripción: ${folder.description}` : "",
+        folder.instructions ? `Instrucciones del proyecto:\n${folder.instructions}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : ""
+  const hasNodeProject = Object.keys(files).some((p) => /(^|\/)package\.json$/.test(p))
+  // App mode builds the full-stack APPS contract even on an empty workspace —
+  // emitting the static-preview rules there would contradict the builder.
+  const expectNodeProject = hasNodeProject || mode === "app" || mode === "deps"
+  const previewBlock = mode === "app"
+    ? [
+        "El workspace alojará un SOFTWARE FULL-STACK real: Next.js 14 App Router",
+        "+ TypeScript + Prisma + PostgreSQL. Usa package.json, app/**,",
+        "app/api/**, lib/db.ts, prisma/schema.prisma, .env.example y",
+        "docker-compose.yml. El preview se arranca automáticamente con el dev server",
+        "y prepara la base de datos con db:push/db:seed. NO uses arrays globales",
+        "ni almacenamiento en memoria como persistencia primaria.",
+        "Si existe app/page.tsx, los cambios visuales del home/dashboard se hacen",
+        "en app/page.tsx y app/globals.css. NO edites index.html ni README.md",
+        "para cambios que deban verse en el preview vivo de Next.",
+      ].join("\n")
+    : mode === "deps"
+    ? [
+        hasNodeProject
+          ? "El workspace contiene package.json: trata este turno como gestión real de dependencias."
+          : "El usuario está pidiendo dependencias, pero aún no hay package.json. Si el pedido requiere un proyecto ejecutable, crea un starter Vite mínimo con package.json; si solo pregunta, explica qué falta.",
+        "Inspecciona package.json antes de cambiarlo. Instala paquetes solo por nombre/version válidos, sin flags arbitrarios ni scripts interactivos.",
+        "Después de instalar o editar dependencias, ejecuta type_check y dev_server_check; si aparece un import roto o módulo faltante, corrige package.json/código y verifica otra vez.",
+      ].join("\n")
+    : expectNodeProject
+    ? [
+        hasNodeProject
+          ? "El workspace contiene un PROYECTO Node REAL (hay package.json) — típicamente"
+          : "El workspace alojará un PROYECTO Node REAL.",
+        "Usa imports npm normales y extensiones .tsx/.ts; el usuario lo ejecuta",
+        "con dev server autoejecutado en preview. Respeta el stack ya presente en package.json",
+        "si existe.",
+      ].join("\n")
+    : [
+        "El workspace tiene un PREVIEW EN VIVO (navegador embebido) que se",
+        "actualiza solo. Escribe SIEMPRE código que se pueda previsualizar sin",
+        "build ni npm:",
+        "- Web estática: un único index.html autocontenido (puedes usar el CDN de",
+        "  Tailwind y enlazar styles.css / app.js locales).",
+        "- React/JSX: define un componente App exportado por defecto (export default",
+        "  function App()). React 18 y los globales Recharts, d3, lucide, motion y",
+        "  AnimatePresence, además de Tailwind, ya están disponibles — NO uses",
+        "  imports de paquetes npm (no hay bundler). Importar archivos locales",
+        "  .css/.json sí funciona.",
+        "- Mantén cada entrega autocontenida y lista para renderizar.",
+      ].join("\n")
+  return [
+    "Eres un asistente de programación que trabaja en un workspace en memoria del navegador.",
+    "Cuando devuelvas código pensado para un archivo, usa SIEMPRE este formato para que la app pueda aplicarlo:",
+    "",
+    "\u0060\u0060\u0060<lenguaje> <ruta>",
+    "<contenido COMPLETO del archivo>",
+    "\u0060\u0060\u0060",
+    "(la ruta va SOLO en el encabezado del bloque — NO añadas líneas `// path:` dentro del contenido;",
+    "en package.json un comentario rompe el JSON)",
+    folderBlock,
+    "",
+    previewBlock,
+    "",
+    AGENT_STYLE_BLOCK,
+    proactiveBlock ? `\n${proactiveBlock}\n` : "",
+    "",
+    "Archivos disponibles:",
+    fileList || "(workspace vacío)",
+    activeBlock,
+  ].filter((part) => part !== "").join("\n")
+}
+
+// Backend import caps (POST /api/codex/projects/:id/files): 200 files, 500KB
+// per file, 5MB total. Filter/trim the local workspace to fit so a huge asset
+// never turns the whole sync into a 400.
+const CODEX_IMPORT_MAX_FILES = 200
+const CODEX_IMPORT_MAX_FILE_BYTES = 500 * 1024
+const CODEX_IMPORT_MAX_TOTAL_BYTES = 5 * 1024 * 1024
+
+function collectWorkspaceFilesForImport(
+  files: Record<string, { path: string; language: string; content: string }>,
+): Array<{ path: string; content: string }> {
+  const out: Array<{ path: string; content: string }> = []
+  let total = 0
+  const encoder = typeof TextEncoder !== "undefined" ? new TextEncoder() : null
+  const byteLen = (s: string) => (encoder ? encoder.encode(s).length : s.length)
+  for (const [path, file] of Object.entries(files)) {
+    if (!path || typeof file?.content !== "string") continue
+    if (path.length > 500) continue
+    if (/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(path)) continue
+    const bytes = byteLen(file.content)
+    if (bytes > CODEX_IMPORT_MAX_FILE_BYTES) continue
+    if (total + bytes > CODEX_IMPORT_MAX_TOTAL_BYTES) break
+    out.push({ path, content: file.content })
+    total += bytes
+    if (out.length >= CODEX_IMPORT_MAX_FILES) break
+  }
+  return out
+}
+
+export type AICodeChatPanelProps = {
+  embedded?: boolean
+  title?: string
+  onBack?: () => void
+  proactive?: boolean
+}
+
+export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
+  const { user, token } = useAuth()
+  const {
+    selectedModel,
+    selectProvider,
+    availableModels,
+  } = useChat()
+  const {
+    files,
+    activePath,
+    applyBlock,
+    registerChatFocusHandler,
+    activeFolder,
+    codeChatSessions,
+    activeCodeChatSessionId,
+    activeCodeChatSession,
+    createCodeChatSession,
+    setActiveCodeChatSession,
+    patchCodeChatSessionTurns,
+    patchAgentState,
+  } = useCodeWorkspace()
+
+  const sessionId = activeCodeChatSessionId
+  const turns = React.useMemo(
+    () => activeCodeChatSession?.turns ?? [],
+    [activeCodeChatSession?.turns],
+  )
+  const turnsRef = React.useRef(turns)
+  React.useEffect(() => {
+    turnsRef.current = turns
+  }, [turns])
+  const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
+
+  const setTurns = React.useCallback(
+    (updater: React.SetStateAction<CodeChatTurn[]>) => {
+      if (!sessionId) return
+      patchCodeChatSessionTurns(sessionId, (prev) =>
+        typeof updater === "function" ? (updater as (p: CodeChatTurn[]) => CodeChatTurn[])(prev) : updater,
+      )
+    },
+    [patchCodeChatSessionTurns, sessionId],
+  )
+
+  const [input, setInput] = React.useState("")
+  const [codeAttachments, setCodeAttachments] = React.useState<CodeComposerAttachment[]>([])
+  const [codeUploadProgress, setCodeUploadProgress] = React.useState<Record<string, number>>({})
+  const [identityIssue, setIdentityIssue] = React.useState<{ code: string; message: string } | null>(null)
+  const [codeDraggingFiles, setCodeDraggingFiles] = React.useState(false)
+  const [busy, setBusy] = React.useState(false)
+  const [buildingApp, setBuildingApp] = React.useState(false)
+  const proactiveEnabled = proactive ?? getProactiveCompanyState().enabled
+  const agentsActive =
+    busy ||
+    buildingApp ||
+    proactiveEnabled ||
+    agentPhase === "generating" ||
+    agentPhase === "debugging"
+  const [includeContext, setIncludeContext] = React.useState(true)
+  const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+  const composerModeRef = React.useRef<ComposerMode>(composerMode)
+  composerModeRef.current = composerMode
+  const [selectingTarget, setSelectingTarget] = React.useState(false)
+  const [selectedPreviewTarget, setSelectedPreviewTarget] = React.useState<CodePreviewSelectionDetail | null>(null)
+
+  // The /code chat picks its OWN model — a fast, streaming one — independent of
+  // the main chat (whose default may be a slow reasoning model that times out
+  // the live stream). Auto-selected from the catalog, persisted, user-overridable.
+  const [codeModel, setCodeModel] = React.useState<{ name: string; provider?: string } | null>(null)
+
+  // Reasoning effort for /code streams (Bajo/Medio/Extra/Max). Shared key with
+  // the main composer so the user's preference carries across surfaces.
+  const [selectedEffort, setSelectedEffortState] = React.useState<string>("Medio")
+  React.useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("sira:composer:effort")
+      if (saved) setSelectedEffortState(saved)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+  const setSelectedEffort = React.useCallback((effort: string) => {
+    setSelectedEffortState(effort)
+    try {
+      window.localStorage.setItem("sira:composer:effort", effort)
+    } catch {
+      /* quota / private mode */
+    }
+  }, [])
+
+  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
+  // policy.fallbackModel it will route to. Surface it so the composer never gets
+  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
+  // LLM-free and works even with no model at all.)
+  const [fallbackModel, setFallbackModel] = React.useState<{
+    name: string
+    provider?: string
+    displayName?: string
+  } | null>(null)
+
+  React.useEffect(() => {
+    if ((availableModels && availableModels.length > 0) || fallbackModel) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await apiClient.getAIModels("TEXT")
+        const fb = (
+          res as {
+            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
+          }
+        )?.policy?.fallbackModel
+        if (!cancelled && fb?.name) {
+          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
+        }
+      } catch {
+        /* best-effort: deterministic Agent build still works without a model */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [availableModels, fallbackModel])
+
+  React.useEffect(() => {
+    if (codeModel || !availableModels || availableModels.length === 0) return
+    let restored: { name: string; provider?: string } | null = null
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem("code-workspace:model") : null
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.name && availableModels.some((m) => m.name === parsed.name)) restored = parsed
+      }
+    } catch {
+      /* ignore corrupt value */
+    }
+    const chosen = restored || recommendFastModel(availableModels) || availableModels[0]
+    if (chosen) setCodeModel({ name: chosen.name, provider: chosen.provider })
+  }, [availableModels, codeModel])
+
+  const chooseCodeModel = React.useCallback((m: { name: string; provider?: string }) => {
+    setCodeModel(m)
+    try {
+      window.localStorage.setItem("code-workspace:model", JSON.stringify(m))
+    } catch {
+      /* quota / private mode */
+    }
+  }, [])
+
+  // If a real catalog loads later (e.g. an admin activates models) and our
+  // persisted choice is the policy fallback — which isn't in the catalog — drop
+  // it so the picker reflects the real list instead of pinning "Gema4".
+  React.useEffect(() => {
+    if (!availableModels || availableModels.length === 0 || !codeModel) return
+    if (availableModels.some((m) => m.name === codeModel.name)) return
+    const next = recommendFastModel(availableModels) || availableModels[0]
+    if (next) chooseCodeModel({ name: next.name, provider: next.provider })
+  }, [availableModels, codeModel, chooseCodeModel])
+
+  // Resolved model the code chat actually uses. Priority:
+  //  1. an explicit code-chat choice (codeModel),
+  //  2. a fast model derived inline from the catalog (so the FIRST request is
+  //     already fast even before the auto-pick effect has run),
+  //  3. the main-chat selection as a last resort (may be a slow model).
+  const autoFastModel = React.useMemo(
+    () => recommendFastModel(availableModels || []),
+    [availableModels],
+  )
+  const activeModelName =
+    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
+  const activeProvider =
+    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
+  // What the model picker shows: the real catalog when present, else the single
+  // policy fallback so the user sees "Gema4" rather than an endless spinner.
+  const pickerModels = React.useMemo<ModelOption[]>(() => {
+    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
+    if (fallbackModel) {
+      return [
+        {
+          name: fallbackModel.name,
+          displayName: fallbackModel.displayName,
+          provider: fallbackModel.provider,
+        } as ModelOption,
+      ]
+    }
+    return []
+  }, [availableModels, fallbackModel])
+  // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
+  const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
+
+  // OpenCode engine (opt-in): when configured/reachable, the chat can route
+  // prompts through the real agent engine instead of the LLM/builder path.
+  const { available: engineAvailable } = useOpencodeEngine()
+  const [engineMode, setEngineMode] = React.useState(false)
+  // Map<chatSessionId, engineSessionId> so each code chat reuses one engine session.
+  const engineSessionRef = React.useRef<Record<string, string>>({})
+  // Codex Agent V2 — the REAL server-driven agent (plan→build runs, durable
+  // SSE). Availability requires BOTH the public feature flag and this user's
+  // effective access. Health alone sent ordinary users into a guaranteed 403
+  // instead of the deterministic builder.
+  const codexHealth = useCodexHealth()
+  const [codexCanRun, setCodexCanRun] = React.useState(false)
+  React.useEffect(() => {
+    if (codexHealth.enabled !== true || !user?.id) {
+      setCodexCanRun(false)
+      return
+    }
+    let cancelled = false
+    setCodexCanRun(false)
+    codexApi
+      .access()
+      .then((access) => {
+        if (!cancelled) setCodexCanRun(access.enabled === true && access.canRun === true)
+      })
+      .catch(() => {
+        if (!cancelled) setCodexCanRun(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [codexHealth.enabled, user?.id])
+  const codexAvailable = codexHealth.enabled === true && codexCanRun
+  // Map<chatSessionId, codexProjectId> so each code chat reuses ONE project.
+  // For Empresas, the durable authority is the backend association table.
+  // Browser storage remains available only for local-folder sessions.
+  const codexProjectRef = React.useRef<Record<string, string>>({})
+  const [durableCompanyCodexProjectId, setDurableCompanyCodexProjectId] = React.useState<string | null>(null)
+  const [companyAssociationResolved, setCompanyAssociationResolved] = React.useState(false)
+  const [associationEpoch, setAssociationEpoch] = React.useState(0)
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const bump = () => setAssociationEpoch((value) => value + 1)
+    window.addEventListener(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT, bump)
+    return () => window.removeEventListener(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT, bump)
+  }, [])
+  React.useEffect(() => {
+    const workspaceId = String(activeFolder?.id || "")
+    const companyProjectId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })
+    if (!companyProjectId) {
+      setDurableCompanyCodexProjectId(null)
+      setCompanyAssociationResolved(true)
+      return
+    }
+    let cancelled = false
+    setCompanyAssociationResolved(false)
+    codexApi.getCompanyAssociation(companyProjectId)
+      .then((state) => {
+        if (!cancelled) {
+          setDurableCompanyCodexProjectId(state.association?.codexProject.id || null)
+          setCompanyAssociationResolved(true)
+          setIdentityIssue(null)
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDurableCompanyCodexProjectId(null)
+          setIdentityIssue(codexIdentityIssue(error))
+          // The banner stays, but the gate must resolve so local/host preview
+          // is not stuck on a stale module-level Codex project id.
+          setCompanyAssociationResolved(true)
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeFolder?.id, associationEpoch])
+  const detachCodexProjectForLocalFallback = React.useCallback(
+    (sid: string) => {
+      delete codexProjectRef.current[sid]
+      clearSessionCodexProject(sid)
+      if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
+      setActiveCodexProject(null)
+    },
+    [activeFolder?.id],
+  )
+  // Keep the module-level active-codex-project in sync with the visible chat
+  // session so PreviewPane's ▶/auto-run targets THIS chat's server workspace
+  // (or falls back to the host/srcdoc path when the chat has no codex project).
+  React.useEffect(() => {
+    if (!sessionId) {
+      setActiveCodexProject(null)
+      return
+    }
+    const companyWorkspace = Boolean(codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }))
+    const projectId = companyWorkspace
+      ? durableCompanyCodexProjectId
+      : (
+        linkedCodexProject({ sessionId, workspaceId: activeFolder?.id })
+        ?? codexProjectRef.current[sessionId]
+      )
+    if (companyWorkspace && !companyAssociationResolved) return
+    if (projectId && codexAvailable) codexProjectRef.current[sessionId] = projectId
+    setActiveCodexProject(
+      codexAvailable && (!companyWorkspace || companyAssociationResolved) ? projectId : null,
+    )
+  }, [
+    activeFolder?.id,
+    codexAvailable,
+    companyAssociationResolved,
+    durableCompanyCodexProjectId,
+    sessionId,
+  ])
+
+  const abortRef = React.useRef<AbortController | null>(null)
+  const activeCodexRunRef = React.useRef<CodexRunCancellationTarget | null>(null)
+  const activeCodexTurnIdRef = React.useRef<string | null>(null)
+  const codexCancellationAttemptRef = React.useRef(0)
+  const codexCancellationRef = React.useRef<CodexCancellationAttempt | null>(null)
+  const explicitCodexStopTurnIdsRef = React.useRef<Set<string>>(new Set())
+  const activeCodexCancellationState = React.useMemo(() => {
+    const turnId = codexCancellationRef.current?.turnId
+    if (!turnId) return null
+    const state = turns.find((turn) => turn.id === turnId)?.cancellationState
+    // Every ref transition also patches turns; this follows that durable turn
+    // without reviving a stale failed marker from another session.
+    return state === "cancelling" || state === "failed" ? state : null
+  }, [turns])
+  const codeFileInputRef = React.useRef<HTMLInputElement | null>(null)
+  const codeAttachmentsRef = React.useRef<CodeComposerAttachment[]>([])
+  const codeDragCounterRef = React.useRef(0)
+  const codeCancelledTempIdsRef = React.useRef<Set<string>>(new Set())
+  // Turn ids whose `voice` was created in THIS panel instance. La voz ya no
+  // se auto-reproduce nunca (solo al clic del usuario), pero el marcador se
+  // conserva por si hace falta distinguir turnos frescos de rehidratados.
+  const freshVoiceIdsRef = React.useRef<Set<string>>(new Set())
+  const markVoiced = React.useCallback((turnId: string) => {
+    freshVoiceIdsRef.current.add(turnId)
+  }, [])
+  const inputRef = React.useRef<HTMLTextAreaElement | null>(null)
+  const lastAppliedFilesRef = React.useRef<Array<{ path: string; content: string }>>([])
+  const scrollerRef = React.useRef<HTMLDivElement | null>(null)
+  const selectionRequestRef = React.useRef(0)
+  // Allow Cmd/Ctrl+L from anywhere in the workspace to focus the
+  // composer. The provider exposes a small bus so we don't drill refs.
+  React.useEffect(() => {
+    return registerChatFocusHandler(() => {
+      inputRef.current?.focus()
+    })
+  }, [registerChatFocusHandler])
+
+  // The shell's "Composer" button (⌘I) emits a window event so this
+  // panel can switch into the multi-step "build" mode and focus the
+  // input without coupling shell ↔ panel through props.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const handler = () => {
+      setComposerMode("build")
+      window.requestAnimationFrame(() => inputRef.current?.focus())
+    }
+    window.addEventListener("siragpt:code-composer-mode", handler)
+    return () => window.removeEventListener("siragpt:code-composer-mode", handler)
+  }, [])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onSelectionCaptured = (event: Event) => {
+      const detail = (event as CustomEvent<CodePreviewSelectionDetail>).detail
+      if (!detail) return
+      setSelectingTarget(false)
+      setSelectedPreviewTarget(detail)
+      setComposerMode((mode) => (mode === "plan" || mode === "ask" || mode === "image" ? "build" : mode))
+      // Keep the free-form instruction clean. The structured selector context
+      // rides as a chip and is merged only on submit.
+      setInput((prev) => extractInstructionFromComposer(prev))
+      window.requestAnimationFrame(() => {
+        const inputEl = inputRef.current
+        inputEl?.focus()
+        if (inputEl) {
+          const end = inputEl.value.length
+          inputEl.setSelectionRange(end, end)
+        }
+      })
+      toast.success("Elemento listo. Escribe el cambio y envíalo.")
+    }
+    const onSelectionCancel = (event: Event) => {
+      setSelectingTarget(false)
+      const reason = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail?.reason
+      if (reason) toast.message(reason)
+    }
+    window.addEventListener(CODE_SELECTION_CAPTURED_EVENT, onSelectionCaptured)
+    window.addEventListener(CODE_SELECTION_CANCEL_EVENT, onSelectionCancel)
+    return () => {
+      window.removeEventListener(CODE_SELECTION_CAPTURED_EVENT, onSelectionCaptured)
+      window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, onSelectionCancel)
+    }
+  }, [])
+
+  const toggleTargetSelection = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    if (selectingTarget) {
+      setSelectingTarget(false)
+      window.dispatchEvent(
+        new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
+          detail: { reason: "Selección cancelada.", source: "chat" },
+        }),
+      )
+      return
+    }
+    selectionRequestRef.current += 1
+    setSelectingTarget(true)
+    setComposerMode((mode) => (mode === "plan" || mode === "ask" || mode === "image" ? "build" : mode))
+    window.dispatchEvent(new CustomEvent(CODE_OPEN_PREVIEW_EVENT))
+    window.setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent(CODE_SELECT_TARGET_EVENT, {
+          detail: { requestId: selectionRequestRef.current },
+        }),
+      )
+    }, 90)
+    inputRef.current?.blur()
+    toast("Selecciona en el preview la parte que quieres modificar.")
+  }, [selectingTarget])
+
+  React.useEffect(() => {
+    codeAttachmentsRef.current = codeAttachments
+  }, [codeAttachments])
+
+  React.useEffect(() => {
+    return () => {
+      codeAttachmentsRef.current.forEach((file) => {
+        if (file.preview) URL.revokeObjectURL(file.preview)
+      })
+    }
+  }, [])
+
+  const showCodeUploadRejections = React.useCallback((rejected: Array<{ reason: string }>) => {
+    if (rejected.length === 0) return
+    const grouped = rejected.reduce<Record<string, number>>((acc, item) => {
+      acc[item.reason] = (acc[item.reason] || 0) + 1
+      return acc
+    }, {})
+    Object.entries(grouped).forEach(([reason, count]) => {
+      toast.error(count > 1 ? `${reason} (${count} archivos)` : reason)
+    })
+  }, [])
+
+  const uploadCodeFiles = React.useCallback(
+    async (fileList: FileList, sourceChannel: string = "picker") => {
+      if (fileList.length === 0) return
+      if (!user) {
+        toast.error("Inicia sesión para adjuntar archivos.")
+        return
+      }
+
+      const incoming = Array.from(fileList)
+      const { accepted, rejected } = validateBatch(incoming, {
+        existingCount: codeAttachmentsRef.current.length,
+      })
+      showCodeUploadRejections(rejected)
+      if (accepted.length === 0) return
+
+      const idempotencyKey = `code-upload-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      const tempFiles: CodeComposerAttachment[] = accepted.map((file) => {
+        const tempId = `code-temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+        codeCancelledTempIdsRef.current.delete(tempId)
+        return {
+          tempId,
+          name: file.name,
+          originalName: file.name,
+          type: file.type,
+          mimeType: file.type,
+          size: file.size,
+          preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : null,
+          file,
+          sourceChannel,
+          status: "uploading",
+        }
+      })
+
+      setCodeAttachments((current) => {
+        const next = [...current, ...tempFiles]
+        codeAttachmentsRef.current = next
+        return next
+      })
+      setCodeUploadProgress((current) => {
+        const next = { ...current }
+        tempFiles.forEach((file) => {
+          next[file.tempId] = 1
+        })
+        return next
+      })
+
+      const chunks = buildComposerUploadChunks(accepted, tempFiles)
+      let failedChunks = 0
+
+      for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index]
+        const chunkTempIds = new Set(chunk.temps.map((file) => file.tempId))
+        try {
+          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
+            sourceChannel,
+            idempotencyKey: `${idempotencyKey}-${index + 1}`,
+            asyncProcessing: true,
+            onProgress: (pct) => {
+              setCodeUploadProgress((current) => {
+                const next = { ...current }
+                chunk.temps.forEach((file) => {
+                  next[file.tempId] = Math.max(next[file.tempId] || 1, Math.min(99, pct))
+                })
+                return next
+              })
+            },
+          })
+
+          if (!Array.isArray(response?.files)) {
+            failedChunks += 1
+            setCodeAttachments((current) => {
+              const next = current.map((file) =>
+                chunkTempIds.has(file.tempId)
+                  ? { ...file, status: "failed" as const, uploadError: "Respuesta sin archivos" }
+                  : file,
+              )
+              codeAttachmentsRef.current = next
+              return next
+            })
+            toast.error("La subida falló. Puedes reintentar desde el chip.")
+            continue
+          }
+
+          setCodeUploadProgress((current) => {
+            const next = { ...current }
+            chunk.temps.forEach((file) => {
+              next[file.tempId] = 100
+            })
+            return next
+          })
+
+          const merged: CodeComposerAttachment[] = response.files
+            .map((serverFile: any, serverIndex: number) => {
+              const temp = chunk.temps[serverIndex]
+              if (!temp || codeCancelledTempIdsRef.current.has(temp.tempId)) return null
+              const failed = serverFile?.success === false
+              return {
+                ...temp,
+                ...serverFile,
+                tempId: temp.tempId,
+                file: temp.file,
+                preview: temp.preview ?? serverFile?.preview ?? null,
+                name: serverFile?.originalName || serverFile?.name || temp.name,
+                originalName: serverFile?.originalName || temp.originalName || temp.name,
+                filename: serverFile?.filename,
+                type: serverFile?.mimeType || serverFile?.type || temp.type,
+                mimeType: serverFile?.mimeType || serverFile?.type || temp.mimeType,
+                size: Number(serverFile?.size || temp.size || 0),
+                sourceChannel,
+                status: failed ? ("failed" as const) : ("ready" as const),
+                uploadError: failed ? serverFile?.error || "No se pudo procesar el archivo." : undefined,
+              }
+            })
+            .filter(Boolean) as CodeComposerAttachment[]
+
+          const failedServerFiles = merged.filter((file) => file.status === "failed")
+          if (failedServerFiles.length > 0) {
+            failedChunks += 1
+            failedServerFiles.forEach((file) => toast.error(file.uploadError || "No se pudo procesar el archivo."))
+          }
+
+          setCodeAttachments((current) => {
+            const next = [
+              ...current.filter((file) => !chunkTempIds.has(file.tempId)),
+              ...merged,
+            ]
+            codeAttachmentsRef.current = next
+            return next
+          })
+
+          window.setTimeout(() => {
+            setCodeUploadProgress((current) => {
+              const next = { ...current }
+              chunk.temps.forEach((file) => {
+                delete next[file.tempId]
+              })
+              return next
+            })
+          }, 500)
+        } catch (error: any) {
+          failedChunks += 1
+          const reason = error?.message || "Error de subida"
+          setCodeAttachments((current) => {
+            const next = current.map((file) =>
+              chunkTempIds.has(file.tempId)
+                ? { ...file, status: "failed" as const, uploadError: reason }
+                : file,
+            )
+            codeAttachmentsRef.current = next
+            return next
+          })
+          toast.error(reason)
+        }
+      }
+
+      logIngest({
+        source: sourceChannel as any,
+        count: accepted.length,
+        total_bytes: accepted.reduce((sum, file) => sum + file.size, 0),
+        rejected_count: rejected.length,
+        rejected_codes: rejected.map((item) => item.code),
+      })
+
+      if (accepted.length >= 10 && failedChunks === 0) {
+        toast.success(`${accepted.length} archivos adjuntados al agente de APPS.`)
+      }
+    },
+    [showCodeUploadRejections, user],
+  )
+
+  const removeCodeAttachment = React.useCallback((index: number) => {
+    setCodeAttachments((current) => {
+      const removed = current[index]
+      if (removed?.tempId) codeCancelledTempIdsRef.current.add(removed.tempId)
+      if (removed?.preview) URL.revokeObjectURL(removed.preview)
+      const next = current.filter((_, i) => i !== index)
+      codeAttachmentsRef.current = next
+      return next
+    })
+  }, [])
+
+  const retryCodeAttachment = React.useCallback(
+    (file: CodeComposerAttachment) => {
+      if (!file.file) {
+        toast.error("No se puede reintentar: vuelve a arrastrar el archivo.")
+        return
+      }
+      setCodeAttachments((current) => {
+        const next = current.filter((item) => codeAttachmentId(item) !== codeAttachmentId(file))
+        codeAttachmentsRef.current = next
+        return next
+      })
+      uploadCodeFiles(filesToFileList([file.file]), file.sourceChannel || "retry")
+    },
+    [uploadCodeFiles],
+  )
+
+  const ingestDroppedCodeFiles = React.useCallback(
+    (dataTransfer: DataTransfer | null, sourceChannel: "drop" | "drop-internal" = "drop") => {
+      const files = extractFilesFromDataTransfer(dataTransfer)
+      if (files.length === 0) return false
+      void uploadCodeFiles(filesToFileList(files), sourceChannel)
+      return true
+    },
+    [uploadCodeFiles],
+  )
+
+  const handleCodeTextareaPaste = React.useCallback(
+    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const { files, text } = extractFromClipboardEvent(event.nativeEvent)
+      if (files.length === 0) return
+      event.preventDefault()
+      if (text) {
+        setInput((current) => (current ? `${current}\n${text}` : text))
+      }
+      const isImageOnly = files.every((file) => file.type.startsWith("image/") && /^pasted-/.test(file.name))
+      void uploadCodeFiles(filesToFileList(files), isImageOnly ? "paste-image" : "paste-files")
+    },
+    [uploadCodeFiles],
+  )
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const isFileDrag = (event: DragEvent) =>
+      !!event.dataTransfer?.types && Array.from(event.dataTransfer.types).includes("Files")
+
+    const onDragEnter = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      codeDragCounterRef.current += 1
+      setCodeDraggingFiles(true)
+    }
+    const onDragOver = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy"
+    }
+    const onDragLeave = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      codeDragCounterRef.current = Math.max(0, codeDragCounterRef.current - 1)
+      if (codeDragCounterRef.current === 0) setCodeDraggingFiles(false)
+    }
+    const onDrop = (event: DragEvent) => {
+      if (!isFileDrag(event)) return
+      event.preventDefault()
+      setCodeDraggingFiles(false)
+      codeDragCounterRef.current = 0
+      ingestDroppedCodeFiles(event.dataTransfer)
+    }
+    const onPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return
+      const target = event.target as HTMLElement | null
+      if (target === inputRef.current) return
+      const hasFile = !!event.clipboardData && (
+        event.clipboardData.files.length > 0 ||
+        Array.from(event.clipboardData.items || []).some((item) => item.kind === "file")
+      )
+      if (!hasFile) return
+      const { files } = extractFromClipboardEvent(event)
+      if (files.length === 0) return
+      event.preventDefault()
+      const isImageOnly = files.every((file) => file.type.startsWith("image/") && /^pasted-/.test(file.name))
+      void uploadCodeFiles(filesToFileList(files), isImageOnly ? "paste-image" : "paste-files")
+    }
+
+    window.addEventListener("dragenter", onDragEnter)
+    window.addEventListener("dragover", onDragOver)
+    window.addEventListener("dragleave", onDragLeave)
+    window.addEventListener("drop", onDrop)
+    document.addEventListener("paste", onPaste)
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter)
+      window.removeEventListener("dragover", onDragOver)
+      window.removeEventListener("dragleave", onDragLeave)
+      window.removeEventListener("drop", onDrop)
+      document.removeEventListener("paste", onPaste)
+    }
+  }, [ingestDroppedCodeFiles, uploadCodeFiles])
+
+  // Auto-scroll on new content while the user is at the bottom — if
+  // they scrolled up to read history, leave them alone.
+  React.useEffect(() => {
+    const el = scrollerRef.current
+    if (!el) return
+    const threshold = 80
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold
+    if (nearBottom) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [turns])
+
+  React.useEffect(() => {
+    setInput("")
+    setSelectedPreviewTarget(null)
+    setSelectingTarget(false)
+    setBusy(false)
+    // Invalidate every pending cancellation callback before aborting the local
+    // stream. A promise from the previous session must never patch this one.
+    codexCancellationAttemptRef.current += 1
+    codexCancellationRef.current = null
+    activeCodexTurnIdRef.current = null
+    abortRef.current?.abort()
+    abortRef.current = null
+    // Session navigation detaches the local stream but deliberately leaves the
+    // durable backend run alive. Returning to the session reconnects to it.
+    activeCodexRunRef.current = null
+    // Also clear the BUILD latch and any parked/repair state on a session
+    // switch — otherwise an in-flight build (buildingApp) from the previous
+    // session keeps the composer wedged and would drain a parked message into
+    // the wrong chat.
+    setBuildingApp(false)
+    pendingInputRef.current = []
+    repairInFlightRef.current = false
+    return () => {
+      abortRef.current?.abort()
+      abortRef.current = null
+      const engineSession = sessionId ? engineSessionRef.current[sessionId] : null
+      if (engineSession) void opencodeService.abortSession(engineSession).catch(() => {})
+    }
+  }, [sessionId])
+
+  React.useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.style.height = "0px"
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 140)}px`
+  }, [input])
+
+  const finalizeCodexCancellation = React.useCallback(
+    (candidate: CodexCancellationAttempt): boolean => {
+      const current = codexCancellationRef.current
+      if (
+        !current
+        || current.turnId !== candidate.turnId
+        || current.attempt !== candidate.attempt
+        || !canFinalizeCodexCancellation(candidate)
+      ) {
+        return false
+      }
+
+      codexCancellationRef.current = null
+      explicitCodexStopTurnIdsRef.current.delete(candidate.turnId)
+      if (activeCodexRunRef.current?.turnId === candidate.turnId) {
+        activeCodexRunRef.current = null
+      }
+      if (activeCodexTurnIdRef.current === candidate.turnId) {
+        activeCodexTurnIdRef.current = null
+      }
+      setTurns((prev) =>
+        markCodexTurnCancelled(prev, candidate.turnId).map((turn) =>
+          turn.id === candidate.turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "done", detail: "Cancelación confirmada por el servidor" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      setBusy(false)
+      return true
+    },
+    [setTurns],
+  )
+
+  const beginCodexCancellation = React.useCallback(
+    (turnId: string, target: CodexRunCancellationTarget | null): number => {
+      const attempt = codexCancellationAttemptRef.current + 1
+      codexCancellationAttemptRef.current = attempt
+      const next = beginCodexCancellationAttempt({
+        previous: codexCancellationRef.current,
+        attempt,
+        turnId,
+        target,
+      })
+      codexCancellationRef.current = next
+      activeCodexTurnIdRef.current = turnId
+      if (target) activeCodexRunRef.current = target
+      setBusy(true)
+      setTurns((prev) =>
+        markCodexTurnCancelling(prev, turnId).map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "running", detail: "Confirmando la cancelación durable" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      return attempt
+    },
+    [setTurns],
+  )
+
+  const recordCodexEngineSettled = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      const next = settleCodexCancellationEngine(current)
+      codexCancellationRef.current = next
+      return finalizeCodexCancellation(next)
+    },
+    [finalizeCodexCancellation],
+  )
+
+  const recordCodexBackendConfirmation = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      const next = confirmCodexCancellationBackend(current)
+      codexCancellationRef.current = next
+      return finalizeCodexCancellation(next)
+    },
+    [finalizeCodexCancellation],
+  )
+
+  const recordCodexCancellationFailure = React.useCallback(
+    (turnId: string, attempt: number): boolean => {
+      const current = codexCancellationRef.current
+      if (!current || current.turnId !== turnId || current.attempt !== attempt) return false
+      codexCancellationRef.current = failCodexCancellationBackend(current)
+      setTurns((prev) =>
+        markCodexTurnCancellationFailed(prev, turnId).map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                agentPhases: buildCodeAgentPhases("generate", {
+                  generate: { status: "error", detail: "El servidor no confirmó la cancelación; puedes reintentar" },
+                }),
+              }
+            : turn,
+        ),
+      )
+      // Keep the stop control visible. The durable worker may still be active.
+      setBusy(true)
+      return true
+    },
+    [setTurns],
+  )
+
+  const requestCodexCancellation = React.useCallback(
+    async (target: CodexRunCancellationTarget, attempt: number): Promise<boolean> => {
+      try {
+        await cancelCodexRunFamily(target, {
+          cancelRun: codexApi.cancelRun,
+          cancelFamily: codexApi.cancelRunFamily,
+          listRuns: codexApi.listRuns,
+          // Close the plan→build race while the bubble truthfully says that
+          // durable cancellation is still being confirmed.
+          settle: () => new Promise((resolve) => window.setTimeout(resolve, 160)),
+        })
+        recordCodexBackendConfirmation(target.turnId, attempt)
+        return true
+      } catch {
+        if (recordCodexCancellationFailure(target.turnId, attempt)) {
+          toast.error("No pude confirmar la cancelación del agente en el servidor. Puedes reintentar.")
+        }
+        return false
+      }
+    },
+    [recordCodexBackendConfirmation, recordCodexCancellationFailure],
+  )
+
+  const cancelStream = React.useCallback(() => {
+    const existingCancellation = codexCancellationRef.current
+    if (existingCancellation?.status === "cancelling") return
+
+    const activeCodexRun = existingCancellation?.status === "failed"
+      ? existingCancellation.target
+      : activeCodexRunRef.current
+    const codexTurnId = existingCancellation?.turnId
+      ?? activeCodexRun?.turnId
+      ?? activeCodexTurnIdRef.current
+
+    if (codexTurnId) {
+      explicitCodexStopTurnIdsRef.current.add(codexTurnId)
+      const attempt = beginCodexCancellation(codexTurnId, activeCodexRun)
+      abortRef.current?.abort()
+      abortRef.current = null
+      if (activeCodexRun) void requestCodexCancellation(activeCodexRun, attempt)
+      return
+    }
+
+    // Non-Codex engines have no durable backend run to confirm.
+    abortRef.current?.abort()
+    abortRef.current = null
+    const engineSession = sessionId ? engineSessionRef.current[sessionId] : null
+    if (engineSession) {
+      if (sessionId) delete engineSessionRef.current[sessionId]
+      void opencodeService.abortSession(engineSession).catch(() => {})
+    }
+    setBusy(false)
+    setBuildingApp(false)
+    setTurns((prev) =>
+      prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)),
+    )
+  }, [beginCodexCancellation, requestCodexCancellation, sessionId, setTurns])
+
+  // runCodexEngine is defined AFTER sendPrompt; the resilience fallback in
+  // sendPrompt's catch reaches it through this ref (kept fresh by an effect).
+  const codexEngineRef = React.useRef<
+    | ((
+        text: string,
+        sid: string,
+        opts?: CodexEngineOptions,
+      ) => Promise<void | "workspace_sync_failed" | "cancelled">)
+    | null
+  >(null)
+
+  const sendPrompt = React.useCallback(
+    async (
+      prompt: string,
+      override?: {
+        systemPrompt?: string
+        autoApply?: boolean
+        /** Skip AGENT_STYLE_BLOCK (dashboard narration) — plain chat answers. */
+        plainStyle?: boolean
+        /** Pure chat turn (greeting/question/meta): never show the 5-step
+         *  build rail nor "Aplicando cambios" — the agent is talking, not
+         *  building. Implies no file work in this turn. */
+        conversational?: boolean
+        /** Resolved current public-web request. It may carry one safe public
+         *  hostname from a prior user turn, but never the full transcript. */
+        webGroundingQuery?: string
+        /** Phrasing for the spoken completion digest (default "patch");
+         *  the SRE/auto-repair callers pass "debug" ("Arreglado…"). */
+        spokenKind?: "patch" | "debug"
+        files?: string[]
+        /** Mode that owns this request. External starters and queued turns can
+         * differ from the mode currently painted in the composer. */
+        mode?: ComposerMode
+      },
+    ) => {
+      const normalized = normalizeChatInput(prompt)
+      if (shouldWarnUser(normalized)) {
+        toast.error(
+          `El mensaje supera el límite (${normalized.originalLength.toLocaleString()} caracteres). Se recortó.`,
+          { duration: 4500 },
+        )
+      }
+      const text = normalized.value.trim()
+      if (!text || busy) return { applied: [] as Array<{ path: string; content: string }> }
+      if (!user) {
+        toast.error("Inicia sesión para usar el chat de código.")
+        return { applied: [] as Array<{ path: string; content: string }> }
+      }
+      if (!activeModelName) {
+        toast.error("Cargando modelos… intenta de nuevo en un momento.")
+        return { applied: [] as Array<{ path: string; content: string }> }
+      }
+
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
+        return { applied: [] as Array<{ path: string; content: string }> }
+      }
+
+      // Intake / routing is decided by the agent FSM (nextAgentAction) in
+      // `dispatch`; sendPrompt is now a pure LLM-streaming executor. The system
+      // prompt can be overridden per role (landing generator, SRE, …).
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      // A conversational turn (greeting/question/meta) is a CHAT, not a build:
+      // no 5-step rail, no "Aplicando cambios al workspace" — just a light
+      // thinking label while the reply streams. CodeAgentProgress renders null
+      // when agentPhases is absent, so the rail simply never appears.
+      const conversational = !!override?.conversational
+      const webGroundingQuery = conversational
+        ? override?.webGroundingQuery?.trim() || buildWebGroundingQuery(text, turns)
+        : null
+      const webGroundedConversation = Boolean(webGroundingQuery)
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: text },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          streaming: true,
+          ...(conversational
+            ? { agentLabel: "Pensando" }
+            : {
+                agentLabel: "Planificando el turno",
+                agentPhases: buildCodeAgentPhases("plan"),
+              }),
+        },
+      ])
+      setInput("")
+      setBusy(true)
+
+      const controller = new AbortController()
+      abortRef.current = controller
+
+      const patchAssistant = (patch: Partial<CodeChatTurn>) => {
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, ...patch } : t)),
+        )
+      }
+
+      const promptMode = override?.mode ?? composerMode
+      const modeInstruction = COMPOSER_MODE_INSTRUCTION[promptMode]
+      // Include the recent conversation so the agent actually accumulates the
+      // intake context across turns. Without this the chat was stateless per
+      // message — it kept re-asking the same questions and never had enough
+      // context to generate. `turns` here is the state BEFORE this message was
+      // appended, i.e. the genuine prior history.
+      const transcript = turns
+        .filter((t) => !t.streaming && t.content.trim())
+        .slice(-12)
+        .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
+        .join("\n\n")
+      const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      const scopedConvoBlock = webGroundedConversation ? "" : convoBlock
+      const proactiveState = getProactiveCompanyState()
+      if (proactiveState.enabled && !webGroundedConversation && text.trim() && !proactiveState.objective) {
+        // First real CEO instruction becomes the company objective.
+        const looksLikeKickoff = /modo PROACTIVO|matrix\.build|0-person company/i.test(text)
+        if (!looksLikeKickoff) setProactiveCompanyObjective(text)
+      }
+      const proactiveBlock = getProactiveCompanyState().enabled
+        ? buildProactiveCompanySystemBlock({
+            companyName: agentCompanyDisplayName(activeFolder?.name),
+            objective: getProactiveCompanyState().objective,
+          })
+        : null
+      const scopedProactiveBlock = webGroundedConversation ? null : proactiveBlock
+      const finalPrompt = override?.systemPrompt
+        ? `${override.plainStyle ? "" : `${AGENT_STYLE_BLOCK}\n\n`}${override.systemPrompt}${scopedProactiveBlock ? `\n\n${scopedProactiveBlock}` : ""}\n\n${scopedConvoBlock}Usuario: ${text}`
+        : includeContext
+          ? `${buildSystemContext(files, activePath, activeFolder, promptMode, scopedProactiveBlock)}\n\n${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
+          : `${scopedProactiveBlock ? `${scopedProactiveBlock}\n\n` : ""}${modeInstruction}\n\n${scopedConvoBlock}Usuario: ${text}`
+
+      if (!conversational) {
+        patchAssistant({
+          agentLabel: includeContext ? "Leyendo contexto del workspace" : "Preparando generación",
+          agentPhases: buildCodeAgentPhases("context", {
+            context: {
+              status: "running",
+              detail: includeContext
+                ? `${Object.keys(files).length} archivo(s) disponibles`
+                : "Sin contexto del workspace",
+            },
+          }),
+        })
+      }
+
+      // Accumulate the streamed answer locally so onDone can auto-apply the
+      // generated files without reading it back out of a setState updater
+      // (updaters must stay pure — applyBlock is a side effect).
+      let assistantText = ""
+      let applied: Array<{ path: string; content: string }> = []
+      let rejectedStream: { issue?: string; retryInstruction?: string } | null = null
+      let cancelled = false
+      const startedAt = Date.now()
+      // Real token usage (+ optional USD cost) from the stream's `usage` frame,
+      // delivered just before onClose so it's available when we build metrics.
+      let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
+
+      try {
+        if (conversational) {
+          patchAssistant({ agentLabel: webGroundedConversation ? "Consultando la web" : "Respondiendo" })
+        } else {
+          patchAssistant({
+            agentLabel: "Generando respuesta con el agente de código",
+            agentPhases: buildCodeAgentPhases("generate", {
+              context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+            }),
+          })
+        }
+        await apiClient.generateAIStream(
+          {
+            provider: activeProvider,
+            model: activeModelName,
+            prompt: finalPrompt,
+            streamId: id,
+            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+            // /code stays on the reliable plain stream. For an explicit public
+            // web turn the backend performs a deterministic, read-only fetch /
+            // search first and injects the result as untrusted evidence. We do
+            // NOT enable the general agent toolset here: a malicious page must
+            // never gain access to code, shell, files or private connectors.
+            disableAgentic: true,
+            enableWebGrounding: webGroundedConversation,
+            webGroundingQuery: webGroundingQuery || undefined,
+            reasoningEffort: selectedEffort,
+          },
+          (chunk) => {
+            assistantText += chunk
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const nextContent = t.content + chunk
+                // The first completed line = the planning line is done → stamp the
+                // REAL planning duration once (turn start → first line emitted).
+                const planPatch =
+                  t.planMs == null && nextContent.includes("\n")
+                    ? { planMs: Date.now() - startedAt }
+                    : {}
+                return { ...t, content: nextContent, ...planPatch }
+              }),
+            )
+          },
+          () => {
+            if (controller.signal.aborted || abortRef.current !== controller) {
+              cancelled = true
+              return
+            }
+            // Agentic write modes (app/build, plus debug/patch via explicit
+            // override) = Replit-style "presented output": the agent applies the
+            // generated files itself and opens the live preview, with NO manual
+            // "Aplicar" button (the user asked the agentic system to do the
+            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+            // never apply. `applied` feeds the Worked-Summary/action-log metrics
+            // on the turn (real numbers).
+            if (!conversational) {
+              patchAssistant({
+                agentLabel: "Aplicando cambios al workspace",
+                agentPhases: buildCodeAgentPhases("apply", {
+                  context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                  generate: { status: "done", detail: "Stream completado" },
+                }),
+              })
+            }
+            // Blocklist, not allowlist: any mode that is not explicitly
+            // read-only (ask/plan/image) applies the files the model wrote.
+            // The old app|build allowlist left deps/debug — and any build
+            // misrouted through another mode — streaming file cards into
+            // chat while the workspace and preview stayed empty.
+            if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
+              try {
+                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                if (blocks.length > 0) {
+                  // Mejora 3 (stream validator): when the streamed content fails
+                  // the deterministic structural checks, do NOT ship a broken
+                  // file to the preview. The work_task loop retries with the
+                  // returned instruction. Debug spoken turns still apply so a
+                  // targeted SRE patch is not blocked by a leftover fence.
+                  const streamCheck = validateStreamedFiles(
+                    blocks.map((b) => ({ path: b.path as string, content: b.content })),
+                  )
+                  if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                    rejectedStream = streamCheck
+                    toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                    patchAssistant({
+                      agentLabel: "Validación bloqueó la aplicación",
+                      agentPhases: buildCodeAgentPhases("apply", {
+                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                        generate: { status: "done", detail: "Stream completado" },
+                        apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
+                      }),
+                    })
+                  } else {
+                    for (const b of blocks) {
+                      if (b.path) applyBlock(b.path, b.content)
+                    }
+                    applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                    lastAppliedFilesRef.current = applied
+                    const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                    const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                    toast.success(
+                      hasPkg
+                        ? "Proyecto generado — levantando el dev server…"
+                        : hasHtml
+                          ? "App generada — revisa el preview en vivo →"
+                          : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                    )
+                    openPreviewAndMaybeRun(applied)
+                  }
+                }
+              } catch {
+                // Auto-apply failed (parse/write error). There is no manual
+                // "Aplicar" button anymore, so surface the failure explicitly and
+                // tell the user they can still copy the code as a fallback.
+                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                patchAssistant({
+                  agentLabel: "No se pudieron aplicar los cambios",
+                  agentPhases: buildCodeAgentPhases("apply", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Stream completado" },
+                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                  }),
+                })
+              }
+            }
+            const verifyDetail = applied.length > 0
+              ? `${applied.length} archivo(s) aplicado(s)`
+              : "Respuesta sin escritura de archivos"
+            if (applied.length > 0) markVoiced(assistantId)
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                // Conversational close: the turn ends quietly (no rail, no
+                // "Turno completado" banner) — like any chat answer. The token
+                // usage still attaches below so costs stay visible.
+                const base = conversational
+                  ? { ...t, streaming: false, agentLabel: undefined }
+                  : {
+                      ...t,
+                      streaming: false,
+                      agentLabel: "Turno completado",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                        generate: { status: "done", detail: "Respuesta generada" },
+                        apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                        verify: { status: "done", detail: verifyDetail },
+                      }),
+                    }
+                // Attach the Worked Summary when the turn did file work OR the
+                // stream reported real token usage (the Agent Usage figure).
+                if (applied.length > 0 || usage) {
+                  const { actions, metrics } = buildWriteMetrics(applied, {
+                    startedAt,
+                    now: Date.now(),
+                    getPrevContent: (p) => files[p]?.content ?? "",
+                  })
+                  // Even a no-file text answer shows an action row (the model
+                  // reasoned + produced the reply).
+                  const effectiveActions =
+                    actions.length > 0
+                      ? actions
+                      : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
+                  const withUsage = usage
+                    ? {
+                        ...metrics,
+                        tokensIn: usage.tokensIn,
+                        tokensOut: usage.tokensOut,
+                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                      }
+                    : metrics
+                  return {
+                    ...base,
+                    actions: effectiveActions,
+                    metrics: withUsage,
+                    // Claude Code-style spoken completion digest — only when the
+                    // turn did real multi-step file work (never for plain answers).
+                    ...(applied.length > 0
+                      ? {
+                          voice: buildSpokenSummary({
+                            kind: override?.spokenKind ?? "patch",
+                            filesChanged: withUsage.filesChanged,
+                            durationMs: withUsage.timeWorkedMs,
+                          }),
+                        }
+                      : {}),
+                  }
+                }
+                return base
+              }),
+            )
+            // Only release the latch if this turn is still the active one — a
+            // newer turn may have replaced abortRef, and clearing it here would
+            // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+          },
+          (err) => {
+            // A cancelled/aborted stream (user started a new turn, navigated
+            // away, or the SSE socket was cut) is NOT a failure — surface it as
+            // a soft "stopped" state that keeps whatever partial content arrived,
+            // instead of a scary red "Fetch is aborted" error turn.
+            const aborted =
+              err?.name === "AbortError" ||
+              /\babort|cancel|operation was aborted/i.test(err?.message || "")
+            const msg = err?.message || "Error en el chat de código"
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId
+                  ? aborted
+                    ? {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Generación detenida",
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "done", detail: "Detenida" },
+                              }),
+                            }),
+                        content: t.content
+                          ? `${t.content}\n\n_Generación detenida._`
+                          : "_Generación detenida — vuelve a enviar para reintentar._",
+                      }
+                    : {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Error en el turno",
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "error", detail: msg },
+                              }),
+                            }),
+                        content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
+                      }
+                  : t,
+              ),
+            )
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+          },
+          controller.signal,
+          {
+            // The backend may replace already-streamed text after its final
+            // safety scrub. Keep both the UI turn and the local accumulator in
+            // sync; appending the replacement would duplicate the answer and
+            // could reintroduce text the scrub intentionally removed.
+            onReplace: (content) => {
+              assistantText = content
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === assistantId
+                    ? {
+                        ...t,
+                        content,
+                        ...(t.planMs == null && content.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}),
+                      }
+                    : t,
+                ),
+              )
+            },
+            onUsage: (u) => { usage = u },
+          },
+        )
+      } catch (err: any) {
+        const aborted =
+          err?.name === "AbortError" ||
+          /\babort|cancel|operation was aborted/i.test(err?.message || "")
+        if (aborted) {
+          cancelled = true
+          patchAssistant({
+            streaming: false,
+            agentLabel: "Generación detenida",
+            ...(conversational
+              ? {}
+              : {
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "done", detail: "Detenida" },
+                  }),
+                }),
+          })
+        } else {
+          // Claude Code parity: when the CHOSEN model produced nothing even
+          // after the transport exhausted its retry budget, an agentic
+          // apply-turn must not die — degrade to the Codex engine with an
+          // honest note. Chat-only turns keep the plain error (re-ask is cheap).
+          const emptyModel = /no se recibi\u00f3 respuesta del modelo|empty model stream/i.test(
+            err?.message || "",
+          )
+          // Any non-conversational turn qualifies for the degrade — the old
+          // `override?.autoApply` gate only covered explicit apply overrides,
+          // so a default-mode build whose model went silent died with a bare
+          // "No se recibió respuesta" instead of falling back to Codex.
+          if (emptyModel && (override?.autoApply ?? !conversational) && codexAvailable && codexEngineRef.current && sessionId) {
+            patchAssistant({
+              streaming: false,
+              agentLabel: "Modelo sin respuesta — continuando con el motor Codex",
+              agentPhases: buildCodeAgentPhases("generate", {
+                generate: {
+                  status: "done",
+                  detail: "El modelo elegido no respondió; delego en el motor Codex",
+                },
+              }),
+            })
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+            await codexEngineRef.current(text, sessionId, { iterate: true, omitUserTurn: true })
+            return { applied: lastAppliedFilesRef.current, rejected: rejectedStream || undefined }
+          }
+          toast.error(err?.message || "Error en el chat de código")
+          patchAssistant({
+            streaming: false,
+            agentLabel: "Error en el turno",
+            ...(conversational
+              ? {}
+              : {
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: err?.message || "Error en el chat de código" },
+                  }),
+                }),
+          })
+        }
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
+        if (cancelled) return { applied: [] as Array<{ path: string; content: string }>, cancelled: true }
+      }
+      return {
+        applied,
+        rejected: rejectedStream || undefined,
+        cancelled: cancelled || controller.signal.aborted,
+      }
+    },
+    [
+      activePath,
+      activeFolder,
+      activeModelName,
+      activeProvider,
+      applyBlock,
+      busy,
+      codexAvailable,
+      composerMode,
+      files,
+      includeContext,
+      markVoiced,
+      selectedEffort,
+      sessionId,
+      setTurns,
+      turns,
+      user,
+    ],
+  )
+
+  // Deterministic "Construir app" path: sends the prompt to
+  // /api/builder/generate (pure heuristics -> real project files plus a
+  // self-contained index.html preview). This is the reliable APPS flow: prompt
+  // in the chat, files written into the workspace, preview on localhost /
+  // index.html, with a local index.html fallback if the backend is temporarily
+  // unreachable.
+  const buildApp = React.useCallback(
+    async (
+      prompt: string,
+      ctx?: AgentBuildContext,
+      // omitUserTurn: engine fallbacks (runCodexEngine/runEngine) already
+      // rendered the user's message in their own turn — don't duplicate it.
+      opts?: { omitUserTurn?: boolean },
+    ): Promise<void | "cancelled"> => {
+      const text = prompt.trim()
+      if (!text || busy || buildingApp) return
+      if (!user) {
+        toast.error("Inicia sesión para construir la app.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Selecciona o crea un agente de código.")
+        return
+      }
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      setTurns((prev) => [
+        ...prev,
+        ...(opts?.omitUserTurn ? [] : [{ id, role: "user", content: text } as CodeChatTurn]),
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "⚙️ Analizando el brief y activando herramientas de construcción…",
+          streaming: true,
+          agentLabel: "Construyendo software",
+          agentPhases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Arquitectura definida" },
+            context: { status: "done", detail: ctx ? "Contexto de intake listo" : "Brief inferido" },
+            generate: { status: "running", detail: "Frontend, backend y datos" },
+          }),
+        },
+      ])
+      setInput("")
+      setBuildingApp(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
+      const startedAt = Date.now()
+      const finishStopped = () =>
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  content: "_Generación detenida._",
+                  streaming: false,
+                  agentLabel: "Generación detenida",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "done", detail: "Detenida por el usuario" },
+                  }),
+                }
+              : t,
+          ),
+        )
+
+      try {
+        let appliedFiles: Array<{ path: string; content: string }>
+        let summary: string
+        let toastMsg: string
+        try {
+          const result = await intakeService.generate(text, controller.signal)
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
+          appliedFiles = result.files || []
+          if (appliedFiles.length === 0) {
+            throw new Error("La generación no devolvió archivos.")
+          }
+          summary = generatedFileSummary(result, appliedFiles)
+          toastMsg = "Software generado — abriendo preview →"
+        } catch {
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
+          appliedFiles = buildLocalIndexFallbackFiles(text, ctx)
+          summary = [
+            `✅ App generada localmente — ${appliedFiles.length} archivo(s).`,
+            ``,
+            `- **Archivo activo:** \`index.html\``,
+            `- **Tipo:** HTML autocontenido listo para preview`,
+            `- **Motivo:** el builder backend no respondió, así que usé el fallback local para no dejar el workspace vacío`,
+            ``,
+            `Estoy abriendo **localhost / index.html** automáticamente. Pídeme cualquier cambio y lo aplico desde este mismo chat.`,
+          ].join("\n")
+          toastMsg = "App generada localmente — abriendo index.html →"
+        }
+        if (cancelledTurn()) {
+          finishStopped()
+          return "cancelled"
+        }
+        // Keep the active editor aligned with the runnable entry: app/page.tsx
+        // for generated Next apps, index.html for static fallbacks.
+        const ordered = orderFilesForWorkspaceApply(appliedFiles)
+        for (const file of ordered) {
+          applyBlock(file.path, file.content)
+        }
+        openPreviewAndMaybeRun(appliedFiles)
+        const { actions, metrics } = buildWriteMetrics(appliedFiles, {
+          startedAt,
+          now: Date.now(),
+          getPrevContent: (p) => files[p]?.content ?? "",
+        })
+        // Claude Code-style spoken completion digest for the finished build:
+        // what was built (entities/screens) AND what's honestly pending —
+        // derived from REAL build facts, never invented.
+        const spokenPending: string[] = []
+        if (appliedFiles.some((f) => /schema\.prisma$/.test(f.path))) {
+          spokenPending.push("conectar la base de datos real")
+        }
+        spokenPending.push("afinar el diseño a tu marca")
+        const spoken = buildSpokenSummary({
+          kind: "build",
+          filesChanged: metrics.filesChanged,
+          durationMs: metrics.timeWorkedMs,
+          appName: ctx?.brand || ctx?.productType || "",
+          entities: (ctx?.dataEntities || "").trim(),
+          pending: spokenPending,
+        })
+        markVoiced(assistantId)
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  content: summary,
+                  streaming: false,
+                  agentLabel: "Software construido",
+                  agentPhases: buildCodeAgentPhases("verify", {
+                    plan: { status: "done", detail: "Arquitectura validada" },
+                    context: { status: "done", detail: ctx ? "Intake usado" : "Prompt directo" },
+                    generate: { status: "done", detail: `${appliedFiles.length} archivo(s) generados` },
+                    apply: { status: "done", detail: "Workspace actualizado" },
+                    verify: { status: "done", detail: "Preview abierto" },
+                  }),
+                  actions,
+                  metrics,
+                  voice: spoken,
+                }
+              : t,
+          ),
+        )
+        toast.success(toastMsg)
+      } catch (err: any) {
+        if (cancelledTurn()) {
+          finishStopped()
+          return "cancelled"
+        }
+        const msg = err?.message || "No se pudo generar la app"
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? {
+                  ...t,
+                  content: `_${msg}_`,
+                  streaming: false,
+                  agentLabel: "Error al construir",
+                  agentPhases: buildCodeAgentPhases("generate", {
+                    generate: { status: "error", detail: msg },
+                  }),
+                }
+              : t,
+          ),
+        )
+        toast.error(msg)
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBuildingApp(false)
+        }
+      }
+    },
+    [applyBlock, busy, buildingApp, files, markVoiced, sessionId, setTurns, user],
+  )
+
+  // SRE tier-0: classify the build log locally (no LLM), render the strict
+  // 5-section diagnosis, and auto-apply a package.json `overrides` patch when
+  // the fix is deterministic. Works even with the model down.
+  const runDeterministicSRE = React.useCallback(
+    async (log: string, userText: string, sid: string) => {
+      // Hold the busy latch for the whole turn (same pattern as the other
+      // dispatch paths) so nothing else can be dispatched in parallel.
+      setBusy(true)
+      try {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        setTurns((prev) => [
+          ...prev,
+          { id, role: "user", content: userText },
+          { id: `${id}-a`, role: "assistant", content: "🔧 Diagnosticando el build (modo determinista)…", streaming: true },
+        ])
+        setInput("")
+        const verdict = classifyBuildError(log)
+        let body = renderFiveSections(verdict)
+        const patches = buildDeterministicSrePatches(files, verdict, log)
+        const pkg = files["package.json"]
+        if (verdict.suggestedOverrides && pkg) {
+          const patched = mergeOverridesIntoPackageJson(pkg.content, verdict.suggestedOverrides)
+          if (patched) {
+            const existing = patches.find((patch) => patch.path === "package.json")
+            if (existing) existing.content = patched
+            else patches.push({ path: "package.json", content: patched })
+          }
+        }
+        if (patches.length > 0) {
+          for (const patch of patches) applyBlock(patch.path, patch.content)
+          openPreviewAndMaybeRun(patches)
+          body += `\n\n_${patches.map((p) => `\`${p.path}\``).join(", ")} actualizado(s) — reintentando el preview automáticamente._`
+        }
+        setTurns((prev) => prev.map((t) => (t.id === `${id}-a` ? { ...t, content: body, streaming: false } : t)))
+        patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [applyBlock, files, patchAgentState, setTurns],
+  )
+
+  // Auto-repair: a failed run (or the preview console "Arreglar con IA" button)
+  // emits `siragpt:code-fix-error` with the captured logs. We hand those logs to
+  // the agent and let it FIX the code automatically — NO manual submit. With a
+  // model available it edits the code (SRE system prompt + autoApply); offline it
+  // runs the deterministic SRE (classifies the build log and auto-patches
+  // package.json overrides when the fix is deterministic).
+  const dispatchingRef = React.useRef(false)
+  const busyRef = React.useRef(false)
+  busyRef.current = busy
+  const buildingAppRef = React.useRef(false)
+  buildingAppRef.current = buildingApp
+  // Synchronous latch so two same-tick events (e.g. an auto error + a manual
+  // "Arreglar con IA" tap) can't start two repairs before React re-renders the
+  // busy refs. Reset when the repair turn settles.
+  const repairInFlightRef = React.useRef(false)
+  // User messages submitted while the panel is busy (very often a BACKGROUND
+  // auto-repair the live dev server triggered) are NEVER dropped: they are
+  // queued here (FIFO) and auto-dispatched in arrival order, one at a time,
+  // as the panel goes idle.
+  const pendingInputRef = React.useRef<PendingCodeInput[]>([])
+  // React state does not update synchronously. This latch closes the tiny
+  // same-tick window in which two external starter clicks could launch two
+  // expensive runs before `busy` becomes observable.
+  const externalRequestInFlightRef = React.useRef(false)
+
+  const repairFromLog = React.useCallback(
+    async (log: string, visibleLabel?: string) => {
+      const text = log.trim()
+      if (!text || !user || !sessionId) return
+      const sid = sessionId
+      patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: text }))
+      const verdict = classifyBuildError(text)
+      if (verdict.suggestedOverrides || verdict.suggestedPrismaModelRenames) {
+        await runDeterministicSRE(
+          text,
+          visibleLabel || "Detecté un error en el build — reparación automática.",
+          sid,
+        )
+        return
+      }
+      if (activeModelName) {
+        await sendPrompt(
+          visibleLabel || "Detecté un error en el preview en vivo. Arréglalo en el código y déjalo funcionando.",
+          {
+            systemPrompt: sreSystemPrompt(text, collectConfigFiles(files)),
+            autoApply: true,
+            spokenKind: "debug",
+          },
+        )
+      } else {
+        await runDeterministicSRE(text, "Detecté un error en el build — diagnóstico automático.", sid)
+      }
+    },
+    [activeModelName, files, patchAgentState, runDeterministicSRE, sendPrompt, sessionId, user],
+  )
+  const repairFromLogRef = React.useRef(repairFromLog)
+  repairFromLogRef.current = repairFromLog
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    let cancelled = false
+    let waitTimer: number | null = null
+    const clearWait = () => {
+      if (waitTimer !== null) {
+        window.clearInterval(waitTimer)
+        waitTimer = null
+      }
+    }
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string; label?: string }>).detail
+      const text = detail?.text?.trim()
+      const label = detail?.label?.trim() || undefined
+      if (!text) return
+      const fire = () => {
+        if (cancelled || repairInFlightRef.current) return
+        repairInFlightRef.current = true
+        void repairFromLogRef.current(text, label).finally(() => {
+          repairInFlightRef.current = false
+        })
+      }
+      // Idle → repair immediately. Busy (a turn is still streaming) → wait for
+      // it to settle, then auto-repair once. Latest error wins; cap the wait so
+      // a wedged turn never leaves a timer running.
+      if (!busyRef.current && !buildingAppRef.current) {
+        fire()
+        return
+      }
+      clearWait()
+      let waited = 0
+      waitTimer = window.setInterval(() => {
+        if (cancelled) {
+          clearWait()
+          return
+        }
+        if (!busyRef.current && !buildingAppRef.current) {
+          clearWait()
+          fire()
+          return
+        }
+        waited += 1
+        if (waited > 240) clearWait() // ~120s ceiling (500ms × 240)
+      }, 500)
+    }
+    window.addEventListener("siragpt:code-fix-error", handler)
+    // Readiness flag so in-page surfaces (e.g. the Publishing failure banner's
+    // "ASK AGENTE") can hand a problem straight to this agent instead of
+    // navigating away to /chat.
+    ;(window as unknown as { __siraCodeAgentReady?: boolean }).__siraCodeAgentReady = true
+    return () => {
+      cancelled = true
+      clearWait()
+      ;(window as unknown as { __siraCodeAgentReady?: boolean }).__siraCodeAgentReady = false
+      window.removeEventListener("siragpt:code-fix-error", handler)
+    }
+  }, [])
+
+  // Apply a set of {path,content} files to the workspace and keep the active
+  // editor aligned with the runnable preview entry.
+  const applyFilesToWorkspace = React.useCallback(
+    (files: Array<{ path: string; content: string }>) => {
+      const ordered = orderFilesForWorkspaceApply(files)
+      for (const f of ordered) applyBlock(f.path, f.content)
+      lastAppliedFilesRef.current = ordered
+      if (files.length > 0) openPreviewAndMaybeRun(files)
+      return files
+    },
+    [applyBlock],
+  )
+
+  // Mejora 3: post-stream deterministic validation + quality gate. Runs the
+  // structural checks (fences, JSON, JSX, truncation) and the pattern-based
+  // quality gate over the files the agent just wrote, and returns a retry
+  // instruction when something would break the preview. Pure — no writes.
+  const validateGeneratedFiles = React.useCallback(
+    (files: Array<{ path: string; content: string }>): { ok: boolean; retryInstruction?: string } => {
+      if (files.length === 0) return { ok: true }
+      const stream = validateStreamedFiles(files)
+      if (!stream.valid) {
+        return { ok: false, retryInstruction: stream.retryInstruction }
+      }
+      const gate = runQualityGate(files)
+      if (!gate.passed) {
+        return { ok: false, retryInstruction: gate.retryInstruction }
+      }
+      return { ok: true }
+    },
+    [],
+  )
+
+  // Run the deterministic builder from either a raw Codex prompt or an intake
+  // context and apply its files INSIDE the current engine turn. Calling
+  // buildApp() from an engine fallback used to return immediately because that
+  // outer turn already held `busy=true`, leaving the workspace empty while the
+  // UI falsely claimed that the deterministic builder had completed.
+  const runDeterministicPromptInto = React.useCallback(
+    async (
+      prompt: string,
+      ctx?: AgentBuildContext,
+      isCancelled?: () => boolean,
+      signal?: AbortSignal,
+    ): Promise<Array<{ path: string; content: string }>> => {
+      const throwIfCancelled = () => {
+        if (!isCancelled?.()) return
+        const error = new Error("Generación detenida.")
+        error.name = "AbortError"
+        throw error
+      }
+
+      throwIfCancelled()
+      try {
+        const result = await intakeService.generate(prompt, signal)
+        const files = result.files || []
+        if (files.length > 0) {
+          throwIfCancelled()
+          applyFilesToWorkspace(files)
+          return files
+        }
+      } catch (err: any) {
+        throwIfCancelled()
+        if (err?.name === "AbortError" && signal?.aborted) {
+          const error = new Error("Generación detenida.")
+          error.name = "AbortError"
+          throw error
+        }
+        /* backend unreachable -> offline index.html shell below */
+      }
+      throwIfCancelled()
+      const fallback = buildLocalIndexFallbackFiles(prompt, ctx)
+      throwIfCancelled()
+      applyFilesToWorkspace(fallback)
+      return fallback
+    },
+    [applyFilesToWorkspace],
+  )
+
+  // Context-shaped wrapper used by the OpenCode engine. Returns the applied
+  // files so finish({written}) can attach real actions/metrics/voice.
+  const runDeterministicInto = React.useCallback(
+    async (
+      ctx: AgentBuildContext,
+      isCancelled?: () => boolean,
+      signal?: AbortSignal,
+    ): Promise<Array<{ path: string; content: string }>> =>
+      runDeterministicPromptInto(promptFromContext(ctx), ctx, isCancelled, signal),
+    [runDeterministicPromptInto],
+  )
+
+  const runDeterministicPatch = React.useCallback(
+    (instruction: string, sid: string): boolean => {
+      const patches = buildDeterministicPreviewPatches(files, instruction)
+      if (patches.length === 0) return false
+
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      const startedAt = Date.now()
+      const { actions, metrics } = buildWriteMetrics(patches, {
+        startedAt,
+        now: Date.now(),
+        getPrevContent: (p) => files[p]?.content ?? "",
+      })
+
+      setInput("")
+      applyFilesToWorkspace(patches)
+      patchAgentState(sid, (s) => ({ ...s, phase: "preview" }))
+      markVoiced(assistantId)
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: instruction },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: [
+            `✅ Cambio aplicado — ${patches.length} archivo(s).`,
+            ``,
+            `- Actualicé \`${patches.map((p) => p.path).join("`, `")}\`.`,
+            `- Reabrí el preview automático para validar el resultado vivo.`,
+          ].join("\n"),
+          streaming: false,
+          agentLabel: "Cambio aplicado",
+          agentPhases: buildCodeAgentPhases("verify", {
+            plan: { status: "done", detail: "Cambio interpretado" },
+            context: { status: "done", detail: "Proyecto Next detectado" },
+            generate: { status: "done", detail: "Parche determinista" },
+            apply: { status: "done", detail: `${patches.length} archivo(s) aplicado(s)` },
+            verify: { status: "done", detail: "Preview reabierto" },
+          }),
+          actions,
+          metrics,
+          voice: buildSpokenSummary({ kind: "patch", filesChanged: metrics.filesChanged, durationMs: metrics.timeWorkedMs }),
+        },
+      ])
+      toast.success(`Cambio aplicado — ${patches.length} archivo(s) →`)
+      return true
+    },
+    [applyFilesToWorkspace, files, markVoiced, patchAgentState, setTurns],
+  )
+
+  // OpenCode engine path. For a normal chat turn it sends the text; for a BUILD
+  // (opts.buildContext) it sends the Vite 7 + React 18 + TS contract prompt and
+  // the engine writes the project files into its /workspace (write/edit tools);
+  // runEngine then reads the whole tree back into the editor. If the engine
+  // yields no usable code (or errors), it falls back to the deterministic
+  // builder in the SAME turn — so a build always produces a result.
+  const runEngine = React.useCallback(
+    async (text: string, sid: string, opts?: { buildContext?: AgentBuildContext; iterate?: boolean; displayText?: string }): Promise<void | "cancelled"> => {
+      const ctx = opts?.buildContext
+      const isBuild = !!ctx
+      const iterate = !!opts?.iterate
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const assistantId = `${id}-a`
+      setTurns((prev) => [
+        ...prev,
+        { id, role: "user", content: opts?.displayText ?? text },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: isBuild ? "⚙️ Motor OpenCode construyendo…" : "⚙️ Motor OpenCode trabajando…",
+          streaming: true,
+          agentLabel: isBuild ? "Construyendo con Motor OpenCode" : "Motor OpenCode trabajando",
+          agentPhases: buildCodeAgentPhases("plan", {
+            plan: { status: "running", detail: isBuild ? "Preparando build" : "Preparando turno" },
+          }),
+        },
+      ])
+      setInput("")
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+      // "Detener" (cancelStream) and the session-switch cleanup both abort AND
+      // clear abortRef; a new turn replaces it. Internal aborts (closing the
+      // events stream below) do NOT touch the ref — so `abortRef !== controller`
+      // unambiguously means THIS turn was cancelled/superseded and must neither
+      // apply files nor run fallbacks nor touch the shared busy latch.
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
+
+      // Live progress rail for the Motor (OpenCode) path — mirrors the
+      // deterministic buildApp/sendPrompt rail so Motor turns show the same
+      // Plan → Contexto → Generar → Aplicar → Verificar steps.
+      const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
+        setTurns((prev) =>
+          prev.map((t) => (t.id === assistantId ? { ...t, agentLabel: label, agentPhases: phases } : t)),
+        )
+
+      const startedAt = Date.now()
+      const finish = (
+        content: string,
+        meta?: {
+          written?: Array<{ path: string; content: string }>
+          read?: Array<{ path: string; content: string }>
+          label?: string
+          phases?: CodeAgentPhase[]
+        },
+      ) => {
+        // Claude Code-style spoken digest when the engine turn wrote files
+        // (mark BEFORE setTurns so the fresh-voice flag exists at render).
+        if (meta?.written && meta.written.length > 0) markVoiced(assistantId)
+        setTurns((prev) =>
+          prev.map((t) => {
+            if (t.id !== assistantId) return t
+            const wrote = !!(meta?.written && meta.written.length > 0)
+            const base = {
+              ...t,
+              content,
+              streaming: false,
+              agentLabel: meta?.label ?? "Turno completado",
+              agentPhases:
+                meta?.phases ??
+                buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Sesión del motor lista" },
+                  context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+                  generate: { status: "done", detail: "Motor OpenCode" },
+                  apply: {
+                    status: "done",
+                    detail: wrote ? `${meta!.written!.length} archivo(s) aplicados` : "Sin escritura de archivos",
+                  },
+                  verify: { status: "done", detail: wrote ? "Workspace actualizado" : "Respuesta entregada" },
+                }),
+            }
+            if (wrote) {
+              const { actions, metrics } = buildWriteMetrics(meta!.written!, {
+                startedAt,
+                now: Date.now(),
+                getPrevContent: (p) => files[p]?.content ?? "",
+                read: meta?.read,
+              })
+              return {
+                ...base,
+                actions,
+                metrics,
+                voice: buildSpokenSummary({
+                  kind: isBuild ? "engine" : "patch",
+                  filesChanged: metrics.filesChanged,
+                  durationMs: metrics.timeWorkedMs,
+                  appName: isBuild ? ctx?.brand || ctx?.productType || "" : "",
+                }),
+              }
+            }
+            return base
+          }),
+        )
+      }
+
+      // Terminal turn state when the user pressed Detener: no files applied,
+      // no deterministic fallback — the cancelled work must stay cancelled.
+      const finishStopped = (): "cancelled" => {
+        finish("_Generación detenida._", {
+          label: "Generación detenida",
+          phases: buildCodeAgentPhases("generate", {
+            generate: { status: "done", detail: "Detenida por el usuario" },
+          }),
+        })
+        return "cancelled"
+      }
+
+      try {
+        let esid = engineSessionRef.current[sid]
+        if (!esid) {
+          const s = await opencodeService.createSession({})
+          esid = String((s && (s.id as string)) || "")
+          if (!esid) throw new Error("El motor no devolvió un id de sesión.")
+          engineSessionRef.current[sid] = esid
+        }
+
+        setEnginePhase(
+          isBuild ? "Leyendo contexto del workspace" : "Preparando turno del motor",
+          buildCodeAgentPhases("context", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "running", detail: isBuild ? "Preparando build" : "Leyendo workspace" },
+          }),
+        )
+
+        const sendText = ctx
+          ? `${landingSystemPrompt(ctx)}\n\n${engineTransportInstructions()}`
+          : iterate
+            ? `MODIFICA los archivos que YA existen en tu workspace para lograr: ${text}.\n\nPrimero LEE el código actual con tus herramientas, haz cambios DIRIGIDOS solo donde corresponde y CONSERVA el resto intacto. NO regeneres todo desde cero — edita los archivos existentes (write/edit). Si el proyecto es Vite + React + TypeScript, RESPETA su contrato: extensiones .tsx/.ts y Tailwind v4 vía @tailwindcss/vite (PROHIBIDO crear tailwind.config.js/postcss.config.js o usar directivas v3 \`@tailwind\`).`
+            : text
+
+        // OpenCode is event-driven: the POST /message returns an empty shell and
+        // the assistant reply arrives over the SSE event stream. We accumulate
+        // text parts (by part.id, dropping the echoed user prompt) and resolve
+        // when the session goes idle.
+        const byId = new Map<string, string>()
+        const order: string[] = []
+        let resolveIdle: () => void = () => {}
+        const idle = new Promise<void>((r) => {
+          resolveIdle = r
+        })
+        // "Detener" aborts the controller: resolve `idle` right away so the
+        // race below exits immediately instead of zombie-waiting the full
+        // engine timeout (up to 150s) and then applying files post-cancel.
+        if (controller.signal.aborted) resolveIdle()
+        else controller.signal.addEventListener("abort", () => resolveIdle(), { once: true })
+        const assistantText = () =>
+          order
+            .map((pid) => byId.get(pid) || "")
+            .filter((txt) => txt && txt !== sendText)
+            .join("\n")
+            .trim()
+
+        const streamP = opencodeService
+          .streamEvents((ev) => {
+            const d = ev?.data as any
+            if (!d || d.sessionID !== esid) return
+            if (ev.type === "message.part.updated" && d.part?.type === "text" && typeof d.part.text === "string") {
+              if (!byId.has(d.part.id)) order.push(d.part.id)
+              byId.set(d.part.id, d.part.text)
+              const live = assistantText()
+              if (live) setTurns((prev) => prev.map((t) => (t.id === assistantId ? { ...t, content: live.slice(0, 12000) } : t)))
+            } else if (ev.type === "session.idle" || ev.type === "session.error") {
+              resolveIdle()
+            }
+          }, controller.signal)
+          .catch(() => {})
+
+        setEnginePhase(
+          "Generando con Motor OpenCode",
+          buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "running", detail: "El motor está trabajando" },
+          }),
+        )
+
+        // Kick off the turn (fire-and-forget; content comes via events) and wait
+        // for idle, with a safety timeout so we never hang the UI.
+        if (cancelledTurn()) {
+          void opencodeService.abortSession(esid).catch(() => {})
+          if (engineSessionRef.current[sid] === esid) delete engineSessionRef.current[sid]
+          finishStopped()
+          return "cancelled"
+        }
+        opencodeService.prompt(esid, sendText).catch(() => {})
+        // Safety net only: the engine resolves `idle` as soon as it finishes, so
+        // simple builds return in seconds and we never wait the full window.
+        // This cap only fires if the engine *hangs*. Keep it generous so the
+        // agent can build real, larger systems (full web app / ecommerce), then
+        // fall back to the deterministic builder so a result is always produced.
+        const engineTimeoutMs = isBuild ? 150_000 : 60_000
+        await Promise.race([idle, new Promise<void>((r) => setTimeout(r, engineTimeoutMs))])
+        // Captured BEFORE our own internal abort below: at this point an
+        // aborted turn can only mean the user pressed Detener (or switched
+        // sessions / started a new turn) — bail out without applying anything.
+        const stoppedByUser = cancelledTurn()
+        controller.abort() // close the events stream
+        await streamP.catch(() => {})
+        if (stoppedByUser) {
+          void opencodeService.abortSession(esid).catch(() => {})
+          if (engineSessionRef.current[sid] === esid) delete engineSessionRef.current[sid]
+          finishStopped()
+          return "cancelled"
+        }
+
+        const reply = assistantText()
+        const blocks = parseCodeBlocks(reply).filter((b) => b.path)
+
+        if (ctx) {
+          // BUILD: read back the ENTIRE project the agent wrote to its /workspace
+          // — a real multi-file tree (index.html, styles, scripts, components,
+          // config…), not just one file. Falls back to known entry paths + reply
+          // code blocks if the listing is empty.
+          let engineFiles = await opencodeService.listProjectFiles()
+          if (engineFiles.length === 0) {
+            const candidates = [
+              "package.json",
+              "vite.config.ts",
+              "tsconfig.json",
+              "index.html",
+              "src/main.tsx",
+              "src/index.css",
+              "src/App.tsx",
+              // Legacy single-html era entries (old engine sessions).
+              "styles.css",
+              "style.css",
+              "app.js",
+              "script.js",
+              "main.js",
+            ]
+            for (const p of candidates) {
+              try {
+                const c = await opencodeService.readFile(p)
+                if (c && c.trim()) engineFiles.push({ path: p, content: c })
+              } catch {
+                /* missing file → skip */
+              }
+            }
+          }
+          const seen = new Set<string>()
+          const merged: Array<{ path: string; content: string }> = []
+          for (const f of [...engineFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (f.path && !seen.has(f.path)) {
+              seen.add(f.path)
+              merged.push(f)
+            }
+          }
+          // Cancelled while reading the tree back → never apply post-cancel.
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
+          // Accept a real project: a runnable/known entry, or simply ≥2 files.
+          const hasEntry = merged.some((f) => /(^|\/)(index\.html?|package\.json)$/i.test(f.path))
+          if (merged.length > 0 && (hasEntry || merged.length >= 2)) {
+            applyFilesToWorkspace(merged)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${merged.length} archivo(s) →)_` : `✅ Motor OpenCode — ${merged.length} archivo(s) →`,
+              { written: merged, read: engineFiles },
+            )
+            toast.success(`Motor OpenCode — ${merged.length} archivo(s) →`)
+            return
+          }
+          // Engine produced nothing usable → reliable deterministic fallback.
+          const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn, controller.signal)
+          finish(
+            reply
+              ? `${reply}\n\n_(El motor no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
+              : `✅ App generada (builder determinista, ${fallbackFiles.length} archivos).`,
+            { written: fallbackFiles },
+          )
+          toast.success("App generada (builder determinista) →")
+          return
+        }
+
+        // Iterate: the agent edited files in its workspace ("change the header").
+        // Read the whole project back and sync it so edits land in the tree +
+        // preview — this is the Replit-style "modify what's not well done" loop.
+        if (iterate) {
+          const projectFiles = await opencodeService.listProjectFiles()
+          const seen = new Set<string>()
+          const synced: Array<{ path: string; content: string }> = []
+          for (const f of [...projectFiles, ...blocks.map((b) => ({ path: b.path as string, content: b.content }))]) {
+            if (f.path && !seen.has(f.path)) {
+              seen.add(f.path)
+              synced.push(f)
+            }
+          }
+          if (cancelledTurn()) {
+            finishStopped()
+            return "cancelled"
+          }
+          if (synced.length > 0) {
+            applyFilesToWorkspace(synced)
+            finish(
+              reply ? `${reply}\n\n_(Motor OpenCode: ${synced.length} archivo(s) →)_` : `✅ Cambios aplicados — ${synced.length} archivo(s) →`,
+              { written: synced },
+            )
+            toast.success(`Cambios aplicados — ${synced.length} archivo(s) →`)
+            return
+          }
+        }
+
+        // Plain engine chat: render the reply + apply any code blocks it returned.
+        if (blocks.length > 0) {
+          applyFilesToWorkspace(blocks.map((b) => ({ path: b.path as string, content: b.content })))
+          finish(reply || `✅ Motor OpenCode — ${blocks.length} archivo(s) aplicados →`, {
+            written: blocks.map((b) => ({ path: b.path as string, content: b.content })),
+          })
+          toast.success(`Motor OpenCode — ${blocks.length} archivo(s) →`)
+          return
+        }
+
+        finish(reply || "_(el motor no devolvió texto)_")
+      } catch (err: any) {
+        // A cancelled turn must not run the deterministic fallback (it would
+        // build the app the user just stopped) nor render a fake error.
+        if (cancelledTurn()) {
+          finishStopped()
+          return "cancelled"
+        }
+        if (ctx) {
+          // Engine unreachable/error during a build → still deliver via the builder.
+          try {
+            const fallbackFiles = await runDeterministicInto(ctx, cancelledTurn, controller.signal)
+            finish(`✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El motor no respondió.`, {
+              written: fallbackFiles,
+            })
+            toast.success("App generada (builder determinista) →")
+            return
+          } catch {
+            /* fall through to error */
+          }
+        }
+        finish(`_${err?.message || "El motor OpenCode no respondió"}_`, {
+          label: "Error en el turno",
+          phases: buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Sesión del motor lista" },
+            context: { status: "done", detail: isBuild ? "Contexto de build listo" : "Workspace leído" },
+            generate: { status: "error", detail: err?.message || "El motor OpenCode no respondió" },
+          }),
+        })
+        toast.error(err?.message || "El motor OpenCode no respondió")
+      } finally {
+        try {
+          controller.abort()
+        } catch {
+          /* already closed */
+        }
+        // Only release the shared latch if THIS turn is still the active one —
+        // a zombie turn settling after Detener (or after a newer turn started)
+        // must not knock down the new turn's busy/abort state.
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
+      }
+    },
+    [applyFilesToWorkspace, files, markVoiced, runDeterministicInto, setTurns],
+  )
+
+  // Codex Agent V2 path — the REAL agent behind the SAME chat UI. Creates one
+  // Codex project per chat session, drives a plan run → auto-approves → build
+  // run, folds the durable SSE events onto the assistant turn (narrative,
+  // phases, file/command counts), then pulls the files the run wrote back into
+  // the workspace. Deterministic buildApp fallback inside, so a build ALWAYS
+  // lands even if the agent errors — mirroring runEngine's guarantees.
+  const runCodexEngine = React.useCallback(
+    async (
+      text: string,
+      sid: string,
+      opts?: CodexEngineOptions,
+    ): Promise<void | "workspace_sync_failed" | "cancelled"> => {
+      const resuming = !!opts?.resume
+      const iterate = resuming || !!opts?.iterate
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      const continuityTurn = opts?.resume
+        ? selectCodexContinuityAssistantTurn(
+            turnsRef.current,
+            opts.resume.runId,
+            opts.resume.planRunId,
+          )
+        : null
+      const assistantId = continuityTurn?.id || `${id}-a`
+      activeCodexTurnIdRef.current = assistantId
+      activeCodexRunRef.current = opts?.resume
+        ? { projectId: opts.resume.projectId, runId: opts.resume.runId, turnId: assistantId }
+        : null
+      const assistantTurn: CodeChatTurn = {
+        id: assistantId,
+        role: "assistant",
+        content: resuming
+          ? "⚙️ Retomando el trabajo del Agente Codex…"
+          : iterate
+            ? "⚙️ Agente Codex trabajando…"
+            : "⚙️ Agente Codex construyendo…",
+        streaming: true,
+        // Explicitly clear a persisted failed/cancelling marker when continuity
+        // reconnects and takes ownership of the durable run again.
+        cancellationState: undefined,
+        codexRunId: opts?.resume?.runId,
+        agentLabel: resuming
+          ? "Retomando ejecución"
+          : iterate
+            ? "Agente Codex trabajando"
+            : "Construyendo con Agente Codex",
+        agentPhases: buildCodeAgentPhases("plan", {
+          plan: {
+            status: "running",
+            detail: resuming ? "Reconectando con el backend" : iterate ? "Preparando turno" : "Preparando build",
+          },
+        }),
+      }
+      setTurns((prev) => {
+        const next = [
+          ...prev,
+          ...(opts?.omitUserTurn
+            ? []
+            : [{ id, role: "user", content: opts?.displayText ?? text } as CodeChatTurn]),
+        ]
+        return resuming
+          ? upsertCodexContinuityTurn(next, assistantTurn, continuityTurn?.id)
+          : [...next, assistantTurn]
+      })
+      setInput("")
+      setBusy(true)
+      const controller = new AbortController()
+      abortRef.current = controller
+      // "Detener" (cancelStream) aborts the controller and clears abortRef; the
+      // only internal abort lives in `finally`. So during the turn body either
+      // signal.aborted or a replaced/cleared abortRef means the user stopped
+      // (or superseded) THIS turn — never apply files or fall back afterwards.
+      const cancelledTurn = () => controller.signal.aborted || abortRef.current !== controller
+      const explicitlyStoppedTurn = () => explicitCodexStopTurnIdsRef.current.has(assistantId)
+
+      const setEnginePhase = (label: string, phases: CodeAgentPhase[]) =>
+        setTurns((prev) =>
+          prev.map((t) =>
+            t.id === assistantId
+              ? patchCodexTurnUnlessCancellationLocked(t, { agentLabel: label, agentPhases: phases })
+              : t,
+          ),
+        )
+      const persistAssistantRunId = (runId: string) => {
+        setTurns((prev) =>
+          prev.map((turn) =>
+            turn.id === assistantId ? { ...turn, codexRunId: runId } : turn,
+          ),
+        )
+      }
+      const bindAssistantToRun = (projectId: string, runId: string) => {
+        activeCodexRunRef.current = { projectId, runId, turnId: assistantId }
+        persistAssistantRunId(runId)
+      }
+
+      const startedAt = Date.now()
+      // finish() mirrors runEngine.finish: on a write it attaches the
+      // Worked-Summary actions/metrics from REAL data + the spoken digest.
+      const finish = (
+        content: string,
+        meta?: {
+          written?: Array<{ path: string; content: string }>
+          read?: Array<{ path: string; content: string }>
+          label?: string
+          phases?: CodeAgentPhase[]
+          voiceText?: string
+        },
+      ) => {
+        if ((meta?.written && meta.written.length > 0) || meta?.voiceText) markVoiced(assistantId)
+        setTurns((prev) =>
+          prev.map((t) => {
+            if (t.id !== assistantId) return t
+            if (isCodexTurnCancellationLocked(t)) return t
+            const wrote = !!(meta?.written && meta.written.length > 0)
+            const base = {
+              ...t,
+              content,
+              streaming: false,
+              agentLabel: meta?.label ?? "Turno completado",
+              agentPhases:
+                meta?.phases ??
+                buildCodeAgentPhases("verify", {
+                  plan: { status: "done", detail: "Plan listo" },
+                  context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+                  generate: { status: "done", detail: "Agente Codex" },
+                  apply: {
+                    status: "done",
+                    detail: wrote ? `${meta!.written!.length} archivo(s) aplicados` : "Sin escritura de archivos",
+                  },
+                  verify: { status: "done", detail: wrote ? "Workspace actualizado" : "Respuesta entregada" },
+                }),
+            }
+            if (wrote) {
+              const { actions, metrics } = buildWriteMetrics(meta!.written!, {
+                startedAt,
+                now: Date.now(),
+                getPrevContent: (p) => files[p]?.content ?? "",
+                read: meta?.read,
+              })
+              // Derive real pending items from the files the agent actually
+              // wrote — so the spoken digest says what's left, not just what
+              // was done. Parity with the deterministic build path.
+              const writtenPaths = (meta!.written! || []).map((w) => w.path || "")
+              const spokenPending: string[] = []
+              if (writtenPaths.some((p) => /schema\.prisma$|\.prisma$/.test(p))) spokenPending.push("conectar la base de datos real")
+              if (writtenPaths.some((p) => /askAI|ai\.ts$/.test(p))) spokenPending.push("afinar el dominio del asistente")
+              if (writtenPaths.some((p) => /server\/|api\/|backend\//.test(p))) spokenPending.push("revisar los endpoints de la API")
+              if (!spokenPending.length) spokenPending.push("afinar el diseño a tu marca")
+              // Infer entities from model file names (e.g. "Producto.tsx" → "Producto")
+              const entityFiles = writtenPaths
+                .filter((p) => /\/(src|app)\/(components\/)?(pages\/|entities\/|features\/)?[A-Z]/.test(p))
+                .map((p) => p.replace(/.*\//, "").replace(/\.\w+$/, ""))
+                .filter((n) => n && n[0] === n[0].toUpperCase())
+                .slice(0, 5)
+              const spokenEntities = entityFiles.length
+                ? entityFiles.join(", ")
+                : undefined
+              return {
+                ...base,
+                actions,
+                metrics,
+                voice:
+                  meta?.voiceText ||
+                  buildSpokenSummary({
+                    kind: iterate ? "patch" : "engine",
+                    filesChanged: metrics.filesChanged,
+                    durationMs: metrics.timeWorkedMs,
+                    entities: spokenEntities,
+                    pending: spokenPending,
+                  }),
+              }
+            }
+            if (meta?.voiceText) return { ...base, voice: meta.voiceText }
+            return base
+          }),
+        )
+      }
+
+      // Stream a single Codex run to a terminal status, folding its events onto
+      // the assistant turn. Returns the final fold state (status + collected
+      // written/read paths + narrative). Reject only for a hard transport error.
+      const streamRun = (
+        runId: string,
+        mode: "plan" | "build",
+        fold: CodexEngineFoldState,
+      ) =>
+        new Promise<CodexEngineFoldState>((resolve, reject) => {
+          let state = fold
+          let lastPhase = state.phase
+          const applyRender = () => {
+            if (cancelledTurn()) return
+            // Narrative + the Claude Code-style live action feed (⏺ Escribiendo
+            // `src/App.tsx`… → ✓) so the user watches the agent work in vivo.
+            const live = `${codexLiveContent(state)}${codexLiveActionsMarkdown(state)}${codexLivePatchMarkdown(state)}`.trim()
+            const phaseDetail =
+              state.status === "waiting_approval"
+                ? "Plan propuesto"
+                : state.writtenPaths.length > 0
+                  ? `${state.writtenPaths.length} archivo(s)`
+                  : state.commandCount > 0
+                    ? `${state.commandCount} comando(s)`
+                    : "El agente está trabajando"
+            const phaseKey = state.phase
+            const label =
+              phaseKey === "apply"
+                ? "Aplicando cambios al workspace"
+                : phaseKey === "verify"
+                  ? "Verificando el resultado"
+                  : "Generando con Agente Codex"
+            const phases = buildCodeAgentPhases(phaseKey, {
+              plan: { status: "done", detail: "Plan listo" },
+              context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+              ...(phaseKey === "generate"
+                ? { generate: { status: "running", detail: phaseDetail } }
+                : {}),
+              ...(phaseKey === "apply"
+                ? { generate: { status: "done", detail: "Trabajo del agente" }, apply: { status: "running", detail: phaseDetail } }
+                : {}),
+            })
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId
+                  ? patchCodexTurnUnlessCancellationLocked(t, {
+                      ...(live ? { content: live } : {}),
+                      agentLabel: label,
+                      agentPhases: phases,
+                    })
+                  : t,
+              ),
+            )
+          }
+          const handle = openRunStream({
+            runId,
+            onEvent: (ev) => {
+              if (cancelledTurn()) return
+              const nextState = foldCodexEvent(state, ev)
+              if (nextState !== state) {
+                state = nextState
+                if (state.phase !== lastPhase || ev.type === "narrative_delta" || ev.type === "reasoning_delta" || ev.type === "action_start" || ev.type === "action_end" || ev.type === "file_patch" || ev.type === "file_delta" || ev.type === "executive_summary") {
+                  lastPhase = state.phase
+                  applyRender()
+                }
+              }
+            },
+            onStatus: (status) => {
+              if (cancelledTurn()) return
+              state = { ...state, status }
+            },
+            token,
+            // A plan run PARKS at waiting_approval (approval spawns a new build
+            // run) — this engine auto-approves, so that status must resolve the
+            // stream instead of reconnecting forever (found in live E2E).
+            terminalStatuses: codexContinuityStreamTerminalStatuses(mode),
+          })
+          // The stream resolves its `done` promise on a terminal run_status or
+          // close(); if the user cancels the turn we abort it via the controller.
+          const onAbort = () => handle.close()
+          if (controller.signal.aborted) onAbort()
+          else controller.signal.addEventListener("abort", onAbort)
+          handle.done
+            .then(() => resolve(state))
+            .catch(reject)
+            .finally(() => controller.signal.removeEventListener("abort", onAbort))
+        })
+
+      // Terminal turn state for Detener: streamRun RESOLVES on close() (it does
+      // not reject), so without an explicit cancelled check the flow would fall
+      // into the deterministic fallback and build the app the user just stopped.
+      const finishStopped = (): "cancelled" => {
+        const cancellation = codexCancellationRef.current
+        if (cancellation?.turnId === assistantId) {
+          recordCodexEngineSettled(assistantId, cancellation.attempt)
+          return "cancelled"
+        }
+        // Session navigation intentionally detaches without cancelling the
+        // backend. Its old async engine must not terminalize the persisted turn.
+        if (activeCodexTurnIdRef.current !== assistantId) return "cancelled"
+        finish("_Generación detenida._", {
+          label: "Generación detenida",
+          phases: buildCodeAgentPhases("generate", {
+            generate: { status: "done", detail: "Detenida por el usuario" },
+          }),
+        })
+        return "cancelled"
+      }
+
+      const runWithProjectSlot = <T,>(projectId: string, operation: () => Promise<T>) =>
+        runWhenCodexProjectIdle({
+          projectId,
+          operation,
+          listRuns: codexApi.listRuns,
+          signal: controller.signal,
+          onWait: (activeRun) => {
+            const status =
+              activeRun?.status === "waiting_approval"
+                ? "esperando aprobación"
+                : activeRun?.status === "queued"
+                  ? "en cola"
+                  : "trabajando"
+            setEnginePhase(
+              "En cola con CEO Office",
+              buildCodeAgentPhases("context", {
+                plan: { status: "done", detail: "Solicitud recibida" },
+                context: {
+                  status: "running",
+                  detail: `Otro departamento está ${status}; este turno conserva su lugar`,
+                },
+              }),
+            )
+          },
+        })
+
+      try {
+        // 1) Ensure ONE Codex project. Empresas resolve through the durable
+        //    backend association; only local folders may reuse browser links.
+        const companyWorkspaceId = codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true })
+        let projectId: string | undefined
+        let companyOrganizationId: string | null = null
+        if (companyWorkspaceId) {
+          const association = await codexApi.getCompanyAssociation(companyWorkspaceId)
+          companyOrganizationId = association.company.organizationId
+          projectId = association.association?.codexProject.id
+          if (!projectId && association.candidates.length) {
+            throw Object.assign(
+              new Error("Confirma el entorno de esta empresa antes de ejecutar código."),
+              { status: 409, code: "company_association_required" },
+            )
+          }
+        } else {
+          projectId = opts?.resume?.projectId || codexProjectRef.current[sid]
+        }
+        if (!projectId && !companyWorkspaceId) {
+          const persisted = linkedCodexProject({
+            sessionId: sid,
+            workspaceId: activeFolder?.id,
+          })
+          if (persisted) {
+            try {
+              const existing = await codexApi.getProject(persisted)
+              if (existing?.id) projectId = existing.id
+            } catch (error) {
+              if (codexErrorCode(error) === "project_not_found") {
+                throw Object.assign(
+                  new Error("El proyecto Codex asociado ya no existe."),
+                  { code: "project_not_found", status: 404 },
+                )
+              }
+              clearSessionCodexProject(sid)
+              if (activeFolder?.id) clearWorkspaceCodexProject(activeFolder.id)
+            }
+          }
+        }
+        if (!projectId) {
+          const title = compactGeneratedTitle(text)
+          const project = await codexApi.createProject(title, text, companyOrganizationId)
+          projectId = project.id
+          if (companyWorkspaceId) {
+            await codexApi.associateCompany(
+              companyWorkspaceId,
+              project.id,
+              [],
+              "created_for_company",
+            )
+            setDurableCompanyCodexProjectId(project.id)
+            notifyCompanyAssociationChanged()
+          }
+        }
+        codexProjectRef.current[sid] = projectId
+        persistSessionCodexProject(sid, projectId)
+        if (activeFolder?.id) persistWorkspaceCodexProject(activeFolder.id, projectId)
+        // Publish the codex project so PreviewPane runs the app in the CODEX
+        // runner (tokenized proxy) instead of pushing a partial local mirror
+        // to the owner-gated host runner (which degraded to a black srcdoc).
+        setActiveCodexProject(projectId)
+
+        setEnginePhase(
+          resuming
+            ? "Reconectando con el trabajo en curso"
+            : iterate
+              ? "Preparando turno del agente"
+              : "Planificando la construcción",
+          buildCodeAgentPhases("context", {
+            plan: { status: "done", detail: "Proyecto Codex listo" },
+            context: {
+              status: "running",
+              detail: resuming
+                ? "Recuperando eventos y archivos"
+                : iterate
+                  ? "Sincronizando workspace"
+                  : "Preparando build",
+            },
+          }),
+        )
+
+        // 1b) Iterate edits the REMOTE project and syncs the result back over
+        //     the local workspace — so the remote tree must first BE the local
+        //     tree. Push the browser workspace into the project before the run;
+        //     if the import fails, abort this tier (editing a stale/foreign
+        //     tree and overwriting the local files with it is strictly worse
+        //     than falling back) and let dispatch use the next engine.
+        if (iterate && !resuming) {
+          const workspaceFiles = collectWorkspaceFilesForImport(files)
+          if (workspaceFiles.length > 0) {
+            try {
+              await runWithProjectSlot(projectId, () =>
+                codexApi.importFiles(projectId, workspaceFiles),
+              )
+            } catch (err: any) {
+              if (cancelledTurn()) {
+                return finishStopped()
+              }
+              const detail = err?.message || "no se pudo sincronizar el workspace"
+              finish(
+                "_No pude sincronizar tu workspace con el proyecto del Agente Codex, así que no lo toco (editar otro árbol pisaría tus archivos). Sigo con otro motor…_",
+                {
+                  label: "Sincronización fallida",
+                  phases: buildCodeAgentPhases("context", {
+                    plan: { status: "done", detail: "Proyecto Codex listo" },
+                    context: { status: "error", detail },
+                  }),
+                },
+              )
+              toast.error("No pude sincronizar el workspace con Codex; uso otro motor.")
+              return "workspace_sync_failed"
+            }
+            if (cancelledTurn()) {
+              return finishStopped()
+            }
+          }
+        }
+
+        setEnginePhase(
+          resuming ? "Retomando con Agente Codex" : "Generando con Agente Codex",
+          buildCodeAgentPhases("generate", {
+            plan: { status: "done", detail: "Proyecto Codex listo" },
+            context: { status: "done", detail: iterate ? "Workspace leído" : "Contexto de build listo" },
+            generate: {
+              status: "running",
+              detail: resuming ? "Recuperando la ejecución durable" : "El agente está trabajando",
+            },
+          }),
+        )
+
+        // 2) A fresh order starts as plan → backend auto-continues to build.
+        // A restored tab reconnects directly to whichever durable run is
+        // already active (or pulls a completed build) instead of creating a
+        // duplicate project/run.
+        let fold: CodexEngineFoldState
+        let completedBuildRunId: string | null = null
+        if (opts?.resume?.mode === "build") {
+          const seed = initialCodexEngineFold()
+          seed.status = opts.resume.status
+          completedBuildRunId = opts.resume.runId
+          bindAssistantToRun(projectId, opts.resume.runId)
+          fold = await streamRun(opts.resume.runId, "build", seed)
+        } else {
+          let planRun: { id: string; status: string }
+          if (opts?.resume) {
+            planRun = {
+              id: opts.resume.runId,
+              status: opts.resume.status,
+            }
+          } else {
+            const created = await createCodexRunWithCancellationFence({
+              projectId,
+              createRun: () => runWithProjectSlot(projectId, () =>
+                codexApi.createRun(projectId, {
+                  mode: "plan",
+                  // APPS-mode envelope → backend forces the Vite SPA stack +
+                  // preview repair, so generated software opens immediately.
+                  prompt: buildAppsModePrompt(text),
+                  model: activeModelName || undefined,
+                  tier: tierForModelChoice(activeProvider, activeModelName),
+                  reasoningEffort: resolveCodexReasoningEffort(selectedEffort),
+                  // The backend owns continuation even when this tab closes.
+                  autoExecute: true,
+                }),
+              ),
+              // Session navigation only detaches the local controller. The
+              // durable run is cancelled here solely for an explicit Stop.
+              isCancelled: explicitlyStoppedTurn,
+              cancelDeps: {
+                cancelRun: codexApi.cancelRun,
+                cancelFamily: codexApi.cancelRunFamily,
+                listRuns: codexApi.listRuns,
+              },
+            })
+            if (created.cancelled) {
+              persistAssistantRunId(created.run.id)
+              const pendingCancellation = codexCancellationRef.current
+              if (pendingCancellation?.turnId === assistantId) {
+                const target = { projectId, runId: created.run.id, turnId: assistantId }
+                const attempt = beginCodexCancellation(assistantId, target)
+                // createCodexRunWithCancellationFence already attempted the
+                // durable stop. Record that exact result; do not lie by
+                // terminalizing the bubble after a failed fence.
+                recordCodexEngineSettled(assistantId, attempt)
+                if (created.cancellationError) {
+                  recordCodexCancellationFailure(assistantId, attempt)
+                } else {
+                  recordCodexBackendConfirmation(assistantId, attempt)
+                }
+              }
+              if (created.cancellationError) {
+                toast.error("No pude confirmar la cancelación del plan en el servidor.")
+              }
+              return
+            }
+            planRun = created.run
+          }
+          // A resumed run can also be stopped while project/session lookup is in
+          // flight. Do not bind a cancelled controller to a durable SSE stream.
+          if (cancelledTurn()) {
+            if (!explicitlyStoppedTurn()) {
+              // POST /runs won the race with a session switch. Keep the new run
+              // durable and attach its id to the old session turn without
+              // repopulating active refs owned by the newly visible session.
+              persistAssistantRunId(planRun.id)
+              return
+            }
+            // cancelStream already owns and is confirming the resume target.
+            // finishStopped supplies the engine-settled half of the gate.
+            return finishStopped()
+          }
+          const seed = initialCodexEngineFold()
+          if (opts?.resume) seed.status = planRun.status
+          bindAssistantToRun(projectId, planRun.id)
+          fold = await streamRun(planRun.id, "plan", seed)
+          if (cancelledTurn()) {
+            return finishStopped()
+          }
+          if (fold.status === "waiting_approval") {
+            // Idempotent: if the backend already continued this plan, the same
+            // build run is returned rather than a second one being created.
+            const buildRun = await codexApi.approvePlan(
+              projectId,
+              planRun.id,
+              tierForModelChoice(activeProvider, activeModelName),
+              {
+                autoExecute: true,
+                model: activeModelName || undefined,
+                reasoningEffort: resolveCodexReasoningEffort(selectedEffort),
+              },
+            )
+            if (cancelledTurn()) {
+              if (!explicitlyStoppedTurn()) {
+                persistAssistantRunId(buildRun.id)
+                return
+              }
+              // Approval may finish after the user pressed Detener. Cancel the
+              // just-created durable child explicitly; attaching an already
+              // aborted stream would otherwise leave it working invisibly.
+              const cancellation = codexCancellationRef.current
+              if (cancellation?.turnId === assistantId) {
+                const target = { projectId, runId: buildRun.id, turnId: assistantId }
+                const alreadyTargetsChild =
+                  cancellation.target?.projectId === target.projectId
+                  && cancellation.target.runId === target.runId
+                if (!alreadyTargetsChild) {
+                  const attempt = beginCodexCancellation(assistantId, target)
+                  void requestCodexCancellation(target, attempt)
+                }
+              } else {
+                // The user pressed Stop and then navigated away. The UI attempt
+                // was invalidated, but the durable intent still fences this
+                // child so it cannot continue invisibly.
+                persistAssistantRunId(buildRun.id)
+                void cancelCodexRunFamily(
+                  { projectId, runId: buildRun.id },
+                  {
+                    cancelRun: codexApi.cancelRun,
+                    cancelFamily: codexApi.cancelRunFamily,
+                    listRuns: codexApi.listRuns,
+                  },
+                ).catch(() => {})
+              }
+              return finishStopped()
+            }
+            completedBuildRunId = buildRun.id
+            bindAssistantToRun(projectId, buildRun.id)
+            fold = await streamRun(
+              buildRun.id,
+              "build",
+              initialCodexEngineFold(),
+            )
+          }
+        }
+        // Detener during the build stream: same shape — no files, no fallback.
+        if (cancelledTurn()) {
+          return finishStopped()
+        }
+
+        const narrative = `${codexLiveContent(fold)}${codexExecutiveSummaryMarkdown(fold)}`.trim()
+        const executiveVoice = fold.executiveSummary?.audioText
+        const succeeded = fold.status === "done"
+        const markBuildSynchronized = () => {
+          if (completedBuildRunId) {
+            persistSessionCodexSyncedRun(sid, completedBuildRunId)
+          }
+        }
+
+        if (succeeded) {
+          // 4) Pull the workspace back. Written paths first (freshest), then
+          //    the REST of the tree: the runner provisions the starter
+          //    (package.json, vite.config, src/ui…) before the run, so a
+          //    written-only pull left the local mirror without a package.json
+          //    — the preview couldn't tell it was a Vite project and fell into
+          //    the srcdoc Babel path (black screen, "Script error").
+          let paths = fold.writtenPaths.filter(Boolean)
+          try {
+            const tree = await codexApi.listFiles(projectId)
+            const seen = new Set(paths)
+            paths = [...paths, ...tree.filter((p) => !seen.has(p))]
+          } catch {
+            // Keep the written set — partial beats empty; the tree listing is
+            // best-effort.
+          }
+          const sourcePaths = paths
+            .filter((p) => !/(^|\/)(node_modules|\.git|dist|build|\.next)\//.test(p))
+            .slice(0, 80)
+          const { files: written, failed: pullFailed } = await pullProjectFiles(
+            codexApi,
+            projectId!,
+            sourcePaths,
+          )
+          // Cancelled while pulling the files back → never apply post-cancel.
+          if (cancelledTurn()) {
+            return finishStopped()
+          }
+          // Iterate edits an EXISTING project: applying a partial tree mixes
+          // stale local files with the remote edit — worse than not touching
+          // anything. Refuse when >20% stayed unreadable after the retry.
+          if (iterate && pullFailed.length > 0 && pullFailed.length * 5 > sourcePaths.length) {
+            finish(
+              `⚠️ No apliqué los cambios: ${pullFailed.length} de ${sourcePaths.length} archivo(s) no se pudieron leer del workspace remoto — aplicar un árbol parcial dejaría el proyecto mezclado. Reintenta la iteración.`,
+            )
+            toast.error(
+              `Agente Codex — lectura incompleta (${pullFailed.length}/${sourcePaths.length}); no se aplicó nada`,
+            )
+            return
+          }
+          if (written.length > 0) {
+            applyFilesToWorkspace(written)
+            markBuildSynchronized()
+            const tally =
+              pullFailed.length > 0
+                ? `${written.length} de ${sourcePaths.length} archivo(s) (${pullFailed.length} no se pudieron leer)`
+                : `${written.length} archivo(s)`
+            finish(
+              narrative
+                ? `${narrative}\n\n_(Agente Codex: ${tally} →)_`
+                : `✅ Agente Codex — ${tally} →`,
+              { written, voiceText: executiveVoice },
+            )
+            if (pullFailed.length > 0) toast.warning(`Agente Codex — ${tally}`)
+            else toast.success(`Agente Codex — ${written.length} archivo(s) →`)
+            return
+          }
+          // Run finished OK but produced no files (e.g. a pure Q&A/plan turn):
+          // render the narrative if any, else fall through to the fallback.
+          if (narrative && iterate) {
+            markBuildSynchronized()
+            finish(narrative, { voiceText: executiveVoice })
+            return
+          }
+          // A successful run with no pullable files has still been inspected.
+          // Do not replay it after every reload; a fresh user turn can iterate
+          // on the same durable project normally.
+          markBuildSynchronized()
+        }
+
+        if (fold.executiveSummary?.status === "failed") {
+          finish(
+            narrative || "_La verificación detectó errores y no aplicó cambios como resultado exitoso._",
+            {
+              label: "Requiere corrección",
+              voiceText: executiveVoice,
+            },
+          )
+          return
+        }
+
+        // 5) FALLBACK: the run failed / produced nothing usable → deterministic
+        //    builder so the user is NEVER left empty (mirrors runEngine). Apply
+        //    it in this turn; buildApp() cannot be called here because this
+        //    engine already owns the shared busy latch.
+        if (!iterate && !resuming) {
+          // The generated files below live in the browser workspace, not in the
+          // remote Codex project. Force PreviewPane onto the local/static path
+          // so it cannot boot a stale remote tree and hide this fallback.
+          detachCodexProjectForLocalFallback(sid)
+          const fallbackFiles = await runDeterministicPromptInto(
+            text,
+            { goal: "app", productType: text },
+            cancelledTurn,
+            controller.signal,
+          )
+          finish(
+            narrative
+              ? `${narrative}\n\n_(El agente no dejó archivos; usé el builder determinista: ${fallbackFiles.length} archivos.)_`
+              : `✅ App generada (builder determinista, ${fallbackFiles.length} archivos).`,
+            { written: fallbackFiles },
+          )
+          toast.success("App generada (builder determinista) →")
+          return
+        }
+        finish(narrative || "_(el agente no devolvió cambios)_", { voiceText: executiveVoice })
+      } catch (err: any) {
+        const errorCode = codexErrorCode(err)
+        const aborted =
+          cancelledTurn() ||
+          err?.name === "AbortError" ||
+          /\babort|cancel|operation was aborted/i.test(err?.message || "")
+        if (aborted) {
+          return finishStopped()
+        } else if (errorCode === "company_project_not_found" || errorCode === "project_not_found") {
+          const { code, message } = codexIdentityIssue(err, "project_not_found")
+          setIdentityIssue({ code, message })
+          // A missing association/project is an actionable identity problem,
+          // not a code-generation failure. Keep the active mapping intact so
+          // the user can inspect/reassociate it instead of losing it silently.
+          finish(`⚠️ ${message}`, {
+            label: "Entorno no disponible",
+            phases: buildCodeAgentPhases("context", {
+              context: { status: "error", detail: message },
+            }),
+          })
+          toast.error(message)
+        } else if (errorCode === "company_association_required") {
+          const code = "company_association_required"
+          const message = "Confirma qué entorno Codex pertenece a esta empresa antes de ejecutar agentes."
+          setIdentityIssue({ code, message })
+          finish(`⚠️ ${message}`, {
+            label: "Asociación requerida",
+            phases: buildCodeAgentPhases("context", {
+              context: { status: "error", detail: message },
+            }),
+          })
+          toast.error(message)
+        } else if (!opts?.iterate && !opts?.resume) {
+          // Project provisioning / plan-run error during a BUILD → still deliver
+          // via the deterministic builder in the same turn.
+          try {
+            detachCodexProjectForLocalFallback(sid)
+            const fallbackFiles = await runDeterministicPromptInto(
+              text,
+              { goal: "app", productType: text },
+              cancelledTurn,
+              controller.signal,
+            )
+            finish(
+              `✅ App generada (builder determinista, ${fallbackFiles.length} archivos). El Agente Codex no respondió.`,
+              { written: fallbackFiles },
+            )
+            toast.success("App generada (builder determinista) →")
+          } catch (fallbackError: any) {
+            if (cancelledTurn() || fallbackError?.name === "AbortError") {
+              return finishStopped()
+            }
+            finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
+              label: "Error en el turno",
+              phases: buildCodeAgentPhases("generate", {
+                generate: { status: "error", detail: err?.message || "El Agente Codex no respondió" },
+              }),
+            })
+            toast.error(err?.message || "El Agente Codex no respondió")
+          }
+        } else {
+          finish(`_${err?.message || "El Agente Codex no respondió"}_`, {
+            label: "Error en el turno",
+            phases: buildCodeAgentPhases("generate", {
+              generate: { status: "error", detail: err?.message || "El Agente Codex no respondió" },
+            }),
+          })
+          toast.error(err?.message || "El Agente Codex no respondió")
+        }
+      } finally {
+        try {
+          controller.abort()
+        } catch {
+          /* already closed */
+        }
+        // Only release the shared latch if THIS turn is still the active one —
+        // a zombie turn settling after Detener (or after a newer turn started)
+        // must not knock down the new turn's busy/abort state.
+        if (abortRef.current === controller) {
+          abortRef.current = null
+          setBusy(false)
+        }
+        const cancellationOwnsTurn = codexCancellationRef.current?.turnId === assistantId
+        if (!cancellationOwnsTurn && activeCodexRunRef.current?.turnId === assistantId) {
+          activeCodexRunRef.current = null
+        }
+        if (!cancellationOwnsTurn && activeCodexTurnIdRef.current === assistantId) {
+          activeCodexTurnIdRef.current = null
+        }
+        explicitCodexStopTurnIdsRef.current.delete(assistantId)
+      }
+    },
+    [activeFolder?.id, activeModelName, activeProvider, applyFilesToWorkspace, beginCodexCancellation, detachCodexProjectForLocalFallback, files, markVoiced, recordCodexBackendConfirmation, recordCodexCancellationFailure, recordCodexEngineSettled, requestCodexCancellation, runDeterministicPromptInto, selectedEffort, setTurns, token],
+  )
+
+  // Keep the resilience-fallback ref pointing at the freshest engine closure.
+  React.useEffect(() => {
+    codexEngineRef.current = runCodexEngine
+  }, [runCodexEngine])
+
+  // Reload/close continuity: the backend keeps auto-executable runs alive.
+  // When this chat mounts again, reconnect to the newest active run or pull
+  // the newest completed build that has not reached this browser workspace.
+  const resumedCodexRunsRef = React.useRef<Set<string>>(new Set())
+  const continuitySessionRef = React.useRef(sessionId)
+  React.useEffect(() => {
+    if (continuitySessionRef.current === sessionId) return
+    continuitySessionRef.current = sessionId
+    resumedCodexRunsRef.current.clear()
+  }, [sessionId])
+
+  React.useEffect(() => {
+    if (!codexAvailable || !user?.id || !sessionId || busy || buildingApp) return
+    const companyWorkspace = Boolean(codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }))
+    const projectId = companyWorkspace
+      ? durableCompanyCodexProjectId
+      : linkedCodexProject({
+        sessionId,
+        workspaceId: activeFolder?.id,
+      })
+    if (!projectId) return
+
+    let cancelled = false
+    let resumeKey: string | null = null
+    void (async () => {
+      try {
+        const runs = await codexApi.listRuns(projectId)
+        if (cancelled || busyRef.current || buildingAppRef.current) return
+        const persistedCancellations = turnsRef.current.filter(
+          (turn) =>
+            turn.role === "assistant"
+            && (turn.cancellationState === "cancelling" || turn.cancellationState === "failed"),
+        )
+        const reconciliation = new Map<
+          string,
+          {
+            kind: ReturnType<typeof classifyCodexCancellationReloadStatus>
+            run: (typeof runs)[number] | null
+          }
+        >()
+        for (const turn of persistedCancellations) {
+          const run = turn.codexRunId
+            ? selectCodexCancellationReloadRun(runs, turn.codexRunId)
+            : null
+          reconciliation.set(turn.id, {
+            kind: classifyCodexCancellationReloadStatus(run?.status),
+            run,
+          })
+        }
+        if (reconciliation.size > 0) {
+          setTurns((prev) =>
+            prev.map((turn) => {
+              const result = reconciliation.get(turn.id)
+              if (!result) return turn
+              const next = reconcileCodexTurnAfterReload(turn, result.kind)
+              return {
+                ...next,
+                ...(result.run ? { codexRunId: result.run.id } : {}),
+                agentPhases:
+                  result.kind === "cancelled"
+                    ? buildCodeAgentPhases("generate", {
+                        generate: { status: "done", detail: "Cancelación confirmada por el servidor" },
+                      })
+                    : result.kind === "done"
+                      ? buildCodeAgentPhases("verify", {
+                          verify: { status: "done", detail: "La ejecución terminó en el servidor" },
+                        })
+                      : result.kind === "active"
+                        ? buildCodeAgentPhases("generate", {
+                            generate: { status: "error", detail: "La ejecución sigue activa; puedes detenerla de nuevo" },
+                          })
+                        : buildCodeAgentPhases("generate", {
+                            generate: {
+                              status: "error",
+                              detail: result.kind === "error"
+                                ? "La ejecución terminó con error"
+                                : "La ejecución ya no está disponible",
+                            },
+                          }),
+              }
+            }),
+          )
+
+          // A reload interrupts the browser-side cancel request. If the worker
+          // is still active, restore a failed/retryable attempt whose engine is
+          // already settled, plus the exact durable target for the Stop button.
+          const activeCancellation = persistedCancellations
+            .slice()
+            .reverse()
+            .map((turn) => ({ turn, result: reconciliation.get(turn.id) }))
+            .find((entry) => entry.result?.kind === "active" && entry.result.run)
+          if (activeCancellation?.result?.run) {
+            const target = {
+              projectId,
+              runId: activeCancellation.result.run.id,
+              turnId: activeCancellation.turn.id,
+            }
+            const attempt = beginCodexCancellation(activeCancellation.turn.id, target)
+            recordCodexEngineSettled(activeCancellation.turn.id, attempt)
+            recordCodexCancellationFailure(activeCancellation.turn.id, attempt)
+            busyRef.current = true
+            return
+          }
+        }
+        const target = selectCodexContinuityRun(
+          runs,
+          readSessionCodexSyncedRun(sessionId),
+        )
+        if (!target || (target.mode !== "plan" && target.mode !== "build")) return
+        resumeKey = `${projectId}:${target.id}`
+        if (resumedCodexRunsRef.current.has(resumeKey)) return
+        resumedCodexRunsRef.current.add(resumeKey)
+        codexProjectRef.current[sessionId] = projectId
+        setActiveCodexProject(projectId)
+        await runCodexEngine(
+          target.prompt?.trim() || "Retoma y completa el trabajo pendiente.",
+          sessionId,
+          {
+            omitUserTurn: true,
+            resume: {
+              projectId,
+              runId: target.id,
+              planRunId: target.planRunId,
+              mode: target.mode,
+              status: target.status,
+            },
+          },
+        )
+      } catch {
+        // A stale/deleted project is handled by the next explicit user turn,
+        // which verifies the durable link before creating a replacement.
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    activeFolder?.id,
+    beginCodexCancellation,
+    buildingApp,
+    busy,
+    codexAvailable,
+    durableCompanyCodexProjectId,
+    recordCodexCancellationFailure,
+    recordCodexEngineSettled,
+    runCodexEngine,
+    sessionId,
+    setTurns,
+    user?.id,
+  ])
+
+  const dispatch = React.useCallback(
+    async (rawInput: string, opts?: CodeDispatchOptions) => {
+      const displayText = rawInput.trim()
+      // An empty rawInput is only valid for the proactive auto-continuation
+      // turn (Mejora 2): the FSM Rule 0 interprets empty text as "continue the
+      // plan". Explicit typed input is never allowed to be empty.
+      if (!displayText && !opts?.fromWorkTask) return
+      const text = expandCodexSlashCommand(displayText).prompt
+      const attachedFileIds = Array.from(new Set((opts?.files || []).filter(Boolean)))
+      const effectiveMode = opts?.mode ?? composerMode
+      if (dispatchingRef.current || busy || buildingApp) {
+        // The live dev server can fire a BACKGROUND auto-repair turn (it failed
+        // to boot, e.g. a cold install over the 90s timeout) that holds the busy
+        // latch. The user's explicit message must NEVER be lost to it: cancel a
+        // background repair, then park the message so the idle-drain effect runs
+        // it the moment the panel settles.
+        if (repairInFlightRef.current) {
+          abortRef.current?.abort()
+          abortRef.current = null
+          repairInFlightRef.current = false
+        }
+        pendingInputRef.current.push({ text: rawInput, files: attachedFileIds, mode: effectiveMode })
+        setInput("")
+        toast("Recibido — lo proceso en cuanto termine la tarea en curso…")
+        return
+      }
+      if (!user) {
+        toast.error("Inicia sesión para usar el chat de código.")
+        return
+      }
+      if (!sessionId) {
+        toast.error("Abre o crea un chat de código (la carpeta/agente no está activo). Recarga si abriste una carpeta local que no montó.")
+        return
+      }
+      dispatchingRef.current = true
+      try {
+      if (effectiveMode !== composerModeRef.current) {
+        setComposerMode(effectiveMode)
+      }
+      const sid = sessionId
+      if (isQuickGreeting(text)) {
+        // With a live model the greeting is a REAL chat turn (varied, aware of
+        // the conversation) — the canned line is only the no-model fallback.
+        if (activeModelName) {
+          await sendPrompt(text, {
+            systemPrompt: CONVERSATION_SYSTEM_PROMPT,
+            autoApply: false,
+            plainStyle: true,
+            conversational: true,
+            files: attachedFileIds,
+          })
+          patchAgentState(sid, (s) => ({ ...s, phase: s.phase === "intake" ? "idle" : s.phase }))
+          return
+        }
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        const greeting =
+          "¡Hola! 👋 Soy tu agente de apps. Dime qué quieres construir o cambiar y me pongo manos a la obra — escribo el código, lo ejecuto y lo corrijo."
+        markVoiced(`${id}-a`)
+        setTurns((prev) => [
+          ...prev,
+          { id, role: "user", content: text },
+          {
+            id: `${id}-a`,
+            role: "assistant",
+            content: greeting,
+            streaming: false,
+            // The action row for the greeting: only what REALLY happened (a
+            // greeting needs no project review nor plan — claiming so would
+            // fabricate work the agent never did).
+            actions: [{ kind: "reasoning", label: "Entendí tu saludo" }],
+            // Voice the greeting with the BROWSER's built-in speech synthesis
+            // (Web Speech API) — 100% local, no API key, no server/credit cost.
+            // ChatBubble renders an inline voice player from this text.
+            voice: greeting,
+          },
+        ])
+        setInput("")
+        patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        return
+      }
+
+      // CONVERSATION tier: questions / doubts / meta get a chat answer — never
+      // the intake or the generator ("quiero preguntarte algo" used to build an
+      // app because "quiero" counts as a build verb). Applies ALWAYS — a stalled
+      // intake used to swallow "¿puedes ayudarme?" into a build; slot answers
+      // ("una cafetería") are not conversational, so the FSM still gets them.
+      const webGroundingQuery = buildWebGroundingQuery(text, turns)
+      const codeWriteRequest = isCodeWriteRequest(text)
+      if (
+        !codeWriteRequest
+        && (
+          isCodeInformationRequest(text)
+          || isConversationalMessage(text)
+          || (webGroundingQuery && !isBuildRequest(text))
+        )
+      ) {
+        if (activeModelName) {
+          await sendPrompt(text, {
+            systemPrompt: CONVERSATION_SYSTEM_PROMPT,
+            autoApply: false,
+            plainStyle: true,
+            conversational: true,
+            webGroundingQuery: webGroundingQuery || undefined,
+            files: attachedFileIds,
+          })
+        } else {
+          const cid = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+          const reply =
+            "¡Claro! Dime tu pregunta — soy tu agente de apps: creo y edito proyectos, los ejecuto en el preview y los publico. Cuando quieras que construya o cambie algo, pídemelo."
+          markVoiced(`${cid}-a`)
+          setTurns((prev) => [
+            ...prev,
+            { id: cid, role: "user", content: text },
+            {
+              id: `${cid}-a`,
+              role: "assistant",
+              content: reply,
+              streaming: false,
+              actions: [{ kind: "reasoning", label: "Entendí tu mensaje" }],
+              voice: reply,
+            },
+          ])
+          setInput("")
+          patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+        }
+        return
+      }
+
+            // Deterministic build shortcut — ONLY when the real agent is unavailable.
+      // With Codex up, classic build requests ("créame una app de X") must flow
+      // to the agent below; this shortcut used to swallow them into a template.
+      // "ok, créala" carries no substance of its own — recover the brief from
+      // the recent conversation so EVERY build tier (codex / engine /
+      // deterministic) receives what was actually discussed. The user bubble
+      // keeps the literal words via displayText.
+      const derivedBrief = isBareBuildCommand(text)
+        ? briefFromConversation(turns.map((t) => ({ role: t.role, content: t.content })))
+        : null
+      const buildText = derivedBrief ?? text
+
+      if ((effectiveMode === "app" || effectiveMode === "build") && !codexAvailable && isBuildRequest(buildText)) {
+        const direct = nextAgentAction(defaultAgentState(), buildText, {
+          mode: effectiveMode,
+          hasModel: false,
+        })
+        if (direct.type === "generate") {
+          patchAgentState(sid, (s) => ({ ...s, phase: "generating", context: direct.context }))
+          const out = await buildApp(promptFromContext(direct.context), { ...direct.context, productType: buildText })
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: out === "cancelled" ? "idle" : "preview",
+            generator: "deterministic",
+          }))
+          return
+        }
+      }
+
+      const agent = activeCodeChatSession?.agent ?? defaultAgentState()
+      const action = nextAgentAction(agent, buildText, {
+        mode: effectiveMode,
+        forceDeterministic: opts?.forceDeterministic,
+        hasModel: !!activeModelName,
+      })
+
+      switch (action.type) {
+        case "generate": {
+          // Mejora 1: decompose the requested build into an ordered AgentTask[]
+          // plan the agent will execute autonomously after this first generate.
+          const initialPlan = planAgentTasks(buildText, agent.tasks)
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "generating",
+            context: action.context,
+            tasks: initialPlan.length > 0 ? initialPlan : s.tasks,
+            budget: stepIterationBudget(s),
+          }))
+          const hasIntake = !!(action.context.productType || action.context.brand)
+          const genPrompt = hasIntake ? promptFromContext(action.context) : buildText
+          // Deterministic tier: enrich a bare context with the raw prompt so the
+          // local scaffold still produces niche-coherent copy.
+          const buildCtx = hasIntake ? action.context : { ...action.context, productType: buildText }
+          if (attachedFileIds.length > 0 && activeModelName && !opts?.forceDeterministic) {
+            const promptResult = await sendPrompt(buildText, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            if (promptResult.cancelled) {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+            return
+          }
+          if (!opts?.forceDeterministic && codexAvailable) {
+            // Codex Agent V2 (the REAL server-driven agent): drives a plan→build
+            // run whose file writes are read back into the workspace, with a
+            // deterministic buildApp fallback inside so a build always lands.
+            const out = await runCodexEngine(buildText, sid, { displayText })
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else if (!opts?.forceDeterministic && engineMode && engineAvailable) {
+            // OpenCode agent (only truly available in Docker AND opt-in via the
+            // "Motor" toggle): it writes the project files into its /workspace via
+            // a funded model and runEngine reads them back — deterministic
+            // fallback inside. Without an explicit Motor opt-in the deterministic
+            // builder below is the primary path (fast, no ~30s GCLB stream cut).
+            const out = await runEngine(buildText, sid, { buildContext: action.context, displayText: text })
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "llm" }))
+          } else {
+            // First build → the deterministic builder is the PRIMARY path. It is
+            // LLM-free, returns in seconds, and emits full project files plus a
+            // self-contained index.html live preview, so it never hits the ~30s
+            // GCLB stream cut that left the chat-streaming generation "cargando"
+            // forever on the Reserved VM.
+            // (This branch previously streamed the whole project from the chat
+            // model — the source of the hang/errors the user reported.)
+            const out = await buildApp(genPrompt, buildCtx)
+            if (out === "cancelled") {
+              patchAgentState(sid, (s) => ({ ...s, phase: "idle" }))
+              return
+            }
+            patchAgentState(sid, (s) => ({ ...s, phase: "preview", generator: "deterministic" }))
+          }
+          return
+        }
+        case "work_task": {
+          // Mejora 1: the FSM asked us to execute the next pending AgentTask.
+          // Mark it in_progress, run the instruction through the same patch
+          // machinery, then mark it completed (only after the stream/quality
+          // gate passes — Mejora 3) and let the proactive effect continue with
+          // the next task (Mejora 2).
+          const currentAgent = activeCodeChatSession?.agent
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: "generating",
+            tasks: updateAgentTask(s.tasks || [], action.taskId, { status: "in_progress" }),
+          }))
+          // Mejora 3 retry loop: execute the instruction, validate the files it
+          // produced, and when the stream/quality gate fails re-run the SAME
+          // task with a targeted fix instruction. Attempts live under a
+          // "[retry:N]" prefix so the loop is bounded by MAX_STREAM_RETRIES.
+          let instruction = action.instruction
+          let retryAttempt = 0
+          let lastVerdict: { ok: boolean; retryInstruction?: string } = { ok: true }
+          let cancelledWork = false
+          for (let attempt = 0; attempt <= MAX_STREAM_RETRIES; attempt++) {
+            lastAppliedFilesRef.current = []
+            let promptResult: { applied: Array<{ path: string; content: string }>; rejected?: { issue?: string; retryInstruction?: string }; cancelled?: boolean } | undefined
+            if (attachedFileIds.length > 0 && activeModelName) {
+              promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            } else if (runDeterministicPatch(instruction, sid)) {
+              // patched deterministically
+            } else if (codexAvailable) {
+              const out = await runCodexEngine(instruction, sid, { iterate: true })
+              if (out === "cancelled") {
+                cancelledWork = true
+                lastVerdict = { ok: false }
+                break
+              }
+              if (out === "workspace_sync_failed") {
+                promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+              }
+            } else if (engineMode && engineAvailable) {
+              const out = await runEngine(instruction, sid, { iterate: true })
+              if (out === "cancelled") {
+                cancelledWork = true
+                lastVerdict = { ok: false }
+                break
+              }
+            } else {
+              promptResult = await sendPrompt(instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            }
+            if (promptResult?.cancelled) {
+              cancelledWork = true
+              lastVerdict = { ok: false }
+              break
+            }
+            // Prefer files the executor just wrote (React `files` is still the
+            // previous render). A rejected stream is a failed turn even when
+            // nothing was applied — that is what the retry loop is for.
+            const appliedNow = promptResult?.applied?.length
+              ? promptResult.applied
+              : lastAppliedFilesRef.current
+            lastVerdict = promptResult?.rejected
+              ? { ok: false, retryInstruction: promptResult.rejected.retryInstruction }
+              : validateGeneratedFiles(appliedNow)
+            if (lastVerdict.ok) break
+            if (attempt >= MAX_STREAM_RETRIES) break
+            retryAttempt = attempt + 1
+            const task = currentAgent?.tasks?.find((t) => t.id === action.taskId)
+            const baseInstruction = (task?.detail || task?.title || instruction).replace(/^\[retry:\d+\]\s*/, "")
+            instruction = `${lastVerdict.retryInstruction}\n\n[retry:${retryAttempt}] ${baseInstruction}`
+            toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${lastVerdict.retryInstruction?.slice(0, 90)}…`)
+          }
+          const doneAgent = activeCodeChatSession?.agent
+          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
+            status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
+          })
+          patchAgentState(sid, (s) => ({
+            ...s,
+            phase: cancelledWork ? "idle" : lastVerdict.ok ? "preview" : "debugging",
+            tasks: patchedTasks,
+          }))
+          return
+        }
+        case "patch": {
+          // Mejora 2: a patch instruction with chained steps ("añade X y luego Y")
+          // expands into an autonomous task plan the agent executes one by one.
+          const plan = planAgentTasks(action.instruction, agent.tasks)
+          if (plan.length > 1 || opts?.fromWorkTask) {
+            patchAgentState(sid, (s) => ({
+              ...s,
+              tasks: plan,
+              budget: stepIterationBudget(s),
+            }))
+          }
+          if (attachedFileIds.length > 0 && activeModelName) {
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+            return
+          }
+          if (runDeterministicPatch(action.instruction, sid)) {
+            return
+          }
+          if (codexAvailable) {
+            // Codex build mode iterates on follow-ups (it syncs the local
+            // workspace into the session's project, edits it and reads the
+            // tree back). A failed workspace sync means Codex would edit the
+            // WRONG tree — treat it as "Codex unavailable" for this turn.
+            const out = await runCodexEngine(action.instruction, sid, { iterate: true })
+            if (out !== "workspace_sync_failed") return
+          }
+          if (engineMode && engineAvailable) {
+            await runEngine(action.instruction, sid, { iterate: true })
+          } else {
+            await sendPrompt(action.instruction, { autoApply: true, files: attachedFileIds, mode: effectiveMode })
+          }
+          return
+        }
+        case "debug": {
+          patchAgentState(sid, (s) => ({ ...s, phase: "debugging", lastError: action.log }))
+          if (effectiveMode === "debug" && activeModelName) {
+            await sendPrompt(text, {
+              systemPrompt: sreSystemPrompt(action.log, collectConfigFiles(files)),
+              autoApply: true,
+              spokenKind: "debug",
+              files: attachedFileIds,
+              mode: effectiveMode,
+            })
+          } else {
+            await runDeterministicSRE(action.log, text, sid)
+          }
+          return
+        }
+        default:
+          // `passthrough` has no explicit write intent. Keep it in read-only
+          // conversation even when the composer is visually in App mode; only
+          // generate/patch/debug actions may enter a code-writing engine.
+          await sendPrompt(text, {
+            autoApply: false,
+            files: attachedFileIds,
+            mode: effectiveMode,
+          })
+          return
+      }
+      } finally {
+        dispatchingRef.current = false
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      activeCodeChatSession,
+      activePath,
+      activeFolder,
+      activeModelName,
+      buildApp,
+      busy,
+      buildingApp,
+      codexAvailable,
+      composerMode,
+      engineAvailable,
+      engineMode,
+      files,
+      includeContext,
+      patchAgentState,
+      runCodexEngine,
+      runDeterministicSRE,
+      runDeterministicPatch,
+      runEngine,
+      sendPrompt,
+      sessionId,
+      setTurns,
+      user,
+    ],
+  )
+
+  // Stable ref to the latest dispatch so the idle-drain effect can run a parked
+  // message without re-subscribing every time dispatch's identity changes.
+  const dispatchRef = React.useRef(dispatch)
+  dispatchRef.current = dispatch
+
+  // Idle-drain: the instant the panel stops being busy, run the messages the
+  // user submitted while it was busy (queued FIFO in pendingInputRef), in
+  // arrival order and one at a time. If a dispatched message settles without
+  // ever taking the busy latch (e.g. a canned greeting), busy never toggles and
+  // this effect would not re-run — so the drain loops until the queue is empty
+  // or the panel goes busy again (that turn's settle resumes the drain).
+  React.useEffect(() => {
+    if (busy || buildingApp || externalRequestInFlightRef.current) return
+    if (pendingInputRef.current.length === 0) return
+    let cancelled = false
+    void (async () => {
+      while (
+        !cancelled
+        && !busyRef.current
+        && !buildingAppRef.current
+        && !externalRequestInFlightRef.current
+      ) {
+        const parked = pendingInputRef.current.shift()
+        if (!parked) return
+        await dispatchRef.current?.(parked.text, { files: parked.files, mode: parked.mode })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [busy, buildingApp])
+
+  // Proactive auto-continuation (Mejora 2): after a generate/patch turn settles
+  // (busy → idle), if the agent still has pending AgentTask[] work and the
+  // iteration budget allows it, dispatch the next task WITHOUT waiting for the
+  // user to type "ok"/"continúa". This is what makes the /code agent build
+  // multi-step plans all by itself.
+  const autoContinueRef = React.useRef(false)
+  React.useEffect(() => {
+    if (busy || buildingApp || externalRequestInFlightRef.current) return
+    const agentState = activeCodeChatSession?.agent
+    if (!agentState || agentState.phase !== "preview") return
+    if (autoContinueRef.current) return
+    const plan = agentState.tasks || []
+    const hasPending = plan.some((task) => task.status === "pending" || task.status === "in_progress")
+    if (!hasPending) return
+    // Gate on the budget BEFORE dispatching: once max iterations or the timeout
+    // is spent, the run stops autonomously (Mejora 4).
+    const decision = nextWorkTaskAction(agentState)
+    if (decision.type !== "work_task") return
+    autoContinueRef.current = true
+    void Promise.resolve(dispatchRef.current?.("", { fromWorkTask: true, mode: composerModeRef.current }))
+      .catch(() => undefined)
+      .finally(() => {
+        autoContinueRef.current = false
+      })
+  }, [activeCodeChatSession?.agent, busy, buildingApp])
+
+  // Tool-initiated agent requests: workspace tools (Auth, Automations, …) emit
+  // `siragpt:code-agent-request` with a plain instruction. It flows through the
+  // SAME dispatch as a typed message — busy panels park it in pendingInputRef
+  // and the idle-drain above runs it as soon as the current turn settles.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const runRequest = (text: string, mode?: ComposerMode) => {
+      const requestMode = mode ?? composerModeRef.current
+      if (busyRef.current || buildingAppRef.current || externalRequestInFlightRef.current) {
+        pendingInputRef.current.push({ text, mode: requestMode })
+        return
+      }
+      externalRequestInFlightRef.current = true
+      void Promise.resolve(dispatchRef.current?.(text, { mode: requestMode })).finally(() => {
+        externalRequestInFlightRef.current = false
+        if (busyRef.current || buildingAppRef.current) return
+        const parked = pendingInputRef.current.shift()
+        if (parked) runRequest(parked.text, parked.mode)
+      })
+    }
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ text?: string; mode?: string; consumed?: boolean }>).detail
+      // Multiple Apps surfaces can briefly coexist during dock transitions.
+      // The shared detail is claimed synchronously so exactly one panel starts
+      // (or queues) a potentially multi-hour autonomous run.
+      const request = claimCodeAgentRequest(detail)
+      if (!request) return
+      runRequest(request.text, request.mode)
+    }
+    window.addEventListener(CODE_AGENT_REQUEST_EVENT, handler)
+    // A PROACTIVO kickoff fired before this panel mounted lands in the stash
+    // (the 120ms race made the button look dead). Claim it exactly once.
+    const pending = claimPendingSeedPrompt()
+    if (pending) runRequest(pending)
+    const autonomousStarter = claimPendingCodeAgentInstruction()
+    if (autonomousStarter) runRequest(autonomousStarter.text, autonomousStarter.mode)
+    return () => window.removeEventListener(CODE_AGENT_REQUEST_EVENT, handler)
+  }, [])
+
+  // Orphan-turn recovery: if the browser persisted a user message but the
+  // assistant turn was never created/completed (tab reload, stale busy latch,
+  // or a previous build that swallowed the submit), retry it automatically.
+  // Wait a beat before slicing the user bubble — an in-flight sendPrompt
+  // commits the assistant on the next paint, and cancelling a 0ms timer
+  // (Strict Mode / turns changing) used to delete the message without
+  // re-dispatching it.
+  const recoveredOrphanTurnRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    if (busy || buildingApp) return
+    const last = turns[turns.length - 1]
+    if (!last || last.role !== "user") return
+    const text = last.content.trim()
+    if (!text || recoveredOrphanTurnRef.current.has(last.id)) return
+    const timer = window.setTimeout(() => {
+      if (busyRef.current || buildingAppRef.current) return
+      const currentLast = turnsRef.current[turnsRef.current.length - 1]
+      if (!currentLast || currentLast.id !== last.id || currentLast.role !== "user") return
+      if (recoveredOrphanTurnRef.current.has(last.id)) return
+      recoveredOrphanTurnRef.current.add(last.id)
+      setTurns((prev) => (prev[prev.length - 1]?.id === last.id ? prev.slice(0, -1) : prev))
+      void dispatchRef.current?.(text)
+    }, 800)
+    return () => window.clearTimeout(timer)
+  }, [busy, buildingApp, setTurns, turns])
+
+  // Stale-busy watchdog: a streaming turn keeps abortRef set; if busy stays true
+  // with NO stream in flight (abortRef cleared) past a grace period, the latch is
+  // wedged — recover the composer so it (and any parked message) is never stuck.
+  React.useEffect(() => {
+    if (!busy) return
+    const t = window.setTimeout(() => {
+      if (!abortRef.current && !codexCancellationRef.current) {
+        setBusy(false)
+        repairInFlightRef.current = false
+      }
+    }, 30_000)
+    return () => window.clearTimeout(t)
+  }, [busy])
+
+  // Stale-build watchdog: buildApp awaits a builder fetch that is now time-bound
+  // (intakeService.generate aborts at 120s), but a wedged buildingApp would still
+  // block the composer. As a backstop, recover the latch if it stays set past a
+  // generous ceiling — a real build (local scaffold or bounded fetch) always
+  // settles well within it.
+  React.useEffect(() => {
+    if (!buildingApp) return
+    const t = window.setTimeout(() => setBuildingApp(false), 150_000)
+    return () => window.clearTimeout(t)
+  }, [buildingApp])
+
+  const readyCodeAttachments = React.useMemo(
+    () => codeAttachments.filter((file) => file.status === "ready"),
+    [codeAttachments],
+  )
+  const hasUploadingCodeAttachments = codeAttachments.some((file) => file.status === "uploading")
+  const hasFailedCodeAttachments = codeAttachments.some((file) => file.status === "failed")
+  const canSubmitCodePrompt =
+    (input.trim().length > 0 || readyCodeAttachments.length > 0 || Boolean(selectedPreviewTarget)) &&
+    !hasUploadingCodeAttachments
+
+  const clearSentCodeAttachments = React.useCallback((sentFiles: CodeComposerAttachment[]) => {
+    if (sentFiles.length === 0) return
+    const sent = new Set(sentFiles.map(codeAttachmentId))
+    setCodeAttachments((current) => {
+      const next = current.filter((file) => {
+        const shouldRemove = sent.has(codeAttachmentId(file))
+        if (shouldRemove && file.preview) URL.revokeObjectURL(file.preview)
+        return !shouldRemove
+      })
+      codeAttachmentsRef.current = next
+      return next
+    })
+    setCodeUploadProgress((current) => {
+      const next = { ...current }
+      sentFiles.forEach((file) => {
+        delete next[file.tempId]
+      })
+      return next
+    })
+  }, [])
+
+  const submitCodePrompt = React.useCallback(() => {
+    if (hasUploadingCodeAttachments) {
+      toast("Espera a que termine la subida antes de enviar.")
+      return
+    }
+    if (!input.trim() && readyCodeAttachments.length === 0 && !selectedPreviewTarget) {
+      if (hasFailedCodeAttachments) toast.error("Reintenta o elimina los adjuntos con error.")
+      return
+    }
+    if (selectedPreviewTarget && !input.trim() && readyCodeAttachments.length === 0) {
+      toast("Describe el cambio para el elemento seleccionado.")
+      inputRef.current?.focus()
+      return
+    }
+    if (!user) {
+      toast.error("Inicia sesión para usar el chat de código.")
+      return
+    }
+    if (!sessionId) {
+      toast.error("Abre o crea un chat de código antes de enviar archivos.")
+      return
+    }
+
+    const instruction = extractInstructionFromComposer(input)
+    const promptWithTarget = selectedPreviewTarget
+      ? buildSelectedElementPrompt(selectedPreviewTarget, instruction)
+      : instruction
+    const payload = composeCodePromptWithAttachments(promptWithTarget, readyCodeAttachments)
+    const fileIds = readyCodeAttachments.map(codeAttachmentFileId).filter((id): id is string => Boolean(id))
+    if (!payload.trim()) return
+    void dispatch(payload, { files: fileIds })
+    setSelectedPreviewTarget(null)
+    clearSentCodeAttachments(readyCodeAttachments)
+  }, [
+    clearSentCodeAttachments,
+    dispatch,
+    hasFailedCodeAttachments,
+    hasUploadingCodeAttachments,
+    input,
+    readyCodeAttachments,
+    selectedPreviewTarget,
+    sessionId,
+    user,
+  ])
+
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+    submitCodePrompt()
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault()
+      submitCodePrompt()
+    }
+  }
+
+  const handleComposerFileInput = React.useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = event.currentTarget.files
+      if (files?.length) void uploadCodeFiles(files, "picker")
+      event.currentTarget.value = ""
+    },
+    [uploadCodeFiles],
+  )
+
+  const handleComposerDragOver = React.useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    const hasFiles = Array.from(event.dataTransfer.types || []).includes("Files")
+    if (!hasFiles) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.dataTransfer.dropEffect = "copy"
+    setCodeDraggingFiles(true)
+  }, [])
+
+  const handleComposerDrop = React.useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (!Array.from(event.dataTransfer.types || []).includes("Files")) return
+      event.preventDefault()
+      event.stopPropagation()
+      setCodeDraggingFiles(false)
+      codeDragCounterRef.current = 0
+      ingestDroppedCodeFiles(event.dataTransfer, "drop-internal")
+    },
+    [ingestDroppedCodeFiles],
+  )
+
+  const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
+  const activeSessionTitle =
+    codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
+    "Nuevo chat"
+  const visibleSessionTitle = title?.trim() || activeSessionTitle
+
+  // Replit-style "Plan" pill: flips the composer into plan mode and back to
+  // whatever mode was active before (defaults to "app").
+  const planReturnModeRef = React.useRef<ComposerMode>("app")
+  const togglePlanMode = React.useCallback(() => {
+    if (composerMode === "plan") {
+      setComposerMode(planReturnModeRef.current)
+    } else {
+      planReturnModeRef.current = composerMode
+      setComposerMode("plan")
+    }
+    inputRef.current?.focus()
+  }, [composerMode])
+
+  return (
+    <div
+      className="relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      data-embedded={embedded ? "true" : undefined}
+    >
+      {codeDraggingFiles ? (
+        <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
+          Suelta archivos para adjuntarlos al agente de APPS
+        </div>
+      ) : null}
+      {/* Replit-style panel header: current thread title + history / new-chat
+          actions (the session tabs collapsed into the history dropdown). */}
+      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
+        {onBack ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+            aria-label="Volver a la empresa"
+            title="Volver a la empresa"
+            onClick={onBack}
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+        ) : null}
+        <span
+          className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
+          title={visibleSessionTitle}
+        >
+          {visibleSessionTitle}
+        </span>
+        {activeFileLabel ? (
+          <span
+            className="min-w-0 shrink truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
+            title={activePath ?? undefined}
+          >
+            {activeFileLabel}
+          </span>
+        ) : null}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+              aria-label="Historial de chats"
+              title="Historial de chats"
+            >
+              <History className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5">
+            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
+              Chats del proyecto
+            </DropdownMenuLabel>
+            {codeChatSessions.map((session) => (
+              <DropdownMenuItem
+                key={session.id}
+                className={cn(
+                  "gap-2 rounded-md text-[13px]",
+                  session.id === activeCodeChatSessionId && "bg-muted/70 font-medium",
+                )}
+                onClick={() => setActiveCodeChatSession(session.id)}
+              >
+                <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                {session.id === activeCodeChatSessionId ? (
+                  <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : null}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
+          aria-label="Nuevo agente"
+          title="Nuevo chat en paralelo"
+          onClick={() => createCodeChatSession()}
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      {identityIssue ? (
+        <div
+          className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+          role="alert"
+          data-testid="code-identity-error"
+          data-identity-code={identityIssue.code}
+        >
+          <span>
+            {identityIssue.message}
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 shrink-0 border-current bg-transparent text-xs"
+            onClick={() => {
+              setIdentityIssue(null)
+              window.dispatchEvent(new CustomEvent(CODE_OPEN_COMPANY_ASSOCIATION_EVENT))
+            }}
+          >
+            {identityIssue.code === "company_association_required" ? "Asociar entorno" : "Revisar asociación"}
+          </Button>
+        </div>
+      ) : null}
+
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
+        {turns.length === 0 ? (
+          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+        ) : (
+          <div className="space-y-3">
+            {turns.map((turn) => (
+              <CodeChatErrorBoundary key={turn.id} label="code-chat-turn">
+                <ChatBubble
+                  turn={turn}
+                  lookupContent={(path) => files[path]?.content ?? ""}
+                />
+              </CodeChatErrorBoundary>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
+        <div
+          data-testid="code-composer-surface"
+          className={cn("code-composer__surface", codeDraggingFiles && "is-drop-target")}
+          onDragOver={handleComposerDragOver}
+          onDrop={handleComposerDrop}
+        >
+          <input
+            ref={codeFileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleComposerFileInput}
+            aria-label="Adjuntar archivos al agente de APPS"
+          />
+          <CodeAttachmentTray
+            files={codeAttachments}
+            progress={codeUploadProgress}
+            onRemove={removeCodeAttachment}
+            onRetry={retryCodeAttachment}
+          />
+          {selectedPreviewTarget ? (
+            <div className="code-composer__chip-row">
+              <div
+                data-testid="code-target-selection-chip"
+                className="inline-flex min-w-0 max-w-full items-center gap-2 rounded-lg border border-violet-500/25 bg-violet-500/[0.08] px-2.5 py-1.5 text-[11px] font-medium text-violet-800 shadow-[0_1px_0_rgba(124,58,237,0.04)] dark:text-violet-100"
+                title={selectedElementChipLabel(selectedPreviewTarget)}
+              >
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-violet-500/12" aria-hidden="true">
+                  <ScanSearch className="h-3.5 w-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-[9px] font-semibold uppercase leading-none tracking-[0.08em] text-violet-700/65 dark:text-violet-200/65">
+                    Elemento seleccionado
+                  </span>
+                  <span className="mt-0.5 block truncate">{selectedElementChipLabel(selectedPreviewTarget)}</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPreviewTarget(null)}
+                  className="ml-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-violet-700/75 transition-colors hover:bg-violet-500/15 hover:text-violet-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/45 dark:text-violet-100 dark:hover:text-white"
+                  aria-label="Quitar elemento seleccionado"
+                  title="Quitar elemento seleccionado"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <Textarea
+            aria-label="Mensaje para el chat de código"
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={handleCodeTextareaPaste}
+            placeholder={
+              selectedPreviewTarget
+                ? "Describe el cambio para este elemento…"
+                : COMPOSER_PLACEHOLDER[composerMode]
+            }
+            rows={1}
+            className="code-composer__input max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
+          />
+          <div className="code-composer__footer">
+            <div className="code-composer__leading">
+              <ComposerPlusMenu
+                mode={composerMode}
+                includeContext={includeContext}
+                activeFileLabel={activeFileLabel}
+                engineAvailable={engineAvailable}
+                engineMode={engineMode}
+                onModeChange={(mode) => {
+                  if (mode === "plan" && composerModeRef.current !== "plan") {
+                    planReturnModeRef.current = composerModeRef.current
+                  } else if (mode !== "plan") {
+                    planReturnModeRef.current = mode
+                  }
+                  setComposerMode(mode)
+                  inputRef.current?.focus()
+                }}
+                onIncludeContextChange={setIncludeContext}
+                onEngineModeChange={setEngineMode}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => codeFileInputRef.current?.click()}
+                aria-label="Adjuntar imagen o documento"
+                title="Adjuntar imagen, PDF, Word, Excel o PPT"
+                className="code-composer__icon-btn"
+              >
+                <Paperclip className="h-[16px] w-[16px]" />
+              </Button>
+              <button
+                type="button"
+                onClick={toggleTargetSelection}
+                aria-pressed={selectingTarget}
+                aria-label={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+                title={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
+                data-testid="code-target-selector"
+                className={cn(
+                  "code-target-select-button shrink-0 rounded-md",
+                  selectingTarget && "code-target-select-button--active",
+                )}
+              >
+                {selectingTarget ? (
+                  <X className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
+                )}
+                <span className="code-target-select-button__label">
+                  {selectingTarget ? "Cancelar" : "Seleccionar UI"}
+                </span>
+              </button>
+            </div>
+            <div className="code-composer__trailing">
+              <ModelPickerInline
+                models={pickerModels}
+                selectedModel={activeModelName || ""}
+                fast={modelIsFast}
+                selectedEffort={selectedEffort}
+                onSelectEffort={setSelectedEffort}
+                onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
+              />
+              <button
+                type="button"
+                onClick={togglePlanMode}
+                aria-pressed={composerMode === "plan"}
+                title="Planear antes de editar archivos"
+                className={cn(
+                  "code-composer__plan",
+                  composerMode === "plan" && "is-active",
+                )}
+              >
+                <span
+                  className={cn(
+                    "code-composer__plan-box",
+                    composerMode === "plan" && "is-active",
+                  )}
+                  aria-hidden="true"
+                >
+                  {composerMode === "plan" ? <Check className="h-2.5 w-2.5" strokeWidth={3} /> : null}
+                </span>
+                <span className="code-composer__plan-label">Plan</span>
+              </button>
+              <DictationButton
+                variant="light"
+                locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+                onTranscript={(text) => {
+                  const chunk = text.trim()
+                  if (!chunk) return
+                  setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                  inputRef.current?.focus()
+                }}
+              />
+              {busy ? (
+                <>
+                  {canSubmitCodePrompt ? (
+                    <Button
+                      type="submit"
+                      size="icon"
+                      className="code-composer__send"
+                      aria-label="Enviar al terminar"
+                      title="Enviar al terminar"
+                    >
+                      <ComposerSendArrow className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className={cn(
+                      "code-composer__stop",
+                      activeCodexCancellationState === "failed" && "is-failed",
+                    )}
+                    onClick={cancelStream}
+                    disabled={activeCodexCancellationState === "cancelling"}
+                    aria-label={
+                      activeCodexCancellationState === "cancelling"
+                        ? "Deteniendo agente"
+                        : activeCodexCancellationState === "failed"
+                          ? "Reintentar detención"
+                          : "Detener"
+                    }
+                    title={
+                      activeCodexCancellationState === "cancelling"
+                        ? "Confirmando cancelación en el servidor"
+                        : activeCodexCancellationState === "failed"
+                          ? "Reintentar cancelación en el servidor"
+                          : "Detener"
+                    }
+                  >
+                    {activeCodexCancellationState === "cancelling"
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <StopCircle className="h-4 w-4" />}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  type="submit"
+                  size="icon"
+                  className="code-composer__send"
+                  disabled={!canSubmitCodePrompt}
+                  aria-label="Enviar"
+                >
+                  <ComposerSendArrow className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function CodeAttachmentTray({
+  files,
+  progress,
+  onRemove,
+  onRetry,
+}: {
+  files: CodeComposerAttachment[]
+  progress: Record<string, number>
+  onRemove: (index: number) => void
+  onRetry: (file: CodeComposerAttachment) => void
+}) {
+  if (files.length === 0) return null
+
+  return (
+    <div className="mb-2 flex max-h-[112px] flex-wrap gap-2 overflow-y-auto px-0.5">
+      {files.map((file, index) => {
+        const type = codeAttachmentType(file)
+        const name = codeAttachmentName(file)
+        const isImage = type.startsWith("image/")
+        const pct = Math.max(1, Math.min(100, progress[file.tempId] ?? (file.status === "ready" ? 100 : 1)))
+        const previewStyle =
+          isImage && file.preview
+            ? {
+                backgroundImage: `url(${file.preview})`,
+                backgroundPosition: "center",
+                backgroundSize: "cover",
+              }
+            : undefined
+
+        return (
+          <div
+            key={codeAttachmentId(file)}
+            className={cn(
+              "group/attachment relative flex max-w-full items-center gap-2 overflow-hidden rounded-lg border bg-muted/25 px-2 py-1.5 text-left shadow-sm",
+              file.status === "failed"
+                ? "border-red-200 bg-red-50/70 text-red-950 dark:border-red-900/60 dark:bg-red-950/20 dark:text-red-200"
+                : "border-border/65",
+            )}
+            title={file.status === "failed" ? file.uploadError || "Error de subida" : name}
+          >
+            <span
+              className={cn(
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-background text-muted-foreground",
+                isImage && file.preview && "border-transparent bg-muted",
+              )}
+              style={previewStyle}
+              aria-hidden="true"
+            >
+              {isImage && file.preview ? null : isImage ? (
+                <ImageIcon className="h-4 w-4" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block max-w-[13rem] truncate text-[12px] font-medium text-foreground">
+                {name}
+              </span>
+              <span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                {file.status === "uploading" ? (
+                  <>
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {pct}%
+                  </>
+                ) : file.status === "failed" ? (
+                  "Error"
+                ) : (
+                  formatCodeAttachmentBytes(file.size) || "Listo"
+                )}
+              </span>
+              {file.status === "uploading" ? (
+                <span className="mt-1 block h-1 overflow-hidden rounded-full bg-muted">
+                  <span className="block h-full rounded-full bg-[#0f87ff]" style={{ width: `${pct}%` }} />
+                </span>
+              ) : null}
+            </span>
+            {file.status === "failed" ? (
+              <button
+                type="button"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+                onClick={() => onRetry(file)}
+                aria-label={`Reintentar ${name}`}
+                title="Reintentar subida"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground"
+              onClick={() => onRemove(index)}
+              aria-label={`Quitar ${name}`}
+              title="Quitar adjunto"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function EmptyChat({
+  active,
+  proactive = false,
+  durable = false,
+}: {
+  active: boolean
+  proactive?: boolean
+  durable?: boolean
+}) {
+  return (
+    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
+      <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
+        <span
+          className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
+          aria-hidden="true"
+        />
+        {durable ? "Agente cloud disponible · hasta 4 h" : "Builder local disponible"}
+      </span>
+      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
+        <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
+      </span>
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
+        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
+      </h2>
+      <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
+        {proactive
+          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
+          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
+      </p>
+      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
+        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
+          <button
+            key={starter.id}
+            type="button"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
+            data-testid={`code-agent-starter-${starter.id}`}
+          >
+            <span className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
+                {starter.id === "ai-platform" ? (
+                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
+                ) : starter.id === "business-os" ? (
+                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <Rocket className="h-4 w-4" aria-hidden="true" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-foreground">{starter.title}</span>
+                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
+                </span>
+                <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
+                  {starter.description}
+                </span>
+                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
+                  {starter.meta}
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
+        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
+          <React.Fragment key={step}>
+            {index > 0 ? <span aria-hidden="true">→</span> : null}
+            <span>{step}</span>
+          </React.Fragment>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ChatBubble({
+  turn,
+  lookupContent,
+}: {
+  turn: CodeChatTurn
+  lookupContent: (path: string) => string
+}) {
+  const isUser = turn.role === "user"
+  const blocks = React.useMemo(
+    () => (turn.role === "assistant" ? parseCodeBlocks(turn.content) : []),
+    [turn.content, turn.role],
+  )
+
+  // USER messages: right-aligned dark-blue bubble with light text (the spec's
+  // user style). No code-block parsing — the user types prompts, not code cards.
+  if (isUser) {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-xl border border-border/60 bg-muted/55 px-3.5 py-2 text-sm leading-relaxed text-foreground shadow-sm">
+          {turn.content}
+        </div>
+      </div>
+    )
+  }
+
+  // ASSISTANT messages: left-aligned, plain background, clean typography (no
+  // colored bubble) — direct text on the interface, with the code-block cards.
+  const blocker = detectBlocker(turn.content)
+  // Pull the model's gerund-led planning line into the status badge (like the
+  // agent dashboard) and narrate the rest. Falls back to a generic badge while
+  // streaming before the planning line lands.
+  const { label: planLabel, body } = extractPlanLabel(turn.content)
+  const liveAgentLabel = planLabel || turn.agentLabel || (turn.streaming ? "Pensando" : "")
+  return (
+    <div className="text-sm">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Asistente
+        {liveAgentLabel ? (
+          <span className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 normal-case tracking-normal text-foreground/80">
+            <BrainCircuit className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span className="truncate font-medium">{liveAgentLabel}</span>
+            {!turn.streaming && typeof turn.planMs === "number" ? (
+              <span className="opacity-60">({formatWorked(turn.planMs)})</span>
+            ) : null}
+            {turn.streaming ? (
+              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      {/* 5-step agent progress rail (Plan → Contexto → Generar → Aplicar →
+          Verificar). Populated from REAL turn state by the build/app/engine
+          paths; renders nothing for turns that never set agentPhases. */}
+      <CodeAgentProgress phases={turn.agentPhases} />
+      {/* Voiced turn (e.g. the greeting): action rows + inline voice player
+          ABOVE the text, so the reply reads actions → audio → text. The player
+          generates ElevenLabs audio (voz femenina multilingüe) SOLO cuando el
+          usuario pulsa play — nunca automático — con fallback local gratuito.
+          Only for turns that carry `voice`; build turns keep their layout. */}
+      {turn.voice ? (
+        <div className="mb-2 space-y-2">
+          {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+          <BrowserVoicePlayer text={turn.voice} />
+        </div>
+      ) : null}
+      {/* An out-of-credits / quota error surfaces as a high-visibility panel
+          instead of plain prose; otherwise render the assistant text normally. */}
+      {blocker ? (
+        <ChatBlockerPanel title={blocker.title} rawError={turn.content} url={blocker.url} />
+      ) : (
+        <div className="text-sm leading-relaxed break-words">
+          {/* `body` already drops the planning line (now in the badge); strip
+              fenced blocks too so prose isn't shown twice (here + block cards).
+              Rendered as markdown so **bold**, `code`, lists & links render. */}
+          <MemoMarkdownBlock
+            content={mdPreserveBreaks(blocks.length > 0 ? stripFences(body) : body)}
+            components={CODE_CHAT_MD_COMPONENTS}
+          />
+        </div>
+      )}
+      {(() => {
+        const applicable = blocks.filter((b) => b.path)
+        return applicable.length >= 2 ? (
+          <div className="mt-2 flex items-center gap-2 rounded-md border border-border/50 bg-muted/20 px-2.5 py-1.5">
+            <span className="text-[11px] text-muted-foreground">
+              {applicable.length} archivos en esta respuesta
+            </span>
+          </div>
+        ) : null
+      })()}
+      {blocks.map((block) => (
+        <CodeBlockCard
+          key={block.index}
+          block={block}
+          existingContent={block.path ? lookupContent(block.path) : ""}
+        />
+      ))}
+      {/* Real action log + mandatory Worked Summary — only when the turn did
+          measurable file work (build/app/engine paths populate these). A voiced
+          turn already showed its actions above (next to the voice player). */}
+      {!turn.voice && turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
+      {turn.metrics ? <ChatWorkedSummary metrics={turn.metrics} /> : null}
+    </div>
+  )
+}
+
+// Compact markdown typography for the /code agent chat. Rendered via the shared
+// MemoMarkdownBlock (react-markdown + the app's sanitize plugins) so the agent's
+// **bold**, `inline code`, lists, headings, links and tables render like the
+// main chat instead of showing raw asterisks/backticks. Module-level constant →
+// stable reference so MemoMarkdownBlock's memo comparator holds across streams.
+const CODE_CHAT_MD_COMPONENTS = {
+  p: (props: any) => <p className="mb-2 last:mb-0" {...props} />,
+  strong: (props: any) => <strong className="font-semibold text-foreground" {...props} />,
+  em: (props: any) => <em className="italic" {...props} />,
+  ul: (props: any) => <ul className="mb-2 ml-4 list-disc space-y-1 last:mb-0" {...props} />,
+  ol: (props: any) => <ol className="mb-2 ml-4 list-decimal space-y-1 last:mb-0" {...props} />,
+  li: (props: any) => <li className="leading-relaxed" {...props} />,
+  h1: (props: any) => <h3 className="mb-1 mt-3 text-[14px] font-semibold first:mt-0" {...props} />,
+  h2: (props: any) => <h3 className="mb-1 mt-3 text-[14px] font-semibold first:mt-0" {...props} />,
+  h3: (props: any) => <h4 className="mb-1 mt-3 text-[13px] font-semibold first:mt-0" {...props} />,
+  h4: (props: any) => <h4 className="mb-1 mt-2 text-[13px] font-semibold first:mt-0" {...props} />,
+  a: (props: any) => (
+    <a
+      className="font-medium text-blue-600 underline underline-offset-2 hover:no-underline dark:text-blue-400"
+      target="_blank"
+      rel="noreferrer"
+      {...props}
+    />
+  ),
+  code: ({ className, children, ...rest }: any) => {
+    const isBlock = /(^|\s)language-/.test(className || "")
+    if (isBlock)
+      return (
+        <code className={className} {...rest}>
+          {children}
+        </code>
+      )
+    return (
+      <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[12px] text-foreground">{children}</code>
+    )
+  },
+  pre: (props: any) => (
+    <pre
+      className="mb-2 overflow-auto rounded-md border border-border/50 bg-muted/30 p-2.5 font-mono text-[12px] leading-relaxed last:mb-0"
+      {...props}
+    />
+  ),
+  blockquote: (props: any) => (
+    <blockquote className="mb-2 border-l-2 border-border/70 pl-3 text-muted-foreground last:mb-0" {...props} />
+  ),
+  hr: () => <hr className="my-3 border-border/50" />,
+  table: (props: any) => (
+    <div className="mb-2 overflow-x-auto">
+      <table className="w-full border-collapse text-[12px]" {...props} />
+    </div>
+  ),
+  th: (props: any) => (
+    <th className="border border-border/60 bg-muted/40 px-2 py-1 text-left font-semibold" {...props} />
+  ),
+  td: (props: any) => <td className="border border-border/50 px-2 py-1 align-top" {...props} />,
+}
+
+// The agent writes with meaningful single newlines (a bold label on its own
+// line, then its text; sequential sentences). Standard markdown collapses those
+// soft breaks into spaces — keep them as hard breaks so the layout survives.
+// Fenced blocks are already extracted to cards, so there's no code to corrupt.
+function mdPreserveBreaks(text: string): string {
+  return text.replace(/([^\n])\n(?!\n)/g, "$1  \n")
+}
+
+function stripFences(text: string): string {
+  return text.replace(/```[^\n`]*\n[\s\S]*?```/g, "").trim()
+}
+
+function CodeAgentProgress({ phases }: { phases?: CodeAgentPhase[] }) {
+  if (!phases || phases.length === 0) return null
+
+  // Replit-style task checklist: one compact row per phase with a status
+  // glyph, instead of a boxed grid — same real per-turn state underneath.
+  return (
+    <div className="mb-2 space-y-1">
+      {phases.map((phase) => {
+        const isDone = phase.status === "done"
+        const isRunning = phase.status === "running"
+        const isError = phase.status === "error"
+        return (
+          <div key={phase.key} className="flex min-w-0 items-center gap-2 text-[12px] leading-tight">
+            <span
+              className={cn(
+                "flex h-4 w-4 shrink-0 items-center justify-center rounded-full border",
+                isDone && "border-emerald-500/40 bg-emerald-500 text-white",
+                isRunning && "border-blue-500/40 bg-blue-500 text-white",
+                isError && "border-red-500/40 bg-red-500 text-white",
+                phase.status === "pending" && "border-border bg-background text-muted-foreground",
+              )}
+              aria-hidden="true"
+            >
+              {isDone ? <Check className="h-3 w-3" /> : isError ? <AlertTriangle className="h-3 w-3" /> : isRunning ? <DotmCircular15 size={14} dotSize={2} color="#ffffff" ariaLabel="Trabajando" className="shrink-0" /> : null}
+            </span>
+            <span
+              className={cn(
+                "truncate font-medium",
+                isDone && "text-foreground/85",
+                isRunning && "text-foreground",
+                isError && "text-red-600 dark:text-red-400",
+                phase.status === "pending" && "text-muted-foreground",
+              )}
+            >
+              {phase.label}
+            </span>
+            {phase.detail ? (
+              <span className="min-w-0 truncate text-muted-foreground/70">— {phase.detail}</span>
+            ) : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Compact action log: the FULL ordered glyph sequence (">_ 📖 ✎ …") + an
+// expandable list of the real file paths the agent wrote/read this turn.
+function ChatActionLog({ actions }: { actions: CodeChatAction[] }) {
+  const [open, setOpen] = React.useState(false)
+  if (!actions.length) return null
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border border-border/60 bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted/50"
+        aria-expanded={open}
+      >
+        <span className="flex flex-wrap items-center gap-x-1 font-mono leading-none" aria-hidden="true">
+          {actions.map((a, i) => (
+            <span key={i}>{glyphForAction(a.kind)}</span>
+          ))}
+        </span>
+        <span className="tabular-nums">
+          {actions.length} {actions.length === 1 ? "acción" : "acciones"}
+        </span>
+      </button>
+      {open && (
+        <ul className="mt-1.5 space-y-1 border-l border-border/60 pl-3 text-xs">
+          {actions.map((a, i) => (
+            <li key={i} className="flex items-center gap-1.5 text-muted-foreground">
+              <span className="font-mono" aria-hidden="true">{glyphForAction(a.kind)}</span>
+              <code className="truncate">{a.label}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// "Trabajó N s" — the mandatory Worked Summary, from REAL measured numbers.
+// File/line groups show only when there was file work; tokens/cost show only
+// when the stream reported real usage (cost omitted when the price is unknown).
+function ChatWorkedSummary({ metrics }: { metrics: CodeChatMetrics }) {
+  const hasFiles = metrics.filesChanged > 0
+  const hasTokens = typeof metrics.tokensIn === "number" || typeof metrics.tokensOut === "number"
+  const orig = metrics.costOriginalUsd
+  const applied = typeof metrics.costAppliedUsd === "number" ? metrics.costAppliedUsd : orig
+  const hasCost = typeof orig === "number" || typeof applied === "number"
+  const showStrike = typeof orig === "number" && typeof applied === "number" && applied < orig
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 py-1 text-[11px] text-muted-foreground">
+      <span className="inline-flex items-center gap-1.5 font-medium text-foreground/85">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-border/70">
+          <Clock3 className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+        </span>
+        Trabajó {formatWorked(metrics.timeWorkedMs)}
+      </span>
+      {hasFiles ? (
+        <>
+          <span>· {metrics.actionsCount} {metrics.actionsCount === 1 ? "acción" : "acciones"}</span>
+          <span>· {metrics.filesChanged} archivo(s)</span>
+          <span className="tabular-nums">· +{metrics.linesAdded} −{metrics.linesRemoved}</span>
+        </>
+      ) : null}
+      {metrics.itemsReadLines > 0 ? (
+        <span className="tabular-nums">· {metrics.itemsReadLines} líneas leídas</span>
+      ) : null}
+      {hasTokens ? (
+        <span className="tabular-nums">
+          · {(metrics.tokensIn ?? 0) + (metrics.tokensOut ?? 0)} tokens
+        </span>
+      ) : null}
+      {hasCost ? (
+        <span className="tabular-nums">
+          ·{" "}
+          {showStrike ? (
+            <span className="mr-1 text-muted-foreground/60 line-through">{formatUsd(orig as number)}</span>
+          ) : null}
+          {formatUsd((applied ?? orig) as number)}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+function ChatBlockerPanel({ title, rawError, url }: { title: string; rawError: string; url?: string }) {
+  const isInternal = url?.startsWith("/")
+  return (
+    <div className="my-1 rounded-lg border border-[#FF0000]/30 bg-[#FF0000]/[0.08] p-3">
+      <div className="flex items-center gap-1.5 text-sm font-semibold text-[#C80000] dark:text-[#FF6B6B]">
+        <AlertTriangle className="h-4 w-4" /> Acción requerida de su parte
+      </div>
+      <div className="mt-1 text-sm text-foreground">{title}</div>
+      <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-lg bg-black/40 p-2.5 text-[11px] leading-relaxed text-zinc-300">
+        {rawError.trim()}
+      </pre>
+      {url && (
+        <a
+          href={url}
+          target={isInternal ? undefined : "_blank"}
+          rel={isInternal ? undefined : "noopener noreferrer"}
+          className="mt-2.5 inline-flex items-center gap-1.5 rounded-md bg-[#FF0000] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#E00000]"
+        >
+          Añadir créditos <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+    </div>
+  )
+}
+
+function ComposerPlusMenu({
+  mode,
+  includeContext,
+  activeFileLabel,
+  engineAvailable,
+  engineMode,
+  onModeChange,
+  onIncludeContextChange,
+  onEngineModeChange,
+}: {
+  mode: ComposerMode
+  includeContext: boolean
+  activeFileLabel: string | null
+  engineAvailable: boolean
+  engineMode: boolean
+  onModeChange: (mode: ComposerMode) => void
+  onIncludeContextChange: (value: boolean) => void
+  onEngineModeChange: React.Dispatch<React.SetStateAction<boolean>>
+}) {
+  const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
+  const iconClass = "h-[18px] w-[18px] text-muted-foreground"
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="code-composer__icon-btn"
+          aria-label="Modo, contexto y herramientas"
+        >
+          <Plus className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        side="top"
+        sideOffset={10}
+        className="w-[292px] rounded-lg border-border/70 p-1.5 shadow-xl"
+      >
+        <DropdownMenuLabel className="px-2.5 py-1.5 text-[11px] font-normal text-muted-foreground">
+          {COMPOSER_MODE_LABEL[mode]}
+          {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
+        </DropdownMenuLabel>
+        <DropdownMenuItem
+          className={itemClass}
+          onClick={() => window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_LAUNCHER_EVENT))}
+        >
+          <LayoutGrid className={iconClass} />
+          <span>Todas las herramientas</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="my-2" />
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "app" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("app")}
+        >
+          <Rocket className={iconClass} />
+          <span>App · construir desde cero</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "build" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("build")}
+        >
+          <Sparkles className={iconClass} />
+          <span>Build</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "deps" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("deps")}
+        >
+          <PackagePlus className={iconClass} />
+          <span>Deps · instalar paquetes</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "plan" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("plan")}
+        >
+          <ListChecks className={iconClass} />
+          <span>Plan</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "debug" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("debug")}
+        >
+          <Bug className={iconClass} />
+          <span>Debug</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "ask" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("ask")}
+        >
+          <CircleHelp className={iconClass} />
+          <span>Ask</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="my-2" />
+        <DropdownMenuItem
+          className={cn(itemClass, mode === "image" && "bg-muted/70 font-medium text-foreground")}
+          onClick={() => onModeChange("image")}
+        >
+          <ImageIcon className={iconClass} />
+          <span>Image</span>
+        </DropdownMenuItem>
+        {engineAvailable ? (
+          <DropdownMenuCheckboxItem
+            checked={engineMode}
+            onCheckedChange={(checked) => onEngineModeChange(checked === true)}
+            className="h-9 rounded-md text-sm"
+          >
+            Motor OpenCode
+          </DropdownMenuCheckboxItem>
+        ) : null}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className={itemClass}>
+            <BookOpen className={iconClass} />
+            <span>Skills</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("plan")}>
+              Plan de implementación
+            </DropdownMenuItem>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("debug")}>
+              Diagnóstico de errores
+            </DropdownMenuItem>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("build")}>
+              Edición de archivos
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className={itemClass}>
+            <Server className={iconClass} />
+            <span>MCP Servers</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-52 rounded-lg p-1.5">
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("ask")}>
+              Workspace local
+            </DropdownMenuItem>
+            <DropdownMenuItem className="rounded-lg text-sm" onClick={() => onModeChange("debug")}>
+              Herramientas de código
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSeparator className="my-2" />
+        <DropdownMenuCheckboxItem
+          checked={includeContext}
+          onCheckedChange={(checked) => onIncludeContextChange(checked === true)}
+          className="h-8 rounded-md text-sm"
+        >
+          Incluir contexto del workspace
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+type ModelOption = { name: string; provider?: string; displayName?: string }
+
+// Values match backend aliases in reasoning-orchestrator.computeForEffort.
+const COMPOSER_EFFORT_LEVELS = [
+  {
+    value: "Bajo",
+    label: "Bajo",
+    description: "Rápido y directo. Menos profundidad.",
+  },
+  {
+    value: "Medio",
+    label: "Medio",
+    description: "Equilibrado. Ideal para el día a día.",
+  },
+  {
+    value: "Extra",
+    label: "Extra",
+    description: "Más profundidad y reflexión. Más lento.",
+  },
+  {
+    value: "Max",
+    label: "Máx",
+    description: "Máxima profundidad. Mayor costo y latencia.",
+  },
+] as const
+
+function resolveComposerEffortIndex(effort: string | null | undefined) {
+  const normalized = String(effort || "").trim().toLowerCase()
+  const aliases: Record<string, number> = {
+    bajo: 0, low: 0, minimo: 0, "mínimo": 0, fast: 0, rapido: 0, "rápido": 0,
+    medio: 1, medium: 1, normal: 1, balanced: 1,
+    extra: 2, alto: 2, high: 2, deep: 2,
+    max: 3, maximo: 3, "máximo": 3, maximum: 3, ultra: 3,
+  }
+  const index = aliases[normalized]
+  return typeof index === "number" ? index : 1
+}
+
+function resolveCodexReasoningEffort(effort: string | null | undefined): "low" | "medium" | "high" | "max" {
+  return (["low", "medium", "high", "max"] as const)[resolveComposerEffortIndex(effort)] || "medium"
+}
+
+function ModelPickerInline({
+  models,
+  selectedModel,
+  fast,
+  selectedEffort,
+  onSelectEffort,
+  onSelect,
+}: {
+  models: ModelOption[]
+  selectedModel: string
+  fast?: boolean
+  selectedEffort: string
+  onSelectEffort: (effort: string) => void
+  onSelect: (model: ModelOption) => void
+}) {
+  const [open, setOpen] = React.useState(false)
+  const [query, setQuery] = React.useState("")
+  const effortIndex = resolveComposerEffortIndex(selectedEffort)
+  const effortLevel = COMPOSER_EFFORT_LEVELS[effortIndex] || COMPOSER_EFFORT_LEVELS[1]
+
+  const grouped = React.useMemo(() => {
+    const map = new Map<string, ModelOption[]>()
+    for (const m of models) {
+      const provider = m.provider || "Otros"
+      if (!map.has(provider)) map.set(provider, [])
+      map.get(provider)!.push(m)
+    }
+    return Array.from(map.entries())
+  }, [models])
+
+  const filtered = React.useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return grouped
+    return grouped
+      .map(([provider, list]) => [
+        provider,
+        list.filter((m) => {
+          const label = (m.displayName || m.name).toLowerCase()
+          return label.includes(q) || provider.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+        }),
+      ] as const)
+      .filter(([, list]) => list.length > 0)
+  }, [grouped, query])
+
+  const active = models.find((m) => m.name === selectedModel)
+  const label = active?.displayName || active?.name || selectedModel || "Modelo"
+
+  React.useEffect(() => {
+    if (!open) setQuery("")
+  }, [open])
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-testid="code-model-selector"
+          className={cn(
+            "code-composer__model",
+            "inline-flex h-8 min-w-0 shrink items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+            "border-border/45 bg-background/60 text-foreground/75 hover:border-border hover:bg-muted/40 hover:text-foreground",
+            "data-[state=open]:border-border data-[state=open]:bg-muted/60 data-[state=open]:text-foreground",
+          )}
+          aria-label={`Seleccionar modelo. Actual: ${label}. Profundidad: ${effortLevel.label}`}
+          title={
+            fast
+              ? `${label} — recomendado para preview en vivo`
+              : `${label} — modelo de razonamiento; puede ser más lento en preview`
+          }
+        >
+          {!fast ? (
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
+          ) : null}
+          <span className="truncate">{label}</span>
+          <ChevronDown className="h-3 w-3 shrink-0 opacity-45" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        side="top"
+        sideOffset={8}
+        collisionPadding={16}
+        className="z-[1000] w-[min(320px,calc(100vw-24px))] overflow-hidden rounded-lg border border-border/60 bg-popover p-0 text-popover-foreground shadow-[0_16px_48px_rgba(15,23,42,0.14)]"
+      >
+        <div className="border-b border-border/50 px-2.5 py-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Buscar modelo…"
+              className="h-8 border-0 bg-muted/40 pl-8 text-xs shadow-none focus-visible:ring-1"
+              onKeyDown={(e) => e.stopPropagation()}
+            />
+          </div>
+        </div>
+        <div className="max-h-[min(280px,calc(100vh-240px))] overflow-y-auto p-1">
+          {models.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Cargando modelos…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="px-3 py-4 text-center text-xs text-muted-foreground">
+              Sin coincidencias
+            </div>
+          ) : (
+            filtered.map(([provider, list], i) => (
+              <React.Fragment key={provider}>
+                {i > 0 ? <DropdownMenuSeparator className="my-1" /> : null}
+                <DropdownMenuLabel className="px-2 py-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+                  {provider}
+                </DropdownMenuLabel>
+                {list.map((m) => {
+                  const selected = m.name === selectedModel
+                  const itemLabel = m.displayName || m.name
+                  const itemFast = !isSlowModel(m.name)
+                  return (
+                    <DropdownMenuItem
+                      key={m.name}
+                      onClick={() => {
+                        onSelect(m)
+                        setOpen(false)
+                      }}
+                      className={cn(
+                        "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
+                        selected && "bg-muted/70 text-foreground",
+                      )}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
+                      {itemFast ? (
+                        <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>
+                      ) : null}
+                      {selected ? <Check className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : null}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </React.Fragment>
+            ))
+          )}
+        </div>
+
+        <div
+          className="model-picker-effort"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <div className="model-picker-effort-header">
+            <span className="model-picker-effort-title">Profundidad</span>
+            <span className="model-picker-effort-value">{effortLevel.label}</span>
+          </div>
+
+          <div className="model-picker-effort-options" role="group" aria-label="Profundidad de razonamiento">
+            {COMPOSER_EFFORT_LEVELS.map((level, index) => (
+              <button
+                key={level.value}
+                type="button"
+                aria-pressed={index === effortIndex}
+                className={cn(
+                  "model-picker-effort-option",
+                  index === effortIndex && "is-current",
+                )}
+                onClick={() => onSelectEffort(level.value)}
+                title={`${level.label}: ${level.description}`}
+              >
+                {level.label}
+              </button>
+            ))}
+          </div>
+
+          <p className="model-picker-effort-description">{effortLevel.description}</p>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function CodeBlockCard({
+  block,
+  existingContent,
+}: {
+  block: CodeBlock
+  existingContent: string
+}) {
+  // Claude Code parity: the chat NEVER dumps code. Each block renders as a
+  // compact, COLLAPSED file chip (path · line count · actions); the code (or
+  // the diff, for files that exist in the workspace) only shows on demand.
+  const [open, setOpen] = React.useState(false)
+  const [copied, setCopied] = React.useState(false)
+
+  const lineCount = React.useMemo(() => block.content.split("\n").length, [block.content])
+  const showDiff = !!block.path && existingContent.length > 0
+  const diffLines = React.useMemo(
+    () => (open && showDiff ? computeLineDiff(existingContent, block.content) : []),
+    [block.content, existingContent, open, showDiff],
+  )
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(block.content)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1200)
+    } catch {
+      toast.error("No se pudo copiar al portapapeles")
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-border/50 bg-muted/15">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-muted/30"
+        aria-expanded={open}
+      >
+        <FileCode2 className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden="true" />
+        <span className="min-w-0 truncate font-mono text-foreground/85">
+          {block.path || `fragmento ${block.language || "de código"}`}
+        </span>
+        <span className="shrink-0 opacity-60">· {lineCount} líneas</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 px-2 text-[11px]"
+            onClick={(e) => {
+              e.stopPropagation()
+              void copy()
+            }}
+          >
+            {copied ? "Copiado" : "Copiar"}
+          </Button>
+          <span className="text-[11px] opacity-70">{open ? "Ocultar" : showDiff ? "Ver diff" : "Ver código"}</span>
+          <ChevronDown
+            className={cn("h-3.5 w-3.5 opacity-60 transition-transform", open && "rotate-180")}
+            aria-hidden="true"
+          />
+        </span>
+      </button>
+      {open ? (
+        showDiff ? (
+          <div className="border-t border-border/50 p-2">
+            <DiffView lines={diffLines} />
+          </div>
+        ) : (
+          <pre className="max-h-72 overflow-auto border-t border-border/50 p-3 font-mono text-[12px] leading-relaxed">
+            {block.content}
+          </pre>
+        )
+      ) : null}
+    </div>
+  )
+}

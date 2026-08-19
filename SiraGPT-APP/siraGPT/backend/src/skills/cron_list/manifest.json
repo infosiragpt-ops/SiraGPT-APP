@@ -1,0 +1,18 @@
+{
+  "id": "cron_list",
+  "name": "List scheduled tasks",
+  "version": "1.0.0",
+  "description": "List the cron jobs and webhooks the user has scheduled, with their next run time and last result summary.",
+  "capabilities": ["schedule"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "type": {
+        "type": "string",
+        "enum": ["cron", "webhook", "all"],
+        "description": "Filter by job type. Default 'all'."
+      }
+    },
+    "additionalProperties": false
+  }
+}

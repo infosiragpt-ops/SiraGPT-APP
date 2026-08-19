@@ -1,0 +1,337 @@
+'use strict';
+
+/**
+ * code-runner route — drives the no-Docker host runner that boots a generated
+ * project as a REAL dev server (vite) on a PRIVATE localhost port, then exposes
+ * it to the browser through a same-origin reverse proxy so the /code preview can
+ * iframe it without Docker and without reaching the server's localhost directly.
+ *
+ *   GET  /api/code-runner/health            → { ok, enabled }            (public)
+ *   POST /api/code-runner/start             → { runId, phase, devUrl }   (auth)
+ *   GET  /api/code-runner/:runId/status         → { running, ready, ... }    (auth)
+ *   POST /api/code-runner/:runId/stop           → { ok }                     (auth)
+ *   ALL  /api/code-runner/:runId/:token/app/*   → reverse-proxy to the dev server
+ *                                                 (gated by the run-scoped path token)
+ *
+ * Disabled unless CODE_HOST_RUNNER is truthy (host-runner.enabled). The old
+ * opencode/Docker path is not usable on Replit and is no longer the fallback.
+ */
+
+const http = require('http');
+const express = require('express');
+const { Readable } = require('stream');
+const { authenticateToken } = require('../middleware/auth');
+const hostRunner = require('../services/code/host-runner');
+
+const router = express.Router();
+
+// The Vite dev server runs UNTRUSTED generated code. Never hand it the user's
+// SiraGPT credentials, and never let it set cookies on the SiraGPT origin.
+const {
+  STRIP_REQUEST_HEADERS,
+  HOP_BY_HOP_HEADERS,
+  buildUpstreamRequestHeaders,
+  isForwardableResponseHeader,
+} = require('../utils/proxy-headers');
+const {
+  applyPreviewFrameHeaders,
+  applyPreviewCorsHeaders,
+  attachCodeRunnerPreviewWebSocketProxy,
+  filterPreviewResponseHeaders,
+  injectPreviewInteractionBridges,
+  previewNonceFromRequest,
+  readPreviewBody,
+  stripPreviewNonce,
+} = require('../services/code/preview-proxy');
+
+function safeRunId(runId) {
+  return String(runId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+}
+
+// Preview tokens are signed base64url claims in production; strip anything
+// outside the URL-safe token alphabet before it reaches the run registry.
+function safeToken(token) {
+  return String(token || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 2048);
+}
+
+function shouldInjectPreviewSelector(req, upstreamHeaders) {
+  if (req.method !== 'GET') return false;
+  const contentType = String(upstreamHeaders['content-type'] || '');
+  const contentEncoding = String(upstreamHeaders['content-encoding'] || '');
+  return /text\/html|application\/xhtml\+xml/i.test(contentType) && !contentEncoding;
+}
+
+// Public: lets the UI know whether the host runner is available here.
+router.get('/health', (req, res) => {
+  res.json({ ok: true, enabled: hostRunner.enabled() });
+});
+
+router.post('/start', authenticateToken, async (req, res) => {
+  try {
+    if (!hostRunner.startAllowed(req.user)) {
+      return res.status(403).json({ error: 'forbidden', message: 'Tu cuenta no puede ejecutar apps aquí.' });
+    }
+    const { runId, files, env } = req.body || {};
+    const out = await hostRunner.startRun({ runId, userId: req.user.id, files, env });
+    // No cookie: the reverse-proxy gate uses a run-scoped token embedded in
+    // out.devUrl's path (see host-runner). Every asset/module/dynamic-import the
+    // sandboxed (opaque-origin) iframe requests carries it automatically, so it
+    // authenticates regardless of the browser's module-script credentials mode.
+    return res.json(out);
+  } catch (err) {
+    if (err && err.code === 'disabled') {
+      return res.status(503).json({ error: 'host_runner_disabled', message: 'El runner local está desactivado en este entorno.' });
+    }
+    if (err && err.code === 'no_package') {
+      return res.status(400).json({ error: 'no_package', message: err.message });
+    }
+    if (err && err.code === 'forbidden') {
+      return res.status(403).json({ error: 'forbidden', message: 'No puedes reiniciar la ejecución de otro usuario.' });
+    }
+    if (err && err.code === 'capacity_full') {
+      return res.status(503).json({ error: 'capacity_full', message: err.message });
+    }
+    // Don't echo err.message — fs failures (ENOENT/ENOTDIR/EACCES) embed the
+    // absolute server tmp path (CWE-209). Log server-side, return generic.
+    console.error('[code-runner] start failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'start_failed', message: 'No se pudo iniciar el runner.' });
+  }
+});
+
+router.get('/:runId/status', authenticateToken, (req, res) => {
+  const st = hostRunner.getStatus(req.params.runId, req.user.id);
+  if (st === null) return res.status(403).json({ error: 'forbidden' });
+  return res.json(st);
+});
+
+router.post('/:runId/stop', authenticateToken, (req, res) => {
+  // Ownership-checked: a user can only stop their OWN run (no-op otherwise).
+  const stopped = hostRunner.stopRun(req.params.runId, req.user.id);
+  return res.json({ ok: stopped });
+});
+
+// Type verification: run `npx tsc --noEmit` in the run's workspace and return
+// parsed diagnostics the auto-repair loop can act on. Ownership-checked.
+router.post('/:runId/verify', authenticateToken, async (req, res) => {
+  try {
+    const result = await hostRunner.verifyRun(req.params.runId, req.user.id);
+    if (result && result.status === 403) return res.status(403).json({ error: 'forbidden' });
+    if (result && result.status === 404) return res.status(404).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: String((err && err.message) || err) });
+  }
+});
+
+// Functional "does the app actually render?" check — drives the run's live dev
+// server through headless chromium and reports a verdict. Companion to the
+// tsc-based /verify (which only proves the code type-checks). Ownership-checked
+// + phase-gated inside verifyRuntime; degrades to { skipped:true, ok:true } when
+// no browser is available, so it never blocks the app.
+router.post('/:runId/verify-runtime', authenticateToken, async (req, res) => {
+  try {
+    const verdict = await hostRunner.verifyRuntime(req.params.runId, req.user.id);
+    if (verdict && verdict.error === 'forbidden') {
+      return res.status(403).json({ error: 'forbidden', message: 'No puedes verificar la ejecución de otro usuario.' });
+    }
+    if (verdict && verdict.error === 'not_found') {
+      return res.status(404).json({ error: 'not_found', message: 'La ejecución no existe.' });
+    }
+    return res.json(verdict);
+  } catch (err) {
+    // Don't echo err.message — it may embed absolute server tmp paths (CWE-209).
+    console.error('[code-runner] verify-runtime failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'verify_failed', message: 'No se pudo verificar la ejecución.' });
+  }
+});
+
+// Real one-shot terminal command in the run's workspace dir (the Replit-style
+// Shell). Ownership-checked + host-runner-gated inside execInRun; bounded
+// (non-interactive, hard timeout, output capped) and never inherits secrets.
+router.post('/:runId/exec', authenticateToken, async (req, res) => {
+  try {
+    // Same authoritative fence as /start: CODE_HOST_RUNNER_ALLOWED_USER_IDS must
+    // gate exec too (arbitrary shell), not just run creation — otherwise a user
+    // dropped from the allowlist could still exec against a run they started.
+    if (!hostRunner.startAllowed(req.user)) return res.status(403).json({ error: 'forbidden' });
+    const command = typeof req.body?.command === 'string' ? req.body.command : '';
+    const timeoutMs = Number(req.body?.timeoutMs) || undefined;
+    const result = await hostRunner.execInRun(req.params.runId, req.user.id, command, { timeoutMs });
+    if (result && result.status === 403) return res.status(403).json({ error: 'forbidden' });
+    if (result && result.status === 404) return res.status(404).json({ error: result.error });
+    if (result && result.status === 400) return res.status(400).json({ error: result.error });
+    return res.json(result);
+  } catch (err) {
+    console.error('[code-runner] exec failed:', (err && err.message) || err);
+    return res.status(500).json({ error: 'exec_failed', message: 'No se pudo ejecutar el comando.' });
+  }
+});
+
+function setPreviewFrameHeaders(_req, res, next) {
+  applyPreviewFrameHeaders(res);
+  next();
+}
+
+function proxiedPath(req) {
+  const marker = `/api/code-runner/${encodeURIComponent(req.params.runId)}/proxy`;
+  const raw = req.originalUrl || req.url || '/';
+  const idx = raw.indexOf(marker);
+  if (idx === -1) return '/';
+  const rest = raw.slice(idx + marker.length);
+  return stripPreviewNonce(rest ? rest : '/');
+}
+
+function tokenAppPath(req) {
+  // Vite is started with --base equal to the public tokenized app prefix.
+  // Forward that full browser path upstream; stripping it to / would make Vite
+  // redirect back to the base URL, which traps the iframe in a 302 loop.
+  const raw = req.originalUrl || req.url || '/';
+  if (raw.startsWith('/api/code-runner/')) return stripPreviewNonce(raw);
+  const base = req.baseUrl || '/api/code-runner';
+  const url = req.url || '/';
+  return stripPreviewNonce(`${base}${url.startsWith('/') ? url : `/${url}`}`);
+}
+
+/**
+ * Reverse-proxy every request under /:runId/:token/app to the run's private dev
+ * server. Auth is the run-scoped token in the URL path, not a cookie, so Vite
+ * module/asset fetches from the sandboxed opaque-origin iframe keep working.
+ */
+function proxyApp(req, res) {
+  const sid = safeRunId(req.params.runId);
+  const token = safeToken(req.params.token);
+  const target = hostRunner.getRunForProxy(sid, token);
+  if (!target) return res.status(403).json({ error: 'forbidden' });
+
+  const fwdHeaders = {};
+  for (const [k, v] of Object.entries(req.headers)) {
+    const lk = k.toLowerCase();
+    if (STRIP_REQUEST_HEADERS.has(lk) || HOP_BY_HOP_HEADERS.has(lk)) continue;
+    if (lk === 'host' || lk === 'content-length' || lk === 'accept-encoding') continue;
+    fwdHeaders[k] = v;
+  }
+  fwdHeaders.host = `127.0.0.1:${target.port}`;
+
+  const upstream = http.request(
+    {
+      hostname: '127.0.0.1',
+      port: target.port,
+      method: req.method,
+      path: tokenAppPath(req),
+      headers: fwdHeaders,
+    },
+    (up) => {
+      const injectSelector = shouldInjectPreviewSelector(req, up.headers);
+      const nonce = previewNonceFromRequest(req);
+      const headers = filterPreviewResponseHeaders(up.headers);
+      if (injectSelector && (up.headers['content-length'] || up.headers['content-encoding'])) {
+        delete headers['content-length'];
+        delete headers['content-encoding'];
+      }
+
+      applyPreviewCorsHeaders(headers, req.headers.origin);
+      headers['referrer-policy'] = 'no-referrer';
+      if (injectSelector) {
+        if (req.method === 'HEAD') {
+          res.writeHead(up.statusCode || 502, headers);
+          up.resume();
+          return res.end();
+        }
+        readPreviewBody(up).then((body) => {
+          const injected = injectPreviewInteractionBridges(body.toString('utf8'), nonce);
+          headers['content-length'] = String(Buffer.byteLength(injected));
+          res.writeHead(up.statusCode || 502, headers);
+          res.end(injected);
+        }).catch((err) => {
+          upstream.destroy();
+          if (!res.headersSent) {
+            const status = err?.code === 'preview_html_too_large' ? 413 : 502;
+            const error = err?.code === 'preview_html_too_large' ? 'preview_html_too_large' : 'runner_stream_failed';
+            res.status(status).json({ error, message: status === 413 ? 'Preview HTML exceeds the injection limit.' : 'El dev server interrumpió la respuesta.' });
+          } else {
+            try { res.end(); } catch (_) { /* already closed */ }
+          }
+        });
+        return;
+      }
+      res.writeHead(up.statusCode || 502, headers);
+      up.pipe(res);
+    },
+  );
+  res.on('close', () => upstream.destroy());
+  upstream.on('error', () => {
+    if (!res.headersSent) {
+      res.status(502).json({ error: 'runner_unreachable', message: 'El dev server no respondió.' });
+    } else {
+      try { res.end(); } catch (_) { /* already closed */ }
+    }
+  });
+  if (req.method === 'GET' || req.method === 'HEAD') upstream.end();
+  else req.pipe(upstream);
+}
+
+router.use('/:runId/:token/app', setPreviewFrameHeaders, proxyApp);
+
+// Authenticated preview proxy. In production the browser cannot iframe the
+// backend container's localhost port, so the runner exposes each dev server
+// through this same-origin path instead of opening dynamic public ports.
+router.use('/:runId/proxy', setPreviewFrameHeaders, authenticateToken, async (req, res) => {
+  if (!['GET', 'HEAD'].includes(req.method)) {
+    return res.status(405).json({ error: 'method_not_allowed' });
+  }
+  const target = hostRunner.getProxyTarget(req.params.runId, req.user.id);
+  if (target.error === 'forbidden') return res.status(403).json({ error: 'forbidden' });
+  if (target.error === 'not_found') return res.status(404).json({ error: 'run_not_found' });
+  if (target.error === 'not_ready') {
+    return res.status(503).json({ error: 'run_not_ready', phase: target.phase, message: target.message });
+  }
+
+  const suffix = proxiedPath(req);
+  const upstreamUrl = `http://127.0.0.1:${target.port}${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+  const headers = buildUpstreamRequestHeaders(req.headers, target.port);
+
+  let upstream;
+  try {
+    upstream = await fetch(upstreamUrl, {
+      method: req.method,
+      headers,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(Number(process.env.CODE_RUNNER_PROXY_TIMEOUT_MS) || 30_000),
+    });
+  } catch (err) {
+    return res.status(502).json({ error: 'preview_proxy_failed', message: err.message });
+  }
+
+  res.status(upstream.status);
+  upstream.headers.forEach((value, key) => {
+    if (!isForwardableResponseHeader(key.toLowerCase())) return;
+    res.setHeader(key, value);
+  });
+  res.setHeader('Cache-Control', 'no-store');
+
+  if (req.method === 'HEAD' || !upstream.body) return res.end();
+  return Readable.fromWeb(upstream.body).pipe(res);
+});
+
+module.exports = router;
+
+router.attachPreviewWebSocketProxy = (server) => attachCodeRunnerPreviewWebSocketProxy(server, {
+  resolveTarget: (request) => {
+    const match = /^\/api\/code-runner\/([^/]+)\/([^/]+)\/app(?:\/|$)/.exec(String(request?.url || '').split('?')[0]);
+    if (!match) return { statusCode: 404 };
+    let runId;
+    let token;
+    try {
+      runId = safeRunId(decodeURIComponent(match[1]));
+      token = safeToken(decodeURIComponent(match[2]));
+    } catch {
+      return { statusCode: 403 };
+    }
+    const target = hostRunner.getRunForProxy(runId, token);
+    if (!target) return { statusCode: 403 };
+    return {
+      url: `ws://127.0.0.1:${target.port}${stripPreviewNonce(request.url || '/')}`,
+      host: `127.0.0.1:${target.port}`,
+    };
+  },
+});

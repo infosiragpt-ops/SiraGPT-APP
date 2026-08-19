@@ -1,0 +1,18 @@
+{
+  "id": "audio_transcribe",
+  "name": "Transcribe audio or video",
+  "version": "1.0.0",
+  "description": "Transcribe speech from an audio or video file owned by the current user. Uses attached media by default and can save the transcript as a downloadable text artifact.",
+  "capabilities": ["fs:read", "net:outbound:llm"],
+  "timeoutMs": 180000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "fileId": { "type": "string", "description": "Optional id of an audio or video file owned by the user. Defaults to attached media." },
+      "language": { "type": "string", "maxLength": 20, "description": "Optional ISO language hint such as es or en." },
+      "prompt": { "type": "string", "maxLength": 1000, "description": "Optional vocabulary or context hint for transcription." },
+      "saveTranscript": { "type": "boolean", "description": "Save the transcript as a downloadable TXT artifact. Default false." }
+    },
+    "additionalProperties": false
+  }
+}

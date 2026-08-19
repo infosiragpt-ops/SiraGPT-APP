@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "description": "Labeled cases for the deterministic cognitive-core eval. Each case feeds reasoning-orchestrator.decide() and asserts the brain's decisions (difficulty, risk, compute, verification). No LLM — fully deterministic, CI-gateable.",
+  "defaults": { "userModel": "gpt-4o-mini", "plan": "PRO", "routingMode": "escalate" },
+  "cases": [
+    { "id": "greet-1", "prompt": "hola", "expect": { "difficulty": "trivial", "risk": "low", "compute": "direct", "verifyFaithfulness": false } },
+    { "id": "greet-2", "prompt": "gracias, muy amable", "expect": { "difficulty": "trivial", "risk": "low", "compute": "direct" } },
+    { "id": "smalltalk-1", "prompt": "¿qué tal tu día?", "expect": { "difficulty": "trivial", "risk": "low" } },
+
+    { "id": "translate-1", "prompt": "traduce esto al inglés: buenos días", "expect": { "difficulty": "simple", "risk": "low", "compute": "direct" } },
+
+    { "id": "math-1", "prompt": "resuelve y demuestra paso a paso que la raíz de 2 es irracional", "expect": { "risk": "low", "compute": "self_consistency" } },
+    { "id": "math-2", "prompt": "calcula la derivada de f(x)=x^2·sin(x) y demuestra cada paso", "expect": { "compute": "self_consistency" } },
+
+    { "id": "legal-1", "prompt": "analiza la cláusula de responsabilidad legal de este contrato y sus implicaciones", "expect": { "risk": "high", "riskDomains": ["legal"], "verifyFaithfulness": true } },
+    { "id": "medical-1", "prompt": "qué dosis del fármaco es adecuada para un paciente con estos síntomas", "expect": { "risk": "high", "riskDomains": ["medical"], "verifyFaithfulness": true } },
+    { "id": "financial-1", "prompt": "haz una valoración financiera y un pronóstico de ingresos a 3 años", "expect": { "risk": "high", "riskDomains": ["financial"] } },
+
+    { "id": "thesis-1", "prompt": "escribe una tesis de 30 páginas sobre IA en educación con metodología e hipótesis", "expect": { "difficulty": "complex", "risk": "medium", "riskDomains": ["academic"] } },
+    { "id": "webapp-1", "prompt": "crea una web para mi empresa de carros", "expect": { "difficulty": "complex" } },
+    { "id": "webapp-2", "prompt": "desarrolla un dashboard con métricas en tiempo real", "expect": { "difficulty": "complex" } },
+
+    { "id": "grounded-doc-1", "prompt": "según el documento adjunto, resume los hallazgos clave del informe en detalle", "hasGrounding": true, "expect": { "verifyFaithfulness": true } },
+
+    { "id": "explain-1", "prompt": "explica brevemente qué es el coeficiente alpha de Cronbach", "expect": { "risk": "low" } },
+    { "id": "explain-2", "prompt": "qué hace este SQL: SELECT * FROM users WHERE active = true", "expect": { "risk": "low" } },
+
+    { "id": "scientific-1", "prompt": "dame un análisis empírico con datasets y estadísticas sobre el experimento", "expect": { "risk": "medium", "riskDomains": ["scientific"] } },
+
+    { "id": "research-1", "prompt": "investiga a fondo el estado del arte en modelos de difusión y compáralos", "expect": { "difficulty": "complex" } }
+  ]
+}

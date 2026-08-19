@@ -1,0 +1,162 @@
+'use strict';
+
+function tokenize(text) {
+  return String(text || '').toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function jaccardSimilarity(a, b) {
+  const setA = new Set(tokenize(a));
+  const setB = new Set(tokenize(b));
+  if (!setA.size || !setB.size) return 0;
+  let inter = 0;
+  for (const t of setA) if (setB.has(t)) inter += 1;
+  const union = setA.size + setB.size - inter;
+  return union ? inter / union : 0;
+}
+
+function structuralVariation(text) {
+  const paragraphs = String(text || '').split(/\n{2,}/).filter(Boolean);
+  if (paragraphs.length <= 1) return text;
+  return [...paragraphs].reverse().join('\n\n');
+}
+
+/**
+ * Three-pass paraphrase pipeline: rewrite → structural variation → similarity gate.
+ */
+// Per-mode similarity ceilings. The humanize/academic modes are
+// stealth-sensitive — they must diverge more from the source so AI
+// detectors and plagiarism checkers don't pattern-match. The user-
+// supplied `maxSimilarity` (when present) still wins.
+const MODE_SIMILARITY_CEILINGS = Object.freeze({
+  standard: 0.72,
+  humanize: 0.55,
+  academic: 0.60,
+  formal: 0.70,
+  simple: 0.72,
+  creative: 0.55,
+  expand: 0.72,
+  shorten: 0.78,
+  custom: 0.72,
+});
+
+// Aliases — callers sometimes pass the conversational form of the
+// mode ("human", "academic-style", "shorter", ...) instead of the
+// canonical keys. We resolve common variants so the engine doesn't
+// silently fall back to "standard" for typos.
+const MODE_ALIASES = Object.freeze({
+  human: 'humanize',
+  humanized: 'humanize',
+  humanise: 'humanize',
+  humanised: 'humanize',
+  natural: 'humanize',
+  paraphrase: 'standard',
+  rephrase: 'standard',
+  reword: 'standard',
+  default: 'standard',
+  formalize: 'formal',
+  formalise: 'formal',
+  professional: 'formal',
+  'academic-style': 'academic',
+  scholarly: 'academic',
+  thesis: 'academic',
+  short: 'shorten',
+  shorter: 'shorten',
+  concise: 'shorten',
+  compress: 'shorten',
+  expanded: 'expand',
+  longer: 'expand',
+  elaborate: 'expand',
+  detailed: 'expand',
+  simplify: 'simple',
+  simplified: 'simple',
+  easy: 'simple',
+  basic: 'simple',
+  // Spanish-language convenience aliases — common direct translations
+  humano: 'humanize',
+  humanizar: 'humanize',
+  estandar: 'standard',
+  estándar: 'standard',
+  formalizar: 'formal',
+  academico: 'academic',
+  académico: 'academic',
+  tesis: 'academic',
+  acortar: 'shorten',
+  corto: 'shorten',
+  expandir: 'expand',
+  largo: 'expand',
+  simplificar: 'simple',
+  facil: 'simple',
+  fácil: 'simple',
+  creativo: 'creative',
+  personalizado: 'custom',
+});
+
+function normaliseMode(mode) {
+  const raw = String(mode || '').trim().toLowerCase();
+  return MODE_ALIASES[raw] || raw;
+}
+
+/**
+ * Return true if `mode` (possibly an alias) resolves to one of the
+ * canonical SUPPORTED_MODES recognised by the engine + route schema.
+ * Lets callers validate input without having to know the alias map.
+ */
+function isKnownMode(mode) {
+  const canonical = normaliseMode(mode);
+  return Object.prototype.hasOwnProperty.call(MODE_SIMILARITY_CEILINGS, canonical);
+}
+
+/**
+ * Return the canonical mode set (no aliases) — useful for building
+ * a /modes endpoint without duplicating the list elsewhere.
+ */
+function listCanonicalModes() {
+  return Object.keys(MODE_SIMILARITY_CEILINGS);
+}
+
+function resolveMaxSimilarity(mode, explicit) {
+  if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0 && explicit <= 1) {
+    return explicit;
+  }
+  const canonical = normaliseMode(mode);
+  return MODE_SIMILARITY_CEILINGS[canonical] || MODE_SIMILARITY_CEILINGS.standard;
+}
+
+async function runParaphrasePipeline({ source, rewriteFn, mode = 'standard', maxSimilarity }) {
+  if (!source || typeof source !== 'string') {
+    return { ok: false, error: 'empty_source' };
+  }
+  if (typeof rewriteFn !== 'function') {
+    return { ok: false, error: 'rewrite_fn_required' };
+  }
+  const effectiveMaxSim = resolveMaxSimilarity(mode, maxSimilarity);
+
+  const pass1 = await rewriteFn({ text: source, pass: 1, mode });
+  const pass2Text = structuralVariation(pass1 || source);
+  const pass2 = await rewriteFn({ text: pass2Text, pass: 2, mode });
+  const finalText = (pass2 || pass2Text || pass1 || '').trim();
+
+  const similarity = jaccardSimilarity(source, finalText);
+  const ok = similarity <= effectiveMaxSim && finalText.length > 0;
+
+  return {
+    ok,
+    output: finalText,
+    similarity,
+    maxSimilarity: effectiveMaxSim,
+    passes: 3,
+    mode,
+  };
+}
+
+module.exports = {
+  jaccardSimilarity,
+  structuralVariation,
+  runParaphrasePipeline,
+  resolveMaxSimilarity,
+  normaliseMode,
+  isKnownMode,
+  listCanonicalModes,
+  MODE_SIMILARITY_CEILINGS,
+  MODE_ALIASES,
+};

@@ -1,0 +1,24 @@
+{
+  "id": "sunat_peru",
+  "name": "Consulta SUNAT / RENIEC Perú",
+  "version": "1.0.0",
+  "description": "Consulta datos OFICIALES del Perú en tiempo real: RUC de empresas en SUNAT (razón social, estado, condición, dirección, actividad), DNI de personas en RENIEC (nombres y apellidos), y el tipo de cambio oficial del dólar SUNAT/SBS. Úsalo SIEMPRE que el usuario mencione un RUC (11 dígitos), un DNI (8 dígitos), pregunte por una empresa peruana por su RUC, o pida el tipo de cambio del dólar en Perú. Devuelve datos reales verificados — nunca inventes ni adivines estos datos.",
+  "capabilities": ["net:outbound"],
+  "timeoutMs": 15000,
+  "params": {
+    "type": "object",
+    "properties": {
+      "tipo": {
+        "type": "string",
+        "enum": ["ruc", "dni", "tipo_cambio"],
+        "description": "Tipo de consulta: 'ruc' (empresa por RUC de 11 dígitos), 'dni' (persona por DNI de 8 dígitos), o 'tipo_cambio' (cotización oficial del dólar SUNAT/SBS)."
+      },
+      "numero": {
+        "type": "string",
+        "description": "Número a consultar: RUC de 11 dígitos (tipo='ruc') o DNI de 8 dígitos (tipo='dni'). Omitir cuando tipo='tipo_cambio'."
+      }
+    },
+    "required": ["tipo"],
+    "additionalProperties": false
+  }
+}

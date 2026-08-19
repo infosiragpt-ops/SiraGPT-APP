@@ -1,0 +1,87 @@
+.shell {
+  background: #f7f7f8;
+  color: #0b0b0f;
+}
+
+.topRule,
+.cardRule {
+  background: #ff0000;
+}
+
+.glow {
+  background: radial-gradient(circle at 50% -10%, rgba(255, 0, 0, 0.08), transparent 38%);
+}
+
+.veil {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(247, 247, 248, 0.96));
+}
+
+.card {
+  border: 1px solid #e5e5e7;
+  background: #ffffff;
+  box-shadow: 0 20px 60px rgba(15, 15, 20, 0.08);
+}
+
+.planPill {
+  border: 1px solid rgba(255, 0, 0, 0.2);
+  background: rgba(255, 0, 0, 0.06);
+  color: #ff0000;
+}
+
+.title,
+.copyStrong {
+  color: #0b0b0f;
+}
+
+.copy,
+.reassuranceItem {
+  color: #5f6068;
+}
+
+.panel {
+  border: 1px solid #e8e8ea;
+  background: #fafafb;
+}
+
+.panelLabel,
+.homeButton,
+.footer {
+  color: #74757d;
+}
+
+.checkIcon,
+.footerIcon {
+  color: #ff0000;
+}
+
+button.primaryButton {
+  border: 1px solid #ff0000;
+  background: #ff0000;
+  color: #ffffff;
+  box-shadow: 0 8px 18px rgba(255, 0, 0, 0.18);
+}
+
+button.primaryButton:hover,
+button.primaryButton:focus-visible {
+  border-color: #e60000;
+  background: #e60000;
+  color: #ffffff;
+}
+
+button.secondaryButton {
+  border-color: #dcdcdf;
+  background: #ffffff;
+  color: #0b0b0f;
+}
+
+button.secondaryButton:hover,
+button.secondaryButton:focus-visible {
+  border-color: rgba(255, 0, 0, 0.4);
+  background: rgba(255, 0, 0, 0.04);
+  color: #0b0b0f;
+}
+
+.homeButton:hover,
+.homeButton:focus-visible {
+  color: #ff0000;
+}

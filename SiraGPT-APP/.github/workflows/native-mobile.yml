@@ -1,0 +1,260 @@
+name: Native mobile builds
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [production-main]
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'mobile-www/**'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-mobile.yml'
+  push:
+    branches: [production-main]
+    paths:
+      - 'android/**'
+      - 'ios/**'
+      - 'mobile-www/**'
+      - 'capacitor.config.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/native-mobile.yml'
+
+env:
+  NODE_VERSION: '24'
+  JAVA_VERSION: '21'
+
+jobs:
+  android:
+    name: Android APK + AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      HAS_ANDROID_SIGNING: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate native version metadata
+        run: npm run native:version:check
+
+      - name: Prepare Android release signing
+        if: env.HAS_ANDROID_SIGNING == 'true'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          mkdir -p android/keystores
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/keystores/siragpt-upload-key.jks
+          cat > android/keystore.properties <<EOF
+          storeFile=keystores/siragpt-upload-key.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+
+      - name: Report Android release signing mode
+        shell: bash
+        run: |
+          if [ -f android/keystore.properties ]; then
+            echo "Android release signing: configured"
+          else
+            echo "Android release signing: not configured; producing unsigned QA bundle"
+          fi
+
+      - name: Sync Capacitor Android
+        run: npm run mobile:sync -- android
+
+      - name: Validate Android wrapper
+        run: |
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/assets/capacitor.config.json
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleDebug :app:bundleRelease --no-daemon --stacktrace
+
+      - name: Verify Android production privacy and network policy
+        shell: bash
+        run: |
+          set -eu
+          release_manifest="android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
+          debug_manifest="android/app/build/intermediates/merged_manifests/debug/processDebugManifest/AndroidManifest.xml"
+          test -f "$release_manifest"
+          test -f "$debug_manifest"
+          grep -q 'android:allowBackup="false"' "$release_manifest"
+          grep -q 'android:fullBackupContent="false"' "$release_manifest"
+          grep -q 'android:usesCleartextTraffic="false"' "$release_manifest"
+          grep -q 'android:usesCleartextTraffic="true"' "$debug_manifest"
+
+      - name: Stage Android QA artifacts with manifest
+        shell: bash
+        run: |
+          set -eu
+          short_sha="${GITHUB_SHA::7}"
+          signing_label="unsigned-release"
+          if [ -f android/keystore.properties ]; then
+            signing_label="signed-release"
+          fi
+          mkdir -p output/native-qa/android
+          cp android/app/build/outputs/apk/debug/*.apk "output/native-qa/android/SiraGPT-${short_sha}-debug.apk"
+          cp android/app/build/outputs/bundle/release/*.aab "output/native-qa/android/SiraGPT-${short_sha}-${signing_label}.aab"
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-qa \
+            --out=output/native-qa/native-release-manifest.json \
+            --markdown-out=output/native-qa/native-release-manifest.md \
+            --checksums-out=output/native-qa/SHA256SUMS.txt \
+            --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
+            --git-sha="$GITHUB_SHA"
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-mobile-android
+          path: |
+            output/native-qa/android/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  ios:
+    name: iOS simulator + unsigned device build
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Validate native version metadata
+        run: npm run native:version:check
+
+      - name: Sync Capacitor iOS
+        run: npm run mobile:sync -- ios
+
+      - name: Build iOS simulator wrapper
+        run: |
+          test -f ios/App/App/Info.plist
+          test -f ios/App/App/PrivacyInfo.xcprivacy
+          test -f ios/App/App/capacitor.config.json
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build unsigned iOS device target
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/SiraGPT-device-derived" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Stage iOS QA evidence with manifest
+        shell: bash
+        run: |
+          set -eu
+          short_sha="${GITHUB_SHA::7}"
+          mkdir -p output/native-qa/ios
+          app_path="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/Build/Products/Debug-iphonesimulator/*.app' -type d -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo "No iOS simulator .app found in DerivedData" >&2
+            exit 1
+          fi
+          test -f "$app_path/PrivacyInfo.xcprivacy"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "output/native-qa/ios/SiraGPT-${short_sha}-ios-simulator-app.zip"
+
+          device_app_path="$(find "$RUNNER_TEMP/SiraGPT-device-derived" -path '*/Build/Products/Release-iphoneos/*.app' -type d -print -quit)"
+          if [ -z "$device_app_path" ]; then
+            echo "No unsigned iOS device .app found in device DerivedData" >&2
+            exit 1
+          fi
+          test -f "$device_app_path/PrivacyInfo.xcprivacy"
+          device_plist="$device_app_path/Info.plist"
+          device_executable="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$device_plist")"
+          device_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$device_plist")"
+          device_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$device_plist")"
+          device_build="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$device_plist")"
+          device_architectures="$(lipo -archs "$device_app_path/$device_executable")"
+          device_report="output/native-qa/ios/SiraGPT-${short_sha}-ios-device-build.json"
+          DEVICE_REPORT="$device_report" \
+          DEVICE_BUNDLE_ID="$device_bundle_id" \
+          DEVICE_VERSION="$device_version" \
+          DEVICE_BUILD="$device_build" \
+          DEVICE_ARCHITECTURES="$device_architectures" \
+          node <<'NODE'
+          const fs = require("fs")
+          const report = {
+            schemaVersion: 1,
+            status: "unsigned-device-compile-passed",
+            purpose: "device-architecture-build-proof",
+            installable: false,
+            bundleIdentifier: process.env.DEVICE_BUNDLE_ID,
+            version: process.env.DEVICE_VERSION,
+            buildNumber: process.env.DEVICE_BUILD,
+            architectures: process.env.DEVICE_ARCHITECTURES.split(/\s+/).filter(Boolean),
+            note: "This proves the generic iOS device target compiles. App Store/TestFlight installation still requires Apple signing and provisioning.",
+          }
+          fs.writeFileSync(process.env.DEVICE_REPORT, `${JSON.stringify(report, null, 2)}\n`)
+          NODE
+
+          node scripts/generate-native-release-manifest.js \
+            --dir=output/native-qa \
+            --out=output/native-qa/native-release-manifest.json \
+            --markdown-out=output/native-qa/native-release-manifest.md \
+            --checksums-out=output/native-qa/SHA256SUMS.txt \
+            --release-tag="native-qa-${GITHUB_RUN_NUMBER}" \
+            --git-sha="$GITHUB_SHA"
+
+      - name: Upload iOS QA evidence
+        uses: actions/upload-artifact@v6
+        with:
+          name: siragpt-mobile-ios-simulator
+          path: |
+            output/native-qa/ios/*
+            output/native-qa/native-release-manifest.json
+            output/native-qa/native-release-manifest.md
+            output/native-qa/SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error

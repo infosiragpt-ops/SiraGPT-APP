@@ -1,0 +1,23 @@
+{
+  "id": "webhook_create",
+  "name": "Create webhook trigger",
+  "version": "1.0.0",
+  "description": "Create a webhook URL that, when POSTed to with the returned secret, will fire the agent on the stored prompt. Useful for integrations: 'when Stripe invoices.paid fires, summarise and email me'.",
+  "capabilities": ["schedule"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string",
+        "description": "What the agent should do when the webhook fires. May reference {{payload.field}} — the incoming JSON body is substituted in."
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "Thinking level. Default medium."
+      }
+    },
+    "required": ["prompt"],
+    "additionalProperties": false
+  }
+}

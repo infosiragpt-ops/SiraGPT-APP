@@ -1,0 +1,35 @@
+name: One-shot Redis prod setup
+
+# Manual trigger only — runs scripts/setup-redis-prod.sh on the VPS.
+# The script is idempotent so running it multiple times is safe.
+# Once REDIS_URL is in .env and sessions persist across PM2 reloads,
+# this workflow can be deleted or kept as a recovery tool.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: setup-redis-production
+  cancel-in-progress: false
+
+jobs:
+  setup:
+    name: SSH to VPS · run setup-redis-prod.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Run idempotent Redis setup on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 60s
+          command_timeout: 6m
+          script_stop: true
+          script: |
+            set -e
+            cd /root/siraNew/siraGPT
+            chmod +x scripts/setup-redis-prod.sh
+            ./scripts/setup-redis-prod.sh

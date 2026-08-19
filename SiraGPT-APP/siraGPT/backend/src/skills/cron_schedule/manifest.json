@@ -1,0 +1,31 @@
+{
+  "id": "cron_schedule",
+  "name": "Schedule recurring task",
+  "version": "1.0.0",
+  "description": "Schedule the agent to run a prompt on a cron schedule. Use when the user asks 'every Monday at 9am', 'daily', 'weekly summary', etc. Returns the job id and next run time.",
+  "capabilities": ["schedule"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "cron": {
+        "type": "string",
+        "description": "Standard 5-field cron expression (min hour dom month dow). Example: '0 9 * * 1' = every Monday at 9am. Sub-minute schedules are rejected."
+      },
+      "prompt": {
+        "type": "string",
+        "description": "What the agent should do when this fires. Keep it self-contained; no chat context."
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "Thinking level for each run. Default medium."
+      },
+      "timezone": {
+        "type": "string",
+        "description": "IANA timezone name (e.g. 'America/Mexico_City'). Defaults to server timezone."
+      }
+    },
+    "required": ["cron", "prompt"],
+    "additionalProperties": false
+  }
+}

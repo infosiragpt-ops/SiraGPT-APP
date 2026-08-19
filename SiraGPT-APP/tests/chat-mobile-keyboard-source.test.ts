@@ -1,0 +1,166 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+import fs from "node:fs"
+import path from "node:path"
+
+const globalsPath = path.join(process.cwd(), "app", "globals.css")
+const viewportHookPath = path.join(process.cwd(), "hooks", "use-visual-viewport-css-vars.ts")
+
+const globals = fs.readFileSync(globalsPath, "utf8")
+const viewportHook = fs.readFileSync(viewportHookPath, "utf8")
+
+/** Extract the full `{ ... }` block (brace-balanced) opening after `start`. */
+function cssBlockAt(source: string, start: number): string {
+  const open = source.indexOf("{", start)
+  assert.notEqual(open, -1, "expected a CSS block to open after the matched selector")
+  let depth = 0
+  for (let i = open; i < source.length; i += 1) {
+    const ch = source[i]
+    if (ch === "{") depth += 1
+    else if (ch === "}") {
+      depth -= 1
+      if (depth === 0) return source.slice(start, i + 1)
+    }
+  }
+  assert.fail("unbalanced braces while extracting CSS block")
+}
+
+function withoutCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "")
+}
+
+describe("mobile keyboard composer source contract", () => {
+  it("does not make the app shell a transformed containing block", () => {
+    const shellIndex = globals.indexOf(".app-shell-viewport")
+    assert.notEqual(shellIndex, -1, "missing app-shell viewport block")
+    const shellBlock = cssBlockAt(globals, shellIndex)
+
+    assert.doesNotMatch(
+      withoutCssComments(shellBlock),
+      /\btransform\s*:/,
+      "app shell must not use transform because it captures fixed-position composer descendants on iOS"
+    )
+    assert.match(
+      shellBlock,
+      /margin-left:\s*var\(--app-viewport-offset-left,\s*0px\)/,
+      "app shell should still apply visualViewport horizontal offset without transform"
+    )
+    assert.match(
+      shellBlock,
+      /margin-top:\s*var\(--app-viewport-offset-top,\s*0px\)/,
+      "app shell should still apply visualViewport vertical offset without transform"
+    )
+  })
+
+  it("marks the visual viewport target when the keyboard is open", () => {
+    assert.match(
+      viewportHook,
+      /KEYBOARD_OPEN_HEIGHT_PX\s*=\s*120/,
+      "keyboard-open detection should ignore small Safari toolbar changes"
+    )
+    assert.match(
+      viewportHook,
+      /target\.dataset\[`\$\{prefix\}Keyboard`\]\s*=/,
+      "viewport sync should expose a data attribute for CSS keyboard overrides"
+    )
+  })
+
+  it("treats pinch-/double-tap-zoom as not-a-keyboard (scale-aware)", () => {
+    // visualViewport.scale > 1 means the user zoomed in, not that an
+    // on-screen keyboard appeared. The metrics reader must fall back to the
+    // layout viewport and report keyboardHeight 0 while zoomed, otherwise the
+    // shell collapses to the zoomed region and the composer disappears.
+    assert.match(
+      viewportHook,
+      /visualViewport\?\.scale/,
+      "viewport metrics must read visualViewport.scale to detect zoom"
+    )
+    assert.match(
+      viewportHook,
+      /const\s+zoomed\s*=\s*scale\s*>\s*1/,
+      "viewport metrics must flag the zoomed state from scale"
+    )
+    assert.match(
+      viewportHook,
+      /keyboardHeight\s*=\s*zoomed[\s\S]*?\?\s*0/,
+      "keyboardHeight must be forced to 0 while zoomed"
+    )
+  })
+
+  it("removes the iOS Safari toolbar clearance while the keyboard is open", () => {
+    // Since the iOS keyboard fix (a8cd955b1, 2026-06-01) the first
+    // `[data-chat-keyboard="open"]` rule is the position:fixed composer dock,
+    // so locate the clearance override structurally instead of assuming the
+    // first selector hit is the override.
+    const iosClearanceIndex = globals.indexOf("@supports (-webkit-touch-callout: none)")
+    assert.notEqual(iosClearanceIndex, -1, "missing iOS Safari clearance block")
+
+    const iosBlock = cssBlockAt(globals, iosClearanceIndex)
+
+    assert.match(
+      iosBlock,
+      /\.chat-viewport\s*\{[^}]*--chat-mobile-bottom-clearance:/,
+      "iOS block should reserve Safari toolbar clearance while the keyboard is closed"
+    )
+    assert.doesNotMatch(
+      iosBlock,
+      /5\.25rem/,
+      "closed iOS Safari clearance should not float the composer far above the bottom bar"
+    )
+
+    // Keyboard open on iOS: the composer dock flips to position:fixed so it
+    // pins to the visual viewport instead of flying to the top (Safari's
+    // sticky-inside-overflow:hidden bug — a8cd955b1).
+    const composerDockFixed =
+      /\.chat-viewport\[data-chat-keyboard="open"\]\s+\.chat-composer-dock,\s*\.chat-viewport\[data-chat-input-focused="true"\]\s+\.chat-composer-dock\s*\{[^}]*position:\s*fixed[^}]*bottom:\s*0/
+
+    assert.match(
+      iosBlock,
+      composerDockFixed,
+      "keyboard-open or focused composer dock must pin to the visual viewport bottom (position: fixed)"
+    )
+
+    const clearanceOverride =
+      /\.chat-viewport\[data-chat-input-focused="true"\],\s*\.chat-viewport\[data-chat-keyboard="open"\]\s*\{[^}]*--chat-mobile-bottom-clearance:\s*max\(env\(safe-area-inset-bottom,\s*0px\),\s*0\.25rem\)/
+
+    assert.match(
+      iosBlock,
+      clearanceOverride,
+      "focused or keyboard-open composer should stay close to the visual viewport bottom on iOS"
+    )
+
+    // The same keyboard-open override also lives outside the iOS-only gate so
+    // Android Chrome drops the toolbar clearance too (b98c9bb69).
+    const afterIosBlock = globals.slice(iosClearanceIndex + iosBlock.length)
+    assert.match(
+      afterIosBlock,
+      clearanceOverride,
+      "keyboard-open clearance override should also apply outside the iOS-only gate"
+    )
+  })
+
+  it("keeps the empty mobile chat composer low and pinned while typing", () => {
+    const initialStageIndex = globals.lastIndexOf("\n  .chat-initial-stage {")
+    assert.notEqual(initialStageIndex, -1, "missing mobile empty-chat stage rule")
+    const initialStageBlock = cssBlockAt(globals, initialStageIndex)
+
+    assert.match(
+      initialStageBlock,
+      /\.chat-initial-stage\s*\{[^}]*align-items:\s*flex-end\s*!important[^}]*padding-bottom:\s*calc\(0\.625rem\s*\+\s*var\(--chat-mobile-bottom-clearance/,
+      "empty mobile chat should place the composer near the bottom, not centered vertically"
+    )
+
+    const initialStagePinnedIndex = globals.indexOf(
+      '.chat-viewport[data-chat-input-focused="true"] .chat-initial-stage',
+      initialStageIndex
+    )
+    assert.notEqual(initialStagePinnedIndex, -1, "missing focused empty-chat stage rule")
+    const initialStagePinnedBlock = cssBlockAt(globals, initialStagePinnedIndex)
+
+    assert.match(
+      initialStagePinnedBlock,
+      /\.chat-viewport\[data-chat-input-focused="true"\]\s+\.chat-initial-stage,\s*\.chat-viewport\[data-chat-keyboard="open"\]\s+\.chat-initial-stage\s*\{[^}]*position:\s*fixed[^}]*height:\s*var\(--chat-viewport-height,\s*100dvh\)[^}]*padding-bottom:\s*calc\(0\.375rem\s*\+\s*var\(--chat-mobile-bottom-clearance/,
+      "empty mobile chat should pin the composer to the visual viewport while typing"
+    )
+  })
+})

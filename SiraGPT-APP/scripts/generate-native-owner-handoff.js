@@ -1,0 +1,625 @@
+#!/usr/bin/env node
+
+const fs = require("fs")
+const path = require("path")
+
+const root = path.resolve(__dirname, "..")
+const metadataPath = path.join(root, "docs/store-submission/native-store-metadata.json")
+const statusPath = path.join(root, "docs/store-submission/native-release-status.json")
+const defaultOut = "output/native-owner-handoff.md"
+const defaultJsonOut = "output/native-owner-handoff.json"
+
+const secretGroups = {
+  android: [
+    "ANDROID_KEYSTORE_BASE64",
+    "ANDROID_KEYSTORE_PASSWORD",
+    "ANDROID_KEY_ALIAS",
+    "ANDROID_KEY_PASSWORD",
+  ],
+  googleplay: [
+    "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON_BASE64",
+  ],
+  ios: [
+    "APPLE_TEAM_ID",
+    "IOS_SIGNING_CERTIFICATE_BASE64",
+    "IOS_SIGNING_CERTIFICATE_PASSWORD",
+    "IOS_PROVISIONING_PROFILE_BASE64",
+  ],
+  appstore: [
+    "APP_STORE_CONNECT_API_KEY_ID",
+    "APP_STORE_CONNECT_API_ISSUER_ID",
+    "APP_STORE_CONNECT_API_KEY_BASE64",
+  ],
+  macos: [
+    "MACOS_CERTIFICATE_BASE64",
+    "MACOS_CERTIFICATE_PASSWORD",
+    "APPLE_TEAM_ID",
+    "APPLE_ID",
+    "APPLE_APP_SPECIFIC_PASSWORD",
+  ],
+  windows: [
+    "WINDOWS_CERTIFICATE_BASE64",
+    "WINDOWS_CERTIFICATE_PASSWORD",
+  ],
+}
+
+const platforms = {
+  android: {
+    label: "Android / Google Play",
+    metadataKey: "android",
+    setupPlatform: "android",
+    workflowPlatform: "android",
+    releaseGroups: ["android"],
+    uploadGroups: ["googleplay"],
+    uploadSetupPlatform: "googleplay",
+    firstWorkflow: "Native signed release packages with platform=android, upload_android_google_play=true, android_play_track=qa, android_release_status=draft",
+    ownerSummary: "Complete Google Play account verification, create the Play service account, and provide the Android upload key material.",
+  },
+  ios: {
+    label: "iPhone / App Store Connect",
+    metadataKey: "ios",
+    setupPlatform: "ios",
+    workflowPlatform: "ios",
+    releaseGroups: ["ios"],
+    uploadGroups: ["appstore"],
+    uploadSetupPlatform: "appstore",
+    firstWorkflow: "Native signed release packages with platform=ios and upload_ios_app_store_connect=true only when App Store Connect upload is approved",
+    ownerSummary: "Complete Apple Developer/App Store Connect setup and provide iOS distribution signing assets plus API key material.",
+  },
+  macos: {
+    label: "macOS",
+    metadataKey: "macos",
+    setupPlatform: "macos",
+    workflowPlatform: "macos",
+    releaseGroups: ["macos"],
+    uploadGroups: [],
+    uploadSetupPlatform: "",
+    firstWorkflow: "Native signed release packages with platform=macos and create_github_release=true",
+    ownerSummary: "Provide Developer ID Application certificate and notarization credentials for public macOS distribution.",
+  },
+  windows: {
+    label: "Windows",
+    metadataKey: "windows",
+    setupPlatform: "windows",
+    workflowPlatform: "windows",
+    releaseGroups: ["windows"],
+    uploadGroups: [],
+    uploadSetupPlatform: "",
+    firstWorkflow: "Native desktop builds with windows_store_package=store after configuring the exact Partner Center identity; use Native signed release packages with platform=windows only for direct EXE distribution",
+    ownerSummary: "Reserve the Microsoft Store app and provide its exact non-secret identity values; provide a Windows code-signing certificate only if direct NSIS/portable EXE distribution is also required.",
+  },
+}
+
+const aliases = {
+  all: ["android", "ios", "macos", "windows"],
+  mobile: ["android", "ios"],
+  desktop: ["macos", "windows"],
+  apple: ["ios", "macos"],
+}
+
+function usage() {
+  return `Usage: node scripts/generate-native-owner-handoff.js [--repo=owner/name] [--platform=all|mobile|desktop|android|ios|macos|windows] [--qa-release-tag=tag --qa-source-sha=sha] [--qa-mobile-run=id] [--qa-desktop-run=id] [--qa-ci-run=id] [--out=path] [--json-out=path] [--json]
+
+Generates a non-secret handoff packet for the account owner who must finish
+store verification, signing credentials, and native release approval.
+When QA release provenance is explicit, both --qa-release-tag and
+--qa-source-sha are required.`
+}
+
+function parseArgs(argv) {
+  const args = {
+    repo: "",
+    platform: "all",
+    out: defaultOut,
+    jsonOut: defaultJsonOut,
+    qaReleaseTag: "",
+    qaSourceSha: "",
+    qaMobileRun: "",
+    qaDesktopRun: "",
+    qaCiRun: "",
+    format: "markdown",
+    help: false,
+  }
+
+  for (const arg of argv) {
+    if (arg === "-h" || arg === "--help") {
+      args.help = true
+    } else if (arg === "--json") {
+      args.format = "json"
+    } else if (arg.startsWith("--repo=")) {
+      args.repo = arg.slice("--repo=".length)
+    } else if (arg.startsWith("--platform=")) {
+      args.platform = arg.slice("--platform=".length)
+    } else if (arg.startsWith("--qa-release-tag=")) {
+      args.qaReleaseTag = arg.slice("--qa-release-tag=".length)
+    } else if (arg.startsWith("--qa-source-sha=")) {
+      args.qaSourceSha = arg.slice("--qa-source-sha=".length)
+    } else if (arg.startsWith("--qa-mobile-run=")) {
+      args.qaMobileRun = arg.slice("--qa-mobile-run=".length)
+    } else if (arg.startsWith("--qa-desktop-run=")) {
+      args.qaDesktopRun = arg.slice("--qa-desktop-run=".length)
+    } else if (arg.startsWith("--qa-ci-run=")) {
+      args.qaCiRun = arg.slice("--qa-ci-run=".length)
+    } else if (arg.startsWith("--out=")) {
+      args.out = arg.slice("--out=".length)
+    } else if (arg.startsWith("--json-out=")) {
+      args.jsonOut = arg.slice("--json-out=".length)
+    } else {
+      throw new Error(`Unknown argument: ${arg}`)
+    }
+  }
+
+  if (Boolean(args.qaReleaseTag) !== Boolean(args.qaSourceSha)) {
+    throw new Error("--qa-release-tag and --qa-source-sha must be provided together")
+  }
+  if (!args.qaReleaseTag && (args.qaMobileRun || args.qaDesktopRun || args.qaCiRun)) {
+    throw new Error("QA workflow run IDs require --qa-release-tag and --qa-source-sha")
+  }
+
+  return args
+}
+
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"))
+}
+
+function unique(items) {
+  return [...new Set(items)]
+}
+
+function expandPlatforms(value) {
+  const requested = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const expanded = requested.length ? requested.flatMap((item) => aliases[item] || [item]) : aliases.all
+  const unknown = expanded.filter((item) => !platforms[item])
+  if (unknown.length) throw new Error(`Unknown platform: ${unknown.join(", ")}`)
+  return unique(expanded)
+}
+
+function secretsForGroups(groups) {
+  return unique(groups.flatMap((group) => secretGroups[group] || []))
+}
+
+function list(items) {
+  if (!items.length) return "- none"
+  return items.map((item) => `- ${item}`).join("\n")
+}
+
+function codeList(items) {
+  return list(items.map((item) => `\`${item}\``))
+}
+
+function buildHandoff({
+  repo,
+  selectedPlatforms,
+  metadata,
+  status,
+  qaReleaseTag,
+  qaSourceSha,
+  qaMobileRun,
+  qaDesktopRun,
+  qaCiRun,
+}) {
+  const actualRepo = repo || status.repo || "infosiragpt-ops/SiraGPT-APP"
+  const latestQaRelease = qaReleaseTag
+    ? {
+        tag: qaReleaseTag,
+        url: `https://github.com/${actualRepo}/releases/tag/${qaReleaseTag}`,
+        targetSha: qaSourceSha,
+        provenance: "explicit-handoff-source",
+      }
+    : status.latestQaRelease
+  const latestVerifiedRuns = qaReleaseTag
+    ? {
+        ...(qaMobileRun ? { mobile: qaMobileRun } : {}),
+        ...(qaDesktopRun ? { desktop: qaDesktopRun } : {}),
+        ...(qaCiRun ? { ci: qaCiRun } : {}),
+      }
+    : status.latestVerifiedRuns
+  const latestQaArtifactManifestRuns = qaReleaseTag
+    ? {
+        checkedAt: new Date().toISOString(),
+        sourceSha: qaSourceSha,
+        ...(qaMobileRun ? { mobileRun: qaMobileRun } : {}),
+        ...(qaDesktopRun ? { desktopRun: qaDesktopRun } : {}),
+        status: qaMobileRun && qaDesktopRun
+          ? "explicit-exact-sha-mobile-and-desktop-runs"
+          : "explicit-release-provenance",
+        diagnosis: "This handoff records only the explicitly supplied QA release target and workflow runs. Artifact names and checksums are authoritative in that release's manifests.",
+      }
+    : status.latestQaArtifactManifestRuns
+  const latestTraceabilityCommit = qaReleaseTag
+    ? {
+        sourceSha: qaSourceSha,
+        sha: qaSourceSha,
+        message: "Explicit QA release provenance",
+        validatedManagementSha: qaSourceSha,
+        validatedManagementCommit: "Explicit QA release provenance",
+        validatedManagementRuns: {
+          ...(qaCiRun ? { ci: qaCiRun } : {}),
+        },
+        note: "The QA release and supplied workflow runs are bound to this exact source SHA.",
+      }
+    : status.latestTraceabilityCommit
+  const platformPlans = selectedPlatforms.map((key) => {
+    const platform = platforms[key]
+    const metadataPlatform = metadata.platforms?.[platform.metadataKey] || {}
+    const releaseSecrets = secretsForGroups(platform.releaseGroups)
+    const uploadSecrets = secretsForGroups(platform.uploadGroups)
+    const allSecrets = unique([...releaseSecrets, ...uploadSecrets])
+
+    return {
+      key,
+      label: platform.label,
+      ownerSummary: platform.ownerSummary,
+      workflowPlatform: platform.workflowPlatform,
+      setupPlatform: platform.setupPlatform,
+      firstWorkflow: platform.firstWorkflow,
+      accountActions: metadataPlatform.requiredAccountActions || [],
+      releaseSecrets,
+      uploadSecrets,
+      allSecrets,
+      dryRunCommand: `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.setupPlatform} --dry-run`,
+      setupCommand: `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.setupPlatform}`,
+      uploadDryRunCommand: platform.uploadSetupPlatform
+        ? `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.uploadSetupPlatform} --dry-run`
+        : "",
+      uploadSetupCommand: platform.uploadSetupPlatform
+        ? `npm run native:github-secrets:setup -- --repo=${actualRepo} --platform=${platform.uploadSetupPlatform}`
+        : "",
+      readinessCommand: `npm run native:readiness -- --require=${unique([...platform.releaseGroups, ...platform.uploadGroups]).join(",")} --only-required`,
+    }
+  })
+
+  return {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    status: "owner-action-required",
+    repo: actualRepo,
+    trackerUrl: status.distributionTrackerUrl,
+    distributionMilestone: status.distributionMilestone,
+    app: {
+      name: metadata.app?.name,
+      supportEmail: metadata.app?.supportEmail,
+      runtimeUrl: metadata.app?.webRuntimeUrl,
+      privacyPolicyUrl: metadata.app?.privacyPolicyUrl,
+      bundleIds: metadata.app?.bundleIds,
+      category: metadata.app?.category,
+    },
+    ownerAccount: metadata.ownerAccount || {
+      email: metadata.app?.supportEmail,
+      status: "owner-verification-required",
+      requiredSecurityActions: [],
+      storePortals: [],
+    },
+    latestQaRelease,
+    latestVerifiedRuns,
+    latestQaArtifactManifestRuns,
+    latestTraceabilityCommit,
+    latestActionsDiagnostics: qaReleaseTag ? null : status.latestActionsDiagnostics,
+    latestSignedPreflight: qaReleaseTag ? null : status.latestSignedPreflight,
+    latestSignedAndroidRelease: qaReleaseTag ? null : status.latestSignedAndroidRelease,
+    latestSecretAudit: qaReleaseTag ? null : status.latestSecretAudit,
+    platformPlans,
+    forbiddenMaterials: [
+      "normal email account password",
+      "raw account password pasted into GitHub",
+      "keystore/certificate/provisioning profile committed to Git",
+      "API private key committed to Git",
+      "screenshots or logs that expose session cookies or private tokens",
+    ],
+  }
+}
+
+function renderMarkdown(handoff) {
+  const lines = []
+  lines.push("# SiraGPT Native Store Owner Handoff")
+  lines.push("")
+  lines.push(`Generated: ${handoff.generatedAt}`)
+  lines.push(`Status: \`${handoff.status}\``)
+  lines.push(`Repository: \`${handoff.repo}\``)
+  lines.push(`Tracker: ${handoff.trackerUrl}`)
+  lines.push("")
+  if (handoff.distributionMilestone?.title) {
+    lines.push("## Distribution Work Queue")
+    lines.push("")
+    lines.push(`- Milestone: \`${handoff.distributionMilestone.title}\``)
+    lines.push(`- URL: ${handoff.distributionMilestone.url}`)
+    lines.push(`- Status: \`${handoff.distributionMilestone.status}\``)
+    lines.push(`- Open issues: ${handoff.distributionMilestone.openIssues}`)
+    lines.push(`- Closed issues: ${handoff.distributionMilestone.closedIssues}`)
+    if (handoff.distributionMilestone.note) {
+      lines.push(`- Note: ${handoff.distributionMilestone.note}`)
+    }
+    if (handoff.distributionMilestone.issues?.length) {
+      lines.push("")
+      lines.push("Platform issues:")
+      lines.push("")
+      for (const issue of handoff.distributionMilestone.issues) {
+        lines.push(`- #${issue.number} ${issue.title}: ${issue.url}`)
+      }
+    }
+    lines.push("")
+  }
+  lines.push("This packet contains secret names and owner actions only. It must not contain passwords, certificates, keystores, provisioning profiles, API private keys, cookies, or recovery codes.")
+  lines.push("")
+  lines.push("## Current App Identity")
+  lines.push("")
+  lines.push(`- App name: \`${handoff.app.name}\``)
+  lines.push(`- Runtime URL: \`${handoff.app.runtimeUrl}\``)
+  lines.push(`- Support email: \`${handoff.app.supportEmail}\``)
+  lines.push(`- Privacy policy: \`${handoff.app.privacyPolicyUrl}\``)
+  lines.push(`- Android package: \`${handoff.app.bundleIds?.android}\``)
+  lines.push(`- iOS bundle ID: \`${handoff.app.bundleIds?.ios}\``)
+  lines.push(`- macOS bundle ID: \`${handoff.app.bundleIds?.macos}\``)
+  lines.push(`- Windows app ID: \`${handoff.app.bundleIds?.windows}\``)
+  lines.push("")
+  if (handoff.ownerAccount?.email) {
+    lines.push("## Store Owner Account")
+    lines.push("")
+    lines.push(`- Owner mailbox: \`${handoff.ownerAccount.email}\``)
+    lines.push(`- Status: \`${handoff.ownerAccount.status}\``)
+    lines.push("")
+    lines.push("Required security actions before store-console work:")
+    lines.push("")
+    lines.push(list(handoff.ownerAccount.requiredSecurityActions || []))
+    if (handoff.ownerAccount.storePortals?.length) {
+      lines.push("")
+      lines.push("Store portal outputs to collect:")
+      lines.push("")
+      for (const portal of handoff.ownerAccount.storePortals) {
+        lines.push(`- ${portal.platform}: ${portal.portal} -> ${portal.requiredOutput}`)
+      }
+    }
+    lines.push("")
+    lines.push("The mailbox password must never be copied into GitHub Actions secrets, release packets, issue comments, screenshots, or logs.")
+    lines.push("")
+  }
+  lines.push("## Latest QA Download")
+  lines.push("")
+  lines.push(`- Release: \`${handoff.latestQaRelease.tag}\``)
+  lines.push(`- URL: ${handoff.latestQaRelease.url}`)
+  lines.push(`- Target SHA: \`${handoff.latestQaRelease.targetSha}\``)
+  if (handoff.latestQaRelease.assetCount !== undefined) {
+    lines.push(`- Assets: ${handoff.latestQaRelease.assetCount}`)
+  }
+  lines.push("")
+  const verifiedRunLabels = [
+    ["Mobile", handoff.latestVerifiedRuns?.mobile],
+    ["Desktop", handoff.latestVerifiedRuns?.desktop],
+    ["Readiness", handoff.latestVerifiedRuns?.readiness],
+    ["CI", handoff.latestVerifiedRuns?.ci],
+    ["Docker", handoff.latestVerifiedRuns?.docker],
+  ].filter(([, run]) => run)
+  if (verifiedRunLabels.length) {
+    lines.push("Verified workflow runs:")
+    lines.push("")
+    for (const [label, run] of verifiedRunLabels) {
+      lines.push(`- ${label}: \`${run}\``)
+    }
+    lines.push("")
+  }
+  if (handoff.latestQaArtifactManifestRuns?.status) {
+    lines.push("## Latest QA Artifact Manifest Verification")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestQaArtifactManifestRuns.checkedAt}\``)
+    lines.push(`- Source SHA: \`${handoff.latestQaArtifactManifestRuns.sourceSha}\``)
+    if (handoff.latestQaArtifactManifestRuns.mobileRun) {
+      lines.push(`- Mobile run: \`${handoff.latestQaArtifactManifestRuns.mobileRun}\``)
+    }
+    if (handoff.latestQaArtifactManifestRuns.desktopRun) {
+      lines.push(`- Desktop run: \`${handoff.latestQaArtifactManifestRuns.desktopRun}\``)
+    }
+    lines.push(`- Status: \`${handoff.latestQaArtifactManifestRuns.status}\``)
+    if (handoff.latestQaArtifactManifestRuns.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestQaArtifactManifestRuns.diagnosis}`)
+    }
+    if (handoff.latestQaArtifactManifestRuns.platformArtifacts) {
+      lines.push("")
+      lines.push("Verified artifact files:")
+      lines.push("")
+      for (const [platform, files] of Object.entries(handoff.latestQaArtifactManifestRuns.platformArtifacts)) {
+        lines.push(`- ${platform}: ${files.map((file) => `\`${file}\``).join(", ")}`)
+      }
+    }
+    lines.push("")
+  }
+  if (handoff.latestTraceabilityCommit?.sha) {
+    lines.push("## Latest Native Artifact Validation")
+    lines.push("")
+    lines.push(`- SHA: \`${handoff.latestTraceabilityCommit.sha}\``)
+    if (handoff.latestTraceabilityCommit.message) {
+      lines.push(`- Commit: \`${handoff.latestTraceabilityCommit.message}\``)
+    }
+    if (handoff.latestTraceabilityCommit.note) {
+      lines.push(`- Status: ${handoff.latestTraceabilityCommit.note}`)
+    }
+    lines.push("")
+  }
+  if (handoff.latestActionsDiagnostics?.actionsEnabled !== undefined) {
+    lines.push("## Latest GitHub Actions Diagnostics")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestActionsDiagnostics.checkedAt}\``)
+    lines.push(`- Repository visibility: \`${handoff.latestActionsDiagnostics.repoVisibility}\``)
+    lines.push(`- Private repository: \`${handoff.latestActionsDiagnostics.isPrivate}\``)
+    lines.push(`- Actions enabled: \`${handoff.latestActionsDiagnostics.actionsEnabled}\``)
+    lines.push(`- Allowed actions: \`${handoff.latestActionsDiagnostics.allowedActions}\``)
+    lines.push(`- CI run: \`${handoff.latestActionsDiagnostics.ciRun}\``)
+    lines.push(`- Native readiness run: \`${handoff.latestActionsDiagnostics.readinessRun}\``)
+    if (handoff.latestActionsDiagnostics.officialBillingDocs) {
+      lines.push(`- GitHub billing docs: ${handoff.latestActionsDiagnostics.officialBillingDocs}`)
+    }
+    if (handoff.latestActionsDiagnostics.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestActionsDiagnostics.diagnosis}`)
+    }
+    lines.push("")
+  }
+  if (handoff.latestSignedPreflight?.run) {
+    lines.push("## Latest Signed Release Preflight")
+    lines.push("")
+    lines.push(`- Run: \`${handoff.latestSignedPreflight.run}\``)
+    lines.push(`- URL: ${handoff.latestSignedPreflight.url}`)
+    lines.push(`- Status: \`${handoff.latestSignedPreflight.status}\``)
+    lines.push(`- Platform: \`${handoff.latestSignedPreflight.platform}\``)
+    lines.push(`- Release tag: \`${handoff.latestSignedPreflight.releaseTag}\``)
+    if (handoff.latestSignedPreflight.notes) {
+      lines.push(`- Notes: ${handoff.latestSignedPreflight.notes}`)
+    }
+    lines.push("")
+  }
+  if (handoff.latestSignedAndroidRelease?.tag) {
+    lines.push("## Latest Signed Android Release")
+    lines.push("")
+    lines.push(`- Tag: \`${handoff.latestSignedAndroidRelease.tag}\``)
+    lines.push(`- URL: ${handoff.latestSignedAndroidRelease.url}`)
+    lines.push(`- Source SHA: \`${handoff.latestSignedAndroidRelease.sourceSha}\``)
+    lines.push(`- Workflow run: \`${handoff.latestSignedAndroidRelease.run}\``)
+    lines.push(`- Status: \`${handoff.latestSignedAndroidRelease.status}\``)
+    if (handoff.latestSignedAndroidRelease.aab?.name) {
+      lines.push(`- AAB: \`${handoff.latestSignedAndroidRelease.aab.name}\``)
+      lines.push(`- AAB SHA-256: \`${handoff.latestSignedAndroidRelease.aab.sha256}\``)
+    }
+    if (handoff.latestSignedAndroidRelease.verification) {
+      lines.push(`- Verification: ${handoff.latestSignedAndroidRelease.verification}`)
+    }
+    if (handoff.latestSignedAndroidRelease.googlePlayUpload) {
+      lines.push(`- Google Play upload: \`${handoff.latestSignedAndroidRelease.googlePlayUpload}\``)
+    }
+    lines.push("")
+  }
+  if (handoff.latestSecretAudit?.status) {
+    lines.push("## Latest Secret-Name Audit")
+    lines.push("")
+    lines.push(`- Checked: \`${handoff.latestSecretAudit.checkedAt}\``)
+    lines.push(`- Status: \`${handoff.latestSecretAudit.status}\``)
+    if (handoff.latestSecretAudit.diagnosis) {
+      lines.push(`- Diagnosis: ${handoff.latestSecretAudit.diagnosis}`)
+    }
+    lines.push(`- Command: \`${handoff.latestSecretAudit.command}\``)
+    lines.push("")
+  }
+  lines.push("## Security Boundary")
+  lines.push("")
+  lines.push("Do not use the normal mailbox password as native signing material. Native distribution requires dedicated store credentials, upload keys, certificates, provisioning profiles, API keys, and app-specific passwords stored only in vendor portals or GitHub Actions secrets.")
+  lines.push("")
+  lines.push("Never provide or commit:")
+  lines.push("")
+  lines.push(list(handoff.forbiddenMaterials))
+  lines.push("")
+  lines.push("## Platform Owner Actions")
+  for (const platform of handoff.platformPlans) {
+    lines.push("")
+    lines.push(`### ${platform.label}`)
+    lines.push("")
+    lines.push(platform.ownerSummary)
+    lines.push("")
+    lines.push("Account/store actions:")
+    lines.push("")
+    lines.push(list(platform.accountActions))
+    lines.push("")
+    lines.push("GitHub Actions secrets to configure:")
+    lines.push("")
+    lines.push(codeList(platform.allSecrets))
+    lines.push("")
+    lines.push("Safe local signing dry-run:")
+    lines.push("")
+    lines.push("```bash")
+    lines.push(platform.dryRunCommand)
+    lines.push("```")
+    lines.push("")
+    lines.push("Upload signing secrets only from a trusted machine after setting the matching environment variables or file path variables:")
+    lines.push("")
+    lines.push("```bash")
+    lines.push(platform.setupCommand)
+    lines.push("```")
+    lines.push("")
+    if (platform.uploadSetupCommand) {
+      lines.push("Store-upload credentials are separate and should be loaded only when the owner approves store upload:")
+      lines.push("")
+      lines.push("```bash")
+      lines.push(platform.uploadDryRunCommand)
+      lines.push(platform.uploadSetupCommand)
+      lines.push("```")
+      lines.push("")
+    }
+    lines.push("Readiness gate after secrets are added:")
+    lines.push("")
+    lines.push("```bash")
+    lines.push(platform.readinessCommand)
+    lines.push("```")
+    lines.push("")
+    lines.push(`First signed workflow target: ${platform.firstWorkflow}`)
+  }
+  lines.push("")
+  lines.push("## Final Gates")
+  lines.push("")
+  lines.push("```bash")
+  lines.push("npm run native:store:readiness")
+  lines.push("npm run native:store:assets -- --require-ready")
+  lines.push("npm run native:store:packet -- --require-ready")
+  lines.push("npm run native:github-secrets:check")
+  lines.push("npm run native:readiness:all")
+  lines.push("```")
+  lines.push("")
+  lines.push("Run `Native signed release packages` only after the owner confirms the selected platform, release tag, upload target, and whether binaries should be transmitted to Google Play or App Store Connect.")
+  lines.push("")
+  return `${lines.join("\n")}\n`
+}
+
+function assertNoSecretLeak(text) {
+  const forbidden = [
+    /BEGIN (RSA|OPENSSH|PRIVATE) KEY/,
+    /ghp_[A-Za-z0-9_]+/,
+    /sk-[A-Za-z0-9_-]{20,}/,
+    /xox[baprs]-[A-Za-z0-9-]+/,
+  ]
+  const hit = forbidden.find((pattern) => pattern.test(text))
+  if (hit) throw new Error(`Generated handoff appears to contain secret-like material: ${hit}`)
+}
+
+function writeFile(filePath, contents) {
+  const absolutePath = path.resolve(root, filePath)
+  fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
+  fs.writeFileSync(absolutePath, contents)
+}
+
+function main() {
+  const args = parseArgs(process.argv.slice(2))
+  if (args.help) {
+    console.log(usage())
+    return
+  }
+
+  const selectedPlatforms = expandPlatforms(args.platform)
+  const metadata = readJson(metadataPath)
+  const status = readJson(statusPath)
+  const handoff = buildHandoff({
+    repo: args.repo,
+    selectedPlatforms,
+    metadata,
+    status,
+    qaReleaseTag: args.qaReleaseTag,
+    qaSourceSha: args.qaSourceSha,
+    qaMobileRun: args.qaMobileRun,
+    qaDesktopRun: args.qaDesktopRun,
+    qaCiRun: args.qaCiRun,
+  })
+
+  const json = `${JSON.stringify(handoff, null, 2)}\n`
+  const markdown = renderMarkdown(handoff)
+  assertNoSecretLeak(json)
+  assertNoSecretLeak(markdown)
+
+  if (args.jsonOut) writeFile(args.jsonOut, json)
+  if (args.out) writeFile(args.out, markdown)
+  process.stdout.write(args.format === "json" ? json : markdown)
+}
+
+try {
+  main()
+} catch (error) {
+  console.error(`generate-native-owner-handoff: ${error.message}`)
+  process.exit(1)
+}

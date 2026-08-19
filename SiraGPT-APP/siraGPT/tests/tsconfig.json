@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "rootDir": "..",
+    "outDir": "../.test-dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": [
+    "../tests/**/*.test.ts",
+    "../types/**/*.d.ts",
+    "../lib/i18n/locales.ts",
+    "../lib/i18n/locale-resolution.ts",
+    "../lib/auth.ts",
+    "../lib/auth/auth-guard-rules.ts",
+    "../lib/next-api-cors.ts",
+    "../lib/app-wrapper-routes.ts",
+    "../lib/long-paste.ts",
+    "../lib/message-preservation.ts",
+    "../lib/attachment-url.ts",
+    "../lib/attachment-ingest.ts",
+    "../lib/search-brain-ui.ts",
+    "../lib/file-processing-vocab.ts",
+    "../lib/download-utils.ts",
+    "../lib/xlsx-client.ts",
+    "../lib/sse-client.ts",
+    "../lib/sentry-config.ts",
+    "../lib/retry-after-fetch.ts",
+    "../lib/deep-links.ts",
+    "../lib/native/share.ts",
+    "../lib/native/clipboard.ts",
+    "../lib/native/storage.ts",
+    "../lib/native/haptics.ts",
+    "../lib/notifications/push.ts",
+    "../lib/integrations/verify-webhook.ts"
+  ],
+  "exclude": [
+    "../tests/lib"
+  ]
+}

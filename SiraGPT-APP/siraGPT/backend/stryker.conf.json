@@ -1,0 +1,38 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/core/schema/stryker-schema.json",
+  "_comment": "Drop-in Stryker config for backend/src/utils/. Run: npx stryker run backend/stryker.conf.json (after `npm i -D @stryker-mutator/core`).",
+  "packageManager": "npm",
+  "testRunner": "command",
+  "commandRunner": {
+    "command": "node --test tests/async-guard.test.js tests/async-handler.test.js tests/bigint-serializer.test.js tests/circuit-breaker.test.js tests/error-telemetry.test.js tests/fetch-instrument.test.js tests/retry-with-backoff.test.js tests/secret-redactor.test.js tests/sse-heartbeat.test.js tests/sse-writer.test.js"
+  },
+  "coverageAnalysis": "off",
+  "mutate": [
+    "src/utils/async-guard.js",
+    "src/utils/async-handler.js",
+    "src/utils/bigint-serializer.js",
+    "src/utils/circuit-breaker.js",
+    "src/utils/error-telemetry.js",
+    "src/utils/fetch-instrument.js",
+    "src/utils/retry-with-backoff.js",
+    "src/utils/secret-redactor.js",
+    "src/utils/sse-heartbeat.js",
+    "src/utils/sse-writer.js"
+  ],
+  "reporters": ["progress", "clear-text", "html", "json"],
+  "htmlReporter": {
+    "fileName": "../docs/mutation-testing-baseline.html"
+  },
+  "jsonReporter": {
+    "fileName": "reports/mutation/mutation.json"
+  },
+  "thresholds": {
+    "high": 80,
+    "low": 60,
+    "break": 0
+  },
+  "timeoutMS": 30000,
+  "concurrency": 2,
+  "tempDirName": ".stryker-tmp",
+  "cleanTempDir": true
+}

@@ -1,0 +1,14 @@
+{
+  "name": "siragpt-sandbox",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SiraGPT document-task sandbox microservice — ephemeral Docker containers driven over HTTPS by the main app.",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "build:image": "docker build -t ${SANDBOX_RUNNER_IMAGE:-siragpt-doc-sandbox:latest} runner",
+    "smoke": "node scripts/smoke.js"
+  },
+  "dependencies": {}
+}

@@ -1,0 +1,444 @@
+/**
+ * circuit-breaker.js
+ *
+ * A robust Circuit Breaker for external service dependencies.
+ *
+ * States:
+ *   CLOSED    → Normal operation. All calls pass through.
+ *   OPEN      → Calls fail fast with CircuitOpenError.
+ *   HALF_OPEN → Probe calls pass through; success → CLOSED, failure → OPEN.
+ *
+ * Features:
+ *   - Rolling‑window failure counting (configurable windowMs)
+ *   - Configurable threshold, cooldown, and probe count
+ *   - Per‑call timeout with optional external AbortSignal
+ *   - State‑change events for monitoring / logging
+ *   - Metrics snapshot via toJSON()
+ *   - forceState() for manual intervention or testing
+ *
+ * Usage:
+ *   const cb = new CircuitBreaker({ name: 'stripe-api', threshold: 3 });
+ *   const result = await cb.call(() => stripe.charges.create(...));
+ *
+ * Event monitoring:
+ *   cb.on('stateChange', ({ from, to, name }) => logger.info({ from, to }, name));
+ *
+ * @jest-environment node
+ */
+
+'use strict';
+
+const EventEmitter = require('node:events');
+
+// ── Internal symbols ──────────────────────────────────────────────────────
+const kState       = Symbol('state');
+const kOpts        = Symbol('opts');
+const kFailures    = Symbol('failures');
+const kSuccesses   = Symbol('successes');
+const kCallCount   = Symbol('callCount');
+const kNextAttempt = Symbol('nextAttempt');
+const kWindow      = Symbol('window');
+const kWinMs       = Symbol('winMs');
+const kInFlightProbes = Symbol('inFlightProbes');
+
+// ── State constants ───────────────────────────────────────────────────────
+const STATE = Object.freeze({
+  CLOSED:   'CLOSED',
+  OPEN:     'OPEN',
+  HALF_OPEN: 'HALF_OPEN',
+});
+
+// ── Error types ───────────────────────────────────────────────────────────
+class CircuitOpenError extends Error {
+  constructor(breakerName) {
+    super(`Circuit breaker "${breakerName}" is OPEN — request rejected without execution.`);
+    this.name = 'CircuitOpenError';
+    this.breakerName = breakerName;
+  }
+}
+
+class CircuitTimeoutError extends Error {
+  constructor(breakerName, timeoutMs) {
+    super(`Circuit breaker "${breakerName}" timed out after ${timeoutMs}ms`);
+    this.name = 'CircuitTimeoutError';
+    this.breakerName = breakerName;
+  }
+}
+
+// ── Defaults ──────────────────────────────────────────────────────────────
+const DEFAULTS = Object.freeze({
+  name:       'default',
+  threshold:  5,          // failures within the window before opening
+  cooldownMs: 30_000,     // ms before OPEN → HALF_OPEN
+  probeCount: 1,          // consecutive successes in HALF_OPEN to close
+  windowMs:   60_000,     // rolling failure window (0 = lifetime)
+  timeoutMs:  0,          // default call timeout (0 = no timeout)
+});
+
+// ── Config sanitization ───────────────────────────────────────────────────
+//
+// Merged options can arrive with non-finite (NaN/Infinity), negative, or
+// otherwise nonsensical values — e.g. `new CircuitBreaker({ threshold: NaN })`
+// silently produced a breaker that NEVER opens (`count >= NaN` is always
+// false), and `{ cooldownMs: NaN }` left `nextAttempt = now + NaN`, so the
+// OPEN → HALF_OPEN auto-transition could never fire and `toJSON()` leaked NaN.
+// Clamp every numeric knob to a safe domain so the state machine and the
+// metrics snapshot stay well-defined regardless of caller input. Documented
+// defaults are preserved for valid input — clamping only kicks in for values
+// that were already broken.
+
+/** Coerce to a finite integer ≥ min; fall back to `fallback` when invalid. */
+function clampInt(value, { min, max, fallback }) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  let v = Math.trunc(n);
+  if (v < min) v = min;
+  if (max != null && v > max) v = max;
+  return v;
+}
+
+/**
+ * Normalise raw constructor options into a safe, fully-finite config.
+ * Public option names and semantics are unchanged; only out-of-domain values
+ * are corrected.
+ */
+function sanitizeOptions(opts) {
+  const merged = { ...DEFAULTS, ...opts };
+  return {
+    // name: anything stringifiable; empty/nullish → default for stable logs.
+    name: (merged.name == null || merged.name === '')
+      ? DEFAULTS.name
+      : String(merged.name),
+    // threshold: at least 1 failure before opening (0/neg/NaN would open
+    // instantly or — for NaN — never open at all).
+    threshold:  clampInt(merged.threshold,  { min: 1, fallback: DEFAULTS.threshold }),
+    // cooldownMs: ≥ 0 (0 = immediate retry); non-finite → default.
+    cooldownMs: clampInt(merged.cooldownMs, { min: 0, fallback: DEFAULTS.cooldownMs }),
+    // probeCount: at least 1 success to close from HALF_OPEN.
+    probeCount: clampInt(merged.probeCount, { min: 1, fallback: DEFAULTS.probeCount }),
+    // windowMs: ≥ 0 (0 = lifetime counting); non-finite → default window.
+    windowMs:   clampInt(merged.windowMs,   { min: 0, fallback: DEFAULTS.windowMs }),
+    // timeoutMs: ≥ 0 (0 = no timeout); non-finite → 0 (disabled), never NaN.
+    timeoutMs:  clampInt(merged.timeoutMs,  { min: 0, fallback: 0 }),
+  };
+}
+
+// ── Rolling window counter ────────────────────────────────────────────────
+class RollingCounter {
+  constructor(windowMs) {
+    this[kWinMs] = windowMs;
+    this[kWindow] = [];        // [{ t: timestamp, v: n }]
+  }
+
+  increment() {
+    this._prune();
+    if (!this[kWinMs]) {
+      // Lifetime mode (no window → _prune is a no-op): aggregate into a SINGLE
+      // entry so memory stays O(1). Pushing one object per increment leaked
+      // unboundedly (kSuccesses is always windowMs=0; kFailures is too when
+      // configured for lifetime counting).
+      if (this[kWindow].length === 0) this[kWindow].push({ t: Date.now(), v: 0 });
+      this[kWindow][0].v += 1;
+      return;
+    }
+    this[kWindow].push({ t: Date.now(), v: 1 });
+  }
+
+  get count() {
+    this._prune();
+    return this[kWindow].reduce((s, e) => s + e.v, 0);
+  }
+
+  reset() { this[kWindow].length = 0; }
+
+  _prune() {
+    if (!this[kWinMs]) return;
+    const cutoff = Date.now() - this[kWinMs];
+    let i = 0;
+    while (i < this[kWindow].length && this[kWindow][i].t < cutoff) i++;
+    if (i > 0) this[kWindow].splice(0, i);
+  }
+}
+
+// ── CircuitBreaker ────────────────────────────────────────────────────────
+class CircuitBreaker extends EventEmitter {
+  /**
+   * @param {object}  [opts]
+   * @param {string}  [opts.name='default']  - Identifier (logged / metrics)
+   * @param {number}  [opts.threshold=5]      - Failures before opening
+   * @param {number}  [opts.cooldownMs=30000] - ms OPEN → HALF_OPEN
+   * @param {number}  [opts.probeCount=1]     - Successes in HALF_OPEN to close
+   * @param {number}  [opts.windowMs=60000]   - Rolling window for failures (0 = lifetime)
+   * @param {number}  [opts.timeoutMs=0]      - Default per-call timeout (0 = none)
+   */
+  constructor(opts = {}) {
+    super();
+    this.setMaxListeners(100);
+
+    this[kOpts]   = sanitizeOptions(opts);
+    this[kState]  = STATE.CLOSED;
+    this[kFailures]  = new RollingCounter(this[kOpts].windowMs);
+    this[kSuccesses] = new RollingCounter(0);
+    this[kCallCount] = 0;
+    this[kNextAttempt] = 0;
+    this[kInFlightProbes] = 0;
+
+    // Optional metrics hook — soft-require so circuit-breaker.js stays
+    // free of utility-tier dependencies in tests / cold-start. If the
+    // metrics module is present, register this breaker so state changes
+    // are mirrored into siragpt_circuit_breaker_state.
+    try {
+      const metrics = require('./metrics');
+      if (metrics && typeof metrics.trackCircuitBreaker === 'function') {
+        metrics.trackCircuitBreaker(this);
+      }
+    } catch { /* metrics is optional */ }
+  }
+
+  // ── Public API ────────────────────────────────────────────────────────
+
+  /**
+   * Execute a protected async call through the circuit breaker.
+   *
+   * @template T
+   * @param {() => Promise<T>} fn          - Async function to protect
+   * @param {object}          [opts]
+   * @param {number}          [opts.timeoutMs]  - Per-call timeout override
+   * @param {AbortSignal}    [opts.signal]      - External abort signal
+   * @returns {Promise<T>}
+   * @throws {CircuitOpenError}    if circuit is OPEN
+   * @throws {CircuitTimeoutError} if call exceeds timeout
+   * @throws {Error}               original error from fn
+   */
+  async call(fn, opts = {}) {
+    this[kCallCount]++;
+    const state = this._resolveState();
+
+    if (state === STATE.OPEN) {
+      throw new CircuitOpenError(this[kOpts].name);
+    }
+
+    // HALF_OPEN probe cap: after cooldown expires, _resolveState() flips the
+    // breaker OPEN → HALF_OPEN and every queued caller sees HALF_OPEN. Without
+    // this gate, N concurrent callers all execute at once against the still-
+    // recovering dependency (thundering herd). Admit at most probeCount probes;
+    // the rest fast-fail as if the breaker were still OPEN. Slots are released
+    // in the finally block (below) on any settle — success, failure, timeout,
+    // or abort — so a resolved probe frees the slot for the next caller.
+    if (state === STATE.HALF_OPEN && this[kInFlightProbes] >= this[kOpts].probeCount) {
+      throw new CircuitOpenError(this[kOpts].name);
+    }
+
+    const timeoutMs = opts.timeoutMs != null ? opts.timeoutMs : this[kOpts].timeoutMs;
+    const externalSignal = opts.signal || null;
+
+    // Capture whether THIS call is an admitted probe so the finally block only
+    // decrements a slot it actually reserved.
+    const isProbe = state === STATE.HALF_OPEN;
+    if (isProbe) this[kInFlightProbes]++;
+
+    let timerId;
+    try {
+      const result = await this._raceWithTimeout(fn, timeoutMs, externalSignal, (id) => { timerId = id; });
+      this._onSuccess();
+      return result;
+    } catch (err) {
+      if (err instanceof CircuitOpenError) throw err;
+      if (err instanceof CircuitTimeoutError) {
+        this._onFailure(err);
+        throw err;
+      }
+      // External abort — don't count as a failure. Gate on the SIGNAL, not the
+      // error value: an abort can surface as a falsy/empty error (e.g. a bare
+      // `throw` or a null reason), which the old `err && …` guard let fall
+      // through and be mis-counted as a circuit failure.
+      if (externalSignal && externalSignal.aborted) {
+        throw err;
+      }
+      this._onFailure(err);
+      throw err;
+    } finally {
+      if (isProbe && this[kInFlightProbes] > 0) this[kInFlightProbes]--;
+      if (timerId) clearTimeout(timerId);
+    }
+  }
+
+  /**
+   * Reset the breaker to CLOSED, clearing all counters.
+   */
+  reset() {
+    const oldState = this[kState];
+    this[kFailures].reset();
+    this[kSuccesses].reset();
+    this[kCallCount] = 0;
+    this[kNextAttempt] = 0;
+    this[kState] = STATE.CLOSED;
+    if (oldState !== STATE.CLOSED) {
+      this.emit('stateChange', {
+        from: oldState,
+        to: STATE.CLOSED,
+        name: this[kOpts].name,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * Force the breaker into a specific state (manual intervention / testing).
+   */
+  forceState(state) {
+    if (!Object.values(STATE).includes(state)) {
+      throw new TypeError(`Invalid state "${state}". Use STATE.CLOSED, STATE.OPEN, or STATE.HALF_OPEN.`);
+    }
+    if (state === STATE.CLOSED) return this.reset();
+    this._transitionTo(state);
+  }
+
+  // ── Metrics / properties ──────────────────────────────────────────────
+
+  get name()          { return this[kOpts].name; }
+  get state()         { return this._resolveState(); }
+  get failureCount()  { return this[kFailures].count; }
+  get successCount()  { return this[kSuccesses].count; }
+  get totalCalls()    { return this[kCallCount]; }
+  get threshold()     { return this[kOpts].threshold; }
+  get cooldownMs()    { return this[kOpts].cooldownMs; }
+  get probeCount()    { return this[kOpts].probeCount; }
+  get windowMs()      { return this[kOpts].windowMs; }
+  get timeoutMs()     { return this[kOpts].timeoutMs; }
+
+  toJSON() {
+    return {
+      name:              this[kOpts].name,
+      state:             this.state,
+      failureCount:      this.failureCount,
+      successCount:      this.successCount,
+      totalCalls:        this.totalCalls,
+      threshold:         this[kOpts].threshold,
+      cooldownMs:        this[kOpts].cooldownMs,
+      probeCount:        this[kOpts].probeCount,
+      windowMs:          this[kOpts].windowMs,
+      timeoutMs:         this[kOpts].timeoutMs,
+      cooldownRemainingMs: this._cooldownRemainingMs(),
+    };
+  }
+
+  /**
+   * Remaining cooldown before an OPEN breaker probes again, always a finite
+   * non-negative integer (never NaN/Infinity even if kNextAttempt was
+   * corrupted), so metrics snapshots stay JSON-serialisable and dashboard-safe.
+   */
+  _cooldownRemainingMs() {
+    const remaining = this[kNextAttempt] - Date.now();
+    if (!Number.isFinite(remaining) || remaining <= 0) return 0;
+    return Math.trunc(remaining);
+  }
+
+  // ── Internal helpers ──────────────────────────────────────────────────
+
+  /** Resolve effective state (auto-transition OPEN → HALF_OPEN when cooldown expires). */
+  _resolveState() {
+    if (this[kState] === STATE.OPEN && Date.now() >= this[kNextAttempt]) {
+      this._transitionTo(STATE.HALF_OPEN);
+    }
+    return this[kState];
+  }
+
+  /** Handle a successful call — in HALF_OPEN may close the circuit. */
+  _onSuccess() {
+    this[kSuccesses].increment();
+    if (this[kState] === STATE.HALF_OPEN && this[kSuccesses].count >= this[kOpts].probeCount) {
+      this.reset();
+    }
+  }
+
+  /** Handle a failed call. */
+  _onFailure(err) {
+    this[kFailures].increment();
+    if (this[kState] === STATE.HALF_OPEN) {
+      this[kSuccesses].reset();
+      this._transitionTo(STATE.OPEN);
+    } else if (this[kState] === STATE.CLOSED) {
+      if (this[kFailures].count >= this[kOpts].threshold) {
+        this._transitionTo(STATE.OPEN);
+      }
+    }
+  }
+
+  /** Transition to a new state, emitting event. */
+  _transitionTo(newState) {
+    const oldState = this[kState];
+    if (oldState === newState) return;
+    this[kState] = newState;
+
+    if (newState === STATE.OPEN) {
+      this[kNextAttempt] = Date.now() + this[kOpts].cooldownMs;
+      this[kSuccesses].reset();
+    } else if (newState === STATE.HALF_OPEN) {
+      this[kSuccesses].reset();
+    }
+
+    this.emit('stateChange', {
+      from: oldState,
+      to: newState,
+      name: this[kOpts].name,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Race fn() against a timeout and/or external AbortSignal.
+   * Returns the value of fn() or throws the first rejection.
+   */
+  async _raceWithTimeout(fn, timeoutMs, externalSignal, setTimerId) {
+    // Fast path: no constraints
+    if ((!timeoutMs || timeoutMs <= 0) && !externalSignal) {
+      return fn();
+    }
+
+    const promises = [fn()];
+    let timerId = null;
+
+    // Timeout guard
+    if (timeoutMs > 0) {
+      promises.push(new Promise((_, reject) => {
+        timerId = setTimeout(() => {
+          reject(new CircuitTimeoutError(this[kOpts].name, timeoutMs));
+        }, timeoutMs);
+        if (setTimerId) setTimerId(timerId);
+      }));
+    }
+
+    // External signal guard. Keep a reference to the listener so it can be
+    // detached in `finally`: with `{ once: true }` it only auto-removes if it
+    // fires, so when the race settles via fn()/timeout instead it would linger
+    // on a reused external signal, leaking one dead listener per call.
+    let onExternalAbort = null;
+    if (externalSignal) {
+      promises.push(new Promise((_, reject) => {
+        if (externalSignal.aborted) {
+          return reject(externalSignal.reason);
+        }
+        onExternalAbort = () => reject(externalSignal.reason);
+        externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+      }));
+    }
+
+    try {
+      return await Promise.race(promises);
+    } finally {
+      if (timerId) clearTimeout(timerId);
+      if (onExternalAbort && externalSignal) {
+        try { externalSignal.removeEventListener('abort', onExternalAbort); } catch { /* ignore */ }
+      }
+    }
+  }
+}
+
+// ── Exports ────────────────────────────────────────────────────────────────
+module.exports = {
+  CircuitBreaker,
+  CircuitOpenError,
+  CircuitTimeoutError,
+  STATE,
+};

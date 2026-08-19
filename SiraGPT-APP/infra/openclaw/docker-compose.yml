@@ -1,0 +1,16 @@
+services:
+  openclaw:
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+    environment:
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      SIRAGPT_INTERNAL_API_URL: ${SIRAGPT_INTERNAL_API_URL:-http://siragpt-backend:5000}
+      SIRAGPT_INTERNAL_API_KEY: ${SIRAGPT_INTERNAL_API_KEY}
+      OPENCLAW_CHANNELS: ${OPENCLAW_CHANNELS:-whatsapp,telegram,slack,discord,signal,imessage}
+    ports:
+      - "${OPENCLAW_PORT:-8787}:8787"
+    volumes:
+      - openclaw-data:/data
+
+volumes:
+  openclaw-data:

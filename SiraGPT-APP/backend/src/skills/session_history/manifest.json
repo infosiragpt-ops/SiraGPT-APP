@@ -1,0 +1,24 @@
+{
+  "id": "session_history",
+  "name": "Read chat history",
+  "version": "1.0.0",
+  "description": "Fetch the most recent messages from a specific chat session. Use to recall what was discussed in a prior thread before answering a new question.",
+  "capabilities": ["agent:read"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "sessionId": {
+        "type": "string",
+        "description": "Chat id, from session_list."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 50,
+        "description": "How many messages to return, most recent first. Default 20."
+      }
+    },
+    "required": ["sessionId"],
+    "additionalProperties": false
+  }
+}

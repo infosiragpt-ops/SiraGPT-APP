@@ -1,0 +1,1033 @@
+"use client"
+
+import * as React from "react"
+import { useState, useEffect, useCallback } from "react"
+import { useRouter } from "next/navigation"
+import { useSearchParams } from "next/navigation"
+import {
+  ArrowLeft,
+  Bot,
+  Save,
+  Eye,
+  Upload,
+  X,
+  Plus,
+  Trash2,
+  Wand2,
+  Settings,
+  MessageSquare,
+  Globe,
+  Database,
+  ImageIcon,
+  Code,
+  Sparkles,
+  BookOpen,
+  Briefcase,
+  Palette,
+  Search,
+  Users,
+  Heart,
+  Gamepad2,
+  TrendingUp,
+  Star} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Switch } from "@/components/ui/switch"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Slider } from "@/components/ui/slider"
+import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useAuth } from "@/lib/auth-context-integrated"
+import { useChat } from "@/lib/chat-context-integrated"
+import { toast } from "sonner"
+import { gptsService, type CustomGPT } from "@/lib/gpts-service"
+import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+
+import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+// Categories - matching the GPTs page
+const categories = [
+  { name: "Writing", icon: <BookOpen className="w-4 h-4" /> },
+  { name: "Productivity", icon: <Briefcase className="w-4 h-4" /> },
+  { name: "Programming", icon: <Code className="w-4 h-4" /> },
+  { name: "Design", icon: <Palette className="w-4 h-4" /> },
+  { name: "DALL·E", icon: <ImageIcon className="w-4 h-4" /> },
+  { name: "Research & Analysis", icon: <Search className="w-4 h-4" /> },
+  { name: "Education", icon: <BookOpen className="w-4 h-4" /> },
+  { name: "Data Analysis", icon: <Users className="w-4 h-4" /> },
+  { name: "Lifestyle", icon: <Heart className="w-4 h-4" /> },
+  { name: "Entertainment", icon: <Gamepad2 className="w-4 h-4" /> },
+  { name: "Marketing", icon: <TrendingUp className="w-4 h-4" /> },
+  { name: "Finance", icon: <Users className="w-4 h-4" /> },
+  { name: "Health & Fitness", icon: <Heart className="w-4 h-4" /> },
+  { name: "Travel", icon: <Globe className="w-4 h-4" /> },
+  { name: "Other", icon: <Star className="w-4 h-4" /> },
+]
+
+interface GPTFormData {
+  name: string
+  description: string
+  iconFile: File | null
+  iconUrl: string | null
+  instructions: string
+  greetingMessage: string
+  modelName: string
+  temperature: number
+  maxTokens: number | null
+  conversationStarters: string[]
+  visibility: "PRIVATE" | "UNLISTED" | "PUBLIC"
+  category: string
+  actions: any[]
+  capabilities: {
+    webBrowsing: boolean
+    dataAnalysis: boolean
+    imageGeneration: boolean
+    codeInterpreter: boolean
+  }
+}
+
+export default function CreateGPTPage() {
+  const { user } = useAuth()
+  const { availableModels } = useChat()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const editId = searchParams.get('edit')
+  const categoryParam = searchParams.get('category')
+
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [isEditMode, setIsEditMode] = useState(false)
+
+  const [formData, setFormData] = useState<GPTFormData>({
+    name: "",
+    description: "",
+    iconFile: null,
+    iconUrl: null,
+    instructions: "",
+    greetingMessage: "",
+    modelName: "",
+    temperature: 0.7,
+    maxTokens: null,
+    conversationStarters: ["", ""],
+    visibility: "PRIVATE",
+    category: "",
+    actions: [],
+    capabilities: {
+      webBrowsing: false,
+      dataAnalysis: false,
+      imageGeneration: false,
+      codeInterpreter: false,
+    }
+  })
+
+  // Set default model when available models are loaded
+  useEffect(() => {
+    if (availableModels.length > 0 && !formData.modelName) {
+      // Prefer GPT-4o mini as default, fallback to first available
+      const defaultModel = availableModels.find(m => m.name === 'gpt-4o-mini') || availableModels[0]
+      setFormData(prev => ({ ...prev, modelName: defaultModel.name }))
+    }
+  }, [availableModels, formData.modelName])
+
+  // Load GPT data for editing
+  useEffect(() => {
+    if (editId) {
+      setIsEditMode(true)
+      loadGPTForEdit(editId)
+    }
+    // loadGPTForEdit is defined below in the component body, so adding
+    // it to deps would lint-loop. Intent: re-fetch only when the
+    // URL-bound editId changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editId])
+
+  useEffect(() => {
+    if (!editId && categoryParam && !formData.category) {
+      setFormData(prev => ({ ...prev, category: categoryParam }))
+    }
+  }, [categoryParam, editId, formData.category])
+
+  const loadGPTForEdit = async (gptId: string) => {
+    setIsLoading(true)
+    try {
+      const gpt = await gptsService.getGPT(gptId)
+
+      // Convert GPT data to form data
+      setFormData({
+        name: gpt.name,
+        description: gpt.description || "",
+        iconFile: null,
+        iconUrl: gpt.iconUrl || null,
+        instructions: gpt.instructions,
+        greetingMessage: gpt.greetingMessage || "",
+        modelName: gpt.modelName,
+        temperature: gpt.temperature,
+        maxTokens: gpt.maxTokens || null,
+        conversationStarters: gpt.conversationStarters && gpt.conversationStarters.length > 0
+          ? [...gpt.conversationStarters, ...Array(2).fill("")].slice(0, 4)
+          : ["", ""],
+        visibility: gpt.visibility,
+        category: gpt.category || "",
+        actions: gpt.actions || [],
+        capabilities: {
+          webBrowsing: false,
+          dataAnalysis: false,
+          imageGeneration: false,
+          codeInterpreter: false,
+        }
+      })
+
+      // If existing GPT has an icon URL, show it as preview
+      if (gpt.iconUrl && (gpt.iconUrl.startsWith('http') || gpt.iconUrl.startsWith('https') || gpt.iconUrl.startsWith('data:'))) {
+        setUploadedImage(gpt.iconUrl)
+      }
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to load GPT')
+      router.push('/gpts')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleInputChange = (field: keyof GPTFormData, value: any) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }))
+  }
+
+  const handleConversationStarterChange = (index: number, value: string) => {
+    const newStarters = [...formData.conversationStarters]
+    newStarters[index] = value
+    setFormData(prev => ({
+      ...prev,
+      conversationStarters: newStarters
+    }))
+  }
+
+  const addConversationStarter = () => {
+    if (formData.conversationStarters.length < 4) {
+      setFormData(prev => ({
+        ...prev,
+        conversationStarters: [...prev.conversationStarters, ""]
+      }))
+    }
+  }
+
+  const removeConversationStarter = (index: number) => {
+    if (formData.conversationStarters.length > 1) {
+      const newStarters = formData.conversationStarters.filter((_, i) => i !== index)
+      setFormData(prev => ({
+        ...prev,
+        conversationStarters: newStarters
+      }))
+    }
+  }
+
+  const handleCapabilityChange = (capability: keyof GPTFormData['capabilities'], enabled: boolean) => {
+    setFormData(prev => ({
+      ...prev,
+      capabilities: {
+        ...prev.capabilities,
+        [capability]: enabled
+      }
+    }))
+  }
+
+  const validateForm = () => {
+    if (!formData.name.trim()) {
+      toast.error("Name is required")
+      return false
+    }
+    if (!formData.description.trim()) {
+      toast.error("Description is required")
+      return false
+    }
+    if (!formData.instructions.trim()) {
+      toast.error("Instructions are required")
+      return false
+    }
+    if (!formData.modelName) {
+      toast.error("Please select a model")
+      return false
+    }
+    return true
+  }
+
+  const handleSave = async () => {
+    if (!validateForm()) return
+
+    setIsSaving(true)
+    try {
+      // Normalize every free-text field before persistence. The
+      // instructions field in particular tends to be a long paste and
+      // benefits from the same zero-width / NUL / U+2028-9 strip the
+      // chat composer uses; toast on truncation so the user knows the
+      // saved GPT may have less detail than they pasted.
+      const normalizedInstr = normalizeChatInput(formData.instructions)
+      if (shouldWarnUser(normalizedInstr)) {
+        toast.error(
+          `Las instrucciones superan el límite (${normalizedInstr.originalLength.toLocaleString()} caracteres). Se recortaron.`,
+          { duration: 4500 },
+        )
+      }
+      const gptData = {
+        name: normalizeChatInput(formData.name).value.trim(),
+        description: normalizeChatInput(formData.description).value.trim(),
+        instructions: normalizedInstr.value.trim(),
+        greetingMessage: normalizeChatInput(formData.greetingMessage).value.trim() || undefined,
+        modelName: formData.modelName,
+        temperature: formData.temperature,
+        maxTokens: formData.maxTokens || undefined,
+        conversationStarters: formData.conversationStarters
+          .map(s => normalizeChatInput(s).value.trim())
+          .filter(s => s),
+        visibility: formData.visibility,
+        category: formData.category || undefined,
+        capabilities: formData.capabilities,
+        iconUrl: formData.iconUrl || undefined,
+        iconFile: formData.iconFile || undefined,
+      }
+
+      let result: CustomGPT
+
+      if (isEditMode && editId) {
+        result = await gptsService.updateGPT(editId, gptData)
+        toast.success("GPT updated successfully!")
+      } else {
+        result = await gptsService.createGPT(gptData)
+        toast.success("GPT created successfully!")
+      }
+
+      router.push("/gpts")
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save GPT")
+    } finally {
+      setIsSaving(false)
+    }
+  }
+  interface Template {
+    tone: string;
+    text: string;
+  }
+  interface Context {
+    tone: "technical" | "creative" | "professional" | "conversational" | "general";
+    domain: string;
+  }
+  // const generateInstructions = () => {
+  //   if (!formData.name || !formData.description) {
+  //     toast.error("Please fill in name and description first")
+  //     return
+  //   }
+
+  //   const suggestions = [
+  //     `You are ${formData.name}. ${formData.description}. Always be helpful, accurate, and engaging in your responses. Provide detailed explanations and practical advice when needed.`,
+  //     `As ${formData.name}, your primary goal is to help users with ${formData.description.toLowerCase()}. Provide detailed, actionable advice and be thorough in your explanations.`,
+  //     `You are an expert ${formData.name}. Your specialization is ${formData.description.toLowerCase()}. Be thorough, precise, and helpful in all your interactions. Always ask clarifying questions when needed.`
+  //   ]
+
+  //   const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)]
+  //   setFormData(prev => ({ ...prev, instructions: randomSuggestion }))
+  // }
+
+  // const generateGreeting = () => {
+  //   if (!formData.name || !formData.description) {
+  //     toast.error("Please fill in name and description first")
+  //     return
+  //   }
+
+  //   const greetings = [
+  //     `Hello! I'm ${formData.name}. I'm here to help you with ${formData.description.toLowerCase()}. What can I assist you with today?`,
+  //     `Hi there! I'm ${formData.name}, your assistant for ${formData.description.toLowerCase()}. How can I help you get started?`,
+  //     `Welcome! I'm ${formData.name} and I specialize in ${formData.description.toLowerCase()}. Feel free to ask me anything!`
+  //   ]
+
+  //   const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)]
+  //   setFormData(prev => ({ ...prev, greetingMessage: randomGreeting }))
+  // }
+
+  // Helper function to infer tone and context from description
+  const inferContext = (description: string): Context => {
+    const lowerDesc = description.toLowerCase();
+    if (lowerDesc.includes("technical") || lowerDesc.includes("programming") || lowerDesc.includes("coding")) {
+      return { tone: "technical", domain: "technical" };
+    } else if (lowerDesc.includes("creative") || lowerDesc.includes("writing") || lowerDesc.includes("design")) {
+      return { tone: "creative", domain: "creative" };
+    } else if (lowerDesc.includes("business") || lowerDesc.includes("marketing") || lowerDesc.includes("strategy")) {
+      return { tone: "professional", domain: "business" };
+    }
+    return { tone: "conversational", domain: "general" };
+  };
+
+  // Track used prompts to avoid repetition
+  let usedInstructions: string[] = [];
+  let usedGreetings: string[] = [];
+
+  const generateInstructions = (): void => {
+    if (!formData.name || !formData.description) {
+      toast.error("Please fill in name and description first");
+      return;
+    }
+
+    const { tone } = inferContext(formData.description);
+
+    // Reset usedInstructions if all templates are used
+    if (usedInstructions.length >= 5) {
+      usedInstructions = [];
+    }
+
+    const instructionTemplates: Template[] = [
+      {
+        tone: "technical",
+        text: `You are ${formData.name}, a highly skilled expert in ${formData.description.toLowerCase()}. Provide precise, accurate, and detailed technical guidance. Include code examples, step-by-step explanations, and best practices when relevant. Always clarify ambiguous queries with follow-up questions to ensure accuracy. Maintain a professional and approachable tone, and structure your responses for clarity and depth.`,
+      },
+      {
+        tone: "creative",
+        text: `You are ${formData.name}, a creative specialist in ${formData.description.toLowerCase()}. Offer imaginative, detailed, and inspiring advice tailored to the user's needs. Provide examples, spark ideas, and encourage creative exploration. Use a warm, engaging tone and ask clarifying questions to better understand the user's goals. Ensure responses are vivid, structured, and actionable.`,
+      },
+      {
+        tone: "professional",
+        text: `You are ${formData.name}, an expert in ${formData.description.toLowerCase()}. Deliver professional, concise, and actionable advice tailored to business contexts. Focus on strategic insights, practical solutions, and clear communication. Use a formal yet approachable tone, and proactively ask questions to refine your understanding of the user's objectives. Structure your responses for clarity and impact.`,
+      },
+      {
+        tone: "conversational",
+        text: `You are ${formData.name}, dedicated to assisting with ${formData.description.toLowerCase()}. Engage users with a friendly, approachable tone, providing clear, detailed, and practical advice. Break down complex topics into simple, actionable steps, and ask clarifying questions to ensure relevance. Organize your responses logically and anticipate follow-up needs to enhance user experience.`,
+      },
+      {
+        tone: "general",
+        text: `You are ${formData.name}, an expert assistant specializing in ${formData.description.toLowerCase()}. Your goal is to provide comprehensive, accurate, and engaging responses. Adapt your tone to the user's needs, offering detailed explanations, practical tips, and relevant examples. Ask clarifying questions when needed, and ensure your responses are well-structured, helpful, and user-focused.`,
+      },
+    ];
+
+    // Filter templates by tone or general, excluding used ones
+    const availableTemplates = instructionTemplates
+      .filter((t) => (t.tone === tone || t.tone === "general") && !usedInstructions.includes(t.text));
+
+    // Fallback to general tone if no specific templates remain
+    const finalTemplates = availableTemplates.length > 0
+      ? availableTemplates
+      : instructionTemplates.filter((t) => t.tone === "general" && !usedInstructions.includes(t.text));
+
+    if (finalTemplates.length === 0) {
+      usedInstructions = []; // Reset if all templates used
+      finalTemplates.push(...instructionTemplates.filter((t) => t.tone === "general"));
+    }
+
+    const selectedInstruction = finalTemplates[Math.floor(Math.random() * finalTemplates.length)].text;
+    usedInstructions.push(selectedInstruction);
+
+    setFormData((prev) => ({ ...prev, instructions: selectedInstruction }));
+  };
+
+  const generateGreeting = (): void => {
+    if (!formData.name || !formData.description) {
+      toast.error("Please fill in name and description first");
+      return;
+    }
+
+    const { tone } = inferContext(formData.description);
+
+    // Reset usedGreetings if all templates are used
+    if (usedGreetings.length >= 5) {
+      usedGreetings = [];
+    }
+
+    const greetingTemplates: Template[] = [
+      {
+        tone: "technical",
+        text: `Hello! I'm ${formData.name}, your go-to expert for ${formData.description.toLowerCase()}. I'm here to provide detailed technical guidance, code snippets, and best practices. What specific challenge or question can I help you with today?`,
+      },
+      {
+        tone: "creative",
+        text: `Hi there! I'm ${formData.name}, your creative partner for ${formData.description.toLowerCase()}. I'm excited to help spark ideas and guide you through your project. What's your next creative goal or question?`,
+      },
+      {
+        tone: "professional",
+        text: `Greetings! I'm ${formData.name}, specializing in ${formData.description.toLowerCase()}. I'm here to offer strategic insights and practical solutions for your business needs. How can I assist you today?`,
+      },
+      {
+        tone: "conversational",
+        text: `Hey there! I'm ${formData.name}, ready to help you with ${formData.description.toLowerCase()}. Whether it's a quick question or a deep dive, I'm here with clear, practical answers. What's on your mind?`,
+      },
+      {
+        tone: "general",
+        text: `Welcome! I'm ${formData.name}, your assistant for ${formData.description.toLowerCase()}. I'm here to provide detailed, friendly, and actionable help. What would you like to explore or learn about today?`,
+      },
+    ];
+
+    // Filter templates by tone or general, excluding used ones
+    const availableGreetings = greetingTemplates
+      .filter((t) => (t.tone === tone || t.tone === "general") && !usedGreetings.includes(t.text));
+
+    // Fallback to general tone if no specific templates remain
+    const finalGreetings = availableGreetings.length > 0
+      ? availableGreetings
+      : greetingTemplates.filter((t) => t.tone === "general" && !usedGreetings.includes(t.text));
+
+    if (finalGreetings.length === 0) {
+      usedGreetings = []; // Reset if all templates used
+      finalGreetings.push(...greetingTemplates.filter((t) => t.tone === "general"));
+    }
+
+    const selectedGreeting = finalGreetings[Math.floor(Math.random() * finalGreetings.length)].text;
+    usedGreetings.push(selectedGreeting);
+
+    setFormData((prev) => ({ ...prev, greetingMessage: selectedGreeting }));
+  };
+
+  const handleImageUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) { // 5MB limit
+        toast.error("Image size should be less than 5MB")
+        return
+      }
+
+      setFormData(prev => ({ ...prev, iconFile: file }))
+
+      const reader = new FileReader()
+      reader.onload = (e) => {
+        const result = e.target?.result as string
+        setUploadedImage(result)
+      }
+      reader.readAsDataURL(file)
+    }
+  }
+
+  const removeImage = () => {
+    setUploadedImage(null)
+    setFormData(prev => ({ ...prev, iconFile: null, iconUrl: null }))
+  }
+
+  const handleEmojiIcon = (emoji: string) => {
+    setFormData(prev => ({ ...prev, iconUrl: emoji }))
+    setUploadedImage(null) // Clear uploaded image if emoji is selected
+  }
+
+  const getNameInitial = () => {
+    return formData.name ? formData.name.charAt(0).toUpperCase() : "?"
+  }
+
+  const hasCustomIcon = () => {
+    return uploadedImage !== null || formData.iconUrl !== null
+  }
+
+  // Popular emoji options
+  const emojiOptions = ["🤖", "💡", "📝", "🎨", "💻", "📊", "🚀", "⚡", "🎯", "🔧", "📚", "🌟"]
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <ThinkingIndicator size="lg" className="mx-auto mb-4" />
+          <p className="text-muted-foreground">Loading GPT...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-full bg-background">
+      {/* Header */}
+      <div className="border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
+        <div className="w-full px-3 sm:px-4 lg:px-6 py-3 sm:py-4">
+          <div className="flex items-center justify-between gap-2 sm:gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+              <SidebarTrigger className="md:hidden" />
+              <Button variant="ghost" size="sm" onClick={() => router.back()} className="flex-shrink-0">
+                <ArrowLeft className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Back</span>
+              </Button>
+              <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+                <Bot className="h-5 w-5 sm:h-6 sm:w-6 text-primary flex-shrink-0" />
+                <h1 className="text-lg sm:text-xl lg:text-2xl font-bold truncate">
+                  {isEditMode ? 'Edit GPT' : 'Create GPT'}
+                </h1>
+              </div>
+            </div>
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsPreviewOpen(true)}
+                disabled={!formData.name}
+                className="h-8 sm:h-9 px-2 sm:px-3"
+              >
+                <Eye className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
+                <span className="hidden sm:inline">Preview</span>
+              </Button>
+              <Button
+                onClick={handleSave}
+                disabled={isSaving || !formData.name}
+                size="sm"
+                className="h-8 sm:h-9 px-2 sm:px-3 text-xs sm:text-sm"
+              >
+                {isSaving ? "Saving..." : isEditMode ? "Update" : "Create"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="w-full px-3 sm:px-4 lg:px-6 py-4 sm:py-6">
+        <div className="max-w-4xl mx-auto space-y-6 sm:space-y-8">
+
+          {/* Basic Information Section */}
+          <Card>
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <Bot className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Basic Information</span>
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                Define the basic properties of your GPT
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
+              {/* Avatar Selection */}
+              <div className="space-y-3 sm:space-y-4">
+                <Label className="text-sm sm:text-base">Avatar</Label>
+
+                {/* Avatar Preview */}
+                <div className="flex flex-col sm:flex-row items-start gap-4 sm:gap-6">
+                  <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl flex items-center justify-center text-2xl sm:text-3xl font-bold shadow-lg overflow-hidden flex-shrink-0">
+                    {uploadedImage ? (
+                      <>
+                        <img
+                          src={uploadedImage}
+                          alt="Avatar"
+                          className="w-full h-full object-cover"
+                        />
+                        <button
+                          onClick={removeImage}
+                          className="absolute -top-1 -right-1 w-4 h-4 sm:w-5 sm:h-5 bg-red-500 text-white rounded-full flex items-center justify-center text-xs hover:bg-red-600"
+                        >
+                          <X className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
+                        </button>
+                      </>
+                    ) : formData.iconUrl ? (
+                      <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
+                        {formData.iconUrl}
+                      </div>
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
+                        {getNameInitial()}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1 space-y-3 w-full">
+                    {/* Emoji Options */}
+                    <div>
+                      <Label className="text-xs sm:text-sm">Quick Icons</Label>
+                      <div className="flex flex-wrap gap-1.5 sm:gap-2 mt-2">
+                        {emojiOptions.map((emoji) => (
+                          <button
+                            key={emoji}
+                            onClick={() => handleEmojiIcon(emoji)}
+                            className={`w-7 h-7 sm:w-8 sm:h-8 rounded-lg border-2 flex items-center justify-center text-base sm:text-lg hover:border-primary transition-colors ${formData.iconUrl === emoji ? 'border-primary bg-primary/10' : 'border-border'
+                              }`}
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Upload Image Button */}
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" asChild>
+                        <label htmlFor="icon-upload" className="cursor-pointer">
+                          <Upload className="h-4 w-4 mr-2" />
+                          Upload Image
+                        </label>
+                      </Button>
+                      <input
+                        id="icon-upload"
+                        type="file"
+                        accept="image/*"
+                        onChange={handleImageUpload}
+                        className="hidden"
+                      />
+                      {hasCustomIcon() && (
+                        <Button variant="outline" size="sm" onClick={removeImage}>
+                          Remove
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Choose an emoji, upload an image, or use the first letter of your GPT's name
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Name */}
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-sm sm:text-base">Name *</Label>
+                <Input
+                  id="name"
+                  placeholder="e.g., Code Reviewer, Creative Writer"
+                  value={formData.name}
+                  onChange={(e) => handleInputChange("name", e.target.value)}
+                  maxLength={100}
+                  className="text-sm sm:text-base"
+                />
+                <div className="text-xs text-muted-foreground">
+                  {formData.name.length}/100 characters
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="space-y-2">
+                <Label htmlFor="description" className="text-sm sm:text-base">Description *</Label>
+                <Textarea
+                  id="description"
+                  placeholder="Describe what your GPT does and how it helps users. Be specific about its capabilities and use cases."
+                  value={formData.description}
+                  onChange={(e) => handleInputChange("description", e.target.value)}
+                  maxLength={500}
+                  rows={3}
+                  className="text-sm sm:text-base resize-none"
+                />
+                <div className="text-xs text-muted-foreground">
+                  {formData.description.length}/500 characters
+                </div>
+              </div>
+
+              {/* Category */}
+              <div className="space-y-2">
+                <Label htmlFor="category" className="text-sm sm:text-base">Category</Label>
+                <Select value={formData.category} onValueChange={(value) => handleInputChange("category", value)}>
+                  <SelectTrigger className="text-sm sm:text-base">
+                    <SelectValue placeholder="Select a category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem key={category.name} value={category.name}>
+                        <div className="flex items-center gap-2">
+                          {category.icon}
+                          <span className="text-sm sm:text-base">{category.name}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Conversation Starters */}
+              {/* <div className="space-y-2">
+                <Label>Conversation Starters</Label>
+                <p className="text-sm text-muted-foreground">
+                  Provide example prompts to help users get started with your GPT
+                </p>
+                <div className="space-y-2">
+                  {formData.conversationStarters.map((starter, index) => (
+                    <div key={index} className="flex gap-2">
+                      <Input
+                        placeholder={`Example: "Help me write a professional email" or "Analyze this data set"`}
+                        value={starter}
+                        onChange={(e) => handleConversationStarterChange(index, e.target.value)}
+                        maxLength={200}
+                      />
+                      {formData.conversationStarters.length > 2 && (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => removeConversationStarter(index)}
+                          className="shrink-0"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  {formData.conversationStarters.length < 4 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={addConversationStarter}
+                      className="w-full"
+                    >
+                      <Plus className="h-4 w-4 mr-2" />
+                      Add Conversation Starter
+                    </Button>
+                  )}
+                </div>
+              </div> */}
+            </CardContent>
+          </Card>
+
+          {/* Behavior Configuration Section */}
+          <Card>
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <MessageSquare className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Behavior Configuration</span>
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                Define how your GPT should behave and respond to users
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
+              {/* Instructions */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="instructions">Instructions *</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={generateInstructions}
+                    disabled={!formData.name || !formData.description}
+                  >
+                    <Wand2 className="h-4 w-4 mr-2" />
+                    Generate
+                  </Button>
+                </div>
+                <Textarea
+                  id="instructions"
+                  placeholder="Provide detailed instructions for how your GPT should behave, respond, and interact with users. Include its personality, expertise level, response style, and any specific guidelines."
+                  value={formData.instructions}
+                  onChange={(e) => handleInputChange("instructions", e.target.value)}
+                  rows={8}
+                  maxLength={50000}
+                />
+                <div className="text-xs text-muted-foreground">
+                  {formData.instructions.length}/50000 characters
+                </div>
+              </div>
+
+              {/* Greeting Message */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="greeting">Greeting Message</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={generateGreeting}
+                    disabled={!formData.name || !formData.description}
+                  >
+                    <Wand2 className="h-4 w-4 mr-2" />
+                    Generate
+                  </Button>
+                </div>
+                <Textarea
+                  id="greeting"
+                  placeholder="The first message your GPT will send to users when they start a conversation"
+                  value={formData.greetingMessage}
+                  onChange={(e) => handleInputChange("greetingMessage", e.target.value)}
+                  rows={4}
+                  maxLength={1000}
+                />
+                <div className="text-xs text-muted-foreground">
+                  {formData.greetingMessage.length}/1000 characters
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Model Settings Section */}
+          <Card>
+            <CardHeader className="pb-4 sm:pb-6">
+              <CardTitle className="flex items-center gap-2 text-lg sm:text-xl">
+                <Settings className="h-4 w-4 sm:h-5 sm:w-5 flex-shrink-0" />
+                <span>Model & Visibility Settings</span>
+              </CardTitle>
+              <CardDescription className="text-xs sm:text-sm">
+                Configure the AI model and who can access your GPT
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 sm:space-y-6 pt-0">
+              {/* Model Selection */}
+              <div className="space-y-2">
+                <Label className="text-sm sm:text-base">AI Model *</Label>
+                <Select value={formData.modelName} onValueChange={(value) => handleInputChange("modelName", value)}>
+                  <SelectTrigger className="text-sm sm:text-base">
+                    <SelectValue placeholder="Select a model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((model) => (
+                      <SelectItem key={model.name} value={model.name}>
+                        <div className="flex flex-col">
+                          <span className="font-medium text-sm sm:text-base">{model.displayName || model.name}</span>
+                          {model.description && (
+                            <span className="text-xs text-muted-foreground">{model.description}</span>
+                          )}
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {availableModels.length === 0 && (
+                  <p className="text-xs text-muted-foreground">Loading available models...</p>
+                )}
+              </div>
+
+              {/* Temperature - Commented out for now */}
+              {/* <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label>Creativity Level (Temperature)</Label>
+                  <span className="text-sm text-muted-foreground">{formData.temperature}</span>
+                </div>
+                <Slider
+                  value={[formData.temperature]}
+                  onValueChange={(value) => handleInputChange("temperature", value[0])}
+                  max={2}
+                  min={0}
+                  step={0.1}
+                  className="w-full"
+                />
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>More Focused</span>
+                  <span>More Creative</span>
+                </div>
+              </div> */}
+
+              {/* Visibility */}
+              <div className="space-y-2">
+                <Label className="text-sm sm:text-base">Visibility</Label>
+                <Select value={formData.visibility} onValueChange={(value) => handleInputChange("visibility", value as "PRIVATE" | "UNLISTED" | "PUBLIC")}>
+                  <SelectTrigger className="text-sm sm:text-base">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="PRIVATE">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></div>
+                        <div>
+                          <div className="font-medium text-sm sm:text-base">Private</div>
+                          <div className="text-xs text-muted-foreground">Only you can access</div>
+                        </div>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="UNLISTED">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-yellow-500 rounded-full flex-shrink-0"></div>
+                        <div>
+                          <div className="font-medium text-sm sm:text-base">Unlisted</div>
+                          <div className="text-xs text-muted-foreground">Accessible via link only</div>
+                        </div>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="PUBLIC">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-green-500 rounded-full flex-shrink-0"></div>
+                        <div>
+                          <div className="font-medium text-sm sm:text-base">Public</div>
+                          <div className="text-xs text-muted-foreground">Anyone can discover and use</div>
+                        </div>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+        </div>
+      </div>
+
+      {/* Preview Dialog */}
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent className="max-w-2xl mx-auto p-4 sm:p-6">
+          <DialogHeader className="pb-4">
+            <DialogTitle className="text-lg sm:text-xl">GPT Preview</DialogTitle>
+            <DialogDescription className="text-sm">
+              Preview how your GPT will appear to users in the store
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            {/* GPT Card Preview */}
+            <div className="bg-white dark:bg-card rounded-lg p-3 sm:p-4 md:p-6 border border-border">
+              <div className="flex items-start space-x-3 sm:space-x-4">
+                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-lg sm:text-xl font-bold overflow-hidden flex-shrink-0">
+                  {uploadedImage ? (
+                    <img
+                      src={uploadedImage}
+                      alt="Avatar"
+                      className="w-full h-full object-cover rounded-full"
+                    />
+                  ) : formData.iconUrl ? (
+                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                      {formData.iconUrl}
+                    </div>
+                  ) : (
+                    <div className="w-full h-full bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center text-white">
+                      {getNameInitial()}
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-foreground mb-1 text-sm sm:text-base truncate">
+                    {formData.name || "Untitled GPT"}
+                  </h3>
+                  <p className="text-muted-foreground text-xs sm:text-sm mb-2 line-clamp-2">
+                    {formData.description || "No description"}
+                  </p>
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div className="flex items-center flex-wrap gap-2 sm:gap-4 text-xs text-muted-foreground">
+                      <span className="truncate">By {user?.name || 'You'}</span>
+                      <div className="flex items-center space-x-1 flex-shrink-0">
+                        <Star className="w-3 h-3 fill-yellow-400 text-yellow-400" />
+                        <span>New</span>
+                      </div>
+                    </div>
+                    <Button size="sm" className="px-2 sm:px-3 py-1 text-xs self-start sm:self-auto">
+                      Chat
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {formData.category && (
+                <Badge variant="outline" className="mt-3 text-xs">
+                  {formData.category}
+                </Badge>
+              )}
+            </div>
+
+            {/* Greeting Preview */}
+            {formData.greetingMessage && (
+              <Card>
+                <CardContent className="pt-4">
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-sm">
+                      {formData.iconUrl || getNameInitial()}
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm">{formData.greetingMessage}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Conversation Starters Preview */}
+            {/* {formData.conversationStarters.filter(s => s.trim()).length > 0 && (
+              <div>
+                <h4 className="font-medium mb-2 text-sm">Conversation Starters</h4>
+                <div className="space-y-2">
+                  {formData.conversationStarters.filter(s => s.trim()).map((starter, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      className="w-full justify-start text-left h-auto py-2 px-3 text-sm"
+                    >
+                      {starter}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )} */}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

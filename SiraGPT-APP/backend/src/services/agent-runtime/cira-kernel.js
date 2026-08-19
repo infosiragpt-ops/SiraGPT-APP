@@ -1,0 +1,247 @@
+"use strict";
+
+const { createTrace } = require("./tracing");
+const { runnable, sequence } = require("./runnable");
+const { buildContentBlocks, summarizeContentBlocks } = require("./content-blocks");
+const { validateJsonSchema } = require("./parsers");
+const { createDefaultRuntimeMiddleware, runMiddleware } = require("./middleware");
+
+function createCiraKernel({ validateEnvelope, registry = null, middleware = null, runtimeOptions = {} } = {}) {
+  const runtimeMiddleware = Array.isArray(middleware) ? middleware : createDefaultRuntimeMiddleware(runtimeOptions);
+
+  const contentStep = runnable("content_blocks.normalize", async (state, context) => {
+    const contentBlocks = buildContentBlocks({
+      text: state.text,
+      attachments: state.attachments,
+      history: state.history,
+    });
+    context.trace.emit("content_blocks.ready", summarizeContentBlocks(contentBlocks));
+    const next = { ...state, content_blocks: contentBlocks, content_summary: summarizeContentBlocks(contentBlocks) };
+    return runMiddleware("after_content", runtimeMiddleware, next, context);
+  });
+
+  const contractStep = runnable("contract.validate", async (state, context) => {
+    if (!state.envelope || typeof state.envelope !== "object") {
+      throw new Error("Cira kernel requires a Universal/Cira task envelope");
+    }
+    const validation = typeof validateEnvelope === "function"
+      ? validateEnvelope(state.envelope)
+      : { ok: true, errors: [] };
+    context.trace.emit("contract.validated", {
+      ok: validation.ok,
+      errors: validation.errors || [],
+      request_id: state.envelope.request_id,
+    });
+    if (!validation.ok) {
+      const err = new Error("Task envelope failed validation");
+      err.code = "contract_validation_failed";
+      err.validation = validation;
+      throw err;
+    }
+    return { ...state, contract_validation: validation };
+  });
+
+  const toolSelectionStep = runnable("tools.select_from_registry", async (state, context) => {
+    const requested = requestedTools(state.envelope);
+    const available = registry && typeof registry.list === "function"
+      ? new Set(registry.list().map((tool) => tool.name))
+      : null;
+    const selected = requested.map((tool) => {
+      const name = tool.tool_name || tool.name;
+      const descriptor = registry && typeof registry.get === "function" ? registry.get(name) : null;
+      return {
+        name,
+        reason: tool.reason || null,
+        priority: tool.priority || "normal",
+        required: tool.required !== false,
+        registered: available ? available.has(name) : true,
+        category: descriptor?.category || tool.tool_type || null,
+        riskLevel: descriptor?.riskLevel || tool.risk_level || "low",
+        permissionsRequired: descriptor?.permissionsRequired || permissionsFromToolRequest(tool),
+        requiresHumanConfirmation: Boolean(descriptor?.requiresHumanConfirmation || tool.requires_human_confirmation),
+        manifest: descriptor?.manifest ? pickToolManifest(descriptor.manifest) : null,
+      };
+    });
+    const missing = selected.filter((tool) => tool.required && !tool.registered).map((tool) => tool.name);
+    context.trace.emit("tools.selected", { count: selected.length, missing });
+    const next = { ...state, selected_tools: selected, missing_tools: missing };
+    return runMiddleware("after_tools", runtimeMiddleware, next, context);
+  });
+
+  const graphStep = runnable("execution_graph.materialize", async (state, context) => {
+    const graph = state.envelope.workflow_graph || {};
+    const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+    const edges = nodes.flatMap((node) => (node.depends_on || []).map((source) => ({ source, target: node.id })));
+    context.trace.emit("execution_graph.ready", {
+      node_count: nodes.length,
+      edge_count: edges.length,
+      execution_mode: graph.execution_mode || "unknown",
+    });
+    const next = {
+      ...state,
+      runtime_graph: {
+        graph_id: graph.graph_id || `${state.envelope.request_id}.graph`,
+        nodes,
+        edges,
+        execution_mode: graph.execution_mode || "durable_multi_step",
+        release_gate: graph.release_gate || state.envelope.final_answer_contract?.delivery_mode || null,
+      },
+    };
+    return runMiddleware("after_graph", runtimeMiddleware, next, context);
+  });
+
+  const releaseStep = runnable("release.preflight", async (state, context) => {
+    const middlewareState = await runMiddleware("before_release", runtimeMiddleware, state, context);
+    const output = middlewareState.envelope.output_contract?.primary_output || {};
+    const schemaValidation = validateJsonSchema(output, {
+      type: "object",
+      required: ["type", "format"],
+      properties: {
+        type: { type: "string" },
+        format: { type: "string" },
+      },
+    });
+    const violations = [];
+    if (!schemaValidation.ok) violations.push(...schemaValidation.errors);
+    if ((middlewareState.missing_tools || []).length > 0) {
+      violations.push({ code: "tool_missing_from_registry", tools: middlewareState.missing_tools });
+    }
+    for (const report of middlewareState.runtime_validation_reports || []) {
+      if (report.status === "failed" && report.severity === "error") {
+        violations.push({
+          code: report.code || "runtime_validation_failed",
+          stage: report.at_stage || report.stage || null,
+          validator: report.name,
+          message: report.message,
+          details: report.details || null,
+        });
+      }
+    }
+    const ready = violations.length === 0;
+    context.trace.emit("release.preflight", {
+      ready,
+      violations,
+      primary_output: output.format || null,
+    });
+    return {
+      ...middlewareState,
+      release_preflight: {
+        ready,
+        violations,
+        primary_output: output,
+        reports: middlewareState.runtime_validation_reports || [],
+      },
+    };
+  });
+
+  return sequence("cira.agentic_kernel", [
+    contentStep,
+    contractStep,
+    toolSelectionStep,
+    graphStep,
+    releaseStep,
+  ]);
+}
+
+async function runCiraAgentRuntime({
+  text,
+  attachments = [],
+  history = [],
+  envelope,
+  validateEnvelope,
+  registry = null,
+  middleware = null,
+  runtimeOptions = {},
+  metadata = {},
+} = {}) {
+  const trace = createTrace({
+    correlationId: envelope?.conversation_id || null,
+    metadata: {
+      request_id: envelope?.request_id || null,
+      ...metadata,
+    },
+  });
+  const kernel = createCiraKernel({ validateEnvelope, registry, middleware, runtimeOptions });
+  try {
+    const state = await kernel.invoke({ text, attachments, history, envelope }, { trace });
+    const finished = trace.finish(state.release_preflight.ready ? "completed" : "blocked", {
+      request_id: envelope.request_id,
+      ready: state.release_preflight.ready,
+    });
+    return shapeRuntimeResult(state, finished);
+  } catch (err) {
+    const finished = trace.finish("failed", {
+      request_id: envelope?.request_id || null,
+      error: err && err.message ? err.message : String(err),
+      code: err && err.code ? err.code : "agent_runtime_error",
+    });
+    return {
+      ok: false,
+      status: "failed",
+      error: {
+        code: err && err.code ? err.code : "agent_runtime_error",
+        message: err && err.message ? err.message : String(err),
+      },
+      trace: finished,
+      trace_events: finished.events,
+    };
+  }
+}
+
+function shapeRuntimeResult(state, trace) {
+  return Object.freeze({
+    ok: true,
+    status: state.release_preflight.ready ? "ready" : "blocked",
+    run_id: trace.run_id,
+    content_blocks: state.content_blocks,
+    content_summary: state.content_summary,
+    selected_tools: state.selected_tools,
+    tool_policy: state.tool_policy || null,
+    policy_blocked_tools: state.policy_blocked_tools || [],
+    runtime_graph: state.runtime_graph,
+    runtime_validation_reports: state.runtime_validation_reports || [],
+    format_sovereignty: state.format_sovereignty || null,
+    release_preflight: state.release_preflight,
+    trace,
+    trace_events: trace.events,
+  });
+}
+
+function requestedTools(envelope) {
+  const plan = envelope?.tool_plan || {};
+  const required = Array.isArray(plan.required_tools) ? plan.required_tools : [];
+  const optional = Array.isArray(plan.optional_tools) ? plan.optional_tools : [];
+  return [
+    ...required.map((tool) => normalizeToolRequest(tool, true)),
+    ...optional.map((tool) => normalizeToolRequest(tool, false)),
+  ].filter(Boolean);
+}
+
+function normalizeToolRequest(tool, required) {
+  if (!tool) return null;
+  if (typeof tool === "string") return { tool_name: tool, required };
+  return { ...tool, required };
+}
+
+function permissionsFromToolRequest(tool = {}) {
+  const raw = tool.permissionsRequired || tool.permissions_required || tool.permission_required;
+  if (!raw || raw === "registered_scope") return [];
+  return Array.isArray(raw) ? raw : [raw];
+}
+
+function pickToolManifest(manifest = {}) {
+  return {
+    sideEffectLevel: manifest.sideEffectLevel || "none",
+    sandboxRequired: Boolean(manifest.sandboxRequired),
+    requiresConfirmation: Boolean(manifest.requiresConfirmation),
+    auditPolicy: manifest.auditPolicy || null,
+    scopes: Array.isArray(manifest.scopes) ? manifest.scopes : [],
+    allowedFormats: Array.isArray(manifest.allowedFormats) ? manifest.allowedFormats : [],
+    forbiddenFormats: Array.isArray(manifest.forbiddenFormats) ? manifest.forbiddenFormats : [],
+  };
+}
+
+module.exports = {
+  createCiraKernel,
+  runCiraAgentRuntime,
+};

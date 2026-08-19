@@ -1,0 +1,144 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const http = require('node:http');
+const { PassThrough, Writable } = require('node:stream');
+const request = require('supertest');
+
+const { buildRouteTestApp, mockResolvedModule, reloadModule } = require('./http-test-utils');
+
+test('code runner proxy allows same-origin iframe even when auth rejects', async () => {
+  const keys = ['CORS_ORIGINS', 'FRONTEND_URL', 'PUBLIC_FRONTEND_URL', 'NEXT_PUBLIC_URL'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  keys.forEach((key) => delete process.env[key]);
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app).get('/api/code-runner/run-1/proxy/');
+
+    assert.equal(res.status, 401);
+    assert.equal(res.headers['x-frame-options'], 'SAMEORIGIN');
+    assert.equal(res.headers['content-security-policy'], "frame-ancestors 'self'");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('code runner frame policy allows the approved parent, not the child or an evil origin', async () => {
+  const previousChild = process.env.CODEX_PREVIEW_ORIGIN;
+  const previousParents = process.env.CORS_ORIGINS;
+  process.env.CODEX_PREVIEW_ORIGIN = 'https://preview.example.com/';
+  process.env.CORS_ORIGINS = 'https://app.example.com';
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app).get('/api/code-runner/run-1/proxy/');
+    assert.equal(res.status, 401);
+    assert.equal(res.headers['x-frame-options'], undefined);
+    assert.match(res.headers['content-security-policy'], /https:\/\/app\.example\.com/);
+    assert.doesNotMatch(res.headers['content-security-policy'], /preview\.example\.com|evil\.example\.com/);
+  } finally {
+    if (previousChild === undefined) delete process.env.CODEX_PREVIEW_ORIGIN;
+    else process.env.CODEX_PREVIEW_ORIGIN = previousChild;
+    if (previousParents === undefined) delete process.env.CORS_ORIGINS;
+    else process.env.CORS_ORIGINS = previousParents;
+  }
+});
+
+
+test('token app proxy forwards the full Vite base path upstream', async () => {
+  const hostRunnerPath = require.resolve('../src/services/code/host-runner');
+  const restoreHostRunner = mockResolvedModule(hostRunnerPath, {
+    enabled: () => true,
+    startAllowed: () => true,
+    getRunForProxy: () => ({ port: 43123 }),
+    getStatus: () => null,
+    stopRun: () => {},
+  });
+
+  const originalRequest = http.request;
+  let upstreamOptions = null;
+  http.request = (...args) => {
+    const [options, callback] = args;
+    if (options && options.hostname === '127.0.0.1' && Number(options.port) === 43123) {
+      upstreamOptions = options;
+      const upstream = new PassThrough();
+      upstream.statusCode = 200;
+      upstream.headers = { 'content-type': 'text/javascript' };
+      process.nextTick(() => {
+        callback(upstream);
+        upstream.end('ok');
+      });
+      return new Writable({ write(_chunk, _encoding, done) { done(); } });
+    }
+    return originalRequest.apply(http, args);
+  };
+
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app)
+      .get('/api/code-runner/run-1/abcdef1234/app/@vite/client?direct=1&__sgpt_preview_nonce=nonce-for-tests-1234')
+      .set('Origin', 'null');
+
+    assert.equal(res.status, 200);
+    assert.equal(upstreamOptions.path, '/api/code-runner/run-1/abcdef1234/app/@vite/client?direct=1');
+    assert.equal(upstreamOptions.port, 43123);
+  } finally {
+    http.request = originalRequest;
+    restoreHostRunner();
+  }
+});
+
+test('token app proxy injects the visual selector bridge into HTML responses', async () => {
+  const hostRunnerPath = require.resolve('../src/services/code/host-runner');
+  const restoreHostRunner = mockResolvedModule(hostRunnerPath, {
+    enabled: () => true,
+    startAllowed: () => true,
+    getRunForProxy: () => ({ port: 43124 }),
+    getStatus: () => null,
+    stopRun: () => {},
+  });
+
+  const originalRequest = http.request;
+  let upstreamOptions = null;
+  http.request = (...args) => {
+    const [options, callback] = args;
+    if (options && options.hostname === '127.0.0.1' && Number(options.port) === 43124) {
+      upstreamOptions = options;
+      const upstream = new PassThrough();
+      upstream.statusCode = 200;
+      upstream.headers = {
+        'content-type': 'text/html; charset=utf-8',
+        'content-length': '43',
+      };
+      process.nextTick(() => {
+        callback(upstream);
+        upstream.end('<html><head></head><body><h1>Hola</h1></body></html>');
+      });
+      return new Writable({ write(_chunk, _encoding, done) { done(); } });
+    }
+    return originalRequest.apply(http, args);
+  };
+
+  try {
+    const app = buildRouteTestApp('/api/code-runner', reloadModule('../src/routes/code-runner'));
+    const res = await request(app)
+      .get('/api/code-runner/run-1/abcdef1234/app/?__sgpt_preview_nonce=nonce-for-tests-1234')
+      .set('Accept-Encoding', 'gzip, br');
+
+    assert.equal(res.status, 200);
+    assert.match(res.text, /__sgptPreviewSelectorBridge/);
+    assert.match(res.text, /sgpt-preview-select-start/);
+    assert.match(res.text, /sgpt-preview-selection-ready/);
+    assert.match(res.text, /pointerdown/);
+    assert.match(res.text, /selectionMethod: 'dom'/);
+    assert.match(res.text, /nonce-for-tests-1234/);
+    assert.ok(Number(res.headers['content-length']) > 43);
+    assert.equal(upstreamOptions.headers['accept-encoding'], undefined);
+  } finally {
+    http.request = originalRequest;
+    restoreHostRunner();
+  }
+});

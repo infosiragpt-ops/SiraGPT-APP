@@ -1,0 +1,405 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Docker Compose (Development & Production)
+# ──────────────────────────────────────────────────────────────
+# Uso:
+#   cp .env.example .env   # edita con tus API keys
+#   docker compose up -d
+#   # Frontend: http://localhost:3000
+#   # Backend:  http://localhost:5000
+#
+# Variables requeridas (sin default seguro):
+#   JWT_SECRET       — cadena aleatoria de al menos 32 caracteres
+#   SESSION_SECRET   — cadena aleatoria de al menos 32 caracteres
+#
+# Variables recomendadas (sin default):
+#   OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, GROQ_API_KEY ...
+# ──────────────────────────────────────────────────────────────
+
+services:
+  # ── Database ──────────────────────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-siragpt}
+    ports:
+      - "${POSTGRES_PORT_EXTERNAL:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-siragpt}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Cache ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    ports:
+      - "${REDIS_PORT_EXTERNAL:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Backend (Express + Prisma) ────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Backend owns a 30s shutdown deadline; Compose leaves 5s for process exit
+    # while remaining below the single-container parent's 40s minimum budget.
+    stop_grace_period: 35s
+    # Apply pending Prisma migrations on boot, then start the server. Without
+    # this the DB drifts behind the image's schema (e.g. a missing projects.type
+    # column → 500s). Set SKIP_MIGRATIONS=1 to bypass during local iteration.
+    command: ["node", "scripts/start-with-migrations.js"]
+    ports:
+      - "${BACKEND_PORT_EXTERNAL:-5000}:5000"
+    environment:
+      PORT: 5000
+      NODE_ENV: ${NODE_ENV:-production}
+      # Production must enforce declarative RBAC; set shadow explicitly only
+      # for a monitored compatibility rollout.
+      RBAC_ENFORCEMENT_MODE: "${RBAC_ENFORCEMENT_MODE:-enforce}"
+      RBAC_CACHE_TTL_MS: "${RBAC_CACHE_TTL_MS:-60000}"
+      RBAC_MUTATION_LOCK_TIMEOUT_MS: "${RBAC_MUTATION_LOCK_TIMEOUT_MS:-500}"
+      RBAC_REDIS_CONNECT_TIMEOUT_MS: "${RBAC_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      RBAC_REDIS_STARTUP_TIMEOUT_MS: "${RBAC_REDIS_STARTUP_TIMEOUT_MS:-500}"
+      RBAC_REDIS_COMMAND_TIMEOUT_MS: "${RBAC_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      AUTH_USER_LOCK_TIMEOUT_MS: "${AUTH_USER_LOCK_TIMEOUT_MS:-500}"
+      AUTH_REVOCATION_REDIS_CONNECT_TIMEOUT_MS: "${AUTH_REVOCATION_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      AUTH_REVOCATION_REDIS_COMMAND_TIMEOUT_MS: "${AUTH_REVOCATION_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS: "${AUTH_SOCKET_REVALIDATION_CACHE_TTL_MS:-5000}"
+      AUTH_SOCKET_REVALIDATION_TIMEOUT_MS: "${AUTH_SOCKET_REVALIDATION_TIMEOUT_MS:-2000}"
+      AUTH_SOCKET_REVALIDATION_CACHE_MAX: "${AUTH_SOCKET_REVALIDATION_CACHE_MAX:-2000}"
+      # External MCP endpoints are HTTPS-only in production. HTTP is available
+      # only for explicit non-production loopback development.
+      SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
+      SIRAGPT_MCP_ALLOW_HTTP: "${SIRAGPT_MCP_ALLOW_HTTP:-0}"
+      # Pass role URLs through without inventing a direct URL beside an explicit
+      # remote runtime. The pure resolver uses these POSTGRES_* values only when
+      # all three URL roles are absent.
+      PRISMA_DATABASE_URL: "${PRISMA_DATABASE_URL:-}"
+      DIRECT_DATABASE_URL: "${DIRECT_DATABASE_URL:-}"
+      DATABASE_URL: "${DATABASE_URL:-}"
+      DATABASE_SSL_REJECT_UNAUTHORIZED: "${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}"
+      DATABASE_SSL_CA: "${DATABASE_SSL_CA:-}"
+      DATABASE_SSL_CERT: "${DATABASE_SSL_CERT:-}"
+      DATABASE_SSL_KEY: "${DATABASE_SSL_KEY:-}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-db}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_DB: "${POSTGRES_DB:-siragpt}"
+      MIGRATION_COMMAND_TIMEOUT_MS: "${MIGRATION_COMMAND_TIMEOUT_MS:-300000}"
+      BOOT_COMMAND_TIMEOUT_MS: "${BOOT_COMMAND_TIMEOUT_MS:-5000}"
+      MIGRATION_DB_CONNECT_TIMEOUT_MS: "${MIGRATION_DB_CONNECT_TIMEOUT_MS:-10000}"
+      MIGRATION_DB_QUERY_TIMEOUT_MS: "${MIGRATION_DB_QUERY_TIMEOUT_MS:-15000}"
+      MIGRATION_DB_STATEMENT_TIMEOUT_MS: "${MIGRATION_DB_STATEMENT_TIMEOUT_MS:-15000}"
+      MIGRATION_LOCK_TIMEOUT_MS: "${MIGRATION_LOCK_TIMEOUT_MS:-120000}"
+      # Local normal boot may skip; release --migrate-only rejects this value.
+      SKIP_MIGRATIONS: "${SKIP_MIGRATIONS:-0}"
+      # Normal boot only; --migrate-only remains strict regardless.
+      MIGRATION_NONFATAL: "${MIGRATION_NONFATAL:-0}"
+      REDIS_URL: "redis://redis:6379"
+      # OAuth state + impersonation limits share Redis, use atomic Lua commands,
+      # disable offline queues, and fail closed under NODE_ENV=production.
+      SESSION_TOKEN_HASH_MODE: "${SESSION_TOKEN_HASH_MODE:-compat}"
+      SESSION_TOKEN_HASH_COMPAT_DRAINED: "${SESSION_TOKEN_HASH_COMPAT_DRAINED:-0}"
+      SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE: "${SESSION_TOKEN_HASH_BACKFILL_BATCH_SIZE:-100}"
+      SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES: "${SESSION_TOKEN_HASH_BACKFILL_MAX_BATCHES:-10}"
+      AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO: "${AUTH_SECURITY_REDIS_MAX_MEMORY_RATIO:-0.8}"
+      AUTH_SECURITY_READY_RETRY_BASE_MS: "${AUTH_SECURITY_READY_RETRY_BASE_MS:-250}"
+      AUTH_SECURITY_READY_RETRY_MAX_MS: "${AUTH_SECURITY_READY_RETRY_MAX_MS:-5000}"
+      OAUTH_STATE_TTL: "${OAUTH_STATE_TTL:-10m}"
+      OAUTH_STATE_RETRY_AFTER_SECONDS: "${OAUTH_STATE_RETRY_AFTER_SECONDS:-5}"
+      OAUTH_STATE_CACHE_MAX_ENTRIES: "${OAUTH_STATE_CACHE_MAX_ENTRIES:-10000}"
+      OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS: "${OAUTH_STATE_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS: "${OAUTH_STATE_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      OAUTH_STATE_REDIS_PREFIX: "${OAUTH_STATE_REDIS_PREFIX:-sira:oauth-state:}"
+      IMPERSONATION_TARGET_LIMIT: "${IMPERSONATION_TARGET_LIMIT:-3}"
+      IMPERSONATION_ADMIN_LIMIT: "${IMPERSONATION_ADMIN_LIMIT:-10}"
+      IMPERSONATION_WINDOW_MS: "${IMPERSONATION_WINDOW_MS:-3600000}"
+      IMPERSONATION_MEMORY_MAX_KEYS: "${IMPERSONATION_MEMORY_MAX_KEYS:-10000}"
+      IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS: "${IMPERSONATION_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS: "${IMPERSONATION_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      IMPERSONATION_REDIS_PREFIX: "${IMPERSONATION_REDIS_PREFIX:-sira:impersonation:}"
+      IMPERSONATION_STORE_RETRY_AFTER_SECONDS: "${IMPERSONATION_STORE_RETRY_AFTER_SECONDS:-5}"
+      # Sensitive auth/API-key/billing buckets are distributed and fail closed.
+      # Local non-Compose runs may explicitly select memory outside production.
+      RATE_LIMIT_STORE: "${RATE_LIMIT_STORE:-redis}"
+      RATE_LIMIT_SENSITIVE_POLICY: "${RATE_LIMIT_SENSITIVE_POLICY:-distributed}"
+      RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS: "${RATE_LIMIT_REDIS_COMMAND_TIMEOUT_MS:-1000}"
+      RATE_LIMIT_STORE_RETRY_AFTER_SECONDS: "${RATE_LIMIT_STORE_RETRY_AFTER_SECONDS:-5}"
+      # SP-initiated SAML request IDs + RelayState share Redis in Compose.
+      SAML_REQUEST_TTL_MS: "${SAML_REQUEST_TTL_MS:-300000}"
+      SAML_REQUEST_CACHE_MAX_ENTRIES: "${SAML_REQUEST_CACHE_MAX_ENTRIES:-5000}"
+      SAML_REDIS_CONNECT_TIMEOUT_MS: "${SAML_REDIS_CONNECT_TIMEOUT_MS:-500}"
+      SAML_REDIS_COMMAND_TIMEOUT_MS: "${SAML_REDIS_COMMAND_TIMEOUT_MS:-500}"
+      SAML_REDIS_RETRY_BASE_MS: "${SAML_REDIS_RETRY_BASE_MS:-100}"
+      SAML_REDIS_RETRY_MAX_MS: "${SAML_REDIS_RETRY_MAX_MS:-5000}"
+      SAML_REDIS_PREFIX: "${SAML_REDIS_PREFIX:-sira:saml:}"
+      SAML_RELAY_STATE_SECRET: "${SAML_RELAY_STATE_SECRET:-}"
+      SAML_ACS_BODY_LIMIT_BYTES: "${SAML_ACS_BODY_LIMIT_BYTES:-262144}"
+      SAML_ACS_RATE_LIMIT_MAX: "${SAML_ACS_RATE_LIMIT_MAX:-30}"
+      SAML_ACS_RATE_LIMIT_WINDOW_MS: "${SAML_ACS_RATE_LIMIT_WINDOW_MS:-60000}"
+      RATE_LIMIT_BILLING_CHECKOUT_MAX: "${RATE_LIMIT_BILLING_CHECKOUT_MAX:-10}"
+      RATE_LIMIT_BILLING_CHECKOUT_IP_MAX: "${RATE_LIMIT_BILLING_CHECKOUT_IP_MAX:-100}"
+      RATE_LIMIT_BILLING_VERIFY_MAX: "${RATE_LIMIT_BILLING_VERIFY_MAX:-20}"
+      RATE_LIMIT_BILLING_VERIFY_IP_MAX: "${RATE_LIMIT_BILLING_VERIFY_IP_MAX:-200}"
+      RATE_LIMIT_BILLING_PLAN_CHANGE_MAX: "${RATE_LIMIT_BILLING_PLAN_CHANGE_MAX:-5}"
+      RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX: "${RATE_LIMIT_BILLING_PLAN_CHANGE_IP_MAX:-50}"
+      RATE_LIMIT_BILLING_WINDOW_MS: "${RATE_LIMIT_BILLING_WINDOW_MS:-900000}"
+      RATE_LIMIT_BILLING_PLAN_WINDOW_MS: "${RATE_LIMIT_BILLING_PLAN_WINDOW_MS:-3600000}"
+      RATE_LIMIT_BILLING_REFUND_MAX: "${RATE_LIMIT_BILLING_REFUND_MAX:-5}"
+      RATE_LIMIT_BILLING_REFUND_IP_MAX: "${RATE_LIMIT_BILLING_REFUND_IP_MAX:-50}"
+      RATE_LIMIT_BILLING_REFUND_WINDOW_MS: "${RATE_LIMIT_BILLING_REFUND_WINDOW_MS:-3600000}"
+      SIRAGPT_API_KEY_AUDIT_COUNTER_MAX: "${SIRAGPT_API_KEY_AUDIT_COUNTER_MAX:-10000}"
+      # This Compose file exposes the backend directly. Ignore forwarded client
+      # IP headers unless the operator explicitly configures a real proxy hop.
+      TRUST_PROXY_HOPS: "${TRUST_PROXY_HOPS:-0}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000}"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:3000}"
+      JWT_SECRET: "${JWT_SECRET}"
+      SESSION_SECRET: "${SESSION_SECRET}"
+      CSRF_PEPPER: "${CSRF_PEPPER:-}"
+      ENCRYPTION_KEY: "${ENCRYPTION_KEY}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+      CEREBRAS_BASE_URL: "${CEREBRAS_BASE_URL:-https://api.cerebras.ai/v1}"
+      FREE_IA_MODEL_ID: "${FREE_IA_MODEL_ID:-gpt-oss-120b}"
+      FREE_IA_DISPLAY_NAME: "${FREE_IA_DISPLAY_NAME:-Free IA}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_AI_API_KEY: "${GOOGLE_AI_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      FAL_API_KEY: "${FAL_API_KEY:-}"
+      FAL_KEY: "${FAL_KEY:-}"
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID:-}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET:-}"
+      GOOGLE_AUTH_BASE_URL: "${GOOGLE_AUTH_BASE_URL:-}"
+      GOOGLE_AUTH_URI: "${GOOGLE_AUTH_URI:-}"
+      GOOGLE_REDIRECT_URI: "${GOOGLE_REDIRECT_URI:-}"
+      GOOGLE_REDIRECT_CALENDAR_DRIVE_URI: "${GOOGLE_REDIRECT_CALENDAR_DRIVE_URI:-}"
+      OAUTH_POST_CALLBACK_ALLOWED_ORIGINS: "${OAUTH_POST_CALLBACK_ALLOWED_ORIGINS:-}"
+      GITHUB_OAUTH_REDIRECT_URI: "${GITHUB_OAUTH_REDIRECT_URI:-}"
+      GITHUB_OAUTH_SUCCESS_REDIRECT: "${GITHUB_OAUTH_SUCCESS_REDIRECT:-}"
+      SPOTIFY_CLIENT_ID: "${SPOTIFY_CLIENT_ID:-}"
+      SPOTIFY_CLIENT_SECRET: "${SPOTIFY_CLIENT_SECRET:-}"
+      SPOTIFY_REDIRECT_URI: "${SPOTIFY_REDIRECT_URI:-}"
+      SPOTIFY_OAUTH_SUCCESS_REDIRECT: "${SPOTIFY_OAUTH_SUCCESS_REDIRECT:-}"
+      SPOTIFY_OAUTH_FAILURE_REDIRECT: "${SPOTIFY_OAUTH_FAILURE_REDIRECT:-}"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY:-}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET:-}"
+      STRIPE_WEBHOOK_RECOVERY_DISABLED: "${STRIPE_WEBHOOK_RECOVERY_DISABLED:-false}"
+      STRIPE_WEBHOOK_RECOVERY_INTERVAL_MS: "${STRIPE_WEBHOOK_RECOVERY_INTERVAL_MS:-60000}"
+      STRIPE_WEBHOOK_RECOVERY_BATCH_SIZE: "${STRIPE_WEBHOOK_RECOVERY_BATCH_SIZE:-25}"
+      STRIPE_WEBHOOK_RECOVERY_LEASE_MS: "${STRIPE_WEBHOOK_RECOVERY_LEASE_MS:-120000}"
+      STRIPE_WEBHOOK_RECOVERY_BACKOFF_BASE_MS: "${STRIPE_WEBHOOK_RECOVERY_BACKOFF_BASE_MS:-30000}"
+      STRIPE_WEBHOOK_RECOVERY_BACKOFF_MAX_MS: "${STRIPE_WEBHOOK_RECOVERY_BACKOFF_MAX_MS:-3600000}"
+      STRIPE_WEBHOOK_RECOVERY_MAX_ATTEMPTS: "${STRIPE_WEBHOOK_RECOVERY_MAX_ATTEMPTS:-8}"
+      PAYPAL_CLIENT_ID: "${PAYPAL_CLIENT_ID:-}"
+      PAYPAL_CLIENT_SECRET: "${PAYPAL_CLIENT_SECRET:-}"
+      MERCADOPAGO_ACCESS_TOKEN: "${MERCADOPAGO_ACCESS_TOKEN:-}"
+      SMTP_HOST: "${SMTP_HOST:-}"
+      SMTP_PORT: "${SMTP_PORT:-587}"
+      SMTP_USER: "${SMTP_USER:-}"
+      SMTP_PASS: "${SMTP_PASS:-}"
+      MAX_FILE_SIZE: "${MAX_FILE_SIZE:-50}"
+      MAX_UPLOAD_FILES: "${MAX_UPLOAD_FILES:-400}"
+      SIRAGPT_MAX_SIMULTANEOUS_DOCUMENTS: "${SIRAGPT_MAX_SIMULTANEOUS_DOCUMENTS:-400}"
+      UPLOAD_DIR: "/app/uploads"
+      # Operational health, queue probes, and metrics access.
+      INTERNAL_HEALTH_TOKEN: "${INTERNAL_HEALTH_TOKEN:-}"
+      INTERNAL_HEALTH_ALLOW_LOOPBACK: "${INTERNAL_HEALTH_ALLOW_LOOPBACK:-false}"
+      METRICS_TOKEN: "${METRICS_TOKEN:-}"
+      METRICS_ALLOW_LOOPBACK: "${METRICS_ALLOW_LOOPBACK:-false}"
+      HEALTH_CACHE_TTL_MS: "${HEALTH_CACHE_TTL_MS:-5000}"
+      HEALTH_DB_TIMEOUT_MS: "${HEALTH_DB_TIMEOUT_MS:-1500}"
+      HEALTH_REDIS_TIMEOUT_MS: "${HEALTH_REDIS_TIMEOUT_MS:-1000}"
+      HEALTH_PROBE_INTERVAL_MS: "${HEALTH_PROBE_INTERVAL_MS:-30000}"
+      HEALTH_PROVIDER_PROBES_ENABLED: "${HEALTH_PROVIDER_PROBES_ENABLED:-false}"
+      HEALTH_SCHEDULE_PROVIDER_PROBES: "${HEALTH_SCHEDULE_PROVIDER_PROBES:-false}"
+      HEALTH_QUEUE_PROBE_TIMEOUT_MS: "${HEALTH_QUEUE_PROBE_TIMEOUT_MS:-1500}"
+      HEALTH_QUEUE_PROBE_CACHE_TTL_MS: "${HEALTH_QUEUE_PROBE_CACHE_TTL_MS:-1000}"
+      HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS: "${HEALTH_QUEUE_METRICS_REFRESH_INTERVAL_MS:-30000}"
+      HEALTH_CRITICAL_QUEUES: "${HEALTH_CRITICAL_QUEUES:-}"
+      # Prisma v6 pool URL controls + advisory-only recommendation loop.
+      DATABASE_POOL_MIN: "${DATABASE_POOL_MIN:-2}"
+      DATABASE_POOL_MAX: "${DATABASE_POOL_MAX:-10}"
+      DATABASE_POOL_TIMEOUT_MS: "${DATABASE_POOL_TIMEOUT_MS:-10000}"
+      DATABASE_POOL_AUTOSCALE_ENABLED: "${DATABASE_POOL_AUTOSCALE_ENABLED:-false}"
+      DATABASE_POOL_AUTOSCALE_INTERVAL_MS: "${DATABASE_POOL_AUTOSCALE_INTERVAL_MS:-30000}"
+      DATABASE_POOL_AUTOSCALE_MIN: "${DATABASE_POOL_AUTOSCALE_MIN:-2}"
+      DATABASE_POOL_AUTOSCALE_MAX: "${DATABASE_POOL_AUTOSCALE_MAX:-50}"
+      DATABASE_POOL_AUTOSCALE_COLD_SAMPLES: "${DATABASE_POOL_AUTOSCALE_COLD_SAMPLES:-3}"
+      # OpenCode engine (sidecar) — empty by default; set to http://opencode:4096
+      # and run `docker compose --profile opencode up` to enable.
+      OPENCODE_SERVER_URL: "${OPENCODE_SERVER_URL:-}"
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Steer the engine to a funded provider/model (its anthropic default has no
+      # credit). Defaults to OpenRouter gpt-4o-mini (verified to write files).
+      OPENCODE_MODEL_PROVIDER: "${OPENCODE_MODEL_PROVIDER:-openrouter}"
+      OPENCODE_MODEL_ID: "${OPENCODE_MODEL_ID:-openai/gpt-4o-mini}"
+      # Codex Agent V2 — flag + runner endpoint. Flag off (default) keeps /code
+      # identical to today; the runner (perfil opencode) provisiona el workspace.
+      CODEX_AGENT_V2: "${CODEX_AGENT_V2:-}"
+      CODEX_IMPLEMENTER_ADAPTER: "${CODEX_IMPLEMENTER_ADAPTER:-native}"
+      CODE_RUNNER_URL: "${CODE_RUNNER_URL:-http://runner:4097}"
+      # Host-visible base dir the runner's /export bind-mount maps to (display
+      # only; shown to the user so they can find the mirrored project on disk).
+      CODEX_EXPORT_HOST_DIR: "${CODEX_EXPORT_HOST_DIR:-.codex-workspaces}"
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5000/health/live"]
+      interval: 15s
+      timeout: 5s
+      # Backend cold boot (Prisma migrate deploy + provider/plugin init) takes
+      # ~40s; a 20s grace period marked it unhealthy and blocked the frontend
+      # from starting. 75s leaves headroom on slower machines.
+      start_period: 75s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Frontend (Next.js) ────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_COMPOSER_MAX_FILES: "${NEXT_PUBLIC_COMPOSER_MAX_FILES:-400}"
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT_EXTERNAL:-3000}:3000"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      HOSTNAME: "0.0.0.0"
+      NEXT_PUBLIC_API_URL: "${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}"
+      NEXT_PUBLIC_URL: "${NEXT_PUBLIC_URL:-http://localhost:3000}"
+      NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-siraGPT}"
+      NEXT_PUBLIC_APP_DESCRIPTION: "${NEXT_PUBLIC_APP_DESCRIPTION:-Multi-LLM AI Platform}"
+      NEXT_PUBLIC_PAYPAL_CLIENT_ID: "${NEXT_PUBLIC_PAYPAL_CLIENT_ID:-}"
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:-}"
+      NEXT_PUBLIC_COMPOSER_MAX_FILES: "${NEXT_PUBLIC_COMPOSER_MAX_FILES:-400}"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── OpenCode engine (Bun sidecar) — opt-in via profile ─────
+  # Runs the vendored agent (vendor/opencode) as an HTTP server. Enable with:
+  #   docker compose --profile opencode up
+  # and set OPENCODE_SERVER_URL=http://opencode:4096 in your .env so the
+  # backend connects to it.
+  opencode:
+    image: oven/bun:1
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /workspace
+    # Run the published, self-contained CLI (the vendored source in
+    # vendor/opencode is kept for reference/modification, but its Bun
+    # workspace+catalog deps don't `bun install` standalone).
+    command: sh -c "bunx opencode-ai@latest serve --hostname 0.0.0.0 --port 4096 --print-logs"
+    environment:
+      OPENCODE_SERVER_PASSWORD: "${OPENCODE_SERVER_PASSWORD:-}"
+      # Provider keys — pass everything in .env so the engine can use any model.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_GENERATIVE_AI_API_KEY: "${GOOGLE_GENERATIVE_AI_API_KEY:-}"
+      GROQ_API_KEY: "${GROQ_API_KEY:-}"
+      MISTRAL_API_KEY: "${MISTRAL_API_KEY:-}"
+      DEEPSEEK_API_KEY: "${DEEPSEEK_API_KEY:-}"
+      XAI_API_KEY: "${XAI_API_KEY:-}"
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+    volumes:
+      - opencode_workspace:/workspace
+    expose:
+      - "4096"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Code runner (Phase B) — runs the agent's project (bun install + dev) ────
+  # Shares the OpenCode workspace volume so it sees the multi-file project the
+  # agent wrote, then serves its dev server on 5173 (published) for the preview.
+  # Same `opencode` profile: docker compose --profile opencode up.
+  runner:
+    build:
+      context: ./scripts
+      dockerfile: runner.Dockerfile
+    profiles: ["opencode"]
+    restart: unless-stopped
+    working_dir: /workspace
+    command: ["bun", "/scripts/code-runner.js"]
+    environment:
+      DEV_PORT: "5173"
+      CTRL_PORT: "4097"
+      RUNNER_WORKDIR: "/workspace"
+      EXPORT_DIR: "/export"
+    volumes:
+      - opencode_workspace:/workspace
+      - ./scripts/code-runner.js:/scripts/code-runner.js:ro
+      - ./scripts/code-runner-utils.js:/scripts/code-runner-utils.js:ro
+      - runner_bun_cache:/root/.bun/install/cache   # warm re-installs (vite/tailwind/framer-motion)
+      # Hybrid "export to disk": Codex V2 mirrors each project's source here so
+      # it lands in a real folder on the host (D:\…\.codex-workspaces\<id>).
+      - ./.codex-workspaces:/export
+    ports:
+      - "5173:5173"   # dev server → preview iframe
+    expose:
+      - "4097"        # control API (backend → runner)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  uploads_data:
+  opencode_workspace:
+  runner_bun_cache:

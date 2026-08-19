@@ -1,0 +1,1 @@
+export const MAX_SIMULTANEOUS_DOCUMENTS = 1000

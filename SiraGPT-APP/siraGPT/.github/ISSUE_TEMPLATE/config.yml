@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/SiraGPT-ORg/siraGPT/security/advisories/new
+    about: Report security issues privately — see SECURITY.md. Do NOT open a public issue.
+  - name: Questions & discussion
+    url: https://github.com/SiraGPT-ORg/siraGPT/discussions
+    about: Ask questions, share ideas, or discuss usage.

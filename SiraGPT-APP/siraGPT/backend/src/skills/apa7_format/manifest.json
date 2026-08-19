@@ -1,0 +1,27 @@
+{
+  "id": "apa7_format",
+  "name": "APA 7 formatter",
+  "version": "1.0.0",
+  "description": "Format a list of bibliographic sources as APA 7 — both inline citations ('(Smith et al., 2024)') and a sorted reference list (Markdown bullets, italic journal titles, ampersand rules). Accepts the merged shape that openalex_search + crossref_verify produce; missing fields degrade gracefully (no 'undefined' in output). Pure-compute, no network.",
+  "capabilities": [],
+  "params": {
+    "type": "object",
+    "properties": {
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "description": "Array of sources. Each may carry: title, authors (array of {family, given} or display strings), year, container (journal), volume, issue, pages, doi, url. Use the output of openalex_search.sources merged with crossref_verify.results when available."
+      },
+      "want": {
+        "type": "string",
+        "enum": ["inline", "reference_list", "both"],
+        "description": "What to return. 'inline' yields an array of '(Author, Year)' strings paired with their source. 'reference_list' yields the markdown bibliography. 'both' returns both fields. Default 'both'."
+      }
+    },
+    "required": ["sources"],
+    "additionalProperties": false
+  }
+}

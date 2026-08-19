@@ -1,0 +1,8 @@
+services:
+  caddy:
+    volumes:
+      - published_sites:/srv/sites:ro
+
+volumes:
+  published_sites:
+    driver: local

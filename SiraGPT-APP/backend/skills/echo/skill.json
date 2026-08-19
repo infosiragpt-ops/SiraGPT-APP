@@ -1,0 +1,21 @@
+{
+  "name": "echo",
+  "version": "0.1.0",
+  "description": "Reference skill that echoes its input. Useful as a smoke test for the registry.",
+  "triggers": [
+    { "on": "tool" }
+  ],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Return the message unchanged.",
+      "paramsSchema": {
+        "type": "object",
+        "properties": { "message": { "type": "string" } },
+        "required": ["message"],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "scopes": []
+}

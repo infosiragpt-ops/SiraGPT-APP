@@ -1,0 +1,24 @@
+{
+  "id": "rag_retrieve",
+  "name": "RAG Retrieve",
+  "version": "1.0.0",
+  "description": "Retrieve the most similar chunks from the user's private knowledge collection. Use when the question is likely answered by previously-ingested documents (handbooks, notes, internal docs).",
+  "capabilities": ["fs:read"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "What you need from the collection."
+      },
+      "k": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "description": "How many chunks to return. Default 4."
+      }
+    },
+    "required": ["query"],
+    "additionalProperties": false
+  }
+}

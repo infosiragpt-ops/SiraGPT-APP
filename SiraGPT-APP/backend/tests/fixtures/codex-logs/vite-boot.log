@@ -1,0 +1,3 @@
+Proxy error: connect ECONNREFUSED 127.0.0.1:5173
+npm WARN deprecated vite-plugin-legacy@1.0.0: this warning is benign during boot
+Vite is still starting and may retry the dev server port.

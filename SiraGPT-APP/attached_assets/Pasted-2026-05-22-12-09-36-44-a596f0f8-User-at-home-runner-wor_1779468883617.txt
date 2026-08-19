@@ -1,0 +1,136 @@
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:616
+2026-05-22 12:09:36.44
+a596f0f8
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at ni (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:543)
+2026-05-22 12:09:36.44
+a596f0f8
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:16935)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:16935)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at Object.wrap (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:13:17831)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at AsyncLocalStorage.run (node:async_hooks:346:14)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:616
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at /home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:726
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-22 12:09:38.13
+a596f0f8
+User
+at ni (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:20:543)
+2026-05-22 12:09:39.75
+a596f0f8
+User
+Error: Failed to find Server Action "x". This request might be from an older or newer deployment.
+2026-05-22 12:09:39.75
+a596f0f8
+User
+at rE (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:15:6522)
+2026-05-22 12:09:39.75
+a596f0f8
+User
+at r$ (/home/runner/workspace/.next/standalone/node_modules/next/dist/compiled/next-server/app-page.runtime.prod.js:17:1667)
+2026-05-22 12:15:13.61
+af3148f0
+User
+[backend] For more information, see: https://pris.ly/prisma-config
+2026-05-22 12:15:13.61
+af3148f0
+User
+[backend] warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+2026-05-22 12:15:20.42
+af3148f0
+User
+[backend] prisma:warn In production, we recommend using `prisma generate --no-engine` (See: `prisma generate --help`)
+2026-05-22 12:15:20.44
+af3148f0
+User
+[backend] Google OAuth callback override ignored; using https://siragpt.com/api/auth/google/callback
+2026-05-22 12:20:31.54
+a596f0f8
+User
+[backend] [agent-task-worker] connection ended; serving requests via local runtime until Redis recovers; queued tasks will use local fallback until Redis reconnects
+2026-05-22 12:20:31.85
+a596f0f8
+User
+npm notice
+2026-05-22 12:20:31.85
+a596f0f8
+User
+npm notice To update run: npm install -g npm@11.15.0
+2026-05-22 12:20:31.85
+a596f0f8
+User
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.15.0
+2026-05-22 12:20:31.85
+a596f0f8
+User
+npm notice New major version of npm available! 10.8.2 -> 11.15.0
+2026-05-22 12:20:31.85
+a596f0f8
+User
+npm notice
+2026-05-22 12:35:09.56
+af3148f0
+User
+[backend] {"t":"2026-05-22T16:35:09.560Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpdbjuqh00001hfgayz771yu","model":"gpt-4o","provider":"OpenAI","durationMs":1900,"promptChars":4,"responseChars":57,"approxTokens":16,"aborted":false,"abortReason":null}
+2026-05-22 12:37:38.03
+af3148f0
+User
+[backend] {"t":"2026-05-22T16:37:38.034Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpdbjuqh00001hfgayz771yu","model":"gpt-4o","provider":"OpenAI","durationMs":1553,"promptChars":4,"responseChars":57,"approxTokens":16,"aborted":false,"abortReason":null}
+2026-05-22 12:37:48.26
+af3148f0
+User
+[backend] {"t":"2026-05-22T16:37:48.263Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpdbjuqh00001hfgayz771yu","model":"deepseek-v4-flash","provider":"DeepSeek","durationMs":1531,"promptChars":4,"responseChars":57,"approxTokens":16,"aborted":false,"abortReason":null}
+2026-05-22 12:37:56.24
+af3148f0
+User
+[backend] {"t":"2026-05-22T16:37:56.241Z","event":"filter_pipeline_metrics","scope":"ai.generate","userId":"cmpdbjuqh00001hfgayz771yu","model":"deepseek-v4-flash","provider":"DeepSeek","durationMs":1515,"promptChars":11,"responseChars":57,"approxTokens":17,"aborted":false,"abortReason":null}

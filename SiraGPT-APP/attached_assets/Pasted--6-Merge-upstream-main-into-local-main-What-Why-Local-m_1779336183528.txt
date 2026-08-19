@@ -1,0 +1,76 @@
+#6 - Merge upstream/main into local main
+What & Why
+Local main has diverged from origin/main (github.com/SiraGPT-ORg/siraGPT). At the moment this plan is created, git status reports 18 commits ahead / 3 commits behind (the original plan said 4/29 — that snapshot is stale; trust the live git status output at task start). The user cannot push from the Replit Git pane until the divergence is resolved.
+
+The incoming upstream commits include recent security/rate-limit features (org announcement rate limits, invite rate limits, Slack integration rate limits, webhook create/delete rate limits, per-org API key revoke rate limits, service-worker hardening + bundle analyzer, etc.) that we want.
+
+There are also uncommitted in-tree changes from the just-completed pandoc/prompts work:
+
+backend/src/services/document-pipeline/content/prompts.js — rewritten for document-grade depth (4-6 sentence paragraphs, 4-6 bullets, longer notes; bans filler phrases).
+replit.nix — added pandoc system dependency (now resolved on PATH at /nix/store/.../pandoc-cli-3.6/bin/pandoc).
+These MUST be committed first so they are not lost in the merge.
+
+Done looks like
+git status on main is clean (no merge markers, no rebase state).
+git log --oneline HEAD..origin/main returns empty (we've caught up).
+The pandoc + prompts work is preserved as its own commit (feat(docs): install pandoc + rewrite section-content prompt for document depth).
+The 11 document-pipeline tests still pass: cd backend && node --test tests/document-pipeline-docx-formulas.test.js tests/document-pipeline-chat-contract.test.js tests/orchestration-document-pipeline.test.js → # pass 11 / # fail 0.
+The focused upstream test set passes: cd backend && node --test tests/archive-audit-logs-per-org.test.js tests/user-export-org-quarterly-override.test.js tests/ai-token-budget.test.js tests/orgs-audit-and-settings.test.js tests/webhook-endpoint-retry-filters.test.js (skip any that do not exist on disk after the merge — log which were skipped).
+The Backend workflow boots clean and curl http://localhost:5050/api/ai/models returns HTTP 200 with 16 models.
+git push origin main succeeds (or the user can push from the Replit Git pane without the "unpulled changes" warning).
+Commit history shows a merge commit (or fast-forwarded local commits) and no commits were dropped.
+Out of scope
+Any code changes beyond conflict resolution.
+UI / frontend changes.
+Rewriting history with rebase + force push.
+Touching the gitsafe-backup or subrepl-* remotes.
+Re-doing the pandoc install (already done — replit.nix change is what needs committing).
+Steps
+Snapshot reality first. Run git --no-optional-locks status, git --no-optional-locks log --oneline -25, git --no-optional-locks fetch origin, then git --no-optional-locks log --oneline HEAD..origin/main and git --no-optional-locks log --oneline origin/main..HEAD. Reconcile against this plan. If counts differ wildly (e.g. local commits include work this plan does not mention), STOP and report instead of proceeding.
+
+Commit the in-tree pandoc/prompts work so it cannot be lost:
+
+git add backend/src/services/document-pipeline/content/prompts.js replit.nix
+git commit -m "feat(docs): install pandoc + rewrite section-content prompt for document depth"
+If git status still shows untracked files that look related to the port described in the original plan (e.g. backend/tests/archive-audit-logs-per-org.test.js, modified backend/src/routes/ai.js, backend/src/routes/users.js, lib/deep-links.ts, etc.), commit those separately with: git commit -m "port: upstream backend improvements (security fixes for org-id auth)". If none of those files exist as modifications, skip — do not invent changes.
+git fetch origin (idempotent — already done in step 1, repeat for safety right before the merge).
+
+git merge origin/main --no-ff -m "Merge upstream/main: org rate-limits + security hardening".
+
+Resolve any conflicts. Strategy:
+
+Files that exist in both ports (backend/src/routes/ai.js, backend/src/routes/users.js, backend/src/services/ai-service.js, backend/src/services/ai/token-budget.js, backend/src/services/context-window.js, backend/src/services/trigger-registry.js, backend/src/schemas/orgs.js, backend/src/jobs/archive-audit-logs.js, backend/index.js, lib/deep-links.ts, lib/download-utils.ts, lib/pending-messages.ts): prefer upstream (git checkout --theirs <file>), THEN re-apply the two security fixes on top:
+backend/src/routes/ai.js: remove the || (req.body && req.body.organizationId) fallback in the two spots that resolve org id for AI routing and OTel span tagging — only trust req.orgContext.orgId. If the spots no longer exist upstream (refactored), skip and note in the merge commit body.
+backend/src/routes/users.js: in resolveExportQuarterlyLimit, keep header/body org-id override BUT verify membership via prismaClient.orgMembership.findUnique({ where: { orgId_userId: { orgId, userId } } }) before honoring it; degrade to default EXPORT_QUARTERLY_LIMIT if not a member.
+backend/src/services/document-pipeline/content/prompts.js: prefer LOCAL (git checkout --ours) — this is the just-committed document-grade rewrite from step 2.
+replit.nix: prefer LOCAL (git checkout --ours) for the pandoc line; if upstream added other entries, merge them in by hand so both sets of deps remain.
+All other conflicts: standard 3-way merge. Prefer upstream unless the local hunk is LLM-models seeding (DB state, not code), Replit-specific config (.replit, workflow definitions, .env*), or document-pipeline renderer logic (the renderers in backend/src/services/document-pipeline/advanced-document-pipeline.js were rewritten locally to wire plan.blocks — keep LOCAL for those hunks).
+Run node --check on every conflict-resolved .js file before staging.
+
+git add -A && git commit to finish the merge (the message from step 4 stays; append a short body listing files where security re-application was skipped, if any).
+
+Verification:
+
+cd backend && node --test tests/document-pipeline-docx-formulas.test.js tests/document-pipeline-chat-contract.test.js tests/orchestration-document-pipeline.test.js — must report # pass 11 / # fail 0.
+For each of these, run it only if the file exists on disk after the merge: tests/archive-audit-logs-per-org.test.js, tests/user-export-org-quarterly-override.test.js, tests/ai-token-budget.test.js, tests/orgs-audit-and-settings.test.js, tests/webhook-endpoint-retry-filters.test.js. Log which were skipped.
+Restart the Backend workflow.
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5050/api/ai/models must print 200. Then curl -s http://localhost:5050/api/ai/models | head -c 2000 to eyeball that 16 models come back.
+git push origin main. If the push is rejected because upstream advanced again during the merge, git fetch origin and repeat from step 4.
+
+Relevant files
+backend/src/services/document-pipeline/content/prompts.js
+replit.nix
+backend/src/routes/ai.js
+backend/src/routes/users.js
+backend/src/services/ai-service.js
+backend/src/services/ai/token-budget.js
+backend/src/services/context-window.js
+backend/src/services/trigger-registry.js
+backend/src/schemas/orgs.js
+backend/src/jobs/archive-audit-logs.js
+backend/src/middleware/enforce-org-quota.js
+backend/index.js
+backend/src/services/document-pipeline/advanced-document-pipeline.js
+lib/deep-links.ts
+lib/download-utils.ts
+lib/pending-messages.ts

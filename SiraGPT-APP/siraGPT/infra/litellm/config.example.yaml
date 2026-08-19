@@ -1,0 +1,126 @@
+# litellm Proxy configuration for "Sira LLM Gateway".
+#
+# Deploy this file alongside the official ghcr.io/berriai/litellm image on
+# a dedicated Replit Autoscale deployment. The backend points at it via
+# LLM_GATEWAY_URL + LLM_GATEWAY_KEY (see backend/src/services/ai/llm-gateway-client.js).
+#
+# Provider API keys live in the *proxy's* env vars, NOT the backend's.
+# That way the backend only needs the gateway key and can be rotated
+# independently from provider credentials.
+#
+# Reference: https://docs.litellm.ai/docs/proxy/configs
+
+model_list:
+  # ── OpenAI ──────────────────────────────────────────────────
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4.1
+    litellm_params:
+      model: openai/gpt-4.1
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: openai/gpt-5-mini
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-4-turbo
+    litellm_params:
+      model: openai/gpt-4-turbo
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+  # ── Anthropic ───────────────────────────────────────────────
+  - model_name: claude-sonnet-4.5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250101
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku-4
+    litellm_params:
+      model: anthropic/claude-haiku-4-20250101
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-opus-4.7
+    litellm_params:
+      model: anthropic/claude-opus-4-7-20250101
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # ── Google Gemini (kept for completeness; intent-triage-judge
+  #    still calls Gemini REST directly per task #42 out-of-scope) ──
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # ── DeepSeek ────────────────────────────────────────────────
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: deepseek/deepseek-v4-pro
+      api_key: os.environ/DEEPSEEK_API_KEY
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: deepseek/deepseek-v4-flash
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+  # ── OpenRouter (catch-all for exotic slugs) ─────────────────
+  - model_name: moonshotai/kimi-k2.6
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2.6
+      api_key: os.environ/OPENROUTER_API_KEY
+
+# Fallback chains — these MIRROR backend/src/services/ai/failover-policy.js.
+# When OpenAI returns 5xx/429 the proxy retries on the next model in the
+# chain without the backend having to decide. Once this is live the Node
+# failover-policy.js becomes read-only metadata for model-router.js.
+litellm_settings:
+  fallbacks:
+    - gpt-4.1: ["gpt-4o", "claude-sonnet-4.5", "gpt-4o-mini"]
+    - gpt-4o: ["gpt-4o-mini", "claude-sonnet-4.5", "gemini-2.5-flash"]
+    - gpt-5: ["gpt-4.1", "gpt-4o", "claude-sonnet-4.5"]
+    - gpt-5-mini: ["gpt-4o-mini", "gemini-2.5-flash"]
+    - gpt-4o-mini: ["gemini-2.5-flash", "claude-haiku-4", "gpt-3.5-turbo"]
+    - gpt-4-turbo: ["gpt-4o", "claude-sonnet-4.5"]
+    - gpt-3.5-turbo: ["gpt-4o-mini", "gemini-2.5-flash"]
+    - claude-opus-4.7: ["claude-sonnet-4.5", "gpt-4.1", "gpt-4o"]
+    - claude-sonnet-4.5: ["claude-haiku-4", "gpt-4o", "gpt-4o-mini"]
+    - claude-haiku-4: ["gpt-4o-mini", "gemini-2.5-flash"]
+    - gemini-2.5-pro: ["gpt-4o", "claude-sonnet-4.5"]
+    - gemini-2.5-flash: ["gpt-4o-mini", "claude-haiku-4"]
+    - deepseek-v4-pro: ["gpt-4o", "claude-sonnet-4.5"]
+    - deepseek-v4-flash: ["gpt-4o-mini", "gemini-2.5-flash"]
+    - moonshotai/kimi-k2.6: ["gpt-4o-mini", "gemini-2.5-flash"]
+
+  # Conservative retry policy — the Node side already has its own retry
+  # loop, so we keep proxy retries low to avoid amplification.
+  num_retries: 1
+  request_timeout: 60
+  # Semantic cache is OFF for the first version (task #42 explicit
+  # out-of-scope). Re-enable here once we've measured hit rate.
+  cache: false
+
+# Shared auth — the backend sends Bearer LLM_GATEWAY_KEY. Keep this
+# value in sync with the backend's LLM_GATEWAY_KEY secret.
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Per-user budgets / rate limits go here once the proxy has user
+  # identity. For v1 we send the backend's userId as the OpenAI `user`
+  # field and let litellm aggregate spend per user automatically.
+  database_url: os.environ/DATABASE_URL  # optional — enables spend tracking
+
+# Health endpoint Replit Autoscale will hit. litellm exposes /health
+# out of the box; we just need to make sure the deployment marks the
+# container ready only after it responds 200.

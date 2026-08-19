@@ -1,0 +1,27 @@
+{
+  "id": "session_spawn",
+  "name": "Spawn sub-agent session",
+  "version": "1.0.0",
+  "description": "Create a NEW chat session and run the agent there with a focused prompt. Useful for parallelisable sub-tasks ('research this in the background while I keep asking questions'). Runs in sandbox mode with a shallower tool set. Returns the new session id and the sub-agent's answer.",
+  "capabilities": ["agent:spawn"],
+  "params": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "A short title for the new session (≤ 80 chars)."
+      },
+      "prompt": {
+        "type": "string",
+        "description": "The task for the sub-agent. Should be self-contained — the sub-agent doesn't see the parent's chat history."
+      },
+      "thinking": {
+        "type": "string",
+        "enum": ["low", "medium", "high"],
+        "description": "Thinking level for the sub-run. Default low."
+      }
+    },
+    "required": ["prompt"],
+    "additionalProperties": false
+  }
+}

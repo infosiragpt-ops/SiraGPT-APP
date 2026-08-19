@@ -1,0 +1,87 @@
+import assert from "node:assert/strict"
+import { describe, it } from "node:test"
+import fs from "node:fs"
+import path from "node:path"
+
+const componentPath = path.join(process.cwd(), "components", "chat-interface-enhanced.tsx")
+const source = fs.readFileSync(componentPath, "utf8")
+
+function sliceAfter(marker: string): string {
+  const start = source.indexOf(marker)
+  assert.notEqual(start, -1, `missing marker: ${marker}`)
+  return source.slice(start)
+}
+
+describe("mobile model selector source contract", () => {
+  it("keeps the default phone model picker static so iOS does not zoom or open the keyboard", () => {
+    const defaultSelector = sliceAfter("// Default model selector for regular chats")
+    const contentStart = defaultSelector.indexOf("<DropdownMenuContent")
+    const contentEnd = defaultSelector.indexOf("</DropdownMenuContent>", contentStart)
+    assert.notEqual(contentStart, -1, "missing default model picker content")
+    assert.notEqual(contentEnd, -1, "missing default model picker content end")
+    const content = defaultSelector.slice(contentStart, contentEnd)
+
+    assert.doesNotMatch(
+      content,
+      /autoFocus/,
+      "the model search input must not autofocus; autofocus opens the iOS keyboard and zooms the viewport"
+    )
+    assert.match(
+      content,
+      /className="[^"]*model-picker-list[^"]*"[\s\S]*filteredModels\.map/,
+      "phone layout should stay a static model list instead of focusing a search field"
+    )
+    assert.match(
+      content,
+      /className="[^"]*hidden[^"]*sm:block[^"]*"[\s\S]*placeholder="Buscar modelos"/,
+      "the searchable input should be desktop/tablet-only, leaving phones as a simple static list"
+    )
+    assert.match(
+      content,
+      /className="[^"]*text-base[^"]*sm:text-\[13px\][^"]*"/,
+      "when search is visible on larger screens, its font must stay at least 16px before sm to avoid iOS input zoom"
+    )
+  })
+
+  it("does not inject fallback video models when Admin returns no active VIDEO rows", () => {
+    assert.doesNotMatch(
+      source,
+      /videoModels\.length \? videoModels : \[/,
+      "the video picker must use only /api/ai/models?type=VIDEO results"
+    )
+    assert.match(
+      source,
+      /video: videoModels,/,
+      "video picker options should come directly from the active Admin-backed VIDEO list"
+    )
+    assert.match(
+      source,
+      /const videoOptions = mediaModelOptions\.video[\s\S]{0,220}setSelectedVideoModel\(""\)/,
+      "when Admin disables all VIDEO models the selected video model should be cleared"
+    )
+  })
+
+  it("keeps the GPT/project Modelo submenu professional on phones (solid light surface, no fixed 360px panel)", () => {
+    assert.match(
+      source,
+      /gpt-model-submenu/,
+      "GPT/project model submenu must use the mobile-professional submenu class"
+    )
+    assert.doesNotMatch(
+      source,
+      /DropdownMenuSubContent[^>]*w-\[360px\]/,
+      "model submenus must not use a fixed 360px width that overflows phones"
+    )
+    assert.match(
+      source,
+      /gpt-model-submenu[\s\S]{0,220}w-\[min\(calc\(100vw-1\.25rem\),20rem\)\]/,
+      "model submenu width must clamp to the phone viewport"
+    )
+    assert.doesNotMatch(
+      source,
+      /DropdownMenuSubContent[^>]*bg-background\/90[^>]*before:bg-\[radial-gradient/,
+      "model submenu must not use translucent gradient glass on mobile"
+    )
+  })
+
+})

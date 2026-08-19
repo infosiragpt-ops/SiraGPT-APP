@@ -1,0 +1,652 @@
+# Prometheus recording + alerting rules for SiraGPT SLOs.
+#
+# Companion to docs/slo.md. Drop this file into the Prometheus rule
+# directory (or the rule_files glob in prometheus.yml) and reload.
+#
+# Conventions:
+#   - All recording rules are prefixed with `siragpt:` and tagged with
+#     the SLI they implement (`http_availability`, `http_latency`,
+#     `agent_success`).
+#   - Burn-rate windows follow the Google SRE multi-window scheme
+#     described in docs/slo.md.
+
+groups:
+  # ------------------------------------------------------------------
+  # Recording rules — SLIs
+  # ------------------------------------------------------------------
+  - name: siragpt.slo.recording
+    interval: 30s
+    rules:
+      # ---- HTTP availability (SLO-API-1, target 99.9%) -------------
+      - record: siragpt:http_requests:rate5m
+        expr: sum by (route) (rate(siragpt_http_requests_total{request_class="standard",route!=""}[5m]))
+
+      - record: siragpt:http_requests_errors:rate5m
+        expr: sum by (route) (rate(siragpt_http_requests_total{status=~"5..",request_class="standard",route!=""}[5m]))
+
+      - record: siragpt:http_availability:ratio_rate5m
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[5m])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[5m])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[5m])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate30m
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[30m])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[30m])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[30m])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate1h
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[1h])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[1h])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[1h])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate2h
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[2h])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[2h])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[2h])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate6h
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[6h])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[6h])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[6h])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate1d
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[1d])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[1d])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[1d])) > 0)
+
+      - record: siragpt:http_availability:ratio_rate3d
+        expr: |
+          (
+            1 - (
+              (sum(rate(siragpt_http_slo_requests_total{status_class="5xx",request_class="standard"}[3d])) or vector(0))
+              /
+              clamp_min(sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[3d])), 0.000000001)
+            )
+          )
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[3d])) > 0)
+
+      # ---- HTTP latency (SLO-API-2) --------------------------------
+      - record: siragpt:http_request_duration:p99_5m
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, route) (
+              rate(siragpt_http_request_duration_seconds_bucket{request_class="standard"}[5m])
+            )
+          )
+
+      - record: siragpt:http_request_duration:p99_1h
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le, route) (
+              rate(siragpt_http_request_duration_seconds_bucket{request_class="standard"}[1h])
+            )
+          )
+
+      - record: siragpt:http_request_duration:p95_5m
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, route) (
+              rate(siragpt_http_request_duration_seconds_bucket{request_class="standard"}[5m])
+            )
+          )
+
+      # Latency SLI: fraction of requests that completed under the
+      # latency budget. We treat the SLO_LATENCY_BUDGET histogram
+      # bucket boundary as authoritative — `le="1.5"` for SLO-API-2.
+      - record: siragpt:http_latency_good:ratio_rate5m
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[5m])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[5m])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[5m])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate30m
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[30m])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[30m])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[30m])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate1h
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[1h])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[1h])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[1h])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate2h
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[2h])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[2h])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[2h])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate6h
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[6h])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[6h])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[6h])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate1d
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[1d])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[1d])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[1d])) > 0)
+
+      - record: siragpt:http_latency_good:ratio_rate3d
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_request_duration_seconds_bucket{le="1.5",request_class="standard"}[3d])) or vector(0))
+            /
+            clamp_min(sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[3d])), 0.000000001)
+          )
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[3d])) > 0)
+
+      # ---- Agent task success (SLO-AGT-1) --------------------------
+      - record: siragpt:agent_success:ratio_rate5m
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[5m])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[5m])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[5m])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate30m
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[30m])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[30m])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[30m])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate1h
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[1h])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[1h])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[1h])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate2h
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[2h])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[2h])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[2h])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate6h
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[6h])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[6h])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[6h])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate1d
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[1d])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[1d])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[1d])) > 0)
+
+      - record: siragpt:agent_success:ratio_rate3d
+        expr: |
+          (
+            (sum(rate(agent_task_terminal_total{status="success"}[3d])) or vector(0))
+            /
+            clamp_min(sum(rate(agent_task_terminal_total{status=~"success|error"}[3d])), 0.000000001)
+          )
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[3d])) > 0)
+
+  # ------------------------------------------------------------------
+  # Alerting rules — multi-window burn-rate
+  # ------------------------------------------------------------------
+  # SLO target ε:
+  #   API availability:   1 - 0.999 = 0.001
+  #   API latency budget: 1 - 0.99  = 0.01
+  #   Agent success:      1 - 0.99  = 0.01
+  #
+  # Burn-rate alert thresholds (from the Google SRE workbook):
+  #   page:   14.4× over (1h & 5m)   — exhausts 30d budget in ~50h
+  #   page:   6×    over (6h & 30m)  — exhausts 30d budget in 5d
+  #   ticket: 3×    over (24h & 2h)
+  #   ticket: 1×    over (72h & 6h)
+  #
+  # Every SLI records 5m/30m/1h/2h/6h/24h/72h windows. Ratios and
+  # alerts are traffic-gated: an idle or missing window emits no SLI
+  # sample and cannot create a false burn.
+  - name: siragpt.slo.alerts.http_availability
+    rules:
+      - alert: SiraGPTHTTPAvailabilityFastBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate1h) > (14.4 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate5m) > (14.4 * 0.001)
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[5m])) > 0)
+        for: 2m
+        labels:
+          severity: page
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 14.4× budget (1h+5m)"
+          description: |
+            HTTP 5xx error rate is consuming the 30-day availability
+            budget at >14.4× the sustainable rate over the last hour
+            *and* the last 5 minutes. At this pace the budget is
+            exhausted in ~50 hours.
+          runbook: docs/operations/runbook-availability.md
+          dashboard: grafana://d/siragpt-slo
+
+      - alert: SiraGPTHTTPAvailabilitySlowBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate6h) > (6 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate30m) > (6 * 0.001)
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[30m])) > 0)
+        for: 15m
+        labels:
+          severity: page
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 6× budget (6h+30m)"
+          description: |
+            Sustained 6× burn over 6h with the last 30m still
+            elevated. Budget exhausted in ~5 days at this pace.
+          runbook: docs/operations/runbook-availability.md
+
+      - alert: SiraGPTHTTPAvailabilityTicket
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate1d) > (3 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate2h) > (3 * 0.001)
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[2h])) > 0)
+        for: 1h
+        labels:
+          severity: ticket
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability burning 3× budget (24h+2h)"
+          description: |
+            Slow-burn condition. File a ticket and investigate during
+            business hours.
+
+      - alert: SiraGPTHTTPAvailabilityLongBurn
+        expr: |
+          (1 - siragpt:http_availability:ratio_rate3d) > (1 * 0.001)
+          and
+          (1 - siragpt:http_availability:ratio_rate6h) > (1 * 0.001)
+          and on() (sum(rate(siragpt_http_slo_requests_total{request_class="standard"}[6h])) > 0)
+        for: 3h
+        labels:
+          severity: ticket
+          slo: SLO-API-1
+          service: siragpt-backend
+        annotations:
+          summary: "API availability slow drain (72h+6h, 1× budget)"
+
+  - name: siragpt.slo.alerts.http_latency
+    rules:
+      - alert: SiraGPTHTTPLatencyFastBurn
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate1h) > (14.4 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate5m) > (14.4 * 0.01)
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[5m])) > 0)
+        for: 2m
+        labels:
+          severity: page
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "p99 latency burning 14.4× budget (1h+5m)"
+          description: |
+            >14.4× of requests are exceeding the 1.5s latency budget
+            over the last hour and 5 minutes. Check upstream LLM
+            latency (Langfuse) and the document pipeline queue depth
+            before paging the platform team.
+          runbook: docs/operations/runbook-latency.md
+
+      - alert: SiraGPTHTTPLatencySlowBurn
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate6h) > (6 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate30m) > (6 * 0.01)
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[30m])) > 0)
+        for: 15m
+        labels:
+          severity: page
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "p99 latency burning 6× budget (6h+30m)"
+
+      - alert: SiraGPTHTTPLatencyTicket
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate1d) > (3 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate2h) > (3 * 0.01)
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[2h])) > 0)
+        for: 1h
+        labels:
+          severity: ticket
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "HTTP latency burning 3× budget (24h+2h)"
+
+      - alert: SiraGPTHTTPLatencyLongBurn
+        expr: |
+          (1 - siragpt:http_latency_good:ratio_rate3d) > (1 * 0.01)
+          and
+          (1 - siragpt:http_latency_good:ratio_rate6h) > (1 * 0.01)
+          and on() (sum(rate(siragpt_http_slo_request_duration_seconds_count{request_class="standard"}[6h])) > 0)
+        for: 3h
+        labels:
+          severity: ticket
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "HTTP latency slow drain (72h+6h, 1× budget)"
+
+      - alert: SiraGPTHTTPLatencyP99Hot
+        expr: |
+          max by (route) (siragpt:http_request_duration:p99_5m) > 3
+        for: 10m
+        labels:
+          severity: ticket
+          slo: SLO-API-2
+          service: siragpt-backend
+        annotations:
+          summary: "Route p99 latency above 3s for 10m ({{ $labels.route }})"
+          description: |
+            Route-level p99 latency has been above 3s for 10 minutes.
+            This does not necessarily violate the SLO but indicates a
+            specific endpoint is degrading and should be triaged.
+
+  - name: siragpt.slo.alerts.agent_success
+    rules:
+      - alert: SiraGPTAgentSuccessFastBurn
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate1h) > (14.4 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate5m) > (14.4 * 0.01)
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[5m])) > 0)
+        for: 5m
+        labels:
+          severity: page
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success burning 14.4× budget (1h+5m)"
+          description: |
+            Agent task failure rate is >14.4% over the last hour and
+            still elevated in the last 5 minutes. Check the task-store
+            failure classifier and circuit-breaker state.
+          runbook: docs/operations/runbook-agent.md
+
+      - alert: SiraGPTAgentSuccessSlowBurn
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate6h) > (6 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate30m) > (6 * 0.01)
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[30m])) > 0)
+        for: 30m
+        labels:
+          severity: page
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success burning 6× budget (6h+30m)"
+
+      - alert: SiraGPTAgentSuccessTicket
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate1d) > (3 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate2h) > (3 * 0.01)
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[2h])) > 0)
+        for: 2h
+        labels:
+          severity: ticket
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success degraded (24h+2h, 3× budget)"
+
+      - alert: SiraGPTAgentSuccessLongBurn
+        expr: |
+          (1 - siragpt:agent_success:ratio_rate3d) > (1 * 0.01)
+          and
+          (1 - siragpt:agent_success:ratio_rate6h) > (1 * 0.01)
+          and on() (sum(rate(agent_task_terminal_total{status=~"success|error"}[6h])) > 0)
+        for: 3h
+        labels:
+          severity: ticket
+          slo: SLO-AGT-1
+          service: siragpt-agent
+        annotations:
+          summary: "Agent task success slow drain (72h+6h, 1× budget)"
+
+  # ------------------------------------------------------------------
+  # Health alerts — not strictly SLO-driven but co-located so oncall
+  # has a single rule file to grep through.
+  # ------------------------------------------------------------------
+  - name: siragpt.slo.alerts.health
+    rules:
+      - alert: SiraGPTMetricsScrapeMissing
+        expr: |
+          (up{job=~"siragpt-backend.*"} == 0)
+          or
+          absent(up{job=~"siragpt-backend.*"})
+        for: 5m
+        labels:
+          severity: page
+          service: siragpt-backend
+        annotations:
+          summary: "SiraGPT backend scrape has been absent or down for 5m"
+          description: |
+            The backend target's synthetic `up` series is absent or has
+            remained zero throughout the window. Check service discovery,
+            Prometheus targets, and the /metrics endpoint.
+
+      - alert: SiraGPTBusinessTrafficMissing
+        expr: |
+          (
+            (sum(rate(siragpt_http_slo_requests_total{request_class=~"standard|streaming"}[10m])) or vector(0)) == 0
+          )
+          and on() (max(up{job=~"siragpt-backend.*"}) == 1)
+        for: 30m
+        labels:
+          severity: warning
+          service: siragpt-backend
+        annotations:
+          summary: "No non-health HTTP traffic recorded for 30m"
+          description: |
+            Scraping is present, but no standard or streaming request was
+            observed. Health probes are intentionally excluded. Confirm
+            load-balancer routing and expected business traffic before action.
+
+      - alert: SiraGPTCircuitBreakerOpen
+        expr: max by (name) (siragpt_circuit_breaker_state) == 2
+        for: 5m
+        labels:
+          severity: ticket
+          service: siragpt-backend
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} OPEN for 5m"
+          description: |
+            A circuit breaker has been OPEN for at least 5 minutes.
+            Inspect the underlying dependency and consider forcing
+            HALF_OPEN once it recovers.
+
+  # ------------------------------------------------------------------
+  # Queue alerts — thresholds are documented in docs/slo.md and the
+  # queue runbook. max-by avoids multiplying global BullMQ counts when
+  # several backend replicas probe the same physical queue.
+  # ------------------------------------------------------------------
+  - name: siragpt.slo.alerts.queues
+    rules:
+      - alert: SiraGPTQueueWaitingBacklogHigh
+        expr: |
+          max by (queue) (
+            siragpt_queue_jobs{state="waiting"}
+            and on (queue, instance) (siragpt_queue_probe_up == 1)
+            and on (queue, instance) (siragpt_queue_probe_staleness_seconds <= 120)
+          ) > 100
+        for: 10m
+        labels:
+          severity: page
+          service: siragpt-worker
+        annotations:
+          summary: "Queue {{ $labels.queue }} has more than 100 waiting jobs for 10m"
+          description: |
+            The physical BullMQ queue has exceeded the documented
+            waiting-job backlog threshold on a fresh, successful observer.
+            Check worker availability, Redis latency, and recent job
+            duration before scaling.
+          runbook: docs/operations/runbook-queues.md
+
+      - alert: SiraGPTQueuePausedBacklog
+        expr: |
+          max by (queue) (
+            siragpt_queue_jobs{state="paused"}
+            and on (queue, instance) (siragpt_queue_probe_up == 1)
+            and on (queue, instance) (siragpt_queue_probe_staleness_seconds <= 120)
+          ) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: siragpt-worker
+        annotations:
+          summary: "Queue {{ $labels.queue }} retains paused jobs for 5m"
+          description: |
+            A fresh, successful observer reports jobs in BullMQ's paused
+            backlog. Confirm whether the pause is intentional before
+            resuming workers or moving jobs.
+          runbook: docs/operations/runbook-queues.md
+
+      - alert: SiraGPTQueueFailedJobsRetained
+        expr: |
+          max by (queue) (
+            siragpt_queue_jobs{state="failed"}
+            and on (queue, instance) (siragpt_queue_probe_up == 1)
+            and on (queue, instance) (siragpt_queue_probe_staleness_seconds <= 120)
+          ) > 10
+        for: 15m
+        labels:
+          severity: ticket
+          service: siragpt-worker
+        annotations:
+          summary: "Queue {{ $labels.queue }} retains more than 10 failed jobs for 15m"
+          description: |
+            A fresh, successful observer reports a retained failed-job
+            backlog above the documented threshold. This is a point-in-time
+            backlog, not a failure rate. Classify a sample before retrying
+            or deleting any jobs.
+          runbook: docs/operations/runbook-queues.md
+
+      - alert: SiraGPTQueueProbeDown
+        expr: max by (queue) (siragpt_queue_probe_up) == 0
+        for: 5m
+        labels:
+          severity: page
+          service: siragpt-worker
+        annotations:
+          summary: "Queue probe cannot reach {{ $labels.queue }} for 5m"
+          description: |
+            Every backend observer reports this physical queue unreachable.
+            Verify Redis connectivity before acting on job gauges.
+          runbook: docs/operations/runbook-queues.md
+
+      - alert: SiraGPTQueueProbePartialFailure
+        expr: |
+          min by (queue) (siragpt_queue_probe_up) == 0
+          and
+          max by (queue) (siragpt_queue_probe_up) == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: siragpt-worker
+        annotations:
+          summary: "Some backend observers cannot inspect {{ $labels.queue }}"
+          description: |
+            At least one observer can reach the queue while another cannot.
+            Investigate replica-specific Redis networking or credentials;
+            queue service remains observable, so this warning does not page.
+          runbook: docs/operations/runbook-queues.md
+
+      - alert: SiraGPTQueueMetricsStale
+        expr: max by (queue) (siragpt_queue_probe_staleness_seconds) > 120
+        for: 5m
+        labels:
+          severity: warning
+          service: siragpt-worker
+        annotations:
+          summary: "Queue metrics for {{ $labels.queue }} are stale"
+          description: |
+            No successful scheduled queue observation has completed for over
+            two minutes. Check the queue-health refresh runtime and Redis.
+          runbook: docs/operations/runbook-queues.md

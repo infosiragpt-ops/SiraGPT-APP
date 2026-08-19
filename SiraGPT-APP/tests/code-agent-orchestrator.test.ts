@@ -1,0 +1,547 @@
+/**
+ * Tests for the pure /code agent orchestrator (FSM) + the SRE tier-0
+ * build-error classifier. No React, no network — fully deterministic.
+ */
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+
+import { defaultAgentState, type AgentState } from "../lib/code-agent/types"
+import {
+  classifyBuildError,
+  isBuildLog,
+  briefFromConversation,
+  isBareBuildCommand,
+  isBareTaskContinue,
+  isConversationalMessage,
+  isBuildRequest,
+  isQuickGreeting,
+  mergeOverridesIntoPackageJson,
+  nextAgentAction,
+  nextPendingTask,
+  createAgentTask,
+  updateAgentTask,
+  promptFromContext,
+  renderFiveSections,
+  DEFAULT_MAX_ITERATIONS,
+} from "../lib/code-agent/orchestrator"
+
+function state(partial: Partial<AgentState> = {}): AgentState {
+  return { ...defaultAgentState(), ...partial }
+}
+
+// ---- autonomous build routing ---------------------------------------------
+
+test("app build request generates immediately with an autonomous brief", () => {
+  const a = nextAgentAction(state(), "hazme una landing para vender ropa", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.tier, "llm")
+    assert.equal(a.context.goal, "landing")
+    assert.equal(a.context.productType, "hazme una landing para vender ropa")
+  }
+})
+
+test("event landing request from /code generates directly without format clarification", () => {
+  const a = nextAgentAction(state(), "Landing one-page para creame una pagina web de eventos", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "landing")
+    assert.match(a.context.productType || "", /eventos/i)
+  }
+})
+
+test("cafeteria website request stays a public landing goal", () => {
+  const a = nextAgentAction(state(), "crea una web de cafeteria", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "landing")
+    assert.equal(promptFromContext(a.context), "Landing one-page para crea una web de cafeteria")
+  }
+})
+
+test("cafeteria website request with split create typo still regenerates a landing", () => {
+  const a = nextAgentAction(state({ phase: "preview" }), "cre auna web de cafeteria", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "landing")
+    assert.match(promptFromContext(a.context), /web de cafeteria/)
+  }
+})
+
+test("restaurant management software overrides landing prefix and routes to app goal", () => {
+  const a = nextAgentAction(state(), "Landing one-page para crea una software para gestionar un restaurante", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "app")
+    assert.match(a.context.productType || "", /restaurante/i)
+  }
+})
+
+test("legacy intake answer now generates instead of asking another question", () => {
+  // step 1 already asked productType; user answers it
+  const a1 = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "ropa streetwear", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a1.type, "generate")
+  if (a1.type === "generate") {
+    assert.equal(a1.context.productType, "ropa streetwear")
+  }
+  // step 2: answer brand → generate with accumulated context
+  const a2 = nextAgentAction(
+    state({ phase: "intake", intakeStep: 2, context: { goal: "landing", productType: "ropa" } }),
+    "Farceque",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a2.type, "generate")
+  if (a2.type === "generate") {
+    assert.equal(a2.context.brand, "Farceque")
+  }
+})
+
+test("noun-only app prompt generates directly", () => {
+  const a = nextAgentAction(
+    state(),
+    "una tienda",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.tier, "llm")
+    assert.equal(a.context.productType, "una tienda")
+  }
+})
+
+test("app request sets app goal and generates directly", () => {
+  const a = nextAgentAction(
+    state(),
+    "crea una app de gestión con panel corporativo",
+    { mode: "app", hasModel: true },
+  )
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") {
+    assert.equal(a.context.goal, "app")
+  }
+})
+
+test('"genera ya" during legacy intake generates immediately', () => {
+  const a = nextAgentAction(state({ phase: "intake", intakeStep: 1 }), "genera ya", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+})
+
+test("a rich prompt generates immediately", () => {
+  const long = "Quiero una landing para mi marca de ropa premium ".repeat(5)
+  const a = nextAgentAction(state(), long, { mode: "app", hasModel: true })
+  assert.equal(a.type, "generate")
+})
+
+test('"propón uno" leaves the brand slot empty', () => {
+  const a = nextAgentAction(state({ phase: "intake", intakeStep: 2, context: { goal: "landing" } }), "propón uno", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") assert.equal(a.context.brand, undefined)
+})
+
+// ---- forced / tiers -------------------------------------------------------
+
+test("forceDeterministic generates immediately in the deterministic tier", () => {
+  const a = nextAgentAction(state(), "una tienda", { mode: "app", forceDeterministic: true, hasModel: true })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") assert.equal(a.tier, "deterministic")
+})
+
+test("no model → generation falls back to the deterministic tier", () => {
+  // Legacy intake state still generates without asking another question.
+  const a = nextAgentAction(state({ phase: "intake", intakeStep: 5 }), "moderno", { mode: "app", hasModel: false })
+  assert.equal(a.type, "generate")
+  if (a.type === "generate") assert.equal(a.tier, "deterministic")
+})
+
+// ---- other transitions ----------------------------------------------------
+
+test("preview + non-build text → patch (iterate)", () => {
+  const a = nextAgentAction(state({ phase: "preview" }), "añade una sección de precios", {
+    mode: "app",
+    hasModel: true,
+  })
+  assert.equal(a.type, "patch")
+})
+
+test("ask/plan modes pass through to plain chat", () => {
+  assert.equal(nextAgentAction(state(), "¿qué hace este archivo?", { mode: "ask", hasModel: true }).type, "passthrough")
+  assert.equal(nextAgentAction(state(), "planea la arquitectura", { mode: "plan", hasModel: true }).type, "passthrough")
+})
+
+test("deps mode routes to a constructive workspace patch", () => {
+  const a = nextAgentAction(state(), "instala lucide-react y úsalo en la navegación", {
+    mode: "deps",
+    hasModel: true,
+  })
+  assert.equal(a.type, "patch")
+})
+
+test("debug mode and pasted logs route to the SRE agent", () => {
+  assert.equal(nextAgentAction(state(), "algo se rompió", { mode: "debug", hasModel: true }).type, "debug")
+  const log = "npm error 404 Not Found - GET https://registry.npmjs.org/@x/y"
+  assert.equal(nextAgentAction(state(), log, { mode: "app", hasModel: true }).type, "debug")
+})
+
+// ---- helpers --------------------------------------------------------------
+
+test("isBuildRequest / isBuildLog heuristics", () => {
+  assert.equal(isBuildRequest("hazme una app"), true)
+  // "realiza/realizar/desarrolla" must count as build verbs.
+  assert.equal(isBuildRequest("realiza un landing"), true)
+  assert.equal(isBuildRequest("realízame una web"), true)
+  assert.equal(isBuildRequest("desarrolla una tienda"), true)
+  // Games are build targets. "contruye ne juego de la culebrita" (real user
+  // message, typos included) fell through to the conversational tier: the
+  // model streamed 14 file cards into chat, nothing was applied, and the
+  // preview stayed blank.
+  assert.equal(isBuildRequest("contruye ne juego de la culebrita"), true)
+  assert.equal(isBuildRequest("construye un juego de la culebrita"), true)
+  assert.equal(isBuildRequest("crea un videojuego arcade"), true)
+  assert.equal(isBuildRequest("hazme una calculadora"), true)
+  assert.equal(isBuildRequest("costruye una app de tareas"), true)
+  assert.equal(isBuildRequest("hola"), false)
+  assert.equal(isQuickGreeting("hola"), true)
+  assert.equal(isQuickGreeting("hola, ¿cómo estás?"), true)
+  assert.equal(isQuickGreeting("hola hazme una app"), false)
+  // Standalone social openers must also stay instant greetings (the screenshot
+  // bug: "como estas?" wrongly streamed a whole tsconfig.json project).
+  assert.equal(isQuickGreeting("como estas?"), true)
+  assert.equal(isQuickGreeting("¿cómo estás?"), true)
+  assert.equal(isQuickGreeting("qué tal"), true)
+  assert.equal(isQuickGreeting("todo bien?"), true)
+  assert.equal(isQuickGreeting("qué onda"), true)
+  assert.equal(isQuickGreeting("how are you"), true)
+  // …but a real build request that happens to be short is NOT a greeting.
+  assert.equal(isQuickGreeting("hazme una app"), false)
+  assert.equal(isQuickGreeting("crea un landing"), false)
+  // Greeting + short vocative tail is still a greeting (never a build run).
+  assert.equal(isQuickGreeting("hola amigo"), true)
+  assert.equal(isQuickGreeting("hola sira"), true)
+  assert.equal(isQuickGreeting("hey bro"), true)
+  assert.equal(isQuickGreeting("buenas equipo"), true)
+  assert.equal(isQuickGreeting("hola mi buen amigo"), false) // 3-word tail → not obviously social
+  // …but a tail that names app/data intent is a real request, not a greeting.
+  assert.equal(isQuickGreeting("hola inventario"), false)
+  assert.equal(isQuickGreeting("hola quiero una tienda"), false)
+  assert.equal(isBuildLog("npm ERR! code ERESOLVE"), true)
+  assert.equal(isBuildLog("buenas tardes"), false)
+})
+
+test('"realiza un landing" generates directly (not an intake question)', () => {
+  const a = nextAgentAction(state(), "realiza un landing", { mode: "app", hasModel: true })
+  assert.equal(a.type, "generate")
+})
+
+test("promptFromContext builds a landing prompt", () => {
+  const p = promptFromContext({ goal: "landing", brand: "Farceque", productType: "ropa", styleAudience: "oscuro" })
+  assert.match(p, /Landing one-page de Farceque para ropa estilo oscuro/)
+})
+
+test("promptFromContext builds an app prompt with data entities", () => {
+  const p = promptFromContext({
+    goal: "app",
+    brand: "Inventario Pro",
+    productType: "gestión de inventario",
+    features: "auth, dashboard, reportes",
+    dataEntities: "Producto, Proveedor, Pedido",
+  })
+  assert.match(p, /App web de Inventario Pro para gestión de inventario/)
+  assert.match(p, /con funcionalidades auth, dashboard, reportes/)
+  assert.match(p, /que maneja Producto, Proveedor, Pedido/)
+})
+
+// ---- SRE tier-0 classifier ------------------------------------------------
+
+test("classifyBuildError detects a 404 tarball and proposes overrides", () => {
+  const log =
+    "npm error 404 Not Found - GET https://registry.npmjs.org/@opentelemetry/resource-detector-aws/-/resource-detector-aws-1.2.3.tgz\n" +
+    "npm error 404 '@opentelemetry/resource-detector-aws@1.2.3' is not in this registry."
+  const v = classifyBuildError(log)
+  assert.equal(v.matched, true)
+  assert.equal(v.category, "registry_404_tarball")
+  assert.ok(v.suggestedOverrides)
+  assert.equal(v.suggestedOverrides!["@opentelemetry/resource-detector-aws"], "1.2.3")
+})
+
+test("classifyBuildError detects ERESOLVE", () => {
+  assert.equal(classifyBuildError("npm ERR! ERESOLVE could not resolve dependency").category, "eresolve_peer")
+})
+
+test("classifyBuildError falls back to a generic verdict", () => {
+  const v = classifyBuildError("something exploded")
+  assert.equal(v.matched, false)
+  assert.equal(v.category, "generic_build_failure")
+})
+
+test("renderFiveSections emits the strict 5-section format", () => {
+  const md = renderFiveSections(classifyBuildError("npm error 404 GET @a/b"))
+  for (const h of ["**Diagnóstico:**", "**Qué pasaba:**", "**Causa raíz:**", "**Arreglo:**", "**Siguiente paso:**"]) {
+    assert.ok(md.includes(h), `missing section ${h}`)
+  }
+})
+
+test("mergeOverridesIntoPackageJson merges and stays valid JSON", () => {
+  const out = mergeOverridesIntoPackageJson('{"name":"x","overrides":{"a":"1"}}', { b: "2" })
+  assert.ok(out)
+  const parsed = JSON.parse(out!)
+  assert.deepEqual(parsed.overrides, { a: "1", b: "2" })
+})
+
+test("mergeOverridesIntoPackageJson returns null on invalid JSON", () => {
+  assert.equal(mergeOverridesIntoPackageJson("not json", { a: "1" }), null)
+})
+
+// ── Conversation tier: chat stays chat, builds stay builds ────────────────
+
+test("isConversationalMessage: desire verb + conversational object → chat", () => {
+  assert.equal(isConversationalMessage("quiero preguntarte algo"), true)
+  assert.equal(isConversationalMessage("Quiero preguntarte algo"), true)
+  assert.equal(isConversationalMessage("necesito saber si puedes hacer juegos"), true)
+  assert.equal(isConversationalMessage("quisiera entender como funciona esto"), true)
+  assert.equal(isConversationalMessage("quiero hacerte una pregunta"), true)
+})
+
+test("isConversationalMessage: questions and meta → chat", () => {
+  assert.equal(isConversationalMessage("¿qué puedes hacer?"), true)
+  assert.equal(isConversationalMessage("que sabes hacer"), true)
+  assert.equal(isConversationalMessage("cómo funciona el preview?"), true)
+  assert.equal(isConversationalMessage("tengo una duda"), true)
+  assert.equal(isConversationalMessage("gracias"), true)
+  assert.equal(isConversationalMessage("una pregunta: guardas mis datos?"), true)
+})
+
+test("isConversationalMessage: real build intent stays build", () => {
+  assert.equal(isConversationalMessage("crea una app de tareas"), false)
+  assert.equal(isConversationalMessage("quiero una tienda online"), false)
+  assert.equal(isConversationalMessage("hazme una landing para mi panadería"), false)
+  assert.equal(isConversationalMessage("¿puedes crear una app de inventario?"), false)
+  assert.equal(isConversationalMessage("necesito un dashboard con gráficas"), false)
+})
+
+test("isConversationalMessage: briefs, logs and long specs stay build/SRE", () => {
+  assert.equal(isConversationalMessage("una panadería en Lima"), false)
+  assert.equal(isConversationalMessage("npm ERR! ERESOLVE unable to resolve"), false)
+  assert.equal(
+    isConversationalMessage(
+      "Plataforma de reservas con login, pagos con Stripe, panel admin, notificaciones por email y catálogo de servicios. ".repeat(5),
+    ),
+    false,
+  )
+})
+
+// ── Conversation → brief: "ok, créala" builds what was discussed ──────────
+
+test("isBareBuildCommand: contentless build orders", () => {
+  assert.equal(isBareBuildCommand("ok, créala"), true)
+  assert.equal(isBareBuildCommand("hazlo ya"), true)
+  assert.equal(isBareBuildCommand("procede"), true)
+  assert.equal(isBareBuildCommand("constrúyela por favor"), true)
+  assert.equal(isBareBuildCommand("dale"), false) // pure ack stays chat
+  assert.equal(isBareBuildCommand("crea una app de tareas"), false) // has substance
+})
+
+test("briefFromConversation: recovers the discussed idea", () => {
+  const turns = [
+    { role: "user", content: "hola" },
+    { role: "assistant", content: "¡Hola! soy tu agente" },
+    { role: "user", content: "quiero preguntarte algo" },
+    { role: "assistant", content: "claro, dime" },
+    { role: "user", content: "¿puedes hacer una app para gestionar los pedidos de mi cafetería?" },
+    { role: "assistant", content: "sí puedo…" },
+  ]
+  assert.equal(
+    briefFromConversation(turns),
+    "¿puedes hacer una app para gestionar los pedidos de mi cafetería?",
+  )
+  assert.equal(briefFromConversation([{ role: "user", content: "hola" }]), null)
+})
+
+// ── Improvement 1: AgentTask[] wired to FSM ──────────────────────────────────
+
+test("nextPendingTask: returns in_progress task first", () => {
+  const tasks = [
+    createAgentTask("task A", "detail A"),
+    createAgentTask("task B", "detail B"),
+  ]
+  tasks[0].status = "in_progress"
+  tasks[1].status = "pending"
+  const next = nextPendingTask(tasks)
+  assert.ok(next)
+  assert.equal(next!.id, tasks[0].id)
+})
+
+test("nextPendingTask: returns first pending when none in_progress", () => {
+  const tasks = [
+    createAgentTask("task A"),
+    createAgentTask("task B"),
+  ]
+  tasks[0].status = "completed"
+  tasks[1].status = "pending"
+  const next = nextPendingTask(tasks)
+  assert.ok(next)
+  assert.equal(next!.id, tasks[1].id)
+})
+
+test("nextPendingTask: returns null when all completed", () => {
+  const tasks = [createAgentTask("task A")]
+  tasks[0].status = "completed"
+  assert.equal(nextPendingTask(tasks), null)
+})
+
+test("nextPendingTask: returns null for undefined/empty", () => {
+  assert.equal(nextPendingTask(undefined), null)
+  assert.equal(nextPendingTask([]), null)
+})
+
+test("isBareTaskContinue: recognises bare ack phrases", () => {
+  assert.equal(isBareTaskContinue("ok"), true)
+  assert.equal(isBareTaskContinue("okay"), true)
+  assert.equal(isBareTaskContinue("dale"), true)
+  assert.equal(isBareTaskContinue("sigue"), true)
+  assert.equal(isBareTaskContinue("continúa"), true)
+  assert.equal(isBareTaskContinue("continua"), true)
+  assert.equal(isBareTaskContinue("siguiente"), true)
+  assert.equal(isBareTaskContinue("adelante"), true)
+  assert.equal(isBareTaskContinue("next"), true)
+  assert.equal(isBareTaskContinue("go"), true)
+  assert.equal(isBareTaskContinue("procede"), true)
+  assert.equal(isBareTaskContinue("avanza"), true)
+  assert.equal(isBareTaskContinue("vamos"), true)
+  assert.equal(isBareTaskContinue("ok, continúa"), true)
+  assert.equal(isBareTaskContinue("sigue ya"), true)
+  assert.equal(isBareTaskContinue("dale porfa"), true)
+})
+
+test("isBareTaskContinue: rejects substantive messages", () => {
+  assert.equal(isBareTaskContinue("añade una sección de precios"), false)
+  assert.equal(isBareTaskContinue("cambia el color del header"), false)
+  assert.equal(isBareTaskContinue("hazme una app de tareas"), false)
+  assert.equal(isBareTaskContinue("crea una landing"), false)
+})
+
+test("FSM: bare ack in preview phase with pending tasks → work_task action", () => {
+  const task = createAgentTask("Add auth page", "Crea la página de login con formulario")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+  if (action.type === "work_task") {
+    assert.equal(action.taskId, task.id)
+    assert.equal(action.instruction, "Crea la página de login con formulario")
+  }
+})
+
+test("FSM: empty input in preview with pending tasks → work_task action", () => {
+  const task = createAgentTask("Add dashboard", "Crea el dashboard con gráficas")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("FSM: 'continúa' in preview with pending tasks → work_task", () => {
+  const task = createAgentTask("Add API routes", "Implementa las rutas de la API")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "continúa", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("FSM: bare ack with no pending tasks → patch (not work_task)", () => {
+  const s = state({ phase: "preview" })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.notEqual(action.type, "work_task")
+})
+
+test("FSM: substantive message in preview with pending tasks → patch (not work_task)", () => {
+  const task = createAgentTask("Add auth page")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "cambia el color del header a azul", { mode: "app", hasModel: true })
+  assert.equal(action.type, "patch")
+})
+
+test("FSM: bare ack outside preview phase → not work_task", () => {
+  const task = createAgentTask("Add auth page")
+  const s = state({
+    phase: "idle",
+    tasks: [task],
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.notEqual(action.type, "work_task")
+})
+
+test("FSM: bare ack with exhausted iteration budget → passthrough (M4)", () => {
+  const task = createAgentTask("Add auth page", "Crea el login")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+    budget: {
+      count: DEFAULT_MAX_ITERATIONS,
+      max: DEFAULT_MAX_ITERATIONS,
+      startedAt: 0,
+      timeoutMs: 60_000,
+      exhausted: true,
+    },
+  })
+  const action = nextAgentAction(s, "ok", { mode: "app", hasModel: true })
+  assert.equal(action.type, "passthrough")
+})
+
+test("FSM: bare ack with iteration budget under cap → still work_task", () => {
+  const task = createAgentTask("Add auth page", "Crea el login")
+  const s = state({
+    phase: "preview",
+    tasks: [task],
+    budget: {
+      count: 1,
+      max: DEFAULT_MAX_ITERATIONS,
+      startedAt: Date.now(),
+      timeoutMs: 60_000,
+    },
+  })
+  const action = nextAgentAction(s, "dale", { mode: "app", hasModel: true })
+  assert.equal(action.type, "work_task")
+})
+
+test("updateAgentTask: marking completed keeps other tasks untouched", () => {
+  const a = createAgentTask("A", "detalle A")
+  const b = createAgentTask("B", "detalle B")
+  const updated = updateAgentTask([a, b], a.id, { status: "completed" })
+  assert.equal(updated[0].status, "completed")
+  assert.equal(updated[1].status, "pending")
+  assert.ok(updated[0].updatedAt >= a.updatedAt)
+})

@@ -1,0 +1,26 @@
+# SiraGPT — Cursor Rules
+
+## Core Directives
+- NO modificar UI/componentes visuales (app/ directory, components/)
+- Solo trabajar en funcionalidad interna: backend, agentes, herramientas, pipelines
+- Push directo a main en SiraGPT-ORg/siraGPT
+- CI debe quedar verde siempre
+
+## Architecture
+- Backend: `backend/src/services/agents/` — sistema multi-agente
+- Tools: `visual-media-tools.js`, `task-tools.js`, `agent-tools.js`
+- Runner: `agent-task-runner.js`, `agent-task-worker.js`
+- Orchestration: `agentic-langgraph.js`, `agentic-operating-core.js`
+- DB: Prisma (`backend/prisma/schema.prisma`)
+- Tests: `backend/tests/` (Node --test native runner)
+
+## Priorities
+1. Estabilidad del sistema de agentes
+2. Generación visual (imágenes, charts, diagrams, dashboards, video)
+3. Pipeline de documentos y artefactos
+4. Performance y errores
+
+## Git
+- Remote: `sira-org` → https://github.com/SiraGPT-ORg/siraGPT
+- Push directo a main
+- Pull antes de push

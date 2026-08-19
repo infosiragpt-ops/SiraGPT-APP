@@ -1,0 +1,56 @@
+rule_files:
+  - prometheus-rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  - name: idle windows emit no availability latency or agent ratios
+    interval: 30s
+    promql_expr_test:
+      - expr: siragpt:http_availability:ratio_rate5m
+        eval_time: 10m
+        exp_samples: []
+      - expr: siragpt:http_latency_good:ratio_rate5m
+        eval_time: 10m
+        exp_samples: []
+      - expr: siragpt:agent_success:ratio_rate5m
+        eval_time: 10m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SiraGPTHTTPAvailabilityFastBurn
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SiraGPTHTTPLatencyFastBurn
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SiraGPTAgentSuccessFastBurn
+        exp_alerts: []
+
+  - name: missing HTTP error series is zero-filled under positive standard traffic
+    interval: 30s
+    input_series:
+      - series: 'siragpt_http_slo_requests_total{request_class="standard",status_class="2xx"}'
+        values: '0+1x40'
+    promql_expr_test:
+      - expr: siragpt:http_availability:ratio_rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'siragpt:http_availability:ratio_rate5m{}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SiraGPTHTTPAvailabilityFastBurn
+        exp_alerts: []
+
+  - name: missing agent success series with all errors evaluates to zero
+    interval: 30s
+    input_series:
+      - series: 'agent_task_terminal_total{status="error"}'
+        values: '0+1x40'
+    promql_expr_test:
+      - expr: siragpt:agent_success:ratio_rate5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'siragpt:agent_success:ratio_rate5m{}'
+            value: 0

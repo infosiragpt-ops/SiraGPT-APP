@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">DeepSeek whale icon</title>
+  <desc id="desc">A compact blue whale icon for DeepSeek models.</desc>
+  <defs>
+    <linearGradient id="whaleBody" x1="8" y1="18" x2="56" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2495ff"/>
+      <stop offset="0.55" stop-color="#1376e8"/>
+      <stop offset="1" stop-color="#0b4ec4"/>
+    </linearGradient>
+    <linearGradient id="whaleBelly" x1="24" y1="34" x2="48" y2="50" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#d9f0ff"/>
+      <stop offset="1" stop-color="#8ccfff"/>
+    </linearGradient>
+  </defs>
+  <path
+    fill="url(#whaleBody)"
+    d="M9.6 34.5c2.2-10.6 13.3-18.8 27.7-18.8 8.8 0 15.7 3.1 18.9 8.1 1.1 1.7.8 3.9-.8 5.2l-4.7 3.8 6.2 7.1c1.2 1.4.2 3.5-1.7 3.5h-8.5c-4.5 4.5-11.6 7.3-20.1 7.3-10.3 0-17.1-4.1-19.3-9.5-1-2.4 1.7-4.5 4-3.2 2.6 1.4 5.5 2 8.4 1.6C14.6 39 8.8 38.2 9.6 34.5Z"
+  />
+  <path
+    fill="url(#whaleBelly)"
+    d="M27.4 39.9c5.6 0 10.8-1.7 15-4.6 1.2-.8 2.7.5 1.9 1.7-3.5 5.3-10 8.6-17.8 8.6-4.9 0-9.4-1.4-12.5-3.7 4.4.7 8.9-.1 13.4-2Z"
+    opacity=".95"
+  />
+  <path
+    fill="#0b4ec4"
+    d="M14.4 36.5c-3.4-.4-6.4-1.6-8.5-3.7-1.5-1.5-1.1-4 .9-4.8l8-3.3c1.5-.6 2.9.9 2.1 2.3l-2.5 4.4 4.3 2.8c1.3.8.7 2.9-.8 2.7l-3.5-.4Z"
+  />
+  <path
+    fill="#1a85ff"
+    d="M50.8 25.2c1.8-3.9 5.6-6.7 10-7.2 1.1-.1 1.9 1 1.4 2-1.6 3.3-4.4 5.8-7.9 7.1l5.7.9c1.2.2 1.6 1.7.6 2.4-3 2.3-7.3 2.6-10.7.7l-2.2-1.2 3.1-4.7Z"
+  />
+  <circle cx="39.8" cy="26.8" r="2" fill="#061b46"/>
+  <circle cx="40.5" cy="26.1" r=".6" fill="#fff"/>
+  <path
+    fill="#bde7ff"
+    d="M31.2 17.2c.7-3.4 3.9-5.5 7.6-4.8.8.1 1.1 1.2.4 1.7-2.2 1.5-3.5 3.4-3.8 5.9l-4.2-2.8Z"
+    opacity=".9"
+  />
+</svg>

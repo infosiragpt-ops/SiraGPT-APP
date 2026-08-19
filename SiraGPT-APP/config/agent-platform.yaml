@@ -1,0 +1,26 @@
+# Agent platform runtime (SiraGPT-native)
+# Paridad con Hermes cli-config / OpenClaw config — sin Python runtime.
+
+hermes:
+  runtime_enabled: true
+  gateway_enabled: true
+  cron_tick_ms: 0
+
+openclaw:
+  adapter_enabled: false
+
+toolsets:
+  default: core
+  available:
+    - core
+    - research
+    - webhook_safe
+    - visual
+    - enterprise
+    - hermes_core
+
+paths:
+  skills_active: .agents/skills
+  openclaw_upstream: .agents/openclaw-upstream
+  hermes_upstream: .agents/hermes-upstream
+  agents_backend: backend/src/services/agents

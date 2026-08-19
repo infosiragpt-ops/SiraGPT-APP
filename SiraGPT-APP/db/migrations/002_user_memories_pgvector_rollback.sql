@@ -1,0 +1,6 @@
+-- Rollback for migration 002_user_memories_pgvector.
+-- This migration is additive (CREATE TABLE and CREATE INDEX with IF NOT EXISTS).
+-- To fully revert:
+--   DROP TABLE IF EXISTS user_memories CASCADE;
+--   DROP EXTENSION IF EXISTS vector CASCADE;
+-- Note: Dropping the vector extension is only safe if no other tables depend on it.

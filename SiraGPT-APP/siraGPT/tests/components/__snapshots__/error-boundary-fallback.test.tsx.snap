@@ -1,0 +1,39 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ErrorBoundary fallback (snapshot) > renders default fallback in dev mode 1`] = `
+<div
+  class="my-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"
+>
+  <div
+    class="flex items-start gap-2"
+  >
+    <svg
+      data-testid="alert-triangle"
+    />
+    <div
+      class="flex-1 min-w-0"
+    >
+      <div
+        class="font-medium text-destructive"
+      >
+        No se pudo renderizar este contenido
+      </div>
+      <div
+        class="mt-0.5 text-xs text-muted-foreground break-words"
+      >
+        Snapshot crash
+      </div>
+    </div>
+    <button
+      class="h-7 px-2 text-xs shrink-0"
+      type="button"
+      variant="ghost"
+    >
+      <svg
+        data-testid="rotate-ccw"
+      />
+      Reintentar
+    </button>
+  </div>
+</div>
+`;

@@ -1,0 +1,30 @@
+Antes de tocar nada, una evaluación honesta: esto tiene dos mitades muy distintas, y la segunda es operación irreversible sobre un servidor con CRMs de clientes (terceros). Voy a manejarlo con cuidado.
+
+Parte A (repo, en mi Mac): falta construir el microservicio standalone services/sandbox (lo que tengo hoy es un módulo in-process en backend/src/services/doc-agent/, no un servicio HTTP con /health + Bearer + orquestación Docker) y un driver remoto en la app para llamarlo por HTTPS, más DEPLOY.md. Esto lo puedo hacer, testear y subir con seguridad.
+Parte B (servidor Lenovo vía Cloudflare): SSH, rotar contraseña, sshd_config, fail2ban, systemd, tunnel. Requiere acceso vivo que probablemente dependa de una sesión interactiva de Cloudflare Access (login por navegador) que yo no puedo completar solo.
+Lo correcto es comprobar primero si tengo acceso antes de prometer nada. Hago reconocimiento de solo-lectura: cloudflared, sesión Access y conectividad al servidor (sin contraseñas, sin cambios).
+
+Ejecutó
+Recon: cloudflared, brew, ssh keys, secrets dir
+Las medidas de seguridad de Fable 5 1M marcaron este mensaje. También pueden marcar contenido normal y seguro. Estas medidas nos permiten ofrecerte capacidades de nivel Mythos en otras áreas más pronto, y estamos trabajando para perfeccionarlas. Se cambió a Opus 4.8. Enviar comentarios o más información.
+cloudflared 2026.5.0 está instalado, brew disponible, no hay clave ed25519 aún. El gate ahora es: ¿la sesión de Cloudflare Access está activa y el túnel llega al servidor? Lo pruebo en solo-lectura, sin contraseña y sin cambios (BatchMode evita que cuelgue en un prompt):
+
+Ejecutó
+Probe Cloudflare Access SSH connectivity (no password)
+Bash
+ssh -o BatchMode=yes -o ConnectTimeout=20 -o StrictHostKeyChecking=accept-new -o ProxyCommand="cloudflared access ssh --hostname %h" lenovo@ssh.chatagic.com "echo CONNECT_OK; hostname; nproc" 2>&1 | head -25; echo "--- ssh exit: ${PIPESTATUS[0]} ---"
+lenovo@ssh.chatagic.com: Permission denied (publickey,password).
+--- ssh exit:  ---
+Conectividad confirmada ✅ — Permission denied (publickey,password) significa que el túnel de Cloudflare Access está activo y llega al sshd del Lenovo (solo falta instalar la clave). Así que la Parte B es viable.
+
+Plan claro y seguro, en este orden:
+
+Parte A (código, ahora): construyo el microservicio standalone services/sandbox (API HTTP: /health sin auth + endpoints Bearer, orquestación Docker con sesiones, semáforo de 15 contenedores, límites por contenedor --network none/1cpu/1g/100pids, TTL 10min + GC) y un driver remoto en la app para que el loop del doc-agent ejecute las herramientas en el Lenovo por HTTPS. Tests + DEPLOY.md. Commit + push.
+Parte B (servidor): clave ed25519 → instalar con la contraseña una sola vez (script expect efímero) → verificar login por clave → endurecer (rotar password fuerte a ~/secrets/, PasswordAuthentication no, PermitRootLogin no, fail2ban, unattended-upgrades) → desplegar el servicio (Docker runner + systemd en 127.0.0.1:4000) → ingress del tunnel sandbox.chatagic.com → verificar /health 200 sin auth y 401/200 con/sin Bearer → confirmar que los servicios de clientes (CRMs, Open WebUI, nginx) siguen intactos.
+Empiezo con el runner Docker self-contained del microservicio:
+
+Creado
+docker-sandbox.js
++146
+-0
+Now the HTTP server (built-in http, zero npm deps → trivial standalone deploy): session registry, 15-container semaphore, 10-min TTL GC, Bearer auth:

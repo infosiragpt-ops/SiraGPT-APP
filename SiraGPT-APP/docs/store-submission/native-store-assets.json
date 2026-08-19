@@ -1,0 +1,228 @@
+{
+  "version": "2026-07-04",
+  "status": "submission-assets-draft",
+  "description": "Non-secret native store asset manifest for SiraGPT Android, iPhone, macOS, and Windows releases.",
+  "platforms": {
+    "android": {
+      "label": "Android / Google Play",
+      "requiredAssets": [
+        {
+          "id": "android-launcher-xxxhdpi",
+          "label": "Packaged launcher icon, xxxhdpi",
+          "stage": "packaged",
+          "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png",
+          "format": "png",
+          "dimensions": {
+            "width": 192,
+            "height": 192
+          }
+        },
+        {
+          "id": "play-high-res-icon",
+          "label": "Google Play high-res icon",
+          "stage": "store-listing",
+          "path": "apps/desktop/assets/icon.png",
+          "format": "png",
+          "dimensions": {
+            "width": 512,
+            "height": 512
+          }
+        },
+        {
+          "id": "play-feature-graphic",
+          "label": "Google Play feature graphic",
+          "stage": "store-listing",
+          "path": "docs/store-submission/assets/android/feature-graphic.png",
+          "format": "png",
+          "allowAlpha": false,
+          "dimensions": {
+            "width": 1024,
+            "height": 500
+          }
+        }
+      ],
+      "requiredCollections": [
+        {
+          "id": "play-phone-screenshots",
+          "label": "Google Play phone screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/android",
+          "pattern": "^phone-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 2,
+          "formats": ["png", "jpg", "jpeg"],
+          "dimensions": {
+            "minWidth": 320,
+            "minHeight": 320,
+            "maxWidth": 3840,
+            "maxHeight": 3840
+          }
+        }
+      ],
+      "optionalCollections": [
+        {
+          "id": "play-tablet-screenshots",
+          "label": "Google Play tablet screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/android",
+          "pattern": "^tablet-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 1,
+          "formats": ["png", "jpg", "jpeg"],
+          "dimensions": {
+            "minWidth": 1024,
+            "minHeight": 600
+          }
+        }
+      ]
+    },
+    "ios": {
+      "label": "iPhone / App Store Connect",
+      "requiredAssets": [
+        {
+          "id": "ios-app-icon-1024",
+          "label": "App Store app icon",
+          "stage": "packaged",
+          "path": "ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png",
+          "format": "png",
+          "allowAlpha": false,
+          "dimensions": {
+            "width": 1024,
+            "height": 1024
+          }
+        },
+        {
+          "id": "ios-app-icon-catalog",
+          "label": "iOS app icon catalog",
+          "stage": "packaged",
+          "path": "ios/App/App/Assets.xcassets/AppIcon.appiconset/Contents.json",
+          "format": "json",
+          "minBytes": 40
+        }
+      ],
+      "requiredCollections": [
+        {
+          "id": "app-store-iphone-screenshots",
+          "label": "App Store iPhone screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/ios",
+          "pattern": "^iphone-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 3,
+          "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
+          "dimensions": {
+            "allowedSizes": [
+              { "width": 1260, "height": 2736 },
+              { "width": 2736, "height": 1260 },
+              { "width": 1290, "height": 2796 },
+              { "width": 2796, "height": 1290 },
+              { "width": 1320, "height": 2868 },
+              { "width": 2868, "height": 1320 }
+            ]
+          }
+        }
+      ],
+      "optionalCollections": [
+        {
+          "id": "app-store-ipad-screenshots",
+          "label": "App Store iPad screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/ios",
+          "pattern": "^ipad-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 3,
+          "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
+          "dimensions": {
+            "allowedSizes": [
+              { "width": 2048, "height": 2732 },
+              { "width": 2732, "height": 2048 }
+            ]
+          }
+        }
+      ]
+    },
+    "macos": {
+      "label": "macOS",
+      "requiredAssets": [
+        {
+          "id": "macos-icns-icon",
+          "label": "macOS app icon",
+          "stage": "packaged",
+          "path": "apps/desktop/assets/icon.icns",
+          "format": "icns",
+          "minBytes": 100000
+        },
+        {
+          "id": "macos-png-icon-source",
+          "label": "macOS icon source",
+          "stage": "packaged",
+          "path": "apps/desktop/assets/icon.png",
+          "format": "png",
+          "dimensions": {
+            "width": 512,
+            "height": 512
+          }
+        }
+      ],
+      "requiredCollections": [
+        {
+          "id": "macos-desktop-screenshots",
+          "label": "macOS product screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/macos",
+          "pattern": "^desktop-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 2,
+          "formats": ["png", "jpg", "jpeg"],
+          "allowAlpha": false,
+          "dimensions": {
+            "allowedSizes": [
+              { "width": 1280, "height": 800 },
+              { "width": 1440, "height": 900 },
+              { "width": 2560, "height": 1600 },
+              { "width": 2880, "height": 1800 }
+            ]
+          }
+        }
+      ],
+      "optionalCollections": []
+    },
+    "windows": {
+      "label": "Windows",
+      "requiredAssets": [
+        {
+          "id": "windows-ico-icon",
+          "label": "Windows app icon",
+          "stage": "packaged",
+          "path": "apps/desktop/assets/icon.ico",
+          "format": "ico",
+          "minBytes": 50000
+        },
+        {
+          "id": "windows-png-icon-source",
+          "label": "Windows icon source",
+          "stage": "packaged",
+          "path": "apps/desktop/assets/icon.png",
+          "format": "png",
+          "dimensions": {
+            "width": 512,
+            "height": 512
+          }
+        }
+      ],
+      "requiredCollections": [
+        {
+          "id": "windows-desktop-screenshots",
+          "label": "Windows product screenshots",
+          "stage": "store-listing",
+          "directory": "docs/store-submission/assets/windows",
+          "pattern": "^desktop-[0-9a-z-]+\\.(png|jpg|jpeg)$",
+          "minCount": 2,
+          "formats": ["png", "jpg", "jpeg"],
+          "dimensions": {
+            "minWidth": 1280,
+            "minHeight": 720
+          }
+        }
+      ],
+      "optionalCollections": []
+    }
+  }
+}

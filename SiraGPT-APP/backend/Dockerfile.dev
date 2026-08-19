@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────
+# siraGPT — Backend (Express) Development Build
+# ──────────────────────────────────────────────────────────────
+# Lightweight image for local dev with hot-reload. Source is
+# mounted as a volume by docker-compose.override.yml.
+# ──────────────────────────────────────────────────────────────
+
+FROM node:22-alpine
+
+WORKDIR /app
+
+RUN apk add --no-cache pandoc wget
+
+# Install all deps (including devDependencies for testing)
+COPY package.json package-lock.json ./
+RUN npm ci --prefer-offline --no-audit --no-fund
+
+# Generate Prisma client at build time
+COPY prisma ./prisma
+RUN npx prisma generate
+
+EXPOSE 5000
+
+# Default: production start (override uses --watch in override.yml)
+CMD ["node", "index.js"]

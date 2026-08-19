@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "qWGzGe1HE6YCGzrOEdXFN"
+uri = "file://extension/icons/icon-128.png"
+type = "image"
+title = "Sira Appshots icon (128px) preview"

@@ -1,0 +1,72 @@
+name: Inspect backend logs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT }}
+          timeout: 30s
+          command_timeout: 2m
+          script_stop: false
+          script: |
+            set +e
+            cd /root/siraNew/siraGPT || true
+
+            PM2_APP="${PM2_APP:-siraGPT-api}"
+            if ! pm2 describe "$PM2_APP" >/dev/null 2>&1; then
+              PM2_APP="$(pm2 jlist 2>/dev/null | node -e '
+                const fs = require("fs");
+                let list = [];
+                try {
+                  const input = fs.readFileSync(0, "utf8").trim();
+                  list = input ? JSON.parse(input) : [];
+                } catch {
+                  list = [];
+                }
+                const text = (p) => [
+                  p && p.name,
+                  p && p.pm2_env && p.pm2_env.pm_cwd,
+                  p && p.pm2_env && p.pm2_env.cwd,
+                  p && p.pm2_env && p.pm2_env.pm_exec_path,
+                  p && p.pm2_env && p.pm2_env.script
+                ].filter(Boolean).join(" ");
+                const found = list.find((p) => /siragpt|sira|backend|api/i.test(text(p)));
+                if (found && found.name) process.stdout.write(found.name);
+              ')"
+            fi
+
+            echo "=== /health snapshot ==="
+            curl -i --max-time 10 https://api.siragpt.com/health || true
+            echo ""
+            echo "=== /health/ready snapshot ==="
+            curl -i --max-time 10 https://api.siragpt.com/health/ready || true
+            echo ""
+            echo "=== local backend health ==="
+            curl -i --max-time 10 "http://127.0.0.1:${PORT:-5000}/health" || true
+            echo ""
+            echo "=== PM2 status ==="
+            pm2 list || true
+            echo ""
+            echo "=== PM2 describe: ${PM2_APP:-unknown} ==="
+            if [[ -n "${PM2_APP:-}" ]]; then
+              pm2 describe "$PM2_APP" || true
+            fi
+            echo ""
+            echo "=== Recent backend logs ==="
+            if [[ -n "${PM2_APP:-}" ]]; then
+              pm2 logs "$PM2_APP" --nostream --lines 120 || true
+            else
+              pm2 logs --nostream --lines 120 || true
+            fi
+            echo ""
+            echo "=== nginx recent errors ==="
+            journalctl -u nginx --since "10 minutes ago" --no-pager -n 120 2>/dev/null || true

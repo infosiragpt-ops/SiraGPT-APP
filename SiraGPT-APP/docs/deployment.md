@@ -1,0 +1,150 @@
+# siraGPT Deployment
+
+This document covers the production deployment pipeline, including
+the manual **auto-rollback** path and the **blue-green** scaffold
+added in cycle 34.
+
+## Standard deploy (automatic + manual auto-rollback)
+
+Entry point: `.github/workflows/deploy.yml` -> SSH to the VPS -> inline
+Docker Compose deploy script with automatic rollback.
+
+Pushes to `main` deploy automatically through the same protected release path:
+
+1. `CI` completes successfully for the exact `main` commit.
+2. `.github/workflows/promote-main-to-production.yml` fast-forwards
+   `production-main` to that same SHA. If `main` and `production-main`
+   diverged, the workflow fails closed and requires a normal branch
+   reconciliation first.
+3. `CI` completes successfully again on `production-main`.
+4. `.github/workflows/deploy.yml` deploys the exact green SHA to the VPS,
+   runs migration safety checks, builds the Docker images, verifies
+   `/api/health/ready`, `/api/version`, the frontend, and the `/code`
+   runtime canary, and rolls back on failure.
+
+Manual releases remain available through the `Deploy to production` workflow
+or a `deploy-production-*` tag after `production-main` CI is green. Optionally
+provide `target_sha` to deploy a specific production-main commit.
+
+Sequence:
+
+1. Snapshot current `git HEAD` SHA on the VPS.
+2. Run `scripts/backup-db.sh` (non-fatal — logged if it fails).
+3. Run `scripts/deploy-production.sh` (pull, build, migrate, restart).
+4. If the deploy fails, `git reset --hard` to the previous SHA,
+   rebuild frontend, `pm2 restart`, then poll `/health` for 20×2s.
+5. Exit codes: `0` success, `1` deploy failed but rollback OK,
+   `2` rollback failed (manual intervention).
+
+### Pre-deploy safety check (cycle 34)
+
+The workflow runs `node scripts/check-migration-safety.js` before
+SSHing to the VPS. It scans `backend/prisma/migrations/*/migration.sql`
+for destructive operations (DROP TABLE/COLUMN, ALTER COLUMN TYPE,
+SET NOT NULL without DEFAULT, renames) and **fails the build**
+unless the migration file contains an explicit marker:
+
+```sql
+-- migration-safety: allow-destructive reason="planned column drop"
+```
+
+Override at the workflow level by setting the env var
+`MIGRATION_SAFETY_OVERRIDE=1` (use with care — break-glass only).
+
+### U0 Prisma migration baseline
+
+Production must use the same `prisma migrate deploy` path as CI. If the
+live database is schema-equivalent but has no `_prisma_migrations` history
+(P3005), do **not** accept that from boot. Instead:
+
+1. Merge the U0 commit to `production-main` and wait for green CI
+   (`migrate deploy` on an empty service database).
+2. Push an annotated tag `deploy-production-baseline-<shortsha>` at that
+   exact SHA. The deploy workflow runs the reviewed one-off
+   `backend/scripts/baseline-migration-history.js` (confirm phrase
+   `I_REVIEWED_PRODUCTION_SCHEMA`) which proves zero schema drift and marks
+   existing migration directories as applied **without replaying DDL**.
+3. The same deploy then runs `--migrate-only`. Subsequent
+   `deploy-production-*` tags use strict `migrate deploy` only.
+4. Schema-bearing units must not ship until this baseline is green in
+   production. Rollback of later schema migrations is constrained by
+   additive-only migration safety; historical DDL is never replayed by the
+   baseline script.
+
+### Post-deploy health check
+
+After `deploy-with-rollback.sh` returns, the workflow polls
+`/health/ready` for up to 60s. A failure triggers the SSH-side
+rollback automatically (handled by the script). The polling job is
+marked `continue-on-error: true` for now so it never wedges a
+healthy deploy while the probe is being tuned.
+
+### Slack notifications
+
+Deploy start/success/failure post into the channel configured for
+the `${{ secrets.SLACK_DEPLOY_WEBHOOK }}` webhook (cycle 25
+integration). Failures include the commit SHA and the URL of the
+failing run.
+
+## Blue-Green deploy (scaffold)
+
+Entry point: `scripts/deploy-blue-green.sh`. Designed for
+zero-downtime frontend swaps:
+
+1. Reads currently active color from `/root/siragpt/.active-color`
+   (defaults to `blue` on first run).
+2. Pulls the requested `IMAGE` and starts a new container on the
+   inactive color's port (`BLUE_PORT=3010` / `GREEN_PORT=3011`).
+3. Polls the new container's `/health/ready` for up to
+   `HEALTH_TIMEOUT_SECONDS=60`.
+4. On healthy: swaps the nginx active-conf symlink, validates with
+   `nginx -t`, then `nginx -s reload`. Writes the new color to
+   `.active-color`.
+5. On unhealthy: stops/removes the new container, leaves the old
+   one serving, exits non-zero.
+6. **Drain**: sleeps `DRAIN_SECONDS=30` before stopping the old
+   container, giving in-flight requests time to finish.
+
+### Required nginx layout
+
+```
+/etc/nginx/conf.d/siragpt-blue.conf     → upstream → 127.0.0.1:3010
+/etc/nginx/conf.d/siragpt-green.conf    → upstream → 127.0.0.1:3011
+/etc/nginx/conf.d/siragpt-active.conf   → symlink to one of the above
+```
+
+The main site config `include`s `siragpt-active.conf`. Swapping the
+symlink + `nginx -s reload` is what cuts traffic over.
+
+### Manual rollback after blue-green
+
+Re-run the script with the previous image:
+
+```bash
+IMAGE=siragpt-frontend:<previous-sha> ./scripts/deploy-blue-green.sh
+```
+
+It will deploy the previous image to the now-inactive color and
+swap back.
+
+## Configuration validation (cycle 34)
+
+`backend/src/utils/config-validator.js` runs at boot, before any
+service init. It enforces per-environment required env vars
+(`dev` / `staging` / `prod`) and warns on cross-field
+misconfigurations:
+
+- `NODE_ENV=production` + `PRISMA_DATABASE_URL` pointing to localhost →
+  warning by default because same-host Postgres/sidecars are valid production
+  topologies. Set `DATABASE_URL_LOCALHOST_POLICY=block` or
+  `REJECT_LOCAL_DATABASE_URL=true` to fail closed.
+- `PRISMA_DATABASE_URL=prisma+postgres://…` without a direct
+  `DIRECT_DATABASE_URL` (or direct legacy fallback) → migration startup exits
+  with `DIRECT_DATABASE_URL_REQUIRED`; the remote runtime URL is never copied
+  into Prisma CLI's `DATABASE_URL`.
+- Short `SESSION_SECRET` / `JWT_SECRET` in production → warning.
+- `CORS_ORIGINS="*"` in production → warning.
+- `LOG_LEVEL=debug` in production → warning.
+
+To extend: edit `REQUIRED_BY_ENV` / `RECOMMENDED_BY_ENV` in
+`config-validator.js`.
