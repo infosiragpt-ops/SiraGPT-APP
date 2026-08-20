@@ -56,7 +56,7 @@ export function ComputerViewer({
       host.replaceChildren()
       try {
         const mod = await import("@novnc/novnc/lib/rfb.js")
-        const RFB = mod.default || mod.RFB || mod
+        const RFB = mod.default
         if (cancelled || !hostRef.current) return
         const rfb: RfbLike = new RFB(hostRef.current, url, {
           credentials: password ? { password } : undefined,
