@@ -78,6 +78,16 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Image used by the backend to spawn one persistent Linux desktop
+  # (Xfce + noVNC) per member. This service is not started; compose
+  # only builds `siragpt-member-desktop:latest` for `docker run`.
+  member-desktop-image:
+    profiles: ["desktop-image"]
+    build:
+      context: ./scripts
+      dockerfile: member-desktop.Dockerfile
+    image: siragpt-member-desktop:latest
+
   # ── Codex/APPS Runner ─────────────────────────────────────
   # Canary workspace runner for APPS/Codex V2. This shared container is
   # contained but is not the final hostile multi-tenant isolation boundary.

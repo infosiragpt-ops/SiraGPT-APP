@@ -85,6 +85,7 @@ import {
   type CodePreviewSelectionCancelDetail,
   type CodePreviewSelectionDetail,
 } from "@/lib/code-preview-selection"
+import { MemberDesktopPane } from "@/components/code/member-desktop-pane"
 
 type LiveRun = { phase: "idle" | "starting" | "ready" | "error" | "stuck"; devUrl: string; note: string }
 type RunnerStatus = { ready?: boolean; error?: string | null; framework?: string | null; tail?: string[]; devUrl?: string }
@@ -205,6 +206,7 @@ const KIND_LABEL: Record<PreviewKind, string> = {
 
 export function PreviewPane() {
   const { files, activePath, activeFolder } = useCodeWorkspace()
+  const [computerSurface, setComputerSurface] = React.useState(true)
 
   const [auto, setAuto] = React.useState(true)
   // v2 key: the Replit-style layout defaults everyone back to the full-width
@@ -1325,6 +1327,20 @@ export function PreviewPane() {
           <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
           <span className="hidden md:inline">Canvas</span>
         </button>
+        <button
+          type="button"
+          onClick={() => setComputerSurface((value) => !value)}
+          title="Máquina Linux persistente de este miembro"
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors",
+            computerSurface
+              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+              : "border-border/60 bg-background text-foreground hover:bg-muted/60",
+          )}
+        >
+          <Monitor className="h-3.5 w-3.5" />
+          <span className="hidden md:inline">Computadora</span>
+        </button>
 
         <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
 
@@ -1503,6 +1519,13 @@ export function PreviewPane() {
           className="pointer-events-none absolute inset-0 z-40 [&>*]:pointer-events-auto"
           data-testid="agent-company-preview-slot"
         />
+        {computerSurface ? (
+          <div className="absolute inset-0 z-10">
+            <MemberDesktopPane
+              title={`${activeFolder?.name || "CEO Office"} · Computadora`}
+            />
+          </div>
+        ) : null}
         {selectionMode ? (
           <div
             role="status"

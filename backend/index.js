@@ -449,6 +449,7 @@ const adminReportsRoutes = require('./src/routes/admin/reports');
 const docAgentRoutes = require('./src/routes/doc-agent');
 const opencodeRoutes = require('./src/routes/opencode');
 const codeRunnerRoutes = require('./src/routes/code-runner');
+const memberDesktopRoutes = require('./src/routes/member-desktop');
 const researchAgentRoutes = require('./src/routes/research-agent');
 const goalsRoutes = require('./src/routes/goals');
 const sandboxRoutes = require('./src/routes/sandbox');
@@ -1270,6 +1271,7 @@ app.use('/api/link-preview', linkPreviewRoutes);
 app.use('/api/doc-agent', docAgentRoutes);
 app.use('/api/opencode', opencodeRoutes);
 app.use('/api/code-runner', codeRunnerRoutes);
+app.use('/api/member-desktop', memberDesktopRoutes);
 app.use('/api/research-agent', researchAgentRoutes);
 app.use('/api/goals', goalsRoutes);
 app.use('/api/sandbox', sandboxRoutes);
@@ -1656,6 +1658,7 @@ async function startServer() {
     // HTTP preview requests are handled by code-runner.js; upgrades must be
     // attached to the underlying Node server because Express never sees them.
     codeRunnerRoutes.attachPreviewWebSocketProxy(server);
+    memberDesktopRoutes.attachWebSocketProxy(server);
 
     // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
     // Caddy forwards the upgrade to this HTTP server; the route resolves the
