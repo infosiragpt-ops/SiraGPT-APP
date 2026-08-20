@@ -30,6 +30,7 @@ const EXPENSIVE_GENERATION_MOUNTS = Object.freeze([
   '/api/elevenlabs',
   '/api/video',
   '/api/computer-use',
+  '/api/agent-computer',
   '/api/research-agent',
   '/api/scientific-search',
   '/api/answer',

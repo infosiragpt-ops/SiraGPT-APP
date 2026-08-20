@@ -1,0 +1,11 @@
+{
+  "name": "siragpt-computer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SiraGPT per-session agent computer (image + orchestrator + in-image agent).",
+  "scripts": {
+    "start": "npm --prefix orchestrator start",
+    "test": "node --test ../../backend/tests/agent-computer-loop.test.js ../../backend/tests/agent-computer-agent.test.js ../../backend/tests/agent-computer-orchestrator.test.js ../../backend/tests/agent-computer-docker.test.js",
+    "build:image": "docker build -t ${COMPUTER_IMAGE:-siragpt-computer:latest} ."
+  }
+}

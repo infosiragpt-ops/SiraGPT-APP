@@ -424,6 +424,7 @@ const {
     initializeWebSocketServer,
     closeComputerUseWebSocketServer,
 } = require('./src/routes/computer-use');
+const agentComputerRoutes = require('./src/routes/agent-computer');
 const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
 const {
     closeUserSessionRevocationBus,
@@ -749,6 +750,7 @@ app.use('/api/ai/generate', expensiveLimiter);
 // indices (Crossref/OpenAlex/…).
 app.use('/api/research-agent', expensiveLimiter);
 app.use('/api/scientific-search', expensiveLimiter);
+app.use('/api/agent-computer', expensiveLimiter);
 app.use('/api/', apiLimiter);
 
 // Idempotency runs AFTER rate-limit (so a flood of replays still
@@ -1254,6 +1256,7 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
