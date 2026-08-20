@@ -6176,13 +6176,22 @@ router.post(
               // fenced-JSON calls parsed back — lets ANY model drive the
               // loop), or 'none' (prompted disabled via env → legacy gate).
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
-              const __agenticWillRun = (
-                agenticStream.isEnabled()
-                && (shouldRunAgentic || documentEditRequested || createDocRequested)
+              const __computerOnlyTurn = agenticStream.resolveComputerOnlyTurn({
+                disableAgentic: req.body.disableAgentic === true,
+                publicWebReadonly: __publicWebReadonly,
+                userId,
+                toolCallMode: __toolCallMode,
+              });
+              const __fullAgenticTurn = (
+                (shouldRunAgentic || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
-                && !__publicWebReadonly
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
+              );
+              const __agenticWillRun = (
+                agenticStream.isEnabled()
+                && !__publicWebReadonly
+                && (__fullAgenticTurn || __computerOnlyTurn)
               );
               // F2 telemetry: a document turn (the AgentRunner would claim it)
               // that does NOT enter the agentic loop is logged as 'skipped'
@@ -6339,9 +6348,12 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
-                  maxSteps: Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
-                    ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
-                    : undefined,
+                  computerOnly: __computerOnlyTurn,
+                  maxSteps: __computerOnlyTurn
+                    ? require('../services/computer/control-loop').MAX_CONTROL_STEPS
+                    : (Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
+                      ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
+                      : undefined),
                   toolCallMode: __toolCallMode,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision

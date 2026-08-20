@@ -46,13 +46,14 @@ const CATEGORY_PATTERNS = Object.freeze({
   generation: /(create_document|verify_artifact)/,
   media: /(image|video|audio|music|chart|diagram|svg|infograph|dashboard|organigram|mermaid|timeline|kanban|swot|eisenhower|raci|canvas|pyramid|porter|risk_matrix|funnel|radar|journey|okr|empathy|lean|scorecard|ansoff|bcg|moscow|decision_tree|concept_map|mindmap|swimlane|pestel|process_flow|comparison_table|gantt|gauge|waterfall|heatmap|treemap)/i,
   memory: /(memory_recall|session_|active_memory)/,
+  computer: /^computer_/,
 });
 
 // intent → per-category weight.
 const INTENT_CATEGORIES = Object.freeze({
-  research_question: { research: 3, web: 3, rag: 1 },
-  web_search: { web: 3, research: 2 },
-  search_web: { web: 3, research: 2 },
+  research_question: { research: 3, web: 3, rag: 1, computer: 2 },
+  web_search: { web: 3, research: 2, computer: 2 },
+  search_web: { web: 3, research: 2, computer: 2 },
   code_generation: { code: 3, generation: 1 },
   web_app_build: { code: 3, generation: 1 },
   data_analysis: { code: 2, rag: 2, media: 2 },
@@ -90,14 +91,14 @@ function categoriesFor(name) {
 }
 
 function buildCategoryWeights({ intent, signals }) {
-  const weights = { web: 0, research: 0, rag: 0, code: 0, generation: 0, media: 0, memory: 0 };
+  const weights = { web: 0, research: 0, rag: 0, code: 0, generation: 0, media: 0, memory: 0, computer: 0 };
   const it = String(intent || '').toLowerCase();
   const base = INTENT_CATEGORIES[it];
   if (base) for (const [c, w] of Object.entries(base)) weights[c] = (weights[c] || 0) + w;
   const s = signals || {};
   if (s.hasFiles) { weights.rag += 3; }
   if (s.hasCode) { weights.code += 2; }
-  if (s.needsResearch) { weights.research += 2; weights.web += 2; }
+  if (s.needsResearch) { weights.research += 2; weights.web += 2; weights.computer += 2; }
   if (s.hasMedia) { weights.media += 3; }
   return weights;
 }
@@ -173,6 +174,9 @@ function selectTools(rawInput, deps = {}) {
     // specific-intent turn even though the user attached a file to edit it.
     if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze|document_edit)/.test(n)) coreSet.add(toName(t));
     if ((signals.hasMedia || /media|image|chart/.test(it)) && /(create_document|generate_image|create_chart)/.test(n)) coreSet.add(toName(t));
+    if ((categoryWeights.web > 0 || categoryWeights.research > 0) && /^computer_(navigate|screenshot)$/.test(n)) {
+      coreSet.add(toName(t));
+    }
   }
 
   // Score everything, then pick core + top-scored up to maxTools.

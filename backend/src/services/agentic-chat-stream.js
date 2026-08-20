@@ -138,6 +138,10 @@ const STAGE_LABELS = {
     monitor_ci: () => 'Esperando verificación CI en verde',
     check_ci_status: () => 'Verificando estado de CI',
     create_pr: () => 'Creando Pull Request',
+    computer_navigate: (args) => `Abriendo ${prettyDomain(args?.url) || 'página'} en la computadora`,
+    computer_screenshot: () => 'Capturando la computadora del miembro',
+    computer_click: (args) => `Clic en (${Number(args?.x) || 0}, ${Number(args?.y) || 0})`,
+    computer_type: () => 'Escribiendo en la computadora',
   finalize:   () => 'Componiendo respuesta',
 };
 
@@ -695,6 +699,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // U3: optional turn-policy snapshot (observe/enforce). Observe mode only
       // attaches telemetry + shadow diffs; never changes tool/routing behaviour.
       turnPolicy = null,
+      // /code department turns send disableAgentic:true so the full host_bash
+      // / artifact toolset stays off. computerOnly keeps a NARROW set:
+      // computer_* + web_search + read_url against the persistent member VM.
+      computerOnly = false,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
@@ -1019,20 +1027,27 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     };
     const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
 
-    let tools = toolsOverride || buildDefaultTools({
-      userQuery,
-      selection,
-      clearance: toolContext && toolContext.clearance,
-      capabilities: customGptCapabilities,
-      skillPolicy: runtimeSkillPolicy,
-    });
+    const narrowComputer = Boolean(computerOnly && !toolsOverride);
+    let tools = toolsOverride
+      || (narrowComputer
+        ? buildComputerOnlyTools({
+          userId: toolContext && toolContext.userId,
+        })
+        : buildDefaultTools({
+          userQuery,
+          selection,
+          clearance: toolContext && toolContext.clearance,
+          capabilities: customGptCapabilities,
+          skillPolicy: runtimeSkillPolicy,
+          userId: toolContext && toolContext.userId,
+        }));
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
     // AFTER buildDefaultTools (so the per-turn selector cannot drop them) and
     // BEFORE the harness wrap (so each action call emits typed SSE events).
     // Only when the GPT defines actions; kill switch SIRAGPT_GPT_ACTIONS_ENABLED=0.
     // Fail-open: a builder error never breaks the turn.
-    if (!toolsOverride && Array.isArray(customGptActions) && customGptActions.length) {
+    if (!toolsOverride && !narrowComputer && Array.isArray(customGptActions) && customGptActions.length) {
       const actionsGate = String(process.env.SIRAGPT_GPT_ACTIONS_ENABLED || '').trim().toLowerCase();
       if (actionsGate !== '0' && actionsGate !== 'off') {
         try {
@@ -1057,7 +1072,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // Boot failures are fail-open; explicit blocks from trusted system
     // plugins and user cancellation remain authoritative.
     let pluginLifecycle = null;
-    if (!toolsOverride) {
+    if (!toolsOverride && !narrowComputer) {
       try {
         pluginLifecycle = await prepareAgentPluginLifecycle({
           userId: toolContext.userId || null,
@@ -1107,6 +1122,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     }
     if (
       !toolsOverride
+      && !narrowComputer
       && __coworkHarnessEnabled
       && toolContext?.prisma?.coworkWorkspace
       && toolContext?.prisma?.coworkRun
@@ -1174,7 +1190,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // leaves the original toolset untouched. Skipped for toolsOverride
     // callers (tests pin the legacy frame contract). Env: SIRAGPT_AGENT_HARNESS=0.
     let __harness = null;
-    if (!toolsOverride) {
+    if (!toolsOverride && !narrowComputer) {
       try {
         const { attachHarness } = require('./agent-harness/run-agent-turn');
         __harness = await attachHarness({
@@ -1215,7 +1231,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // SMALL, ordered toolset — weak models depend on harness quality far more
     // than flagships, and a ~70-tool catalog rendered as prose overwhelms
     // them. Intent tools (media, file/RAG) are pinned so they survive the cap.
-    if (toolCallMode === 'prompted' && !toolsOverride) {
+    if (toolCallMode === 'prompted' && !toolsOverride && !narrowComputer) {
       try {
         const { capToolsForPrompted } = require('./agents/prompted-tool-calling');
         const pinned = [
@@ -1378,9 +1394,13 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // Prompted mode: budgets enforced in code, not prompts. Weak models drift
     // on long horizons; a tighter step budget converges to finalize sooner
     // (the loop already force-narrows to finalize on the last step).
-    if (toolCallMode === 'prompted') {
+    if (toolCallMode === 'prompted' && !narrowComputer) {
       const promptedCap = Number(process.env.SIRAGPT_PROMPTED_MAX_STEPS) || 10;
       maxStepsOverride = Math.min(maxStepsOverride, Math.max(3, promptedCap));
+    }
+    if (narrowComputer) {
+      const { capControlSteps, MAX_CONTROL_STEPS } = require('./computer/control-loop');
+      maxStepsOverride = capControlSteps(maxStepsOverride || MAX_CONTROL_STEPS);
     }
     if (__coworkRun?.maxSteps) {
       maxStepsOverride = Math.min(maxStepsOverride, __coworkRun.maxSteps);
@@ -1450,11 +1470,23 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
-    const extraSystem = [
+    const computerPrompt = require('./computer/computer-tools');
+    const hasComputerTools = tools.some((tool) => tool && String(tool.name || '').startsWith('computer_'));
+    const extraSystem = narrowComputer
+      ? [
+        computerPrompt.COMPUTER_SYSTEM_INSTRUCTION,
+        'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
+        'Este turno de departamento en /code solo tiene computer_navigate, computer_screenshot, computer_click, computer_type, web_search y read_url.',
+        'No hay host_bash ni generador de artefactos. Todas las áreas comparten la computadora persistente del miembro.',
+        'Máximo 25 pasos. Si la misma acción se repite 3 veces, detente.',
+        historyForPrompt ? `\nConversación previa (recortada):\n${historyForPrompt}` : '',
+      ].filter(Boolean).join('\n')
+      : [
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
       pluginPromptBlock,
+      hasComputerTools ? computerPrompt.COMPUTER_SYSTEM_INSTRUCTION : '',
       buildSkillExecutionPrompt(customGptAgentPolicy),
       buildArtifactDeliveryPrompt(artifactDeliveryContract),
       'Responde SIEMPRE en español, con tono profesional y cercano. No uses emojis.',
@@ -2286,6 +2318,18 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const wantsMedia = mediaAlways
       || (!!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind));
     const tools = wantsMedia ? [...base, ...loadMediaTools()] : base;
+    if (opts && opts.userId) {
+      try {
+        const persistent = require('./computer/persistent');
+        if (persistent.computerToolsAvailable({ userId: opts.userId, env: opts.env })) {
+          tools.push(...require('./computer/computer-tools').buildComputerTools({
+            userId: opts.userId,
+            env: opts.env,
+            model: opts.model,
+          }));
+        }
+      } catch (_) { /* computer tools are optional */ }
+    }
     const seen = new Set();
     const deduped = tools.filter((tool) => {
       if (!tool || !tool.name || seen.has(tool.name)) return false;
@@ -2333,6 +2377,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     return gated;
   }
 
+  function buildComputerOnlyTools(opts = {}) {
+    const computerTools = require('./computer/computer-tools');
+    const web = baseWebTools().filter((tool) => tool.name === 'web_search' || tool.name === 'read_url');
+    return computerTools.buildComputerOnlyTools(opts, web);
+  }
+
   /**
    * Read the runtime feature flag for the agentic chat path. Agentic chat
    * remains available for tool-capable models. The turn-level policy above
@@ -2361,6 +2411,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     resolveToolCallMode,
     promptedToolsEnabled,
     agentFirstEnabled,
+    buildComputerOnlyTools,
+    computerToolsAvailable: (...args) => require('./computer/persistent').computerToolsAvailable(...args),
+    resolveComputerOnlyTurn: (...args) => require('./computer/persistent').resolveComputerOnlyTurn(...args),
     // Exposed for tests:
     _internal: {
       freshState,
@@ -2372,6 +2425,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       adaptAgentTool,
       baseWebTools,
       buildDefaultTools,
+      buildComputerOnlyTools,
       applyCustomGptCapabilityGates,
       SENTINEL_FENCE_OPEN,
       SENTINEL_FENCE_CLOSE,
