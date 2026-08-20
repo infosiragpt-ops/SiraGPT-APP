@@ -346,8 +346,14 @@ export const coworkApi = {
     )
   },
 
-  listAudit(workspaceId: string) {
-    const params = new URLSearchParams({ workspaceId, limit: "150" })
+  listWorkspaces(limit = 20) {
+    const params = new URLSearchParams({ limit: String(limit) })
+    return requestJson<{ workspaces: CoworkWorkspace[] }>(`/cowork/workspaces?${params}`)
+  },
+
+  listAudit(workspaceId?: string, limit = 150) {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (workspaceId) params.set("workspaceId", workspaceId)
     return requestJson<{ logs: CoworkAuditLog[] }>(`/cowork/audit?${params}`)
   },
 

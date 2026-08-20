@@ -17,32 +17,30 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { requestCodeAgentInstruction } from "@/lib/code-autonomous-starters"
+import {
+  coworkApi,
+  type CoworkApproval,
+  type CoworkAuditLog,
+  type CoworkWorkspace,
+} from "@/lib/cowork-api"
 import { cn } from "@/lib/utils"
+
+const COWORKER_POLICIES = ["review", "build", "research"] as const
+type CoworkerPolicy = (typeof COWORKER_POLICIES)[number]
 
 type Coworker = {
   id: string
   name: string
   role: string
   description: string
-  policy: "review" | "build" | "research"
+  policy: CoworkerPolicy
   custom?: boolean
 }
 
-type CoworkWorkspace = { id: string; name: string; updatedAt?: string }
-type CoworkApproval = {
-  id: string
-  tool: string
-  humanDescription?: string | null
-  expiresAt?: string | null
-}
-type CoworkAudit = {
-  id: string
-  action: string
-  resultSummary?: string | null
-  createdAt?: string
-}
-
 const STORAGE_KEY = "siragpt:code:coworkers:v1"
+const CUSTOM_ROLE = "Coworker personalizado"
+const CUSTOM_DESCRIPTION =
+  "Especialista creado para este navegador. Conserva las mismas políticas seguras."
 
 const DEFAULT_COWORKERS: readonly Coworker[] = [
   {
@@ -74,36 +72,50 @@ const POLICY_COPY: Record<Coworker["policy"], string> = {
   research: "Investigación y síntesis; sin credenciales ni publicaciones.",
 }
 
-function apiHeaders(): HeadersInit {
-  const token = typeof window === "undefined" ? null : window.localStorage.getItem("auth-token")
-  return {
-    Accept: "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  }
+function cleanText(value: unknown, maxLength: number): string {
+  if (typeof value !== "string") return ""
+  // eslint-disable-next-line no-control-regex
+  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength)
 }
 
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/cowork${path}`, {
-    ...init,
-    headers: { ...apiHeaders(), ...(init?.headers || {}) },
-    credentials: "include",
-  })
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null) as { error?: string; message?: string } | null
-    const error = new Error(payload?.message || payload?.error || `HTTP ${response.status}`)
-    Object.assign(error, { status: response.status })
-    throw error
+/**
+ * localStorage is an untrusted store (same rule as the persisted /code chat
+ * sessions): rebuild every profile from scratch with bounded strings and an
+ * allowlisted policy, and drop anything that does not conform.
+ */
+function sanitizeStoredCoworker(value: unknown): Coworker | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const id = cleanText(record.id, 64)
+  const name = cleanText(record.name, 48)
+  if (!/^custom-[a-z0-9-]{1,48}$/.test(id) || !name) return null
+  const policy = COWORKER_POLICIES.includes(record.policy as CoworkerPolicy)
+    ? (record.policy as CoworkerPolicy)
+    : "review"
+  return {
+    id,
+    name,
+    role: cleanText(record.role, 80) || CUSTOM_ROLE,
+    description: cleanText(record.description, 220) || CUSTOM_DESCRIPTION,
+    policy,
+    custom: true,
   }
-  return response.json() as Promise<T>
 }
 
 function readCustomCoworkers(): Coworker[] {
   try {
     const value = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]")
     if (!Array.isArray(value)) return []
-    return value
-      .filter((item): item is Coworker => typeof item?.id === "string" && typeof item?.name === "string")
-      .slice(0, 12)
+    const seen = new Set<string>(DEFAULT_COWORKERS.map((coworker) => coworker.id))
+    const result: Coworker[] = []
+    for (const item of value) {
+      const coworker = sanitizeStoredCoworker(item)
+      if (!coworker || seen.has(coworker.id)) continue
+      seen.add(coworker.id)
+      result.push(coworker)
+      if (result.length >= 12) break
+    }
+    return result
   } catch {
     return []
   }
@@ -122,7 +134,7 @@ export function CoworkersControlPanel({ onOpenChat }: { onOpenChat: () => void }
   const [workspaces, setWorkspaces] = React.useState<CoworkWorkspace[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = React.useState<string>("")
   const [approvals, setApprovals] = React.useState<CoworkApproval[]>([])
-  const [audit, setAudit] = React.useState<CoworkAudit[]>([])
+  const [audit, setAudit] = React.useState<CoworkAuditLog[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [newName, setNewName] = React.useState("")
@@ -136,19 +148,26 @@ export function CoworkersControlPanel({ onOpenChat }: { onOpenChat: () => void }
     setError(null)
     try {
       const [workspaceResult, approvalResult, auditResult] = await Promise.all([
-        api<{ workspaces: CoworkWorkspace[] }>("/workspaces?limit=20"),
-        api<{ approvals: CoworkApproval[] }>("/approvals?limit=12"),
-        api<{ logs: CoworkAudit[] }>("/audit?limit=8"),
+        coworkApi.listWorkspaces(20),
+        coworkApi.listApprovals(),
+        coworkApi.listAudit(undefined, 8),
       ])
-      setWorkspaces(workspaceResult.workspaces || [])
-      setApprovals(approvalResult.approvals || [])
+      const workspaceList = workspaceResult.workspaces || []
+      setWorkspaces(workspaceList)
+      setApprovals((approvalResult.approvals || []).slice(0, 12))
       setAudit(auditResult.logs || [])
       setSelectedWorkspaceId((current) =>
-        current && workspaceResult.workspaces.some((workspace) => workspace.id === current)
+        current && workspaceList.some((workspace) => workspace.id === current)
           ? current
-          : workspaceResult.workspaces[0]?.id || "",
+          : workspaceList[0]?.id || "",
       )
     } catch (reason) {
+      // Fail closed: never leave stale approvals/workspaces actionable after
+      // a failed refresh — the server state may have changed underneath.
+      setWorkspaces([])
+      setApprovals([])
+      setAudit([])
+      setSelectedWorkspaceId("")
       setError(statusCopy(reason))
     } finally {
       setLoading(false)
@@ -166,8 +185,8 @@ export function CoworkersControlPanel({ onOpenChat }: { onOpenChat: () => void }
     const coworker: Coworker = {
       id: `custom-${Date.now().toString(36)}`,
       name,
-      role: "Coworker personalizado",
-      description: "Especialista creado para este navegador. Conserva las mismas políticas seguras.",
+      role: CUSTOM_ROLE,
+      description: CUSTOM_DESCRIPTION,
       policy: "review",
       custom: true,
     }
@@ -197,19 +216,20 @@ export function CoworkersControlPanel({ onOpenChat }: { onOpenChat: () => void }
       "Responde en español y termina con el siguiente paso concreto.",
     ].join("\n")
     onOpenChat()
-    requestCodeAgentInstruction(prompt, { mode: selected.policy === "build" ? "app" : "app" })
+    // Fail closed with the displayed policy: only the build policy may enter
+    // the write-enabled agent mode; review/research stay in read-only "ask".
+    requestCodeAgentInstruction(prompt, { mode: selected.policy === "build" ? "app" : "ask" })
   }, [onOpenChat, selected, selectedWorkspaceId, workspaces])
 
-  const decideApproval = React.useCallback(async (approvalId: string, decision: "approve" | "deny") => {
+  const decideApproval = React.useCallback(async (approvalId: string, decision: "allow" | "deny") => {
     setActingApproval(approvalId)
     try {
-      await api(`/approvals/${encodeURIComponent(approvalId)}/decision`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision }),
-      })
+      await coworkApi.decideApproval(approvalId, decision)
       await refresh()
     } catch (reason) {
+      // Re-sync first (the approval may have expired or been resolved
+      // elsewhere), then surface the more specific decision error.
+      await refresh()
       setError(statusCopy(reason))
     } finally {
       setActingApproval(null)
@@ -316,8 +336,8 @@ export function CoworkersControlPanel({ onOpenChat }: { onOpenChat: () => void }
                 <p className="font-medium">{approval.humanDescription || approval.tool}</p>
                 <p className="mt-1 text-muted-foreground">Herramienta: {approval.tool}</p>
                 <div className="mt-2 flex justify-end gap-2">
-                  <Button size="sm" variant="outline" onClick={() => void decideApproval(approval.id, "deny")} disabled={actingApproval === approval.id}>Denegar</Button>
-                  <Button size="sm" onClick={() => void decideApproval(approval.id, "approve")} disabled={actingApproval === approval.id}>
+                  <Button size="sm" variant="outline" onClick={() => void decideApproval(approval.id, "deny")} disabled={actingApproval !== null || loading}>Denegar</Button>
+                  <Button size="sm" onClick={() => void decideApproval(approval.id, "allow")} disabled={actingApproval !== null || loading}>
                     {actingApproval === approval.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Aprobar"}
                   </Button>
                 </div>

@@ -119,7 +119,7 @@ export function claimCodeAgentRequest(
   return { text, mode }
 }
 
-export function claimPendingCodeAgentInstruction(): { text: string; mode: "app" } | null {
+export function claimPendingCodeAgentInstruction(): { text: string; mode: "app" | "ask" } | null {
   if (typeof window === "undefined") return null
   try {
     const raw = window.sessionStorage.getItem(PENDING_AGENT_REQUEST_KEY)
@@ -128,15 +128,16 @@ export function claimPendingCodeAgentInstruction(): { text: string; mode: "app" 
     const parsed = JSON.parse(raw) as { text?: string; mode?: string; ts?: number }
     const text = String(parsed?.text || "").trim()
     const ts = Number(parsed?.ts)
+    const mode = parsed?.mode === "app" || parsed?.mode === "ask" ? parsed.mode : null
     if (
       !text
-      || parsed?.mode !== "app"
+      || !mode
       || !Number.isFinite(ts)
       || Date.now() - ts > PENDING_AGENT_REQUEST_TTL_MS
     ) {
       return null
     }
-    return { text, mode: "app" }
+    return { text, mode }
   } catch {
     return null
   }
@@ -144,14 +145,15 @@ export function claimPendingCodeAgentInstruction(): { text: string; mode: "app" 
 
 export function requestCodeAgentInstruction(
   text: string,
-  options: { mode?: "app" } = {},
+  options: { mode?: "app" | "ask" } = {},
 ): boolean {
   if (typeof window === "undefined") return false
   const instruction = String(text || "").trim()
   if (!instruction) return false
+  const mode: "app" | "ask" = options.mode === "ask" ? "ask" : "app"
   const detail: CodeAgentRequestDetail = {
     text: instruction,
-    mode: options.mode ?? "app",
+    mode,
   }
   window.dispatchEvent(new CustomEvent(CODE_AGENT_REQUEST_EVENT, { detail }))
   if (detail.consumed === true) {
@@ -168,7 +170,7 @@ export function requestCodeAgentInstruction(
   try {
     window.sessionStorage.setItem(
       PENDING_AGENT_REQUEST_KEY,
-      JSON.stringify({ text: instruction, mode: "app", ts: Date.now() }),
+      JSON.stringify({ text: instruction, mode, ts: Date.now() }),
     )
     window.dispatchEvent(new CustomEvent(CODE_FOCUS_CEO_CHAT_EVENT))
     return true
