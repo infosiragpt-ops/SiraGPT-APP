@@ -192,6 +192,7 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { AgentOfficeScene } from "./agent-office/agent-office-scene"
 import { CompanyResourcesSurface } from "./company-resources-surface"
+import { CoworkersControlPanel } from "./coworkers-control-panel"
 import {
   EnterpriseCommandCenter,
   type EnterpriseDepartment,
@@ -203,8 +204,8 @@ import {
   type EnterpriseSwarmSummary,
 } from "./enterprise-command-center"
 
-type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "files" | "resources" | "task"
-type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "department">
+type CompanyView = "home" | "chat" | "dashboard" | "control" | "coworkers" | "department" | "files" | "resources" | "task"
+type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "coworkers" | "department">
 
 type CompanyOption = {
   id: string
@@ -2309,6 +2310,21 @@ export function AgentCompanyPanel() {
               type="button"
               variant="ghost"
               size="icon"
+              className="h-10 w-10 shrink-0 rounded-full bg-sky-50 text-sky-700 hover:bg-sky-100 dark:bg-sky-950/40 dark:text-sky-300"
+              onClick={() => setView("coworkers")}
+              aria-label="Abrir coworkers"
+              title="Coworkers, permisos y auditoría"
+              data-testid="coworkers-open"
+            >
+              <UsersRound className="h-4 w-4" />
+            </Button>
+          ) : null}
+
+          {view === "home" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
               className="h-10 w-10 shrink-0 rounded-full bg-muted/45"
               onClick={() => setNewCompanyOpen(true)}
               aria-label="Añadir empresa de agentes"
@@ -2444,6 +2460,8 @@ export function AgentCompanyPanel() {
             onRefreshCompanyAssociation={refreshCompanyAssociation}
             onOpenCeo={openCeoOffice}
           />
+        ) : view === "coworkers" ? (
+          <CoworkersControlPanel onOpenChat={() => setView("chat")} />
         ) : view === "department" && selectedDepartment ? (
           <DepartmentView row={selectedDepartment} onOpenCeo={openCeoOffice} />
         ) : view === "task" && selectedTask ? (
