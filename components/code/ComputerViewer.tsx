@@ -24,8 +24,9 @@ type RfbLike = {
 }
 
 /**
- * noVNC RFB viewer. Import only behind isAgentComputerEnabled() — this file
- * is the new path and does not replace the Selkies/PNG department pane.
+ * Human viewer: noVNC RFB (real mouse/keyboard over VNC→WebSocket).
+ * PNG screenshots stay in the agent control loop — they are not this UI.
+ * Import only behind isAgentComputerEnabled(); flag off keeps Selkies/PNG.
  */
 export function ComputerViewer({
   url,

@@ -20,7 +20,7 @@ const { ZodError } = require('zod');
 
 const { parseAction } = require('./schemas');
 const { executeAction } = require('./actions');
-const { listOrRead, writeFileSafe, FilePathError } = require('./files');
+const { listOrRead, writeFileSafe, ensureTaskDir, FilePathError } = require('./files');
 
 const pexecFile = promisify(execFile);
 
@@ -93,6 +93,16 @@ app.get('/files', async (req, res) => {
   } catch (err) {
     const status = err instanceof FilePathError ? err.status : (err.code === 'ENOENT' ? 404 : 500);
     return res.status(status).json({ error: err.code || 'files_failed', message: err.message });
+  }
+});
+
+app.post('/tasks', async (req, res) => {
+  try {
+    const result = await ensureTaskDir(req.body?.taskId);
+    return res.status(201).json(result);
+  } catch (err) {
+    const status = err instanceof FilePathError ? err.status : 500;
+    return res.status(status).json({ error: err.code || 'task_failed', message: err.message });
   }
 });
 

@@ -3,11 +3,12 @@
 /**
  * SiraGPT agent-computer orchestrator.
  *
- * One Docker container per session (siragpt-computer image). TTL 30 minutes,
- * renewable. Never lists, stops, or recreates sira-dpc-* CEO Office webtops.
+ * One persistent Docker desktop per SiraGPT member (userId). All department
+ * agents of that member share it. Named volume keeps /workspace across
+ * restarts. Never lists, stops, or recreates sira-dpc-* CEO Office webtops.
  *
  *   GET    /health
- *   POST   /sessions
+ *   POST   /sessions          { userId }  → get-or-create
  *   GET    /sessions/:id
  *   POST   /sessions/:id/renew
  *   DELETE /sessions/:id
@@ -18,7 +19,7 @@
 const express = require('express');
 const { loadConfig } = require('./config');
 const { requireOrchSecret } = require('./auth');
-const { SessionManager } = require('./sessions');
+const { SessionManager, UserIdError } = require('./sessions');
 
 function defaultDocker() {
   const Docker = require('dockerode');
@@ -42,19 +43,23 @@ function createApp({ env = process.env, docker, manager } = {}) {
     res.json({
       ok: true,
       service: 'siragpt-computer-orchestrator',
+      model: 'persistent-per-member',
+      desktops: sessions.sessions.size,
       sessions: sessions.sessions.size,
       image: cfg.image,
-      ttlMs: cfg.ttlMs,
-      note: 'TTL applies only to sira-acomp-* agent-computer sessions, never sira-dpc-* webtops.',
+      idleReclaim: cfg.idleReclaim,
+      persistWorkspace: cfg.persistWorkspace,
+      ttlMs: cfg.idleReclaim ? cfg.ttlMs : null,
+      note: 'One desktop per SiraGPT member. Idle reclaim never touches sira-dpc-* webtops.',
     });
   });
 
-  app.post('/sessions', async (_req, res) => {
+  app.post('/sessions', async (req, res) => {
     try {
-      const created = await sessions.create();
-      return res.status(201).json(created);
+      const result = await sessions.ensure({ userId: req.body?.userId });
+      return res.status(result.created ? 201 : 200).json(result);
     } catch (err) {
-      const status = err.status || 500;
+      const status = err.status || (err instanceof UserIdError ? 400 : 500);
       return res.status(status).json({ error: err.code || 'create_failed', message: err.message });
     }
   });
@@ -95,7 +100,7 @@ function start({ env = process.env } = {}) {
   const { app } = createApp({ env });
   return app.listen(cfg.port, cfg.bind, () => {
     // eslint-disable-next-line no-console
-    console.log(`[computer-orch] listening on ${cfg.bind}:${cfg.port} image=${cfg.image} ttlMs=${cfg.ttlMs}`);
+    console.log(`[computer-orch] listening on ${cfg.bind}:${cfg.port} image=${cfg.image} persist=per-member idleReclaim=${cfg.idleReclaim}`);
   });
 }
 

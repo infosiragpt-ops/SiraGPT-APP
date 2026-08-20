@@ -8,7 +8,9 @@ import { isAgentComputerEnabled } from "@/lib/agent-computer-flag"
  * Optional wrapper around the existing department computer surface.
  *
  * Flag OFF (default): render `children` unchanged — Selkies / PNG pane.
- * Flag ON: render ComputerViewer when a noVNC websocket URL is provided.
+ * Flag ON: render ComputerViewer (noVNC) when a websocket URL is provided.
+ * Department agents share the member's one persistent desktop; this pane
+ * does not spawn a per-department container.
  *
  * This file is not imported by /chat or /code by default. Callers that
  * already mount a department pane can swap in this wrapper without

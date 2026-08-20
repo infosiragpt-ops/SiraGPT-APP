@@ -1,11 +1,10 @@
-# SiraGPT per-session agent computer (Grok-bot style webtop).
+# SiraGPT per-member agent computer (Grok-bot style webtop).
 #
 # Deploy path on the VPS: /opt/siragpt/services/computer
 # Build: docker build -t siragpt-computer:latest services/computer
 #
-# NOT the always-on CEO Office webtop (sira-dpc-*). This image is started
-# one-container-per-session by services/computer/orchestrator and reaped
-# after COMPUTER_TTL_MS (default 30 minutes).
+# One persistent desktop per SiraGPT member. Department agents share it.
+# NOT the always-on CEO Office webtop (sira-dpc-*). Never stop those.
 
 FROM ubuntu:22.04
 
@@ -59,11 +58,16 @@ RUN useradd -m -u 10001 -d /workspace -s /bin/bash compuser \
       /opt/computer-agent \
     && chown -R compuser:compuser /workspace /tmp/runtime-compuser /opt/computer-agent
 
-COPY start-x11vnc.sh start-chrome.sh /usr/local/bin/
+# Skeleton copied onto an empty persistent /workspace volume at boot.
+RUN cp -a /workspace /opt/compuser-skel \
+    && chown -R compuser:compuser /opt/compuser-skel
+
+COPY start-x11vnc.sh start-chrome.sh seed-workspace.sh /usr/local/bin/
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY agent/ /opt/computer-agent/
 
 RUN chmod +x /usr/local/bin/start-x11vnc.sh /usr/local/bin/start-chrome.sh \
+      /usr/local/bin/seed-workspace.sh \
     && cd /opt/computer-agent && npm install --omit=dev \
     && chown -R compuser:compuser /opt/computer-agent
 

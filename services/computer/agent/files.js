@@ -68,6 +68,27 @@ async function listOrRead(raw, { root = WORKSPACE_ROOT, maxBytes = 2 * 1024 * 10
   };
 }
 
+function assertSafeTaskId(taskId) {
+  const id = String(taskId == null ? '' : taskId).trim();
+  if (!id) throw new FilePathError('taskId is required');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
+    throw new FilePathError('invalid taskId');
+  }
+  return id;
+}
+
+async function ensureTaskDir(taskId, { root = WORKSPACE_ROOT } = {}) {
+  const id = assertSafeTaskId(taskId);
+  const { rel, abs } = resolveWorkspacePath(id, root);
+  await fs.mkdir(abs, { recursive: true });
+  return {
+    ok: true,
+    path: rel,
+    abs,
+    workspacePath: `/workspace/${rel}`,
+  };
+}
+
 async function writeFileSafe(raw, content, { root = WORKSPACE_ROOT, encoding = 'utf8', maxBytes = 4 * 1024 * 1024 } = {}) {
   const { rel, abs, root: resolvedRoot } = resolveWorkspacePath(raw, root);
   if (rel === '.') throw new FilePathError('cannot overwrite the workspace root');
@@ -90,7 +111,9 @@ module.exports = {
   WORKSPACE_ROOT,
   FilePathError,
   assertSafeRelPath,
+  assertSafeTaskId,
   resolveWorkspacePath,
   listOrRead,
   writeFileSafe,
+  ensureTaskDir,
 };

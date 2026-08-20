@@ -7,10 +7,10 @@
  * built, or the orchestrator cannot start a container. CI stays green.
  *
  * When the image is present this test:
- *   1. POST /sessions
+ *   1. ensure({ userId }) — persistent per-member desktop
  *   2. GET noVNC page (HTTP 200)
  *   3. type + screenshot, pixelmatch a before/after diff
- *   4. DELETE /sessions and assert the container is gone
+ *   4. destroy and assert the container is gone (volume may remain)
  */
 
 const { test } = require('node:test');
@@ -104,7 +104,7 @@ test('docker session: noVNC handshake, type+screenshot pixel diff, DELETE remove
 
   let session;
   try {
-    session = await manager.create();
+    session = await manager.create({ userId: 'integration-user' });
   } catch (err) {
     t.skip(`no se pudo crear el contenedor: ${String(err.message).slice(0, 180)}`);
     return;
@@ -150,7 +150,7 @@ test('docker session: noVNC handshake, type+screenshot pixel diff, DELETE remove
     const changed = pixelmatch(before.data, after.data, diff.data, width, height, { threshold: 0.1 });
     assert.ok(Number.isFinite(changed), 'pixelmatch should return a count');
 
-    const destroyed = await manager.destroy(session.sessionId);
+    const destroyed = await manager.destroy(session.sessionId, { removeVolume: true });
     assert.equal(destroyed.destroyed, true);
     session = null;
 
@@ -160,7 +160,7 @@ test('docker session: noVNC handshake, type+screenshot pixel diff, DELETE remove
     assert.equal(String(leftover.stdout || '').trim(), '');
   } finally {
     if (session) {
-      try { await manager.destroy(session.sessionId); } catch (_) { /* ignore */ }
+      try { await manager.destroy(session.sessionId, { removeVolume: true }); } catch (_) { /* ignore */ }
     }
     manager.stopReaper();
   }

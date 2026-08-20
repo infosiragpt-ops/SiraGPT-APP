@@ -10,9 +10,11 @@ const { parseAction, canonicalizeAction } = require('../../services/computer/age
 const { buildXdotoolArgs } = require('../../services/computer/agent/actions');
 const {
   assertSafeRelPath,
+  assertSafeTaskId,
   resolveWorkspacePath,
   writeFileSafe,
   listOrRead,
+  ensureTaskDir,
   FilePathError,
 } = require('../../services/computer/agent/files');
 
@@ -53,6 +55,22 @@ test('workspace read/write stays inside the root', async () => {
     assert.equal(listing.kind, 'dir');
     assert.ok(listing.entries.some((e) => e.name === 'hello.txt'));
     assert.throws(() => resolveWorkspacePath('../outside', root), FilePathError);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('task artifacts land under /workspace/<task-id>/', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-acomp-task-'));
+  try {
+    assert.throws(() => assertSafeTaskId('../etc'), FilePathError);
+    assert.throws(() => assertSafeTaskId(''), FilePathError);
+    const dir = await ensureTaskDir('task-abc', { root });
+    assert.equal(dir.path, 'task-abc');
+    assert.equal(dir.workspacePath, '/workspace/task-abc');
+    await writeFileSafe('task-abc/note.txt', 'artifact', { root });
+    const read = await listOrRead('task-abc/note.txt', { root });
+    assert.equal(Buffer.from(read.contentBase64, 'base64').toString('utf8'), 'artifact');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -15,13 +15,19 @@ function parseSwitch(raw) {
 }
 
 function loadConfig(env = process.env) {
-  const ttlMs = clampInt(env.COMPUTER_TTL_MS, 30 * 60_000, 1_000, 6 * 60 * 60_000);
+  // Idle reclaim is opt-in. The product model is one persistent desktop
+  // per member; a 30-minute reaper must not destroy that by default.
+  const idleReclaim = parseSwitch(env.COMPUTER_IDLE_RECLAIM) === true;
+  const persistWorkspace = parseSwitch(env.COMPUTER_PERSIST_WORKSPACE) !== false;
+  const ttlMs = clampInt(env.COMPUTER_TTL_MS, 24 * 60 * 60_000, 1_000, 7 * 24 * 60 * 60_000);
   return {
     port: clampInt(env.COMPUTER_ORCH_PORT, 18080, 1, 65535),
     bind: env.COMPUTER_ORCH_BIND || '127.0.0.1',
     secret: String(env.COMPUTER_ORCH_SECRET || '').trim(),
     image: env.COMPUTER_IMAGE || 'siragpt-computer:latest',
     ttlMs,
+    idleReclaim,
+    persistWorkspace,
     reaperMs: clampInt(env.COMPUTER_REAPER_MS, 30_000, 5_000, 5 * 60_000),
     novncBaseUrl: String(env.COMPUTER_NOVNC_BASE_URL || '').replace(/\/$/, ''),
     publicHost: env.COMPUTER_PUBLIC_HOST || '127.0.0.1',
@@ -29,10 +35,12 @@ function loadConfig(env = process.env) {
     nanoCpus: 2_000_000_000,
     shmSize: 1024 * 1024 * 1024,
     vncPassword: env.COMPUTER_VNC_PASSWORD || '',
+    // Max concurrent member desktops on this host (not per-department).
     maxSessions: clampInt(env.COMPUTER_MAX_SESSIONS, 8, 1, 64),
     labelKey: 'siragpt.computer',
-    labelValue: 'session',
+    labelValue: 'user-desktop',
     sessionLabel: 'sessionId',
+    userLabel: 'userId',
     namePrefix: 'sira-acomp-',
     // Always-on CEO Office webtops — NEVER list/stop/recreate these.
     protectedNamePrefix: 'sira-dpc-',

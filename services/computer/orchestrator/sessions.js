@@ -1,7 +1,13 @@
 'use strict';
 
-const crypto = require('crypto');
 const { loadConfig } = require('./config');
+const {
+  UserIdError,
+  normalizeUserId,
+  sessionIdForUser,
+  containerNameForUser,
+  volumeNameForUser,
+} = require('./identity');
 
 /**
  * Caps added after CapDrop ALL. Privileged is never set.
@@ -34,10 +40,6 @@ const CHROME_XVFB_CAPS = Object.freeze([
   'KILL',
 ]);
 
-function newSessionId() {
-  return crypto.randomUUID();
-}
-
 function containerName(sessionId, prefix) {
   return `${prefix}${sessionId}`;
 }
@@ -61,6 +63,14 @@ function wsUrl(httpUrl) {
   return String(httpUrl || '').replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
 }
 
+function isConflict(err) {
+  return Number(err?.statusCode) === 409 || /already (exists|in use)/i.test(String(err?.message || ''));
+}
+
+function isNotFound(err) {
+  return Number(err?.statusCode) === 404 || /no such/i.test(String(err?.message || ''));
+}
+
 class SessionManager {
   constructor({ docker, env = process.env, now = () => Date.now() } = {}) {
     this.docker = docker;
@@ -73,13 +83,21 @@ class SessionManager {
   }
 
   touch(entry) {
-    entry.expiresAt = this.now() + this.cfg.ttlMs;
     entry.lastActivityAt = this.now();
+    entry.expiresAt = this.cfg.idleReclaim ? this.now() + this.cfg.ttlMs : null;
     return entry;
   }
 
   get(sessionId) {
     return this.sessions.get(sessionId) || null;
+  }
+
+  getByUser(userId) {
+    try {
+      return this.sessions.get(sessionIdForUser(userId)) || null;
+    } catch (_) {
+      return null;
+    }
   }
 
   list() {
@@ -89,7 +107,12 @@ class SessionManager {
   toPublic(entry) {
     return {
       sessionId: entry.sessionId,
+      userId: entry.userId,
       status: entry.status,
+      persistent: true,
+      sharedBy: 'member-department-agents',
+      workspaceRoot: '/workspace',
+      volumeName: entry.volumeName || null,
       containerId: entry.containerId,
       containerName: entry.containerName,
       novncWsUrl: entry.novncWsUrl,
@@ -99,7 +122,8 @@ class SessionManager {
       createdAt: entry.createdAt,
       expiresAt: entry.expiresAt,
       lastActivityAt: entry.lastActivityAt,
-      ttlMs: this.cfg.ttlMs,
+      idleReclaim: this.cfg.idleReclaim,
+      ttlMs: this.cfg.idleReclaim ? this.cfg.ttlMs : null,
     };
   }
 
@@ -111,87 +135,202 @@ class SessionManager {
     return Number(bindings[0].HostPort);
   }
 
-  async create() {
-    if (this.sessions.size >= this.cfg.maxSessions) {
-      const err = new Error('at_capacity');
-      err.status = 429;
-      err.code = 'at_capacity';
-      throw err;
-    }
-    const sessionId = newSessionId();
-    const name = containerName(sessionId, this.cfg.namePrefix);
-    if (isProtectedName(name, this.cfg.protectedNamePrefix)) {
-      const err = new Error('refusing to create a protected webtop name');
-      err.status = 500;
-      throw err;
-    }
-
-    const env = [
-      `DISPLAY=:1`,
-      `HOME=/workspace`,
-    ];
-    if (this.cfg.vncPassword) env.push(`COMPUTER_VNC_PASSWORD=${this.cfg.vncPassword}`);
-
-    const container = await this.docker.createContainer({
-      Image: this.cfg.image,
-      name,
-      Hostname: `computer-${sessionId.slice(0, 8)}`,
-      Labels: {
-        [this.cfg.sessionLabel]: sessionId,
-        [this.cfg.labelKey]: this.cfg.labelValue,
-        'siragpt.role': 'agent-computer-session',
-      },
-      Env: env,
-      HostConfig: {
-        Memory: this.cfg.memoryBytes,
-        NanoCpus: this.cfg.nanoCpus,
-        ShmSize: this.cfg.shmSize,
-        Privileged: false,
-        CapDrop: ['ALL'],
-        CapAdd: [...CHROME_XVFB_CAPS],
-        SecurityOpt: ['no-new-privileges:true'],
-        PortBindings: {
-          '6080/tcp': [{ HostIp: '127.0.0.1' }],
-          '8080/tcp': [{ HostIp: '127.0.0.1' }],
-          '9222/tcp': [{ HostIp: '127.0.0.1' }],
-        },
-        ExtraHosts: [],
-      },
-      ExposedPorts: {
-        '6080/tcp': {},
-        '8080/tcp': {},
-        '9222/tcp': {},
-      },
-    });
-
-    await container.start();
-    const info = await container.inspect();
+  applyInspect(entry, info) {
     const novncPort = this.hostPort(info, 6080);
     const agentPort = this.hostPort(info, 8080);
     const cdpPort = this.hostPort(info, 9222);
     const host = this.cfg.publicHost;
     const novncPage = publicUrl(this.cfg.novncBaseUrl, host, novncPort, '/vnc.html');
     const novncWs = wsUrl(publicUrl(this.cfg.novncBaseUrl, host, novncPort, '/'));
-
-    const entry = this.touch({
-      sessionId,
-      status: 'running',
-      containerId: info.Id,
-      containerName: name,
-      novncPort,
-      agentPort,
-      cdpPort,
-      novncUrl: `${novncPage}${novncPage.includes('?') ? '&' : '?'}autoconnect=1&resize=scale`,
-      novncWsUrl: novncWs,
-      agentUrl: `http://${host}:${agentPort}`,
-      cdpUrl: cdpPort ? `http://${host}:${cdpPort}` : undefined,
-      createdAt: this.now(),
-    });
-    this.sessions.set(sessionId, entry);
-    return this.toPublic(entry);
+    entry.containerId = info.Id;
+    entry.status = info.State?.Running ? 'running' : 'stopped';
+    entry.novncPort = novncPort;
+    entry.agentPort = agentPort;
+    entry.cdpPort = cdpPort;
+    entry.novncUrl = `${novncPage}${novncPage.includes('?') ? '&' : '?'}autoconnect=1&resize=scale`;
+    entry.novncWsUrl = novncWs;
+    entry.agentUrl = `http://${host}:${agentPort}`;
+    entry.cdpUrl = cdpPort ? `http://${host}:${cdpPort}` : undefined;
+    return entry;
   }
 
-  async destroy(sessionId) {
+  entryFromUser(userId) {
+    const id = normalizeUserId(userId);
+    const sessionId = sessionIdForUser(id);
+    const name = containerNameForUser(id, this.cfg.namePrefix);
+    if (isProtectedName(name, this.cfg.protectedNamePrefix)) {
+      const err = new Error('refusing to create a protected webtop name');
+      err.status = 500;
+      throw err;
+    }
+    return {
+      sessionId,
+      userId: id,
+      containerName: name,
+      volumeName: this.cfg.persistWorkspace ? volumeNameForUser(id) : null,
+      status: 'pending',
+      createdAt: this.now(),
+    };
+  }
+
+  async ensureVolume(name, userId) {
+    if (!name) return;
+    try {
+      await this.docker.createVolume({
+        Name: name,
+        Labels: {
+          [this.cfg.labelKey]: 'user-workspace',
+          [this.cfg.userLabel]: userId,
+        },
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+    }
+  }
+
+  async ensureRunning(entry) {
+    const container = this.docker.getContainer(entry.containerId || entry.containerName);
+    let info = await container.inspect();
+    if (!info.State?.Running) {
+      await container.start();
+      info = await container.inspect();
+    }
+    this.applyInspect(entry, info);
+    this.sessions.set(entry.sessionId, entry);
+    return entry;
+  }
+
+  async adoptByName(userId) {
+    const draft = this.entryFromUser(userId);
+    try {
+      const info = await this.docker.getContainer(draft.containerName).inspect();
+      if (isProtectedName(String(info.Name || '').replace(/^\//, ''), this.cfg.protectedNamePrefix)) {
+        return null;
+      }
+      const entry = this.applyInspect({ ...draft, createdAt: this.now() }, info);
+      this.sessions.set(entry.sessionId, entry);
+      await this.ensureRunning(entry);
+      return entry;
+    } catch (err) {
+      if (isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  async provision(userId) {
+    const entry = this.entryFromUser(userId);
+    if (this.cfg.persistWorkspace) {
+      await this.ensureVolume(entry.volumeName, entry.userId);
+    }
+
+    const env = [
+      'DISPLAY=:1',
+      'HOME=/workspace',
+      `COMPUTER_USER_ID=${entry.userId}`,
+    ];
+    if (this.cfg.vncPassword) env.push(`COMPUTER_VNC_PASSWORD=${this.cfg.vncPassword}`);
+
+    const hostConfig = {
+      Memory: this.cfg.memoryBytes,
+      NanoCpus: this.cfg.nanoCpus,
+      ShmSize: this.cfg.shmSize,
+      Privileged: false,
+      CapDrop: ['ALL'],
+      CapAdd: [...CHROME_XVFB_CAPS],
+      SecurityOpt: ['no-new-privileges:true'],
+      PortBindings: {
+        '6080/tcp': [{ HostIp: '127.0.0.1' }],
+        '8080/tcp': [{ HostIp: '127.0.0.1' }],
+        '9222/tcp': [{ HostIp: '127.0.0.1' }],
+      },
+      ExtraHosts: [],
+    };
+    if (entry.volumeName) {
+      hostConfig.Mounts = [{
+        Type: 'volume',
+        Source: entry.volumeName,
+        Target: '/workspace',
+      }];
+    }
+
+    let container;
+    try {
+      container = await this.docker.createContainer({
+        Image: this.cfg.image,
+        name: entry.containerName,
+        Hostname: `computer-${entry.sessionId.slice(0, 8)}`,
+        Labels: {
+          [this.cfg.sessionLabel]: entry.sessionId,
+          [this.cfg.userLabel]: entry.userId,
+          [this.cfg.labelKey]: this.cfg.labelValue,
+          'siragpt.role': 'agent-computer-desktop',
+        },
+        Env: env,
+        HostConfig: hostConfig,
+        ExposedPorts: {
+          '6080/tcp': {},
+          '8080/tcp': {},
+          '9222/tcp': {},
+        },
+      });
+    } catch (err) {
+      if (!isConflict(err)) throw err;
+      const adopted = await this.adoptByName(entry.userId);
+      if (adopted) return adopted;
+      throw err;
+    }
+
+    await container.start();
+    const info = await container.inspect();
+    this.applyInspect(entry, info);
+    this.touch(entry);
+    this.sessions.set(entry.sessionId, entry);
+    return entry;
+  }
+
+  /**
+   * Get-or-create the persistent desktop for one SiraGPT member.
+   * Department is intentionally not a key.
+   */
+  async ensure(opts = {}) {
+    const userId = typeof opts === 'string' ? opts : opts.userId;
+    const id = normalizeUserId(userId);
+    const sessionId = sessionIdForUser(id);
+
+    const existing = this.sessions.get(sessionId);
+    if (existing) {
+      try {
+        await this.ensureRunning(existing);
+        this.touch(existing);
+        return { ...this.toPublic(existing), created: false };
+      } catch (err) {
+        if (!isNotFound(err)) throw err;
+        this.sessions.delete(sessionId);
+      }
+    }
+
+    const adopted = await this.adoptByName(id);
+    if (adopted) {
+      this.touch(adopted);
+      return { ...this.toPublic(adopted), created: false };
+    }
+
+    if (this.sessions.size >= this.cfg.maxSessions) {
+      const err = new Error('at_capacity');
+      err.status = 429;
+      err.code = 'at_capacity';
+      throw err;
+    }
+
+    const created = await this.provision(id);
+    return { ...this.toPublic(created), created: true };
+  }
+
+  async create(opts) {
+    return this.ensure(opts);
+  }
+
+  async destroy(sessionId, { removeVolume = false } = {}) {
     const entry = this.sessions.get(sessionId);
     if (!entry) return { ok: true, destroyed: false };
     if (isProtectedName(entry.containerName, this.cfg.protectedNamePrefix)) {
@@ -201,11 +340,16 @@ class SessionManager {
     }
     this.sessions.delete(sessionId);
     try {
-      const container = this.docker.getContainer(entry.containerId);
+      const container = this.docker.getContainer(entry.containerId || entry.containerName);
       try { await container.stop({ t: 5 }); } catch (_) { /* already gone */ }
       try { await container.remove({ force: true }); } catch (_) { /* already gone */ }
     } catch (_) { /* inspect/get may fail if already removed */ }
-    return { ok: true, destroyed: true, sessionId };
+    if (removeVolume && entry.volumeName) {
+      try {
+        await this.docker.getVolume(entry.volumeName).remove({ force: true });
+      } catch (_) { /* volume may be in use or already gone */ }
+    }
+    return { ok: true, destroyed: true, sessionId, volumeRemoved: Boolean(removeVolume && entry.volumeName) };
   }
 
   renew(sessionId) {
@@ -216,12 +360,13 @@ class SessionManager {
   }
 
   async reapExpired() {
+    if (!this.cfg.idleReclaim) return [];
     const now = this.now();
-    const expired = [...this.sessions.values()].filter((s) => s.expiresAt <= now);
+    const expired = [...this.sessions.values()].filter((s) => s.expiresAt != null && s.expiresAt <= now);
     const results = [];
     for (const entry of expired) {
       // eslint-disable-next-line no-await-in-loop
-      results.push(await this.destroy(entry.sessionId));
+      results.push(await this.destroy(entry.sessionId, { removeVolume: false }));
     }
     return results;
   }
@@ -245,10 +390,10 @@ class SessionManager {
 
 module.exports = {
   CHROME_XVFB_CAPS,
-  newSessionId,
   containerName,
   isProtectedName,
   publicUrl,
   wsUrl,
   SessionManager,
+  UserIdError,
 };

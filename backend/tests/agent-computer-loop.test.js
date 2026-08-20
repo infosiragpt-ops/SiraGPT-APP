@@ -119,6 +119,26 @@ test('agentLoop uses screenshot observation only when the model accepts images',
   assert.deepEqual(modes, ['screenshot']);
 });
 
+test('agentLoop ensures /workspace/<task-id>/ and logs taskId per step', async () => {
+  const tasks = [];
+  const result = await agentLoop({
+    goal: 'save a file',
+    taskId: 'task-77',
+    createClient: async () => ({}),
+    complete: async () => ({ action: { type: 'done', result: 'ok' } }),
+    observe: async () => ({ text: 'desktop' }),
+    ensureTask: async ({ taskId }) => {
+      tasks.push(taskId);
+      return { path: taskId, workspacePath: `/workspace/${taskId}` };
+    },
+    act: async () => {},
+  });
+  assert.deepEqual(tasks, ['task-77']);
+  assert.equal(result.taskId, 'task-77');
+  assert.equal(result.log[0].taskId, 'task-77');
+  assert.match(require('../src/services/computer/agent-loop').systemPrompt('cdp', 'g', 'task-77'), /\/workspace\/task-77/);
+});
+
 test('flattenA11y walks the accessibility tree into text', () => {
   const text = flattenA11y({
     role: 'RootWebArea',
