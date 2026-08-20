@@ -64,6 +64,10 @@ args = "Start application"
 task = "workflow.run"
 args = "oauth-url-smoke"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Backend API"
+
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -86,6 +90,17 @@ args = "cd backend && node --test tests/oauth-url-policy.test.js"
 
 [workflows.workflow.metadata]
 isValidation = true
+
+[[workflows.workflow]]
+name = "Backend API"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd SiraGPT-APP/backend && PORT=5050 REPLIT_BACKEND_MODE=sidecar SKIP_MIGRATIONS=1 node scripts/start-with-migrations.js"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [userenv]
 
