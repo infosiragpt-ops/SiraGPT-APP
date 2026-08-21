@@ -82,12 +82,17 @@ test('GET /runs/:runId/events streams the replay as SSE frames plus snapshot', a
   assert.equal(res.status, 200);
   assert.match(String(res.headers['content-type']), /text\/event-stream/);
   const body = String(res.text || '');
+  // The backpressure-aware writer emits a `: connected` comment preamble and a
+  // terminal `data: [DONE]` sentinel; both are protocol frames, not events.
+  assert.ok(body.includes(': connected'), 'expected the connected preamble');
   const frames = body.split('\n\n').filter((f) => f.startsWith('data:'));
-  assert.equal(frames.length, 3, 'expected 2 replay events + 1 snapshot frame');
+  assert.equal(frames.length, 4, 'expected 2 replay + 1 snapshot + 1 [DONE] frame');
   assert.equal(frames[0], 'data: {"type":"run_status","data":{"status":"running"}}');
   assert.ok(frames[2].includes('"type":"snapshot"'));
   assert.ok(frames[2].includes('"status":"done"'));
+  assert.equal(frames[3], 'data: [DONE]');
 });
+
 
 test('GET /runs/:runId/events 404s for a foreign run', async () => {
   const res = await request(app()).get('/api/codex/runs/run-2/events');
