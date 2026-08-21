@@ -100,6 +100,7 @@ export function isBudgetExhausted(budget: AgentIterationBudget | undefined, now 
   if (budget.count >= budget.max) return true
   return budget.timeoutMs > 0 && now - budget.startedAt > budget.timeoutMs
 }
+
 /** Return the next task the agent should work on, or null if none are pending. */
 export function nextPendingTask(tasks: AgentTask[] | undefined): AgentTask | null {
   const list = tasks || []
