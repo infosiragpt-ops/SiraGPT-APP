@@ -755,6 +755,30 @@ async function governThen(input, run) {
         if (typeof ad.refundHoldIfNoTokensUsed === 'function' && input && input.held) {
           ad.refundHoldIfNoTokensUsed({ held: input.held, promptTokens: input.promptTokens, completionTokens: input.completionTokens, cancelled: input.cancelled || input.aborted });
         }
+        if (typeof ad.refundHoldIfNoTokensUsed === 'function' && input && input.held) {
+          ad.refundHoldIfNoTokensUsed({ held: input.held, promptTokens: input.promptTokens, completionTokens: input.completionTokens, cancelled: input.cancelled || input.aborted });
+        }
+        if (typeof ad.ceilTokensOnCancel === 'function' && input && (input.cancelled || input.aborted)) {
+          ad.ceilTokensOnCancel({ promptTokens: input.promptTokens, completionTokens: input.completionTokens, cancelled: true });
+        }
+        if (typeof ad.neverRetry402 === 'function' && input && (input.status === 402 || input.code === '402')) {
+          ad.neverRetry402(input);
+        }
+        if (typeof ad.closeSseThenSettleCredits === 'function') {
+          ad.closeSseThenSettleCredits({ sseClosed: !!(input && (input.sseClosed || input.streamClosed)), settled: !!(input && input.settled), cancelled: !!(input && (input.cancelled || input.aborted)), held: !!(input && input.held) });
+        }
+        if (typeof ad.classifyEconnresetAsCancelled === 'function' && input && input.error) {
+          ad.classifyEconnresetAsCancelled(input.error);
+        }
+        if (typeof ad.mapPrismaDisconnectRetryable === 'function' && input && input.error) {
+          ad.mapPrismaDisconnectRetryable(input.error);
+        }
+        if (typeof ad.skipUpsertIfEmbeddingDimMismatch === 'function' && input && input.embedding != null) {
+          ad.skipUpsertIfEmbeddingDimMismatch(input.embedding, { expectedDim: input.expectedDim });
+        }
+        if (typeof ad.sessionLockOwnerPidCheck === 'function' && input && input.lock) {
+          ad.sessionLockOwnerPidCheck({ lock: input.lock, ownerPid: input.ownerPid, currentPid: input.currentPid });
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

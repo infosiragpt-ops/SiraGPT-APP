@@ -99,6 +99,14 @@ function createSSEWriter(res, options = {}) {
         const win = adapter.replayLastNSseEventsFromCursor(options.replayFrames || ring, { cursor: sseSeq, limit: 32 });
         if (win && Array.isArray(win.replay) && win.replay.length) options.replayFrames = win.replay;
       }
+      if (adapter && typeof adapter.parseLastEventIdIntOnly === 'function') {
+        const parsed = adapter.parseLastEventIdIntOnly(options.lastEventId || options.lastEventID || '');
+        if (parsed && parsed.ok && parsed.lastEventId != null) sseSeq = parsed.lastEventId;
+      }
+      if (adapter && typeof adapter.maxSseBuffersPerSession16 === 'function') {
+        const capped = adapter.maxSseBuffersPerSession16(options.replayFrames || ring || [], { max: 16 });
+        if (capped && Array.isArray(capped.buffers)) options.replayFrames = capped.buffers;
+      }
     } catch (_) {}
   }
 
@@ -201,6 +209,10 @@ function createSSEWriter(res, options = {}) {
           const hb = adapter.maxHeartbeatsPerMinute({ sent: options._hbSent || 0, windowStart: options._hbWindow || startedAt, now: Date.now() });
           if (hb && hb.allow === false) return false;
           if (hb && hb.reset) { options._hbSent = 0; options._hbWindow = Date.now(); }
+        }
+        if (adapter && typeof adapter.pingOnlyIfLastWriteOver15s === 'function') {
+          const ping = adapter.pingOnlyIfLastWriteOver15s({ lastWriteAt, now: Date.now(), minIdleMs: 15000 });
+          if (ping && ping.ping === false) return false;
         }
       } catch (_) {}
       // 3H26: skip heartbeat while kernel buffer is full or the socket is gone.

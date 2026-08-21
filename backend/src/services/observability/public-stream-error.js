@@ -276,6 +276,16 @@ const ENGINE_CODE_RULES = [
   { code: 'credit_observation', message: 'No cobré un bucle de solo observación de herramientas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'credit_observation' },
   { code: 'stderr_cap', message: 'Recorté stderr de la herramienta a 64 KiB.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'stderr_cap' },
   { code: 'enum_invalid', message: 'El valor no coincide con las opciones permitidas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'enum_invalid' },
+  { code: 'tool_args_cap', message: 'Recorté los argumentos de la herramienta a 32 KiB.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_args_cap' },
+  { code: 'queue_wait', message: 'La cola esperó más de 60 segundos. Reintenta en un momento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'queue_wait' },
+  { code: 'stream_stall', message: 'El flujo se detuvo más de 20 segundos. Lo interrumpí.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'stream_stall' },
+  { code: 'tool_name_length', message: 'El nombre de la herramienta supera 64 caracteres. No la ejecuté.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_length' },
+  { code: 'host_bash_blocked', message: 'En un turno solo de computadora no ejecuto host_bash.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'host_bash_blocked' },
+  { code: 'dest_dir_missing', message: 'No escribí el archivo porque falta el directorio destino.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'dest_dir_missing' },
+  { code: 'path_homoglyph', message: 'La ruta usa un carácter que imita una barra. La rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_homoglyph' },
+  { code: 'embedding_dim', message: 'Omití un embedding con dimensión incorrecta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'embedding_dim' },
+  { code: 'tool_recursion', message: 'La misma herramienta se llamó demasiadas veces en este turno.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_recursion' },
+  { code: 'prisma_disconnect', message: 'Se perdió la conexión con la base de datos. Reintenta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'prisma_disconnect' },
 ];
 
 function classifyPublicStreamError(error) {

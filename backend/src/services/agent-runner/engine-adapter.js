@@ -4667,7 +4667,37 @@ function adapterSnapshot() {
     refuseReadThroughSymlink: true,
     markPlanStepFailedIfToolErrorTwice: true,
     restoreLastSseIdOnResume: true,
-    wave: '3H42',
+    capToolArgBytes32KiB: true,
+    repairUnescapedNewlinesInJsonStrings: true,
+    coerceNullStringToNullOptional: true,
+    maxSseBuffersPerSession16: true,
+    compactKeepPinnedFactsAndLast3UserTurns: true,
+    refuseWriteIfDestDirMissing: true,
+    ceilTokensOnCancel: true,
+    classifyEconnresetAsCancelled: true,
+    queueMaxWait60sThen503: true,
+    skipUpsertIfEmbeddingDimMismatch: true,
+    stallIfNoEvent20sMidStream: true,
+    stripUtf16NulPadding: true,
+    rejectToolNameLongerThan64: true,
+    rejectRecursiveSameToolNameOver8: true,
+    skipCompletedPlanStepsOnResume: true,
+    gzipCheckpointIfOver64KiB: true,
+    parseLastEventIdIntOnly: true,
+    capGlobMatchFileSize1MiB: true,
+    redactAuthorizationBearerInToolResults: true,
+    refuseHostBashIfComputerOnlyTurn: true,
+    subagentInheritRemainingStepBudget: true,
+    concatenateSplitToolCallFragments: true,
+    neverRetry402: true,
+    combinedStdoutStderr96KiB: true,
+    pingOnlyIfLastWriteOver15s: true,
+    rejectUnicodeSlashHomoglyph: true,
+    sessionLockOwnerPidCheck: true,
+    mapPrismaDisconnectRetryable: true,
+    defaultToolTimeout30sIfMissing: true,
+    closeSseThenSettleCredits: true,
+    wave: '3H43',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -5551,6 +5581,414 @@ function restoreLastSseIdOnResume({ lastEventId, cursor, store } = {}) {
 }
 
 
+// ---------------------------------------------------------------------------
+// 3H43 — remaining holes vs Claude Code/Cowork after 3H42
+// ---------------------------------------------------------------------------
+
+const TOOL_ARG_BYTES_32KIB = 32 * 1024;
+const SSE_BUFFERS_MAX = 16;
+const COMPACT_LAST_USER_TURNS = 3;
+const QUEUE_WAIT_MAX_MS = 60_000;
+const STREAM_STALL_MS = 20_000;
+const TOOL_NAME_MAX_LEN = 64;
+const SAME_TOOL_NAME_MAX = 8;
+const CKPT_GZIP_BYTES = 64 * 1024;
+const GLOB_FILE_MAX_BYTES = 1024 * 1024;
+const COMBINED_STDIO_MAX = 96 * 1024;
+const SSE_PING_IDLE_MS = 15_000;
+const TOOL_TIMEOUT_DEFAULT_MS = 30_000;
+const PATH_HOMOGLYPH_RE = /[\u2215\u2044\uFF0F\u29F8\uFF3C\u29F9]/;
+const AUTH_BEARER_HEADER_RE = /Authorization\s*:\s*Bearer\s+[^\s,;]+/gi;
+const AUTH_BEARER_TOKEN_RE = /\bBearer\s+[A-Za-z0-9\-._~+/]+=*/g;
+
+function capToolArgBytes32KiB(args, { maxBytes = TOOL_ARG_BYTES_32KIB } = {}) {
+  const cap = Math.max(256, Number(maxBytes) || TOOL_ARG_BYTES_32KIB);
+  let raw;
+  if (typeof args === 'string') raw = args;
+  else if (args == null) raw = '';
+  else {
+    try { raw = JSON.stringify(args); } catch (_) { raw = String(args); }
+  }
+  const buf = Buffer.from(raw, 'utf8');
+  if (buf.length <= cap) return { args, truncated: false, bytes: buf.length, code: null };
+  const marker = '\n[truncated_tool_args]';
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, 'utf8'));
+  const text = buf.subarray(0, keep).toString('utf8') + marker;
+  return { args: text, truncated: true, bytes: buf.length, text, code: 'tool_args_cap' };
+}
+
+function repairUnescapedNewlinesInJsonStrings(raw) {
+  if (raw == null) return { ok: false, repaired: false, code: 'json_parse' };
+  if (typeof raw === 'object') return { ok: true, repaired: false, value: raw, code: null };
+  const s = String(raw);
+  try { return { ok: true, repaired: false, value: JSON.parse(s), code: null }; } catch (_) { /* repair */ }
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') { inStr = false; out += ch; continue; }
+      if (ch === '\n') { out += '\\n'; continue; }
+      if (ch === '\r') { out += '\\r'; continue; }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    out += ch;
+  }
+  try { return { ok: true, repaired: true, value: JSON.parse(out), code: 'json_newline_repair' }; }
+  catch (_) { return { ok: false, repaired: false, code: 'json_parse' }; }
+}
+
+function coerceNullStringToNullOptional(value, schema) {
+  function walk(v, sch) {
+    const required = new Set(Array.isArray(sch && sch.required) ? sch.required : []);
+    if (sch && sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = {};
+      let coerced = false;
+      for (const k of Object.keys(v)) {
+        const child = sch.properties[k];
+        if (!required.has(k) && v[k] === 'null') {
+          o[k] = null;
+          coerced = true;
+          continue;
+        }
+        if (required.has(k) && v[k] === 'null') {
+          o[k] = v[k];
+          continue;
+        }
+        const r = walk(v[k], child);
+        o[k] = r.value;
+        if (r.coerced) coerced = true;
+      }
+      return { ok: true, value: o, coerced, code: coerced ? 'null_string_coerce' : null };
+    }
+    const nullable = !!(sch && (sch.nullable === true || (Array.isArray(sch.type) && sch.type.indexOf('null') >= 0)));
+    if (v === 'null' && nullable) return { ok: true, value: null, coerced: true, code: 'null_string_coerce' };
+    return { ok: true, value: v, coerced: false, code: null };
+  }
+  return walk(value, schema || {});
+}
+
+function maxSseBuffersPerSession16(buffers, { max = SSE_BUFFERS_MAX } = {}) {
+  const list = Array.isArray(buffers) ? buffers.slice() : [];
+  const cap = Math.max(1, Number(max) || SSE_BUFFERS_MAX);
+  let dropped = 0;
+  while (list.length > cap) { list.shift(); dropped += 1; }
+  return { buffers: list, dropped, truncated: dropped > 0, code: dropped ? 'sse_buffer_cap' : null };
+}
+
+function compactKeepPinnedFactsAndLast3UserTurns(messages, { pins, lastN = COMPACT_LAST_USER_TURNS } = {}) {
+  const msgs = Array.isArray(messages) ? messages : [];
+  const pinList = Array.isArray(pins) ? pins : [];
+  const n = Math.max(1, Number(lastN) || COMPACT_LAST_USER_TURNS);
+  const userIdx = [];
+  for (let i = 0; i < msgs.length; i += 1) {
+    if (msgs[i] && msgs[i].role === 'user') userIdx.push(i);
+  }
+  const keepFrom = userIdx.length <= n ? 0 : userIdx[userIdx.length - n];
+  const kept = [];
+  for (let i = 0; i < msgs.length; i += 1) {
+    const m = msgs[i];
+    if (i >= keepFrom || (m && (m.pinned || m.pin))) kept.push(m);
+  }
+  const pinMsgs = pinList.map((p) => (
+    p && typeof p === 'object' ? Object.assign({ pinned: true }, p) : { role: 'system', content: String(p), pinned: true }
+  ));
+  const seen = new Set(kept.map((m) => String((m && m.content) || '')));
+  const extra = pinMsgs.filter((p) => !seen.has(String((p && p.content) || '')));
+  const out = extra.concat(kept);
+  return {
+    messages: out,
+    kept: kept.length,
+    pins: extra.length,
+    dropped: msgs.length - kept.length,
+    code: (extra.length || kept.length !== msgs.length) ? 'compact_pins_last3' : null,
+  };
+}
+
+function refuseWriteIfDestDirMissing(filePath, { existsSync } = {}) {
+  const p = String(filePath == null ? '' : filePath);
+  if (!p) return { ok: false, path: p, code: 'dest_dir_missing' };
+  const slash = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  const dir = slash >= 0 ? (p.slice(0, slash) || '/') : '.';
+  if (typeof existsSync !== 'function') return { ok: true, skipped: true, path: p, dir, code: null };
+  try {
+    if (!existsSync(dir)) return { ok: false, path: p, dir, code: 'dest_dir_missing' };
+  } catch (_) {
+    return { ok: false, path: p, dir, code: 'dest_dir_missing' };
+  }
+  return { ok: true, path: p, dir, code: null };
+}
+
+function ceilTokensOnCancel({ promptTokens, completionTokens, cancelled } = {}) {
+  const p = Number(promptTokens) || 0;
+  const c = Number(completionTokens) || 0;
+  const prompt = Math.ceil(p);
+  const completion = Math.ceil(c);
+  return {
+    tokens: prompt + completion,
+    promptTokens: prompt,
+    completionTokens: completion,
+    cancelled: !!cancelled,
+    code: cancelled ? 'credit_ceil' : null,
+  };
+}
+
+function classifyEconnresetAsCancelled(err) {
+  if (err == null) return { cancelled: false, family: null, retryable: false, code: null };
+  const code = String((err && err.code) || '');
+  const msg = String((err && (err.message || err)) || '');
+  const status = Number(err && (err.status || err.statusCode));
+  const isReset = code === 'ECONNRESET' || /ECONNRESET/i.test(msg);
+  if (!isReset) return { cancelled: false, family: Number.isFinite(status) && status >= 500 ? '5xx' : null, retryable: false, code: null };
+  return { cancelled: true, family: 'cancelled', retryable: false, code: 'cancelled', status: Number.isFinite(status) ? status : null };
+}
+
+function queueMaxWait60sThen503({ waitedMs, maxMs = QUEUE_WAIT_MAX_MS } = {}) {
+  const w = Math.max(0, Number(waitedMs) || 0);
+  const cap = Math.max(1000, Number(maxMs) || QUEUE_WAIT_MAX_MS);
+  if (w >= cap) return { reject: true, status: 503, retry: true, retryAfterSec: 2, code: 'queue_wait' };
+  return { reject: false, status: 200, retry: false, remainingMs: cap - w, code: null };
+}
+
+function skipUpsertIfEmbeddingDimMismatch(embedding, { expectedDim } = {}) {
+  const arr = Array.isArray(embedding) ? embedding : (embedding && Array.isArray(embedding.vector) ? embedding.vector : []);
+  const dim = arr.length;
+  const exp = Number(expectedDim);
+  if (!Number.isFinite(exp) || exp <= 0) return { skip: false, dim, code: null };
+  if (dim !== exp) return { skip: true, dim, expectedDim: exp, code: 'embedding_dim' };
+  return { skip: false, dim, expectedDim: exp, code: null };
+}
+
+function stallIfNoEvent20sMidStream({ lastEventAt, now, firstTokenAt, stallMs = STREAM_STALL_MS } = {}) {
+  if (firstTokenAt == null && lastEventAt == null) return { stalled: false, skipped: true, code: null };
+  const t = Number(now) || Date.now();
+  const last = Number(lastEventAt != null ? lastEventAt : firstTokenAt);
+  if (!Number.isFinite(last)) return { stalled: false, skipped: true, code: null };
+  const cap = Math.max(1000, Number(stallMs) || STREAM_STALL_MS);
+  const elapsed = t - last;
+  if (elapsed >= cap) return { stalled: true, elapsedMs: elapsed, code: 'stream_stall' };
+  return { stalled: false, elapsedMs: elapsed, code: null };
+}
+
+function stripUtf16NulPadding(text) {
+  if (text == null) return { text, stripped: false, code: null };
+  let s = Buffer.isBuffer(text) ? text.toString('utf8') : (typeof text === 'string' ? text : String(text));
+  const orig = s;
+  if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+  const nulCount = (s.match(/\u0000/g) || []).length;
+  if (nulCount > 0 && nulCount >= s.length / 4) s = s.replace(/\u0000/g, '');
+  const stripped = s !== orig;
+  return { text: s, stripped, code: stripped ? 'utf16_nul' : null };
+}
+
+function rejectToolNameLongerThan64(name, { max = TOOL_NAME_MAX_LEN } = {}) {
+  const n = String(name == null ? '' : name);
+  const cap = Math.max(1, Number(max) || TOOL_NAME_MAX_LEN);
+  if (n.length > cap) return { ok: false, name: n, length: n.length, code: 'tool_name_length' };
+  return { ok: true, name: n, length: n.length, code: null };
+}
+
+function rejectRecursiveSameToolNameOver8(calls, { max = SAME_TOOL_NAME_MAX } = {}) {
+  const list = Array.isArray(calls) ? calls : [];
+  const cap = Math.max(1, Number(max) || SAME_TOOL_NAME_MAX);
+  const counts = {};
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    const name = String((c && (c.name || c.tool)) || '');
+    counts[name] = (counts[name] || 0) + 1;
+    if (counts[name] > cap) dropped += 1;
+    else kept.push(c);
+  }
+  return { calls: kept, dropped, counts, code: dropped ? 'tool_recursion' : null };
+}
+
+function skipCompletedPlanStepsOnResume(steps, { completedIds } = {}) {
+  const list = Array.isArray(steps) ? steps : [];
+  const done = new Set((Array.isArray(completedIds) ? completedIds : []).map(String));
+  const remaining = [];
+  let skipped = 0;
+  for (const st of list) {
+    const id = String((st && (st.id || st.stepId)) || '');
+    const status = String((st && st.status) || '').toLowerCase();
+    if (done.has(id) || status === 'completed' || status === 'done' || (st && st.completed === true)) {
+      skipped += 1;
+      continue;
+    }
+    remaining.push(st);
+  }
+  return { steps: remaining, skipped, code: skipped ? 'plan_skip_completed' : null };
+}
+
+function gzipCheckpointIfOver64KiB(payload, { maxBytes = CKPT_GZIP_BYTES, gzipFn } = {}) {
+  let raw;
+  if (Buffer.isBuffer(payload)) raw = payload;
+  else if (typeof payload === 'string') raw = Buffer.from(payload, 'utf8');
+  else {
+    try { raw = Buffer.from(JSON.stringify(payload == null ? {} : payload), 'utf8'); }
+    catch (_) { raw = Buffer.from(String(payload), 'utf8'); }
+  }
+  const cap = Math.max(256, Number(maxBytes) || CKPT_GZIP_BYTES);
+  if (raw.length <= cap) return { gzipped: false, bytes: raw.length, payload, code: null };
+  let gz = raw;
+  if (typeof gzipFn === 'function') gz = gzipFn(raw);
+  else {
+    try { gz = require('zlib').gzipSync(raw); } catch (_) { gz = raw; }
+  }
+  return {
+    gzipped: true,
+    bytes: raw.length,
+    gzipBytes: Buffer.isBuffer(gz) ? gz.length : Buffer.byteLength(String(gz)),
+    payload: gz,
+    code: 'ckpt_gzip',
+  };
+}
+
+function parseLastEventIdIntOnly(headerValue) {
+  const s = String(headerValue == null ? '' : headerValue).trim();
+  if (!/^\d+$/.test(s)) return { ok: false, lastEventId: 0, code: 'sse_id_parse' };
+  const n = Number(s);
+  if (!Number.isSafeInteger(n) || n < 0) return { ok: false, lastEventId: 0, code: 'sse_id_parse' };
+  return { ok: true, lastEventId: n, code: null };
+}
+
+function capGlobMatchFileSize1MiB(matches, { maxBytes = GLOB_FILE_MAX_BYTES, sizeOf } = {}) {
+  const list = Array.isArray(matches) ? matches : [];
+  const cap = Math.max(1, Number(maxBytes) || GLOB_FILE_MAX_BYTES);
+  const kept = [];
+  let dropped = 0;
+  for (const m of list) {
+    let sz = 0;
+    if (typeof sizeOf === 'function') sz = Number(sizeOf(m)) || 0;
+    else if (m && typeof m === 'object') sz = Number(m.size || m.bytes || 0) || 0;
+    if (sz > cap) { dropped += 1; continue; }
+    kept.push(m);
+  }
+  return { matches: kept, dropped, code: dropped ? 'glob_file_size' : null };
+}
+
+function redactAuthorizationBearerInToolResults(text) {
+  if (text == null) return { text, redacted: false, code: null };
+  const asObj = typeof text === 'object';
+  const s = asObj ? JSON.stringify(text) : String(text);
+  const out = s.replace(AUTH_BEARER_HEADER_RE, 'Authorization: Bearer [REDACTED]').replace(AUTH_BEARER_TOKEN_RE, 'Bearer [REDACTED]');
+  const redacted = out !== s;
+  if (asObj) {
+    try { return { text: JSON.parse(out), redacted, code: redacted ? 'auth_redact' : null }; } catch (_) { /* keep string */ }
+  }
+  return { text: out, redacted, code: redacted ? 'auth_redact' : null };
+}
+
+function refuseHostBashIfComputerOnlyTurn({ computerOnly, toolName } = {}) {
+  const name = String(toolName || '');
+  const isHost = /^(host_bash|host-bash|hostBash)$/i.test(name);
+  if (computerOnly && isHost) return { ok: false, toolName: name, code: 'host_bash_blocked' };
+  return { ok: true, toolName: name, code: null };
+}
+
+function subagentInheritRemainingStepBudget({ parentRemaining, childRequested, max } = {}) {
+  const parent = Number(parentRemaining);
+  const req = Number(childRequested);
+  const cap = Number(max);
+  let remaining = Number.isFinite(parent) ? Math.max(0, Math.floor(parent)) : (Number.isFinite(req) ? Math.max(0, Math.floor(req)) : 0);
+  if (Number.isFinite(req)) remaining = Math.min(remaining, Math.max(0, Math.floor(req)));
+  if (Number.isFinite(cap)) remaining = Math.min(remaining, Math.max(0, Math.floor(cap)));
+  return { remaining, inherited: Number.isFinite(parent), code: remaining === 0 ? 'subagent_budget' : null };
+}
+
+function concatenateSplitToolCallFragments(fragments) {
+  const list = Array.isArray(fragments) ? fragments : (fragments == null ? [] : [fragments]);
+  const joined = list.map((f) => {
+    if (f == null) return '';
+    if (typeof f === 'string') return f;
+    if (typeof f === 'object') return String(f.arguments || f.delta || f.fragment || f.content || '');
+    return String(f);
+  }).join('');
+  if (!joined) return { ok: false, concatenated: false, value: null, joined: '', code: 'json_parse' };
+  try {
+    const value = JSON.parse(joined);
+    return { ok: true, concatenated: list.length > 1, value, joined, code: list.length > 1 ? 'tool_call_concat' : null };
+  } catch (_) {
+    return { ok: false, concatenated: list.length > 1, value: joined, joined, code: 'json_parse' };
+  }
+}
+
+function neverRetry402(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  const is402 = status === 402 || code === '402' || /insufficient balance|quota_exhausted|payment required/i.test(msg);
+  if (is402) return { retry: false, status: 402, code: 'quota_exhausted' };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function combinedStdoutStderr96KiB({ stdout, stderr, maxBytes = COMBINED_STDIO_MAX } = {}) {
+  const cap = Math.max(1024, Number(maxBytes) || COMBINED_STDIO_MAX);
+  const so = stdout == null ? '' : String(stdout);
+  const se = stderr == null ? '' : String(stderr);
+  const combined = so + (se ? ((so ? '\n' : '') + se) : '');
+  const bytes = Buffer.byteLength(combined, 'utf8');
+  if (bytes <= cap) return { text: combined, truncated: false, bytes, code: null };
+  const marker = '\n[truncated_combined]';
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, 'utf8'));
+  const text = Buffer.from(combined, 'utf8').subarray(0, keep).toString('utf8') + marker;
+  return { text, truncated: true, bytes, code: 'combined_cap' };
+}
+
+function pingOnlyIfLastWriteOver15s({ lastWriteAt, now, minIdleMs = SSE_PING_IDLE_MS } = {}) {
+  const t = Number(now) || Date.now();
+  const last = Number(lastWriteAt) || 0;
+  const cap = Math.max(1000, Number(minIdleMs) || SSE_PING_IDLE_MS);
+  const idle = t - last;
+  if (idle >= cap) return { ping: true, idleMs: idle, code: null };
+  return { ping: false, idleMs: idle, code: 'sse_ping_skip' };
+}
+
+function rejectUnicodeSlashHomoglyph(filePath) {
+  const p = String(filePath == null ? '' : filePath);
+  if (PATH_HOMOGLYPH_RE.test(p)) return { ok: false, path: p, code: 'path_homoglyph' };
+  return { ok: true, path: p, code: null };
+}
+
+function sessionLockOwnerPidCheck({ ownerPid, currentPid, lock } = {}) {
+  const owner = Number(ownerPid != null ? ownerPid : (lock && lock.pid));
+  const cur = Number(currentPid != null ? currentPid : (typeof process !== 'undefined' ? process.pid : 0));
+  if (!Number.isFinite(owner) || owner <= 0) return { ok: false, steal: false, code: 'lock_pid' };
+  if (!Number.isFinite(cur) || owner !== cur) return { ok: false, steal: false, ownerPid: owner, currentPid: cur, code: 'lock_pid' };
+  return { ok: true, steal: false, ownerPid: owner, currentPid: cur, code: null };
+}
+
+function mapPrismaDisconnectRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.name)) || '');
+  const msg = String((err && err.message) || '');
+  const blob = code + ' ' + msg;
+  const is = code === 'P1001' || code === 'P1017' || code === 'P2024'
+    || /Can't reach database|Server has closed the connection|PrismaClientInitializationError|PrismaClientRustPanicError|Connection reset by peer/i.test(blob);
+  if (is) return { retryable: true, code: 'prisma_disconnect' };
+  return { retryable: false, code: null };
+}
+
+function defaultToolTimeout30sIfMissing(timeoutMs, { defaultMs = TOOL_TIMEOUT_DEFAULT_MS } = {}) {
+  const n = Number(timeoutMs);
+  const d = Math.max(1000, Number(defaultMs) || TOOL_TIMEOUT_DEFAULT_MS);
+  if (!Number.isFinite(n) || n <= 0) return { timeoutMs: d, applied: true, code: 'tool_timeout_default' };
+  return { timeoutMs: n, applied: false, code: null };
+}
+
+function closeSseThenSettleCredits({ sseClosed, settled, cancelled, held } = {}) {
+  if (held && !sseClosed) return { order: 'close_first', sseClosed: false, settle: false, settled: !!settled, cancelled: !!cancelled, code: 'sse_settle_order' };
+  if (held && sseClosed && !settled) return { order: 'settle', sseClosed: true, settle: true, settled: false, cancelled: !!cancelled, code: null };
+  if (sseClosed && settled) return { order: 'done', sseClosed: true, settle: false, settled: true, cancelled: !!cancelled, code: null };
+  return { order: 'noop', sseClosed: !!sseClosed, settle: false, settled: !!settled, cancelled: !!cancelled, code: null };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -5851,6 +6289,36 @@ module.exports = {
   refuseReadThroughSymlink,
   markPlanStepFailedIfToolErrorTwice,
   restoreLastSseIdOnResume,
+  capToolArgBytes32KiB,
+  repairUnescapedNewlinesInJsonStrings,
+  coerceNullStringToNullOptional,
+  maxSseBuffersPerSession16,
+  compactKeepPinnedFactsAndLast3UserTurns,
+  refuseWriteIfDestDirMissing,
+  ceilTokensOnCancel,
+  classifyEconnresetAsCancelled,
+  queueMaxWait60sThen503,
+  skipUpsertIfEmbeddingDimMismatch,
+  stallIfNoEvent20sMidStream,
+  stripUtf16NulPadding,
+  rejectToolNameLongerThan64,
+  rejectRecursiveSameToolNameOver8,
+  skipCompletedPlanStepsOnResume,
+  gzipCheckpointIfOver64KiB,
+  parseLastEventIdIntOnly,
+  capGlobMatchFileSize1MiB,
+  redactAuthorizationBearerInToolResults,
+  refuseHostBashIfComputerOnlyTurn,
+  subagentInheritRemainingStepBudget,
+  concatenateSplitToolCallFragments,
+  neverRetry402,
+  combinedStdoutStderr96KiB,
+  pingOnlyIfLastWriteOver15s,
+  rejectUnicodeSlashHomoglyph,
+  sessionLockOwnerPidCheck,
+  mapPrismaDisconnectRetryable,
+  defaultToolTimeout30sIfMissing,
+  closeSseThenSettleCredits,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

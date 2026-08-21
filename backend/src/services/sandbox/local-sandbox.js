@@ -583,6 +583,21 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
             if (seCap.truncated) stderrTruncated = true;
           }
         }
+        if (typeof ad.stderrByteCapPerCommand === 'function') {
+          const seCap = ad.stderrByteCapPerCommand(stderr, { maxBytes: 64 * 1024 });
+          if (seCap && seCap.text != null) {
+            stderr = seCap.text;
+            if (seCap.truncated) stderrTruncated = true;
+          }
+        }
+        if (typeof ad.combinedStdoutStderr96KiB === 'function') {
+          const comb = ad.combinedStdoutStderr96KiB({ stdout, stderr, maxBytes: 96 * 1024 });
+          if (comb && comb.truncated) {
+            stdout = comb.text;
+            stderr = '';
+            stdoutTruncated = true;
+          }
+        }
         if (typeof ad.redactHomePathsInResults === 'function') {
           const rhOut = ad.redactHomePathsInResults(stdout);
           if (rhOut && rhOut.text != null) stdout = rhOut.text;

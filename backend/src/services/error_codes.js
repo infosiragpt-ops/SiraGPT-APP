@@ -262,6 +262,33 @@ const CODES = Object.freeze({
   SYMLINK_READ: 'symlink_read',
   PLAN_STEP_FAILED: 'plan_step_failed',
   PIN_TOOL_ERROR: 'pin_tool_error',
+  TOOL_ARGS_CAP: 'tool_args_cap',
+  JSON_NEWLINE_REPAIR: 'json_newline_repair',
+  NULL_STRING_COERCE: 'null_string_coerce',
+  SSE_BUFFER_CAP: 'sse_buffer_cap',
+  COMPACT_PINS_LAST3: 'compact_pins_last3',
+  DEST_DIR_MISSING: 'dest_dir_missing',
+  CREDIT_CEIL: 'credit_ceil',
+  QUEUE_WAIT: 'queue_wait',
+  EMBEDDING_DIM: 'embedding_dim',
+  STREAM_STALL: 'stream_stall',
+  UTF16_NUL: 'utf16_nul',
+  TOOL_NAME_LENGTH: 'tool_name_length',
+  TOOL_RECURSION: 'tool_recursion',
+  PLAN_SKIP_COMPLETED: 'plan_skip_completed',
+  CKPT_GZIP: 'ckpt_gzip',
+  SSE_ID_PARSE: 'sse_id_parse',
+  GLOB_FILE_SIZE: 'glob_file_size',
+  AUTH_REDACT: 'auth_redact',
+  HOST_BASH_BLOCKED: 'host_bash_blocked',
+  SUBAGENT_BUDGET: 'subagent_budget',
+  TOOL_CALL_CONCAT: 'tool_call_concat',
+  COMBINED_CAP: 'combined_cap',
+  PATH_HOMOGLYPH: 'path_homoglyph',
+  LOCK_PID: 'lock_pid',
+  PRISMA_DISCONNECT: 'prisma_disconnect',
+  TOOL_TIMEOUT_DEFAULT: 'tool_timeout_default',
+  SSE_SETTLE_ORDER: 'sse_settle_order',
 });
 
 function isRetryable(code) {
@@ -310,7 +337,10 @@ function isRetryable(code) {
     || c === 'generate_overloaded'
     || c === 'sse_buffer_overflow'
     || c === 'turn_wall'
-    || c === 'identical_prompt_inflight';
+    || c === 'identical_prompt_inflight'
+    || c === 'queue_wait'
+    || c === 'stream_stall'
+    || c === 'prisma_disconnect';
 }
 
 function publicError(code, extra) {
@@ -326,7 +356,7 @@ function httpStatusFor(code) {
   if (c === CODES.FORBIDDEN) return 403;
   if (c === CODES.SESSION_QUEUE_FULL || c === CODES.CRON_BUSY || c === CODES.GENERATE_OVERLOADED || c === 'generate_overloaded') return 429;
   if (c === CODES.TURN_TIMEOUT || c === CODES.CRON_TIMEOUT || c === CODES.CRON_DISPATCH_UNAVAILABLE) return 504;
-  if (c === 'hmac_secret_missing') return 503;
+  if (c === 'hmac_secret_missing' || c === 'queue_wait') return 503;
   if (c === CODES.WEBHOOK_HMAC_FAILED || c === 'hmac_invalid') return 401;
   if (c === CODES.RETRY_UNAVAILABLE) return 409;
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG) return 413;

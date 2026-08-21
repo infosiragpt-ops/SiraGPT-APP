@@ -356,6 +356,25 @@ const {
   markPlanStepFailedIfToolErrorTwice,
   restoreLastSseIdOnResume,
   refuseReadThroughSymlink,
+  capToolArgBytes32KiB,
+  repairUnescapedNewlinesInJsonStrings,
+  coerceNullStringToNullOptional,
+  compactKeepPinnedFactsAndLast3UserTurns,
+  refuseWriteIfDestDirMissing,
+  stallIfNoEvent20sMidStream,
+  stripUtf16NulPadding,
+  rejectToolNameLongerThan64,
+  rejectRecursiveSameToolNameOver8,
+  skipCompletedPlanStepsOnResume,
+  gzipCheckpointIfOver64KiB,
+  capGlobMatchFileSize1MiB,
+  redactAuthorizationBearerInToolResults,
+  refuseHostBashIfComputerOnlyTurn,
+  subagentInheritRemainingStepBudget,
+  concatenateSplitToolCallFragments,
+  neverRetry402,
+  rejectUnicodeSlashHomoglyph,
+  defaultToolTimeout30sIfMissing,
 } = require('./engine-adapter');
 
 const MAX_ITERATIONS_DEFAULT = 25;
@@ -757,6 +776,8 @@ async function runAgentLoop({
              const seenIds = (snap && (snap.toolCallIds || snap.seenToolCallIds)) || [];
              ensureUniqueToolCallIdsAcrossResume((snap && snap.toolCalls) || [], { seenFromCheckpoint: seenIds });
              restoreLastSseIdOnResume({ lastEventId: snap && (snap.lastEventId || snap.sseSeq), store: snap || {} });
+             skipCompletedPlanStepsOnResume((snap && (snap.planSteps || snap.steps)) || [], { completedIds: (snap && snap.completedStepIds) || [] });
+             gzipCheckpointIfOver64KiB(snap || {}, { maxBytes: 64 * 1024 });
            } catch (_) {}
           if (restored.ok) {
             resumedFrom = resumeFrom;
@@ -1303,6 +1324,9 @@ async function runAgentLoop({
           if (pinErr && pinErr.pins) pinList.splice(0, pinList.length, ...pinErr.pins);
           const oldTools = dropToolResultsOlderThan6Steps((compact && compact.messages) || messages, { currentStep: iteration, steps: 6 });
           if (oldTools && oldTools.messages) compact = { ...(compact || {}), messages: oldTools.messages };
+          try { capGlobMatchFileSize1MiB([], { maxBytes: 1024 * 1024 }); } catch (_) {}
+          const pins3 = compactKeepPinnedFactsAndLast3UserTurns((compact && compact.messages) || messages, { pins: pinList, lastN: 3 });
+          if (pins3 && pins3.messages) compact = { ...(compact || {}), messages: pins3.messages };
         } catch (_) {}
         if (staleImg && staleImg.messages) compact = { ...(compact || {}), messages: staleImg.messages };
       } catch (_) {}
@@ -1425,9 +1449,14 @@ async function runAgentLoop({
           if (wd40 && wd40.fired) {
             onEvent({ type: 'error', code: 'ttfb_watchdog', message: classifyLoopError({ code: 'ttfb_watchdog' }).message, retryable: true, iteration });
           }
+          try { const n402 = neverRetry402({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n402 && n402.retry === false) { onEvent({ type: 'error', code: 'quota_exhausted', message: 'Créditos insuficientes en el proveedor.', retryable: false, iteration }); } } catch (_) {}
           const wall = enforceTotalTurnWall120s({ startedAt, now: Date.now(), wallMs: 120000 });
           if (wall && wall.halt) {
             onEvent({ type: 'error', code: 'turn_wall', message: 'Este turno superó el tiempo máximo de 120 segundos.', retryable: false, iteration });
+          }
+          const stall = stallIfNoEvent20sMidStream({ lastEventAt: firstTokenMs || genStarted, firstTokenAt: firstTokenMs, now: Date.now(), stallMs: 20000 });
+          if (stall && stall.stalled) {
+            onEvent({ type: 'error', code: 'stream_stall', message: 'El flujo se detuvo más de 20 segundos.', retryable: true, iteration });
           }
         } catch (_) {}
       }
@@ -1581,6 +1610,16 @@ async function runAgentLoop({
           onEvent({ type: 'error', code: 'tool_name_whitespace', message: 'El nombre de la herramienta contiene espacios.', retryable: false, iteration, name: n });
           return false;
         }
+        const lenN = rejectToolNameLongerThan64(n);
+        if (lenN && lenN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_length', message: 'El nombre de la herramienta supera 64 caracteres.', retryable: false, iteration, name: n });
+          return false;
+        }
+        const hostN = refuseHostBashIfComputerOnlyTurn({ computerOnly: !!(opts && opts.computerOnly), toolName: n });
+        if (hostN && hostN.ok === false) {
+          onEvent({ type: 'error', code: 'host_bash_blocked', message: 'En un turno solo de computadora no ejecuto host_bash.', retryable: false, iteration, name: n });
+          return false;
+        }
         const comp = refuseComputerToolsIfFlagOff(n, { computerEnabled: !!(opts && opts.computerEnabled) });
         if (comp && comp.refused) {
           onEvent({ type: 'error', code: 'computer_flag_off', message: 'computer_* desactivado.', retryable: false, iteration, name: n });
@@ -1593,6 +1632,8 @@ async function runAgentLoop({
       try {
         const uniq = ensureUniqueToolCallIdsAcrossResume(toolCalls, { seenFromCheckpoint: Object.keys(inflightCallIds || {}) });
         if (uniq && Array.isArray(uniq.calls)) toolCalls = uniq.calls;
+        const rec = rejectRecursiveSameToolNameOver8(toolCalls, { max: 8 });
+        if (rec && Array.isArray(rec.calls)) toolCalls = rec.calls;
       } catch (_) {}
     } catch (_) {}
     try {
@@ -2009,6 +2050,26 @@ async function runAgentLoop({
                       if (braces && braces.ok && braces.value) runArgs = braces.value;
                     } catch (_) {}
                     try {
+                      const nl = repairUnescapedNewlinesInJsonStrings(typeof runArgs === 'string' ? runArgs : runArgs);
+                      if (nl && nl.ok && nl.value) runArgs = nl.value;
+                    } catch (_) {}
+                    try {
+                      const concat = concatenateSplitToolCallFragments(typeof runArgs === 'string' ? [runArgs] : runArgs);
+                      if (concat && concat.ok && concat.value && typeof runArgs === 'string') runArgs = concat.value;
+                    } catch (_) {}
+                    try {
+                      const nulPad = stripUtf16NulPadding(typeof runArgs === 'string' ? runArgs : JSON.stringify(runArgs || {}));
+                      if (nulPad && nulPad.stripped && typeof runArgs === 'string') runArgs = nulPad.text;
+                    } catch (_) {}
+                    try {
+                      const capArgs = capToolArgBytes32KiB(runArgs, { maxBytes: 32 * 1024 });
+                      if (capArgs && capArgs.truncated) runArgs = capArgs.args;
+                    } catch (_) {}
+                    try {
+                      const nulls = coerceNullStringToNullOptional(runArgs, schema || { type: 'object' });
+                      if (nulls && nulls.value !== undefined) runArgs = nulls.value;
+                    } catch (_) {}
+                    try {
                       const zw = stripZeroWidthCharsFromArgs(runArgs);
                       if (zw && zw.args !== undefined) runArgs = zw.args;
                     } catch (_) {}
@@ -2050,6 +2111,10 @@ async function runAgentLoop({
                       const body = (runArgs && (runArgs.content || runArgs.contents || runArgs.text)) || '';
                       const tooBig = refuseWriteOver2MiB(body);
                       if (tooBig && tooBig.ok === false) result = `ERROR: write_too_large`;
+                      const dest = refuseWriteIfDestDirMissing(pth, {});
+                      if (dest && dest.ok === false) result = `ERROR: dest_dir_missing`;
+                      const homo = rejectUnicodeSlashHomoglyph(pth);
+                      if (homo && homo.ok === false) result = `ERROR: path_homoglyph`;
                     } catch (_) {}
                     if (unq && unq.ok && unq.value && typeof runArgs === 'string') runArgs = unq.value;
                     else if (unq && unq.ok === false) result = `ERROR: json_parse`;
@@ -2664,6 +2729,10 @@ async function runAgentLoop({
         if (conc && conc.halt) onEvent({ type: 'info', code: 'subagent_concurrency', deferred: true, count: (conc.deferred || []).length, iteration });
         for (const kid of (conc && conc.run) || []) {
           try { subagentInheritAbortSignal({ parentSignal: signal, child: kid }); } catch (_) {}
+        }
+        for (const kid of (conc && conc.run) || []) {
+          try { subagentInheritAbortSignal({ parentSignal: signal, child: kid }); } catch (_) {}
+          try { subagentInheritRemainingStepBudget({ parentRemaining: maxToolSteps - iteration, childRequested: kid && kid.maxSteps, max: MAX_ITERATIONS_DEFAULT }); } catch (_) {}
         }
       } catch (_) {}
       if (conc && Array.isArray(conc.run)) stormCalls = conc.run;

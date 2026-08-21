@@ -118,6 +118,23 @@ function createSessionQueue() {
           err.retryAfterSec = wait.retryAfterSec;
           return Promise.reject(err);
         }
+        if (wait && wait.ok === false) {
+          const err = new Error('generate_overloaded');
+          err.code = 'generate_overloaded';
+          err.retryAfterSec = wait.retryAfterSec;
+          return Promise.reject(err);
+        }
+        if (typeof adWait.queueMaxWait60sThen503 === 'function') {
+          const waited = Number((opts && (opts.waitedMs || opts.queuedMs)) || queued * 8000);
+          const qwait = adWait.queueMaxWait60sThen503({ waitedMs: waited, maxMs: 60000 });
+          if (qwait && qwait.reject) {
+            const err = new Error('queue_wait');
+            err.code = 'queue_wait';
+            err.status = 503;
+            err.retryAfterSec = qwait.retryAfterSec;
+            return Promise.reject(err);
+          }
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);
