@@ -31,11 +31,34 @@
  */
 
 const { calculateCost } = require('./observability/llm-cost');
+const {
+  resolveAgentLlmClient,
+  resolveNativeDeepSeekModel,
+  isOpenRouterClient,
+  FLASH,
+} = require('./agent-runner/native-llm');
+const engineControl = require('./agent-runner/engine-control');
+let engineCorrectness = null;
+try { engineCorrectness = require('./agent-runner/engine-correctness'); } catch (_) { engineCorrectness = null; }
+let engineLifecycle = null;
+try { engineLifecycle = require('./agent-runner/engine-lifecycle'); } catch (_) { engineLifecycle = null; }
+let engineAdapter = null;
+try { engineAdapter = require('./agent-runner/engine-adapter'); } catch (_) { engineAdapter = null; }
+
+const engineAdvance = require('./agent-runner/engine-advance');
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
 
-function responseUsage(resp, { model, provider } = {}) {
+function responseUsage(resp, { model, provider, hold } = {}) {
+  try {
+    if (engineCorrectness && engineCorrectness.creditOnLlmFailure) {
+      const gate = engineCorrectness.creditOnLlmFailure(resp, hold);
+      if (gate && gate.code === 'credit_no_usage') {
+        return { inputTokens: 0, outputTokens: 0, tokensEstimate: 0, costUsd: 0, model: model || null, provider: provider || null, source: 'credit_no_usage', code: 'credit_no_usage' };
+      }
+    }
+  } catch (_) {}
   const raw = resp?.usage || {};
   const inputTokens = Math.max(0, Math.round(Number(
     raw.prompt_tokens ?? raw.input_tokens ?? raw.inputTokens ?? 0,
@@ -268,6 +291,14 @@ function classifyToolError(err) {
       name: err.name,
     };
   } else probe = { message: String(err) };
+  if (engineAdapter && typeof engineAdapter.classifyToolFailure === 'function') {
+    try {
+      const kind = engineAdapter.classifyToolFailure(probe);
+      if (kind && kind.kind && kind.kind !== 'unknown') {
+        return kind.retryable ? 'transient' : 'terminal';
+      }
+    } catch (_) { /* keep legacy */ }
+  }
   return classifyTaskError(probe).retryable ? 'transient' : 'terminal';
 }
 
@@ -394,9 +425,31 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
       return { error: auth?.reason || 'tool_denied' };
     }
   }
-  const tool = registry.find(t => t.name === name);
+  try {
+    if (engineAdapter && engineAdapter.denyDangerousGenerateTools) {
+      const danger = engineAdapter.denyDangerousGenerateTools(name, argsRaw);
+      if (danger && danger.ok === false) return { error: 'dangerous_tool' };
+    }
+    if (engineAdapter && engineAdapter.runPreToolHook) {
+      const pre = engineAdapter.runPreToolHook(name, argsRaw);
+      if (pre && pre.ok === false) return { error: pre.code || 'dangerous_tool' };
+    }
+    if (engineAdapter && engineAdapter.capToolArgBytes) {
+      const cap = engineAdapter.capToolArgBytes(argsRaw);
+      if (cap && cap.ok === false) return { error: 'tool_args_invalid' };
+    }
+  } catch (_) {}
+  let resolvedName = name;
+  try {
+    if (engineLifecycle && engineLifecycle.rewriteUnknownToNearest) {
+      const nearest = engineLifecycle.rewriteUnknownToNearest(name, { catalog: registry.map((t) => t && t.name).filter(Boolean) });
+      if (nearest && nearest.ok && nearest.mapped) resolvedName = nearest.mapped;
+    }
+  } catch (_) {}
+  const tool = registry.find(t => t.name === resolvedName) || registry.find(t => t.name === name);
   if (!tool) {
-    return { error: `unknown_tool: ${name}` };
+    try { if (engineCorrectness) { const r = engineCorrectness.resolveUnknownTool(name, { catalog: registry.map((t) => t && t.name).filter(Boolean) }); if (r && r.suggestion) return { error: `tool_unknown: ${name} closest=${r.suggestion}` }; } } catch (_) {}
+    return { error: `tool_unknown: ${name}` };
   }
   let args = {};
   try {
@@ -404,9 +457,43 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   } catch (e) {
     return { error: `invalid_json_args: ${e.message}` };
   }
-  const validation = validateToolArgs(tool, args);
-  if (!validation.ok) {
-    return { error: validation.error };
+  try {
+    if (engineAdapter && engineAdapter.stripAdditionalProperties && tool.parameters) {
+      const stripped = engineAdapter.stripAdditionalProperties(args, tool.parameters);
+      if (stripped && stripped.ok === false) return { error: stripped.code || 'schema_invalid' };
+      if (stripped && stripped.args) args = stripped.args;
+    }
+  } catch (_) {}
+  try {
+    if (engineLifecycle && engineLifecycle.repairToolCallSchema) {
+      const repaired = engineLifecycle.repairToolCallSchema({ name: tool.name, arguments: args }, tool.parameters || { type: 'object' }, { catalog: registry.map((t) => t && t.name).filter(Boolean) });
+      if (repaired && repaired.args) args = repaired.args;
+    }
+  } catch (_) {}
+  try {
+    if (!ctx.repairBudget) ctx.repairBudget = engineControl.createToolRepairBudget();
+    const schema = tool.parameters || { type: 'object' };
+    const seen = ctx.repairBudget.see(name);
+    const repaired = engineControl.repairToolCallWithFeedback({
+      name,
+      args,
+      schema,
+      attempt: seen.count,
+      maxAttempts: ctx.repairBudget.max,
+    });
+    if (!repaired.ok) {
+      return {
+        error: repaired.code || 'schema_invalid',
+        feedback: repaired.feedback || repaired.code,
+        retry: Boolean(repaired.retry),
+      };
+    }
+    args = repaired.args || args;
+  } catch (_) {
+    const validation = validateToolArgs(tool, args);
+    if (!validation.ok) {
+      return { error: validation.error };
+    }
   }
   // Budget is consumed only AFTER lookup + arg validation: a malformed or
   // unknown call must not burn a tool-call slot the model could still use
@@ -422,8 +509,32 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   }
   try {
     const result = await tool.execute(args, ctx);
+    try {
+      if (engineLifecycle && engineLifecycle.verifyStrReplace && /str_replace|edit_file|write_file/.test(String(tool.name || ''))) {
+        const chk = engineLifecycle.verifyStrReplace({
+          pathName: args.path || args.file_path,
+          before: result && result.before,
+          after: result && (result.after || result.content),
+          oldString: args.old_string || args.oldString,
+          newString: args.new_string || args.newString,
+        });
+        if (chk && chk.ok === false) return { error: chk.code };
+      }
+    } catch (_) {}
+    try {
+      if (engineCorrectness && engineCorrectness.capToolResultWithHash) {
+        const capped = engineCorrectness.capToolResultWithHash(typeof result === 'string' ? result : JSON.stringify(result == null ? '' : result));
+        if (capped && capped.truncated) return { result: capped.text };
+      }
+    } catch (_) {}
     return { result };
   } catch (e) {
+    try {
+      if (engineLifecycle && engineLifecycle.mapProviderHttp) {
+        const mapped = engineLifecycle.mapProviderHttp(e);
+        return { error: mapped.code, message: mapped.message };
+      }
+    } catch (_) {}
     return { error: `tool_execution_failed: ${e.message}` };
   }
 }
@@ -748,6 +859,9 @@ function buildDegradedAnswer(stoppedReason) {
   if (reason.startsWith('runtime_budget')) {
     return 'No alcancé a completar la tarea dentro del tiempo disponible. Te dejo lo procesado hasta ahora; si necesitas el resultado completo, vuelve a intentarlo o acota la solicitud.';
   }
+  if (/credit_no_usage|credit_ceiling|402|quota/.test(reason)) {
+    return 'El proveedor se quedó sin crédito en este turno. No cobré el fallo. Recarga /code e inténtalo de nuevo.';
+  }
   if (reason.startsWith('model_error')) {
     return 'Hubo un problema temporal con el modelo y no pude completar la respuesta. Por favor vuelve a intentarlo; si el problema persiste, reformula la solicitud.';
   }
@@ -828,7 +942,7 @@ async function run(openai, opts) {
     onStepDone = () => {},
     onStep = () => {},
     ctx = {},
-    model = 'gpt-4o',
+    model = FLASH,
     extraSystem = '',
     finalizeGuard = null,
     initialToolChoice = null,
@@ -854,8 +968,11 @@ async function run(openai, opts) {
   if (!Array.isArray(tools)) throw new Error('react-agent: tools must be an array');
 
   let activeOpenai = openai;
-  let activeModel = model;
-  let activeProvider = ctx?.provider || null;
+  let activeModel = resolveNativeDeepSeekModel(model);
+  let activeProvider = 'DeepSeek';
+  if (!activeOpenai || isOpenRouterClient(activeOpenai)) {
+    activeOpenai = resolveAgentLlmClient({ client: activeOpenai });
+  }
 
   // `finalize` is always present. Even if a caller forgets to include
   // it in their toolset, the agent still has a way to terminate
@@ -956,7 +1073,12 @@ async function run(openai, opts) {
   const steps = [];
   let finalAnswer = null;
   let stoppedReason = 'max_steps';
+  let emptyState = {};
   const startedAt = Date.now();
+  let tokensUsed = 0;
+  const repairBudget = engineControl.createToolRepairBudget();
+  const stepTelemetry = engineControl.createStepTelemetry();
+  ctx.repairBudget = repairBudget;
 
   // Prevent infinite loops when tools fail silently and the model
   // keeps making the same call. Track tool error frequency per step.
@@ -1112,6 +1234,18 @@ async function run(openai, opts) {
       stoppedReason = 'runtime_budget_exhausted';
       break;
     }
+    try {
+      const stop = engineControl.evaluateStopConditions({
+        iteration: step + 1,
+        maxIterations: maxSteps,
+        tokensUsed,
+        tokenBudget: opts.tokenBudget,
+      });
+      if (stop && stop.stop) {
+        stoppedReason = stop.reason || 'token_budget';
+        break;
+      }
+    } catch (_) { /* engine-control optional */ }
 
     // ACI observation aging: collapse tool outputs older than the last
     // OBS_KEEP_ROUNDS rounds to one-line gists, every step, regardless of
@@ -1212,6 +1346,28 @@ async function run(openai, opts) {
       if (ctx.signal.aborted) onParentAbort();
       else ctx.signal.addEventListener('abort', onParentAbort, { once: true });
     }
+    const tokenWd = engineLifecycle && engineLifecycle.startFirstTokenWatchdog
+      ? engineLifecycle.startFirstTokenWatchdog({
+        timeoutMs: (function () {
+          try {
+            if (engineAdapter && engineAdapter.splitModelVsToolTimeout) {
+              return engineAdapter.splitModelVsToolTimeout('model').ttfbMs || 2500;
+            }
+          } catch (_) {}
+          return 2500;
+        }()),
+        onHeartbeat: () => {},
+      })
+      : { mark() {}, stop() {} };
+    if (engineAdapter && ctx && ctx.signal) {
+      try {
+        engineAdapter.abortSiblingsOnParentCancel({ parentCancelled: true, siblingIds: (opts && opts.siblingIds) || [] });
+        engineAdapter.abortCascade({
+          userSignal: ctx.signal,
+          modelAbort: () => { try { stepCtl.abort(); } catch (_) {} },
+        });
+      } catch (_) {}
+    }
     try {
       if (prompted) {
         // Provider-safe payload: no tools/tool_choice params, no role:'tool'
@@ -1233,28 +1389,88 @@ async function run(openai, opts) {
           tool_choice: toolChoice,
           ...(parallelToolCalls === true ? { parallel_tool_calls: true } : {}),
           temperature: 0.3,
+          ...(function clampTok() {
+            try {
+              if (engineAdapter && engineAdapter.clampMaxTokensToRemainingContext) {
+                const used = engineAdapter.estimateCompactTokens(messages);
+                const c = engineAdapter.clampMaxTokensToRemainingContext({ maxTokens: 1500, used, contextWindow: 128000 });
+                if (c && c.maxTokens) return { max_tokens: c.maxTokens };
+              }
+            } catch (_) {}
+            return {};
+          }()),
         }, { signal: stepCtl.signal });
       }
     } catch (err) {
       const timedOut = stepCtl.signal.aborted && !(ctx?.signal && ctx.signal.aborted);
+      let mapped = null;
+      try { mapped = engineLifecycle && engineLifecycle.mapProviderHttp(err); } catch (_) {}
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
-        : `model_error: ${err.message}`;
+        : (mapped && mapped.code ? mapped.code : `model_error: ${err.message}`);
+      if (mapped && /credit_no_usage|credit_ceiling|rate_limited/.test(String(mapped.code || '')) && steps.length) {
+        try {
+          const pub = require('./observability/public-stream-error').classifyPublicStreamError(err);
+          finalAnswer = (pub && pub.message) || mapped.message || buildDegradedAnswer(stoppedReason);
+        } catch (_) {
+          finalAnswer = buildDegradedAnswer(stoppedReason);
+        }
+      }
       break;
     } finally {
+      try { tokenWd.stop(); } catch (_) {}
       clearTimeout(stepTimer);
       if (ctx?.signal) {
         try { ctx.signal.removeEventListener('abort', onParentAbort); } catch { /* noop */ }
       }
     }
 
+    try { tokenWd.mark(Date.now()); } catch (_) {}
     const choice = resp.choices?.[0];
     const msg = choice?.message;
     if (!msg) { stoppedReason = 'no_message'; break; }
+    try {
+      if (engineAdapter && engineAdapter.allowDeepSeekGenerateModel && ctx && ctx.model) {
+        const gate = engineAdapter.allowDeepSeekGenerateModel(ctx.model);
+        if (gate && gate.ok === false) break;
+      }
+      if (engineAdapter && engineAdapter.guardUserRoleSpoof && Array.isArray(messages)) {
+        const lastU = [...messages].reverse().find((m) => m && m.role === 'user');
+        if (lastU) {
+          const g = engineAdapter.guardUserRoleSpoof(lastU.content);
+          if (g && g.spoofed) lastU.content = g.text;
+        }
+      }
+      if (engineAdapter && engineAdapter.emptyResponseRetryOnce) {
+        const emptyGate = engineAdapter.emptyResponseRetryOnce(resp, emptyState);
+        emptyState = emptyGate.state || emptyState;
+        if (emptyGate.retry) continue;
+        if (emptyGate.stop) { stoppedReason = 'empty_response'; break; }
+      }
+      if (engineAdapter && engineAdapter.stopOnFinalAnswer && (!msg.tool_calls || msg.tool_calls.length === 0) && String(msg.content || '').trim()) {
+        const fin = engineAdapter.stopOnFinalAnswer(msg);
+        if (fin && fin.stop) {
+          /* fall through to existing finalize-less answer path */
+        }
+      }
+      if (engineAdapter && engineAdapter.dropDuplicateSystemPrompts && Array.isArray(messages)) {
+        const dedup = engineAdapter.dropDuplicateSystemPrompts(messages);
+        if (dedup && dedup.messages) messages.splice(0, messages.length, ...dedup.messages);
+      }
+    } catch (_) {}
     const usage = responseUsage(resp, {
       model: activeModel,
       provider: activeProvider,
     });
+    tokensUsed += Number(usage.tokensEstimate || 0);
+    try {
+      stepTelemetry.record({
+        stepIndex: step,
+        type: 'model',
+        status: 'completed',
+        result: usage,
+      });
+    } catch (_) { /* telemetry fail-open */ }
 
     // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
     // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside
@@ -1291,7 +1507,106 @@ async function run(openai, opts) {
     // context — this is how the model "sees" its own trace.
     messages.push(msg);
 
-    const toolCalls = msg.tool_calls || [];
+    const toolCalls = (function uniqueCalls() {
+      const raw = msg.tool_calls || [];
+      try {
+        if (engineAdapter && engineAdapter.ensureUniqueToolCallIds) {
+          const uniq = engineAdapter.ensureUniqueToolCallIds(raw);
+          if (uniq && uniq.calls) {
+            msg.tool_calls = uniq.calls;
+            raw = uniq.calls;
+          }
+        }
+        if (engineAdapter && engineAdapter.stopIfFinalTextWithTools) {
+          const fin = engineAdapter.stopIfFinalTextWithTools({ content: msg.content, tool_calls: raw });
+          if (fin && fin.stop) {
+            msg.tool_calls = [];
+            return [];
+          }
+        }
+        if (engineAdapter && engineAdapter.allowlistToolName) {
+          raw = (Array.isArray(raw) ? raw : []).filter((c) => {
+            const n = (c && c.function && c.function.name) || (c && c.name) || '';
+            const allow = engineAdapter.allowlistToolName(n);
+            return !(allow && allow.ok === false);
+          });
+          msg.tool_calls = raw;
+        }
+        if (engineAdapter && engineAdapter.validateEnumArgs) {
+          raw = (Array.isArray(raw) ? raw : []).filter((c) => {
+            try {
+              const args = c && c.function && c.function.arguments;
+              const parsed = typeof args === 'string' ? JSON.parse(args) : (c && c.arguments) || args || {};
+              const en = engineAdapter.validateEnumArgs(parsed, (c && c.schema) || { type: 'object' });
+              return !(en && en.ok === false);
+            } catch (_) { return true; }
+          });
+          msg.tool_calls = raw;
+        }
+        if (engineAdapter && engineAdapter.maxConcurrentToolsPerTurn) {
+          try {
+            const conc = engineAdapter.maxConcurrentToolsPerTurn(raw, { max: 4 });
+            if (conc && Array.isArray(conc.run)) raw = conc.run.concat(conc.deferred || []);
+            msg.tool_calls = raw;
+          } catch (_) {}
+        }
+        if (engineAdapter && engineAdapter.aliasCommonToolNames) {
+          try {
+            raw = (Array.isArray(raw) ? raw : []).map((c) => {
+              const n = (c && c.function && c.function.name) || (c && c.name);
+              const al = engineAdapter.aliasCommonToolNames(n);
+              if (al && al.name && c && c.function) {
+                return Object.assign({}, c, { function: Object.assign({}, c.function, { name: al.name }) });
+              }
+              if (al && al.name && c) return Object.assign({}, c, { name: al.name });
+              return c;
+            });
+            msg.tool_calls = raw;
+          } catch (_) {}
+        }
+        if (engineAdapter && engineAdapter.jsonRepairTrailingComma) {
+          try {
+            raw = (Array.isArray(raw) ? raw : []).map((c) => {
+              const args = c && c.function && c.function.arguments;
+              if (typeof args === 'string') {
+                const repaired = engineAdapter.jsonRepairTrailingComma(args);
+                if (repaired && repaired.ok && repaired.value) {
+                  const nextArgs = JSON.stringify(repaired.value);
+                  return Object.assign({}, c, { function: Object.assign({}, c.function, { arguments: nextArgs }) });
+                }
+              }
+              return c;
+            });
+            msg.tool_calls = raw;
+          } catch (_) {}
+        }
+        if (engineAdapter && engineAdapter.repairUnquotedKeysInToolJson) {
+          try {
+            raw = (Array.isArray(raw) ? raw : []).map((c) => {
+              const args = c && c.function && c.function.arguments;
+              if (typeof args === 'string') {
+                const repaired = engineAdapter.repairUnquotedKeysInToolJson(args);
+                if (repaired && repaired.ok && repaired.value) {
+                  const nextArgs = JSON.stringify(repaired.value);
+                  return Object.assign({}, c, { function: Object.assign({}, c.function, { arguments: nextArgs }) });
+                }
+              }
+              return c;
+            });
+            msg.tool_calls = raw;
+          } catch (_) {}
+        }
+        if (engineAdapter && engineAdapter.maxToolsPerTurnHardCap) {
+          try {
+            const hard = engineAdapter.maxToolsPerTurnHardCap(raw, { max: 32 });
+            if (hard && hard.halt) raw = (Array.isArray(raw) ? raw : []).slice(0, 32);
+            msg.tool_calls = raw;
+          } catch (_) {}
+        }
+        return raw;
+      } catch (_) {}
+      return raw;
+    }());
     const thought = (msg.content || '').trim();
 
     if (toolCalls.length === 0) {
@@ -1680,11 +1995,31 @@ async function run(openai, opts) {
 
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
-  return { finalAnswer, steps, stoppedReason, exhaustedTools: Array.from(exhaustedTools) };
+  let sleepCompact = null;
+  try {
+    sleepCompact = engineAdvance.sleepTimeCompact({
+      messages,
+      persistMemory: ctx.persistMemory,
+      userId: ctx.userId,
+      chatId: ctx.chatId,
+      reason: stoppedReason,
+    });
+  } catch (_) { sleepCompact = { skipped: true }; }
+  try { Promise.resolve(stepTelemetry.flush()).catch(() => {}); } catch (_) {}
+  return {
+    finalAnswer,
+    steps,
+    stoppedReason,
+    exhaustedTools: Array.from(exhaustedTools),
+    tokensUsed,
+    sleepCompact,
+    engineLive: true,
+  };
 }
 
 module.exports = {
   run,
+  engineLive: true,
   DEFAULT_MAX_STEPS,
   DEFAULT_MAX_RUNTIME_MS,
   SYSTEM_PROMPT,

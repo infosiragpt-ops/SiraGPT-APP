@@ -39,8 +39,9 @@ const CORE_TOOLS = Object.freeze(['web_search', 'read_url', 'read_file', 'search
 
 // Tool-name → capability category (a tool can match several).
 const CATEGORY_PATTERNS = Object.freeze({
-  web: /^(web_search|read_url|web_extract|deep_search|browser_)/,
-  research: /^(scientific_search|github_search|x_search|deep_search|sunat_)/,
+  web: /^(web_search|read_url|web_extract|deep_search|browser_|computer_navigate|computer_screenshot)/,
+  research: /^(scientific_search|github_search|x_search|deep_search|sunat_|computer_navigate|computer_screenshot)/,
+  computer: /^computer_/,
   rag: /(rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|docintel|deep_analyze|compare_documents|auto_file|memory_recall)/,
   code: /(python_exec|host_bash|host_file|list_dir|glob_files|code_grep|clone_project|run_tests|propose_patch|static_check|check_ci|monitor_ci|search_code|get_symbol)/,
   generation: /(create_document|verify_artifact)/,
@@ -90,14 +91,14 @@ function categoriesFor(name) {
 }
 
 function buildCategoryWeights({ intent, signals }) {
-  const weights = { web: 0, research: 0, rag: 0, code: 0, generation: 0, media: 0, memory: 0 };
+  const weights = { web: 0, research: 0, rag: 0, code: 0, generation: 0, media: 0, memory: 0, computer: 0 };
   const it = String(intent || '').toLowerCase();
   const base = INTENT_CATEGORIES[it];
   if (base) for (const [c, w] of Object.entries(base)) weights[c] = (weights[c] || 0) + w;
   const s = signals || {};
   if (s.hasFiles) { weights.rag += 3; }
   if (s.hasCode) { weights.code += 2; }
-  if (s.needsResearch) { weights.research += 2; weights.web += 2; }
+  if (s.needsResearch) { weights.research += 2; weights.web += 2; weights.computer += 1; }
   if (s.hasMedia) { weights.media += 3; }
   return weights;
 }

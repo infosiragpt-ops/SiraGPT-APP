@@ -1,0 +1,30 @@
+services:
+  computer-orchestrator:
+    build: ./orchestrator
+    image: siragpt-computer-orchestrator:local
+    container_name: siragpt-computer-orchestrator
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      PORT: "8090"
+      BIND: "0.0.0.0"
+      COMPUTER_IMAGE: siragpt-computer:local
+      COMPUTER_NETWORK: siragpt_agent_computer
+      PUBLIC_BASE_URL: https://computer.siragpt.com
+      COMPUTER_NOVNC_BASE_URL: https://computer.siragpt.com
+      EPHEMERAL_TTL_MS: "1800000"
+    networks:
+      - siragpt_default
+      - agent_computer
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+networks:
+  siragpt_default:
+    external: true
+  agent_computer:
+    name: siragpt_agent_computer
+    external: true

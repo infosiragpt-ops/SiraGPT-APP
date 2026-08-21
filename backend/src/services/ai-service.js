@@ -94,10 +94,8 @@ function getFallbackChain(primaryProvider = '') {
 
     const primary = String(primaryProvider || '').trim().toLowerCase();
     const candidates = [
-        { provider: 'gemini', model: 'gemini-2.5-flash', enabled: !!process.env.GEMINI_API_KEY },
-        { provider: 'openai', model: 'gpt-4o-mini', enabled: !!process.env.OPENAI_API_KEY },
         { provider: 'deepseek', model: 'deepseek-v4-flash', enabled: !!process.env.DEEPSEEK_API_KEY },
-        { provider: 'openrouter', model: 'moonshotai/kimi-k2.6', enabled: !!process.env.OPENROUTER_API_KEY },
+        { provider: 'deepseek', model: 'deepseek-v4-pro', enabled: !!process.env.DEEPSEEK_API_KEY },
     ];
     const defaults = [];
     // Cross-provider recovery comes first. A provider-wide billing or auth
@@ -109,7 +107,7 @@ function getFallbackChain(primaryProvider = '') {
     for (const candidate of candidates) {
         if (candidate.enabled && candidate.provider === primary) defaults.push(candidate.model);
     }
-    if (process.env.OPENAI_API_KEY) defaults.push('gpt-3.5-turbo');
+    // gpt-3.5-turbo fallback removed: DeepSeek-only product lock
     return [...new Set(defaults)];
 }
 
@@ -140,18 +138,18 @@ function providerForModel(model) {
     if (m === configuredGema4Model || /^gema4[-\s]?31b$/i.test(m)) {
         return process.env.GEMA4_PROVIDER || 'OpenAI';
     }
-    if (isSiragptCombined(m)) return 'OpenRouter';
-    if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
-    if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
-    if (/^(openai|google|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
-    if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'OpenRouter';
+    if (isSiragptCombined(m)) return 'DeepSeek';
+    if (/deepseek/i.test(m)) return 'DeepSeek';
+    if (/^(claude|anthropic\/)/i.test(m)) return 'DeepSeek';
+    if (/^(openai|google|x-ai|openrouter|meta-llama|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'DeepSeek';
+    if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'DeepSeek';
     if (/^(gemini|imagen)/i.test(m)) return 'Gemini';
     return 'OpenAI';
 }
 
 function normalizeChatProvider(provider, model) {
     const p = String(provider || '').trim();
-    if (/^anthropic$/i.test(p)) return 'OpenRouter';
+    if (/^anthropic$/i.test(p)) return 'DeepSeek';
     if (!p) return providerForModel(model);
     return p;
 }
@@ -159,10 +157,27 @@ function normalizeChatProvider(provider, model) {
 function normalizeModelForProvider(provider, model) {
     const m = String(model || '').trim();
     if (!m) return m;
-    if (/^openrouter$/i.test(String(provider || '')) && /^claude/i.test(m) && !m.includes('/')) {
-        return `anthropic/${m}`;
+    if (/^deepseek$/i.test(String(provider || ''))) {
+        const bare = m.includes('/') ? m.split('/').pop() : m;
+        if (/v4-pro/i.test(bare)) return 'deepseek-v4-pro';
+        if (/^deepseek-(v\d|chat|reasoner)/i.test(bare)) return bare;
+        return 'deepseek-v4-flash';
+    }
+    if (/^openrouter$/i.test(String(provider || ''))) {
+        if (/v4-pro/i.test(m)) return 'deepseek-v4-pro';
+        return process.env.SIRAGPT_AGENT_RUNNER_MODEL || 'deepseek-v4-flash';
     }
     return m;
+}
+
+function lockChatGenerateToNativeDeepSeek(provider, model) {
+    const raw = String(model || '').trim();
+    const bare = (raw.includes('/') ? raw.split('/').pop() : raw);
+    const usePro = /v4-pro/i.test(bare);
+    return {
+        provider: 'DeepSeek',
+        model: usePro ? 'deepseek-v4-pro' : (process.env.SIRAGPT_AGENT_RUNNER_MODEL || 'deepseek-v4-flash'),
+    };
 }
 
 function modelSupportsVision(provider, model) {
@@ -175,7 +190,7 @@ function modelSupportsVision(provider, model) {
         return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);
     }
     if (normalizedProvider === 'openrouter') {
-        return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/i.test(normalizedModel);
+        return false;
     }
     return false;
 }
@@ -195,13 +210,6 @@ function selectVisionRuntime(provider, model) {
         return {
             provider: 'Gemini',
             model: process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            switched: true,
-        };
-    }
-    if (process.env.OPENROUTER_API_KEY) {
-        return {
-            provider: 'OpenRouter',
-            model: process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini',
             switched: true,
         };
     }
@@ -264,6 +272,26 @@ function getFallbackMessage(language) {
     return messages[language] || messages.es;
 }
 
+
+/** OLA200_WAVE_F BE-051 — leftover OpenRouter/OpenAI/Gemini text generate is closed. */
+function assertNativeTextGenerate(provider, model) {
+  const p = String(provider || '').toLowerCase();
+  const m = String(model || '').toLowerCase();
+  if (p.includes('openrouter') || p.includes('openai') || p.includes('gemini') || p.includes('anthropic')) {
+    const err = new Error('model_forbidden');
+    err.code = 'model_forbidden';
+    err.status = 400;
+    throw err;
+  }
+  if (m.includes('openrouter') || m.includes('gpt-4o') || m.includes('gpt-4') || m.includes('claude') || m.includes('gemini')) {
+    const err = new Error('model_forbidden');
+    err.code = 'model_forbidden';
+    err.status = 400;
+    throw err;
+  }
+  return true;
+}
+
 class AIService {
 
     /**
@@ -291,14 +319,13 @@ class AIService {
         }
 
         if (provider === "OpenRouter") {
+            // WAVE3: text generate is native DeepSeek only. Visibility
+            // catalog may still list OpenRouter; do not hop generate here.
+            try { console.warn("[ai-service] OpenRouter generate client closed — using native DeepSeek"); } catch (_) { /* noop */ }
             return new OpenAI({
                 ...baseOpts,
-                apiKey: process.env.OPENROUTER_API_KEY,
-                baseURL: "https://openrouter.ai/api/v1",
-                defaultHeaders: {
-                    'HTTP-Referer': process.env.NEXT_PUBLIC_URL || process.env.FRONTEND_URL || 'http://localhost:3000',
-                    'X-Title': 'SiraGPT',
-                },
+                apiKey: process.env.DEEPSEEK_API_KEY,
+                baseURL: "https://api.deepseek.com",
             });
         }
 
@@ -511,10 +538,14 @@ class AIService {
                 // Vaciar files: el modelo base no soporta visión.
                 files = [];
             }
-            provider = 'OpenRouter';
-            model = SIRAGPT_BASE_MODEL;
+            const lockedCombined = lockChatGenerateToNativeDeepSeek('DeepSeek', 'deepseek-v4-flash');
+            provider = lockedCombined.provider;
+            model = lockedCombined.model;
         }
 
+        const lockedChat = lockChatGenerateToNativeDeepSeek(provider, model);
+        provider = lockedChat.provider;
+        model = lockedChat.model;
         provider = normalizeChatProvider(provider, model);
         model = normalizeModelForProvider(provider, model);
         let fullResponseContent = '';
@@ -939,10 +970,22 @@ class AIService {
             // Nothing was streamed — deliver a professional fallback as the
             // assistant's reply AND surface the technical error on a side
             // channel so the UI can toast/retry if it wants to.
-            const fallback = getFallbackMessage(language);
+            let fallback = getFallbackMessage(language);
+            try {
+                const last = apiError || lastError;
+                const status = Number(last && (last.status || last.statusCode)) || 0;
+                const text = String((last && last.message) || last || '');
+                if (status === 402 || /insufficient (balance|credits)|quota_exhausted|credit_no_usage|credits?_exhausted/i.test(text)) {
+                    const pub = require('./observability/public-stream-error').classifyPublicStreamError(last || { status: 402, message: text });
+                    if (pub && pub.message) fallback = pub.message;
+                } else if (status === 429 || /rate.?limit/i.test(text)) {
+                    const pub = require('./observability/public-stream-error').classifyPublicStreamError(last || { status: 429, message: text });
+                    if (pub && pub.message) fallback = pub.message;
+                }
+            } catch (_) { /* keep generic fallback */ }
             try {
                 res.write(`data: ${JSON.stringify({ content: fallback })}\n\n`);
-                res.write(`data: ${JSON.stringify({ error: `AI service (${provider}) is temporarily unavailable.`, recovered: true })}\n\n`);
+                res.write(`data: ${JSON.stringify({ error: fallback, recovered: true, code: (apiError && apiError.code) || 'provider_exhausted' })}\n\n`);
             } catch { /* socket may be gone */ }
             return fallback;
         } finally {
@@ -1088,7 +1131,7 @@ class AIService {
     async generateImage(prompt, provider = "OpenAI", model = "gpt-image-2") {
         try {
             const client = this.getClient(provider);
-            console.log(`🎨 Generating image with gpt-image-2 for prompt: "${prompt}"`);
+            console.log(`🎨 Generating image with gpt-image-2 for promptLen: ${String(prompt || "").length}`);
 
             const response = await client.images.generate({
                 // dall-e-3 was removed from this account (400 model does not
@@ -1147,7 +1190,7 @@ class AIService {
      * @param {string} model - AI model to use
      * @returns {Promise<object>} - Generated Vector PPT file information
      */
-    async generateVectorPPT(prompt, provider = "OpenAI", model = "gpt-4o") {
+    async generateVectorPPT(prompt, provider = "DeepSeek", model = "deepseek-v4-flash") {
         try {
             console.log('🎨 Starting VECTOR presentation generation (Gamma-style)...');
             return await vectorPPTService.generateVectorPresentation(prompt, provider, model);
@@ -1164,9 +1207,16 @@ class AIService {
      * @param {string} model - AI model to use
      * @returns {Promise<object>} - Generated PPT file information
      */
-    async generatePPT(prompt, provider = "OpenAI", model = "gpt-4o") {
+    async generatePPT(prompt, provider = "DeepSeek", model = "deepseek-v4-flash") {
         try {
-            const client = this.getClient(provider);
+            // 3H8 leftover candado: PPT structure generate is native DeepSeek only.
+            const native = require('./agent-runner/native-llm');
+            if (!native.hasUsableDeepSeekKey()) {
+                throw new Error('DEEPSEEK_API_KEY is not configured');
+            }
+            const client = native.createNativeDeepSeekClient();
+            provider = 'DeepSeek';
+            model = native.resolveNativeDeepSeekModel(model);
 
             // Create a detailed prompt for generating PPT structure
             const systemMessage = {
@@ -1540,3 +1590,5 @@ service.selectVisionRuntime = selectVisionRuntime;
 service.OPENAI_HTTP_TIMEOUT_MS = OPENAI_HTTP_TIMEOUT_MS;
 
 module.exports = service;
+module.exports.assertNativeTextGenerate = assertNativeTextGenerate;
+
