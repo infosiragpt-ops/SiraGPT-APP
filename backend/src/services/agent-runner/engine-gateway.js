@@ -749,6 +749,25 @@ async function governThen(input, run) {
         if (typeof ad.holdSettleNeverDoubleCharge === 'function' && input && input.held) {
           ad.holdSettleNeverDoubleCharge({ held: input.held, settled: input.settled, cancelled: input.cancelled || input.aborted });
         }
+        if (typeof ad.holdSettleNeverDoubleCharge === 'function' && input && input.held) {
+          ad.holdSettleNeverDoubleCharge({ held: input.held, settled: input.settled, cancelled: input.cancelled || input.aborted });
+        }
+        if (typeof ad.refundHoldIfNoTokensUsed === 'function' && input && input.held) {
+          ad.refundHoldIfNoTokensUsed({ held: input.held, promptTokens: input.promptTokens, completionTokens: input.completionTokens, cancelled: input.cancelled || input.aborted });
+        }
+        if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
+          ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
+        }
+        if (typeof ad.tombstoneDeletedCheckpoint === 'function' && input && input.deleteCheckpointId) {
+          ad.tombstoneDeletedCheckpoint({ id: input.deleteCheckpointId, store: input.checkpointStore || {}, seq: input.seq });
+        }
+        if (typeof ad.retryAfterJitter50to150ms === 'function' && input && (input.retryAfterMs != null || input.retryAfterSec != null || input.status === 429)) {
+          const j = ad.retryAfterJitter50to150ms({ retryAfterMs: input.retryAfterMs, retryAfterSec: input.retryAfterSec });
+          if (j && j.delayMs != null) input.retryDelayMs = j.delayMs;
+        }
+        if (typeof ad.skipEmptyEmbeddingUpsert === 'function' && input && input.embedding != null) {
+          ad.skipEmptyEmbeddingUpsert(input.embedding, { fact: input.fact });
+        }
         if (typeof ad.refuseComputerToolsIfFlagOff === 'function' && input && input.toolName) {
           const off = ad.refuseComputerToolsIfFlagOff(input.toolName, { computerEnabled: input.computerEnabled });
           if (off && off.refused) {

@@ -336,6 +336,26 @@ const {
   isolateParallelToolTimeout,
   holdSettleNeverDoubleCharge,
   enforceAdditionalPropertiesFalse,
+  ensureUniqueToolCallIdsAcrossResume,
+  clampSchemaIntegerNumberToMinMax,
+  repairMissingClosingBracesWithBudget,
+  refundHoldIfNoTokensUsed,
+  pinLastToolErrorOnCompact,
+  refuseWriteOver2MiB,
+  skipEmptyEmbeddingUpsert,
+  neverChargeToolOnlyObservationLoop,
+  enforceTotalTurnWall120s,
+  repairEnumCaseInsensitive,
+  stripZeroWidthCharsFromArgs,
+  clampJsonArrayLength256,
+  retryAfterJitter50to150ms,
+  dropToolResultsOlderThan6Steps,
+  rejectToolNameWithWhitespace,
+  keepIdNumericStringsAsStrings,
+  abortSiblingToolsOnParentCancelToken,
+  markPlanStepFailedIfToolErrorTwice,
+  restoreLastSseIdOnResume,
+  refuseReadThroughSymlink,
 } = require('./engine-adapter');
 
 const MAX_ITERATIONS_DEFAULT = 25;
@@ -732,6 +752,11 @@ async function runAgentLoop({
            try {
              const ckList = (snap && Array.isArray(snap.checkpoints)) ? snap.checkpoints : (checkpoint ? [checkpoint] : []);
              pruneCheckpointsKeepLastN(ckList, { keep: 8 });
+           } catch (_) {}
+           try {
+             const seenIds = (snap && (snap.toolCallIds || snap.seenToolCallIds)) || [];
+             ensureUniqueToolCallIdsAcrossResume((snap && snap.toolCalls) || [], { seenFromCheckpoint: seenIds });
+             restoreLastSseIdOnResume({ lastEventId: snap && (snap.lastEventId || snap.sseSeq), store: snap || {} });
            } catch (_) {}
           if (restored.ok) {
             resumedFrom = resumeFrom;
@@ -1273,6 +1298,12 @@ async function runAgentLoop({
           const keepPair = compactKeepLastUserAssistantPair((compact && compact.messages) || messages);
           if (keepPair && keepPair.messages) compact = { ...(compact || {}), messages: keepPair.messages, keepIndexes: keepPair.keepIndexes };
         } catch (_) {}
+        try {
+          const pinErr = pinLastToolErrorOnCompact((compact && compact.messages) || messages, { pins: pinList });
+          if (pinErr && pinErr.pins) pinList.splice(0, pinList.length, ...pinErr.pins);
+          const oldTools = dropToolResultsOlderThan6Steps((compact && compact.messages) || messages, { currentStep: iteration, steps: 6 });
+          if (oldTools && oldTools.messages) compact = { ...(compact || {}), messages: oldTools.messages };
+        } catch (_) {}
         if (staleImg && staleImg.messages) compact = { ...(compact || {}), messages: staleImg.messages };
       } catch (_) {}
       try {
@@ -1393,6 +1424,10 @@ async function runAgentLoop({
           });
           if (wd40 && wd40.fired) {
             onEvent({ type: 'error', code: 'ttfb_watchdog', message: classifyLoopError({ code: 'ttfb_watchdog' }).message, retryable: true, iteration });
+          }
+          const wall = enforceTotalTurnWall120s({ startedAt, now: Date.now(), wallMs: 120000 });
+          if (wall && wall.halt) {
+            onEvent({ type: 'error', code: 'turn_wall', message: 'Este turno superó el tiempo máximo de 120 segundos.', retryable: false, iteration });
           }
         } catch (_) {}
       }
@@ -1541,6 +1576,11 @@ async function runAgentLoop({
           onEvent({ type: 'error', code: 'empty_tool_name', message: 'Nombre de herramienta vacío.', retryable: false, iteration });
           return false;
         }
+        const wsN = rejectToolNameWithWhitespace(n);
+        if (wsN && wsN.ok === false && wsN.code === 'tool_name_whitespace') {
+          onEvent({ type: 'error', code: 'tool_name_whitespace', message: 'El nombre de la herramienta contiene espacios.', retryable: false, iteration, name: n });
+          return false;
+        }
         const comp = refuseComputerToolsIfFlagOff(n, { computerEnabled: !!(opts && opts.computerEnabled) });
         if (comp && comp.refused) {
           onEvent({ type: 'error', code: 'computer_flag_off', message: 'computer_* desactivado.', retryable: false, iteration, name: n });
@@ -1550,6 +1590,10 @@ async function runAgentLoop({
       });
       const deduped = dropDuplicateConsecutiveToolCalls(toolCalls);
       if (deduped && Array.isArray(deduped.calls)) toolCalls = deduped.calls;
+      try {
+        const uniq = ensureUniqueToolCallIdsAcrossResume(toolCalls, { seenFromCheckpoint: Object.keys(inflightCallIds || {}) });
+        if (uniq && Array.isArray(uniq.calls)) toolCalls = uniq.calls;
+      } catch (_) {}
     } catch (_) {}
     try {
       const storm = maxToolCallsPerMessage(toolCalls, { max: 8 });
@@ -1961,6 +2005,31 @@ async function runAgentLoop({
                       else if (sq && sq.ok && sq.value && typeof runArgs === 'object') runArgs = sq.value;
                     } catch (_) {}
                     try {
+                      const braces = repairMissingClosingBracesWithBudget(typeof runArgs === 'string' ? runArgs : runArgs, { budget: 8 });
+                      if (braces && braces.ok && braces.value) runArgs = braces.value;
+                    } catch (_) {}
+                    try {
+                      const zw = stripZeroWidthCharsFromArgs(runArgs);
+                      if (zw && zw.args !== undefined) runArgs = zw.args;
+                    } catch (_) {}
+                    try {
+                      const arrCap = clampJsonArrayLength256(runArgs, { max: 256 });
+                      if (arrCap && arrCap.value !== undefined) runArgs = arrCap.value;
+                    } catch (_) {}
+                    try {
+                      const idsStay = keepIdNumericStringsAsStrings(runArgs, schema || { type: 'object' });
+                      if (idsStay && idsStay.value !== undefined) runArgs = idsStay.value;
+                    } catch (_) {}
+                    try {
+                      const clampedN = clampSchemaIntegerNumberToMinMax(runArgs, schema || { type: 'object' });
+                      if (clampedN && clampedN.ok && clampedN.value !== undefined) runArgs = clampedN.value;
+                    } catch (_) {}
+                    try {
+                      const enu = repairEnumCaseInsensitive(runArgs, schema || {});
+                      if (enu && enu.ok && enu.value !== undefined) runArgs = enu.value;
+                      else if (enu && enu.ok === false) result = 'ERROR: enum_invalid';
+                    } catch (_) {}
+                    try {
                       const schemaFalse = enforceAdditionalPropertiesFalse(schema);
                       if (schemaFalse && schemaFalse.schema) schema = schemaFalse.schema;
                     } catch (_) {}
@@ -1976,6 +2045,11 @@ async function runAgentLoop({
                       const pth = (runArgs && (runArgs.path || runArgs.file_path || runArgs.target)) || '';
                       const nulp = rejectNulInPath(pth);
                       if (nulp && nulp.ok === false) result = `ERROR: nul_path`;
+                      const synR = refuseReadThroughSymlink(pth, {});
+                      if (synR && synR.ok === false) result = `ERROR: symlink_read`;
+                      const body = (runArgs && (runArgs.content || runArgs.contents || runArgs.text)) || '';
+                      const tooBig = refuseWriteOver2MiB(body);
+                      if (tooBig && tooBig.ok === false) result = `ERROR: write_too_large`;
                     } catch (_) {}
                     if (unq && unq.ok && unq.value && typeof runArgs === 'string') runArgs = unq.value;
                     else if (unq && unq.ok === false) result = `ERROR: json_parse`;
@@ -2482,7 +2556,21 @@ async function runAgentLoop({
         role: 'tool',
         tool_call_id: call.id || `call_${iteration}_${mapped}`,
         content: String(result),
+        step: iteration,
+        isError: !ok,
       });
+      try {
+        const planFail = markPlanStepFailedIfToolErrorTwice({ stepId: mapped, errorsByStep: lastToolArgsByName, error: !ok });
+        if (planFail && planFail.failed) {
+          onEvent({ type: 'error', code: 'plan_step_failed', tool: mapped, message: 'Ese paso del plan falló dos veces.', retryable: false, iteration });
+        }
+      } catch (_) {}
+      try {
+        abortSiblingToolsOnParentCancelToken({
+          parentToken: signal || (opts && opts.signal) || { aborted: cancelledEmitted },
+          siblings: Array.isArray(toolCalls) ? toolCalls : [],
+        });
+      } catch (_) {}
       if (stoppedReason === 'tool_repair_exhausted' || /tool_repair_exhausted/.test(String(result))) {
         const classified = classifyLoopError({ code: 'tool_repair_exhausted' });
         stoppedReason = 'tool_repair_exhausted';

@@ -1,9 +1,10 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H41 live, 2026-08-21 00:57 Lima).
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0057.md` (3H41, prune ckpt N=8 + SSE cursor persist + single-quote/comment JSON repair + max output tokens 8192 + drop consecutive dup tools + HTTP 5xx/4xx/timeout + keep last user+asst pair + redact key-like args + bound steps on resume + reject empty tool name + NUL path + skip blocked heartbeat + wait inflight then drop + usage on error path + pgvector timeout 2s + refuse computer_* if flag off + true/false coerce + max 2 subagents + drop empty assistant turn + SSE retry:ms + sandbox tmp cleanup on timeout + subagent abort inherit + truncate result marker + isolate parallel tool timeout + hold-settle no double-charge + additionalProperties false, frontend untouched)
-- 3H41 previa diferida: `/opt/siragpt/docs/mejoras/ola-3h-20260820-2157.md` (21:57 Lima: DeepSeek 402; no se aplico codigo). Esta corrida 00:57 Lima SI aplica 3H41: logs post-02:56Z tuvieron generate 200 sin 402 reciente (ultimo 402 03:33Z; generates 03:39 y 04:32). No se llamo live DeepSeek en smoke largo.
-- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1857.md` (3H40)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H42 live, 2026-08-21 06:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0657.md` (3H42, tool id unique across resume + schema min/max clamp + missing-brace JSON repair + refund hold if 0 tokens + pin last tool error + SSE replay last 32 + reject identical prompt inflight + refuse write >2MiB + skip empty embeddings + never charge observation loops + turn wall 120s + case-insensitive enum repair + strip zero-width args + array cap 256 + Retry-After jitter 50-150ms + ckpt tombstone + stderr 64KiB + drop tool results >6 steps + reject whitespace tool name + id strings stay strings + event seq increase + abort siblings on cancel token + redact emails + max 8 heartbeats/min + refuse symlink read + plan step failed twice + restore last SSE id, frontend untouched)
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0057.md` (3H41)
+- 3H41 previa diferida: `/opt/siragpt/docs/mejoras/ola-3h-20260820-2157.md` (21:57 Lima: DeepSeek 402; no se aplico codigo).
+- Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1857.md` (3H40)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1557.md` (3H39)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1257.md` (3H38)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-0957.md` (3H37)

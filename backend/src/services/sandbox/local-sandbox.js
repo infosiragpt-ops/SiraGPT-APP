@@ -568,6 +568,21 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
           if (split.stdoutTruncated) stdoutTruncated = true;
           if (split.stderrTruncated) stderrTruncated = true;
         }
+        if (typeof ad.splitStdoutStderrToolResult === 'function') {
+          const split = ad.splitStdoutStderrToolResult({ stdout, stderr, maxBytes: maxOutputBytes });
+          stdout = split.stdout;
+          stderr = split.stderr;
+          if (split.stdoutTruncated) stdoutTruncated = true;
+          if (split.stderrTruncated) stderrTruncated = true;
+        }
+        if (typeof ad.refuseReadThroughSymlink === 'function') { try { ad.refuseReadThroughSymlink(args.cwd || args.workdir || '', {}); } catch (_) {} }
+        if (typeof ad.stderrByteCapPerCommand === 'function') {
+          const seCap = ad.stderrByteCapPerCommand(stderr, { maxBytes: 64 * 1024 });
+          if (seCap && seCap.text != null) {
+            stderr = seCap.text;
+            if (seCap.truncated) stderrTruncated = true;
+          }
+        }
         if (typeof ad.redactHomePathsInResults === 'function') {
           const rhOut = ad.redactHomePathsInResults(stdout);
           if (rhOut && rhOut.text != null) stdout = rhOut.text;

@@ -265,6 +265,17 @@ const ENGINE_CODE_RULES = [
   { code: 'subagent_concurrency', message: 'Demasiados subagentes a la vez. Aplacé el resto.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_concurrency' },
   { code: 'empty_turn', message: 'Omití un turno del asistente sin texto ni herramientas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'empty_turn' },
   { code: 'tool_result_truncated', message: 'Recorté el resultado de la herramienta y marqué el recorte.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_result_truncated' },
+  { code: 'tool_id_resume_dup', message: 'Había identificadores de herramienta duplicados al reanudar. Los reparé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_id_resume_dup' },
+  { code: 'write_too_large', message: 'El archivo supera 2 MiB. No lo escribí.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'write_too_large' },
+  { code: 'identical_prompt_inflight', message: 'Esa misma pregunta ya se está generando en esta sesión.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'identical_prompt_inflight' },
+  { code: 'turn_wall', message: 'Este turno superó el tiempo máximo de 120 segundos.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'turn_wall' },
+  { code: 'tool_name_whitespace', message: 'El nombre de la herramienta contiene espacios. No la ejecuté.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_whitespace' },
+  { code: 'symlink_read', message: 'No leo a través de un enlace simbólico.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'symlink_read' },
+  { code: 'plan_step_failed', message: 'Ese paso del plan falló dos veces. Lo marqué como fallido.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'plan_step_failed' },
+  { code: 'empty_embedding', message: 'Omití un embedding vacío al guardar memoria.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'empty_embedding' },
+  { code: 'credit_observation', message: 'No cobré un bucle de solo observación de herramientas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'credit_observation' },
+  { code: 'stderr_cap', message: 'Recorté stderr de la herramienta a 64 KiB.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'stderr_cap' },
+  { code: 'enum_invalid', message: 'El valor no coincide con las opciones permitidas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'enum_invalid' },
 ];
 
 function classifyPublicStreamError(error) {

@@ -1,31 +1,31 @@
 # Rubrica de capacidades del motor — SiraGPT vs Claude Code / Cowork
 
-Version: **3H41** (2026-08-21 00:57 America/Lima, 2026-08-21T05:57Z). Superpone 3H40 + prune checkpoints last 8 / SSE Last-Event-ID persist / single-quote+comment JSON repair / max output tokens 8192 / drop consecutive duplicate tool calls / classify 5xx vs 4xx vs timeout / compact keep last user+assistant pair / redact key-like tool args / bound steps on checkpoint resume / reject empty tool name / reject NUL in path / skip heartbeat if write would block / wait inflight then drop on cancel / token usage on error path / pgvector query timeout 2s / refuse computer_* if flag off / coerce true/false strings / max 2 concurrent subagents / drop empty assistant turn / SSE retry:ms pad / sandbox tmp cleanup on timeout / subagent inherits abort / truncate tool result with marker / isolate parallel tool timeout / hold-settle never double-charge / additionalProperties false.
+Version: **3H42** (2026-08-21 06:57 America/Lima, 2026-08-21T11:57Z). Superpone 3H41 + tool_call id uniqueness across resume / schema integer-number clamp min-max / JSON missing-brace repair with budget / refund hold if no tokens used / pin last tool error on compact / SSE replay last 32 from cursor / reject identical prompt inflight same session / refuse write >2MiB / skip empty embedding upsert / never charge tool-only observation loops / total-turn wall 120s / case-insensitive enum repair / strip zero-width chars from args / max JSON array length 256 / Retry-After jitter 50-150ms / checkpoint tombstone / stderr 64KiB cap / drop tool results older than 6 steps / reject tool name with whitespace / numeric id strings stay strings / session event seq must increase / abort siblings on parent cancel token / redact emails in logs / max 8 heartbeats/min / refuse read through symlink / plan step failed if tool error twice / restore last SSE id on resume.
 Superficie: motor backend `/chat` + `/code`. **UI no forma parte de esta rubrica.**
 Generate path: DeepSeek V4 Flash / Pro only (`openrouter: false`).
 
-**3H41 previa (2026-08-20 21:57 America/Lima) DEFERRED** por DeepSeek 402. Esta corrida 00:57 Lima SI shippea 3H41. TTFB live Flash: **unmeasured** (no se llamo DeepSeek en smoke largo; ultimo 402 log 03:33Z, generates 200 posteriores sin 402). No se inventaron metricas p50/p95.
+**TTFB live Flash: unmeasured** (no se llamo DeepSeek en smoke largo; 0 x 402 Insufficient Balance desde StartedAt 3H41 `2026-08-21T06:33:46Z`). No se inventaron metricas p50/p95.
 
-Como se mide: invariantes `tests/ola-3h41-invariants.test.js` + `tests/ola-3h40-invariants.test.js` (wave 3H40|3H41). `/health` live (sin cobro DeepSeek en smoke largo).
+Como se mide: invariantes `tests/ola-3h42-invariants.test.js` + `tests/ola-3h41-invariants.test.js` + `tests/ola-3h40-invariants.test.js` (wave 3H40|3H41|3H42). `/health` live (sin cobro DeepSeek en smoke largo).
 
-| # | Capacidad | Metrica | Antes (3H40) | Despues (3H41) | Target |
+| # | Capacidad | Metrica | Antes (3H41) | Despues (3H42) | Target |
 |---|---|---|---|---|---|
-| 1 | Bucle agentico multi-paso sin humano | tool-chain >=3 + subagent + stopWhen + wall clock | hard cap 32 + nested abort | **max 2 concurrent subagents** + **subagent inherits abort** + **drop empty assistant turn** | subagent_concurrency; inherited abort; empty_turn |
-| 2 | Tool-call reliability | repair + schema + alias + isolate + result cap | unquoted keys + NUL + integer coerce | **single-quote+comment JSON repair** + **drop consecutive dup tools** + **reject empty tool name** + **true/false coerce** + **additionalProperties false** + **truncate result with marker** | repaired JSON; dropped:n; empty_tool_name |
-| 3 | Planning: budget + loop cut + DLQ + DAG | catalog + kind map + circuit | empty-model x2 + budget /5 | **bound remaining steps on checkpoint resume** + **isolate parallel tool timeout** | remaining capped; timeoutMs per tool |
-| 4 | Long-context compact + pin + memory | compact + pin + retrieve + ACL + score | stale images + facts 30d | **keep last user+assistant pair** + **pgvector query timeout 2s** | keepIndexes; pgvector_timeout |
-| 5 | Session resume + checkpoint rollback | durable ckpt + CAS | syntax rollback | **prune checkpoints keep last 8** + **SSE Last-Event-ID persist cursor** | pruned:true; cursor monotonic |
-| 6 | File edit exact diff + verify | unique hunk + scheduler | symlink write + UTF-8 BOM | **reject NUL in path** | nul_path |
-| 7 | Sandbox exec stream/timeout/cleanup | onChunk; destroy; limits; net deny | SIGTERM+SIGKILL 1500ms + stdout 64KiB | **tmp cleanup on timeout** | cleaned:true sandbox_timeout |
-| 8 | SSE robustness | per-session seq + heartbeat + gap + window | pad idle>10s + destroy on close | **retry:ms in pad** + **skip heartbeat if write would block** | retry: 2000; skip:true |
-| 9 | Per-session queue + event order | fifo maxPending=8 + idempotency + hash | generate/user cap + steal lock | (sin cambio de cola; starve ya en 3H40) | generate_overloaded intacto |
-| 10 | Credit/token accounting on cancel | hold + settle + release | never charge 401/403 | **hold-settle never double-charge** + **usage on error path even sin completion** + **wait inflight then drop** | credit_hold_reuse; completionTokens:0 |
-| 11 | Classified errors | code publico ES | IPv4 redact + EPIPE cancelled | **5xx vs 4xx vs timeout** + **redact key-like tool args** + **refuse computer_* if flag off** | http_5xx; [REDACTED]; computer_flag_off |
-| 12 | Latency p50/p95 first-token y turn-end | P2 + firstByte + flags | glob cap 500 + TTFB 8s + wave 3H40 | **clamp max output tokens 8192** + **wave 3H41** | maxTokens 8192; health 3H41; TTFB live unmeasured |
+| 1 | Bucle agentico multi-paso sin humano | tool-chain >=3 + subagent + stopWhen + wall clock | max 2 subagents + inherit abort | **total-turn wall 120s** + **abort siblings on parent cancel token** + **plan step failed if tool error twice** | turn_wall; turn_cancelled; plan_step_failed |
+| 2 | Tool-call reliability | repair + schema + alias + isolate + result cap | single-quote JSON + empty name | **id uniqueness across resume** + **schema min/max clamp** + **missing-brace repair** + **case-insensitive enum** + **zero-width strip** + **array cap 256** + **id strings stay strings** + **reject whitespace tool name** | tool_id_resume_dup; schema_clamp; enum_repair; tool_name_whitespace |
+| 3 | Planning: budget + loop cut + DLQ + DAG | catalog + kind map + circuit | bound steps on resume | **plan step failed twice** | plan_step_failed |
+| 4 | Long-context compact + pin + memory | compact + pin + retrieve + ACL + score | keep last user+asst pair | **pin last tool error** + **drop tool results older than 6 steps** + **skip empty embeddings** | pin_tool_error; compact_old_tools; empty_embedding |
+| 5 | Session resume + checkpoint rollback | durable ckpt + CAS | prune last 8 + SSE cursor persist | **tombstone deleted ckpt** + **restore last SSE id** + **tool ids unique across resume** | ckpt_tombstone; sse lastEventId |
+| 6 | File edit exact diff + verify | unique hunk + scheduler | reject NUL path | **refuse write >2MiB** + **refuse read through symlink** | write_too_large; symlink_read |
+| 7 | Sandbox exec stream/timeout/cleanup | onChunk; destroy; limits; net deny | tmp cleanup on timeout + stdout 64KiB | **stderr 64KiB cap** | stderr_cap |
+| 8 | SSE robustness | per-session seq + heartbeat + gap + window | retry:ms + skip blocked hb | **replay last 32 from cursor** + **max 8 heartbeats/min** + **event seq must increase** | sse_resume; heartbeat_cap; event_order |
+| 9 | Per-session queue + event order | fifo maxPending=8 + idempotency + hash | generate/user cap + steal lock | **reject identical prompt inflight same session** | identical_prompt_inflight |
+| 10 | Credit/token accounting on cancel | hold + settle + release | hold-settle never double-charge | **refund hold if 0 tokens** + **never charge observation loops** | credit_no_usage; credit_observation |
+| 11 | Classified errors | code publico ES | 5xx/4xx/timeout + key redact | **redact emails in logs** + **Retry-After jitter 50-150ms** | [REDACTED_EMAIL]; jitterMs |
+| 12 | Latency p50/p95 first-token y turn-end | P2 + firstByte + flags | TTFB 8s + wave 3H41 | **turn wall 120s** + **wave 3H42** | turn_wall; health 3H42; TTFB live unmeasured |
 
 ## Como se mueve un numero
 
-Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H41 mueve caps 1-12 (26 helpers nuevos; 3H40 intacto). TTFB live Flash unmeasured (no smoke LLM largo).
+Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H42 mueve caps 1-12 (27 helpers nuevos; 3H41 intacto). TTFB live Flash unmeasured (no smoke LLM largo).
 
 ## Leftovers (no son esta oleada)
 
@@ -33,15 +33,16 @@ Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H41 muev
 - `mcp_policy` deny-all para hosts NUEVOS (`SIRAGPT_MCP_ALLOWED_HOSTS` vacio). 3H32 reusa hosts ya conectados en la sesion; no abre una allowlist.
 - `chat_run_worker` skipped dormant (`dormant_ok:true`). Encenderlo cambiaria generate a BullMQ y romperia SSE in-process.
 - `SIRAGPT_REFRESH_TOKEN_ROTATION` unset (no encender sin dual-read).
-- `SIRAGPT_SANDBOX_NET_ALLOW` unset — deny-all honesto. No inventar hosts. 3H36 fail-closed lo honra.
+- `SIRAGPT_SANDBOX_NET_ALLOW` unset — deny-all honesto. No inventar hosts. 3H36 fail-closed lo honra. No se reabro en 3H42 (romperia computer).
 - Sandbox interpreter sigue `local` (gVisor `runsc` es el agent-runner). Este path declara `usesRunsc: false`.
 - `create_file` / `delete_file` / `move_file` / `notebook_edit` no existen live (allowlist no los inventa).
 - Live Flash TTFB no se midio con DeepSeek (no quemar creditos). p50/p95 de 3H39 son scripted.
+- glob ignore `node_modules`/`.git` ya estaba en `GLOB_IGNORE_DEFAULTS` (3H3x). ulimit nproc ya en `sandboxUlimitSpec`.
+
+## 3H42 live (21-ago 06:57 Lima)
+
+Codigo 3H42 shipped. Tests: `ola-3h42-invariants.test.js` + `ola-3h41-invariants.test.js` + `ola-3h40-invariants.test.js` (wave acepta 3H42). TTFB live unmeasured (no se llamo DeepSeek en smoke largo). 0 x 402 reales desde 06:33Z. Hotfix chat 02:56Z se conserva (`persistentComputerTools`, computerOnly gated, CDP 8KiB, MAX_CONTROL_STEPS=25).
 
 ## 3H41 live (21-ago 00:57 Lima)
 
-Codigo 3H41 shipped. Tests: `ola-3h41-invariants.test.js` + `ola-3h40-invariants.test.js` (wave acepta 3H41). TTFB live unmeasured (no se llamo DeepSeek en smoke largo). Ultimo 402 real en logs: 2026-08-21T03:33:54Z; generates 200 posteriores (03:39, 04:32) sin Insufficient Balance. Hotfix chat 02:56Z se conserva.
-
-## 3H41 diferida previa (20-ago 21:57 Lima)
-
-Aquella corrida no aplico codigo: DeepSeek 402. Queda documentada en `ola-3h-20260820-2157.md`.
+Queda en `ola-3h-20260821-0057.md`.

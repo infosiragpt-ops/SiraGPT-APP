@@ -66,6 +66,8 @@ function createSSEWriter(res, options = {}) {
   const nextSseId = () => { sseSeq += 1; return sseSeq; }
   let runtime = null;
   try { runtime = require('../services/agent-runner/engine-runtime'); } catch (_) { runtime = null; }
+  let adapter = options.adapter || null;
+  try { if (!adapter) adapter = require('../services/agent-runner/engine-adapter'); } catch (_) { adapter = adapter || null; }
   let lifecycle = null;
   try { lifecycle = require('../services/agent-runner/engine-lifecycle'); } catch (_) { lifecycle = null; }
   const terminalSseState = {};
@@ -88,6 +90,16 @@ function createSSEWriter(res, options = {}) {
         sseSeq = replayed.nextSeq || sseSeq;
       }
     }
+    try {
+      if (adapter && typeof adapter.restoreLastSseIdOnResume === 'function') {
+        const rest = adapter.restoreLastSseIdOnResume({ lastEventId: sseSeq, store: options.cursorStore || {} });
+        if (rest && Number.isFinite(Number(rest.lastEventId))) sseSeq = Number(rest.lastEventId);
+      }
+      if (adapter && typeof adapter.replayLastNSseEventsFromCursor === 'function') {
+        const win = adapter.replayLastNSseEventsFromCursor(options.replayFrames || ring, { cursor: sseSeq, limit: 32 });
+        if (win && Array.isArray(win.replay) && win.replay.length) options.replayFrames = win.replay;
+      }
+    } catch (_) {}
   }
 
   // Idempotent — express may have already set some of these. setHeader is
@@ -124,8 +136,9 @@ function createSSEWriter(res, options = {}) {
   // it the browser waits for the first real `data:` frame, which can be
   // 5+ s on a slow provider.
   try { res.write(': connected\n\n'); } catch { closed = true; }
-  let adapter = null;
-  try { adapter = require('../services/agent-runner/engine-adapter'); } catch (_) { adapter = null; }
+  if (!adapter) {
+    try { adapter = require('../services/agent-runner/engine-adapter'); } catch (_) { adapter = adapter || null; }
+  }
   try {
     if (adapter && typeof adapter.sseRetryFieldOnFirstEvent === 'function') {
       const retry = adapter.sseRetryFieldOnFirstEvent({ first: true });
@@ -184,6 +197,11 @@ function createSSEWriter(res, options = {}) {
           const skip = adapter.skipHeartbeatIfWriteWouldBlock({ wouldBlock: backpressured, pendingBytes: (res.socket && res.socket.writableLength) || 0, writable: !res.writableEnded && !res.destroyed });
           if (skip && skip.skip) return false;
         }
+        if (adapter && typeof adapter.maxHeartbeatsPerMinute === 'function') {
+          const hb = adapter.maxHeartbeatsPerMinute({ sent: options._hbSent || 0, windowStart: options._hbWindow || startedAt, now: Date.now() });
+          if (hb && hb.allow === false) return false;
+          if (hb && hb.reset) { options._hbSent = 0; options._hbWindow = Date.now(); }
+        }
       } catch (_) {}
       // 3H26: skip heartbeat while kernel buffer is full or the socket is gone.
       const due = runtime && typeof runtime.heartbeatDue === 'function'
@@ -209,6 +227,15 @@ function createSSEWriter(res, options = {}) {
             res.write(`id: ${id}\nevent: heartbeat\ndata: ${JSON.stringify({ type: 'heartbeat', inflight, at: Date.now(), seq: id })}\n\n`);
           }
           lastWriteAt = Date.now();
+          try {
+            options._hbSent = (options._hbSent || 0) + 1;
+            if (adapter && typeof adapter.requireSessionEventSeqIncrease === 'function') {
+              adapter.requireSessionEventSeqIncrease({ lastSeq: id - 1, nextSeq: id });
+            }
+            if (adapter && typeof adapter.redactEmailsInLogs === 'function') {
+              adapter.redactEmailsInLogs(String(inflight || ''));
+            }
+          } catch (_) {}
         }
       } catch (_) { /* socket gone — comment heartbeat will cancel */ }
       return true;

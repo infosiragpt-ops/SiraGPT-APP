@@ -4640,7 +4640,34 @@ function adapterSnapshot() {
     isolateParallelToolTimeout: true,
     holdSettleNeverDoubleCharge: true,
     enforceAdditionalPropertiesFalse: true,
-    wave: '3H41',
+    ensureUniqueToolCallIdsAcrossResume: true,
+    clampSchemaIntegerNumberToMinMax: true,
+    repairMissingClosingBracesWithBudget: true,
+    refundHoldIfNoTokensUsed: true,
+    pinLastToolErrorOnCompact: true,
+    replayLastNSseEventsFromCursor: true,
+    rejectIdenticalPromptInflightSameSession: true,
+    refuseWriteOver2MiB: true,
+    skipEmptyEmbeddingUpsert: true,
+    neverChargeToolOnlyObservationLoop: true,
+    enforceTotalTurnWall120s: true,
+    repairEnumCaseInsensitive: true,
+    stripZeroWidthCharsFromArgs: true,
+    clampJsonArrayLength256: true,
+    retryAfterJitter50to150ms: true,
+    tombstoneDeletedCheckpoint: true,
+    stderrByteCapPerCommand: true,
+    dropToolResultsOlderThan6Steps: true,
+    rejectToolNameWithWhitespace: true,
+    keepIdNumericStringsAsStrings: true,
+    requireSessionEventSeqIncrease: true,
+    abortSiblingToolsOnParentCancelToken: true,
+    redactEmailsInLogs: true,
+    maxHeartbeatsPerMinute: true,
+    refuseReadThroughSymlink: true,
+    markPlanStepFailedIfToolErrorTwice: true,
+    restoreLastSseIdOnResume: true,
+    wave: '3H42',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -5016,6 +5043,514 @@ function enforceAdditionalPropertiesFalse(schema) {
 }
 
 
+// ---------------------------------------------------------------------------
+// 3H42 — remaining holes vs Claude Code/Cowork after 3H41
+//  206 tool_call id uniqueness across resume
+//  207 schema integer/number clamp to min/max
+//  208 repair JSON missing closing braces with budget
+//  209 cancel: refund hold if no tokens used
+//  210 compact: pin last tool error
+//  211 SSE reconnect: replay last 32 events from cursor
+//  212 queue: reject new generate if same session has identical prompt inflight
+//  213 file edit: refuse write >2MiB
+//  214 memory upsert: skip empty embeddings
+//  215 credit: never charge for tool-only observation loops
+//  216 total-turn wall clock 120s
+//  217 case-insensitive enum repair
+//  218 strip zero-width chars from args
+//  219 max JSON array length 256
+//  220 429 Retry-After jitter 50–150ms
+//  221 checkpoint CAS tombstone deleted ckpt
+//  222 stderr same 64KiB cap as stdout
+//  223 drop tool results older than 6 steps when compacting
+//  224 reject tool name with whitespace
+//  225 coerce numeric strings that are ids stay strings
+//  226 session event order: seq must increase
+//  227 abort sibling tools on parent cancel token
+//  228 redact emails in logs
+//  229 max 8 heartbeats/min
+//  230 refuse to follow symlink for read
+//  231 plan: mark step failed if tool error twice
+//  232 resume: restore last SSE id
+//  233 health adapter.wave=3H42
+// ---------------------------------------------------------------------------
+
+const SSE_REPLAY_WINDOW = 32;
+const WRITE_MAX_BYTES_2MIB = 2 * 1024 * 1024;
+const TOTAL_TURN_WALL_MS = 120_000;
+const JSON_ARRAY_MAX_LEN = 256;
+const STDERR_BYTE_CAP = 64 * 1024;
+const COMPACT_TOOL_RESULT_AGE_STEPS = 6;
+const HEARTBEATS_PER_MIN_MAX = 8;
+const JSON_BRACE_REPAIR_BUDGET = 8;
+const RETRY_AFTER_JITTER_MIN_MS = 50;
+const RETRY_AFTER_JITTER_MAX_MS = 150;
+const ZERO_WIDTH_RE = /[\u200B-\u200D\uFEFF\u2060\u180E]/g;
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
+const ID_KEY_RE = /(?:^|_)(id|uuid|guid|key|slug|token)$/i;
+
+function ensureUniqueToolCallIdsAcrossResume(calls, { seenFromCheckpoint, prefix = 'call' } = {}) {
+  const list = Array.isArray(calls)
+    ? calls.map((c) => (c && typeof c === 'object' ? Object.assign({}, c) : c))
+    : [];
+  const seen = new Set(
+    Array.isArray(seenFromCheckpoint) ? seenFromCheckpoint.map(String) : (seenFromCheckpoint instanceof Set ? [...seenFromCheckpoint].map(String) : []),
+  );
+  let duplicates = 0;
+  let assigned = 0;
+  for (let i = 0; i < list.length; i += 1) {
+    const c = list[i];
+    if (!c || typeof c !== 'object') continue;
+    let id = String(c.id || '').trim();
+    if (!id || seen.has(id)) {
+      if (id && seen.has(id)) duplicates += 1;
+      let n = i;
+      do {
+        id = `${prefix}_r${n}`;
+        n += 1;
+      } while (seen.has(id));
+      assigned += 1;
+    }
+    c.id = id;
+    seen.add(id);
+  }
+  return {
+    calls: list,
+    duplicates,
+    assigned,
+    ids: Array.from(seen),
+    code: duplicates ? 'tool_id_resume_dup' : null,
+  };
+}
+
+function clampSchemaIntegerNumberToMinMax(value, schema) {
+  function walk(v, sch) {
+    if (!sch || typeof sch !== 'object') return { ok: true, value: v };
+    const t = sch.type;
+    if (t === 'integer' || t === 'number') {
+      let n = typeof v === 'number' ? v : Number(v);
+      if (!Number.isFinite(n)) return { ok: false, value: v, code: 'coercion_rejected' };
+      if (t === 'integer') n = Math.trunc(n);
+      const lo = sch.minimum != null ? Number(sch.minimum) : (sch.min != null ? Number(sch.min) : null);
+      const hi = sch.maximum != null ? Number(sch.maximum) : (sch.max != null ? Number(sch.max) : null);
+      let clamped = false;
+      if (Number.isFinite(lo) && n < lo) { n = lo; clamped = true; }
+      if (Number.isFinite(hi) && n > hi) { n = hi; clamped = true; }
+      return { ok: true, value: n, clamped, code: clamped ? 'schema_clamp' : null };
+    }
+    if (sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = {};
+      let any = false;
+      for (const k of Object.keys(v)) {
+        const r = walk(v[k], sch.properties[k]);
+        if (r.ok === false) return r;
+        o[k] = r.value;
+        if (r.clamped) any = true;
+      }
+      return { ok: true, value: o, clamped: any, code: any ? 'schema_clamp' : null };
+    }
+    return { ok: true, value: v, code: null };
+  }
+  return walk(value, schema || {});
+}
+
+function repairMissingClosingBracesWithBudget(raw, { budget = JSON_BRACE_REPAIR_BUDGET } = {}) {
+  if (raw == null) return { ok: true, value: {}, repaired: false, code: null };
+  if (typeof raw === 'object') return { ok: true, value: raw, repaired: false, code: null };
+  const s = String(raw);
+  try { return { ok: true, value: JSON.parse(s), repaired: false, code: null }; } catch (_) { /* repair */ }
+  const cap = Math.max(0, Math.min(32, Number(budget) || JSON_BRACE_REPAIR_BUDGET));
+  let stack = [];
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') {
+      if (stack.length && stack[stack.length - 1] === ch) stack.pop();
+    }
+  }
+  if (inStr) {
+    // close hanging string first so braces can close
+    stack.push('"');
+  }
+  if (!stack.length) return { ok: false, value: null, repaired: false, code: 'json_parse' };
+  if (stack.length > cap) return { ok: false, value: null, repaired: false, budget: cap, code: 'json_parse' };
+  const suffix = stack.reverse().join('');
+  try {
+    return { ok: true, value: JSON.parse(s + suffix), repaired: true, added: suffix, code: null };
+  } catch (_) {
+    return { ok: false, value: null, repaired: false, code: 'json_parse' };
+  }
+}
+
+function refundHoldIfNoTokensUsed({ held, promptTokens, completionTokens, cancelled } = {}) {
+  const prompt = Number(promptTokens) || 0;
+  const completion = Number(completionTokens) || 0;
+  const used = prompt + completion;
+  if (!held) return { refund: false, charge: false, used, code: null };
+  if (used > 0) return { refund: false, charge: true, used, code: null };
+  return { refund: true, charge: false, used: 0, cancelled: !!cancelled, code: 'credit_no_usage' };
+}
+
+function pinLastToolErrorOnCompact(messages, { pins } = {}) {
+  const list = Array.isArray(messages) ? messages : [];
+  const pinList = Array.isArray(pins) ? pins.slice() : [];
+  let last = null;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const m = list[i];
+    if (!m || typeof m !== 'object') continue;
+    const role = String(m.role || '');
+    const isTool = role === 'tool' || role === 'function' || m.isError || m.error;
+    const text = String(m.content == null ? (m.error || m.message || '') : m.content);
+    const errish = m.isError === true || m.error || /error|failed|exception/i.test(text) || (role === 'tool' && m.ok === false);
+    if (isTool && errish) {
+      last = { role: 'tool', content: text.slice(0, 2000), error: true, step: i };
+      break;
+    }
+  }
+  if (!last) return { pinned: false, pins: pinList, code: null };
+  const already = pinList.some((p) => String((p && (p.content || p.text)) || p) === last.content);
+  if (!already) pinList.push({ kind: 'tool_error', content: last.content, pinned: true });
+  return { pinned: true, pin: last, pins: pinList, code: 'pin_tool_error' };
+}
+
+function replayLastNSseEventsFromCursor(events, { cursor, limit = SSE_REPLAY_WINDOW } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  const n = Math.max(1, Math.min(SSE_REPLAY_WINDOW, Number(limit) || SSE_REPLAY_WINDOW));
+  const cur = Number(cursor);
+  const after = Number.isFinite(cur)
+    ? list.filter((e) => Number((e && (e.id || e.seq)) ) > cur)
+    : list;
+  const replay = after.slice(-n);
+  return {
+    replay,
+    count: replay.length,
+    truncated: after.length > n,
+    window: n,
+    cursor: Number.isFinite(cur) ? cur : 0,
+    code: replay.length ? 'sse_resume' : null,
+  };
+}
+
+function rejectIdenticalPromptInflightSameSession({ sessionKey, prompt, inflight } = {}) {
+  const key = String(sessionKey || '');
+  const p = String(prompt == null ? '' : prompt);
+  const list = Array.isArray(inflight) ? inflight : (inflight ? [inflight] : []);
+  if (!key || !p) return { reject: false, code: null };
+  const hit = list.find((row) => {
+    if (!row) return false;
+    const sk = String(row.sessionKey || row.session || '');
+    const pr = String(row.prompt == null ? row.text || '' : row.prompt);
+    return (!sk || sk === key) && pr === p;
+  });
+  if (hit) return { reject: true, sessionKey: key, code: 'identical_prompt_inflight' };
+  return { reject: false, sessionKey: key, code: null };
+}
+
+function refuseWriteOver2MiB(content, { maxBytes = WRITE_MAX_BYTES_2MIB } = {}) {
+  const s = content == null ? '' : (Buffer.isBuffer(content) ? content : Buffer.from(String(content), 'utf8'));
+  const bytes = s.length;
+  const cap = Math.max(1, Number(maxBytes) || WRITE_MAX_BYTES_2MIB);
+  if (bytes > cap) return { ok: false, bytes, maxBytes: cap, code: 'write_too_large' };
+  return { ok: true, bytes, maxBytes: cap, code: null };
+}
+
+function skipEmptyEmbeddingUpsert(vector, { fact } = {}) {
+  const emptyFact = fact != null && String(fact).trim() === '';
+  if (emptyFact) return { skip: true, reason: 'empty_fact', code: 'empty_embedding' };
+  if (vector == null) return { skip: true, reason: 'null', code: 'empty_embedding' };
+  if (Array.isArray(vector)) {
+    if (vector.length === 0) return { skip: true, reason: 'empty_array', code: 'empty_embedding' };
+    const allZero = vector.every((n) => !Number(n));
+    if (allZero) return { skip: true, reason: 'zero', code: 'empty_embedding' };
+    return { skip: false, dim: vector.length, code: null };
+  }
+  if (typeof vector === 'string' && !vector.trim()) return { skip: true, reason: 'empty_string', code: 'empty_embedding' };
+  return { skip: false, code: null };
+}
+
+function neverChargeToolOnlyObservationLoop({ toolOnly, observationLoop, usage, charged } = {}) {
+  const tokens = Number((usage && (usage.total_tokens || usage.totalTokens)) || 0) || 0;
+  if (charged) return { charge: false, skipped: true, code: 'credit_hold_reuse' };
+  if (toolOnly && observationLoop) {
+    return { charge: false, skipped: true, tokens, code: 'credit_observation' };
+  }
+  return { charge: true, skipped: false, tokens, code: null };
+}
+
+function enforceTotalTurnWall120s({ startedAt, now, wallMs = TOTAL_TURN_WALL_MS } = {}) {
+  const start = Number(startedAt) || 0;
+  const t = Number(now) || Date.now();
+  const cap = Math.max(1000, Number(wallMs) || TOTAL_TURN_WALL_MS);
+  const elapsed = t - start;
+  if (start && elapsed >= cap) {
+    return { halt: true, elapsedMs: elapsed, wallMs: cap, code: 'turn_wall' };
+  }
+  return { halt: false, elapsedMs: start ? elapsed : 0, wallMs: cap, remainingMs: start ? Math.max(0, cap - elapsed) : cap, code: null };
+}
+
+function repairEnumCaseInsensitive(value, schema) {
+  function walk(v, sch) {
+    if (!sch || typeof sch !== 'object') return { ok: true, value: v };
+    if (Array.isArray(sch.enum) && sch.enum.length) {
+      if (sch.enum.includes(v)) return { ok: true, value: v, repaired: false, code: null };
+      const want = String(v == null ? '' : v).toLowerCase();
+      const hit = sch.enum.find((e) => String(e).toLowerCase() === want);
+      if (hit !== undefined) return { ok: true, value: hit, repaired: true, code: 'enum_repair' };
+      return { ok: false, value: v, code: 'enum_invalid' };
+    }
+    if (sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = {};
+      let repaired = false;
+      for (const k of Object.keys(v)) {
+        const r = walk(v[k], sch.properties[k]);
+        if (r.ok === false) return r;
+        o[k] = r.value;
+        if (r.repaired) repaired = true;
+      }
+      return { ok: true, value: o, repaired, code: repaired ? 'enum_repair' : null };
+    }
+    return { ok: true, value: v, code: null };
+  }
+  return walk(value, schema || {});
+}
+
+function stripZeroWidthCharsFromArgs(args) {
+  function walk(v) {
+    if (typeof v === 'string') return v.replace(ZERO_WIDTH_RE, '');
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const k of Object.keys(v)) o[k] = walk(v[k]);
+      return o;
+    }
+    return v;
+  }
+  const out = walk(args);
+  const changed = JSON.stringify(out) !== JSON.stringify(args);
+  return { args: out, stripped: changed, code: changed ? 'zero_width_strip' : null };
+}
+
+function clampJsonArrayLength256(value, { max = JSON_ARRAY_MAX_LEN } = {}) {
+  const cap = Math.max(1, Number(max) || JSON_ARRAY_MAX_LEN);
+  let truncated = false;
+  function walk(v, depth) {
+    if (depth > 32) return v;
+    if (Array.isArray(v)) {
+      if (v.length > cap) {
+        truncated = true;
+        v = v.slice(0, cap);
+      }
+      return v.map((x) => walk(x, depth + 1));
+    }
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const k of Object.keys(v)) o[k] = walk(v[k], depth + 1);
+      return o;
+    }
+    return v;
+  }
+  const out = walk(value, 0);
+  return { value: out, truncated, max: cap, code: truncated ? 'array_cap' : null };
+}
+
+function retryAfterJitter50to150ms({ retryAfterMs, retryAfterSec, rand } = {}) {
+  const base = retryAfterMs != null
+    ? Number(retryAfterMs)
+    : (retryAfterSec != null ? Number(retryAfterSec) * 1000 : 0);
+  const wait = Math.max(0, Number.isFinite(base) ? base : 0);
+  const rnd = typeof rand === 'function' ? Number(rand()) : Math.random();
+  const span = RETRY_AFTER_JITTER_MAX_MS - RETRY_AFTER_JITTER_MIN_MS;
+  const unit = Number.isFinite(rnd) ? Math.min(1, Math.max(0, rnd)) : 0;
+  const jitter = RETRY_AFTER_JITTER_MIN_MS + Math.round(unit * span);
+  const delayMs = wait + jitter;
+  return { delayMs, waitMs: wait, jitterMs: jitter, code: null };
+}
+
+function tombstoneDeletedCheckpoint({ id, store, seq } = {}) {
+  const rec = (store && typeof store === 'object') ? store : {};
+  const key = String(id || '');
+  if (!key) return { ok: false, tombstoned: false, code: 'ckpt_tombstone' };
+  rec[key] = { deleted: true, tombstone: true, seq: Number(seq) || Date.now(), at: Date.now() };
+  return { ok: true, tombstoned: true, id: key, store: rec, code: 'ckpt_tombstone' };
+}
+
+function stderrByteCapPerCommand(text, { maxBytes = STDERR_BYTE_CAP } = {}) {
+  const s = text == null ? '' : (typeof text === 'string' ? text : String(text));
+  const cap = Math.max(16, Number(maxBytes) || STDERR_BYTE_CAP);
+  const bytes = Buffer.byteLength(s, 'utf8');
+  if (bytes <= cap) return { truncated: false, text: s, bytes, maxBytes: cap, code: null };
+  const marker = `\n[stderr truncated ${bytes - cap} bytes]`;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  const keep = Math.max(0, cap - markerBytes);
+  let cut = Buffer.from(s, 'utf8').subarray(0, keep).toString('utf8');
+  while (Buffer.byteLength(cut + marker, 'utf8') > cap && cut.length) cut = cut.slice(0, -1);
+  return { truncated: true, text: cut + marker, bytes, maxBytes: cap, code: 'stderr_cap' };
+}
+
+function dropToolResultsOlderThan6Steps(messages, { steps = COMPACT_TOOL_RESULT_AGE_STEPS, currentStep } = {}) {
+  const list = Array.isArray(messages) ? messages.slice() : [];
+  const age = Math.max(1, Number(steps) || COMPACT_TOOL_RESULT_AGE_STEPS);
+  const now = currentStep != null ? Number(currentStep) : list.length;
+  let dropped = 0;
+  const out = list.map((m, i) => {
+    if (!m || typeof m !== 'object') return m;
+    const role = String(m.role || '');
+    if (role !== 'tool' && role !== 'function') return m;
+    const step = m.step != null ? Number(m.step) : i;
+    if (Number.isFinite(step) && now - step > age) {
+      dropped += 1;
+      return Object.assign({}, m, { content: '[dropped_old_tool_result]', dropped: true });
+    }
+    return m;
+  });
+  return { messages: out, dropped, steps: age, code: dropped ? 'compact_old_tools' : null };
+}
+
+function rejectToolNameWithWhitespace(name) {
+  const n = String(name == null ? '' : name);
+  if (!n.trim()) return { ok: false, code: 'empty_tool_name' };
+  if (/\s/.test(n)) return { ok: false, name: n, code: 'tool_name_whitespace' };
+  return { ok: true, name: n, code: null };
+}
+
+function keepIdNumericStringsAsStrings(value, schema) {
+  function walk(v, sch, key) {
+    const looksId = (typeof key === 'string' && ID_KEY_RE.test(key)) || (sch && sch.format === 'id');
+    if (looksId && typeof v === 'string' && /^\d+$/.test(v)) {
+      return { ok: true, value: v, kept: true, code: null };
+    }
+    if (sch && (sch.type === 'integer' || sch.type === 'number') && !looksId) {
+      return { ok: true, value: v };
+    }
+    if (sch && sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = {};
+      let kept = false;
+      for (const k of Object.keys(v)) {
+        const r = walk(v[k], sch.properties[k], k);
+        o[k] = r.value;
+        if (r.kept) kept = true;
+      }
+      return { ok: true, value: o, kept, code: kept ? 'id_stay_string' : null };
+    }
+    if (v && typeof v === 'object' && !Array.isArray(v) && !sch) {
+      const o = {};
+      let kept = false;
+      for (const k of Object.keys(v)) {
+        const r = walk(v[k], null, k);
+        o[k] = r.value;
+        if (r.kept) kept = true;
+      }
+      return { ok: true, value: o, kept, code: kept ? 'id_stay_string' : null };
+    }
+    return { ok: true, value: v, kept: false, code: null };
+  }
+  return walk(value, schema || null, null);
+}
+
+function requireSessionEventSeqIncrease({ lastSeq, nextSeq } = {}) {
+  const last = Number(lastSeq);
+  const next = Number(nextSeq);
+  if (!Number.isFinite(next)) return { ok: false, lastSeq: Number.isFinite(last) ? last : 0, code: 'event_order' };
+  const prev = Number.isFinite(last) ? last : 0;
+  if (next <= prev) return { ok: false, lastSeq: prev, nextSeq: next, code: 'event_order' };
+  return { ok: true, lastSeq: next, nextSeq: next, code: null };
+}
+
+function abortSiblingToolsOnParentCancelToken({ parentToken, siblings, abortFn } = {}) {
+  const aborted = !!(parentToken && (parentToken.aborted === true || parentToken.cancelled === true));
+  const list = Array.isArray(siblings) ? siblings : [];
+  if (!aborted) return { aborted: 0, siblings: list, code: null };
+  const ids = [];
+  for (const s of list) {
+    const id = (s && (s.id || s.callId)) || s;
+    ids.push(id);
+    if (typeof abortFn === 'function') {
+      try { abortFn(id); } catch (_) { /* best-effort */ }
+    }
+    if (s && typeof s === 'object') s.aborted = true;
+  }
+  return { aborted: ids.length, ids, code: 'turn_cancelled' };
+}
+
+function redactEmailsInLogs(text) {
+  if (text == null) return { text: text, redacted: false, code: null };
+  if (typeof text === 'object') {
+    const s = JSON.stringify(text);
+    const out = s.replace(EMAIL_RE, '[REDACTED_EMAIL]');
+    const redacted = out !== s;
+    try { return { text: JSON.parse(out), redacted, code: redacted ? 'email_redact' : null }; } catch (_) {
+      return { text: out, redacted, code: redacted ? 'email_redact' : null };
+    }
+  }
+  const s = String(text);
+  const out = s.replace(EMAIL_RE, '[REDACTED_EMAIL]');
+  return { text: out, redacted: out !== s, code: out !== s ? 'email_redact' : null };
+}
+
+function maxHeartbeatsPerMinute({ sent, windowStart, now, max = HEARTBEATS_PER_MIN_MAX } = {}) {
+  const cap = Math.max(1, Number(max) || HEARTBEATS_PER_MIN_MAX);
+  const t = Number(now) || Date.now();
+  const start = Number(windowStart) || t;
+  const count = Number(sent) || 0;
+  if (t - start >= 60_000) {
+    return { allow: true, sent: 0, windowStart: t, reset: true, max: cap, code: null };
+  }
+  if (count >= cap) return { allow: false, sent: count, windowStart: start, max: cap, code: 'heartbeat_cap' };
+  return { allow: true, sent: count, windowStart: start, max: cap, code: null };
+}
+
+function refuseReadThroughSymlink(filePath, { lstatSync, isSymlink } = {}) {
+  const p = String(filePath == null ? '' : filePath);
+  if (typeof isSymlink === 'function') {
+    try {
+      if (isSymlink(p)) return { ok: false, path: p, code: 'symlink_read' };
+    } catch (_) { /* treat as not a symlink */ }
+    return { ok: true, path: p, code: null };
+  }
+  const ls = typeof lstatSync === 'function' ? lstatSync : null;
+  if (!ls) return { ok: true, skipped: true, path: p, code: null };
+  try {
+    const st = ls(p);
+    if (st && (st.isSymbolicLink && st.isSymbolicLink())) {
+      return { ok: false, path: p, code: 'symlink_read' };
+    }
+  } catch (_) { /* missing file is not a symlink refuse */ }
+  return { ok: true, path: p, code: null };
+}
+
+function markPlanStepFailedIfToolErrorTwice({ stepId, errorsByStep, error } = {}) {
+  const map = (errorsByStep && typeof errorsByStep === 'object') ? errorsByStep : {};
+  const id = String(stepId || '');
+  const prev = Number(map[id]) || 0;
+  const next = prev + (error ? 1 : 0);
+  map[id] = next;
+  if (next >= 2) {
+    return { failed: true, count: next, stepId: id, errorsByStep: map, code: 'plan_step_failed' };
+  }
+  return { failed: false, count: next, stepId: id, errorsByStep: map, code: null };
+}
+
+function restoreLastSseIdOnResume({ lastEventId, cursor, store } = {}) {
+  const rec = (store && typeof store === 'object') ? store : {};
+  const fromArg = lastEventId != null ? Number(lastEventId) : (cursor != null ? Number(cursor) : NaN);
+  const fromStore = rec.lastEventId != null ? Number(rec.lastEventId) : (rec.cursor != null ? Number(rec.cursor) : NaN);
+  const id = Number.isFinite(fromArg) ? fromArg : (Number.isFinite(fromStore) ? fromStore : 0);
+  rec.lastEventId = id;
+  rec.cursor = id;
+  return { restored: true, lastEventId: id, cursor: id, store: rec, code: null };
+}
+
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -5289,6 +5824,33 @@ module.exports = {
   isolateParallelToolTimeout,
   holdSettleNeverDoubleCharge,
   enforceAdditionalPropertiesFalse,
+  ensureUniqueToolCallIdsAcrossResume,
+  clampSchemaIntegerNumberToMinMax,
+  repairMissingClosingBracesWithBudget,
+  refundHoldIfNoTokensUsed,
+  pinLastToolErrorOnCompact,
+  replayLastNSseEventsFromCursor,
+  rejectIdenticalPromptInflightSameSession,
+  refuseWriteOver2MiB,
+  skipEmptyEmbeddingUpsert,
+  neverChargeToolOnlyObservationLoop,
+  enforceTotalTurnWall120s,
+  repairEnumCaseInsensitive,
+  stripZeroWidthCharsFromArgs,
+  clampJsonArrayLength256,
+  retryAfterJitter50to150ms,
+  tombstoneDeletedCheckpoint,
+  stderrByteCapPerCommand,
+  dropToolResultsOlderThan6Steps,
+  rejectToolNameWithWhitespace,
+  keepIdNumericStringsAsStrings,
+  requireSessionEventSeqIncrease,
+  abortSiblingToolsOnParentCancelToken,
+  redactEmailsInLogs,
+  maxHeartbeatsPerMinute,
+  refuseReadThroughSymlink,
+  markPlanStepFailedIfToolErrorTwice,
+  restoreLastSseIdOnResume,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

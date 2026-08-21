@@ -242,6 +242,26 @@ const CODES = Object.freeze({
   SUBAGENT_CONCURRENCY: 'subagent_concurrency',
   EMPTY_TURN: 'empty_turn',
   TOOL_RESULT_TRUNCATED: 'tool_result_truncated',
+  TOOL_ID_RESUME_DUP: 'tool_id_resume_dup',
+  SCHEMA_CLAMP: 'schema_clamp',
+  WRITE_TOO_LARGE: 'write_too_large',
+  IDENTICAL_PROMPT_INFLIGHT: 'identical_prompt_inflight',
+  EMPTY_EMBEDDING: 'empty_embedding',
+  CREDIT_OBSERVATION: 'credit_observation',
+  TURN_WALL: 'turn_wall',
+  ENUM_REPAIR: 'enum_repair',
+  ENUM_INVALID: 'enum_invalid',
+  ARRAY_CAP: 'array_cap',
+  CKPT_TOMBSTONE: 'ckpt_tombstone',
+  STDERR_CAP: 'stderr_cap',
+  COMPACT_OLD_TOOLS: 'compact_old_tools',
+  TOOL_NAME_WHITESPACE: 'tool_name_whitespace',
+  EVENT_ORDER: 'event_order',
+  EMAIL_REDACT: 'email_redact',
+  HEARTBEAT_CAP: 'heartbeat_cap',
+  SYMLINK_READ: 'symlink_read',
+  PLAN_STEP_FAILED: 'plan_step_failed',
+  PIN_TOOL_ERROR: 'pin_tool_error',
 });
 
 function isRetryable(code) {
@@ -288,7 +308,9 @@ function isRetryable(code) {
     || c === 'net_timeout'
     || c === 'net_dns'
     || c === 'generate_overloaded'
-    || c === 'sse_buffer_overflow';
+    || c === 'sse_buffer_overflow'
+    || c === 'turn_wall'
+    || c === 'identical_prompt_inflight';
 }
 
 function publicError(code, extra) {
