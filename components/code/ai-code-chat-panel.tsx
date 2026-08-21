@@ -57,6 +57,7 @@ import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
+import { recordRun } from "@/lib/code-agent/observability"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
@@ -1892,6 +1893,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       let rejectedStream: { issue?: string; retryInstruction?: string } | null = null
       let cancelled = false
       const startedAt = Date.now()
+      const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      // First-stream-chunk timestamp: TTFT for the observability run.
+      let firstChunkAt: number | undefined
+      let streamChunks = 0
       // Real token usage (+ optional USD cost) from the stream's `usage` frame,
       // delivered just before onClose so it's available when we build metrics.
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
@@ -1925,6 +1930,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             reasoningEffort: selectedEffort,
           },
           (chunk) => {
+            if (firstChunkAt == null) firstChunkAt = Date.now()
+            streamChunks += 1
             assistantText += chunk
             setTurns((prev) =>
               prev.map((t) => {
@@ -2012,6 +2019,20 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 // "Aplicar" button anymore, so surface the failure explicitly and
                 // tell the user they can still copy the code as a fallback.
                 toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                void recordRun({
+                  id: runId,
+                  conversational,
+                  startedAt,
+                  finishedAt: Date.now(),
+                  totalMs: Date.now() - startedAt,
+                  streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+                  outcome: "error",
+                  phases: [
+                    { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                    { name: "generate", ms: Date.now() - startedAt },
+                    { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
+                  ],
+                })
                 patchAssistant({
                   agentLabel: "No se pudieron aplicar los cambios",
                   agentPhases: buildCodeAgentPhases("apply", {
@@ -2088,6 +2109,28 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 return base
               }),
             )
+            // Observability: the turn is closed and the run is fully known
+            // (outcome, applied files, token usage). The `success` branch above
+            // already recorded apply failures; this covers the common path.
+            void recordRun({
+              id: runId,
+              conversational,
+              startedAt,
+              finishedAt: Date.now(),
+              totalMs: Date.now() - startedAt,
+              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+              outcome: "success",
+              phases: [
+                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                { name: "generate", ms: Date.now() - startedAt },
+                ...(applied.length > 0
+                  ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
+                  : []),
+                { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
+              ],
+              files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
+              usage: usage ?? undefined,
+            })
             // Only release the latch if this turn is still the active one — a
             // newer turn may have replaced abortRef, and clearing it here would
             // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
@@ -2105,6 +2148,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               err?.name === "AbortError" ||
               /\babort|cancel|operation was aborted/i.test(err?.message || "")
             const msg = err?.message || "Error en el chat de código"
+            void recordRun({
+              id: runId,
+              conversational: false,
+              startedAt,
+              finishedAt: Date.now(),
+              totalMs: Date.now() - startedAt,
+              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+              outcome: aborted ? "aborted" : "error",
+              phases: [
+                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                { name: "generate", ms: Date.now() - startedAt, detail: msg },
+              ],
+            })
             setTurns((prev) =>
               prev.map((t) =>
                 t.id === assistantId
@@ -2174,6 +2230,19 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         const aborted =
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
+        void recordRun({
+          id: runId,
+          conversational,
+          startedAt,
+          finishedAt: Date.now(),
+          totalMs: Date.now() - startedAt,
+          streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+          outcome: aborted ? "aborted" : "error",
+          phases: [
+            { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+            { name: "generate", ms: Date.now() - startedAt, detail: err?.message || "Error en el chat de código" },
+          ],
+        })
         if (aborted) {
           cancelled = true
           patchAssistant({

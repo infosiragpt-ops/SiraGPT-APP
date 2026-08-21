@@ -208,6 +208,14 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(...args)",
   },
   {
+    file: "lib/code-agent/observability.ts",
+    reason: "Same-origin, credential-free best-effort telemetry POST to the observability store; never attaches user auth and any failure is swallowed.",
+    accepts: (text) =>
+      text.startsWith('fetch("/api/code-agent/observability"')
+      && /\bmethod\s*:\s*["']POST["']/.test(text)
+      && isCredentialFreePublicFetch(text),
+  },
+  {
     file: "lib/api.ts",
     reason: "Anonymous quota GET is intentionally unauthenticated.",
     accepts: (text) => text.includes("/ai/anon-quota") && isNonMutatingFetchCall(text),
