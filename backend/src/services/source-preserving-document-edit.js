@@ -8385,6 +8385,30 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
+  // FEATURE_DOC_ENGINE (default off): "pasa este word al formato UPN"
+  // transplanta el source a la plantilla. Con el flag off el path de
+  // edición por párrafos existente no cambia.
+  try {
+    const { isDocEngineEnabled } = require('./doc-engine/flags');
+    if (isDocEngineEnabled()) {
+      const { tryDocEngineTransform } = require('./doc-engine/chat-bridge');
+      const intentFiles = [
+        ...(Array.isArray(sourceFiles) ? sourceFiles : []),
+        ...(Array.isArray(sourceFiles?.assetFiles) ? sourceFiles.assetFiles : []),
+      ];
+      const hit = await tryDocEngineTransform({
+        prompt,
+        displayPrompt,
+        files: intentFiles,
+        userId,
+        chatId,
+        signal,
+      });
+      if (hit) return hit;
+    }
+  } catch (err) {
+    try { console.warn(`[doc-engine] chat bridge fell through: ${err?.message || err}`); } catch { /* noop */ }
+  }
   // Attached images travel outside the editable set: they are candidate
   // replacement payloads for "reemplaza la foto por la imagen adjunta".
   const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
