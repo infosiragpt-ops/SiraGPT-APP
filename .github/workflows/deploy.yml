@@ -515,6 +515,15 @@ jobs:
             trap cleanup_transfer EXIT
 
             cd "${APP_DIR}"
+            # Self-heal: VPS cleanups can wipe /opt/siragpt/.git, making every
+            # later git command die with "need a repository to verify a bundle".
+            # An empty repo is enough: the bundle carries FULL history (created
+            # with plain `git bundle create ... HEAD`, zero prerequisites), so
+            # verify passes and the fetch below repopulates everything.
+            if ! git rev-parse --git-dir >/dev/null 2>&1; then
+              echo "[deploy-workflow] ${APP_DIR} has no git repository; bootstrapping an empty one"
+              git init -q
+            fi
             CHECKSUM_LINE="$(cat "${DEPLOY_BUNDLE_CHECKSUM}")"
             if ! [[ "${CHECKSUM_LINE}" =~ ^[0-9a-f]{64}[[:space:]][[:space:]]deploy\.bundle$ ]]; then
               echo "[deploy-workflow] Invalid deploy bundle checksum manifest"
