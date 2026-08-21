@@ -1,48 +1,95 @@
 'use strict';
 
 /**
- * Puente /chat → doc-engine.
- * Solo corre cuando FEATURE_DOC_ENGINE=1 y el turno es un
- * transform-to-template (source + plantilla / "pasa al formato UPN").
- * Si el flag está off, devolvemos null y el path de edición por
- * párrafos existente sigue igual.
+ * Hook de /chat (y document_edit, /api/doc, agent-task) → transformToTemplate.
+ *
+ * Vive DESPUÉS de selectSourcePreservingDocumentSet y ANTES de
+ * generateSourcePreservingDocumentEdit. In-process PizZip: no cola, no
+ * contenedor nuevo. OpenRouter está prohibido en este motor.
  */
 
-const { isDocEngineEnabled, isTemplateTransformRequest } = require('./flags');
-const { classifyDocxPair } = require('./transform-to-template');
-const { runPipeline } = require('./pipeline');
+const path = require('path');
+const { isDocEngineEnabled } = require('./flags');
+const {
+  classifyTemplateVsContent,
+  transformToTemplate,
+} = require('./transform-to-template');
 
-function looksLikeTemplateName(file = {}) {
-  const name = String(file.originalName || file.filename || file.name || '').toLowerCase();
-  return /(formato|plantilla|template|upn|xxxxxxxx)/i.test(name);
+function isDocxLike(file = {}) {
+  const name = String(file?.originalName || file?.filename || file?.name || '');
+  const mime = String(file?.mimeType || file?.mimetype || file?.type || '');
+  return mime.includes('wordprocessingml') || /\.docx$/i.test(name);
 }
 
-async function loadPairBuffers(files, { readBuffer } = {}) {
-  const { source, template, docs } = classifyDocxPair(files);
-  if (!source || !template) return null;
-  const reader = typeof readBuffer === 'function'
-    ? readBuffer
-    : async (file) => {
-      if (Buffer.isBuffer(file.buffer)) return file.buffer;
-      const { readSourceBuffer } = require('../source-preserving-document-edit');
-      return readSourceBuffer(file);
-    };
+async function readFileBuffer(file, readBuffer) {
+  if (typeof readBuffer === 'function') return readBuffer(file);
+  if (Buffer.isBuffer(file.buffer) && file.buffer.length) return file.buffer;
+  const { readSourceBuffer } = require('../source-preserving-document-edit');
+  const read = await readSourceBuffer(file);
+  return read?.buffer || null;
+}
+
+function buildValidation(transformed) {
+  const sectOk = transformed.templateSectPr === transformed.resultSectPr;
+  const headersOk = JSON.stringify(transformed.headerFooterBefore)
+    === JSON.stringify(transformed.headerFooterAfter);
   return {
-    source,
-    template,
-    sourceBuffer: await reader(source),
-    templateBuffer: await reader(template),
-    docs,
+    format: 'docx',
+    passed: Boolean(sectOk && transformed.transplantedBlocks > 0),
+    checks: {
+      source_transplanted: transformed.transplantedBlocks > 0,
+      template_sectpr_preserved: sectOk,
+      header_footer_unchanged: headersOk,
+    },
+    details: {
+      editMode: 'doc_engine_transform_to_template',
+      styleMap: transformed.styleMap || {},
+      transplantedBlocks: transformed.transplantedBlocks,
+    },
   };
 }
 
+function persistOrWrap({ buffer, filename, userId, chatId, validation }) {
+  let artifact = null;
+  if (userId) {
+    try {
+      const { saveArtifact, EXTENSION_TO_MIME } = require('../agents/task-tools');
+      artifact = saveArtifact({
+        filename,
+        base64: Buffer.from(buffer).toString('base64'),
+        mime: EXTENSION_TO_MIME.docx,
+        ownerUserId: userId,
+        chatId,
+        validation,
+      });
+    } catch {
+      artifact = null;
+    }
+  }
+  if (!artifact) {
+    artifact = {
+      id: `doc-engine:${filename}`,
+      filename,
+      format: 'docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: buffer.length,
+      downloadUrl: null,
+      validation,
+    };
+  } else if (!artifact.validation) {
+    artifact.validation = validation;
+  }
+  return artifact;
+}
+
 /**
- * @returns {Promise<object|null>} mismo shape que tryGenerateSourcePreservingDocumentEdit
+ * Hook post-select: ≥2 DOCX de current_upload + plantilla detectada por contenido.
+ * @returns {Promise<object|null>} mismo contrato que generateSourcePreservingDocumentEdit
  */
-async function tryDocEngineTransform({
+async function tryDocEngineAfterSelection({
+  files = [],
   prompt,
   displayPrompt,
-  files = [],
   userId,
   chatId,
   signal,
@@ -50,58 +97,79 @@ async function tryDocEngineTransform({
   readBuffer,
 } = {}) {
   if (!isDocEngineEnabled(env)) return null;
-  const requestText = displayPrompt || prompt || '';
-  const intentFiles = Array.isArray(files) ? files : [];
-  if (!isTemplateTransformRequest(requestText, intentFiles)
-    && !intentFiles.filter(looksLikeTemplateName).length) {
-    return null;
+  const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
+  if (docs.length < 2) return null;
+
+  const withBuffers = [];
+  for (const file of docs) {
+    const buffer = await readFileBuffer(file, readBuffer);
+    if (!Buffer.isBuffer(buffer) || !buffer.length) return null;
+    withBuffers.push({ ...file, buffer });
   }
-  const pair = await loadPairBuffers(intentFiles, { readBuffer });
-  if (!pair) return null;
 
-  const result = await runPipeline({
-    sourceBuffer: pair.sourceBuffer,
-    templateBuffer: pair.templateBuffer,
-    instructions: requestText,
-    userId,
-  });
+  const pair = classifyTemplateVsContent(withBuffers);
+  if (!pair.template || !pair.content) return null;
   if (signal?.aborted) return null;
-  if (!result.ok || !result.artifact) return null;
 
-  let saved = null;
-  if (userId) {
-    try {
-      const { saveArtifact, EXTENSION_TO_MIME } = require('../agents/task-tools');
-      saved = saveArtifact({
-        filename: result.artifact.filename,
-        base64: Buffer.from(result.artifact.buffer).toString('base64'),
-        mime: result.artifact.mime || EXTENSION_TO_MIME.docx,
-        ownerUserId: userId,
-        chatId,
-      });
-    } catch {
-      saved = null;
+  const transformed = transformToTemplate({
+    sourceBuffer: pair.content.buffer,
+    templateBuffer: pair.template.buffer,
+  });
+  try {
+    const validation = buildValidation(transformed);
+    if (validation.passed !== true) return null;
+
+    const contentName = pair.content.originalName || pair.content.filename || pair.content.name || 'documento.docx';
+    const base = path.basename(contentName, path.extname(contentName)).replace(/[^\w.-]+/g, '_') || 'documento';
+    const filename = `${base}_formato.docx`;
+    const artifact = persistOrWrap({
+      buffer: transformed.buffer,
+      filename,
+      userId,
+      chatId,
+      validation,
+    });
+
+    return {
+      content: 'Documento transplantado a la plantilla (sectPr, headers y footers de la plantilla intactos). El contenido fuente reemplazó los placeholders XXXXXXXX.',
+      file: {
+        type: 'doc',
+        format: 'docx',
+        title: `${base} formato`,
+        explanation: 'Se copió la plantilla como base y se transplantó el cuerpo fuente.',
+        filename: artifact.filename,
+        url: artifact.downloadUrl || null,
+        mime: artifact.mime,
+        size: artifact.sizeBytes,
+        buffer: transformed.buffer,
+      },
+      artifact,
+      validation,
+      previewHtml: null,
+      format: 'docx',
+      engine: 'doc-engine',
+      contentFile: pair.content,
+      templateFile: pair.template,
+      orchestration: {
+        mode: 'doc_engine_transform_to_template',
+        selectionReason: 'classify_template_vs_content',
+      },
+    };
+  } finally {
+    if (transformed.workDir) {
+      try {
+        require('fs').rmSync(transformed.workDir, { recursive: true, force: true });
+      } catch { /* cleanup best-effort */ }
     }
   }
+}
 
-  const file = {
-    name: result.artifact.filename,
-    filename: result.artifact.filename,
-    mimeType: result.artifact.mime,
-    buffer: result.artifact.buffer,
-    ...(saved && typeof saved === 'object' ? saved : {}),
-  };
-
-  return {
-    content: 'Documento transplantado a la plantilla (sectPr, headers y footers de la plantilla intactos).',
-    file,
-    format: 'docx',
-    engine: 'doc-engine',
-  };
+/** @deprecated usar tryDocEngineAfterSelection desde el hook post-select */
+async function tryDocEngineTransform(opts = {}) {
+  return tryDocEngineAfterSelection(opts);
 }
 
 module.exports = {
+  tryDocEngineAfterSelection,
   tryDocEngineTransform,
-  loadPairBuffers,
-  looksLikeTemplateName,
 };

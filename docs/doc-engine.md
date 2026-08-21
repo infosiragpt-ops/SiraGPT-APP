@@ -41,15 +41,33 @@ Contrato `transformToTemplate`:
 
 Flag off ⇒ las tres responden **404**.
 
-## Chat
+## Chat (hook de producción)
 
-Con `FEATURE_DOC_ENGINE=1`, un turno tipo «pasa este word al formato UPN»
-(source + plantilla) entra a este job. Con el flag off, el editor por
-párrafos existente no se toca.
+El Word path en vivo es in-process PizZip en
+`tryGenerateSourcePreservingDocumentEdit` (callers: `agentic-chat-stream.js`,
+`agent-task-runner.js`, `document-edit-tool.js`, `routes/doc.js`). SSE
+existente: «Editando documento original».
+
+`selectSourcePreservingDocumentSet` siempre toma `currentDocx[0]`. Si el
+chip de la plantilla UPN va primero en `/api/ai/generate` → `fileIds`, el
+path viejo edita la plantilla vacía (`fill_cover` deja `XXXXXXXX`).
+
+**Hook (el único en /chat):** después de `selectSourcePreservingDocumentSet`
+y antes de `generateSourcePreservingDocumentEdit`. Si
+`FEATURE_DOC_ENGINE=1` y hay ≥2 DOCX `current_upload`:
+`classifyTemplateVsContent` (styles / `XXXX` / UPN vs cuerpo largo, no el
+orden de subida) → `transformToTemplate` in-process. No se engancha el
+SSE pre-loop ni `fillDocxCoverBuffer`. La cola `doc-jobs` es opcional
+(HTTP `/api/documents/*`); el chat no la necesita.
+
+Imagen Python existente: `siragpt-doc-sandbox:latest`
+(`services/sandbox/runner/Dockerfile`). El primer ship de /chat no
+requiere un contenedor nuevo.
 
 ## Sandbox
 
-- Imagen: `siragpt-sandbox:doc-engine` (`services/doc-engine/Dockerfile`,
+- Imagen opcional de jobs: `siragpt-doc-sandbox:latest` (runner existente
+  con python-docx) o `siragpt-sandbox:doc-engine` (`services/doc-engine/Dockerfile`,
   `debian:bookworm-slim`, Python 3.11, LibreOffice writer/calc/impress,
   poppler, fonts-liberation, fonts-crosextra-carlito, zip/unzip, pandoc).
 - Runner: `--network=none`, rootfs read-only, `--cap-drop=ALL`, seccomp
@@ -62,7 +80,7 @@ párrafos existente no se toca.
 | Variable | Default | Qué hace |
 |---|---|---|
 | `FEATURE_DOC_ENGINE` | `0` | Activa el motor |
-| `DOC_ENGINE_IMAGE` | `siragpt-sandbox:doc-engine` | Imagen del sandbox |
+| `DOC_ENGINE_IMAGE` | `siragpt-doc-sandbox:latest` | Imagen Python existente (opcional) |
 | `DOC_ENGINE_QUEUE_NAME` | `doc-jobs` | Cola BullMQ |
 | `DOC_ENGINE_CONCURRENCY` | `2` | Workers |
 | `DOC_ENGINE_TIMEOUT_MS` | `180000` | Timeout del job |

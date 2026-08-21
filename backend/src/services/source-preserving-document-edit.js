@@ -208,6 +208,9 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (sameDocumentCue && (structuralEditVerb || strongStructuralVerb)) return true;
   if (hasFiles) {
+    // "pasa este word al formato UPN" — pasa no está en structuralEditVerb;
+    // sin esto el SSE pre-loop nunca llama tryGenerate y el hook no corre.
+    if (/\bpasa\w*\b/.test(text) && /\b(formato|plantilla|template|upn)\b/.test(text)) return true;
     if (professionalEditingIntent) return true;
     if (editorialCorrectionIntent) return true;
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
@@ -8385,39 +8388,59 @@ async function tryGenerateSourcePreservingDocumentEdit({
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
-  // FEATURE_DOC_ENGINE (default off): "pasa este word al formato UPN"
-  // transplanta el source a la plantilla. Con el flag off el path de
-  // edición por párrafos existente no cambia.
-  try {
-    const { isDocEngineEnabled } = require('./doc-engine/flags');
-    if (isDocEngineEnabled()) {
-      const { tryDocEngineTransform } = require('./doc-engine/chat-bridge');
-      const intentFiles = [
-        ...(Array.isArray(sourceFiles) ? sourceFiles : []),
-        ...(Array.isArray(sourceFiles?.assetFiles) ? sourceFiles.assetFiles : []),
-      ];
-      const hit = await tryDocEngineTransform({
-        prompt,
-        displayPrompt,
-        files: intentFiles,
-        userId,
-        chatId,
-        signal,
-      });
-      if (hit) return hit;
-    }
-  } catch (err) {
-    try { console.warn(`[doc-engine] chat bridge fell through: ${err?.message || err}`); } catch { /* noop */ }
-  }
   // Attached images travel outside the editable set: they are candidate
   // replacement payloads for "reemplaza la foto por la imagen adjunta".
   const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
   const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
-  if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
+  const currentUploadDocx = (Array.isArray(sourceFiles) ? sourceFiles : [])
+    .filter((file) => file?.source === 'current_upload' && isDocxFile(file));
+  // "pasa este word al formato UPN" no entra en los verbos de edición por
+  // párrafos. Con el flag + 2 DOCX current_upload seguimos hasta el select
+  // para que el hook de transplant pueda correr. Flag off: gate intacto.
+  const wantsDocEnginePair = (() => {
+    try {
+      return require('./doc-engine/flags').isDocEngineEnabled() && currentUploadDocx.length >= 2;
+    } catch {
+      return false;
+    }
+  })();
+  if (!isSourcePreservingEditRequest(requestText, intentFiles) && !wantsDocEnginePair) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+
+  // FEATURE_DOC_ENGINE (default off). Hook más pequeño: DESPUÉS del select
+  // (que siempre toma currentDocx[0] — si la plantilla UPN va primero en
+  // fileIds, editaría los XXXXXXXX) y ANTES de generateSourcePreservingDocumentEdit.
+  // ≥2 DOCX current_upload → classifyTemplateVsContent (styles/XXXX/UPN vs
+  // cuerpo largo) → transformToTemplate in-process (PizZip). Cubre /chat,
+  // document_edit, /api/doc y agent-task. No se engancha el SSE pre-loop
+  // ni fillDocxCoverBuffer.
+  try {
+    if (wantsDocEnginePair) {
+      const { tryDocEngineAfterSelection } = require('./doc-engine/chat-bridge');
+      const hit = await tryDocEngineAfterSelection({
+        files: currentUploadDocx,
+        prompt,
+        displayPrompt: requestText,
+        userId,
+        chatId,
+        signal,
+      });
+      if (hit) {
+        await recordSourcePreservingVersion(prisma, {
+          result: hit,
+          sourceFile: hit.contentFile || supported,
+          userId,
+          chatId,
+        });
+        return hit;
+      }
+    }
+  } catch (err) {
+    try { console.warn(`[doc-engine] post-select hook fell through: ${err?.message || err}`); } catch { /* noop */ }
+  }
 
   // Explicit plural scope ("todos los documentos", "cada archivo", "ambos")
   // means one immutable edited copy per current upload. The old selector chose

@@ -22,7 +22,7 @@ function getDocEngineConfig(env = process.env) {
   };
   return {
     enabled: isDocEngineEnabled(env),
-    image: String(env.DOC_ENGINE_IMAGE || 'siragpt-sandbox:doc-engine').trim(),
+    image: String(env.DOC_ENGINE_IMAGE || 'siragpt-doc-sandbox:latest').trim(),
     concurrency: n(env.DOC_ENGINE_CONCURRENCY, 2, 1, 8),
     timeoutMs: n(env.DOC_ENGINE_TIMEOUT_MS, 180_000, 5_000, 600_000),
     workspaceSize: String(env.DOC_ENGINE_WORKSPACE_SIZE || '512m').trim(),

@@ -272,7 +272,7 @@ services:
       # OOXML document engine (default off). Chat keeps the paragraph-edit path
       # unless FEATURE_DOC_ENGINE=1. No new public ports.
       FEATURE_DOC_ENGINE: "${FEATURE_DOC_ENGINE:-0}"
-      DOC_ENGINE_IMAGE: "${DOC_ENGINE_IMAGE:-siragpt-sandbox:doc-engine}"
+      DOC_ENGINE_IMAGE: "${DOC_ENGINE_IMAGE:-siragpt-doc-sandbox:latest}"
       DOC_ENGINE_QUEUE_NAME: "${DOC_ENGINE_QUEUE_NAME:-doc-jobs}"
       DOC_ENGINE_CONCURRENCY: "${DOC_ENGINE_CONCURRENCY:-2}"
       DOC_ENGINE_TIMEOUT_MS: "${DOC_ENGINE_TIMEOUT_MS:-180000}"

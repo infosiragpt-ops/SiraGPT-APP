@@ -9,10 +9,11 @@ const PizZip = require('pizzip');
 
 const flags = require('../src/services/doc-engine/flags');
 const ooxml = require('../src/services/doc-engine/ooxml');
-const { transformBuffers } = require('../src/services/doc-engine/transform-to-template');
+const { transformBuffers, classifyTemplateVsContent } = require('../src/services/doc-engine/transform-to-template');
 const { buildHardenedRunArgs } = require('../src/services/doc-engine/runner');
 const { runVerifyLoop, pickDeepSeekModel } = require('../src/services/doc-engine/verify-loop');
-const { tryDocEngineTransform } = require('../src/services/doc-engine/chat-bridge');
+const { tryDocEngineAfterSelection } = require('../src/services/doc-engine/chat-bridge');
+const { tryGenerateSourcePreservingDocumentEdit } = require('../src/services/source-preserving-document-edit');
 const { createJob, getJob, resetStore, appendEvent } = require('../src/services/doc-engine/job-store');
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -44,7 +45,7 @@ function sourceDocx() {
     'word/header1.xml': `<?xml version="1.0"?><w:hdr xmlns:w="${W}"><w:p/></w:hdr>`,
     'word/footer1.xml': `<?xml version="1.0"?><w:ftr xmlns:w="${W}"><w:p/></w:ftr>`,
     'word/_rels/document.xml.rels': `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>`,
-    'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Portada original UPN</w:t></w:r></w:p><w:sectPr><w:pgMar w:top="1"/></w:sectPr></w:body></w:document>`,
+    'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Portada original UPN</w:t></w:r></w:p><w:p><w:r><w:t>Capitulo 1 contenido real del source investigacion metodologica y resultados del RSN.</w:t></w:r></w:p><w:sectPr><w:pgMar w:top="1"/></w:sectPr></w:body></w:document>`,
   });
 }
 
@@ -105,7 +106,42 @@ describe('doc-engine verify', () => {
   });
 });
 
-describe('doc-engine chat bridge', () => {
+describe('classifyTemplateVsContent', () => {
+  it('picks the XXXX/UPN file as plantilla even when it is first (chip order)', () => {
+    const plantilla = {
+      originalName: 'aaaa.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: templateDocx(),
+    };
+    const rsn = {
+      originalName: 'zzzz.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: sourceDocx(),
+    };
+    const pair = classifyTemplateVsContent([plantilla, rsn]);
+    assert.equal(pair.template, plantilla);
+    assert.equal(pair.content, rsn);
+    assert.equal(pair.reason, 'content');
+  });
+
+  it('prefers XXXX/UPN body over a misleading formato-*.docx name', () => {
+    const fakeNameRealBody = {
+      originalName: 'formato-upn.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: sourceDocx(),
+    };
+    const realPlantilla = {
+      originalName: 'rsn.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: templateDocx(),
+    };
+    const pair = classifyTemplateVsContent([fakeNameRealBody, realPlantilla]);
+    assert.equal(pair.template, realPlantilla);
+    assert.equal(pair.content, fakeNameRealBody);
+  });
+});
+
+describe('doc-engine chat hook', () => {
   const prev = process.env.FEATURE_DOC_ENGINE;
   after(() => {
     if (prev === undefined) delete process.env.FEATURE_DOC_ENGINE;
@@ -114,7 +150,7 @@ describe('doc-engine chat bridge', () => {
 
   it('returns null when flag is off', async () => {
     delete process.env.FEATURE_DOC_ENGINE;
-    const hit = await tryDocEngineTransform({
+    const hit = await tryDocEngineAfterSelection({
       prompt: 'pasa este word al formato UPN',
       files: [
         { name: 'src.docx', buffer: sourceDocx() },
@@ -125,12 +161,12 @@ describe('doc-engine chat bridge', () => {
     assert.equal(hit, null);
   });
 
-  it('transplants when flag is on', async () => {
-    const hit = await tryDocEngineTransform({
+  it('transplants when flag is on even if plantilla is first', async () => {
+    const hit = await tryDocEngineAfterSelection({
       prompt: 'pasa este word al formato UPN',
       files: [
-        { name: 'tesis.docx', buffer: sourceDocx(), originalName: 'tesis.docx' },
         { name: 'formato-upn.docx', buffer: templateDocx(), originalName: 'formato-upn.docx' },
+        { name: 'tesis.docx', buffer: sourceDocx(), originalName: 'tesis.docx' },
       ],
       env: { FEATURE_DOC_ENGINE: '1' },
       readBuffer: async (f) => f.buffer,
@@ -138,8 +174,65 @@ describe('doc-engine chat bridge', () => {
     assert.ok(hit);
     assert.equal(hit.engine, 'doc-engine');
     assert.equal(hit.format, 'docx');
+    assert.equal(hit.validation.passed, true);
     const xml = new PizZip(hit.file.buffer).file('word/document.xml').asText();
     assert.match(xml, /Portada original UPN/);
+    assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, ''), /XXXXXXXX/);
+  });
+
+  it('tryGenerate hook after select transplants when plantilla is fileIds[0]', async () => {
+    const prevFlag = process.env.FEATURE_DOC_ENGINE;
+    process.env.FEATURE_DOC_ENGINE = '1';
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'de-hook-'));
+    const plantillaPath = path.join(tmp, 'formato-upn.docx');
+    const rsnPath = path.join(tmp, 'rsn.docx');
+    fs.writeFileSync(plantillaPath, templateDocx());
+    fs.writeFileSync(rsnPath, sourceDocx());
+    const prisma = {
+      file: {
+        async findMany() {
+          return [
+            {
+              id: 'plantilla-first',
+              filename: 'formato-upn.docx',
+              originalName: 'formato-upn.docx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              path: plantillaPath,
+              extractedText: 'XXXXXXXX',
+            },
+            {
+              id: 'rsn-second',
+              filename: 'rsn.docx',
+              originalName: 'rsn.docx',
+              mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              path: rsnPath,
+              extractedText: 'Portada original UPN capitulo contenido real del source investigacion',
+            },
+          ];
+        },
+      },
+      generatedArtifact: { async findMany() { return []; } },
+      message: { async findMany() { return []; } },
+    };
+    try {
+      const result = await tryGenerateSourcePreservingDocumentEdit({
+        prisma,
+        userId: 'user-upn',
+        chatId: 'chat-upn',
+        fileIds: ['plantilla-first', 'rsn-second'],
+        prompt: 'pasa este word al formato UPN',
+        displayPrompt: 'pasa este word al formato UPN',
+      });
+      assert.ok(result);
+      assert.equal(result.engine, 'doc-engine');
+      assert.equal(result.validation.passed, true);
+      const xml = new PizZip(result.file.buffer).file('word/document.xml').asText();
+      assert.match(xml, /Portada original UPN/);
+      assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, ''), /XXXXXXXX/);
+    } finally {
+      if (prevFlag === undefined) delete process.env.FEATURE_DOC_ENGINE;
+      else process.env.FEATURE_DOC_ENGINE = prevFlag;
+    }
   });
 });
 
