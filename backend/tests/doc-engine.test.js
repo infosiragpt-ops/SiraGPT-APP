@@ -143,6 +143,54 @@ describe('doc-engine chat bridge', () => {
   });
 });
 
+describe('doc-engine unpack guards', () => {
+  it('rejects path traversal and zip-bomb entry counts', () => {
+    const zip = new PizZip();
+    zip.file('[Content_Types].xml', '<Types xmlns="x"/>');
+    zip.file('../../etc/passwd', 'root\n');
+    const bad = zip.generate({ type: 'nodebuffer' });
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'de-trav-'));
+    assert.throws(() => ooxml.unpackBuffer(bad, dest), /path traversal/);
+    assert.throws(() => ooxml.assertSafeZipName('/tmp/evil.xml'), /path traversal/);
+
+    const bomb = new PizZip();
+    bomb.file('[Content_Types].xml', '<Types xmlns="x"/>');
+    for (let i = 0; i < 5001; i += 1) bomb.file(`pad/${i}.txt`, 'x');
+    const bombBuf = bomb.generate({ type: 'nodebuffer' });
+    const dest2 = fs.mkdtempSync(path.join(os.tmpdir(), 'de-bomb-'));
+    assert.throws(() => ooxml.unpackBuffer(bombBuf, dest2), /zip-bomb/);
+  });
+
+  it('fails when document r:id is missing from .rels', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'de-rels-'));
+    fs.mkdirSync(path.join(root, 'word', '_rels'), { recursive: true });
+    fs.writeFileSync(path.join(root, '[Content_Types].xml'), '<Types xmlns="x"/>');
+    fs.writeFileSync(
+      path.join(root, 'word', 'document.xml'),
+      `<?xml version="1.0"?><w:document xmlns:w="${W}" xmlns:r="${R}"><w:body><w:p/><w:sectPr><w:headerReference w:type="default" r:id="rId99"/></w:sectPr></w:body></w:document>`,
+    );
+    fs.writeFileSync(
+      path.join(root, 'word', '_rels', 'document.xml.rels'),
+      `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    );
+    assert.throws(() => ooxml.validateUnpacked(root), /rId99/);
+  });
+});
+
+describe('doc-engine pipeline preview', () => {
+  it('produces a PDF with at least one page', async () => {
+    const { runPipeline } = require('../src/services/doc-engine/pipeline');
+    const ran = await runPipeline({
+      sourceBuffer: sourceDocx(),
+      templateBuffer: templateDocx(),
+      instructions: 'pasa este word al formato UPN',
+      verifyDeps: { client: null },
+    });
+    assert.equal(ran.ok, true);
+    assert.ok(ran.artifact.pdfPages >= 1);
+  });
+});
+
 describe('doc-engine job store SSE stages', () => {
   before(() => resetStore());
   it('records unpack|map|edit|validate|render|verify|done', () => {
