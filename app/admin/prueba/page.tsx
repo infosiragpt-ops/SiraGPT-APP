@@ -23,7 +23,7 @@ export default function AdminPruebaPage() {
     const checks: CheckResult[] = []
 
     try {
-      const healthRes = await fetch("/api/health", { cache: "no-store" })
+      const healthRes = await fetch("/api/health")
       const health = await healthRes.json().catch(() => null)
       checks.push({
         name: "Frontend",
