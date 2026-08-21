@@ -2079,7 +2079,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             // writing). Read-only modes (ask/plan/image) pass autoApply:false and
             // never apply. `applied` feeds the Worked-Summary/action-log metrics
             // on the turn (real numbers).
-        )
             let applied: Array<{ path: string; content: string }> = []
             if (!conversational) {
               patchAssistant({
