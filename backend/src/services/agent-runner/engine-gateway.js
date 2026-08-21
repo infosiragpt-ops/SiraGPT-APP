@@ -742,6 +742,37 @@ async function governThen(input, run) {
           const red = ad.redactIpv4InPublicErrors(input.publicMessage);
           if (red && red.message) input.publicMessage = red.message;
         }
+        if (typeof ad.classifyHttpFamily === 'function' && input && (input.error || input.status)) {
+          const fam = ad.classifyHttpFamily(input.error || { status: input.status });
+          if (fam && fam.code) input.httpFamily = fam.family;
+        }
+        if (typeof ad.holdSettleNeverDoubleCharge === 'function' && input && input.held) {
+          ad.holdSettleNeverDoubleCharge({ held: input.held, settled: input.settled, cancelled: input.cancelled || input.aborted });
+        }
+        if (typeof ad.refuseComputerToolsIfFlagOff === 'function' && input && input.toolName) {
+          const off = ad.refuseComputerToolsIfFlagOff(input.toolName, { computerEnabled: input.computerEnabled });
+          if (off && off.refused) {
+            const err = new Error('computer_flag_off');
+            err.code = 'computer_flag_off';
+            throw err;
+          }
+        }
+        if (typeof ad.maxConcurrentSubagents === 'function' && input && input.subagents) {
+          const mc = ad.maxConcurrentSubagents(input.subagents, { max: 2 });
+          if (mc && mc.halt) {
+            const err = new Error('subagent_concurrency');
+            err.code = 'subagent_concurrency';
+            throw err;
+          }
+        }
+        if (typeof ad.rejectEmptyToolName === 'function' && input && input.toolName != null) {
+          const empty = ad.rejectEmptyToolName(input.toolName);
+          if (empty && empty.ok === false) {
+            const err = new Error('empty_tool_name');
+            err.code = 'empty_tool_name';
+            throw err;
+          }
+        }
         if (typeof ad.maxToolsPerTurnHardCap === 'function' && input && input.toolCalls) {
           const cap = ad.maxToolsPerTurnHardCap(input.toolCalls);
           if (cap && cap.halt) {

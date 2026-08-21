@@ -275,7 +275,7 @@ test("3H37-V-001 skip compact if under 70% of window", () => {
 
 test("3H37-W-001 snapshot exposes 3H36 plus 3H37 flags and DeepSeek lock", () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === "3H37" || s.wave === "3H38" || s.wave === "3H39" || s.wave === "3H40");
+  assert.ok(s.wave === "3H37" || s.wave === "3H38" || s.wave === "3H39" || s.wave === "3H40" || s.wave === "3H41");
   assert.equal(s.toolNameAllowlist, true);
   assert.equal(s.nestedArrayObjectCoerce, true);
   assert.equal(s.createIfMissingLargeOverwrite, true);
@@ -396,5 +396,5 @@ test("3H37-AB-001 compose binds 3H37 tests and wave is 3H37", () => {
   assert.ok(String(__filename || "").includes("ola-3h37-invariants.test.js"));
   const src = read("src/services/agent-runner/engine-adapter.js");
   assert.ok(src.indexOf("3H37") >= 0);
-  assert.ok(ad.adapterSnapshot().wave === "3H37" || ad.adapterSnapshot().wave === "3H38" || ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40");
+  assert.ok(ad.adapterSnapshot().wave === "3H37" || ad.adapterSnapshot().wave === "3H38" || ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40" || ad.adapterSnapshot().wave === "3H41");
 });

@@ -251,6 +251,20 @@ const ENGINE_CODE_RULES = [
   { code: 'unauthorized', message: 'No autorizado. No se cobró el turno.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'unauthorized' },
   { code: 'glob_cap', message: 'Demasiados resultados de búsqueda. Recorté la lista.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'glob_cap' },
   { code: 'ttfb_watchdog', message: 'El proveedor no envió el primer token a tiempo.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'ttfb_watchdog' },
+  { code: 'ckpt_prune', message: 'Conservé solo los últimos puntos de restauración.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'ckpt_prune' },
+  { code: 'sse_cursor', message: 'Reanudé el flujo SSE desde el último identificador.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sse_cursor' },
+  { code: 'max_output_tokens', message: 'Limité los tokens de salida del modelo.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'max_output_tokens' },
+  { code: 'dup_tool_call', message: 'Omití una llamada de herramienta duplicada consecutiva.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'dup_tool_call' },
+  { code: 'http_5xx', message: 'El proveedor falló (5xx). Reintenta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'http_5xx' },
+  { code: 'http_4xx', message: 'El proveedor rechazó la solicitud (4xx).', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'http_4xx' },
+  { code: 'http_timeout', message: 'El proveedor tardó demasiado. Reintenta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'http_timeout' },
+  { code: 'empty_tool_name', message: 'La herramienta no tiene nombre. No la ejecuté.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'empty_tool_name' },
+  { code: 'nul_path', message: 'La ruta contiene un byte nulo. La rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'nul_path' },
+  { code: 'pgvector_timeout', message: 'La búsqueda de memoria superó el tiempo límite.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'pgvector_timeout' },
+  { code: 'computer_flag_off', message: 'Las herramientas de computadora están desactivadas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'computer_flag_off' },
+  { code: 'subagent_concurrency', message: 'Demasiados subagentes a la vez. Aplacé el resto.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_concurrency' },
+  { code: 'empty_turn', message: 'Omití un turno del asistente sin texto ni herramientas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'empty_turn' },
+  { code: 'tool_result_truncated', message: 'Recorté el resultado de la herramienta y marqué el recorte.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_result_truncated' },
 ];
 
 function classifyPublicStreamError(error) {

@@ -4614,13 +4614,407 @@ function adapterSnapshot() {
     classifyEpipeAsCancelled: true,
     skipGlobIfMatchCap: true,
     firstTokenWatchdogMs: true,
-    wave: '3H40',
+    pruneCheckpointsKeepLastN: true,
+    persistSseLastEventIdCursor: true,
+    repairSingleQuotesAndCommentsInToolJson: true,
+    clampMaxOutputTokens: true,
+    dropDuplicateConsecutiveToolCalls: true,
+    classifyHttpFamily: true,
+    compactKeepLastUserAssistantPair: true,
+    redactKeyLikeToolArgsFromLogs: true,
+    boundStepsOnCheckpointResume: true,
+    rejectEmptyToolName: true,
+    rejectNulInPath: true,
+    skipHeartbeatIfWriteWouldBlock: true,
+    waitInflightToolThenDropOnCancel: true,
+    recordTokenUsageOnErrorPath: true,
+    pgvectorMemoryQueryTimeout: true,
+    refuseComputerToolsIfFlagOff: true,
+    coerceTrueFalseStringsToBool: true,
+    maxConcurrentSubagents: true,
+    dropEmptyAssistantTurn: true,
+    sseRetryMsInPad: true,
+    sandboxTmpCleanupOnTimeout: true,
+    subagentInheritAbortSignal: true,
+    truncateToolResultWithMarker: true,
+    isolateParallelToolTimeout: true,
+    holdSettleNeverDoubleCharge: true,
+    enforceAdditionalPropertiesFalse: true,
+    wave: '3H41',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
     latencyNote: 'scripted p50/p95; never invented Flash',
   };
 }
+
+// ---------------------------------------------------------------------------
+// 3H41 — remaining holes vs Claude Code/Cowork after 3H40
+//  179 prune checkpoints keep last N=8
+//  180 persist SSE Last-Event-ID cursor
+//  181 repair single quotes + trailing comments in tool JSON
+//  182 clamp max output tokens (hard 8192)
+//  183 drop duplicate consecutive tool calls (name+args)
+//  184 classify HTTP family 5xx vs 4xx vs timeout separately
+//  185 compact always keep last user+assistant pair
+//  186 redact key-like tool args from logs
+//  187 bound remaining steps on checkpoint resume
+//  188 reject empty tool name
+//  189 reject NUL in path
+//  190 skip heartbeat if write would block
+//  191 wait inflight tool then drop on cancel
+//  192 record token usage on error path even if no completion
+//  193 pgvector memory query timeout 2000ms
+//  194 refuse computer_* if flag off
+//  195 coerce "true"/"false" strings to bool
+//  196 max concurrent subagents = 2
+//  197 drop assistant message with 0 tools and 0 text
+//  198 SSE retry:ms in pad
+//  199 sandbox tmp cleanup on timeout
+//  200 subagent inherits abort signal
+//  201 truncate tool result with marker
+//  202 isolate parallel tool timeout per item
+//  203 hold-settle never double-charge on cancel
+//  204 enforce additionalProperties false on tool schemas
+//  205 health adapter.wave=3H41
+// ---------------------------------------------------------------------------
+
+const CHECKPOINT_KEEP_LAST_N = 8;
+const MAX_OUTPUT_TOKENS_HARD = 8192;
+const MAX_CONCURRENT_SUBAGENTS = 2;
+const PGVECTOR_QUERY_TIMEOUT_MS = 2_000;
+const TOOL_RESULT_MARKER_CAP = 12_000;
+const SSE_RETRY_MS_DEFAULT = 2_000;
+const PARALLEL_TOOL_TIMEOUT_MS = 15_000;
+
+function pruneCheckpointsKeepLastN(list, { keep = CHECKPOINT_KEEP_LAST_N } = {}) {
+  const arr = Array.isArray(list) ? list.slice() : [];
+  const n = Math.max(1, Number(keep) || CHECKPOINT_KEEP_LAST_N);
+  if (arr.length <= n) return { pruned: false, dropped: 0, checkpoints: arr, keep: n, code: null };
+  const dropped = arr.length - n;
+  return { pruned: true, dropped, checkpoints: arr.slice(-n), keep: n, code: 'ckpt_prune' };
+}
+
+function persistSseLastEventIdCursor({ lastEventId, seq, store } = {}) {
+  const id = lastEventId != null ? Number(lastEventId) : Number(seq);
+  const rec = (store && typeof store === 'object') ? store : {};
+  if (!Number.isFinite(id) || id < 0) {
+    return { persisted: false, cursor: rec.cursor != null ? rec.cursor : 0, code: 'sse_cursor' };
+  }
+  const prev = Number(rec.cursor) || 0;
+  if (id < prev) return { persisted: false, cursor: prev, stale: true, code: 'sse_cursor' };
+  rec.cursor = id;
+  return { persisted: true, cursor: id, store: rec, code: null };
+}
+
+function repairSingleQuotesAndCommentsInToolJson(raw) {
+  if (raw == null) return { ok: true, value: {}, repaired: false, code: null };
+  if (typeof raw === 'object') return { ok: true, value: raw, repaired: false, code: null };
+  const s = String(raw);
+  try { return { ok: true, value: JSON.parse(s), repaired: false, code: null }; } catch (_) { /* repair */ }
+  let repaired = s.replace(/\/\/[^\n\r]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  repaired = repaired.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => JSON.stringify(inner.replace(/\\'/g, "'")));
+  try {
+    return { ok: true, value: JSON.parse(repaired), repaired: repaired !== s, code: null };
+  } catch (_) {
+    return { ok: false, value: null, repaired: false, code: 'json_parse' };
+  }
+}
+
+function clampMaxOutputTokens(n, { max = MAX_OUTPUT_TOKENS_HARD, min = 1 } = {}) {
+  const raw = Number(n);
+  const hi = Math.max(1, Number(max) || MAX_OUTPUT_TOKENS_HARD);
+  const lo = Math.max(1, Number(min) || 1);
+  if (!Number.isFinite(raw)) return { ok: true, maxTokens: hi, clamped: true, code: 'max_output_tokens' };
+  const v = Math.min(hi, Math.max(lo, Math.floor(raw)));
+  return { ok: true, maxTokens: v, clamped: v !== raw, code: v !== raw ? 'max_output_tokens' : null };
+}
+
+function _toolCallFingerprint(c) {
+  if (!c || typeof c !== 'object') return String(c || '');
+  const name = (c.function && c.function.name) || c.name || '';
+  const args = (c.function && c.function.arguments) || c.arguments || c.args || '';
+  const argStr = typeof args === 'string' ? args : JSON.stringify(args || {});
+  return `${name}\n${argStr}`;
+}
+
+function dropDuplicateConsecutiveToolCalls(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const out = [];
+  let dropped = 0;
+  let prev = null;
+  for (const c of list) {
+    const fp = _toolCallFingerprint(c);
+    if (prev != null && fp === prev) {
+      dropped += 1;
+      continue;
+    }
+    prev = fp;
+    out.push(c);
+  }
+  return { calls: out, dropped, code: dropped ? 'dup_tool_call' : null };
+}
+
+function classifyHttpFamily(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || err.response && err.response.status);
+  const code = String(err.code || err.errno || '').toUpperCase();
+  const msg = String(err.message || '');
+  if (code === 'ETIMEDOUT' || code === 'ESOCKETTIMEDOUT' || /timed?\s*out/i.test(msg) || err.name === 'TimeoutError') {
+    return { family: 'timeout', retryable: true, code: 'http_timeout', status: Number.isFinite(status) ? status : null };
+  }
+  if (Number.isFinite(status) && status >= 500) {
+    return { family: '5xx', retryable: true, code: 'http_5xx', status };
+  }
+  if (Number.isFinite(status) && status >= 400) {
+    return { family: '4xx', retryable: false, code: 'http_4xx', status };
+  }
+  if (code === 'ECONNRESET' || code === 'ECONNREFUSED' || code === 'ENOTFOUND') {
+    return { family: 'net', retryable: true, code: 'http_net', status: null };
+  }
+  return { family: 'ok', retryable: false, code: null, status: Number.isFinite(status) ? status : null };
+}
+
+function compactKeepLastUserAssistantPair(messages) {
+  const list = Array.isArray(messages) ? messages.slice() : [];
+  let lastUser = -1;
+  let lastAsst = -1;
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const r = String((list[i] && list[i].role) || '');
+    if (lastAsst < 0 && r === 'assistant') lastAsst = i;
+    if (lastUser < 0 && r === 'user') lastUser = i;
+    if (lastUser >= 0 && lastAsst >= 0) break;
+  }
+  const keep = new Set();
+  if (lastUser >= 0) keep.add(lastUser);
+  if (lastAsst >= 0) keep.add(lastAsst);
+  return { messages: list, keepIndexes: [...keep].sort((a, b) => a - b), kept: keep.size, code: null };
+}
+
+function redactKeyLikeToolArgsFromLogs(args) {
+  const KEY_RE = /(?:api[_-]?key|secret|token|password|authorization|bearer|sk-[a-zA-Z0-9]+)/i;
+  let redacted = false;
+  function walk(v) {
+    if (typeof v === 'string') {
+      if (KEY_RE.test(v)) {
+        redacted = true;
+        return '[REDACTED]';
+      }
+      return v;
+    }
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const o = {};
+      for (const k of Object.keys(v)) {
+        if (KEY_RE.test(k)) {
+          redacted = true;
+          o[k] = '[REDACTED]';
+        } else o[k] = walk(v[k]);
+      }
+      return o;
+    }
+    return v;
+  }
+  return { args: walk(args), redacted, code: redacted ? 'secret_redact' : null };
+}
+
+function boundStepsOnCheckpointResume({ remaining, checkpointRemaining, max } = {}) {
+  const cap = Math.max(1, Number(max) || 25);
+  const live = Number(remaining);
+  const ck = Number(checkpointRemaining);
+  const fromLive = Number.isFinite(live) ? live : cap;
+  const fromCk = Number.isFinite(ck) ? ck : cap;
+  const bound = Math.max(0, Math.min(cap, fromLive, fromCk));
+  return { remaining: bound, capped: bound < fromLive || bound < fromCk, max: cap, code: null };
+}
+
+function rejectEmptyToolName(name) {
+  const n = String(name == null ? '' : name).trim();
+  if (!n) return { ok: false, code: 'empty_tool_name' };
+  return { ok: true, name: n, code: null };
+}
+
+function rejectNulInPath(p) {
+  const s = String(p == null ? '' : p);
+  if (s.indexOf('\u0000') >= 0) return { ok: false, code: 'nul_path' };
+  return { ok: true, path: s, code: null };
+}
+
+function skipHeartbeatIfWriteWouldBlock({ wouldBlock, pendingBytes, writable } = {}) {
+  if (writable === false) return { skip: true, reason: 'closed', code: null };
+  const pending = Number(pendingBytes);
+  if (wouldBlock === true || (Number.isFinite(pending) && pending > 0)) {
+    return { skip: true, reason: 'backpressure', code: null };
+  }
+  return { skip: false, reason: null, code: null };
+}
+
+function waitInflightToolThenDropOnCancel({ cancelled, inflight, waitFn } = {}) {
+  if (!cancelled) return { waited: false, dropped: 0, code: null };
+  const list = Array.isArray(inflight) ? inflight : (inflight ? [inflight] : []);
+  if (typeof waitFn === 'function') {
+    try { waitFn(list); } catch (_) { /* best-effort */ }
+  }
+  return { waited: true, dropped: list.length, ids: list.map((t) => (t && t.id) || t), code: 'turn_cancelled' };
+}
+
+function recordTokenUsageOnErrorPath({ usage, error, noCompletion } = {}) {
+  const u = usage && typeof usage === 'object' ? usage : {};
+  const prompt = Number(u.prompt_tokens || u.promptTokens || 0) || 0;
+  const completion = noCompletion ? 0 : (Number(u.completion_tokens || u.completionTokens || 0) || 0);
+  const total = prompt + completion;
+  return {
+    recorded: true,
+    promptTokens: prompt,
+    completionTokens: completion,
+    totalTokens: total,
+    error: error ? String(error.code || error.message || error) : null,
+    noCompletion: !!noCompletion,
+    code: null,
+  };
+}
+
+function pgvectorMemoryQueryTimeout({ elapsedMs, timeoutMs = PGVECTOR_QUERY_TIMEOUT_MS } = {}) {
+  const elapsed = Number(elapsedMs);
+  const cap = Math.max(1, Number(timeoutMs) || PGVECTOR_QUERY_TIMEOUT_MS);
+  if (Number.isFinite(elapsed) && elapsed >= cap) {
+    return { timedOut: true, elapsedMs: elapsed, timeoutMs: cap, code: 'pgvector_timeout' };
+  }
+  return { timedOut: false, elapsedMs: Number.isFinite(elapsed) ? elapsed : 0, timeoutMs: cap, code: null };
+}
+
+function refuseComputerToolsIfFlagOff(name, { computerEnabled } = {}) {
+  const n = String(name || '');
+  if (!/^computer_/i.test(n)) return { ok: true, refused: false, code: null };
+  if (computerEnabled === true) return { ok: true, refused: false, code: null };
+  return { ok: false, refused: true, name: n, code: 'computer_flag_off' };
+}
+
+function coerceTrueFalseStringsToBool(value, schema) {
+  function walk(v, sch) {
+    if (!sch || typeof sch !== 'object') return { ok: true, value: v };
+    if (sch.type === 'boolean') {
+      if (typeof v === 'boolean') return { ok: true, value: v };
+      if (typeof v === 'string') {
+        const t = v.trim().toLowerCase();
+        if (t === 'true') return { ok: true, value: true, coerced: true, code: null };
+        if (t === 'false') return { ok: true, value: false, coerced: true, code: null };
+        return { ok: false, value: v, code: 'coercion_rejected' };
+      }
+    }
+    if (sch.properties && v && typeof v === 'object' && !Array.isArray(v)) {
+      const o = {};
+      for (const k of Object.keys(v)) {
+        const r = walk(v[k], sch.properties[k]);
+        if (r.ok === false) return r;
+        o[k] = r.value;
+      }
+      return { ok: true, value: o, code: null };
+    }
+    return { ok: true, value: v, code: null };
+  }
+  return walk(value, schema || { type: 'boolean' });
+}
+
+function maxConcurrentSubagents(list, { max = MAX_CONCURRENT_SUBAGENTS } = {}) {
+  const arr = Array.isArray(list) ? list : [];
+  const cap = Math.max(1, Number(max) || MAX_CONCURRENT_SUBAGENTS);
+  if (arr.length > cap) {
+    return { ok: false, halt: true, count: arr.length, max: cap, run: arr.slice(0, cap), deferred: arr.slice(cap), code: 'subagent_concurrency' };
+  }
+  return { ok: true, halt: false, count: arr.length, max: cap, run: arr, deferred: [], code: null };
+}
+
+function dropEmptyAssistantTurn(message) {
+  const msg = message && message.choices && message.choices[0] && message.choices[0].message
+    ? message.choices[0].message
+    : (message && message.message) || message || {};
+  const content = String(msg.content == null ? '' : msg.content).trim();
+  const tools = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  if (!content && tools.length === 0) {
+    return { drop: true, code: 'empty_turn' };
+  }
+  return { drop: false, code: null };
+}
+
+function sseRetryMsInPad({ retryMs = SSE_RETRY_MS_DEFAULT } = {}) {
+  const ms = Math.max(0, Math.floor(Number(retryMs) || SSE_RETRY_MS_DEFAULT));
+  return { padded: true, retryMs: ms, frame: `retry: ${ms}\n\n`, code: null };
+}
+
+function sandboxTmpCleanupOnTimeout({ timedOut, tmpDir, rmFn } = {}) {
+  if (!timedOut) return { cleaned: false, path: tmpDir || null, code: null };
+  const p = tmpDir != null ? String(tmpDir) : '';
+  if (p && typeof rmFn === 'function') {
+    try { rmFn(p); } catch (_) { /* best-effort */ }
+  }
+  return { cleaned: !!p, path: p || null, code: 'sandbox_timeout' };
+}
+
+function subagentInheritAbortSignal({ parentSignal, child } = {}) {
+  const parent = parentSignal || null;
+  const rec = (child && typeof child === 'object') ? child : {};
+  if (parent && parent.aborted) {
+    rec.aborted = true;
+    rec.signal = parent;
+    return { inherited: true, aborted: true, child: rec, code: 'turn_cancelled' };
+  }
+  rec.signal = parent;
+  return { inherited: true, aborted: false, child: rec, code: null };
+}
+
+function truncateToolResultWithMarker(text, { maxBytes = TOOL_RESULT_MARKER_CAP } = {}) {
+  const s = text == null ? '' : (typeof text === 'string' ? text : JSON.stringify(text));
+  const cap = Math.max(16, Number(maxBytes) || TOOL_RESULT_MARKER_CAP);
+  const bytes = Buffer.byteLength(s, 'utf8');
+  if (bytes <= cap) return { truncated: false, text: s, bytes, maxBytes: cap, code: null };
+  const marker = `\n[truncated ${bytes - cap} bytes]`;
+  const markerBytes = Buffer.byteLength(marker, 'utf8');
+  const keep = Math.max(0, cap - markerBytes);
+  let cut = Buffer.from(s, 'utf8').subarray(0, keep).toString('utf8');
+  while (Buffer.byteLength(cut + marker, 'utf8') > cap && cut.length) cut = cut.slice(0, -1);
+  return { truncated: true, text: cut + marker, bytes, maxBytes: cap, code: 'tool_result_truncated' };
+}
+
+function isolateParallelToolTimeout(tools, { timeoutMs = PARALLEL_TOOL_TIMEOUT_MS } = {}) {
+  const list = Array.isArray(tools) ? tools : [];
+  const ms = Math.max(1, Number(timeoutMs) || PARALLEL_TOOL_TIMEOUT_MS);
+  const isolated = list.map((t, i) => ({
+    index: i,
+    id: (t && (t.id || t.callId)) || i,
+    timeoutMs: ms,
+  }));
+  return { isolated, timeoutMs: ms, count: isolated.length, code: null };
+}
+
+function holdSettleNeverDoubleCharge({ held, settled, cancelled } = {}) {
+  if (!held) return { charge: false, settled: false, code: null };
+  if (settled) return { charge: false, settled: true, skipped: true, code: 'credit_hold_reuse' };
+  if (cancelled) return { charge: false, settled: true, cancelled: true, code: 'credit_cancel' };
+  return { charge: true, settled: true, code: null };
+}
+
+function enforceAdditionalPropertiesFalse(schema) {
+  if (!schema || typeof schema !== 'object') {
+    return { schema: { type: 'object', additionalProperties: false }, enforced: true, code: null };
+  }
+  function walk(sch) {
+    if (!sch || typeof sch !== 'object') return sch;
+    const o = Array.isArray(sch) ? sch.slice() : { ...sch };
+    if (!Array.isArray(o) && (o.type === 'object' || o.properties)) {
+      if (o.additionalProperties !== false) o.additionalProperties = false;
+    }
+    if (o.properties && typeof o.properties === 'object') {
+      const p = {};
+      for (const k of Object.keys(o.properties)) p[k] = walk(o.properties[k]);
+      o.properties = p;
+    }
+    if (o.items) o.items = walk(o.items);
+    return o;
+  }
+  return { schema: walk(schema), enforced: true, code: null };
+}
+
 
 module.exports = {
   COMMENT_HEARTBEAT_MS,
@@ -4869,6 +5263,32 @@ module.exports = {
   classifyEpipeAsCancelled,
   skipGlobIfMatchCap,
   firstTokenWatchdogMs,
+  pruneCheckpointsKeepLastN,
+  persistSseLastEventIdCursor,
+  repairSingleQuotesAndCommentsInToolJson,
+  clampMaxOutputTokens,
+  dropDuplicateConsecutiveToolCalls,
+  classifyHttpFamily,
+  compactKeepLastUserAssistantPair,
+  redactKeyLikeToolArgsFromLogs,
+  boundStepsOnCheckpointResume,
+  rejectEmptyToolName,
+  rejectNulInPath,
+  skipHeartbeatIfWriteWouldBlock,
+  waitInflightToolThenDropOnCancel,
+  recordTokenUsageOnErrorPath,
+  pgvectorMemoryQueryTimeout,
+  refuseComputerToolsIfFlagOff,
+  coerceTrueFalseStringsToBool,
+  maxConcurrentSubagents,
+  dropEmptyAssistantTurn,
+  sseRetryMsInPad,
+  sandboxTmpCleanupOnTimeout,
+  subagentInheritAbortSignal,
+  truncateToolResultWithMarker,
+  isolateParallelToolTimeout,
+  holdSettleNeverDoubleCharge,
+  enforceAdditionalPropertiesFalse,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

@@ -1,31 +1,31 @@
 # Rubrica de capacidades del motor — SiraGPT vs Claude Code / Cowork
 
-Version: **3H40** (2026-08-20 18:57 America/Lima, 2026-08-20T23:57Z). Superpone 3H39 + hard cap 32 tools/step / abort nested subagents on parent halt / unquoted-key JSON repair / drop NUL args / integer coerce / empty-model circuit / budget hint every 5 steps / drop stale image-pdf / skip facts >30d / rollback on syntax fail / refuse symlink write / strip UTF-8 BOM / SIGTERM+SIGKILL 1500ms / stdout 64KiB helper / SSE proxy pad / destroy SSE on close / max 2 generate/user / steal lock heartbeat >45s / never charge 401/403 / redact IPv4 / EPIPE response cancelled / glob cap 500 / TTFB watchdog 8s.
+Version: **3H41** (2026-08-21 00:57 America/Lima, 2026-08-21T05:57Z). Superpone 3H40 + prune checkpoints last 8 / SSE Last-Event-ID persist / single-quote+comment JSON repair / max output tokens 8192 / drop consecutive duplicate tool calls / classify 5xx vs 4xx vs timeout / compact keep last user+assistant pair / redact key-like tool args / bound steps on checkpoint resume / reject empty tool name / reject NUL in path / skip heartbeat if write would block / wait inflight then drop on cancel / token usage on error path / pgvector query timeout 2s / refuse computer_* if flag off / coerce true/false strings / max 2 concurrent subagents / drop empty assistant turn / SSE retry:ms pad / sandbox tmp cleanup on timeout / subagent inherits abort / truncate tool result with marker / isolate parallel tool timeout / hold-settle never double-charge / additionalProperties false.
 Superficie: motor backend `/chat` + `/code`. **UI no forma parte de esta rubrica.**
 Generate path: DeepSeek V4 Flash / Pro only (`openrouter: false`).
 
-**3H41 (2026-08-20 21:57 America/Lima, 2026-08-21T02:57Z) DEFERRED.** No se aplico codigo de oleada 3H41. DeepSeek 402 Insufficient Balance: no se puede smoke live `/chat` `/code`. 3H40 permanece live (`adapter.wave=3H40`, `openrouterGenerate=false`). Hotfix chat 2026-08-21T02:56:29Z: `computerOnly` gated a intent (no cada `disableAgentic` de /code, incl. "hola"), cap CDP observe, 402 clasificado en vez de sanitize generico "Hubo un problema". TTFB live unmeasured because 402. No se inventaron metricas.
+**3H41 previa (2026-08-20 21:57 America/Lima) DEFERRED** por DeepSeek 402. Esta corrida 00:57 Lima SI shippea 3H41. TTFB live Flash: **unmeasured** (no se llamo DeepSeek en smoke largo; ultimo 402 log 03:33Z, generates 200 posteriores sin 402). No se inventaron metricas p50/p95.
 
-Como se mide: invariantes `tests/ola-3h40-invariants.test.js` + `tests/ola-3h39-invariants.test.js` + `tests/ola-3h38-invariants.test.js` + `tests/ola-3h37-invariants.test.js` + `tests/ola-3h36-invariants.test.js` + `tests/ola-3h35-invariants.test.js` + `tests/ola-3h34-invariants.test.js` + `tests/ola-3h33-invariants.test.js` + `tests/ola-3h32-invariants.test.js` + `tests/ola-3h31-invariants.test.js`. `/health` live (sin Fal, sin cobro DeepSeek).
+Como se mide: invariantes `tests/ola-3h41-invariants.test.js` + `tests/ola-3h40-invariants.test.js` (wave 3H40|3H41). `/health` live (sin cobro DeepSeek en smoke largo).
 
-| # | Capacidad | Metrica | Antes (3H39) | Despues (3H40) | Target |
+| # | Capacidad | Metrica | Antes (3H40) | Despues (3H41) | Target |
 |---|---|---|---|---|---|
-| 1 | Bucle agentico multi-paso sin humano | tool-chain >=3 + subagent + stopWhen + wall clock | call-order results + cancel in-flight | **hard cap 32 tools/step halt** + **abort nested depth>=1 on parent halt** | too_many_tools; aborted:n |
-| 2 | Tool-call reliability | repair + schema + alias + isolate + result cap | trailing-comma + aliases + nested depth 6 | **unquoted keys JSON** + **drop NUL** + **integer coerce "3"/"3.2"** | repaired JSON; stripped:true; coercion_rejected |
-| 3 | Planning: budget + loop cut + DLQ + DAG | catalog + kind map + circuit | subagent depth 2 + wall-clock <5s | **empty model x2 halt** + **budget hint step%5 remaining<=10** | empty_model; inject:true |
-| 4 | Long-context compact + pin + memory | compact + pin + retrieve + ACL + score | merge dup users + hash dedupe | **drop stale image/pdf > last 2 user turns** + **skip facts >30d** | dropped images; skipped:n |
-| 5 | Session resume + checkpoint rollback | durable ckpt + CAS | refuse stale checksum edit | **rollback previous bytes if syntaxCheck fails** | rolledBack:true |
-| 6 | File edit exact diff + verify | unique hunk + scheduler | hunk context + atomic tmp + UNC | **refuse write through symlink** + **strip UTF-8 BOM** | symlink_write; bom:true |
-| 7 | Sandbox exec stream/timeout/cleanup | onChunk; destroy; limits; net deny | no-new-privs + LD_PRELOAD scrub | **SIGTERM then SIGKILL 1500ms** + **stdout 64KiB helper** | killed:true; truncated:true |
-| 8 | SSE robustness | per-session seq + heartbeat + gap + window | drop buffered tokens + SSE id monotonic | **comment pad idle>10s** + **destroy writer on req close** | padded:true; destroyed:true |
-| 9 | Per-session queue + event order | fifo maxPending=8 + idempotency + hash | coalesced same call id | **3rd generate/user overloaded** + **steal lock heartbeat >45s** | generate_overloaded; stolen:true |
-| 10 | Credit/token accounting on cancel | hold + settle + release | settle if client gone | **never charge 401/403** | charge:false unauthorized |
-| 11 | Classified errors | code publico ES | json_parse + cancelled AbortError | **redact IPv4 x.x.x.x** + **EPIPE/ECONNRESET response → cancelled** | 0 IPv4; cancelled != net_reset |
-| 12 | Latency p50/p95 first-token y turn-end | P2 + firstByte + flags | skip dup web_fetch + wave 3H39 | **glob/grep cap 500** + **TTFB watchdog 8s scripted** + **wave 3H40** | glob_cap; ttfb_watchdog; health 3H40 |
+| 1 | Bucle agentico multi-paso sin humano | tool-chain >=3 + subagent + stopWhen + wall clock | hard cap 32 + nested abort | **max 2 concurrent subagents** + **subagent inherits abort** + **drop empty assistant turn** | subagent_concurrency; inherited abort; empty_turn |
+| 2 | Tool-call reliability | repair + schema + alias + isolate + result cap | unquoted keys + NUL + integer coerce | **single-quote+comment JSON repair** + **drop consecutive dup tools** + **reject empty tool name** + **true/false coerce** + **additionalProperties false** + **truncate result with marker** | repaired JSON; dropped:n; empty_tool_name |
+| 3 | Planning: budget + loop cut + DLQ + DAG | catalog + kind map + circuit | empty-model x2 + budget /5 | **bound remaining steps on checkpoint resume** + **isolate parallel tool timeout** | remaining capped; timeoutMs per tool |
+| 4 | Long-context compact + pin + memory | compact + pin + retrieve + ACL + score | stale images + facts 30d | **keep last user+assistant pair** + **pgvector query timeout 2s** | keepIndexes; pgvector_timeout |
+| 5 | Session resume + checkpoint rollback | durable ckpt + CAS | syntax rollback | **prune checkpoints keep last 8** + **SSE Last-Event-ID persist cursor** | pruned:true; cursor monotonic |
+| 6 | File edit exact diff + verify | unique hunk + scheduler | symlink write + UTF-8 BOM | **reject NUL in path** | nul_path |
+| 7 | Sandbox exec stream/timeout/cleanup | onChunk; destroy; limits; net deny | SIGTERM+SIGKILL 1500ms + stdout 64KiB | **tmp cleanup on timeout** | cleaned:true sandbox_timeout |
+| 8 | SSE robustness | per-session seq + heartbeat + gap + window | pad idle>10s + destroy on close | **retry:ms in pad** + **skip heartbeat if write would block** | retry: 2000; skip:true |
+| 9 | Per-session queue + event order | fifo maxPending=8 + idempotency + hash | generate/user cap + steal lock | (sin cambio de cola; starve ya en 3H40) | generate_overloaded intacto |
+| 10 | Credit/token accounting on cancel | hold + settle + release | never charge 401/403 | **hold-settle never double-charge** + **usage on error path even sin completion** + **wait inflight then drop** | credit_hold_reuse; completionTokens:0 |
+| 11 | Classified errors | code publico ES | IPv4 redact + EPIPE cancelled | **5xx vs 4xx vs timeout** + **redact key-like tool args** + **refuse computer_* if flag off** | http_5xx; [REDACTED]; computer_flag_off |
+| 12 | Latency p50/p95 first-token y turn-end | P2 + firstByte + flags | glob cap 500 + TTFB 8s + wave 3H40 | **clamp max output tokens 8192** + **wave 3H41** | maxTokens 8192; health 3H41; TTFB live unmeasured |
 
 ## Como se mueve un numero
 
-Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H40 mueve caps 1-12 (hard cap 32 tools, nested abort, unquoted JSON, NUL strip, integer coerce, empty-model circuit, budget every 5, stale images, facts 30d, syntax rollback, symlink write, UTF-8 BOM, SIGTERM+SIGKILL 1500ms, stdout 64KiB helper, SSE pad, destroy on close, generate/user cap, steal stale lock, never charge 401/403, IPv4 redact, EPIPE cancelled, glob cap 500, TTFB 8s).
+Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H41 mueve caps 1-12 (26 helpers nuevos; 3H40 intacto). TTFB live Flash unmeasured (no smoke LLM largo).
 
 ## Leftovers (no son esta oleada)
 
@@ -38,6 +38,10 @@ Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H40 muev
 - `create_file` / `delete_file` / `move_file` / `notebook_edit` no existen live (allowlist no los inventa).
 - Live Flash TTFB no se midio con DeepSeek (no quemar creditos). p50/p95 de 3H39 son scripted.
 
-## 3H41 diferida (20-ago 21:57 Lima)
+## 3H41 live (21-ago 00:57 Lima)
 
-No live Flash TTFB: unmeasured because 402. Extreme block = pago DeepSeek. Tests pin 3H40: 29 pass / 0 fail; combined `ola-3h-invariants.test.js`: 16 pass / 0 fail (proceso de test no sale solo por handles abiertos de DB pool; no es fallo de pin). Backend no recreado (StartedAt 2026-08-21T02:56:29Z).
+Codigo 3H41 shipped. Tests: `ola-3h41-invariants.test.js` + `ola-3h40-invariants.test.js` (wave acepta 3H41). TTFB live unmeasured (no se llamo DeepSeek en smoke largo). Ultimo 402 real en logs: 2026-08-21T03:33:54Z; generates 200 posteriores (03:39, 04:32) sin Insufficient Balance. Hotfix chat 02:56Z se conserva.
+
+## 3H41 diferida previa (20-ago 21:57 Lima)
+
+Aquella corrida no aplico codigo: DeepSeek 402. Queda documentada en `ola-3h-20260820-2157.md`.

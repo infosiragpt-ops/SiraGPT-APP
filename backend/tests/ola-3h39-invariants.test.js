@@ -242,7 +242,7 @@ test('3H39-V-001 skip duplicate web fetch same URL in one turn', () => {
 
 test('3H39-W-001 snapshot exposes 3H38 plus 3H39 flags and DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === "3H39" || s.wave === "3H40");
+  assert.ok(s.wave === "3H39" || s.wave === "3H40" || s.wave === "3H41");
   assert.equal(s.maxConcurrentToolsPerTurn, true);
   assert.equal(s.subagentResultSizeCap, true);
   assert.equal(s.repairMissingRequiredFromPriorTurn, true);
@@ -365,5 +365,5 @@ test('3H39-AB-001 compose binds 3H39 tests and wave is 3H39', () => {
   assert.ok(String(__filename || '').includes('ola-3h39-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H39') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40");
+  assert.ok(ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40" || ad.adapterSnapshot().wave === "3H41");
 });

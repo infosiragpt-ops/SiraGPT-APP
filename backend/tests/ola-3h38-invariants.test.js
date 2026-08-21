@@ -251,7 +251,7 @@ test('3H38-V-001 skip memory retrieve if turn elapsed over 2500ms', () => {
 
 test('3H38-W-001 snapshot exposes 3H37 plus 3H38 flags and DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === "3H38" || s.wave === "3H39" || s.wave === "3H40");
+  assert.ok(s.wave === "3H38" || s.wave === "3H39" || s.wave === "3H40" || s.wave === "3H41");
   assert.equal(s.identicalObservationLoopCut, true);
   assert.equal(s.abortSiblingsOnParentCancel, true);
   assert.equal(s.validateEnumArgs, true);
@@ -381,5 +381,5 @@ test('3H38-AB-001 compose binds 3H38 tests and wave is 3H38', () => {
   assert.ok(String(__filename || '').includes('ola-3h38-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H38') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === "3H38" || ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40");
+  assert.ok(ad.adapterSnapshot().wave === "3H38" || ad.adapterSnapshot().wave === "3H39" || ad.adapterSnapshot().wave === "3H40" || ad.adapterSnapshot().wave === "3H41");
 });

@@ -1,8 +1,9 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H40 live, 2026-08-20 18:57 Lima). 3H41 (2026-08-20 21:57 Lima / 2026-08-21T02:57Z) **DEFERRED**.
-- 3H41 diferida: `/opt/siragpt/docs/mejoras/ola-3h-20260820-2157.md` (sin codigo 3H41: DeepSeek 402 Insufficient Balance impide smoke live `/chat` `/code`; TTFB live unmeasured because 402; 3H40 sigue live; hotfix chat 2026-08-21T02:56:29Z gated `computerOnly` a intent, cap CDP observe, 402 clasificado en vez de "Hubo un problema")
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1857.md` (3H40, hard cap 32 tools + nested abort + unquoted JSON + NUL strip + integer coerce + empty-model circuit + budget every 5 + stale images + facts 30d + syntax rollback + symlink write + UTF-8 BOM + SIGTERM+SIGKILL 1500ms + stdout 64KiB + SSE pad + destroy on close + generate/user cap + steal stale lock + never charge 401/403 + IPv4 redact + EPIPE cancelled + glob cap 500 + TTFB 8s, frontend untouched)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H41 live, 2026-08-21 00:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0057.md` (3H41, prune ckpt N=8 + SSE cursor persist + single-quote/comment JSON repair + max output tokens 8192 + drop consecutive dup tools + HTTP 5xx/4xx/timeout + keep last user+asst pair + redact key-like args + bound steps on resume + reject empty tool name + NUL path + skip blocked heartbeat + wait inflight then drop + usage on error path + pgvector timeout 2s + refuse computer_* if flag off + true/false coerce + max 2 subagents + drop empty assistant turn + SSE retry:ms + sandbox tmp cleanup on timeout + subagent abort inherit + truncate result marker + isolate parallel tool timeout + hold-settle no double-charge + additionalProperties false, frontend untouched)
+- 3H41 previa diferida: `/opt/siragpt/docs/mejoras/ola-3h-20260820-2157.md` (21:57 Lima: DeepSeek 402; no se aplico codigo). Esta corrida 00:57 Lima SI aplica 3H41: logs post-02:56Z tuvieron generate 200 sin 402 reciente (ultimo 402 03:33Z; generates 03:39 y 04:32). No se llamo live DeepSeek en smoke largo.
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1857.md` (3H40)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1557.md` (3H39)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-1257.md` (3H38)
 - Anterior: `/opt/siragpt/docs/mejoras/ola-3h-20260820-0957.md` (3H37)
