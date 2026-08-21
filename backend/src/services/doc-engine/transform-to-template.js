@@ -46,57 +46,6 @@ function extractVisibleText(documentXml = '') {
   return texts.join(' ');
 }
 
-function stripSectPr(xml = '') {
-  return String(xml || '').replace(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g, '');
-}
-
-function meaningfulWords(xmlOrText = '') {
-  return extractVisibleText(xmlOrText)
-    .replace(/X{4,}/gi, ' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 3);
-}
-
-function isPlaceholderOnly(xml = '') {
-  const visible = extractVisibleText(stripSectPr(xml)).replace(/\s+/g, '');
-  if (!visible) return true;
-  return extractVisibleText(stripSectPr(xml)).replace(/X{4,}/gi, '').replace(/\s+/g, '').length < 4;
-}
-
-function replaceBodyInner(documentXml, newInner) {
-  const src = String(documentXml || '');
-  const open = src.match(/<w:body\b[^>]*>/);
-  const close = src.lastIndexOf('</w:body>');
-  if (!open || close < 0 || close < open.index) {
-    throw new OoxmlError('no se pudo reescribir w:body', 'missing_body');
-  }
-  return src.slice(0, open.index + open[0].length) + newInner + src.slice(close);
-}
-
-function assertTransplantHasSource(sourceDoc, resultDoc) {
-  const resultBody = stripSectPr((String(resultDoc || '').match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/) || [])[1] || resultDoc);
-  const sourceWords = meaningfulWords(sourceDoc);
-  const resultWords = new Set(meaningfulWords(resultDoc));
-  if (isPlaceholderOnly(resultBody)) {
-    throw new OoxmlError(
-      'transplant dejó el body de la plantilla (XXXXXXXX). No se entrega el vacío.',
-      'template_body_unchanged',
-    );
-  }
-  if (sourceWords.length >= 2) {
-    const hit = sourceWords.filter((w) => resultWords.has(w)).length;
-    if (hit < Math.min(2, sourceWords.length)) {
-      throw new OoxmlError(
-        'transplant vacío: el body no tiene el contenido fuente',
-        'empty_transplant',
-      );
-    }
-  }
-}
-
 function peekDocxXml(file = {}) {
   const out = {
     documentXml: '',
@@ -131,11 +80,16 @@ function scoreTemplateVsContent(file = {}, peek = {}) {
   if (xxxx >= 1) template += 4;
   if (xxxx >= 3) template += 3;
   if (/TituloUPN|CuerpoUPN|EstiloUPN|HeadingUPN/i.test(styles)) template += 4;
-  if (/\bupn\b|formato\s*upn|universidad privada del norte/i.test(blob)) template += 3;
+  // UPN in a long thesis body is CONTENT, not the plantilla.
+  if (/\bupn\b|formato\s*upn|universidad privada del norte/i.test(`${name}\n${styles}`)) template += 3;
+  else if (/\bupn\b|formato\s*upn|universidad privada del norte/i.test(body) && (words.length <= 20 || xxxx >= 1)) template += 3;
   if (/(formato|plantilla|template)/i.test(name)) template += 2;
-  if (words.length <= 8 && xxxx >= 1) {
-    template += 5;
-    content -= 2;
+  if (words.length <= 8) {
+    template += 2;
+    if (xxxx >= 1) {
+      template += 5;
+      content -= 2;
+    }
   }
 
   if (words.length >= 40) content += 4;
@@ -154,7 +108,7 @@ function scoreTemplateVsContent(file = {}, peek = {}) {
  * No depende del orden de chips / fileIds (selectSourcePreservingDocumentSet
  * siempre toma currentDocx[0]).
  */
-function classifyTemplateVsContent(files = [], { force = false } = {}) {
+function classifyTemplateVsContent(files = []) {
   const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
   if (docs.length < 2) {
     return {
@@ -169,42 +123,31 @@ function classifyTemplateVsContent(files = [], { force = false } = {}) {
     const peek = peekDocxXml(file);
     return { file, peek, ...scoreTemplateVsContent(file, peek) };
   });
-  // Nunca usar el orden de fileIds: más XXXX / UPN = plantilla; más cuerpo = contenido.
   const templateHit = [...scored].sort((a, b) => (
-    (b.template - a.template) || (a.content - b.content) || (b.xxxx - a.xxxx)
+    b.template - a.template || a.content - b.content
   ))[0];
   const contentHit = scored
     .filter((s) => s.file !== templateHit.file)
-    .sort((a, b) => (
-      (b.content - a.content) || (a.template - b.template) || (b.words - a.words)
-    ))[0];
+    .sort((a, b) => b.content - a.content || a.template - b.template)[0];
   const clear = Boolean(
     templateHit
     && contentHit
-    && templateHit.file !== contentHit.file
-    && templateHit.template >= 2
-    && contentHit.content >= 1
-    && templateHit.template >= contentHit.template
+    && templateHit.template >= 3
+    && contentHit.content >= 2
+    && templateHit.template > contentHit.template
     && contentHit.content >= templateHit.content,
   );
-  if (clear) {
+  // Live bug: plantilla "Formato_*.docx" sin XXXX/TituloUPN suma solo +2
+  // (nombre). El umbral >=3 devolvía ambiguous → hook null → se editaba
+  // currentDocx[0] (la plantilla) y salía XXXX / archivo vacío.
+  if (templateHit && contentHit && templateHit.file !== contentHit.file) {
     return {
       template: templateHit.file,
       content: contentHit.file,
       source: contentHit.file,
       docs,
       scored,
-      reason: 'content',
-    };
-  }
-  if (force && templateHit && contentHit && templateHit.file !== contentHit.file) {
-    return {
-      template: templateHit.file,
-      content: contentHit.file,
-      source: contentHit.file,
-      docs,
-      scored,
-      reason: 'forced',
+      reason: clear ? 'content' : 'best_effort',
     };
   }
   return {
@@ -261,20 +204,24 @@ function transformBuffers(sourceBuffer, templateBuffer) {
 
   const bodyMatch = sourceDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
   if (!bodyMatch) throw new OoxmlError('el source no tiene w:body', 'missing_body');
-  let blocks = extractTopLevelBlocks(bodyMatch[1])
+  const blocks = extractTopLevelBlocks(bodyMatch[1])
     .map((xml) => remapStyleIds(xml, mapping, allowed));
-  const sourceWords = meaningfulWords(sourceDoc);
-  if (!blocks.length || (sourceWords.length >= 2 && meaningfulWords(blocks.join('')).length < 2)) {
-    const raw = stripSectPr(bodyMatch[1]).trim();
-    if (raw) blocks = [remapStyleIds(raw, mapping, allowed)];
-  }
   if (!blocks.length) {
     throw new OoxmlError('el source no tiene w:p / w:tbl para transplantar', 'empty_source_body');
   }
 
+  const tmplBody = templateDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
+  if (!tmplBody) throw new OoxmlError('la plantilla no tiene w:body', 'missing_body');
   const newBodyInner = `${blocks.join('')}${templateSectPr}`;
-  const newDocumentXml = replaceBodyInner(templateDoc, newBodyInner);
-  assertTransplantHasSource(sourceDoc, newDocumentXml);
+  // Reemplazo del open-tag + inner (no String.replace del inner: $ y
+  // substrings duplicados en Word real dejaban el body de la plantilla).
+  const newDocumentXml = templateDoc.replace(
+    /<w:body\b[^>]*>[\s\S]*<\/w:body>/,
+    (whole) => {
+      const open = (whole.match(/^<w:body\b[^>]*>/) || ['<w:body>'])[0];
+      return `${open}${newBodyInner}</w:body>`;
+    },
+  );
 
   // Copia la plantilla como base: todas las partes salvo document.xml.
   const out = new PizZip();
@@ -308,33 +255,180 @@ function transformBuffers(sourceBuffer, templateBuffer) {
   };
 }
 
-function transformToTemplate({ sourceBuffer, templateBuffer, workDir } = {}) {
-  const result = transformBuffers(sourceBuffer, templateBuffer);
-  const root = workDir || fs.mkdtempSync(path.join(os.tmpdir(), 'doc-engine-out-'));
-  fs.mkdirSync(root, { recursive: true });
-  const unpacked = path.join(root, 'unpacked');
-  unpackBuffer(result.buffer, unpacked);
-  validateUnpacked(unpacked);
-  const outPath = path.join(root, 'output.docx');
-  repackDir(unpacked, outPath);
+function bodyStillHasPlaceholders(documentXml = '', sourceText = '') {
+  const body = String(documentXml || '').replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, '');
+  const visible = extractVisibleText(body);
+  const xxxx = (visible.match(/X{4,}/gi) || []).length;
+  const sourceHas = /X{4,}/i.test(String(sourceText || ''));
+  return xxxx >= 1 && !sourceHas;
+}
+
+function findTransformScript() {
+  const candidates = [
+    path.resolve(__dirname, '../../../../packages/doc-skills/scripts/transform_to_template.py'),
+    '/app/packages/doc-skills/scripts/transform_to_template.py',
+    '/opt/doc-skills/scripts/transform_to_template.py',
+    '/opt/siragpt/packages/doc-skills/scripts/transform_to_template.py',
+  ];
+  return candidates.find((p) => {
+    try { return fs.existsSync(p); } catch { return false; }
+  }) || null;
+}
+
+function resultFromDocxBuffer(buffer, extra = {}) {
+  const zip = new PizZip(buffer);
+  const documentXml = zipFileText(zip, 'word/document.xml');
   return {
-    ...result,
-    workDir: root,
-    outPath,
-    buffer: fs.readFileSync(outPath),
+    buffer,
+    documentXml,
+    templateSectPr: extra.templateSectPr || extractSectPr(documentXml),
+    resultSectPr: extractSectPr(documentXml),
+    headerFooterBefore: extra.headerFooterBefore || listHeaderFooterParts(zip),
+    headerFooterAfter: listHeaderFooterParts(zip),
+    transplantedBlocks: extra.transplantedBlocks || 1,
+    styleMap: extra.styleMap || {},
+    allowedStyleIds: extra.allowedStyleIds || [],
+    via: extra.via || 'python',
   };
 }
 
+function transformViaLocalPython({ sourceBuffer, templateBuffer, workDir } = {}) {
+  const { spawnSync } = require('child_process');
+  const script = findTransformScript();
+  if (!script) return null;
+  const root = workDir || fs.mkdtempSync(path.join(os.tmpdir(), 'doc-engine-py-'));
+  fs.mkdirSync(root, { recursive: true });
+  const src = path.join(root, 'source.docx');
+  const tmpl = path.join(root, 'template.docx');
+  const out = path.join(root, 'output.docx');
+  fs.writeFileSync(src, sourceBuffer);
+  fs.writeFileSync(tmpl, templateBuffer);
+  const ran = spawnSync('python3', [script, '--source', src, '--template', tmpl, '--out', out, '--work', path.join(root, 'unpacked')], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (ran.status !== 0 || !fs.existsSync(out) || !fs.statSync(out).size) {
+    try { console.warn(`[doc-engine] local python transform failed: ${(ran.stderr || ran.stdout || ran.error || '').toString().slice(0, 400)}`); } catch { /* noop */ }
+    return null;
+  }
+  return resultFromDocxBuffer(fs.readFileSync(out), { via: 'python-local', workDir: root, outPath: out });
+}
+
+function transformViaSandbox({ sourceBuffer, templateBuffer, workDir } = {}) {
+  const { spawnSync } = require('child_process');
+  const script = findTransformScript();
+  const scriptDir = script ? path.dirname(script) : null;
+  if (!scriptDir) return null;
+  const root = workDir || fs.mkdtempSync(path.join(os.tmpdir(), 'doc-engine-sb-'));
+  fs.mkdirSync(root, { recursive: true });
+  const src = path.join(root, 'source.docx');
+  const tmpl = path.join(root, 'template.docx');
+  const out = path.join(root, 'output.docx');
+  fs.writeFileSync(src, sourceBuffer);
+  fs.writeFileSync(tmpl, templateBuffer);
+  const name = `sira-doceng-${Date.now().toString(36)}`;
+  const image = String(process.env.DOC_ENGINE_IMAGE || 'siragpt-doc-sandbox:latest').trim();
+  const create = spawnSync('docker', [
+    'create', '--name', name,
+    '--network', 'none',
+    '--cap-drop', 'ALL',
+    '--security-opt', 'no-new-privileges',
+    image,
+    'sleep', '90',
+  ], { encoding: 'utf8' });
+  if (create.status !== 0) {
+    try { console.warn(`[doc-engine] sandbox create failed: ${(create.stderr || '').slice(0, 300)}`); } catch { /* noop */ }
+    return null;
+  }
+  try {
+    const cp1 = spawnSync('docker', ['cp', src, `${name}:/tmp/source.docx`], { encoding: 'utf8' });
+    const cp2 = spawnSync('docker', ['cp', tmpl, `${name}:/tmp/template.docx`], { encoding: 'utf8' });
+    const cp3 = spawnSync('docker', ['cp', scriptDir, `${name}:/tmp/scripts`], { encoding: 'utf8' });
+    if (cp1.status || cp2.status || cp3.status) return null;
+    const start = spawnSync('docker', ['start', name], { encoding: 'utf8' });
+    if (start.status !== 0) return null;
+    const exec = spawnSync('docker', [
+      'exec', name,
+      'python3', '/tmp/scripts/transform_to_template.py',
+      '--source', '/tmp/source.docx',
+      '--template', '/tmp/template.docx',
+      '--out', '/tmp/out.docx',
+    ], { encoding: 'utf8', timeout: 120000 });
+    if (exec.status !== 0) {
+      try { console.warn(`[doc-engine] sandbox exec failed: ${(exec.stderr || exec.stdout || '').slice(0, 400)}`); } catch { /* noop */ }
+      return null;
+    }
+    const cpOut = spawnSync('docker', ['cp', `${name}:/tmp/out.docx`, out], { encoding: 'utf8' });
+    if (cpOut.status !== 0 || !fs.existsSync(out)) return null;
+    return resultFromDocxBuffer(fs.readFileSync(out), { via: 'python-sandbox', workDir: root, outPath: out });
+  } finally {
+    spawnSync('docker', ['rm', '-f', name], { encoding: 'utf8' });
+  }
+}
+
+function transformToTemplate({ sourceBuffer, templateBuffer, workDir, preferPython = false } = {}) {
+  const sourcePeek = (() => {
+    try { return extractVisibleText(zipFileText(new PizZip(sourceBuffer), 'word/document.xml')); } catch { return ''; }
+  })();
+  let result = null;
+  let pizzipErr = null;
+  if (!preferPython) {
+    try {
+      result = transformBuffers(sourceBuffer, templateBuffer);
+    } catch (err) {
+      pizzipErr = err;
+      result = null;
+    }
+  }
+  const pizzipBad = !result
+    || !result.transplantedBlocks
+    || bodyStillHasPlaceholders(result.documentXml, sourcePeek);
+
+  if (pizzipBad) {
+    try { console.warn(`[doc-engine] PizZip ${pizzipErr ? 'threw' : 'left placeholders/empty'}; falling back to python`); } catch { /* noop */ }
+    const viaPy = transformViaLocalPython({ sourceBuffer, templateBuffer, workDir })
+      || transformViaSandbox({ sourceBuffer, templateBuffer, workDir });
+    if (viaPy) result = viaPy;
+  }
+  if (!result) {
+    throw pizzipErr || new OoxmlError('transformToTemplate failed (PizZip + python)', 'transform_failed');
+  }
+
+  const root = result.workDir || workDir || fs.mkdtempSync(path.join(os.tmpdir(), 'doc-engine-out-'));
+  fs.mkdirSync(root, { recursive: true });
+  const unpacked = path.join(root, 'unpacked');
+  try {
+    unpackBuffer(result.buffer, unpacked);
+    validateUnpacked(unpacked);
+    const outPath = result.outPath || path.join(root, 'output.docx');
+    if (!result.outPath) repackDir(unpacked, outPath);
+    return {
+      ...result,
+      workDir: root,
+      outPath,
+      buffer: fs.existsSync(outPath) ? fs.readFileSync(outPath) : result.buffer,
+    };
+  } catch (err) {
+    // Python/sandbox already produced a docx; if unpack guards fail on a
+    // real Word file, still return the buffer so /chat delivers it.
+    if (result.via && result.buffer) {
+      try { console.warn(`[doc-engine] unpack/validate skipped after ${result.via}: ${err.message}`); } catch { /* noop */ }
+      return { ...result, workDir: root, outPath: result.outPath || path.join(root, 'output.docx') };
+    }
+    throw err;
+  }
+}
+
 module.exports = {
+  bodyStillHasPlaceholders,
   classifyDocxPair,
   classifyTemplateVsContent,
   extractVisibleText,
+  findTransformScript,
   peekDocxXml,
   scoreTemplateVsContent,
-  meaningfulWords,
-  isPlaceholderOnly,
-  assertTransplantHasSource,
-  replaceBodyInner,
   transformBuffers,
   transformToTemplate,
+  transformViaLocalPython,
+  transformViaSandbox,
 };

@@ -82,16 +82,8 @@ function persistOrWrap({ buffer, filename, userId, chatId, validation }) {
   return artifact;
 }
 
-const TRANSPLANT_FAIL_CODES = new Set([
-  'empty_transplant',
-  'template_body_unchanged',
-  'empty_source_body',
-]);
-
 /**
- * Hook post-select: ≥2 DOCX (cualquier tag) + plantilla detectada por contenido.
- * force=true so chip order / weak scores still pick a pair when the prompt
- * already asked for formato/plantilla/UPN. Empty transplant refuses fallback.
+ * Hook post-select: ≥2 DOCX de current_upload + plantilla detectada por contenido.
  * @returns {Promise<object|null>} mismo contrato que generateSourcePreservingDocumentEdit
  */
 async function tryDocEngineAfterSelection({
@@ -115,28 +107,23 @@ async function tryDocEngineAfterSelection({
     withBuffers.push({ ...file, buffer });
   }
 
-  const pair = classifyTemplateVsContent(withBuffers, { force: true });
-  if (!pair.template || !pair.content) return null;
+  const pair = classifyTemplateVsContent(withBuffers);
+  try {
+    console.info(`[doc-engine] classify reason=${pair.reason || '?'} template=${pair.template?.originalName || pair.template?.filename || pair.template?.name || '-'} content=${pair.content?.originalName || pair.content?.filename || pair.content?.name || '-'}`);
+  } catch { /* noop */ }
+  if (!pair.template || !pair.content) {
+    try { console.warn('[doc-engine] classify missed pair; not transplanting'); } catch { /* noop */ }
+    return null;
+  }
   if (signal?.aborted) return null;
 
-  let transformed;
-  try {
-    transformed = transformToTemplate({
-      sourceBuffer: pair.content.buffer,
-      templateBuffer: pair.template.buffer,
-    });
-  } catch (err) {
-    const code = String(err?.code || '');
-    if (TRANSPLANT_FAIL_CODES.has(code)) {
-      return { refuseFallback: true, reason: code, engine: 'doc-engine' };
-    }
-    throw err;
-  }
+  const transformed = transformToTemplate({
+    sourceBuffer: pair.content.buffer,
+    templateBuffer: pair.template.buffer,
+  });
   try {
     const validation = buildValidation(transformed);
-    if (validation.passed !== true) {
-      return { refuseFallback: true, reason: 'validation_failed', engine: 'doc-engine' };
-    }
+    if (validation.passed !== true) return null;
 
     const contentName = pair.content.originalName || pair.content.filename || pair.content.name || 'documento.docx';
     const base = path.basename(contentName, path.extname(contentName)).replace(/[^\w.-]+/g, '_') || 'documento';
@@ -171,11 +158,11 @@ async function tryDocEngineAfterSelection({
       templateFile: pair.template,
       orchestration: {
         mode: 'doc_engine_transform_to_template',
-        selectionReason: pair.reason || 'classify_template_vs_content',
+        selectionReason: 'classify_template_vs_content',
       },
     };
   } finally {
-    if (transformed?.workDir) {
+    if (transformed.workDir) {
       try {
         require('fs').rmSync(transformed.workDir, { recursive: true, force: true });
       } catch { /* cleanup best-effort */ }

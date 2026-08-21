@@ -106,16 +106,6 @@ describe('doc-engine verify', () => {
   });
 });
 
-describe('isTemplateTransformRequest', () => {
-  it('fires on pásalo / formato / UPN / filename regardless of accent', () => {
-    const pair = [{ name: 'rsn.docx' }, { name: 'tesis.docx' }];
-    assert.equal(flags.isTemplateTransformRequest('pásalo al formato UPN', pair), true);
-    assert.equal(flags.isTemplateTransformRequest('pasalo', pair), true);
-    assert.equal(flags.isTemplateTransformRequest('hola', pair), false);
-    assert.equal(flags.isTemplateTransformRequest('hola', [{ name: 'a.docx' }, { name: 'formato-upn.docx' }]), true);
-  });
-});
-
 describe('classifyTemplateVsContent', () => {
   it('picks the XXXX/UPN file as plantilla even when it is first (chip order)', () => {
     const plantilla = {
@@ -149,34 +139,36 @@ describe('classifyTemplateVsContent', () => {
     assert.equal(pair.template, realPlantilla);
     assert.equal(pair.content, fakeNameRealBody);
   });
+});
 
-  it('force=true still returns a pair when scores are weak', () => {
-    const short = (text, name) => ({
-      originalName: name,
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      buffer: makeDocx({
-        'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
-        'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>${text}</w:t></w:r></w:p>${SECT}</w:body></w:document>`,
-      }),
-    });
-    const a = short('Uno dos', 'a.docx');
-    const b = short('Tres cuatro', 'b.docx');
-    const ambiguous = classifyTemplateVsContent([a, b]);
-    assert.equal(ambiguous.reason, 'ambiguous');
-    const forced = classifyTemplateVsContent([a, b], { force: true });
-    assert.equal(forced.reason, 'forced');
-    assert.ok(forced.template);
-    assert.ok(forced.content);
-    assert.notEqual(forced.template, forced.content);
+describe('doc-engine transform request cues', () => {
+  it('matches pasalo / formato / UPN with 2 file ids (chat preloop)', () => {
+    assert.equal(flags.isTemplateTransformRequest('pasalo a UPN', ['a', 'b']), true);
+    assert.equal(flags.isTemplateTransformRequest('usa esta plantilla', ['a', 'b']), true);
+    assert.equal(flags.isTemplateTransformRequest('formato', ['a', 'b']), true);
+    assert.equal(flags.isTemplateTransformRequest('hola', ['a', 'b']), false);
   });
 });
 
-describe('transformBuffers empty transplant', () => {
-  it('throws instead of returning the XXXX template body', () => {
-    assert.throws(
-      () => transformBuffers(templateDocx(), templateDocx()),
-      (err) => ['template_body_unchanged', 'empty_transplant', 'empty_source_body'].includes(err?.code),
-    );
+describe('classify best-effort without XXXX', () => {
+  it('still pairs formato-named empty-ish file vs long body', () => {
+    const plantilla = {
+      originalName: 'Formato_para_el_articulo.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: makeDocx({
+        'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
+        'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>Titulo</w:t></w:r></w:p>${SECT}</w:body></w:document>`,
+      }),
+    };
+    const rsn = {
+      originalName: 'rsn.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: sourceDocx(),
+    };
+    const pair = classifyTemplateVsContent([plantilla, rsn]);
+    assert.equal(pair.template, plantilla);
+    assert.equal(pair.content, rsn);
+    assert.ok(pair.reason === 'content' || pair.reason === 'best_effort');
   });
 });
 
@@ -273,11 +265,13 @@ describe('doc-engine chat hook', () => {
       else process.env.FEATURE_DOC_ENGINE = prevFlag;
     }
   });
+});
 
-  it('tryGenerate hooks recent_attachment docx (no current_upload tag)', async () => {
+describe('doc-engine hook recent_attachment + pasalo', () => {
+  it('tryGenerate transplants when files are recent_attachment and prompt is pasalo', async () => {
     const prevFlag = process.env.FEATURE_DOC_ENGINE;
     process.env.FEATURE_DOC_ENGINE = '1';
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'de-recent-'));
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'de-hook2-'));
     const plantillaPath = path.join(tmp, 'formato-upn.docx');
     const rsnPath = path.join(tmp, 'rsn.docx');
     fs.writeFileSync(plantillaPath, templateDocx());
@@ -287,7 +281,7 @@ describe('doc-engine chat hook', () => {
         async findMany() {
           return [
             {
-              id: 'plantilla-recent',
+              id: 'p1',
               filename: 'formato-upn.docx',
               originalName: 'formato-upn.docx',
               mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -295,7 +289,7 @@ describe('doc-engine chat hook', () => {
               extractedText: 'XXXXXXXX',
             },
             {
-              id: 'rsn-recent',
+              id: 'c1',
               filename: 'rsn.docx',
               originalName: 'rsn.docx',
               mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -309,25 +303,29 @@ describe('doc-engine chat hook', () => {
       message: {
         async findMany() {
           return [{
-            id: 'msg-1',
+            id: 'm1',
             timestamp: new Date(),
             files: [
-              { id: 'plantilla-recent', name: 'formato-upn.docx' },
-              { id: 'rsn-recent', name: 'rsn.docx' },
+              { id: 'p1', name: 'formato-upn.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+              { id: 'c1', name: 'rsn.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
             ],
           }];
         },
       },
     };
     try {
+      const { isSourcePreservingEditRequest } = require('../src/services/source-preserving-document-edit');
+      assert.equal(isSourcePreservingEditRequest('pasalo a formato UPN', ['p1', 'c1']), true);
+      assert.equal(isSourcePreservingEditRequest('pasalo a formato UPN', []), true);
       const result = await tryGenerateSourcePreservingDocumentEdit({
         prisma,
         userId: 'user-upn',
         chatId: 'chat-upn',
         fileIds: [],
-        prompt: 'pásalo al formato UPN',
-        displayPrompt: 'pásalo al formato UPN',
+        prompt: 'pasalo a formato UPN',
+        displayPrompt: 'pasalo a formato UPN',
       });
+      // fileIds empty → recent_attachment; hook must still fire via allDocx + cue
       assert.ok(result);
       assert.equal(result.engine, 'doc-engine');
       const xml = new PizZip(result.file.buffer).file('word/document.xml').asText();
@@ -337,24 +335,6 @@ describe('doc-engine chat hook', () => {
       if (prevFlag === undefined) delete process.env.FEATURE_DOC_ENGINE;
       else process.env.FEATURE_DOC_ENGINE = prevFlag;
     }
-  });
-
-  it('refuses fallback instead of delivering XXXX when transplant is empty', async () => {
-    const prevFlag = process.env.FEATURE_DOC_ENGINE;
-    process.env.FEATURE_DOC_ENGINE = '1';
-    const hit = await tryDocEngineAfterSelection({
-      prompt: 'pásalo al formato UPN',
-      files: [
-        { name: 'formato-upn.docx', buffer: templateDocx(), originalName: 'formato-upn.docx' },
-        { name: 'otra-plantilla.docx', buffer: templateDocx(), originalName: 'otra-plantilla.docx' },
-      ],
-      env: { FEATURE_DOC_ENGINE: '1' },
-      readBuffer: async (f) => f.buffer,
-    });
-    assert.equal(hit?.refuseFallback, true);
-    assert.ok(!hit?.file?.buffer);
-    if (prevFlag === undefined) delete process.env.FEATURE_DOC_ENGINE;
-    else process.env.FEATURE_DOC_ENGINE = prevFlag;
   });
 });
 

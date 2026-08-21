@@ -2,6 +2,7 @@
 
 /**
  * FEATURE_DOC_ENGINE routes (default off → 404).
+ *   GET  /api/documents/healthz
  *   POST /api/documents/transform
  *   GET  /api/documents/:jobId/stream
  *   GET  /api/documents/:jobId/artifact
@@ -36,6 +37,17 @@ function signer() {
   const secret = cfg.signingSecret || 'doc-engine-dev-signing-secret';
   return createSignedUrlSigner({ secret, defaultTtlSec: cfg.artifactTtlSec });
 }
+
+router.get('/healthz', (req, res) => {
+  const enabled = isDocEngineEnabled();
+  return res.status(enabled ? 200 : 404).json({
+    ok: enabled,
+    feature: 'FEATURE_DOC_ENGINE',
+    enabled,
+    engine: 'doc-engine',
+    transform: '/api/documents/transform',
+  });
+});
 
 router.post(
   '/transform',

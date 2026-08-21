@@ -41,20 +41,21 @@ function isTemplateTransformRequest(prompt = '', files = []) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
-  const docs = (Array.isArray(files) ? files : []).filter((f) => {
+  if (!text) return false;
+  const list = Array.isArray(files) ? files : [];
+  const docs = list.filter((f) => {
+    if (typeof f === 'string') return /\.docx$/i.test(f);
     const name = String(f?.originalName || f?.filename || f?.name || f?.fieldname || '');
     const mime = String(f?.mimeType || f?.mimetype || f?.type || '');
     return mime.includes('wordprocessingml') || /\.docx$/i.test(name);
   });
-  const names = docs
-    .map((f) => String(f?.originalName || f?.filename || f?.name || f?.fieldname || '').toLowerCase())
-    .join(' ');
-  const blob = `${text} ${names}`;
-  const templateCue = /\b(formato|plantilla|template|upn|apa|ieee)\b/.test(blob);
-  // pásalo / pasalo / pásame / pasar — \bpasa\b no cubre el clítico.
-  const passCue = /\b(pasa\w*|aplicar?|convierte\w*|traslad\w*|transplant\w*|usa(?:r)?)\b/.test(text);
-  if (docs.length >= 2 && (templateCue || passCue)) return true;
-  if (docs.length >= 1 && templateCue && passCue) return true;
+  // Chat preloop pasa fileIds (strings). Cuenta esos ids cuando no hay MIME.
+  const count = docs.length > 0 ? docs.length : list.length;
+  // Cualquier 2+ docx + formato|plantilla|UPN|pasalo. "pasalo" no matchea \bpasa\b.
+  const templateCue = /\b(formato|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text);
+  const passCue = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/.test(text);
+  if (count >= 2 && (templateCue || passCue)) return true;
+  if (count >= 1 && templateCue && passCue) return true;
   return false;
 }
 
