@@ -289,6 +289,36 @@ const CODES = Object.freeze({
   PRISMA_DISCONNECT: 'prisma_disconnect',
   TOOL_TIMEOUT_DEFAULT: 'tool_timeout_default',
   SSE_SETTLE_ORDER: 'sse_settle_order',
+  INFLIGHT_TOOLS: 'inflight_tools',
+  JSON_LINE_COMMENT: 'json_line_comment',
+  NAN_INFINITY: 'nan_infinity',
+  SSE_STALE: 'sse_stale',
+  COMPACT_SUMMARY: 'compact_summary',
+  PATH_SYSTEM: 'path_system',
+  USAGE_NEGATIVE: 'usage_negative',
+  QUEUE_FAIR_SHARE: 'queue_fair_share',
+  MEMORY_SCORE_NAN: 'memory_score_nan',
+  STREAM_STALL_CANCEL: 'stream_stall_cancel',
+  BIDI_STRIP: 'bidi_strip',
+  TOOL_NAME_CHARSET: 'tool_name_charset',
+  TOOL_CYCLE: 'tool_cycle',
+  PLAN_STEPS_CAP: 'plan_steps_cap',
+  CKPT_TOO_LARGE: 'ckpt_too_large',
+  SSE_ID_BACKWARDS: 'sse_id_backwards',
+  GLOB_MATCH_CAP: 'glob_match_cap',
+  JWT_REDACT: 'jwt_redact',
+  COMPUTER_NO_USER: 'computer_no_user',
+  SUBAGENT_MIN: 'subagent_min',
+  TOOL_CALL_INCOMPLETE: 'tool_call_incomplete',
+  PAYLOAD_TOO_LARGE: 'payload_too_large',
+  LINE_CAP: 'line_cap',
+  CLIENT_GONE: 'client_gone',
+  LOCK_TTL: 'lock_ttl',
+  REDIS_DISCONNECT: 'redis_disconnect',
+  TOOL_TIMEOUT_CAP: 'tool_timeout_cap',
+  SSE_FLUSH: 'sse_flush',
+  TOOL_LIST_CAP: 'tool_list_cap',
+  CREDIT_SCREENSHOT: 'credit_screenshot',
 });
 
 function isRetryable(code) {
@@ -340,7 +370,10 @@ function isRetryable(code) {
     || c === 'identical_prompt_inflight'
     || c === 'queue_wait'
     || c === 'stream_stall'
-    || c === 'prisma_disconnect';
+    || c === 'prisma_disconnect'
+    || c === 'redis_disconnect'
+    || c === 'queue_fair_share'
+    || c === 'client_gone';
 }
 
 function publicError(code, extra) {
@@ -359,7 +392,7 @@ function httpStatusFor(code) {
   if (c === 'hmac_secret_missing' || c === 'queue_wait') return 503;
   if (c === CODES.WEBHOOK_HMAC_FAILED || c === 'hmac_invalid') return 401;
   if (c === CODES.RETRY_UNAVAILABLE) return 409;
-  if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG) return 413;
+  if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   return 400;
 }
 

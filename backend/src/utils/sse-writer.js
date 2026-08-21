@@ -107,6 +107,13 @@ function createSSEWriter(res, options = {}) {
         const capped = adapter.maxSseBuffersPerSession16(options.replayFrames || ring || [], { max: 16 });
         if (capped && Array.isArray(capped.buffers)) options.replayFrames = capped.buffers;
       }
+      if (adapter && typeof adapter.dropSseEventsOlderThan2min === 'function') {
+        const stale = adapter.dropSseEventsOlderThan2min(options.replayFrames || ring || [], { now: Date.now(), maxAgeMs: 120000 });
+        if (stale && Array.isArray(stale.events)) options.replayFrames = stale.events;
+      }
+      if (adapter && typeof adapter.rejectLastEventIdGoingBackwards === 'function') {
+        adapter.rejectLastEventIdGoingBackwards({ lastEventId: options.lastEventId || options.lastEventID, currentSeq: sseSeq });
+      }
     } catch (_) {}
   }
 
@@ -209,6 +216,10 @@ function createSSEWriter(res, options = {}) {
           const hb = adapter.maxHeartbeatsPerMinute({ sent: options._hbSent || 0, windowStart: options._hbWindow || startedAt, now: Date.now() });
           if (hb && hb.allow === false) return false;
           if (hb && hb.reset) { options._hbSent = 0; options._hbWindow = Date.now(); }
+        }
+        if (adapter && typeof adapter.closeIfClientGone30s === 'function') {
+          const gone = adapter.closeIfClientGone30s({ lastClientAt: lastWriteAt, now: Date.now(), timeoutMs: 30000 });
+          if (gone && gone.close) return false;
         }
         if (adapter && typeof adapter.pingOnlyIfLastWriteOver15s === 'function') {
           const ping = adapter.pingOnlyIfLastWriteOver15s({ lastWriteAt, now: Date.now(), minIdleMs: 15000 });
@@ -432,6 +443,11 @@ function createSSEWriter(res, options = {}) {
       });
     },
     close() {
+      try {
+        if (adapter && typeof adapter.flushLastSseEventBeforeClose === 'function') {
+          adapter.flushLastSseEventBeforeClose({ pendingEvent: ring.length ? ring[ring.length - 1] : null, closed: false });
+        }
+      } catch (_) {}
       cancelHeartbeat();
       try { commentHb.stop(); } catch (_) {}
       try {

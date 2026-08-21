@@ -4697,7 +4697,37 @@ function adapterSnapshot() {
     mapPrismaDisconnectRetryable: true,
     defaultToolTimeout30sIfMissing: true,
     closeSseThenSettleCredits: true,
-    wave: '3H43',
+    maxInflightToolsPerSession8: true,
+    stripLeftoverLineCommentsInJson: true,
+    rejectNaNInfinityNumbers: true,
+    dropSseEventsOlderThan2min: true,
+    capCompactSummary2KiB: true,
+    refuseWriteToEtcProcSys: true,
+    neverNegativeUsage: true,
+    queueFairShareExtraSlotIfWaitOver20s: true,
+    skipMemoryIfScoreNaN: true,
+    cancelIfThreeStreamStalls: true,
+    stripBidiOverrideChars: true,
+    rejectToolNameOutsideCharset: true,
+    rejectToolCallCycleAtoBtoA: true,
+    capPlanSteps24: true,
+    refuseCheckpointOver1MiBUncompressed: true,
+    rejectLastEventIdGoingBackwards: true,
+    capGlobMatchesReturned32: true,
+    redactJwtShapedStrings: true,
+    refuseComputerToolsIfNoUserId: true,
+    minRemainingSubagentBudget1: true,
+    dropIncompleteTrailingToolCall: true,
+    neverRetry413: true,
+    capStdoutLine8KiB: true,
+    closeIfClientGone30s: true,
+    sessionLockTtl90s: true,
+    mapRedisEconnrefusedRetryable: true,
+    hardCapToolTimeout120s: true,
+    flushLastSseEventBeforeClose: true,
+    capSerializedToolList8KB: true,
+    screenshotOnlyNoCharge: true,
+    wave: '3H44',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -5989,6 +6019,375 @@ function closeSseThenSettleCredits({ sseClosed, settled, cancelled, held } = {})
   return { order: 'noop', sseClosed: !!sseClosed, settle: false, settled: !!settled, cancelled: !!cancelled, code: null };
 }
 
+// ---------------------------------------------------------------------------
+// 3H44 — remaining holes vs Claude Code/Cowork after 3H43
+// ---------------------------------------------------------------------------
+
+const INFLIGHT_TOOLS_MAX = 8;
+const COMPACT_SUMMARY_MAX = 2048;
+const SSE_EVENT_MAX_AGE_MS = 120_000;
+const QUEUE_FAIR_WAIT_MS = 20_000;
+const STALL_CANCEL_COUNT = 3;
+const PLAN_STEPS_MAX = 24;
+const CKPT_UNCOMPRESSED_MAX = 1024 * 1024;
+const GLOB_RETURN_MAX = 32;
+const STDOUT_LINE_MAX = 8 * 1024;
+const CLIENT_GONE_MS = 30_000;
+const LOCK_TTL_MS = 90_000;
+const TOOL_TIMEOUT_HARD_MS = 120_000;
+const TOOL_LIST_SERIAL_MAX = 8 * 1024;
+const TOOL_NAME_CHARSET_RE = /^[A-Za-z0-9_.-]+$/;
+const BIDI_OVERRIDE_RE = /[\u202A-\u202E\u2066-\u2069]/g;
+const JWT_SHAPED_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g;
+const SYSTEM_PATH_RE = /^(?:\/etc(?:\/|$)|\/proc(?:\/|$)|\/sys(?:\/|$))/i;
+
+const inflightBySession = new Map();
+
+function maxInflightToolsPerSession8(inflight, { max = INFLIGHT_TOOLS_MAX, sessionKey } = {}) {
+  let n;
+  if (typeof inflight === 'number') n = inflight;
+  else if (inflight && typeof inflight.size === 'number' && typeof inflight.length !== 'number') n = inflight.size;
+  else if (Array.isArray(inflight)) n = inflight.length;
+  else if (sessionKey != null && inflightBySession.has(String(sessionKey))) n = inflightBySession.get(String(sessionKey));
+  else n = 0;
+  n = Math.max(0, Number(n) || 0);
+  const cap = Math.max(1, Number(max) || INFLIGHT_TOOLS_MAX);
+  if (n >= cap) return { ok: false, reject: true, inflight: n, max: cap, code: 'inflight_tools' };
+  return { ok: true, reject: false, inflight: n, remaining: cap - n, max: cap, code: null };
+}
+
+function stripLeftoverLineCommentsInJson(raw) {
+  if (raw == null) return { ok: false, repaired: false, code: 'json_parse' };
+  if (typeof raw === 'object') return { ok: true, repaired: false, value: raw, code: null };
+  const s = String(raw);
+  try { return { ok: true, repaired: false, value: JSON.parse(s), code: null }; } catch (_) { /* strip */ }
+  let out = '';
+  let inStr = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inStr) {
+      out += ch;
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') { inStr = true; out += ch; continue; }
+    if (ch === '/' && s[i + 1] === '/') {
+      while (i < s.length && s[i] !== '\n') i += 1;
+      if (i < s.length && s[i] === '\n') out += '\n';
+      continue;
+    }
+    out += ch;
+  }
+  try { return { ok: true, repaired: true, value: JSON.parse(out), code: 'json_line_comment' }; }
+  catch (_) { return { ok: false, repaired: false, text: out, code: 'json_parse' }; }
+}
+
+function rejectNaNInfinityNumbers(value) {
+  function bad(v) {
+    if (typeof v === 'number' && !Number.isFinite(v)) return true;
+    if (Array.isArray(v)) return v.some(bad);
+    if (v && typeof v === 'object') {
+      for (const k of Object.keys(v)) {
+        if (bad(v[k])) return true;
+      }
+    }
+    return false;
+  }
+  if (bad(value)) return { ok: false, value, code: 'nan_infinity' };
+  return { ok: true, value, code: null };
+}
+
+function dropSseEventsOlderThan2min(events, { now, maxAgeMs = SSE_EVENT_MAX_AGE_MS } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  const t = Number(now) || Date.now();
+  const age = Math.max(1000, Number(maxAgeMs) || SSE_EVENT_MAX_AGE_MS);
+  const kept = [];
+  let dropped = 0;
+  for (const e of list) {
+    const at = Number(e && (e.at || e.ts || e.t || e.time));
+    if (Number.isFinite(at) && (t - at) > age) { dropped += 1; continue; }
+    kept.push(e);
+  }
+  return { events: kept, dropped, code: dropped ? 'sse_stale' : null };
+}
+
+function capCompactSummary2KiB(summary, { maxBytes = COMPACT_SUMMARY_MAX } = {}) {
+  const s = summary == null ? '' : String(summary);
+  const cap = Math.max(64, Number(maxBytes) || COMPACT_SUMMARY_MAX);
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.length <= cap) return { text: s, truncated: false, bytes: buf.length, code: null };
+  const marker = '\n[truncated_summary]';
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, 'utf8'));
+  const text = buf.subarray(0, keep).toString('utf8') + marker;
+  return { text, truncated: true, bytes: buf.length, code: 'compact_summary' };
+}
+
+function refuseWriteToEtcProcSys(filePath) {
+  const p = String(filePath == null ? '' : filePath).replace(/\\/g, '/');
+  const n = p.startsWith('/') ? p : `/${p}`;
+  if (SYSTEM_PATH_RE.test(n) || SYSTEM_PATH_RE.test(p)) {
+    return { ok: false, path: p, code: 'path_system' };
+  }
+  return { ok: true, path: p, code: null };
+}
+
+function neverNegativeUsage({ promptTokens, completionTokens, totalTokens } = {}) {
+  const pRaw = Number(promptTokens);
+  const cRaw = Number(completionTokens);
+  const tRaw = Number(totalTokens);
+  const prompt = Math.max(0, Number.isFinite(pRaw) ? pRaw : 0);
+  const completion = Math.max(0, Number.isFinite(cRaw) ? cRaw : 0);
+  const tokens = Number.isFinite(tRaw) ? Math.max(0, tRaw) : prompt + completion;
+  const clamped = (Number.isFinite(pRaw) && pRaw < 0)
+    || (Number.isFinite(cRaw) && cRaw < 0)
+    || (Number.isFinite(tRaw) && tRaw < 0);
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    tokens,
+    clamped,
+    code: clamped ? 'usage_negative' : null,
+  };
+}
+
+function queueFairShareExtraSlotIfWaitOver20s({ waitedMs, extraIfMs = QUEUE_FAIR_WAIT_MS } = {}) {
+  const w = Math.max(0, Number(waitedMs) || 0);
+  const t = Math.max(0, Number(extraIfMs) || QUEUE_FAIR_WAIT_MS);
+  if (w > t) return { extraSlot: true, extra: 1, waitedMs: w, code: 'queue_fair_share' };
+  return { extraSlot: false, extra: 0, waitedMs: w, code: null };
+}
+
+function skipMemoryIfScoreNaN(facts) {
+  const list = Array.isArray(facts) ? facts : [];
+  const kept = [];
+  let skipped = 0;
+  for (const f of list) {
+    const score = f && (f.score != null ? f.score : f.similarity);
+    if (score != null && typeof score === 'number' && !Number.isFinite(score)) {
+      skipped += 1;
+      continue;
+    }
+    if (score != null && typeof score !== 'number' && Number.isNaN(Number(score))) {
+      skipped += 1;
+      continue;
+    }
+    kept.push(f);
+  }
+  return { facts: kept, skipped, code: skipped ? 'memory_score_nan' : null };
+}
+
+function cancelIfThreeStreamStalls({ stallCount, max = STALL_CANCEL_COUNT } = {}) {
+  const n = Math.max(0, Number(stallCount) || 0);
+  const cap = Math.max(1, Number(max) || STALL_CANCEL_COUNT);
+  if (n >= cap) return { cancel: true, stallCount: n, code: 'stream_stall_cancel' };
+  return { cancel: false, stallCount: n, remaining: cap - n, code: null };
+}
+
+function stripBidiOverrideChars(text) {
+  if (text == null) return { text, stripped: false, code: null };
+  const s = Buffer.isBuffer(text) ? text.toString('utf8') : String(text);
+  const next = s.replace(BIDI_OVERRIDE_RE, '');
+  return { text: next, stripped: next !== s, code: next !== s ? 'bidi_strip' : null };
+}
+
+function rejectToolNameOutsideCharset(name, { re } = {}) {
+  const n = String(name == null ? '' : name);
+  const okRe = re instanceof RegExp ? re : TOOL_NAME_CHARSET_RE;
+  if (!n || !okRe.test(n)) return { ok: false, name: n, code: 'tool_name_charset' };
+  return { ok: true, name: n, code: null };
+}
+
+function rejectToolCallCycleAtoBtoA(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const names = list.map((c) => String((c && (c.name || c.tool || (c.function && c.function.name))) || ''));
+  for (let i = 0; i + 2 < names.length; i += 1) {
+    if (names[i] && names[i + 1] && names[i] === names[i + 2] && names[i] !== names[i + 1]) {
+      return { ok: false, cycle: [names[i], names[i + 1], names[i + 2]], code: 'tool_cycle' };
+    }
+  }
+  return { ok: true, cycle: null, code: null };
+}
+
+function capPlanSteps24(steps, { max = PLAN_STEPS_MAX } = {}) {
+  const list = Array.isArray(steps) ? steps : [];
+  const cap = Math.max(1, Number(max) || PLAN_STEPS_MAX);
+  if (list.length <= cap) return { steps: list, truncated: false, dropped: 0, code: null };
+  return { steps: list.slice(0, cap), truncated: true, dropped: list.length - cap, code: 'plan_steps_cap' };
+}
+
+function refuseCheckpointOver1MiBUncompressed(payload, { maxBytes = CKPT_UNCOMPRESSED_MAX } = {}) {
+  let raw;
+  if (Buffer.isBuffer(payload)) raw = payload;
+  else if (typeof payload === 'string') raw = Buffer.from(payload, 'utf8');
+  else {
+    try { raw = Buffer.from(JSON.stringify(payload == null ? {} : payload), 'utf8'); }
+    catch (_) { raw = Buffer.from(String(payload), 'utf8'); }
+  }
+  const cap = Math.max(1024, Number(maxBytes) || CKPT_UNCOMPRESSED_MAX);
+  if (raw.length > cap) return { ok: false, bytes: raw.length, maxBytes: cap, code: 'ckpt_too_large' };
+  return { ok: true, bytes: raw.length, maxBytes: cap, code: null };
+}
+
+function rejectLastEventIdGoingBackwards({ lastEventId, currentSeq, stored } = {}) {
+  const incoming = Number(lastEventId);
+  const cur = Number(currentSeq != null ? currentSeq : stored);
+  if (!Number.isFinite(incoming) || incoming < 0) {
+    return { ok: false, lastEventId: incoming, backwards: false, code: 'sse_id_parse' };
+  }
+  if (Number.isFinite(cur) && incoming < cur) {
+    return { ok: false, lastEventId: incoming, currentSeq: cur, backwards: true, code: 'sse_id_backwards' };
+  }
+  return { ok: true, lastEventId: incoming, currentSeq: Number.isFinite(cur) ? cur : incoming, backwards: false, code: null };
+}
+
+function capGlobMatchesReturned32(hits, { max = GLOB_RETURN_MAX } = {}) {
+  const list = Array.isArray(hits) ? hits : [];
+  const cap = Math.max(1, Number(max) || GLOB_RETURN_MAX);
+  if (list.length <= cap) return { hits: list, truncated: false, dropped: 0, code: null };
+  return { hits: list.slice(0, cap), truncated: true, dropped: list.length - cap, code: 'glob_match_cap' };
+}
+
+function redactJwtShapedStrings(text) {
+  if (text == null) return { text, redacted: false, code: null };
+  const s = String(text);
+  const next = s.replace(JWT_SHAPED_RE, '[REDACTED_JWT]');
+  return { text: next, redacted: next !== s, code: next !== s ? 'jwt_redact' : null };
+}
+
+function refuseComputerToolsIfNoUserId({ toolName, userId } = {}) {
+  const n = String(toolName || '');
+  const isComp = /^computer[_-]/i.test(n);
+  const uid = userId == null ? '' : String(userId).trim();
+  if (isComp && !uid) return { ok: false, toolName: n, code: 'computer_no_user' };
+  return { ok: true, toolName: n, code: null };
+}
+
+function minRemainingSubagentBudget1({ remaining, parentRemaining } = {}) {
+  const raw = Number(remaining != null ? remaining : parentRemaining);
+  if (raw === 0) return { remaining: 0, applied: false, code: 'subagent_budget' };
+  if (!Number.isFinite(raw) || raw < 1) return { remaining: 1, applied: true, code: 'subagent_min' };
+  return { remaining: Math.floor(raw), applied: false, code: null };
+}
+
+function dropIncompleteTrailingToolCall(calls) {
+  const list = Array.isArray(calls) ? calls.slice() : [];
+  if (!list.length) return { calls: list, dropped: false, code: null };
+  const last = list[list.length - 1];
+  const name = last && (last.name || last.tool || (last.function && last.function.name));
+  const args = last && (last.arguments || last.args || (last.function && last.function.arguments));
+  let incomplete = !name || !String(name).trim();
+  if (!incomplete && typeof args === 'string') {
+    const t = args.trim();
+    if (t && (t[0] === '{' || t[0] === '[')) {
+      try { JSON.parse(t); } catch (_) { incomplete = true; }
+    }
+  }
+  if (incomplete) {
+    list.pop();
+    return { calls: list, dropped: true, code: 'tool_call_incomplete' };
+  }
+  return { calls: list, dropped: false, code: null };
+}
+
+function neverRetry413(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  const is = status === 413 || code === '413' || /payload too large|request entity too large|\b413\b/i.test(msg);
+  if (is) return { retry: false, status: 413, code: 'payload_too_large' };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function capStdoutLine8KiB(text, { maxBytes = STDOUT_LINE_MAX } = {}) {
+  const s = text == null ? '' : String(text);
+  const cap = Math.max(64, Number(maxBytes) || STDOUT_LINE_MAX);
+  const lines = s.split('\n');
+  let truncated = false;
+  const out = lines.map((ln) => {
+    const buf = Buffer.from(ln, 'utf8');
+    if (buf.length <= cap) return ln;
+    truncated = true;
+    return buf.subarray(0, cap).toString('utf8') + '[truncated_line]';
+  });
+  return { text: out.join('\n'), truncated, code: truncated ? 'line_cap' : null };
+}
+
+function closeIfClientGone30s({ lastClientAt, now, timeoutMs = CLIENT_GONE_MS } = {}) {
+  const last = Number(lastClientAt);
+  const t = Number(now) || Date.now();
+  const cap = Math.max(1000, Number(timeoutMs) || CLIENT_GONE_MS);
+  if (!Number.isFinite(last)) return { close: false, skipped: true, code: null };
+  const elapsed = t - last;
+  if (elapsed >= cap) return { close: true, elapsedMs: elapsed, code: 'client_gone' };
+  return { close: false, elapsedMs: elapsed, code: null };
+}
+
+function sessionLockTtl90s({ acquiredAt, now, ttlMs = LOCK_TTL_MS } = {}) {
+  const acq = Number(acquiredAt);
+  const t = Number(now) || Date.now();
+  const ttl = Math.max(1000, Number(ttlMs) || LOCK_TTL_MS);
+  if (!Number.isFinite(acq)) return { expired: false, skipped: true, steal: false, code: null };
+  const age = t - acq;
+  if (age >= ttl) return { expired: true, steal: true, ageMs: age, code: 'lock_ttl' };
+  return { expired: false, steal: false, remainingMs: ttl - age, ageMs: age, code: null };
+}
+
+function mapRedisEconnrefusedRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.errno || err.name)) || '');
+  const msg = String((err && err.message) || '');
+  const blob = `${code} ${msg}`;
+  const isRefused = code === 'ECONNREFUSED' || /ECONNREFUSED/i.test(blob);
+  if (!isRefused) return { retryable: false, code: null };
+  return { retryable: true, code: 'redis_disconnect' };
+}
+
+function hardCapToolTimeout120s(timeoutMs, { maxMs = TOOL_TIMEOUT_HARD_MS } = {}) {
+  const n = Number(timeoutMs);
+  const cap = Math.max(1000, Number(maxMs) || TOOL_TIMEOUT_HARD_MS);
+  if (!Number.isFinite(n) || n <= 0) return { timeoutMs: n, capped: false, applied: false, code: null };
+  if (n > cap) return { timeoutMs: cap, capped: true, applied: true, code: 'tool_timeout_cap' };
+  return { timeoutMs: n, capped: false, applied: false, code: null };
+}
+
+function flushLastSseEventBeforeClose({ pendingEvent, closed, flushed } = {}) {
+  if (closed) return { flush: false, closed: true, code: null };
+  if (pendingEvent != null && flushed !== true) {
+    return { flush: true, event: pendingEvent, closed: false, code: 'sse_flush' };
+  }
+  return { flush: false, closed: false, code: null };
+}
+
+function capSerializedToolList8KB(tools, { maxBytes = TOOL_LIST_SERIAL_MAX } = {}) {
+  const list = Array.isArray(tools) ? tools : [];
+  let raw;
+  try { raw = JSON.stringify(list); } catch (_) { raw = String(list); }
+  const buf = Buffer.from(raw, 'utf8');
+  const cap = Math.max(256, Number(maxBytes) || TOOL_LIST_SERIAL_MAX);
+  if (buf.length <= cap) return { tools: list, truncated: false, bytes: buf.length, dropped: 0, code: null };
+  const out = list.slice();
+  while (out.length) {
+    let next;
+    try { next = JSON.stringify(out); } catch (_) { next = String(out); }
+    if (Buffer.byteLength(next, 'utf8') <= cap) break;
+    out.pop();
+  }
+  return { tools: out, truncated: true, bytes: buf.length, dropped: list.length - out.length, code: 'tool_list_cap' };
+}
+
+function screenshotOnlyNoCharge({ tools, names, screenshotOnly } = {}) {
+  const list = Array.isArray(tools) ? tools : (Array.isArray(names) ? names : []);
+  const nms = list.map((t) => String((typeof t === 'string' ? t : (t && (t.name || t.tool))) || '').toLowerCase()).filter(Boolean);
+  const only = screenshotOnly === true || (nms.length > 0 && nms.every((n) => /screenshot/.test(n)));
+  if (only) return { charge: false, screenshotOnly: true, code: 'credit_screenshot' };
+  return { charge: true, screenshotOnly: false, code: null };
+}
+
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -6319,6 +6718,36 @@ module.exports = {
   mapPrismaDisconnectRetryable,
   defaultToolTimeout30sIfMissing,
   closeSseThenSettleCredits,
+  maxInflightToolsPerSession8,
+  stripLeftoverLineCommentsInJson,
+  rejectNaNInfinityNumbers,
+  dropSseEventsOlderThan2min,
+  capCompactSummary2KiB,
+  refuseWriteToEtcProcSys,
+  neverNegativeUsage,
+  queueFairShareExtraSlotIfWaitOver20s,
+  skipMemoryIfScoreNaN,
+  cancelIfThreeStreamStalls,
+  stripBidiOverrideChars,
+  rejectToolNameOutsideCharset,
+  rejectToolCallCycleAtoBtoA,
+  capPlanSteps24,
+  refuseCheckpointOver1MiBUncompressed,
+  rejectLastEventIdGoingBackwards,
+  capGlobMatchesReturned32,
+  redactJwtShapedStrings,
+  refuseComputerToolsIfNoUserId,
+  minRemainingSubagentBudget1,
+  dropIncompleteTrailingToolCall,
+  neverRetry413,
+  capStdoutLine8KiB,
+  closeIfClientGone30s,
+  sessionLockTtl90s,
+  mapRedisEconnrefusedRetryable,
+  hardCapToolTimeout120s,
+  flushLastSseEventBeforeClose,
+  capSerializedToolList8KB,
+  screenshotOnlyNoCharge,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

@@ -779,6 +779,24 @@ async function governThen(input, run) {
         if (typeof ad.sessionLockOwnerPidCheck === 'function' && input && input.lock) {
           ad.sessionLockOwnerPidCheck({ lock: input.lock, ownerPid: input.ownerPid, currentPid: input.currentPid });
         }
+        if (typeof ad.sessionLockOwnerPidCheck === 'function' && input && input.lock) {
+          ad.sessionLockOwnerPidCheck({ lock: input.lock, ownerPid: input.ownerPid, currentPid: input.currentPid });
+        }
+        if (typeof ad.neverNegativeUsage === 'function' && input && (input.promptTokens != null || input.completionTokens != null)) {
+          ad.neverNegativeUsage({ promptTokens: input.promptTokens, completionTokens: input.completionTokens, totalTokens: input.totalTokens });
+        }
+        if (typeof ad.mapRedisEconnrefusedRetryable === 'function' && input && input.error) {
+          ad.mapRedisEconnrefusedRetryable(input.error);
+        }
+        if (typeof ad.sessionLockTtl90s === 'function' && input && input.lock) {
+          ad.sessionLockTtl90s({ acquiredAt: input.lock.acquiredAt || input.lock.at, now: Date.now(), ttlMs: 90000 });
+        }
+        if (typeof ad.screenshotOnlyNoCharge === 'function' && input && (input.tools || input.screenshotOnly)) {
+          ad.screenshotOnlyNoCharge({ tools: input.tools, screenshotOnly: input.screenshotOnly });
+        }
+        if (typeof ad.neverRetry413 === 'function' && input && (input.status === 413 || input.code === '413')) {
+          ad.neverRetry413(input);
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

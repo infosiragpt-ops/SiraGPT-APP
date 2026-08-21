@@ -135,6 +135,21 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.queueMaxWait60sThen503 === 'function') {
+          const waited = Number((opts && (opts.waitedMs || opts.queuedMs)) || queued * 8000);
+          const qwait = adWait.queueMaxWait60sThen503({ waitedMs: waited, maxMs: 60000 });
+          if (qwait && qwait.reject) {
+            const err = new Error('queue_wait');
+            err.code = 'queue_wait';
+            err.status = 503;
+            err.retryAfterSec = qwait.retryAfterSec;
+            return Promise.reject(err);
+          }
+        }
+        if (typeof adWait.queueFairShareExtraSlotIfWaitOver20s === 'function') {
+          const waitedFair = Number((opts && (opts.waitedMs || opts.queuedMs)) || queued * 8000);
+          adWait.queueFairShareExtraSlotIfWaitOver20s({ waitedMs: waitedFair, extraIfMs: 20000 });
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

@@ -286,6 +286,16 @@ const ENGINE_CODE_RULES = [
   { code: 'embedding_dim', message: 'Omití un embedding con dimensión incorrecta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'embedding_dim' },
   { code: 'tool_recursion', message: 'La misma herramienta se llamó demasiadas veces en este turno.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_recursion' },
   { code: 'prisma_disconnect', message: 'Se perdió la conexión con la base de datos. Reintenta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'prisma_disconnect' },
+  { code: 'inflight_tools', message: 'Hay demasiadas herramientas en vuelo en esta sesión (máximo 8).', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'inflight_tools' },
+  { code: 'path_system', message: 'No escribo en /etc, /proc ni /sys.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_system' },
+  { code: 'tool_cycle', message: 'Detecté un ciclo de herramientas A→B→A. Lo detuve.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_cycle' },
+  { code: 'computer_no_user', message: 'No ejecuto computer_* sin un usuario identificado.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'computer_no_user' },
+  { code: 'payload_too_large', message: 'El proveedor rechazó el cuerpo por tamaño (413). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'payload_too_large' },
+  { code: 'client_gone', message: 'El cliente se fue más de 30 segundos. Cerré el flujo.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'client_gone' },
+  { code: 'redis_disconnect', message: 'Se perdió la conexión con Redis. Reintenta.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'redis_disconnect' },
+  { code: 'ckpt_too_large', message: 'El punto de restauración supera 1 MiB sin comprimir. No lo guardé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'ckpt_too_large' },
+  { code: 'sse_id_backwards', message: 'El Last-Event-ID iba hacia atrás. Lo rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sse_id_backwards' },
+  { code: 'tool_name_charset', message: 'El nombre de la herramienta usa caracteres no permitidos.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_charset' },
 ];
 
 function classifyPublicStreamError(error) {
