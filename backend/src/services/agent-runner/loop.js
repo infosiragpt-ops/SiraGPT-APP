@@ -396,6 +396,26 @@ const {
   neverRetry413,
   hardCapToolTimeout120s,
   capSerializedToolList8KB,
+  capToolResultJson128KiB,
+  repairSingleQuotedKeysLeftover,
+  rejectNegativeZeroNumbers,
+  compactNeverDropLastAssistantToolCalls,
+  refuseWriteToDevBoot,
+  skipMemoryIfVectorAllZeros,
+  resetStallCountOnToken,
+  stripTagCharsUPlusE0000,
+  rejectToolNameStartingWithDigit,
+  maxUniqueToolsPerTurn16,
+  refuseEmptyPlanTitle,
+  crc32CheckOnCheckpointLoad,
+  skipHiddenGlobFiles,
+  redactSkPrefixesInResults,
+  refuseComputerToolsIfSessionMissing,
+  refuseSubagentIfParentCancelled,
+  requireToolCallId,
+  neverRetry451,
+  perToolRemainingWallClock,
+  sortToolsByNameForCache,
 } = require('./engine-adapter');
 
 const MAX_ITERATIONS_DEFAULT = 25;
@@ -802,6 +822,8 @@ async function runAgentLoop({
              refuseCheckpointOver1MiBUncompressed(snap || {}, { maxBytes: 1024 * 1024 });
              capPlanSteps24((snap && (snap.planSteps || snap.steps)) || [], { max: 24 });
              rejectLastEventIdGoingBackwards({ lastEventId: snap && (snap.lastEventId || snap.sseSeq), stored: snap && snap.sseSeq });
+             crc32CheckOnCheckpointLoad(snap || {}, { expectedCrc: snap && (snap.crc32 || snap.crc) });
+             refuseEmptyPlanTitle((snap && (snap.planTitle || snap.title)) || '');
            } catch (_) {}
           if (restored.ok) {
             resumedFrom = resumeFrom;
@@ -1350,10 +1372,16 @@ async function runAgentLoop({
           if (oldTools && oldTools.messages) compact = { ...(compact || {}), messages: oldTools.messages };
           try { capGlobMatchFileSize1MiB([], { maxBytes: 1024 * 1024 }); } catch (_) {}
           try { capGlobMatchesReturned32([], { max: 32 }); } catch (_) {}
+          try { skipHiddenGlobFiles([]); } catch (_) {}
           const pins3 = compactKeepPinnedFactsAndLast3UserTurns((compact && compact.messages) || messages, { pins: pinList, lastN: 3 });
           if (pins3 && pins3.messages) compact = { ...(compact || {}), messages: pins3.messages };
           try { capCompactSummary2KiB(JSON.stringify((compact && compact.messages) || []).slice(0, 4000), { maxBytes: 2048 }); } catch (_) {}
           try { skipMemoryIfScoreNaN((compact && compact.facts) || []); } catch (_) {}
+          try { skipMemoryIfVectorAllZeros((compact && compact.facts) || []); } catch (_) {}
+          try {
+            const keepTc = compactNeverDropLastAssistantToolCalls(messages, (compact && compact.messages) || []);
+            if (keepTc && keepTc.messages) compact = { ...(compact || {}), messages: keepTc.messages };
+          } catch (_) {}
         } catch (_) {}
         if (staleImg && staleImg.messages) compact = { ...(compact || {}), messages: staleImg.messages };
       } catch (_) {}
@@ -1478,6 +1506,7 @@ async function runAgentLoop({
           }
           try { const n402 = neverRetry402({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n402 && n402.retry === false) { onEvent({ type: 'error', code: 'quota_exhausted', message: 'Créditos insuficientes en el proveedor.', retryable: false, iteration }); } } catch (_) {}
           try { const n413 = neverRetry413({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n413 && n413.retry === false) { onEvent({ type: 'error', code: 'payload_too_large', message: 'El proveedor rechazó el cuerpo por tamaño (413).', retryable: false, iteration }); } } catch (_) {}
+          try { const n451 = neverRetry451({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n451 && n451.retry === false) { onEvent({ type: 'error', code: 'legal_unavailable', message: 'El proveedor rechazó la petición por razones legales (451).', retryable: false, iteration }); } } catch (_) {}
           const wall = enforceTotalTurnWall120s({ startedAt, now: Date.now(), wallMs: 120000 });
           if (wall && wall.halt) {
             onEvent({ type: 'error', code: 'turn_wall', message: 'Este turno superó el tiempo máximo de 120 segundos.', retryable: false, iteration });
@@ -1488,6 +1517,7 @@ async function runAgentLoop({
             try {
               const three = cancelIfThreeStreamStalls({ stallCount: (opts && opts.stallCount) || 3 });
               if (three && three.cancel) onEvent({ type: 'error', code: 'stream_stall_cancel', message: 'El flujo se detuvo tres veces. Lo cancelé.', retryable: false, iteration });
+              try { resetStallCountOnToken({ stallCount: (opts && opts.stallCount) || 0, token: (opts && opts.lastToken) || '' }); } catch (_) {}
             } catch (_) {}
           }
         } catch (_) {}
@@ -1662,6 +1692,16 @@ async function runAgentLoop({
           onEvent({ type: 'error', code: 'computer_no_user', message: 'No ejecuto computer_* sin un usuario identificado.', retryable: false, iteration, name: n });
           return false;
         }
+        const digN = rejectToolNameStartingWithDigit(n);
+        if (digN && digN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_digit', message: 'El nombre de la herramienta no puede empezar con un dígito.', retryable: false, iteration, name: n });
+          return false;
+        }
+        const sesN = refuseComputerToolsIfSessionMissing({ toolName: n, sessionId: (opts && (opts.sessionId || opts.threadId)) || threadId || streamId });
+        if (sesN && sesN.ok === false) {
+          onEvent({ type: 'error', code: 'computer_no_session', message: 'No ejecuto computer_* sin una sesión activa.', retryable: false, iteration, name: n });
+          return false;
+        }
         const comp = refuseComputerToolsIfFlagOff(n, { computerEnabled: !!(opts && opts.computerEnabled) });
         if (comp && comp.refused) {
           onEvent({ type: 'error', code: 'computer_flag_off', message: 'computer_* desactivado.', retryable: false, iteration, name: n });
@@ -1682,6 +1722,11 @@ async function runAgentLoop({
         }
         const trail = dropIncompleteTrailingToolCall(toolCalls);
         if (trail && Array.isArray(trail.calls)) toolCalls = trail.calls;
+        const idsReq = requireToolCallId(toolCalls);
+        if (idsReq && Array.isArray(idsReq.calls)) toolCalls = idsReq.calls;
+        const uniqTurn = maxUniqueToolsPerTurn16(toolCalls, { max: 16 });
+        if (uniqTurn && Array.isArray(uniqTurn.calls)) toolCalls = uniqTurn.calls;
+        try { sortToolsByNameForCache(toolCalls); } catch (_) {}
         const inf = maxInflightToolsPerSession8(toolCalls, { max: 8, sessionKey: threadId || streamId });
         if (inf && inf.reject) {
           onEvent({ type: 'error', code: 'inflight_tools', message: 'Hay demasiadas herramientas en vuelo en esta sesión.', retryable: true, iteration });
@@ -2111,12 +2156,24 @@ async function runAgentLoop({
                       if (lc && lc.ok && lc.value) runArgs = lc.value;
                     } catch (_) {}
                     try {
+                      const sqLeft = repairSingleQuotedKeysLeftover(typeof runArgs === 'string' ? runArgs : runArgs);
+                      if (sqLeft && sqLeft.ok && sqLeft.value) runArgs = sqLeft.value;
+                    } catch (_) {}
+                    try {
                       const nan = rejectNaNInfinityNumbers(typeof runArgs === 'object' ? runArgs : runArgs);
                       if (nan && nan.ok === false) result = `ERROR: nan_infinity`;
                     } catch (_) {}
                     try {
+                      const nz = rejectNegativeZeroNumbers(typeof runArgs === 'object' ? runArgs : runArgs);
+                      if (nz && nz.ok === false) result = `ERROR: negative_zero`;
+                    } catch (_) {}
+                    try {
                       const bidi = stripBidiOverrideChars(typeof runArgs === 'string' ? runArgs : JSON.stringify(runArgs || {}));
                       if (bidi && bidi.stripped && typeof runArgs === 'string') runArgs = bidi.text;
+                    } catch (_) {}
+                    try {
+                      const tags = stripTagCharsUPlusE0000(typeof runArgs === 'string' ? runArgs : JSON.stringify(runArgs || {}));
+                      if (tags && tags.stripped && typeof runArgs === 'string') runArgs = tags.text;
                     } catch (_) {}
                     try {
                       const concat = concatenateSplitToolCallFragments(typeof runArgs === 'string' ? [runArgs] : runArgs);
@@ -2182,6 +2239,8 @@ async function runAgentLoop({
                       if (homo && homo.ok === false) result = `ERROR: path_homoglyph`;
                       const sysP = refuseWriteToEtcProcSys(pth);
                       if (sysP && sysP.ok === false) result = `ERROR: path_system`;
+                      const devP = refuseWriteToDevBoot(pth);
+                      if (devP && devP.ok === false) result = `ERROR: path_dev_boot`;
                     } catch (_) {}
                     if (unq && unq.ok && unq.value && typeof runArgs === 'string') runArgs = unq.value;
                     else if (unq && unq.ok === false) result = `ERROR: json_parse`;
@@ -2503,6 +2562,8 @@ async function runAgentLoop({
             if (marked && marked.truncated) result = marked.text;
             try { const redB = redactAuthorizationBearerInToolResults(result); if (redB && redB.text != null) result = redB.text; } catch (_) {}
             try { const redJ = redactJwtShapedStrings(result); if (redJ && redJ.text != null) result = redJ.text; } catch (_) {}
+            try { const redSk = redactSkPrefixesInResults(result); if (redSk && redSk.text != null) result = redSk.text; } catch (_) {}
+            try { const capJ = capToolResultJson128KiB(result, { maxBytes: 128 * 1024 }); if (capJ && capJ.text != null) result = capJ.text; } catch (_) {}
           } catch (_) {}
         }
       } catch (_) { /* keep raw */ }
@@ -2794,6 +2855,7 @@ async function runAgentLoop({
       } catch (_) {}
       try {
         try { hardCapToolTimeout120s((opts && opts.toolTimeoutMs) || null); } catch (_) {}
+        try { perToolRemainingWallClock({ timeoutMs: (opts && opts.toolTimeoutMs) || null, remainingMs: (opts && (opts.remainingMs || opts.remainingWallMs)) || null }); } catch (_) {}
         const kids = (opts && opts.subagents) || [];
         const conc = maxConcurrentSubagents(kids, { max: 2 });
         if (conc && conc.halt) onEvent({ type: 'info', code: 'subagent_concurrency', deferred: true, count: (conc.deferred || []).length, iteration });
@@ -2804,6 +2866,7 @@ async function runAgentLoop({
           try { subagentInheritAbortSignal({ parentSignal: signal, child: kid }); } catch (_) {}
           try { subagentInheritRemainingStepBudget({ parentRemaining: maxToolSteps - iteration, childRequested: kid && kid.maxSteps, max: MAX_ITERATIONS_DEFAULT }); } catch (_) {}
           try { minRemainingSubagentBudget1({ remaining: maxToolSteps - iteration }); } catch (_) {}
+          try { refuseSubagentIfParentCancelled({ parentCancelled: !!(opts && (opts.parentCancelled || opts.cancelled)), signal: opts && opts.signal }); } catch (_) {}
         }
       } catch (_) {}
       if (conc && Array.isArray(conc.run)) stormCalls = conc.run;

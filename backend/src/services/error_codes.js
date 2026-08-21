@@ -319,6 +319,33 @@ const CODES = Object.freeze({
   SSE_FLUSH: 'sse_flush',
   TOOL_LIST_CAP: 'tool_list_cap',
   CREDIT_SCREENSHOT: 'credit_screenshot',
+  TOOL_RESULT_JSON_CAP: 'tool_result_json_cap',
+  JSON_SINGLE_QUOTE_KEY: 'json_single_quote_key',
+  NEGATIVE_ZERO: 'negative_zero',
+  SSE_DUP_ID: 'sse_dup_id',
+  COMPACT_KEEP_TOOL_CALLS: 'compact_keep_tool_calls',
+  PATH_DEV_BOOT: 'path_dev_boot',
+  USAGE_IGNORE_NEG_COMPLETION: 'usage_ignore_neg_completion',
+  QUEUE_GENERATE_CAP: 'queue_generate_cap',
+  MEMORY_ZERO_VECTOR: 'memory_zero_vector',
+  STALL_RESET: 'stall_reset',
+  TAG_STRIP: 'tag_strip',
+  TOOL_NAME_DIGIT: 'tool_name_digit',
+  UNIQUE_TOOLS_CAP: 'unique_tools_cap',
+  PLAN_TITLE_EMPTY: 'plan_title_empty',
+  CKPT_CRC: 'ckpt_crc',
+  GLOB_HIDDEN: 'glob_hidden',
+  SK_REDACT: 'sk_redact',
+  COMPUTER_NO_SESSION: 'computer_no_session',
+  SUBAGENT_PARENT_CANCELLED: 'subagent_parent_cancelled',
+  TOOL_ID_REQUIRED: 'tool_id_required',
+  LEGAL_UNAVAILABLE: 'legal_unavailable',
+  ANSI_STRIP: 'ansi_strip',
+  LOCK_HEARTBEAT: 'lock_heartbeat',
+  TOOL_WALL: 'tool_wall',
+  SSE_DONE: 'sse_done',
+  TOOL_SORT: 'tool_sort',
+  CREDIT_OBSERVE: 'credit_observe',
 });
 
 function isRetryable(code) {
@@ -373,7 +400,9 @@ function isRetryable(code) {
     || c === 'prisma_disconnect'
     || c === 'redis_disconnect'
     || c === 'queue_fair_share'
-    || c === 'client_gone';
+    || c === 'client_gone'
+    || c === 'queue_generate_cap'
+    || c === 'net_timeout';
 }
 
 function publicError(code, extra) {
@@ -393,6 +422,7 @@ function httpStatusFor(code) {
   if (c === CODES.WEBHOOK_HMAC_FAILED || c === 'hmac_invalid') return 401;
   if (c === CODES.RETRY_UNAVAILABLE) return 409;
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
+  if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   return 400;
 }
 

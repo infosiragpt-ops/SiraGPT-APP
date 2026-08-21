@@ -150,6 +150,15 @@ function createSessionQueue() {
           const waitedFair = Number((opts && (opts.waitedMs || opts.queuedMs)) || queued * 8000);
           adWait.queueFairShareExtraSlotIfWaitOver20s({ waitedMs: waitedFair, extraIfMs: 20000 });
         }
+        if (typeof adWait.maxQueuedGenerate16 === 'function') {
+          const qcap = adWait.maxQueuedGenerate16(queued, { max: 16 });
+          if (qcap && qcap.reject) {
+            const err = new Error('queue_generate_cap');
+            err.code = 'queue_generate_cap';
+            err.status = 429;
+            return Promise.reject(err);
+          }
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

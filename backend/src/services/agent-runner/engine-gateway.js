@@ -797,6 +797,24 @@ async function governThen(input, run) {
         if (typeof ad.neverRetry413 === 'function' && input && (input.status === 413 || input.code === '413')) {
           ad.neverRetry413(input);
         }
+        if (typeof ad.neverRetry451 === 'function' && input && (input.status === 451 || input.code === '451')) {
+          ad.neverRetry451(input);
+        }
+        if (typeof ad.ignoreNegativeCompletionTokens === 'function' && input && (input.completionTokens != null || input.promptTokens != null)) {
+          ad.ignoreNegativeCompletionTokens({ promptTokens: input.promptTokens, completionTokens: input.completionTokens, totalTokens: input.totalTokens });
+        }
+        if (typeof ad.classifyEnetunreachAsTimeout === 'function' && input && input.error) {
+          ad.classifyEnetunreachAsTimeout(input.error);
+        }
+        if (typeof ad.mapRedisEaiAgainRetryable === 'function' && input && input.error) {
+          ad.mapRedisEaiAgainRetryable(input.error);
+        }
+        if (typeof ad.sessionLockHeartbeatEvery20s === 'function' && input && input.lock) {
+          ad.sessionLockHeartbeatEvery20s({ lastBeatAt: input.lock.heartbeatAt || input.lock.lastBeatAt, now: Date.now(), intervalMs: 20000 });
+        }
+        if (typeof ad.observeOnlyNoCharge === 'function' && input && (input.tools || input.observeOnly)) {
+          ad.observeOnlyNoCharge({ tools: input.tools, observeOnly: input.observeOnly });
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

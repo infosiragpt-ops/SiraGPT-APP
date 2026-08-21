@@ -4727,7 +4727,36 @@ function adapterSnapshot() {
     flushLastSseEventBeforeClose: true,
     capSerializedToolList8KB: true,
     screenshotOnlyNoCharge: true,
-    wave: '3H44',
+    capToolResultJson128KiB: true,
+    repairSingleQuotedKeysLeftover: true,
+    rejectNegativeZeroNumbers: true,
+    dropDuplicateSseEventIds: true,
+    compactNeverDropLastAssistantToolCalls: true,
+    refuseWriteToDevBoot: true,
+    ignoreNegativeCompletionTokens: true,
+    classifyEnetunreachAsTimeout: true,
+    maxQueuedGenerate16: true,
+    skipMemoryIfVectorAllZeros: true,
+    resetStallCountOnToken: true,
+    stripTagCharsUPlusE0000: true,
+    rejectToolNameStartingWithDigit: true,
+    maxUniqueToolsPerTurn16: true,
+    refuseEmptyPlanTitle: true,
+    crc32CheckOnCheckpointLoad: true,
+    skipHiddenGlobFiles: true,
+    redactSkPrefixesInResults: true,
+    refuseComputerToolsIfSessionMissing: true,
+    refuseSubagentIfParentCancelled: true,
+    requireToolCallId: true,
+    neverRetry451: true,
+    stripAnsiFromSandboxOut: true,
+    sessionLockHeartbeatEvery20s: true,
+    mapRedisEaiAgainRetryable: true,
+    perToolRemainingWallClock: true,
+    endSseWithEventDone: true,
+    sortToolsByNameForCache: true,
+    observeOnlyNoCharge: true,
+    wave: '3H45',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -6388,6 +6417,389 @@ function screenshotOnlyNoCharge({ tools, names, screenshotOnly } = {}) {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// 3H45 — remaining holes vs Claude Code/Cowork after 3H44
+// ---------------------------------------------------------------------------
+
+const TOOL_RESULT_JSON_MAX = 128 * 1024;
+const QUEUED_GENERATE_MAX = 16;
+const UNIQUE_TOOLS_TURN_MAX = 16;
+const LOCK_HEARTBEAT_MS = 20_000;
+const TAG_CHARS_RE = /[\u{E0000}-\u{E007F}]/gu;
+const ANSI_RE = /\x1B\[[0-9;?]*[ -/]*[@-~]|\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)|\x1B[@-Z\\-_]/g;
+const SK_PREFIX_RE = /\bsk-[A-Za-z0-9_\-]{8,}\b/g;
+const DEV_BOOT_RE = /^(?:\/dev(?:\/|$)|\/boot(?:\/|$))/i;
+const CRC32_POLY = 0xEDB88320;
+
+function capToolResultJson128KiB(result, { maxBytes = TOOL_RESULT_JSON_MAX } = {}) {
+  let raw;
+  if (Buffer.isBuffer(result)) raw = result;
+  else if (typeof result === 'string') raw = Buffer.from(result, 'utf8');
+  else {
+    try { raw = Buffer.from(JSON.stringify(result === undefined ? null : result), 'utf8'); }
+    catch (_) { raw = Buffer.from(String(result), 'utf8'); }
+  }
+  const cap = Math.max(256, Number(maxBytes) || TOOL_RESULT_JSON_MAX);
+  if (raw.length <= cap) return { text: raw.toString('utf8'), truncated: false, bytes: raw.length, code: null };
+  const marker = '\n[truncated_tool_result]';
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, 'utf8'));
+  return { text: raw.subarray(0, keep).toString('utf8') + marker, truncated: true, bytes: raw.length, code: 'tool_result_json_cap' };
+}
+
+function repairSingleQuotedKeysLeftover(raw) {
+  if (raw == null) return { ok: false, repaired: false, code: 'json_parse' };
+  if (typeof raw === 'object') return { ok: true, repaired: false, value: raw, code: null };
+  const s = String(raw);
+  try { return { ok: true, repaired: false, value: JSON.parse(s), code: null }; } catch (_) { /* leftover keys */ }
+  let out = '';
+  let inDbl = false;
+  let esc = false;
+  for (let i = 0; i < s.length; i += 1) {
+    const ch = s[i];
+    if (inDbl) {
+      out += ch;
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') inDbl = false;
+      continue;
+    }
+    if (ch === '"') { inDbl = true; out += ch; continue; }
+    if (ch === "'") {
+      let j = i + 1;
+      let key = '';
+      while (j < s.length && s[j] !== "'" && s[j] !== '\n') { key += s[j]; j += 1; }
+      if (j < s.length && s[j] === "'") {
+        let k = j + 1;
+        while (k < s.length && /\s/.test(s[k])) k += 1;
+        if (s[k] === ':') {
+          out += `"${key}"`;
+          i = j;
+          continue;
+        }
+      }
+    }
+    out += ch;
+  }
+  try { return { ok: true, repaired: true, value: JSON.parse(out), code: 'json_single_quote_key' }; }
+  catch (_) { return { ok: false, repaired: false, text: out, code: 'json_parse' }; }
+}
+
+function rejectNegativeZeroNumbers(value) {
+  function bad(v) {
+    if (typeof v === 'number' && Object.is(v, -0)) return true;
+    if (Array.isArray(v)) return v.some(bad);
+    if (v && typeof v === 'object') {
+      for (const k of Object.keys(v)) {
+        if (bad(v[k])) return true;
+      }
+    }
+    return false;
+  }
+  if (bad(value)) return { ok: false, value, code: 'negative_zero' };
+  return { ok: true, value, code: null };
+}
+
+function dropDuplicateSseEventIds(events) {
+  const list = Array.isArray(events) ? events : [];
+  const seen = new Set();
+  const kept = [];
+  let dropped = 0;
+  for (const e of list) {
+    const id = e && (e.id != null ? e.id : (e.eventId != null ? e.eventId : e.sseId));
+    if (id == null || id === '') { kept.push(e); continue; }
+    const key = String(id);
+    if (seen.has(key)) { dropped += 1; continue; }
+    seen.add(key);
+    kept.push(e);
+  }
+  return { events: kept, dropped, code: dropped ? 'sse_dup_id' : null };
+}
+
+function compactNeverDropLastAssistantToolCalls(original, compacted) {
+  const src = Array.isArray(original) ? original : [];
+  const out = Array.isArray(compacted) ? compacted.slice() : (Array.isArray(original) ? original.slice() : []);
+  let last = null;
+  for (let i = src.length - 1; i >= 0; i -= 1) {
+    const m = src[i];
+    if (m && m.role === 'assistant' && (m.tool_calls || m.toolCalls)) { last = m; break; }
+  }
+  if (!last) return { messages: out, restored: false, code: null };
+  const lastCalls = last.tool_calls || last.toolCalls;
+  const has = out.some((m) => {
+    if (!m || m.role !== 'assistant') return false;
+    const calls = m.tool_calls || m.toolCalls;
+    if (!calls) return false;
+    try { return JSON.stringify(calls) === JSON.stringify(lastCalls); } catch (_) { return calls === lastCalls; }
+  });
+  if (has) return { messages: out, restored: false, code: null };
+  out.push(last);
+  return { messages: out, restored: true, code: 'compact_keep_tool_calls' };
+}
+
+function refuseWriteToDevBoot(filePath) {
+  const p = String(filePath == null ? '' : filePath).replace(/\\/g, '/');
+  const n = p.startsWith('/') ? p : `/${p}`;
+  if (DEV_BOOT_RE.test(n) || DEV_BOOT_RE.test(p)) return { ok: false, path: p, code: 'path_dev_boot' };
+  return { ok: true, path: p, code: null };
+}
+
+function ignoreNegativeCompletionTokens({ promptTokens, completionTokens, totalTokens } = {}) {
+  const pRaw = Number(promptTokens);
+  const cRaw = Number(completionTokens);
+  const tRaw = Number(totalTokens);
+  const ignored = Number.isFinite(cRaw) && cRaw < 0;
+  const prompt = Number.isFinite(pRaw) ? pRaw : 0;
+  const completion = ignored ? 0 : (Number.isFinite(cRaw) ? cRaw : 0);
+  const tokens = Number.isFinite(tRaw) && tRaw >= 0 ? tRaw : prompt + completion;
+  return {
+    promptTokens: prompt,
+    completionTokens: completion,
+    tokens,
+    ignored,
+    code: ignored ? 'usage_ignore_neg_completion' : null,
+  };
+}
+
+function classifyEnetunreachAsTimeout(err) {
+  if (err == null) return { timeout: false, retryable: false, code: null };
+  const blob = `${(err && (err.code || err.errno || err.name)) || ''} ${(err && err.message) || ''}`.toUpperCase();
+  if (/ENETUNREACH/.test(blob)) return { timeout: true, retryable: true, code: 'net_timeout' };
+  return { timeout: false, retryable: false, code: null };
+}
+
+function maxQueuedGenerate16(queued, { max = QUEUED_GENERATE_MAX } = {}) {
+  let n;
+  if (typeof queued === 'number') n = queued;
+  else if (queued && typeof queued.size === 'number' && typeof queued.length !== 'number') n = queued.size;
+  else if (Array.isArray(queued)) n = queued.length;
+  else n = 0;
+  n = Math.max(0, Number(n) || 0);
+  const cap = Math.max(1, Number(max) || QUEUED_GENERATE_MAX);
+  if (n >= cap) return { ok: false, reject: true, queued: n, max: cap, code: 'queue_generate_cap' };
+  return { ok: true, reject: false, queued: n, remaining: cap - n, max: cap, code: null };
+}
+
+function skipMemoryIfVectorAllZeros(facts) {
+  const list = Array.isArray(facts) ? facts : [];
+  const kept = [];
+  let skipped = 0;
+  for (const f of list) {
+    const v = f && (f.vector || f.embedding || f.values);
+    if (Array.isArray(v) && v.length > 0 && v.every((x) => Number(x) === 0)) {
+      skipped += 1;
+      continue;
+    }
+    kept.push(f);
+  }
+  return { facts: kept, skipped, code: skipped ? 'memory_zero_vector' : null };
+}
+
+function resetStallCountOnToken({ stallCount, token, chunk, delta } = {}) {
+  const has = (token != null && String(token).length > 0)
+    || (chunk != null && String(chunk).length > 0)
+    || (delta != null && String(delta).length > 0);
+  const n = Math.max(0, Number(stallCount) || 0);
+  if (has) return { stallCount: 0, reset: true, code: 'stall_reset' };
+  return { stallCount: n, reset: false, code: null };
+}
+
+function stripTagCharsUPlusE0000(text) {
+  if (text == null) return { text, stripped: false, code: null };
+  const s = Buffer.isBuffer(text) ? text.toString('utf8') : String(text);
+  const next = s.replace(TAG_CHARS_RE, '');
+  return { text: next, stripped: next !== s, code: next !== s ? 'tag_strip' : null };
+}
+
+function rejectToolNameStartingWithDigit(name) {
+  const n = String(name == null ? '' : name);
+  if (/^[0-9]/.test(n)) return { ok: false, name: n, code: 'tool_name_digit' };
+  return { ok: true, name: n, code: null };
+}
+
+function maxUniqueToolsPerTurn16(calls, { max = UNIQUE_TOOLS_TURN_MAX } = {}) {
+  const list = Array.isArray(calls) ? calls : [];
+  const cap = Math.max(1, Number(max) || UNIQUE_TOOLS_TURN_MAX);
+  const seen = new Set();
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    const name = String((c && (c.name || c.tool || (c.function && c.function.name))) || (typeof c === 'string' ? c : ''));
+    if (!seen.has(name)) {
+      if (seen.size >= cap) { dropped += 1; continue; }
+      seen.add(name);
+    }
+    kept.push(c);
+  }
+  return { calls: kept, unique: seen.size, dropped, truncated: dropped > 0, code: dropped ? 'unique_tools_cap' : null };
+}
+
+function refuseEmptyPlanTitle(title) {
+  const raw = (title && typeof title === 'object' && !Array.isArray(title) && title.title != null) ? title.title : title;
+  const t = raw == null ? '' : String(raw).trim();
+  if (!t) return { ok: false, title: t, code: 'plan_title_empty' };
+  return { ok: true, title: t, code: null };
+}
+
+function crc32OfBuffer(buf) {
+  try {
+    const z = require('zlib');
+    if (typeof z.crc32 === 'function') return z.crc32(buf) >>> 0;
+  } catch (_) { /* software */ }
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j += 1) {
+      crc = (crc >>> 1) ^ (CRC32_POLY & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function crc32CheckOnCheckpointLoad(payload, { expectedCrc, crc } = {}) {
+  let raw;
+  if (Buffer.isBuffer(payload)) raw = payload;
+  else if (typeof payload === 'string') raw = Buffer.from(payload, 'utf8');
+  else {
+    try { raw = Buffer.from(JSON.stringify(payload == null ? {} : payload), 'utf8'); }
+    catch (_) { raw = Buffer.from(String(payload), 'utf8'); }
+  }
+  const got = crc32OfBuffer(raw);
+  const expRaw = expectedCrc != null ? expectedCrc : crc;
+  const exp = Number(expRaw);
+  if (expRaw == null || !Number.isFinite(exp)) return { ok: true, crc: got, skipped: true, code: null };
+  if ((got >>> 0) !== (exp >>> 0)) return { ok: false, crc: got, expected: exp >>> 0, code: 'ckpt_crc' };
+  return { ok: true, crc: got, expected: exp >>> 0, code: null };
+}
+
+function skipHiddenGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = [];
+  let skipped = 0;
+  function hiddenPath(p) {
+    const parts = String(p || '').replace(/\\/g, '/').split('/');
+    return parts.some((seg) => seg.startsWith('.') && seg !== '.' && seg !== '..');
+  }
+  for (const h of list) {
+    const p = typeof h === 'string' ? h : (h && (h.path || h.name || h.file)) || '';
+    if (hiddenPath(p)) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped, code: skipped ? 'glob_hidden' : null };
+}
+
+function redactSkPrefixesInResults(text) {
+  if (text == null) return { text, redacted: false, code: null };
+  const s = String(text);
+  const next = s.replace(SK_PREFIX_RE, '[REDACTED_SK]');
+  return { text: next, redacted: next !== s, code: next !== s ? 'sk_redact' : null };
+}
+
+function refuseComputerToolsIfSessionMissing({ toolName, sessionId, session } = {}) {
+  const n = String(toolName || '');
+  const isComp = /^computer[_-]/i.test(n);
+  let sid = sessionId == null ? '' : String(sessionId).trim();
+  if (!sid && session && typeof session === 'object') {
+    sid = String(session.id || session.sessionId || session.threadId || '').trim();
+  }
+  if (isComp && !sid) return { ok: false, toolName: n, code: 'computer_no_session' };
+  return { ok: true, toolName: n, code: null };
+}
+
+function refuseSubagentIfParentCancelled({ parentCancelled, cancelled, signal } = {}) {
+  const yes = parentCancelled === true || cancelled === true || !!(signal && signal.aborted === true);
+  if (yes) return { ok: false, refuse: true, code: 'subagent_parent_cancelled' };
+  return { ok: true, refuse: false, code: null };
+}
+
+function requireToolCallId(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    const id = c && (c.id || c.toolCallId || c.tool_call_id);
+    if (id == null || !String(id).trim()) { dropped += 1; continue; }
+    kept.push(c);
+  }
+  return { calls: kept, dropped, ok: dropped === 0, code: dropped ? 'tool_id_required' : null };
+}
+
+function neverRetry451(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || '');
+  const msg = String(err.message || '');
+  const is = status === 451 || code === '451' || /unavailable for legal reasons|\b451\b/i.test(msg);
+  if (is) return { retry: false, status: 451, code: 'legal_unavailable' };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function stripAnsiFromSandboxOut(text) {
+  if (text == null) return { text, stripped: false, code: null };
+  const s = Buffer.isBuffer(text) ? text.toString('utf8') : String(text);
+  const next = s.replace(ANSI_RE, '');
+  return { text: next, stripped: next !== s, code: next !== s ? 'ansi_strip' : null };
+}
+
+function sessionLockHeartbeatEvery20s({ lastBeatAt, now, intervalMs = LOCK_HEARTBEAT_MS } = {}) {
+  const last = Number(lastBeatAt);
+  const t = Number(now) || Date.now();
+  const iv = Math.max(1000, Number(intervalMs) || LOCK_HEARTBEAT_MS);
+  if (!Number.isFinite(last)) return { beat: true, skipped: false, code: 'lock_heartbeat' };
+  const elapsed = t - last;
+  if (elapsed >= iv) return { beat: true, elapsedMs: elapsed, nextAt: t + iv, code: 'lock_heartbeat' };
+  return { beat: false, elapsedMs: elapsed, remainingMs: iv - elapsed, code: null };
+}
+
+function mapRedisEaiAgainRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.errno || err.name)) || '');
+  const msg = String((err && err.message) || '');
+  const blob = `${code} ${msg}`;
+  const is = code === 'EAI_AGAIN' || /EAI_AGAIN/i.test(blob);
+  if (!is) return { retryable: false, code: null };
+  return { retryable: true, code: 'redis_disconnect' };
+}
+
+function perToolRemainingWallClock({ timeoutMs, remainingMs, remainingWallMs } = {}) {
+  const req = Number(timeoutMs);
+  const wall = Number(remainingMs != null ? remainingMs : remainingWallMs);
+  if (Number.isFinite(req) && req > 0 && Number.isFinite(wall) && wall >= 0 && wall < req) {
+    return { timeoutMs: wall, applied: true, remainingMs: wall, code: 'tool_wall' };
+  }
+  if ((!Number.isFinite(req) || req <= 0) && Number.isFinite(wall) && wall > 0) {
+    return { timeoutMs: wall, applied: true, remainingMs: wall, code: 'tool_wall' };
+  }
+  return {
+    timeoutMs: Number.isFinite(req) ? req : null,
+    applied: false,
+    remainingMs: Number.isFinite(wall) ? wall : null,
+    code: null,
+  };
+}
+
+function endSseWithEventDone({ closed, alreadyDone } = {}) {
+  if (closed || alreadyDone) return { write: false, frame: null, code: null };
+  return { write: true, frame: 'event: done\ndata: {}\n\n', event: 'done', code: 'sse_done' };
+}
+
+function sortToolsByNameForCache(tools) {
+  const list = Array.isArray(tools) ? tools.slice() : [];
+  const nameOf = (t) => String((typeof t === 'string' ? t : (t && (t.name || t.tool))) || '');
+  const before = list.map(nameOf).join('\0');
+  list.sort((a, b) => nameOf(a).localeCompare(nameOf(b)));
+  const after = list.map(nameOf).join('\0');
+  return { tools: list, sorted: before !== after, code: before !== after ? 'tool_sort' : null };
+}
+
+function observeOnlyNoCharge({ tools, names, observeOnly } = {}) {
+  const list = Array.isArray(tools) ? tools : (Array.isArray(names) ? names : []);
+  const nms = list.map((t) => String((typeof t === 'string' ? t : (t && (t.name || t.tool))) || '').toLowerCase()).filter(Boolean);
+  const only = observeOnly === true || (nms.length > 0 && nms.every((n) => /observe/.test(n)));
+  if (only) return { charge: false, observeOnly: true, code: 'credit_observe' };
+  return { charge: true, observeOnly: false, code: null };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -6748,6 +7160,35 @@ module.exports = {
   flushLastSseEventBeforeClose,
   capSerializedToolList8KB,
   screenshotOnlyNoCharge,
+  capToolResultJson128KiB,
+  repairSingleQuotedKeysLeftover,
+  rejectNegativeZeroNumbers,
+  dropDuplicateSseEventIds,
+  compactNeverDropLastAssistantToolCalls,
+  refuseWriteToDevBoot,
+  ignoreNegativeCompletionTokens,
+  classifyEnetunreachAsTimeout,
+  maxQueuedGenerate16,
+  skipMemoryIfVectorAllZeros,
+  resetStallCountOnToken,
+  stripTagCharsUPlusE0000,
+  rejectToolNameStartingWithDigit,
+  maxUniqueToolsPerTurn16,
+  refuseEmptyPlanTitle,
+  crc32CheckOnCheckpointLoad,
+  skipHiddenGlobFiles,
+  redactSkPrefixesInResults,
+  refuseComputerToolsIfSessionMissing,
+  refuseSubagentIfParentCancelled,
+  requireToolCallId,
+  neverRetry451,
+  stripAnsiFromSandboxOut,
+  sessionLockHeartbeatEvery20s,
+  mapRedisEaiAgainRetryable,
+  perToolRemainingWallClock,
+  endSseWithEventDone,
+  sortToolsByNameForCache,
+  observeOnlyNoCharge,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

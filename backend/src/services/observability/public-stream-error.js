@@ -296,6 +296,14 @@ const ENGINE_CODE_RULES = [
   { code: 'ckpt_too_large', message: 'El punto de restauración supera 1 MiB sin comprimir. No lo guardé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'ckpt_too_large' },
   { code: 'sse_id_backwards', message: 'El Last-Event-ID iba hacia atrás. Lo rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sse_id_backwards' },
   { code: 'tool_name_charset', message: 'El nombre de la herramienta usa caracteres no permitidos.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_charset' },
+  { code: 'path_dev_boot', message: 'No escribo en /dev ni /boot.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_dev_boot' },
+  { code: 'computer_no_session', message: 'No ejecuto computer_* sin una sesión activa.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'computer_no_session' },
+  { code: 'legal_unavailable', message: 'El proveedor rechazó la petición por razones legales (451). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'legal_unavailable' },
+  { code: 'queue_generate_cap', message: 'Hay demasiadas generaciones en cola en esta sesión (máximo 16).', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'queue_generate_cap' },
+  { code: 'ckpt_crc', message: 'El punto de restauración no pasó la verificación CRC32. No lo cargué.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'ckpt_crc' },
+  { code: 'tool_name_digit', message: 'El nombre de la herramienta no puede empezar con un dígito.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_digit' },
+  { code: 'plan_title_empty', message: 'El plan no tiene título. Lo rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'plan_title_empty' },
+  { code: 'subagent_parent_cancelled', message: 'El padre se canceló. No lanzo el subagente.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_parent_cancelled' },
 ];
 
 function classifyPublicStreamError(error) {

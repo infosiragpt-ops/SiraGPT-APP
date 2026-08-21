@@ -613,6 +613,10 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
             if (ln.truncated) stdoutTruncated = true;
           }
         }
+        if (typeof ad.stripAnsiFromSandboxOut === 'function') {
+          const ans = ad.stripAnsiFromSandboxOut(stdout);
+          if (ans && ans.text != null) stdout = ans.text;
+        }
         if (typeof ad.redactHomePathsInResults === 'function') {
           const rhOut = ad.redactHomePathsInResults(stdout);
           if (rhOut && rhOut.text != null) stdout = rhOut.text;

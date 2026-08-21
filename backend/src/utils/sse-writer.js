@@ -111,6 +111,10 @@ function createSSEWriter(res, options = {}) {
         const stale = adapter.dropSseEventsOlderThan2min(options.replayFrames || ring || [], { now: Date.now(), maxAgeMs: 120000 });
         if (stale && Array.isArray(stale.events)) options.replayFrames = stale.events;
       }
+      if (adapter && typeof adapter.dropDuplicateSseEventIds === 'function') {
+        const dups = adapter.dropDuplicateSseEventIds(options.replayFrames || ring || []);
+        if (dups && Array.isArray(dups.events)) options.replayFrames = dups.events;
+      }
       if (adapter && typeof adapter.rejectLastEventIdGoingBackwards === 'function') {
         adapter.rejectLastEventIdGoingBackwards({ lastEventId: options.lastEventId || options.lastEventID, currentSeq: sseSeq });
       }
@@ -446,6 +450,12 @@ function createSSEWriter(res, options = {}) {
       try {
         if (adapter && typeof adapter.flushLastSseEventBeforeClose === 'function') {
           adapter.flushLastSseEventBeforeClose({ pendingEvent: ring.length ? ring[ring.length - 1] : null, closed: false });
+        }
+        if (adapter && typeof adapter.endSseWithEventDone === 'function') {
+          const doneEv = adapter.endSseWithEventDone({ closed: false });
+          if (doneEv && doneEv.write && doneEv.frame) {
+            try { if (!res.writableEnded && !res.destroyed) res.write(doneEv.frame); } catch (_) {}
+          }
         }
       } catch (_) {}
       cancelHeartbeat();

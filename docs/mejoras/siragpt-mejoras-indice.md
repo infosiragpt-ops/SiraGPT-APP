@@ -1,7 +1,8 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H44 live, 2026-08-21 12:57 Lima).
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1257.md` (3H44, inflight tools 8 + leftover // JSON comments + reject NaN/Infinity + SSE drop >2min + compact summary 2KiB + refuse /etc /proc /sys + never negative usage + queue fair-share >20s + skip NaN memory score + cancel after 3 stalls + strip bidi + tool name charset + A→B→A cycle + plan steps 24 + refuse ckpt >1MiB + Last-Event-ID no backwards + glob 32 matches + JWT redact + computer_* requires userId + subagent min remaining 1 + drop incomplete trailing call + never retry 413 + per-line 8KiB + close if client gone 30s + lock ttl 90s + Redis ECONNREFUSED retryable + tool timeout hard 120s + flush last SSE + tool list 8KB + screenshot-only no-charge, frontend untouched)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H45 live, 2026-08-21 15:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1557.md` (3H45, tool result JSON 128KiB + leftover single-quoted keys + reject -0 + SSE drop duplicate ids + compact keep last assistant tool_calls + refuse /dev /boot + ignore negative completion tokens + ENETUNREACH as timeout + max 16 queued generate + skip all-zero memory vectors + reset stall count on token + strip U+E0000 tags + reject tool name starting with digit + max 16 unique tools/turn + refuse empty plan title + ckpt CRC32 + skip hidden glob + redact sk- + computer_* requires session + refuse subagent if parent cancelled + require tool id + never retry 451 + strip ANSI sandbox out + lock heartbeat 20s + Redis EAI_AGAIN retryable + per-tool remaining wall + SSE event:done + sort tools by name + observe-only no-charge, frontend untouched)
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1257.md` (3H44)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0957.md` (3H43)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0657.md` (3H42)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-0057.md` (3H41)
