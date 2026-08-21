@@ -36,7 +36,9 @@ describe('FEATURE_DOC_ENGINE flag', () => {
   it('detects UPN template-transform prompts', () => {
     const files = [{ name: 'tesis.docx' }, { name: 'formato-upn.docx' }]
     expect(flags.isTemplateTransformRequest('pasa este word al formato UPN', files)).toBe(true)
-    expect(flags.isTemplateTransformRequest('hola', files)).toBe(false)
+    expect(flags.isTemplateTransformRequest('pásalo', files)).toBe(true)
+    expect(flags.isTemplateTransformRequest('hola', files)).toBe(true)
+    expect(flags.isTemplateTransformRequest('hola', [{ name: 'a.docx' }, { name: 'b.docx' }])).toBe(false)
   })
 })
 

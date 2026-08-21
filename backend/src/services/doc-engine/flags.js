@@ -41,14 +41,18 @@ function isTemplateTransformRequest(prompt = '', files = []) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
-  if (!text) return false;
   const docs = (Array.isArray(files) ? files : []).filter((f) => {
     const name = String(f?.originalName || f?.filename || f?.name || f?.fieldname || '');
     const mime = String(f?.mimeType || f?.mimetype || f?.type || '');
     return mime.includes('wordprocessingml') || /\.docx$/i.test(name);
   });
-  const templateCue = /\b(formato|plantilla|template|upn|apa|ieee)\b/.test(text);
-  const passCue = /\b(pasa|pasar|aplica|aplicar|convierte|convertir|traslada|transplanta|usa|usar)\b/.test(text);
+  const names = docs
+    .map((f) => String(f?.originalName || f?.filename || f?.name || f?.fieldname || '').toLowerCase())
+    .join(' ');
+  const blob = `${text} ${names}`;
+  const templateCue = /\b(formato|plantilla|template|upn|apa|ieee)\b/.test(blob);
+  // pásalo / pasalo / pásame / pasar — \bpasa\b no cubre el clítico.
+  const passCue = /\b(pasa\w*|aplicar?|convierte\w*|traslad\w*|transplant\w*|usa(?:r)?)\b/.test(text);
   if (docs.length >= 2 && (templateCue || passCue)) return true;
   if (docs.length >= 1 && templateCue && passCue) return true;
   return false;

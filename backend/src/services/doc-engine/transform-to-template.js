@@ -46,6 +46,57 @@ function extractVisibleText(documentXml = '') {
   return texts.join(' ');
 }
 
+function stripSectPr(xml = '') {
+  return String(xml || '').replace(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g, '');
+}
+
+function meaningfulWords(xmlOrText = '') {
+  return extractVisibleText(xmlOrText)
+    .replace(/X{4,}/gi, ' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 3);
+}
+
+function isPlaceholderOnly(xml = '') {
+  const visible = extractVisibleText(stripSectPr(xml)).replace(/\s+/g, '');
+  if (!visible) return true;
+  return extractVisibleText(stripSectPr(xml)).replace(/X{4,}/gi, '').replace(/\s+/g, '').length < 4;
+}
+
+function replaceBodyInner(documentXml, newInner) {
+  const src = String(documentXml || '');
+  const open = src.match(/<w:body\b[^>]*>/);
+  const close = src.lastIndexOf('</w:body>');
+  if (!open || close < 0 || close < open.index) {
+    throw new OoxmlError('no se pudo reescribir w:body', 'missing_body');
+  }
+  return src.slice(0, open.index + open[0].length) + newInner + src.slice(close);
+}
+
+function assertTransplantHasSource(sourceDoc, resultDoc) {
+  const resultBody = stripSectPr((String(resultDoc || '').match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/) || [])[1] || resultDoc);
+  const sourceWords = meaningfulWords(sourceDoc);
+  const resultWords = new Set(meaningfulWords(resultDoc));
+  if (isPlaceholderOnly(resultBody)) {
+    throw new OoxmlError(
+      'transplant dejó el body de la plantilla (XXXXXXXX). No se entrega el vacío.',
+      'template_body_unchanged',
+    );
+  }
+  if (sourceWords.length >= 2) {
+    const hit = sourceWords.filter((w) => resultWords.has(w)).length;
+    if (hit < Math.min(2, sourceWords.length)) {
+      throw new OoxmlError(
+        'transplant vacío: el body no tiene el contenido fuente',
+        'empty_transplant',
+      );
+    }
+  }
+}
+
 function peekDocxXml(file = {}) {
   const out = {
     documentXml: '',
@@ -103,7 +154,7 @@ function scoreTemplateVsContent(file = {}, peek = {}) {
  * No depende del orden de chips / fileIds (selectSourcePreservingDocumentSet
  * siempre toma currentDocx[0]).
  */
-function classifyTemplateVsContent(files = []) {
+function classifyTemplateVsContent(files = [], { force = false } = {}) {
   const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
   if (docs.length < 2) {
     return {
@@ -118,35 +169,51 @@ function classifyTemplateVsContent(files = []) {
     const peek = peekDocxXml(file);
     return { file, peek, ...scoreTemplateVsContent(file, peek) };
   });
-  const templateHit = [...scored].sort((a, b) => b.template - a.template)[0];
+  // Nunca usar el orden de fileIds: más XXXX / UPN = plantilla; más cuerpo = contenido.
+  const templateHit = [...scored].sort((a, b) => (
+    (b.template - a.template) || (a.content - b.content) || (b.xxxx - a.xxxx)
+  ))[0];
   const contentHit = scored
     .filter((s) => s.file !== templateHit.file)
-    .sort((a, b) => b.content - a.content)[0];
+    .sort((a, b) => (
+      (b.content - a.content) || (a.template - b.template) || (b.words - a.words)
+    ))[0];
   const clear = Boolean(
     templateHit
     && contentHit
-    && templateHit.template >= 3
-    && contentHit.content >= 2
-    && templateHit.template > contentHit.template
+    && templateHit.file !== contentHit.file
+    && templateHit.template >= 2
+    && contentHit.content >= 1
+    && templateHit.template >= contentHit.template
     && contentHit.content >= templateHit.content,
   );
-  if (!clear) {
+  if (clear) {
     return {
-      template: null,
-      content: null,
-      source: null,
+      template: templateHit.file,
+      content: contentHit.file,
+      source: contentHit.file,
       docs,
       scored,
-      reason: 'ambiguous',
+      reason: 'content',
+    };
+  }
+  if (force && templateHit && contentHit && templateHit.file !== contentHit.file) {
+    return {
+      template: templateHit.file,
+      content: contentHit.file,
+      source: contentHit.file,
+      docs,
+      scored,
+      reason: 'forced',
     };
   }
   return {
-    template: templateHit.file,
-    content: contentHit.file,
-    source: contentHit.file,
+    template: null,
+    content: null,
+    source: null,
     docs,
     scored,
-    reason: 'content',
+    reason: 'ambiguous',
   };
 }
 
@@ -194,19 +261,20 @@ function transformBuffers(sourceBuffer, templateBuffer) {
 
   const bodyMatch = sourceDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
   if (!bodyMatch) throw new OoxmlError('el source no tiene w:body', 'missing_body');
-  const blocks = extractTopLevelBlocks(bodyMatch[1])
+  let blocks = extractTopLevelBlocks(bodyMatch[1])
     .map((xml) => remapStyleIds(xml, mapping, allowed));
+  const sourceWords = meaningfulWords(sourceDoc);
+  if (!blocks.length || (sourceWords.length >= 2 && meaningfulWords(blocks.join('')).length < 2)) {
+    const raw = stripSectPr(bodyMatch[1]).trim();
+    if (raw) blocks = [remapStyleIds(raw, mapping, allowed)];
+  }
   if (!blocks.length) {
     throw new OoxmlError('el source no tiene w:p / w:tbl para transplantar', 'empty_source_body');
   }
 
-  const tmplBody = templateDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
-  if (!tmplBody) throw new OoxmlError('la plantilla no tiene w:body', 'missing_body');
   const newBodyInner = `${blocks.join('')}${templateSectPr}`;
-  const newDocumentXml = templateDoc.replace(
-    /<w:body\b[^>]*>[\s\S]*<\/w:body>/,
-    (whole) => whole.replace(tmplBody[1], newBodyInner),
-  );
+  const newDocumentXml = replaceBodyInner(templateDoc, newBodyInner);
+  assertTransplantHasSource(sourceDoc, newDocumentXml);
 
   // Copia la plantilla como base: todas las partes salvo document.xml.
   const out = new PizZip();
@@ -263,6 +331,10 @@ module.exports = {
   extractVisibleText,
   peekDocxXml,
   scoreTemplateVsContent,
+  meaningfulWords,
+  isPlaceholderOnly,
+  assertTransplantHasSource,
+  replaceBodyInner,
   transformBuffers,
   transformToTemplate,
 };
