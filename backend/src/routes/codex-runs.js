@@ -12,6 +12,7 @@ const codexRunStore = require('../services/codex/codex-run-store');
 const { createGitHubCodexConnector } = require('../services/github-codex-connector');
 const { runAgentTaskJob } = require('../services/agents/agent-task-runner');
 const { runTests } = require('../services/agents/code-sandbox');
+const { createSSEWriter } = require('../utils/sse-writer');
 
 const router = express.Router();
 
@@ -113,46 +114,19 @@ router.get(
       return res.status(404).json({ error: 'run_not_found' });
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders?.();
-
-    // Replay-only SSE. The stream must never let a write/end exception escape
-    // to the global error handler (it would try to send a JSON 500 after the
-    // SSE head was already flushed) and must close cleanly when the client
-    // disconnects — a dead socket otherwise keeps the handler alive until
-    // Node notices on the next write.
-    let closed = false;
-    const cleanup = () => {
-      if (closed) return;
-      closed = true;
-    };
-    req.on('close', cleanup);
-    res.on('close', cleanup);
-
-    const send = (obj) => {
-      if (closed || res.writableEnded) return false;
-      try {
-        res.write(`data: ${JSON.stringify(obj)}\n\n`);
-        return true;
-      } catch {
-        cleanup();
-        return false;
-      }
-    };
+    // Replay-only SSE con el writer backpressure-aware de producción:
+    // flush de headers + preamble `: connected` antes del primer frame
+    // (TTFT del replay), cierre limpio en desconexión del cliente y sin
+    // dejar escapar excepciones write/end hacia el error handler global.
+    const sse = createSSEWriter(res, { heartbeatMs: undefined });
     for (const event of row.events || []) {
-      if (!send(event)) break;
+      await sse.event(event);
+      if (sse.closed) break;
     }
-    if (!closed && send({ type: 'snapshot', run: row })) {
-      try {
-        res.end();
-      } catch {
-        cleanup();
-      }
-    } else {
-      cleanup();
+    if (!(await sse.event({ type: 'snapshot', run: row }))) {
+      return;
     }
+    sse.done();
   },
 );
 

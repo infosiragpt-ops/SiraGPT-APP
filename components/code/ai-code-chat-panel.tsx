@@ -52,7 +52,6 @@ import {
   StopCircle,
   X,
 } from "lucide-react"
-import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
@@ -62,6 +61,17 @@ import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundar
 import { toast } from "sonner"
 
 import { ComposerSendArrow } from "@/components/chat/ChatComposerSurface"
+// El reproductor por voz tira de @huggingface/transformers (~700 KB gz), que
+// entraba al chunk crítico del /code con un import estático. Solo se monta
+// cuando un turno lleva `voice` (saludos/resúmenes bajo demanda), así que se
+// carga en lazy: el split saca transformers del payload inicial y el chunk
+// llega en paralelo a la primera interacción.
+const BrowserVoicePlayer = React.lazy(() =>
+  import("@/components/code/browser-voice-player").then((mod) => ({
+    default: mod.BrowserVoicePlayer,
+  })),
+)
+
 import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
@@ -5419,7 +5429,9 @@ function ChatBubble({
       {turn.voice ? (
         <div className="mb-2 space-y-2">
           {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
-          <BrowserVoicePlayer text={turn.voice} />
+          <React.Suspense fallback={null}>
+            <BrowserVoicePlayer text={turn.voice} />
+          </React.Suspense>
         </div>
       ) : null}
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
