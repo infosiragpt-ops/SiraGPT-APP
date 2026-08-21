@@ -1,5 +1,5 @@
 "use client"
-import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, LogOut, PanelLeft, ArrowLeft, Plug, ScrollText } from "lucide-react"
+import { BarChart3, Users, Settings, CreditCard, Database, Shield, Activity, FileText, Bot, Heart, LogOut, PanelLeft, ArrowLeft, Plug, ScrollText, FlaskConical } from "lucide-react"
 import { useRouter, usePathname } from "next/navigation"
 
 import {
@@ -84,6 +84,11 @@ const adminMenuItems = [
     title: "Ajustes",
     icon: Settings,
     url: "/admin/settings",
+  },
+  {
+    title: "Prueba",
+    icon: FlaskConical,
+    url: "/admin/prueba",
   },
 ]
 

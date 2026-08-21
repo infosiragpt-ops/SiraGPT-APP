@@ -67,6 +67,11 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
+    file: "app/admin/prueba/page.tsx",
+    reason: "Public same-origin health GET used by the admin diagnostics card.",
+    accepts: (text) => text === 'fetch("/api/health")' && isCredentialFreePublicFetch(text),
+  },
+  {
     file: "app/admin/status/page.tsx",
     reason: "Public Prometheus text endpoint; admin JSON calls use authenticatedFetch.",
     accepts: (text) =>
