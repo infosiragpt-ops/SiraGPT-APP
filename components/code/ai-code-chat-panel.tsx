@@ -4719,7 +4719,8 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const hasFailedCodeAttachments = codeAttachments.some((file) => file.status === "failed")
   const canSubmitCodePrompt =
     (input.trim().length > 0 || readyCodeAttachments.length > 0 || Boolean(selectedPreviewTarget)) &&
-    !hasUploadingCodeAttachments
+    !hasUploadingCodeAttachments &&
+    online
 
   const clearSentCodeAttachments = React.useCallback((sentFiles: CodeComposerAttachment[]) => {
     if (sentFiles.length === 0) return
@@ -5182,7 +5183,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   type="submit"
                   size="icon"
                   className="code-composer__send"
-                  disabled={!canSubmitCodePrompt || !online}
+                  disabled={!canSubmitCodePrompt}
                   aria-label={online ? "Enviar" : OFFLINE_SEND_HINT_CODE}
                   title={online ? "Enviar" : OFFLINE_SEND_HINT_CODE}
                 >
