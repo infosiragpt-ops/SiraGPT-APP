@@ -299,9 +299,13 @@ const IGNORED_EXPORT_DIRS = new Set([
 function shouldIgnoreExportPath(relPath) {
   const p = String(relPath || '').replaceAll('\\', '/').trim();
   if (!p) return true;
-  for (const seg of p.split('/')) {
+  const segments = p.split('/');
+  for (const seg of segments) {
     if (seg && IGNORED_EXPORT_DIRS.has(seg)) return true;
   }
+  // Excluir archivos de entorno con secretos (.env, .env.local…) del export.
+  const leaf = segments[segments.length - 1];
+  if (leaf === '.env' || /^\.env\.[A-Za-z0-9_-]+$/.test(leaf)) return true;
   return false;
 }
 

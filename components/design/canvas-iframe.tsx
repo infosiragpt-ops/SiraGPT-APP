@@ -50,13 +50,11 @@ export function CanvasIframe({ html, placeholder }: Props) {
   }
 
   const openFullscreen = () => {
-    if (!html) return
-    const w = window.open("", "_blank", "noopener,noreferrer")
-    if (w) {
-      w.document.open()
-      w.document.write(html)
-      w.document.close()
-    }
+    // El HTML aquí es salida NO confiable del agente. Escribirlo en una ventana
+    // top-level (w.document.write) hereda el origen de SiraGPT, igual que el blob
+    // de preview-pane — acceso a localStorage/cookies/APIs. Solo lo vemos
+    // aislado dentro del iframe sandboxed.
+    return
   }
 
   return (
@@ -120,7 +118,7 @@ export function CanvasIframe({ html, placeholder }: Props) {
             <iframe
               ref={iframeRef}
               srcDoc={html}
-              sandbox="allow-scripts allow-forms allow-same-origin"
+              sandbox="allow-scripts allow-forms"
               className="w-full h-full rounded-lg border-0"
               title="Design canvas preview"
             />

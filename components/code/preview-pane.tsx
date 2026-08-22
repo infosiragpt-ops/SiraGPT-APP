@@ -1058,17 +1058,12 @@ export function PreviewPane() {
   }, [files, activePath])
 
   const openInNewTab = React.useCallback(() => {
+    // El HTML estático del preview también es salida NO confiable del agente.
+    // Abrirlo como documento top-level hereda el origen de SiraGPT (acceso a
+    // localStorage/cookies/APIs) — mismo vector que el runner en vivo, que ya
+    // está bloqueado. Mantenemos la preview aislada dentro del iframe sandboxed.
     if (typeof window === "undefined") return
-    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
-    // y el código generado NO confiable correría con el origen real de SiraGPT
-    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
-    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
-    if (liveRun.phase === "ready") return
-    const blob = new Blob([result.html], { type: "text/html" })
-    const url = URL.createObjectURL(blob)
-    window.open(url, "_blank", "noopener,noreferrer")
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.phase, result.html])
+  }, [])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
