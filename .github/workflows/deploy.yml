@@ -249,7 +249,7 @@ jobs:
             APP_DIR="/opt/siragpt"
             DEPLOY_BUNDLE="${DEPLOY_TRANSFER_DIR}/deploy.bundle"
             DEPLOY_BUNDLE_CHECKSUM="${DEPLOY_TRANSFER_DIR}/deploy.bundle.sha256"
-            COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env"
+            COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml -f docker-compose.prometheus.yml --env-file .env"
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
             # Same origin as READY_URL. api.siragpt.com can lag or route
             # differently and caused false rollbacks after healthy deploys
