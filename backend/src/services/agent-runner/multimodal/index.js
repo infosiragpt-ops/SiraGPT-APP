@@ -45,10 +45,11 @@ function extraExecutors({
   sandbox,
   client = null,
   model = null,
-  format = 'openrouter',
+  format = 'openai',
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  desktopCtx = {},
 } = {}) {
   const executors = {};
   let computerCleanup = null;
@@ -60,7 +61,7 @@ function extraExecutors({
     executors.speak = voice.makeSpeakExecutor({ sandbox, synthesize, env });
   }
   if (flags.computerEnabled(env)) {
-    const built = computer.makeComputerExecutors({ env, driver: computerDriver });
+    const built = computer.makeComputerExecutors({ env, driver: computerDriver, desktopCtx });
     Object.assign(executors, built.executors);
     computerCleanup = built.cleanup;
   }
@@ -85,14 +86,27 @@ function prepareF7Extras({
   client = null,
   model = null,
   env = process.env,
-  format = 'openrouter',
+  format = 'openai',
   openaiClient = null,
   synthesize = null,
   computerDriver = null,
+  desktopCtx = {},
 } = {}) {
+  if (!desktopCtx || (!desktopCtx.projectId && !desktopCtx.departmentId)) {
+    try {
+      const desktop = require('../../codex/dept-real-pc');
+      const last = desktop.lastDesktopBinding && desktop.lastDesktopBinding();
+      if (last && (last.projectId || last.departmentId || last.requestedDepartmentId)) {
+        desktopCtx = {
+          projectId: (desktopCtx && desktopCtx.projectId) || last.projectId,
+          departmentId: (desktopCtx && desktopCtx.departmentId) || last.requestedDepartmentId || last.departmentId,
+        };
+      }
+    } catch (_) { /* keep empty */ }
+  }
   const toolDefinitions = extraToolDefinitions({ env });
   const { executors, cleanup } = extraExecutors({
-    env, sandbox, client, model, format, openaiClient, synthesize, computerDriver,
+    env, sandbox, client, model, format, openaiClient, synthesize, computerDriver, desktopCtx,
   });
   const imageParts = flags.visionEnabled(env)
     ? vision.collectImageAttachments(files, { env })

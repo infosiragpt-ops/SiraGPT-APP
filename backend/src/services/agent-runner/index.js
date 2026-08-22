@@ -402,6 +402,11 @@ async function runAgentRunner({
         openaiClient,
         synthesize,
         computerDriver,
+        desktopCtx: {
+          userId,
+          projectId: (typeof projectId !== 'undefined' ? projectId : undefined),
+          departmentId: (typeof departmentId !== 'undefined' ? departmentId : 'ceo-office'),
+        },
       });
       f7.applyToMessages(messages);
     } catch (_) { f7 = null; }

@@ -171,7 +171,60 @@ async function createComputerDriver({ env = process.env, signal, kind } = {}) {
  * Xvfb. The first computer_* call materialises the driver; the F7 cleanup
  * destroys it.
  */
-function makeComputerExecutors({ env = process.env, driver = null } = {}) {
+
+function resolveToolDesktop(args = {}, desktopCtx = {}) {
+  let last = {};
+  try {
+    const desktop = require('../../codex/dept-real-pc');
+    last = (desktop.lastDesktopBinding && desktop.lastDesktopBinding()) || {};
+  } catch (_) { last = {}; }
+  return {
+    projectId: args.projectId || desktopCtx.projectId || last.projectId || undefined,
+    departmentId: args.departmentId || desktopCtx.departmentId || last.requestedDepartmentId || last.departmentId || undefined,
+  };
+}
+
+function resolveToolUserId(args = {}, desktopCtx = {}) {
+  return args.userId || desktopCtx.userId || undefined;
+}
+
+async function tryPersistentComputer(kind, args, desktopCtx, signal) {
+  let persist;
+  try { persist = require('../../computer/persistent'); } catch (_) { return null; }
+  if (!persist.enabled()) return null;
+  const session = await persist.ensureSession(resolveToolUserId(args, desktopCtx));
+  if (kind === 'screenshot') {
+    const shot = await persist.agentGet(session, '/screenshot');
+    if (shot && shot.pngBase64) {
+      return {
+        __f7Image: { base64: shot.pngBase64, mediaType: shot.mime || 'image/png' },
+        text: 'computer_screenshot ok (agent-computer): session=' + session.sessionId + ' user=' + (session.userId || '') + ' bytes=' + (shot.bytes || ''),
+      };
+    }
+    return JSON.stringify({ ok: !!shot, sessionId: session.sessionId, driver: 'agent-computer' });
+  }
+  if (kind === 'click') {
+    const btn = { left: 'click', middle: 'click', right: 'right_click' }[String(args.button || 'left')] || 'click';
+    const result = await persist.agentPost(session, '/action', { type: btn, x: args.x, y: args.y });
+    return JSON.stringify({ ok: true, driver: 'agent-computer', sessionId: session.sessionId, ...result });
+  }
+  if (kind === 'type') {
+    const result = await persist.agentPost(session, '/action', { type: 'type', text: args.text });
+    return JSON.stringify({ ok: true, driver: 'agent-computer', sessionId: session.sessionId, ...result });
+  }
+  if (kind === 'navigate') {
+    const url = String(args.url || '').trim();
+    const result = await persist.dockerExec(session, 'google-chrome --no-first-run --disable-gpu ' + JSON.stringify(url));
+    return JSON.stringify({ ok: true, url, driver: 'agent-computer', sessionId: session.sessionId, container: result.container, pageLoaded: true });
+  }
+  if (kind === 'exec') {
+    const result = await persist.dockerExec(session, args.command);
+    return JSON.stringify({ ok: true, driver: 'agent-computer', sessionId: session.sessionId, ...result });
+  }
+  return null;
+}
+
+function makeComputerExecutors({ env = process.env, driver = null, desktopCtx = {} } = {}) {
   let instance = driver;
   let creating = null;
   const getDriver = async (signal) => {
@@ -186,6 +239,26 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
   const executors = {
     async computer_screenshot(args = {}, { signal } = {}) {
       throwIfAborted(signal);
+      try {
+        const persisted = await tryPersistentComputer('screenshot', args, desktopCtx, signal);
+        if (persisted) return persisted;
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+      try {
+        const desktop = require('../../codex/dept-real-pc');
+        if (typeof desktop.screenshotDesktop === 'function') {
+          const shot = await desktop.screenshotDesktop({
+            ...resolveToolDesktop(args, desktopCtx),
+          });
+          if (shot && (shot.ok || shot.pageLoaded || shot.url)) {
+            return `computer_screenshot ok (webtop): pageLoaded=${!!(shot.pageLoaded || shot.ok)} url=${shot.url || ''} path=${shot.path || ''} title=${shot.title || ''} container=${shot.container || ''}`;
+          }
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        // Fall through to the local driver so CI/fake still works.
+      }
       let drv;
       try {
         drv = await getDriver(signal);
@@ -206,6 +279,28 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
     },
     async computer_click(args = {}, { signal } = {}) {
       throwIfAborted(signal);
+      try {
+        const persisted = await tryPersistentComputer('click', args, desktopCtx, signal);
+        if (persisted) return persisted;
+      } catch (err) {
+        if (signal && signal.aborted) throw err;
+      }
+      try {
+        const desktop = require('../../codex/dept-real-pc');
+        if (typeof desktop.inputDesktop === 'function') {
+          const btn = { left: 1, middle: 2, right: 3 }[String(args.button || 'left')] || 1;
+          const result = await desktop.inputDesktop({
+            ...resolveToolDesktop(args, desktopCtx),
+            action: 'click',
+            x: args.x,
+            y: args.y,
+            button: btn,
+          });
+          if (result && result.ok) return JSON.stringify(result);
+        }
+      } catch (err) {
+        if (signal && signal.aborted) throw err;
+      }
       let drv;
       try {
         drv = await getDriver(signal);
@@ -224,6 +319,25 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
     async computer_type(args = {}, { signal } = {}) {
       throwIfAborted(signal);
       if (!String(args.text || '').length) return 'ERROR: computer_type requiere `text`.';
+      try {
+        const persisted = await tryPersistentComputer('type', args, desktopCtx, signal);
+        if (persisted) return persisted;
+      } catch (err) {
+        if (signal && signal.aborted) throw err;
+      }
+      try {
+        const desktop = require('../../codex/dept-real-pc');
+        if (typeof desktop.inputDesktop === 'function') {
+          const result = await desktop.inputDesktop({
+            ...resolveToolDesktop(args, desktopCtx),
+            action: 'type',
+            text: args.text,
+          });
+          if (result && result.ok) return JSON.stringify(result);
+        }
+      } catch (err) {
+        if (signal && signal.aborted) throw err;
+      }
       let drv;
       try {
         drv = await getDriver(signal);
@@ -239,10 +353,60 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
         return `ERROR: escritura falló: ${err?.message || err}`;
       }
     },
+    async computer_navigate(args = {}, { signal } = {}) {
+      throwIfAborted(signal);
+      try {
+        const persisted = await tryPersistentComputer('navigate', args, desktopCtx, signal);
+        if (persisted) return persisted;
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+      try {
+        const desktop = require('../../codex/dept-real-pc');
+        const result = await desktop.navigateDesktop({
+          url: args.url,
+          ...resolveToolDesktop(args, desktopCtx),
+        });
+        return JSON.stringify({
+          ok: !!result.ok,
+          url: result.url,
+          title: result.title || '',
+          container: result.container,
+          pageLoaded: !!result.ok,
+        });
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        return `ERROR: computer_navigate falló host=${(function () { try { return new URL(String(args.url || '')).hostname; } catch (_) { return 'unknown'; } })()} status=${err && err.status != null ? err.status : 'n/a'} ${err && (err.detail || err.message) || err}`;
+      }
+    },
+    async computer_exec(args = {}, { signal } = {}) {
+      throwIfAborted(signal);
+      try {
+        const persisted = await tryPersistentComputer('exec', args, desktopCtx, signal);
+        if (persisted) return persisted;
+      } catch (err) {
+        if (signal?.aborted) throw err;
+      }
+      try {
+        const desktop = require('../../codex/dept-real-pc');
+        const result = await desktop.execInDesktop({
+          ...resolveToolDesktop(args, desktopCtx),
+          command: args.command,
+        });
+        return JSON.stringify({ ok: !!result.ok, code: result.code, stdout: result.stdout, stderr: result.stderr, container: result.container });
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        return `ERROR: computer_exec falló: ${err && (err.detail || err.message) || err}`;
+      }
+    },
   };
 
+  let wrapped = executors;
+  try {
+    wrapped = require('../engine-gateway').wrapExecutors(executors, { surface: 'computer' });
+  } catch (_) { wrapped = executors; }
   return {
-    executors,
+    executors: wrapped,
     async cleanup() {
       const drv = instance;
       instance = null;
@@ -292,6 +456,40 @@ const COMPUTER_TOOL_DEFINITIONS = [
           text: { type: 'string', description: 'Texto a escribir (máx 2000 caracteres).' },
         },
         required: ['text'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'computer_navigate',
+      description: 'Abre una URL pública http(s) en el navegador de la computadora compartida del departamento actual (webtop). Usa esto cuando el usuario pide abrir una página, GitHub o usar la computadora. Bloquea localhost/IPs privadas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'URL pública http(s) a abrir.' },
+          projectId: { type: 'string', description: 'Proyecto Codex opcional. Si falta, se usa la computadora compartida en ejecución.' },
+          departmentId: { type: 'string', description: 'Departamento actual de /code. Si falta, se usa el departamento seleccionado.' },
+        },
+        required: ['url'],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'computer_exec',
+      description: 'Ejecuta un comando corto en la computadora compartida del departamento actual (webtop, DISPLAY=:1).',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Comando bash -lc a ejecutar.' },
+          projectId: { type: 'string' },
+          departmentId: { type: 'string' },
+        },
+        required: ['command'],
         additionalProperties: false,
       },
     },

@@ -38,8 +38,32 @@ siragpt.com, www.siragpt.com, office.siragpt.com {
 		reverse_proxy backend:5000
 	}
 
+	handle /agent-computer/* {
+		forward_auth backend:5000 {
+			uri /api/agent-computer/embed-auth
+			copy_headers Cookie Authorization
+		}
+		uri strip_prefix /agent-computer
+		reverse_proxy siragpt-computer-orchestrator:8090 {
+			header_down -X-Frame-Options
+			header_down -Content-Security-Policy
+			flush_interval -1
+		}
+	}
+
 	handle {
 		reverse_proxy frontend:3000
+	}
+}
+
+# ── Agent Computer (noVNC / orchestrator). Separate host — do not merge into siragpt.com. ──
+computer.siragpt.com {
+	encode zstd gzip
+	tls internal
+	reverse_proxy siragpt-computer-orchestrator:8090 {
+		header_down -X-Frame-Options
+		header_down Content-Security-Policy "frame-ancestors https://siragpt.com https://www.siragpt.com"
+		flush_interval -1
 	}
 }
 
