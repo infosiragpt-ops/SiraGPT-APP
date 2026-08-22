@@ -32,7 +32,7 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           timeout: 60s
           command_timeout: 15m
-          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION
+          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION,BACKUP_ENV_AGE_RECIPIENT
           script: |
             set -euo pipefail
             cd /opt/siragpt
@@ -100,6 +100,18 @@ jobs:
             sha256sum "${LATEST}" > "${LATEST}.sha256"
             test -s "${LATEST}.sha256"
 
+            # 2b. Encrypted copy of the production .env into the same bucket
+            #     (age public-key encryption; private key is held offsite).
+            if [[ -f /opt/siragpt/.env && -n "${BACKUP_ENV_AGE_RECIPIENT:-}" ]] && command -v age >/dev/null 2>&1; then
+              ENV_ENC="backups/env/siraGPT_env_$(date -u +%Y%m%dT%H%M%SZ).age"
+              mkdir -p "$(dirname "${ENV_ENC}")"
+              age -r "${BACKUP_ENV_AGE_RECIPIENT}" -o "${ENV_ENC}" /opt/siragpt/.env
+              test -s "${ENV_ENC}"
+            else
+              ENV_ENC=""
+              echo "::notice::Skipping .env backup (missing file, recipient, or age binary)."
+            fi
+
             if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
               echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
               echo "Backup and checksum retained locally: ${LATEST}"
@@ -131,6 +143,12 @@ jobs:
             aws "${AWS_ARGS[@]}" s3 cp "${LATEST}.sha256" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}.sha256")" \
               --only-show-errors
 
+            if [[ -n "${ENV_ENC:-}" ]]; then
+              aws "${AWS_ARGS[@]}" s3 cp "${ENV_ENC}" "s3://${BACKUP_BUCKET}/$(basename "${ENV_ENC}")" \
+                --only-show-errors
+              echo "Encrypted .env uploaded: $(basename "${ENV_ENC}")"
+            fi
+
             echo "Backup and checksum uploaded: $(basename "${LATEST}")"
         env:
           # These are passed THROUGH to the remote shell via the `envs:`
@@ -140,3 +158,4 @@ jobs:
           BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
           BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
           BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          BACKUP_ENV_AGE_RECIPIENT: ${{ secrets.BACKUP_ENV_AGE_RECIPIENT }}
