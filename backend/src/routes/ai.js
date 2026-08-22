@@ -126,6 +126,7 @@ const _hashUserIdForSpan = (_otelSpans && _otelSpans.hashUserId)
   ? _otelSpans.hashUserId
   : (() => null);
 const operationalRag = require('../services/rag/operational-runtime');
+const sdie = require('../services/sdie');
 const chatLatencyPolicy = require('../services/chat-latency-policy');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -3068,8 +3069,26 @@ router.post(
       // of normal chat, not only isolated /api/rag endpoints. Long
       // attached/project files are indexed once per chat/project and the
       // prompt receives compact, cited evidence snippets.
+      //
+      // SDIE v2 Phase 1: summarize_full walks the entire document. Top-k
+      // RAG is the screenshot bug (editorial fragments instead of a
+      // synthesis). Skip retrieval when SDIE owns the turn.
       let operationalRagContext = null;
-      if (userId && !__publicWebReadonly) {
+      let __sdieSpec = null;
+      try {
+        if (sdie.isSdieV2Enabled() && processedFiles.length > 0) {
+          __sdieSpec = sdie.compileIntent(prompt);
+          if (sdie.shouldHandle({ prompt, files: processedFiles, spec: __sdieSpec }) && sdie.shouldSkipTopK(__sdieSpec)) {
+            console.log(`[sdie] skipping top-k RAG for ${__sdieSpec.strategy} coverage=${__sdieSpec.scope.coverage}`);
+          } else {
+            __sdieSpec = null;
+          }
+        }
+      } catch (sdieSpecErr) {
+        console.warn('[sdie] spec compile failed (RAG continues):', sdieSpecErr?.message || sdieSpecErr);
+        __sdieSpec = null;
+      }
+      if (userId && !__publicWebReadonly && !__sdieSpec) {
         try {
           operationalRagContext = await operationalRag.buildRuntimeContext({
             rag,
@@ -6138,6 +6157,43 @@ router.post(
             // client; if we then fall back to the plain stream we must wipe
             // that sentinel first (aiService.generateStream only appends).
             let __agenticDidStream = false;
+
+            // SDIE v2 Phase 1 — /chat and /code document+summary turns.
+            // Runs before generic RAG/agentic. Never claims OOXML edits
+            // (FEATURE_DOC_ENGINE / source-preserving / agent-runner).
+            try {
+              const referer = String(req.headers?.referer || req.get?.('referer') || '');
+              const surface = req.body?.surface
+                || req.body?.source
+                || (/\b\/code(?:\/|$|\?)/i.test(referer) ? 'code' : 'chat');
+              if (sdie.isSdieV2Enabled() && processedFiles.length > 0) {
+                const sdieResult = await sdie.runSdieTurn({
+                  prompt,
+                  files: processedFiles,
+                  surface,
+                  signal,
+                });
+                if (sdieResult.handled && sdieResult.answer) {
+                  try { res.write(`data: ${JSON.stringify({ content: sdieResult.answer })}\n\n`); } catch { /* socket gone */ }
+                  try {
+                    res.write(`data: ${JSON.stringify({
+                      type: 'sdie',
+                      engine: 'sdie-v2',
+                      strategy: sdieResult.spec?.strategy || null,
+                      surface,
+                      repairs: sdieResult.repairs || 0,
+                    })}\n\n`);
+                  } catch { /* socket gone */ }
+                  console.log(`[sdie] approved ${sdieResult.spec?.strategy} surface=${surface} repairs=${sdieResult.repairs || 0} chars=${sdieResult.answer.length}`);
+                  return sdieResult.answer;
+                }
+                if (sdieResult.reason && sdieResult.reason !== 'not_sdie_turn' && sdieResult.reason !== 'flag_off') {
+                  console.log(`[sdie] declined (${sdieResult.reason}); falling back to generic path`);
+                }
+              }
+            } catch (sdieErr) {
+              console.warn('[sdie] generate short-circuit failed (generic path continues):', sdieErr?.message || sdieErr);
+            }
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
             // do OpenAI-style tool calls AND there are no images
@@ -6318,6 +6374,8 @@ router.post(
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
+                  processedFiles,
+                  surface: req.body?.surface || req.body?.source || 'chat',
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
