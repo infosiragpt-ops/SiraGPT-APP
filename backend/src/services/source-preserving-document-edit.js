@@ -196,6 +196,15 @@ function isSourcePreservingEditRequest(prompt, files = []) {
     && primaryEditVerb
     && /\b(documento|archivo|word|docx|tesis|general|principal|contenido)\b/.test(text);
 
+  // FEATURE_DOC_ENGINE: this MUST run BEFORE !editVerb. "pasa" is not a
+  // structural verb, so "pasalo a UPN" used to return false here and the
+  // SSE pre-loop never called tryGenerate.
+  const fileCount = Array.isArray(files) ? files.length : (files ? 1 : 0);
+  const transformCue = /\b(formato|format|plantilla|template|upn|pasalo|pasala)\b/.test(text);
+  const passCue = /\bpasa\w*\b/.test(text);
+  // 2+ adjuntos + cue. 1 adjunto + pasa. 0 adjuntos + pasa (para que
+  // resolveRecentEditableFileIds no se corte con files=[]).
+  if (transformCue && (fileCount >= 2 || passCue)) return true;
   if (!editVerb) return false;
   // "completa el anexo 3 … y dame un nuevo word" = edita el adjunto y
   // entregame el archivo actualizado, NO un documento desde cero. El veto de
@@ -208,6 +217,9 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (explicitFreshDeliverable && !preservation && !concreteEditTarget && !explicitAttachedMutation) return false;
   if (sameDocumentCue && (structuralEditVerb || strongStructuralVerb)) return true;
   if (hasFiles) {
+    // "pasa este word al formato UPN" — pasa no está en structuralEditVerb;
+    // sin esto el SSE pre-loop nunca llama tryGenerate y el hook no corre.
+    if (/\bpasa\w*\b/.test(text) && /\b(formato|format|plantilla|template|upn)\b/.test(text)) return true;
     if (professionalEditingIntent) return true;
     if (editorialCorrectionIntent) return true;
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
@@ -535,7 +547,7 @@ function resolveGeneratedArtifactPath(row = {}) {
   }
 }
 
-async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, limit = 8 } = {}) {
+async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, limit = 8, lastArtifactId } = {}) {
   if (!userId || !chatId) return [];
   const rows = prisma?.generatedArtifact?.findMany
     ? await prisma.generatedArtifact.findMany({
@@ -575,6 +587,14 @@ async function loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, 
     }))
     .filter((row) => row.path && isSupportedSourcePreservingFile(row));
   const messageArtifacts = await loadRecentAssistantArtifactSourceFiles(prisma, { chatId, limit });
+  const wanted = String(lastArtifactId || '').trim();
+  if (wanted) {
+    const pinned = dbArtifacts.find((row) => String(row.artifactId || '') === wanted)
+      || messageArtifacts.find((row) => String(row.artifactId || '') === wanted);
+    if (pinned) {
+      return dedupeFiles([pinned, ...dbArtifacts, ...messageArtifacts]);
+    }
+  }
   return dedupeFiles([...dbArtifacts, ...messageArtifacts]);
 }
 
@@ -8382,18 +8402,99 @@ async function tryGenerateSourcePreservingDocumentEdit({
   prompt,
   displayPrompt,
   signal,
+  lastArtifactId,
 } = {}) {
   const requestText = displayPrompt || prompt || '';
   const sourceFiles = await loadEditableSourceFiles(prisma, { userId, fileIds, chatId, prompt: requestText });
   // Attached images travel outside the editable set: they are candidate
   // replacement payloads for "reemplaza la foto por la imagen adjunta".
   const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
-  const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
+  const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId, lastArtifactId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
-  if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
+  const currentUploadDocx = (Array.isArray(sourceFiles) ? sourceFiles : [])
+    .filter((file) => file?.source === 'current_upload' && isDocxFile(file));
+  const allDocx = (Array.isArray(sourceFiles) ? sourceFiles : []).filter(isDocxFile);
+  // Flag + (2+ DOCX any source + formato|plantilla|UPN|pasalo) OR 2 current_upload.
+  // Live miss: files tagged recent_attachment (no fileIds) never hit the hook.
+  const wantsDocEnginePair = (() => {
+    try {
+      const flags = require('./doc-engine/flags');
+      if (!flags.isDocEngineEnabled()) return false;
+      if (allDocx.length >= 2 && flags.isTemplateTransformRequest(requestText, allDocx)) return true;
+      return currentUploadDocx.length >= 2;
+    } catch {
+      return false;
+    }
+  })();
+  if (!isSourcePreservingEditRequest(requestText, intentFiles) && !wantsDocEnginePair) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });
   const supported = selection.sourceFile;
+
+  // FEATURE_DOC_ENGINE (default off). Hook más pequeño: DESPUÉS del select
+  // (que siempre toma currentDocx[0] — si la plantilla UPN va primero en
+  // fileIds, editaría los XXXXXXXX) y ANTES de generateSourcePreservingDocumentEdit.
+  // ≥2 DOCX current_upload → classifyTemplateVsContent (styles/XXXX/UPN vs
+  // cuerpo largo) → transformToTemplate in-process (PizZip). Cubre /chat,
+  // document_edit, /api/doc y agent-task. No se engancha el SSE pre-loop
+  // ni fillDocxCoverBuffer.
+  try {
+    if (wantsDocEnginePair) {
+      const { tryDocEngineAfterSelection } = require('./doc-engine/chat-bridge');
+      const hit = await tryDocEngineAfterSelection({
+        files: allDocx.length >= 2 ? allDocx : currentUploadDocx,
+        prompt,
+        displayPrompt: requestText,
+        userId,
+        chatId,
+        signal,
+      });
+      if (hit) {
+        await recordSourcePreservingVersion(prisma, {
+          result: hit,
+          sourceFile: hit.contentFile || supported,
+          userId,
+          chatId,
+        });
+        return hit;
+      }
+    }
+  } catch (err) {
+    try { console.warn(`[doc-engine] post-select hook fell through: ${err?.message || err}`); } catch { /* noop */ }
+  }
+
+  // NEVER professional-edit a plantilla (XXXX / placeholders) when another
+  // DOCX has real prose. Live 23:57Z: hook classified correctly, transform
+  // produced 16k words, validation dropped it, then referenced_filename
+  // picked Formato and "mejoré 11 párrafo(s)" of XXXX.
+  if (allDocx.length >= 2) {
+    try {
+      const {
+        peekDocxXml,
+        looksLikePlaceholderDocx,
+        looksLikeRealProseDocx,
+      } = require('./doc-engine/transform-to-template');
+      const scored = allDocx.map((file) => {
+        const peek = peekDocxXml(file);
+        return { file, peek, placeholder: looksLikePlaceholderDocx(file, peek), prose: looksLikeRealProseDocx(file, peek) };
+      });
+      const plantilla = scored.find((row) => row.placeholder);
+      const prose = scored.find((row) => row.prose && row.file !== (plantilla && plantilla.file));
+      const supportedIsPlantilla = Boolean(
+        plantilla
+        && supported
+        && (supported === plantilla.file
+          || supported.id === plantilla.file.id
+          || String(supported.originalName || supported.filename || '') === String(plantilla.file.originalName || plantilla.file.filename || ''))
+      );
+      if (plantilla && prose && (supportedIsPlantilla || !supported)) {
+        try { console.warn('[doc-engine] refusing professional-edit on placeholder plantilla; another docx has real prose'); } catch { /* noop */ }
+        return null;
+      }
+    } catch (guardErr) {
+      try { console.warn(`[doc-engine] placeholder guard skipped: ${guardErr && guardErr.message || guardErr}`); } catch { /* noop */ }
+    }
+  }
 
   // Explicit plural scope ("todos los documentos", "cada archivo", "ambos")
   // means one immutable edited copy per current upload. The old selector chose

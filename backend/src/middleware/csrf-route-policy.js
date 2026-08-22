@@ -37,6 +37,7 @@ const EXPENSIVE_GENERATION_MOUNTS = Object.freeze([
   '/api/github-search',
   '/api/x-search',
   '/api/doc-agent',
+  '/api/documents',
   '/api/opencode',
   '/api/search',
   '/api/search-brain',
