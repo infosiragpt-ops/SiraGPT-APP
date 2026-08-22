@@ -49,3 +49,13 @@ export const ACADEMIC_SEARCH_PATTERNS = {
   publication: PUBLICATION_PATTERN,
   action: SEARCH_ACTION_PATTERN,
 }
+
+/** FE-061: never send the raw academic query (PII) to analytics. */
+export function analyticsSafeAcademicQuery(value: string): { kind: "academic"; length: number; flagged: boolean } {
+  const text = String(value || "")
+  return {
+    kind: "academic",
+    length: text.length,
+    flagged: isAcademicResearchPrompt(text),
+  }
+}

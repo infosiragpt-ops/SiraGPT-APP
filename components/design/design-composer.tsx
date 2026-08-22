@@ -114,7 +114,7 @@ export function DesignComposer({
 }: Props) {
   const [value, setValue] = React.useState("")
   const [models, setModels] = React.useState<AiModel[]>([])
-  const [modelId, setModelId] = React.useState<string>(initialModel || "gpt-4o")
+  const [modelId, setModelId] = React.useState<string>(initialModel || "deepseek-v4-flash")
   const [effort, setEffort] = React.useState<Effort>("balanced")
   const [visibility, setVisibility] = React.useState<Visibility>("private")
 
@@ -145,7 +145,7 @@ export function DesignComposer({
       hits.unshift({ name: m.name, display: m.displayName || m.name })
     }
     // Absolute fallback
-    if (hits.length === 0) hits.push({ name: "gpt-4o", display: "GPT-4o" })
+    if (hits.length === 0) hits.push({ name: "deepseek-v4-flash", display: "DeepSeek V4 Flash" })
     return hits
   }, [models, modelId])
 

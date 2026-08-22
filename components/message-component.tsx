@@ -277,11 +277,29 @@ const isDocumentLikeAttachment = (file: any) => {
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
 };
 
+const resolveSameOriginUploadUrl = (pathOrUrl: string) => {
+    const raw = String(pathOrUrl || "").trim();
+    if (!raw) return "";
+    if (/^(data:|blob:)/i.test(raw)) return raw;
+    try {
+        const parsed = /^(https?:|\/\/)/i.test(raw)
+            ? new URL(raw, "https://siragpt.com")
+            : new URL(raw, "https://siragpt.com");
+        if (parsed.pathname.startsWith("/uploads/")) {
+            return `${parsed.pathname}${parsed.search || ""}`;
+        }
+    } catch {
+        /* fall through */
+    }
+    return raw;
+};
+
 const resolveUserImageAttachmentUrl = (file: any) => {
     const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
     if (!imageUrl) return "";
+    const sameOrigin = resolveSameOriginUploadUrl(imageUrl) || imageUrl;
     const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-    return appendUploadAuthToken(imageUrl, token);
+    return appendUploadAuthToken(sameOrigin, token);
 };
 
 const formatAgentTaskUserContent = (content: string) => {
@@ -362,6 +380,85 @@ function backendUrl(pathOrUrl: string) {
     const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000";
     return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
 }
+
+/** Same-origin /uploads path so <img> can send the HttpOnly cookie.
+ *  Stored video cards often have http://localhost:5000/uploads/... or an
+ *  api-host absolute URL that the browser cannot load (mixed content / no cookie).
+ */
+function resolveVideoCardImageUrl(pathOrUrl: string) {
+    const rewritten = resolveSameOriginUploadUrl(pathOrUrl);
+    if (!rewritten) return "";
+    if (/^(data:|blob:)/i.test(rewritten)) return rewritten;
+    if (/^https?:/i.test(rewritten)) return rewritten;
+    return rewritten.startsWith("/") ? rewritten : `/${rewritten}`;
+}
+
+function VideoCardFilmPlaceholder({ variant }: { variant: "poster" | "thumb" }) {
+    return (
+        <span
+            className={variant === "poster" ? "video-liquid-poster-ph" : "video-liquid-thumb video-liquid-thumb-ph"}
+            aria-hidden="true"
+        >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round">
+                <rect x="3.4" y="5.4" width="17.2" height="13.2" rx="1.7" />
+                <path d="M3.4 9.2h17.2M8.1 5.4v3.8M15.9 5.4v3.8M8.1 14.8v3.8M15.9 14.8v3.8" />
+                <circle cx="12" cy="13.15" r="2.05" />
+            </svg>
+        </span>
+    );
+}
+
+function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "thumb" }) {
+    const [failed, setFailed] = React.useState(false);
+    const src = resolveVideoCardImageUrl(url);
+    if (!src || failed) {
+        return <VideoCardFilmPlaceholder variant={variant} />;
+    }
+    return (
+        <img
+            src={src}
+            alt=""
+            className={variant === "poster" ? "video-liquid-poster" : "video-liquid-thumb"}
+            loading="lazy"
+            onError={(event) => {
+                event.currentTarget.removeAttribute("src");
+                setFailed(true);
+            }}
+        />
+    );
+}
+
+function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => void }) {
+    const [failed, setFailed] = React.useState(false);
+    const imageUrl = resolveUserImageAttachmentUrl(file);
+    if (!imageUrl || failed) {
+        return (
+            <span
+                className="inline-flex h-[220px] w-[220px] max-w-full items-center justify-center rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                aria-hidden="true"
+            >
+                <svg viewBox="0 0 24 24" className="h-10 w-10" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round">
+                    <rect x="3.4" y="5.4" width="17.2" height="13.2" rx="1.7" />
+                    <path d="M3.4 9.2h17.2M8.1 5.4v3.8M15.9 5.4v3.8M8.1 14.8v3.8M15.9 14.8v3.8" />
+                    <circle cx="12" cy="13.15" r="2.05" />
+                </svg>
+            </span>
+        );
+    }
+    return (
+        <img
+            src={imageUrl}
+            alt={file.name || file.originalName || "Image"}
+            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
+            onClick={() => onOpen(imageUrl)}
+            onError={(event) => {
+                event.currentTarget.removeAttribute("src");
+                setFailed(true);
+            }}
+        />
+    );
+}
+
 
 function escapeHtml(value: unknown) {
     return String(value ?? "")
@@ -1071,8 +1168,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const agentTraceView = extractAgentTrace(message);
     const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
-    const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
-      (isStreaming && !message.content) || !!(message as any).progressStage
+    const isThinking = isAssistant && !message.error && !hasLiveReasoning && !message.content && (
+      isStreaming || !!(message as any).progressStage
     );
     // const isThinking = isAssistant && message.content === null;
 
@@ -2210,41 +2307,16 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         };
 
         return (
-            <Card
-                data-testid="generated-document-card"
-                data-preview-openable={onDocumentPreview ? "true" : undefined}
-                role={onDocumentPreview ? "button" : undefined}
-                tabIndex={onDocumentPreview ? 0 : undefined}
-                aria-label={`Previsualizar ${presentationData.filename}`}
-                onClick={onDocumentPreview ? previewPPT : undefined}
-                onKeyDown={onDocumentPreview ? (event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault()
-                        previewPPT()
-                    }
-                } : undefined}
-                className="mt-3 cursor-pointer p-4 transition-colors hover:bg-muted/30 active:bg-muted/45"
-            >
-                <div className="flex items-center gap-3">
-                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-orange-50 text-orange-600 dark:bg-orange-950/40">
-                        <PresentationIcon className="h-6 w-6" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold">{presentationData.filename}</div>
-                        <div className="text-xs text-muted-foreground">Documento · PPTX</div>
-                    </div>
-                    <div className="flex shrink-0 gap-2" onClick={(event) => event.stopPropagation()}>
-                        <Button size="sm" variant="default" onClick={previewPPT} className="bg-blue-600 hover:bg-blue-700">
-                            <Eye className="h-4 w-4 mr-2" />
-                            Previsualizar
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={downloadPPT}>
-                            <Download className="h-4 w-4 mr-2" />
-                            Descargar
-                        </Button>
-                    </div>
-                </div>
-            </Card>
+            <div className="flex gap-2 mt-4">
+                <Button size="sm" variant="default" onClick={previewPPT} className="bg-blue-600 hover:bg-blue-700">
+                    <Eye className="h-4 w-4 mr-2" />
+                    Preview
+                </Button>
+                <Button size="sm" variant="outline" onClick={downloadPPT}>
+                    <Download className="h-4 w-4 mr-2" />
+                    Download
+                </Button>
+            </div>
         );
     };
 
@@ -2263,6 +2335,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         const imageCount = Number(videoEntry.imageCount || sourceImageUrls.length || 0)
         const durationValue = String(videoEntry.requestedDuration || videoEntry.duration || '').replace(/s$/i, '')
         const durationLabel = durationValue ? `${durationValue}s` : null
+        const requestedAspect = String(videoEntry.aspect_ratio || videoEntry.aspectRatio || 'auto').trim()
+        const previewAspect = ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16'].includes(requestedAspect)
+            ? requestedAspect
+            : '16:9'
         const metaLine = [
             videoEntry.generationType === 'reference-to-video'
                 ? 'Referencias'
@@ -2271,7 +2347,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     : 'Texto a video',
             videoEntry.resolution,
             durationLabel,
-            videoEntry.aspect_ratio || videoEntry.aspectRatio,
+            requestedAspect,
         ].filter(Boolean).join(' / ')
         const modelLabel = videoEntry.modelDisplayName || videoEntry.model || 'SiraGPT Video'
         const isProcessing = status === 'processing' || status === 'in_progress' || status === 'queued'
@@ -2311,7 +2387,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
                 {isProcessing ? (
                     <div className="video-liquid-stage mt-3">
-                        <div className="video-liquid-preview" aria-hidden="true">
+                        <div className="video-liquid-preview" data-aspect={previewAspect} aria-hidden="true">
+                            {sourceImageUrls[0] ? (
+                                <VideoCardStill url={sourceImageUrls[0]} variant="poster" />
+                            ) : null}
                             <span className="video-liquid-scan" />
                             <span className="video-liquid-contour video-liquid-contour-a" />
                             <span className="video-liquid-contour video-liquid-contour-b" />
@@ -2333,12 +2412,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         {sourceImageUrls.length > 0 ? (
                             <div className="mt-3 flex items-center gap-1.5">
                                 {sourceImageUrls.slice(0, 4).map((url: string, index: number) => (
-                                    <img
+                                    <VideoCardStill
                                         key={`${url}-${index}`}
-                                        src={backendUrl(url)}
-                                        alt=""
-                                        className="video-liquid-thumb"
-                                        loading="lazy"
+                                        url={url}
+                                        variant="thumb"
                                     />
                                 ))}
                                 {sourceImageUrls.length > 4 ? (
@@ -2361,6 +2438,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             key={filename}             // don’t remount unless the file changes
                             ref={videoRef}
                             className="video-liquid-player"
+                            data-aspect={previewAspect}
                             controls
                             preload="auto"
                             playsInline
@@ -2825,39 +2903,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 };
 
                                 return (
-                                    <Card
-                                        key={index}
-                                        data-testid="generated-document-card"
-                                        data-preview-openable={canPreviewFile ? "true" : undefined}
-                                        role={canPreviewFile ? "button" : undefined}
-                                        tabIndex={canPreviewFile ? 0 : undefined}
-                                        aria-label={canPreviewFile ? `Previsualizar ${fileName}` : fileName}
-                                        onClick={canPreviewFile ? () => onDocumentPreview && onDocumentPreview({
-                                            url: previewUrl,
-                                            downloadUrl: resolvedDownloadUrl || undefined,
-                                            filename: fileName,
-                                            previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
-                                                ? `/api/files/${file.id}/render?target=pdf`
-                                                : undefined,
-                                        }) : undefined}
-                                        onKeyDown={canPreviewFile ? (event) => {
-                                            if (event.key === "Enter" || event.key === " ") {
-                                                event.preventDefault()
-                                                onDocumentPreview && onDocumentPreview({
-                                                    url: previewUrl,
-                                                    downloadUrl: resolvedDownloadUrl || undefined,
-                                                    filename: fileName,
-                                                    previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
-                                                        ? `/api/files/${file.id}/render?target=pdf`
-                                                        : undefined,
-                                                })
-                                            }
-                                        } : undefined}
-                                        className={cn(
-                                            "p-5 hover:shadow-lg transition-all duration-200 border-2 border-border/50 hover:border-primary/30 bg-gradient-to-br from-card to-card/50",
-                                            canPreviewFile && "cursor-pointer active:bg-muted/30",
-                                        )}
-                                    >
+                                    <Card key={index} className="p-5 hover:shadow-lg transition-all duration-200 border-2 border-border/50 hover:border-primary/30 bg-gradient-to-br from-card to-card/50">
                                         <div className="flex items-start gap-4">
                                             <div className="flex-shrink-0 p-3 rounded-xl bg-primary/5">
                                                 {getFileIcon()}
@@ -2877,7 +2923,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                     )}
                                                 </div>
 
-                                                <div className="flex flex-wrap gap-2" onClick={(event) => event.stopPropagation()}>
+                                                <div className="flex flex-wrap gap-2">
                                                     <Button
                                                         variant="outline"
                                                         size="sm"
@@ -3076,18 +3122,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         <div className="flex flex-wrap justify-end gap-2">
                             {parsedFiles
                                 .filter(isRenderableImageAttachment)
-                                .map((file: any, index: number) => {
-                                    const imageUrl = resolveUserImageAttachmentUrl(file);
-                                    return (
-                                        <img
-                                            key={`img-${index}`}
-                                            src={imageUrl}
-                                            alt={file.name || file.originalName || "Image"}
-                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                                            onClick={() => setSelectedImage(imageUrl)}
-                                        />
-                                    );
-                                })}
+                                .map((file: any, index: number) => (
+                                    <UserChatImage
+                                        key={`img-${index}`}
+                                        file={file}
+                                        onOpen={setSelectedImage}
+                                    />
+                                ))}
                         </div>
                     </div>
                 )}
@@ -3240,10 +3281,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
-                        ) : isThinking ? (
+                        ) : isThinking && !hasAgentTrace ? (
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}
                                 pct={(message as any).progressPct ?? null}
+                                steps={(message as any).agentSteps || (message as any).reasoningToolCalls || []}
                             />
                         ) : (
                             <>

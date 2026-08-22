@@ -128,3 +128,36 @@ export function deleteWorkspaceFile(
     mirror: { kind: "delete", path },
   }
 }
+
+
+/** OLA200_WAVE_F FE-040 — refuse a stale local snapshot over a newer server etag. */
+export type WorkspaceRevision = {
+  etag?: string | null
+  revision?: number | null
+  updatedAt?: number | null
+}
+
+export function workspaceRevisionRank(rev?: WorkspaceRevision | null): number {
+  if (!rev) return 0
+  const n = Number(rev.revision)
+  if (Number.isFinite(n) && n > 0) return n
+  const t = Number(rev.updatedAt)
+  if (Number.isFinite(t) && t > 0) return t
+  return 0
+}
+
+export function applyServerWorkspaceIfNewer<T extends WorkspaceRevision>(
+  local: T,
+  server: T,
+): { applied: T; stale: boolean } {
+  const localRank = workspaceRevisionRank(local)
+  const serverRank = workspaceRevisionRank(server)
+  const localEtag = String(local?.etag || "")
+  const serverEtag = String(server?.etag || "")
+  if (serverEtag && localEtag && serverEtag !== localEtag && serverRank >= localRank) {
+    return { applied: server, stale: false }
+  }
+  if (serverRank > localRank) return { applied: server, stale: false }
+  if (localRank > serverRank) return { applied: local, stale: true }
+  return { applied: serverEtag ? server : local, stale: false }
+}

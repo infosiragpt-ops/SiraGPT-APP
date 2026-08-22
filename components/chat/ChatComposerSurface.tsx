@@ -45,6 +45,8 @@ export function ChatComposerSurface({
   textarea,
   toolbar,
   footer = null,
+  layout = "row",
+  expanded = false,
 }: {
   overlayVisible?: boolean
   overlay?: React.ReactNode
@@ -54,6 +56,8 @@ export function ChatComposerSurface({
   textarea: React.ReactNode
   toolbar: React.ReactNode
   footer?: React.ReactNode
+  layout?: "row" | "stacked"
+  expanded?: boolean
 }) {
   return (
     <div className="relative">
@@ -61,9 +65,12 @@ export function ChatComposerSurface({
       {slashMenu}
       <div
         data-testid="chat-composer-surface"
+        data-composer-layout={layout}
+        data-expand-composer={expanded ? "1" : "0"}
         className={cn(
           "composer-surface group/composer relative",
           overlayVisible ? "overflow-visible" : "overflow-hidden",
+          expanded && "is-expanded",
         )}
       >
         <div className="composer-context-tray">

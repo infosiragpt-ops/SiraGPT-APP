@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -112,22 +112,18 @@ export default function PaymentsPage() {
   }, [payments])
 
   return (
-    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">Pagos</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">Transacciones reales registradas en la plataforma</p>
-            </div>
-          </div>
-        </div>
-        <Button variant="outline" onClick={loadPayments} disabled={loading} className="gap-2">
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Recargar
-        </Button>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Pagos"
+        description="Transacciones reales registradas en la plataforma"
+        actions={
+          <Button variant="outline" size="sm" onClick={loadPayments} disabled={loading} className="h-8 gap-1.5 text-[13px]">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Recargar
+          </Button>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
@@ -270,6 +266,7 @@ export default function PaymentsPage() {
           </div>
         </CardContent>
       </Card>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

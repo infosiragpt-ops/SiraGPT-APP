@@ -483,22 +483,7 @@ export function CodeWorkspace() {
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WorkspaceTopBar
         openPanels={openPanels}
-        activePanel={activePanel}
         onTogglePanel={handleTogglePanel}
-        onClosePanel={handleClosePanel}
-        toolTab={
-          activeTool && activeTool !== "git" && activeTool !== "validation"
-            ? WORKSPACE_TOOLS[activeTool]
-            : null
-        }
-        toolTabActive={!newTabOpen}
-        onFocusToolTab={() => {
-          setMobileView("preview")
-          setNewTabOpen(false)
-        }}
-        onCloseToolTab={() => setActiveTool(null)}
-        newTabOpen={newTabOpen}
-        onCloseNewTab={() => setNewTabOpen(false)}
         toolsMenu={
           <Button
             type="button"
@@ -521,7 +506,6 @@ export function CodeWorkspace() {
           setPaletteOpen(true)
         }}
         onOpenInvite={() => setInviteOpen(true)}
-        inviteOpen={inviteOpen}
         onOpenCode={() => {
           setActiveTool(null)
           setNewTabOpen(false)

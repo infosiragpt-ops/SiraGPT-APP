@@ -20,8 +20,20 @@ import * as React from "react"
 import { ChevronDown, Search, Trash2, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { CODE_RUNNER_ACTIVE_EVENT, getActiveHostRunId, useCodeWorkspace } from "@/lib/code-workspace-context"
+import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT,
+  CODE_RUNNER_ACTIVE_EVENT,
+  getActiveCodexProject,
+  getActiveDepartmentComputer,
+  getActiveHostRunId,
+  setActiveHostRunId,
+  useCodeWorkspace,
+} from "@/lib/code-workspace-context"
+import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
+import { buildRuntimeEnv } from "@/lib/code-secrets"
+import { codexApi } from "@/lib/codex/codex-api"
 
 export type TerminalPanelProps = {
   open: boolean
@@ -43,6 +55,10 @@ const nextLineId = () => `line-${Date.now().toString(36)}-${++lineCounter}`
 
 export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   const { files, activeFolder } = useCodeWorkspace()
+  const workspaceProjectId = React.useMemo(
+    () => getActiveCodexProject() || codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }),
+    [activeFolder?.id],
+  )
   const [lines, setLines] = React.useState<Line[]>([])
   const [input, setInput] = React.useState("")
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -56,6 +72,13 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   // still picks it up (the CODE_RUNNER_ACTIVE_EVENT already fired by then).
   const [activeRunId, setActiveRunId] = React.useState<string | null>(() => getActiveHostRunId())
   const activeRunIdRef = React.useRef<string | null>(getActiveHostRunId())
+  const [departmentComputer, setDepartmentComputer] = React.useState<{ runId: string | null; projectId: string | null }>(() => ({
+    runId: getActiveDepartmentComputer(),
+    projectId: getActiveCodexProject(),
+  }))
+  const departmentComputerRef = React.useRef(departmentComputer)
+  const [codexProjectId, setCodexProjectId] = React.useState<string | null>(() => getActiveCodexProject())
+  const codexProjectIdRef = React.useRef<string | null>(getActiveCodexProject())
   const [busy, setBusy] = React.useState(false)
   const busyRef = React.useRef(false)
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -90,9 +113,125 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
     return () => window.removeEventListener(CODE_RUNNER_ACTIVE_EVENT, onActive as EventListener)
   }, [])
 
+  React.useEffect(() => {
+    const refresh = () => {
+      const next = { runId: getActiveDepartmentComputer(), projectId: getActiveCodexProject() }
+      departmentComputerRef.current = next
+      setDepartmentComputer(next)
+    }
+    refresh()
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, refresh)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, refresh)
+  }, [])
+
+  React.useEffect(() => {
+    const refresh = () => {
+      const id = getActiveCodexProject() || workspaceProjectId
+      codexProjectIdRef.current = id
+      setCodexProjectId(id)
+    }
+    refresh()
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refresh)
+    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refresh)
+  }, [workspaceProjectId])
+
+  const filesRef = React.useRef(files)
+  filesRef.current = files
+  const folderIdRef = React.useRef(activeFolder?.id ?? null)
+  folderIdRef.current = activeFolder?.id ?? null
+
+  const ensureHostSession = React.useCallback(async (): Promise<{ runId: string | null; error?: string }> => {
+    const existing = getActiveHostRunId() || activeRunIdRef.current
+    if (existing) {
+      const st = await hostRunnerService.status(existing)
+      if (st.running || st.ready || (st.phase && st.phase !== "error")) {
+        activeRunIdRef.current = existing
+        setActiveRunId(existing)
+        return { runId: existing }
+      }
+    }
+    let runId: string
+    try {
+      runId = crypto.randomUUID()
+    } catch {
+      runId = `run-${Math.random().toString(36).slice(2)}`
+    }
+    const fileMap: Record<string, string> = {}
+    for (const [path, file] of Object.entries(filesRef.current || {})) {
+      fileMap[path] = file?.content ?? ""
+    }
+    const started = await hostRunnerService.start(
+      fileMap,
+      runId,
+      buildRuntimeEnv(folderIdRef.current, filesRef.current),
+    )
+    if (started.disabled) {
+      return {
+        runId: null,
+        error: started.error || "El motor de ejecución está desactivado en este entorno (CODE_HOST_RUNNER).",
+      }
+    }
+    if (started.error) {
+      return { runId: null, error: started.error }
+    }
+    const id = started.runId || runId
+    setActiveHostRunId(id)
+    activeRunIdRef.current = id
+    setActiveRunId(id)
+    return { runId: id }
+  }, [])
+
+  const scrollKey = React.useMemo(() => {
+    const id = departmentComputer.runId || codexProjectId || activeFolder?.id || "local"
+    return `siragpt:code-shell:${id}`
+  }, [activeFolder?.id, codexProjectId, departmentComputer.runId])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const raw = window.sessionStorage.getItem(scrollKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as Line[]
+      if (Array.isArray(parsed) && parsed.length) setLines(parsed.slice(-200))
+    } catch {
+      /* ignore */
+    }
+  }, [scrollKey])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.sessionStorage.setItem(scrollKey, JSON.stringify(lines.slice(-200)))
+    } catch {
+      /* ignore */
+    }
+  }, [lines, scrollKey])
+
   const print = React.useCallback((text: string, kind: Line["kind"] = "out") => {
     setLines((prev) => [...prev, { id: nextLineId(), kind, text }])
   }, [])
+
+  React.useEffect(() => {
+    if (!open) return
+    if (departmentComputerRef.current.runId || codexProjectIdRef.current) return
+    if (getActiveHostRunId() || activeRunIdRef.current) return
+    let cancelled = false
+    void (async () => {
+      busyRef.current = true
+      setBusy(true)
+      print("Iniciando sesión de terminal…", "info")
+      const session = await ensureHostSession()
+      if (cancelled) return
+      if (session.error) print(session.error, "err")
+      else if (session.runId) print("Sesión lista. Los comandos se ejecutan en el workspace del servidor.", "info")
+      busyRef.current = false
+      setBusy(false)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [ensureHostSession, open, print])
+
 
   const clearLines = React.useCallback(() => {
     setLines([])
@@ -136,6 +275,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
     [activeFolder?.name, files, print],
   )
 
+  void runPseudo
   const runCommand = React.useCallback(
     async (raw: string) => {
       const cmd = raw.trim()
@@ -150,27 +290,14 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
       // Client-side conveniences regardless of run state.
       if (head === "clear") return clearLines()
       if (head === "help") {
-        const real = !!activeRunIdRef.current
         print(
-          real
-            ? [
-                "Terminal REAL — se ejecuta en el workspace del servidor de desarrollo activo.",
-                "Puedes usar cualquier comando de shell: ls, cat, npm run <script>, node -v, git status, etc.",
-                "  clear                 limpia la consola",
-                "  js <expr>             evalúa una expresión JS en el navegador",
-              ].join("\n")
-            : [
-                "Comandos disponibles (pseudo-shell, sin servidor activo):",
-                "  help                  muestra esta ayuda",
-                "  ls | dir              lista archivos del workspace",
-                "  cat <ruta>            muestra el contenido de un archivo",
-                "  pwd                   carpeta lógica activa",
-                "  echo <texto>          imprime texto",
-                "  clear                 limpia la consola",
-                "  js <expr>             evalúa una expresión JavaScript pura",
-                "",
-                "Pulsa ▶ Ejecutar para arrancar la app y obtener una TERMINAL REAL.",
-              ].join("\n"),
+          [
+            "Terminal — los comandos se ejecutan en el workspace del servidor.",
+            "Si el motor rechaza la sesion, se muestra el error real.",
+            "  help                  muestra esta ayuda",
+            "  clear                 limpia la consola",
+            "  js <expr>             evalua JS en el navegador",
+          ].join("\n"),
           "info",
         )
         return
@@ -187,28 +314,21 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
         return
       }
 
-      // REAL shell: a live host dev server exists → run the command for real in
-      // its workspace dir. Falls back to the pseudo-shell if the run vanished.
-      const runId = activeRunIdRef.current
-      if (runId) {
+      // Workspace / department computer: exec in the Codex sandbox (not the host).
+      const dept = departmentComputerRef.current
+      const projectId = dept.projectId || codexProjectIdRef.current || workspaceProjectId
+      if (projectId) {
         busyRef.current = true
         setBusy(true)
         try {
-          const res = await hostRunnerService.exec(runId, cmd)
-          if (res.unavailable) {
-            activeRunIdRef.current = null
-            setActiveRunId(null)
-            runPseudo(cmd)
-            return
-          }
-          const body = (res.output || "").replace(/\s+$/, "")
-          if (body) print(body, res.ok ? "out" : "err")
-          if (res.timedOut) print("⏱ el comando excedió el tiempo límite", "err")
+          const res = await codexApi.execInProject(projectId, cmd, dept.runId)
+          const body = `${res.stdout || ""}${res.stderr ? (res.stdout ? "\n" : "") + res.stderr : ""}`.replace(/\s+$/, "")
+          if (body) print(body, res.ok === false ? "err" : "out")
           if (!res.ok && typeof res.exitCode === "number" && res.exitCode !== 0) {
             print(`exit code ${res.exitCode}`, "err")
-          } else if (!res.ok && res.error && !body) {
-            print(res.error, "err")
           }
+        } catch (err) {
+          print(err instanceof Error ? err.message : "No se pudo ejecutar el comando.", "err")
         } finally {
           busyRef.current = false
           setBusy(false)
@@ -216,10 +336,50 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
         return
       }
 
-      // No live run → pseudo-shell.
-      runPseudo(cmd)
+      busyRef.current = true
+      setBusy(true)
+      try {
+        let runId = activeRunIdRef.current || getActiveHostRunId()
+        if (!runId) {
+          const session = await ensureHostSession()
+          if (session.error || !session.runId) {
+            print(session.error || "No se pudo iniciar la sesión de terminal.", "err")
+            return
+          }
+          runId = session.runId
+        }
+        const res = await hostRunnerService.exec(runId, cmd)
+        if (res.unavailable) {
+          const session = await ensureHostSession()
+          if (session.error || !session.runId) {
+            print(session.error || res.error || "No hay un servidor activo para ejecutar comandos.", "err")
+            return
+          }
+          const retry = await hostRunnerService.exec(session.runId, cmd)
+          const retryBody = (retry.output || "").replace(/\s+$/, "")
+          if (retryBody) print(retryBody, retry.ok ? "out" : "err")
+          if (retry.timedOut) print("⏱ el comando excedió el tiempo límite", "err")
+          if (!retry.ok && typeof retry.exitCode === "number" && retry.exitCode !== 0) {
+            print(`exit code ${retry.exitCode}`, "err")
+          } else if (!retry.ok && retry.error && !retryBody) {
+            print(retry.error, "err")
+          }
+          return
+        }
+        const body = (res.output || "").replace(/\s+$/, "")
+        if (body) print(body, res.ok ? "out" : "err")
+        if (res.timedOut) print("⏱ el comando excedió el tiempo límite", "err")
+        if (!res.ok && typeof res.exitCode === "number" && res.exitCode !== 0) {
+          print(`exit code ${res.exitCode}`, "err")
+        } else if (!res.ok && res.error && !body) {
+          print(res.error, "err")
+        }
+      } finally {
+        busyRef.current = false
+        setBusy(false)
+      }
     },
-    [activeRunIdRef, clearLines, print, runPseudo],
+    [clearLines, ensureHostSession, print, workspaceProjectId],
   )
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -267,6 +427,8 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
   return (
     <section
       aria-label="Shell - Terminal integrada"
+      data-workspace-shell={departmentComputer.runId || activeRunId || codexProjectId || workspaceProjectId ? "real" : "local"}
+      data-testid="workspace-shell-panel"
       className="flex h-full min-h-0 flex-col border-t border-[#d8d8d8] bg-[#fbfbfa]"
       style={{
         backgroundColor: TERMINAL_SURFACE,
@@ -299,9 +461,9 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
                 ? { backgroundColor: "#e3f4e8", color: "#1a7f37" }
                 : { backgroundColor: "#efefec", color: "#7a7f87" }
             }
-            title={activeRunId ? "Terminal real: comandos en el servidor de desarrollo activo" : "Pseudo-shell: arranca la app (▶ Ejecutar) para una terminal real"}
+            title={departmentComputer.runId || activeRunId || codexProjectId || workspaceProjectId ? "Terminal real: comandos en el workspace / computador del departamento" : "Pseudo-shell: abre un proyecto o departamento para una terminal real"}
           >
-            {busy ? "ejecutando…" : activeRunId ? "● real" : "○ local"}
+            {busy ? "ejecutando…" : departmentComputer.runId || activeRunId || codexProjectId || workspaceProjectId ? "● real" : "○ local"}
           </span>
         </div>
         <div className="flex min-w-0 items-center gap-1">

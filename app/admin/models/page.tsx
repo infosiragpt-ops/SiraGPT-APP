@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { 
   Bot, 
   Settings, 
@@ -15,7 +15,8 @@ import {
   CheckCircle,
   XCircle,
   Zap,
-  Database
+  Database,
+  Search
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -23,9 +24,9 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminStatCard, AdminPageBody } from "@/components/admin/admin-chrome"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -81,7 +82,7 @@ interface SyncStatus {
 const initialFormData = {
   name: '',
   displayName: '',
-  provider: 'OpenAI',
+  provider: 'DeepSeek',
   type: 'TEXT' as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC',
   icon: 'Bot',
   description: '',
@@ -95,6 +96,52 @@ function adminAuthHeaders(token: string | null, includeJson = false): HeadersIni
   if (includeJson) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
   return headers
+}
+
+/** Compact iOS-style switch: 32px track, 28px thumb, 44px tap target. */
+function ModelActiveSwitch({
+  checked,
+  disabled,
+  onCheckedChange,
+  ariaLabel,
+}: {
+  checked: boolean
+  disabled?: boolean
+  onCheckedChange: (next: boolean) => void
+  ariaLabel: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onCheckedChange(!checked)}
+      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-md disabled:opacity-60"
+    >
+      <span
+        aria-hidden
+        className="relative block overflow-hidden rounded-full"
+        style={{
+          width: 52,
+          height: 32,
+          backgroundColor: checked ? "#34C759" : "#D1D5DB",
+          transition: "background-color 160ms ease",
+        }}
+      >
+        <span
+          className="absolute top-[2px] block rounded-full bg-white shadow-md"
+          style={{
+            width: 28,
+            height: 28,
+            left: checked ? 22 : 2,
+            transition: "left 160ms ease",
+          }}
+        />
+      </span>
+    </button>
+  )
 }
 
 export default function ModelsPage() {
@@ -112,6 +159,8 @@ export default function ModelsPage() {
   const [selectedProvider, setSelectedProvider] = useState<string>('ALL PROVIDERS')
   const [selectedType, setSelectedType] = useState<string>('ALL TYPES')
   const [searchQuery, setSearchQuery] = useState('')
+  const [activosOpen, setActivosOpen] = useState(false)
+  const [activosQuery, setActivosQuery] = useState('')
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1)
@@ -138,7 +187,7 @@ export default function ModelsPage() {
       ])
     } catch (error) {
       console.error('Failed to load initial data:', error)
-      toast.error('Failed to load data')
+      toast.error('No se pudieron cargar los datos')
     } finally {
       setIsLoading(false)
     }
@@ -155,7 +204,7 @@ export default function ModelsPage() {
         const data = await response.json()
         setModels(data.models)
       } else {
-        toast.error('Failed to load models')
+        toast.error('No se pudieron cargar los modelos')
       }
     } catch (error) {
       console.error('Failed to load models:', error)
@@ -224,15 +273,15 @@ export default function ModelsPage() {
       const data = await response.json()
       
       if (data.success) {
-        toast.success(`Successfully fetched ${data.count} models from providers`)
+        toast.success(`Se obtuvieron ${data.count} modelos de los proveedores`)
         devLog('Fetched models:', data.models)
         devLog('Provider breakdown:', data.providers)
       } else {
-        toast.error(data.error || 'Failed to fetch models')
+        toast.error(data.error || 'No se pudieron obtener los modelos')
       }
     } catch (error) {
       console.error('Failed to fetch models:', error)
-      toast.error('Failed to fetch models')
+      toast.error('No se pudieron obtener los modelos')
     } finally {
       setIsFetching(false)
     }
@@ -250,14 +299,14 @@ export default function ModelsPage() {
       const data = await response.json()
       
       if (data.success) {
-        toast.success(`Models synced: ${data.result.created} created, ${data.result.updated} updated`)
+        toast.success(`Sincronizados: ${data.result.created} creados, ${data.result.updated} actualizados`)
         await Promise.all([loadModels(), loadStats(), loadSyncStatus()])
       } else {
-        toast.error(data.error || 'Failed to sync models')
+        toast.error(data.error || 'No se pudieron sincronizar los modelos')
       }
     } catch (error) {
       console.error('Failed to sync models:', error)
-      toast.error('Failed to sync models')
+      toast.error('No se pudieron sincronizar los modelos')
     } finally {
       setIsSyncing(false)
     }
@@ -284,7 +333,7 @@ export default function ModelsPage() {
       }
     } catch (error) {
       console.error('Failed to toggle scheduler:', error)
-      toast.error('Failed to toggle scheduler')
+      toast.error('No se pudo cambiar el programador')
     }
   }
 
@@ -300,14 +349,14 @@ export default function ModelsPage() {
       const data = await response.json()
       
       if (data.success) {
-        toast.success(`Immediate sync completed: ${data.result.created} created, ${data.result.updated} updated`)
+        toast.success(`Sincronización lista: ${data.result.created} creados, ${data.result.updated} actualizados`)
         await Promise.all([loadModels(), loadStats(), loadSyncStatus()])
       } else {
-        toast.error(data.error || 'Failed to run sync')
+        toast.error(data.error || 'No se pudo sincronizar')
       }
     } catch (error) {
       console.error('Failed to run immediate sync:', error)
-      toast.error('Failed to run sync')
+      toast.error('No se pudo sincronizar')
     } finally {
       setIsSyncing(false)
     }
@@ -330,10 +379,10 @@ export default function ModelsPage() {
         await Promise.all([loadModels(), loadStats()])
       } else {
         const error = await response.json()
-        toast.error(error.error || 'Failed to create model')
+        toast.error(error.error || 'No se pudo crear el modelo')
       }
     } catch (error) {
-      toast.error('Failed to create model')
+      toast.error('No se pudo crear el modelo')
     }
   }
 
@@ -367,30 +416,44 @@ export default function ModelsPage() {
         await Promise.all([loadModels(), loadStats()])
       } else {
         const error = await response.json()
-        toast.error(error.error || 'Failed to update model')
+        toast.error(error.error || 'No se pudo actualizar el modelo')
       }
     } catch (error) {
-      toast.error('Failed to update model')
+      toast.error('No se pudo actualizar el modelo')
     }
   }
 
+  const togglingIdsRef = useRef<Set<string>>(new Set())
+
   const toggleModelStatus = async (modelId: string, currentStatus: boolean) => {
+    if (togglingIdsRef.current.has(modelId)) return
+    togglingIdsRef.current.add(modelId)
+    const next = !currentStatus
+    setModels((prev) => prev.map((m) => (m.id === modelId ? { ...m, isActive: next } : m)))
+    setStats((prev) => prev ? {
+      ...prev,
+      active: Math.max(0, prev.active + (next ? 1 : -1)),
+      inactive: Math.max(0, prev.inactive + (next ? -1 : 1)),
+    } : prev)
     try {
       const token = localStorage.getItem('auth-token')
       const response = await authenticatedFetch(`${API_ROOT}/admin/models/${modelId}`, {
-        method: 'PUT',
+        method: 'PATCH',
         headers: adminAuthHeaders(token, true),
-        body: JSON.stringify({ isActive: !currentStatus })
+        body: JSON.stringify({ isActive: next })
       })
-
-      if (response.ok) {
-        toast.success(`Model ${!currentStatus ? 'activated' : 'deactivated'}`)
-        await Promise.all([loadModels(), loadStats()])
-      } else {
-        toast.error('Failed to update model')
-      }
+      if (!response.ok) throw new Error('toggle failed')
+      toast.success(next ? 'Modelo activado' : 'Modelo desactivado')
     } catch (error) {
-      toast.error('Failed to update model')
+      setModels((prev) => prev.map((m) => (m.id === modelId ? { ...m, isActive: currentStatus } : m)))
+      setStats((prev) => prev ? {
+        ...prev,
+        active: Math.max(0, prev.active + (currentStatus ? 1 : -1)),
+        inactive: Math.max(0, prev.inactive + (currentStatus ? -1 : 1)),
+      } : prev)
+      toast.error('No se pudo actualizar el modelo')
+    } finally {
+      togglingIdsRef.current.delete(modelId)
     }
   }
 
@@ -404,6 +467,19 @@ export default function ModelsPage() {
     
     return matchesSearch && matchesProvider && matchesType
   })
+
+  const activosModels = models
+    .filter((m) => m.isActive)
+    .slice()
+    .sort((a, b) => (a.displayName || a.name).localeCompare(b.displayName || b.name, 'es'))
+  const activosQ = activosQuery.trim().toLowerCase()
+  const activosVisible = activosQ
+    ? activosModels.filter((m) =>
+        m.displayName.toLowerCase().includes(activosQ) ||
+        m.name.toLowerCase().includes(activosQ) ||
+        m.provider.toLowerCase().includes(activosQ)
+      )
+    : activosModels
 
   // Pagination logic
   const totalFilteredModels = filteredModels.length
@@ -475,28 +551,25 @@ export default function ModelsPage() {
 
   if (isLoading) {
     return (
-      <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-4 pb-24 sm:px-6 lg:px-8">
-        <div className="flex items-center space-x-2">
-          <ThinkingIndicator size="sm" />
-          <span>Loading models...</span>
-        </div>
-      </div>
+      <>
+        <AdminPageHeader title="Modelos IA" description="Cargando catálogo…" />
+        <AdminPageBody>
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <ThinkingIndicator size="sm" />
+            <span>Cargando modelos…</span>
+          </div>
+        </AdminPageBody>
+      </>
     )
   }
 
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-4 px-4 py-4 pb-24 sm:space-y-6 sm:px-6 lg:px-8">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <SidebarTrigger className="mt-1 h-9 w-9 shrink-0 md:hidden" />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">AI Models</h1>
-            <p className="text-sm text-muted-foreground sm:text-base">Manage and sync AI models from multiple providers</p>
-          </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+    <>
+      <AdminPageHeader
+        title="Modelos IA"
+        description="Gestiona y sincroniza modelos de varios proveedores"
+        actions={
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
           {/* Vista previa de modelos disponibles en los proveedores (GET
               /admin/models/fetch — verificado en vivo: 574 modelos). */}
           <Button
@@ -504,13 +577,14 @@ export default function ModelsPage() {
             onClick={fetchModelsFromProviders}
             disabled={isFetching}
             size="sm"
+            className="h-8 text-[13px]"
           >
             {isFetching ? (
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Download className="mr-2 h-4 w-4" />
+              <Download className="mr-1.5 h-3.5 w-3.5" />
             )}
-            Fetch Models
+            Obtener
           </Button>
           
           <Button 
@@ -518,31 +592,30 @@ export default function ModelsPage() {
             onClick={syncModelsToDatabase} 
             disabled={isSyncing}
             size="sm"
+            className="h-8 text-[13px]"
           >
             {isSyncing ? (
-              <ThinkingIndicator size="sm" className="mr-2" />
+              <ThinkingIndicator size="sm" className="mr-1.5" />
             ) : (
-              <Upload className="mr-2 h-4 w-4" />
+              <Upload className="mr-1.5 h-3.5 w-3.5" />
             )}
-            <span className="hidden sm:inline">Sync Models</span>
-            <span className="sm:hidden">Sync</span>
+            Sincronizar
           </Button>
 
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="sm">
-                <Plus className="mr-2 h-4 w-4" />
-                <span className="hidden sm:inline">Add Model</span>
-                <span className="sm:hidden">Add</span>
+              <Button size="sm" className="h-8 text-[13px]">
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Agregar
               </Button>
             </DialogTrigger>
             <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg">
               <DialogHeader>
-                <DialogTitle>Add New AI Model</DialogTitle>
+                <DialogTitle>Agregar modelo de IA</DialogTitle>
               </DialogHeader>
               <form onSubmit={handleCreateModel} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="name">Model Name</Label>
+                  <Label htmlFor="name">Nombre del modelo</Label>
                   <Input
                     id="name"
                     placeholder="e.g., gpt-4"
@@ -552,7 +625,7 @@ export default function ModelsPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="displayName">Display Name</Label>
+                  <Label htmlFor="displayName">Nombre visible</Label>
                   <Input
                     id="displayName"
                     placeholder="e.g., GPT-4"
@@ -562,20 +635,20 @@ export default function ModelsPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="provider">Provider</Label>
+                  <Label htmlFor="provider">Proveedor</Label>
                   <Select value={formData.provider} onValueChange={(value) => setFormData({ ...formData, provider: value })}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                      {(providers.length ? providers : ['DeepSeek']).map((p) => (
                         <SelectItem key={p} value={p}>{p}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="type">Model Type</Label>
+                  <Label htmlFor="type">Tipo</Label>
                   <Select value={formData.type} onValueChange={(value) => setFormData({ ...formData, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' })}>
                     <SelectTrigger>
                       <SelectValue />
@@ -590,7 +663,7 @@ export default function ModelsPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
+                  <Label htmlFor="description">Descripción</Label>
                   <Textarea
                     id="description"
                     placeholder="Enter model description"
@@ -599,58 +672,94 @@ export default function ModelsPage() {
                   />
                 </div>
                 <Button type="submit" className="w-full">
-                  Create Model
+                  Crear modelo
                 </Button>
               </form>
             </DialogContent>
           </Dialog>
-        </div>
-      </div>
+          </div>
+        }
+      />
+      <AdminPageBody className="space-y-3 pb-24">
 
       {/* Stats Cards */}
       {stats && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
-              <CardTitle className="text-sm font-medium">Total Models</CardTitle>
-              <Database className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-              <div className="text-2xl font-bold">{stats.total}</div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
-              <CardTitle className="text-sm font-medium">Active Models</CardTitle>
-              <CheckCircle className="h-4 w-4 text-green-500" />
-            </CardHeader>
-            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-              <div className="text-2xl font-bold text-green-600">{stats.active}</div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
-              <CardTitle className="text-sm font-medium">Inactive Models</CardTitle>
-              <XCircle className="h-4 w-4 text-red-500" />
-            </CardHeader>
-            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-              <div className="text-2xl font-bold text-red-600">{stats.inactive}</div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2 sm:p-6 sm:pb-2">
-              <CardTitle className="text-sm font-medium">Providers</CardTitle>
-              <Zap className="h-4 w-4 text-blue-500" />
-            </CardHeader>
-            <CardContent className="p-4 pt-0 sm:p-6 sm:pt-0">
-              <div className="text-2xl font-bold">{Object.keys(stats.byProvider).length}</div>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <AdminStatCard title="Total" value={stats.total} icon={Database} />
+          <div className="relative">
+            <AdminStatCard
+              title="Activos"
+              value={stats.active}
+              icon={CheckCircle}
+              valueClassName="text-emerald-600"
+              description="Ver activos"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                setActivosQuery('')
+                setActivosOpen(true)
+              }}
+              className="absolute inset-0 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              aria-label="Ver activos"
+            />
+          </div>
+          <AdminStatCard title="Inactivos" value={stats.inactive} icon={XCircle} valueClassName="text-red-600" />
+          <AdminStatCard title="Proveedores" value={Object.keys(stats.byProvider).length} icon={Zap} />
         </div>
       )}
+
+      <Dialog open={activosOpen} onOpenChange={setActivosOpen}>
+        <DialogContent className="flex max-h-[80vh] max-w-lg flex-col gap-3 overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>Modelos activos ({activosModels.length})</DialogTitle>
+            <DialogDescription>
+              Desactiva modelos sin recorrer la tabla completa.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={activosQuery}
+              onChange={(e) => setActivosQuery(e.target.value)}
+              placeholder="Buscar por nombre o proveedor…"
+              className="pl-8"
+              autoFocus
+            />
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {activosVisible.length === 0 ? (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {activosModels.length === 0
+                  ? 'No hay modelos activos.'
+                  : 'Ningún activo coincide con la búsqueda.'}
+              </p>
+            ) : (
+              <ul className="divide-y">
+                {activosVisible.map((model) => (
+                  <li key={model.id} className="flex items-center gap-3 py-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">{model.displayName || model.name}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {model.provider}
+                        {model.displayName && model.name && model.displayName !== model.name ? ` · ${model.name}` : ''}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <ModelActiveSwitch
+                        checked={model.isActive}
+                        onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
+                        ariaLabel="Desactivar modelo"
+                      />
+                      <span className="text-xs font-medium text-green-600 dark:text-green-500">Activo</span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Auto-Sync Status — restored: GET /models/sync/status and the
           scheduler/run endpoints work (verified live); the card was hidden
@@ -660,14 +769,14 @@ export default function ModelsPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle className="text-lg">Auto-Sync Status</CardTitle>
+                <CardTitle className="text-base">Sincronización automática</CardTitle>
                 <CardDescription>
-                  Automatic model synchronization from providers
+                  Sincronización automática desde proveedores
                 </CardDescription>
               </div>
               <div className="flex items-center space-x-2">
                 <Badge variant={syncStatus.isScheduled ? "default" : "secondary"}>
-                  {syncStatus.isScheduled ? "Scheduled" : "Stopped"}
+                  {syncStatus.isScheduled ? "Programada" : "Detenida"}
                 </Badge>
                 <Button 
                   variant="outline" 
@@ -675,9 +784,9 @@ export default function ModelsPage() {
                   onClick={toggleScheduler}
                 >
                   {syncStatus.isScheduled ? (
-                    <><Pause className="mr-2 h-4 w-4" />Stop</>
+                    <><Pause className="mr-2 h-4 w-4" />Detener</>
                   ) : (
-                    <><Play className="mr-2 h-4 w-4" />Start</>
+                    <><Play className="mr-2 h-4 w-4" />Iniciar</>
                   )}
                 </Button>
                 <Button 
@@ -691,7 +800,7 @@ export default function ModelsPage() {
                   ) : (
                     <Zap className="mr-2 h-4 w-4" />
                   )}
-                  Sync Now
+                  Sincronizar
                 </Button>
               </div>
             </div>
@@ -699,27 +808,27 @@ export default function ModelsPage() {
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <p className="text-sm font-medium">Last Sync</p>
+                <p className="text-sm font-medium">Última sincronización</p>
                 <p className="text-sm text-muted-foreground">
                   {syncStatus.lastSync 
                     ? formatDate(syncStatus.lastSync.timestamp)
-                    : 'Never'
+                    : 'Nunca'
                   }
                 </p>
               </div>
               
               <div className="space-y-2">
-                <p className="text-sm font-medium">Next Sync</p>
+                <p className="text-sm font-medium">Próxima sincronización</p>
                 <p className="text-sm text-muted-foreground">
                   {syncStatus.nextRun && syncStatus.isScheduled
                     ? formatDate(syncStatus.nextRun)
-                    : 'Not scheduled'
+                    : 'No programada'
                   }
                 </p>
               </div>
               
               <div className="space-y-2">
-                <p className="text-sm font-medium">Last Result</p>
+                <p className="text-sm font-medium">Último resultado</p>
                 <div className="text-sm">
                   {syncStatus.lastSync?.result && (
                     <div className="space-x-4">
@@ -748,14 +857,14 @@ export default function ModelsPage() {
         <CardHeader>
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between space-y-2 sm:space-y-0">
             <div>
-              <CardTitle>Models ({totalFilteredModels})</CardTitle>
+              <CardTitle>Modelos ({totalFilteredModels})</CardTitle>
               <CardDescription>
-                Showing {startIndex + 1}-{Math.min(endIndex, totalFilteredModels)} of {totalFilteredModels} models
+                Mostrando {startIndex + 1}-{Math.min(endIndex, totalFilteredModels)} de {totalFilteredModels}
               </CardDescription>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
               <Input
-                placeholder="Search models..."
+                placeholder="Buscar modelos…"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full sm:w-48"
@@ -765,7 +874,7 @@ export default function ModelsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="ALL PROVIDERS">ALL PROVIDERS</SelectItem>
+                  <SelectItem value="ALL PROVIDERS">Todos los proveedores</SelectItem>
                   {providers.map((provider) => (
                     <SelectItem key={provider} value={provider}>
                       {provider.toUpperCase()}
@@ -795,14 +904,14 @@ export default function ModelsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Model</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Last Synced</TableHead>
-                <TableHead>Cost</TableHead>
-                <TableHead>Context</TableHead>
-                <TableHead>Actions</TableHead>
+                <TableHead>Modelo</TableHead>
+                <TableHead>Proveedor</TableHead>
+                <TableHead>Tipo</TableHead>
+                <TableHead>Estado</TableHead>
+                <TableHead>Última sync</TableHead>
+                <TableHead>Costo</TableHead>
+                <TableHead>Contexto</TableHead>
+                <TableHead>Acciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -866,10 +975,10 @@ export default function ModelsPage() {
                   
                   <TableCell>
                     <div className="flex items-center gap-2">
-                      <Switch
+                      <ModelActiveSwitch
                         checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
-                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
+                        ariaLabel={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
                       <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
                         {model.isActive ? "Activo" : "Inactivo"}
@@ -887,7 +996,7 @@ export default function ModelsPage() {
                           </div>
                         </>
                       ) : (
-                        <span className="text-muted-foreground">Never</span>
+                        <span className="text-muted-foreground">Nunca</span>
                       )}
                     </div>
                   </TableCell>
@@ -922,7 +1031,7 @@ export default function ModelsPage() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => handleEditModel(model)}>
                           <Settings className="mr-2 h-4 w-4" />
-                          Edit Model
+                          Editar
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
@@ -968,17 +1077,17 @@ export default function ModelsPage() {
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => handleEditModel(model)}>
                           <Settings className="mr-2 h-4 w-4" />
-                          Edit Model
+                          Editar
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
                   <div className="mt-2 flex items-center justify-between border-t border-border/60 pt-2">
                     <div className="flex items-center gap-2">
-                      <Switch
+                      <ModelActiveSwitch
                         checked={model.isActive}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
-                        aria-label={model.isActive ? "Desactivar modelo" : "Activar modelo"}
+                        ariaLabel={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
                       <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
                         {model.isActive ? "Activo" : "Inactivo"}
@@ -995,7 +1104,7 @@ export default function ModelsPage() {
             <div className="text-center py-8">
               <Bot className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <p className="text-muted-foreground">
-                No models found matching your criteria
+                No hay modelos que coincidan
               </p>
             </div>
           )}
@@ -1007,7 +1116,7 @@ export default function ModelsPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <p className="text-sm text-muted-foreground">
-                  Page {currentPage} of {totalPages} • {totalFilteredModels} total models
+                  Página {currentPage} de {totalPages} · {totalFilteredModels} modelos
                 </p>
               </div>
               <div className="flex items-center space-x-2">
@@ -1017,7 +1126,7 @@ export default function ModelsPage() {
                   onClick={goToPrevPage}
                   disabled={currentPage === 1}
                 >
-                  Previous
+                  Anterior
                 </Button>
                 
                 <div className="flex items-center space-x-1">
@@ -1053,7 +1162,7 @@ export default function ModelsPage() {
                   onClick={goToNextPage}
                   disabled={currentPage === totalPages}
                 >
-                  Next
+                  Siguiente
                 </Button>
               </div>
             </div>
@@ -1065,12 +1174,12 @@ export default function ModelsPage() {
       <Dialog open={editingModel !== null} onOpenChange={() => setEditingModel(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Model</DialogTitle>
+            <DialogTitle>Editar modelo</DialogTitle>
           </DialogHeader>
           {editingModel && (
             <form onSubmit={handleUpdateModel} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="edit-name">Model Name</Label>
+                <Label htmlFor="edit-name">Nombre del modelo</Label>
                 <Input
                   id="edit-name"
                   value={editingModel.name}
@@ -1079,7 +1188,7 @@ export default function ModelsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-displayName">Display Name</Label>
+                <Label htmlFor="edit-displayName">Nombre visible</Label>
                 <Input
                   id="edit-displayName"
                   value={editingModel.displayName}
@@ -1088,20 +1197,20 @@ export default function ModelsPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-provider">Provider</Label>
+                <Label htmlFor="edit-provider">Proveedor</Label>
                 <Select value={editingModel.provider} onValueChange={(value) => setEditingModel({ ...editingModel, provider: value })}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {(providers.length ? providers : ['OpenAI', 'Gemini', 'OpenRouter']).map((p) => (
+                    {(providers.length ? providers : ['DeepSeek']).map((p) => (
                       <SelectItem key={p} value={p}>{p}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-type">Type</Label>
+                <Label htmlFor="edit-type">Tipo</Label>
                 <Select value={editingModel.type} onValueChange={(value) => setEditingModel({ ...editingModel, type: value as 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' })}>
                   <SelectTrigger>
                     <SelectValue />
@@ -1116,7 +1225,7 @@ export default function ModelsPage() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="edit-description">Description</Label>
+                <Label htmlFor="edit-description">Descripción</Label>
                 <textarea
                   id="edit-description"
                   value={editingModel.description || ''}
@@ -1131,20 +1240,21 @@ export default function ModelsPage() {
                   checked={editingModel.isActive}
                   onCheckedChange={(checked) => setEditingModel({ ...editingModel, isActive: checked })}
                 />
-                <Label htmlFor="edit-isActive">Active</Label>
+                <Label htmlFor="edit-isActive">Activo</Label>
               </div>
               <div className="flex justify-end space-x-2">
                 <Button type="button" variant="outline" onClick={() => setEditingModel(null)}>
-                  Cancel
+                  Cancelar
                 </Button>
                 <Button type="submit">
-                  Update Model
+                  Guardar
                 </Button>
               </div>
             </form>
           )}
         </DialogContent>
       </Dialog>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

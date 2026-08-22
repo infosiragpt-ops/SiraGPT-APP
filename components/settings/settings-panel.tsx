@@ -1,14 +1,10 @@
 "use client"
 
-// ────────────────────────────────────────────────────────────
-// SettingsPanel — the full settings experience (nav + content),
-// reusable in two shapes:
-//   • variant="page"  → the /settings route (full screen, URL-synced)
-//   • variant="modal" → a floating Claude-style dialog opened from the
-//                       sidebar "Configuración" menu item.
-// All section logic + persistence (settings-context auto-save) is shared;
-// only the surrounding chrome differs per variant.
-// ────────────────────────────────────────────────────────────
+// SettingsPanel — previous advanced settings KEPT and improved.
+// Claude-like chrome (left nav + search + groups) wrapping the original
+// sections. DeepSeek-only models. No OpenRouter generate.
+// variant="page"  → /settings
+// variant="modal" → sidebar Configuración (⌘,)
 
 import React from "react"
 import Link from "next/link"
@@ -29,7 +25,7 @@ import {
   ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, MoonStar, Sun,
   LogOut, Download, Trash2, Github, Globe, Linkedin, Mail,
   ExternalLink, Search as SearchIcon, Camera, Plus,
-  AlertTriangle, Laptop} from "lucide-react"
+  AlertTriangle, Laptop, CreditCard, Gauge, Cpu} from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { apiClient } from "@/lib/api"
@@ -42,6 +38,10 @@ import { LOCALES } from "@/lib/i18n/locales"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { MemorySettingsCard } from "@/components/settings/MemorySettingsCard"
 import { McpServersCard } from "@/components/settings/McpServersCard"
+import { TotpSetupCard } from "@/components/settings/TotpSetupCard"
+import { GmailConnectionCard } from "@/components/GmailConnectionCard"
+import GoogleServicesConnectionCard from "@/components/GoogleServicesConnectionCard"
+import { getMyCredits, type Credits } from "@/lib/credits-service"
 
 // ────────────────────────────────────────────────────────────
 // Section registry
@@ -49,19 +49,36 @@ import { McpServersCard } from "@/components/settings/McpServersCard"
 export type SectionKey =
   | "general" | "models" | "notifications" | "personalization" | "apps"
   | "schedules" | "data" | "security" | "account"
+  | "privacy" | "billing" | "usage" | "capabilities" | "connectors"
+  | "code" | "cowork"
 
 // Section metadata; labels and descriptions come from next-intl at
 // render time so a language switch flips the nav instantly.
+const ALIAS: Record<string, SectionKey> = { privacy: "data", connectors: "apps" }
+
+function resolveSection(s: SectionKey | string | undefined): SectionKey {
+  const raw = (s || "general") as string
+  if (raw in ALIAS) return ALIAS[raw]
+  const known: SectionKey[] = [
+    "general","models","notifications","personalization","apps","schedules",
+    "data","security","account","billing","usage","capabilities","code","cowork",
+  ]
+  return (known as string[]).includes(raw) ? (raw as SectionKey) : "general"
+}
+
 const SECTION_KEYS = [
-  { key: "general" as const,         icon: Sliders,     keywords: "theme accent font size density language region voice audio accessibility" },
-  { key: "models" as const,          icon: Brain,       keywords: "modelo default openai gemini anthropic openrouter favorito" },
-  { key: "notifications" as const,   icon: Bell,        keywords: "notificaciones push email toast sonido escritorio horas silenciosas" },
-  { key: "personalization" as const, icon: Sparkles,    keywords: "personalizar estilo tono memoria instrucciones voz lienzo busqueda" },
-  { key: "apps" as const,            icon: Plug,        keywords: "apps conectores gmail drive calendar slack github notion canva figma whatsapp" },
-  { key: "schedules" as const,       icon: Clock,       keywords: "programar schedule cron tarea" },
-  { key: "data" as const,            icon: Database,    keywords: "datos privacidad historial archivo borrar exportar descargar politica" },
-  { key: "security" as const,        icon: ShieldCheck, keywords: "seguridad mfa 2fa sesion dispositivos contraseña" },
-  { key: "account" as const,         icon: UserCircle2, keywords: "cuenta perfil nombre avatar foto constructor gpt sitio linkedin github" },
+  { key: "general" as const,         icon: Sliders,     group: "config", keywords: "theme accent font size density language region voice audio accessibility" },
+  { key: "account" as const,         icon: UserCircle2, group: "config", keywords: "cuenta perfil nombre avatar foto constructor gpt sitio linkedin github plan correo" },
+  { key: "data" as const,            icon: Database,    group: "config", keywords: "datos privacidad historial archivo borrar exportar descargar politica" },
+  { key: "security" as const,        icon: ShieldCheck, group: "config", keywords: "seguridad mfa 2fa totp sesion dispositivos contraseña" },
+  { key: "notifications" as const,   icon: Bell,        group: "config", keywords: "notificaciones push email toast sonido escritorio horas silenciosas" },
+  { key: "billing" as const,         icon: CreditCard,  group: "config", keywords: "facturacion plan suscripcion pago" },
+  { key: "usage" as const,           icon: Gauge,       group: "config", keywords: "uso limite creditos consumo" },
+  { key: "models" as const,          icon: Brain,       group: "personalize", keywords: "modelo default deepseek favorito" },
+  { key: "personalization" as const, icon: Sparkles,    group: "personalize", keywords: "personalizar estilo tono memoria instrucciones voz lienzo busqueda" },
+  { key: "capabilities" as const,    icon: Cpu,         group: "personalize", keywords: "capacidades memoria busqueda voz codigo lienzo conector" },
+  { key: "apps" as const,            icon: Plug,        group: "personalize", keywords: "apps conectores gmail drive calendar slack github notion canva figma whatsapp mcp" },
+  { key: "schedules" as const,       icon: Clock,       group: "personalize", keywords: "programar schedule cron tarea" },
 ]
 
 type Variant = "page" | "modal"
@@ -77,7 +94,7 @@ export function SettingsPanel({
 }) {
   const t = useTranslations("settings")
   const { user } = useAuth()
-  const [section, setSection] = React.useState<SectionKey>(initialSection)
+  const [section, setSection] = React.useState<SectionKey>(() => resolveSection(initialSection))
   const [query, setQuery] = React.useState("")
 
   // Compose sections from key + i18n labels so a language swap flips
@@ -86,6 +103,7 @@ export function SettingsPanel({
     SECTION_KEYS.map((s) => ({
       key: s.key,
       icon: s.icon,
+      group: s.group,
       keywords: s.keywords,
       label: t(`sections.${s.key}.label`),
       desc: t(`sections.${s.key}.desc`),
@@ -109,6 +127,13 @@ export function SettingsPanel({
       })
     : SECTIONS
 
+  const groupedNav = ["config", "personalize"].map((gid) => ({
+    id: gid,
+    label: gid === "config" ? "Configuración" : "Personalizar",
+    items: filteredSections.filter((x) => x.group === gid),
+  })).filter((g) => g.items.length > 0)
+  void groupedNav
+
   // Shared left-nav: search box + section buttons (identical in both variants)
   const nav = (
     <div className="space-y-3">
@@ -122,10 +147,17 @@ export function SettingsPanel({
         />
       </div>
       <nav className="flex flex-col gap-1">
-        {filteredSections.map((s) => {
+        {filteredSections.map((s, i) => {
           const Icon = s.icon
           const active = s.key === section
+          const prev = filteredSections[i - 1]
+          const showGroup = !prev || prev.group !== s.group
+          const groupLabel = s.group === "config" ? "Configuración" : "Personalizar"
           return (
+            <React.Fragment key={s.key}>
+              {showGroup && (
+                <div className="px-3 pt-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{groupLabel}</div>
+              )}
             <button
               key={s.key}
               onClick={() => changeSection(s.key)}
@@ -145,6 +177,7 @@ export function SettingsPanel({
                 <div className="text-xs text-muted-foreground truncate">{s.desc}</div>
               </div>
             </button>
+            </React.Fragment>
           )
         })}
         {filteredSections.length === 0 && (
@@ -166,13 +199,18 @@ export function SettingsPanel({
       {section === "data" && <DataControlsSection />}
       {section === "security" && <SecuritySection />}
       {section === "account" && <AccountSection />}
+      {section === "billing" && <BillingSection />}
+      {section === "usage" && <UsageSection />}
+      {section === "capabilities" && <CapabilitiesSection />}
+      {section === "code" && <CodeSection />}
+      {section === "cowork" && <CoworkSection />}
     </>
   )
 
   // ── Modal variant — floating Claude-style dialog body ──
   if (variant === "modal") {
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div className="flex h-full min-h-0 flex-col" data-settings-pro="keep-advanced">
         {/*
           Responsive layout is driven by a scoped <style> with real media
           queries rather than Tailwind md:/lg: utilities. This project ships a
@@ -230,10 +268,17 @@ export function SettingsPanel({
               />
             </div>
             <nav className="set-modal-nav">
-              {filteredSections.map((s) => {
+              {filteredSections.map((s, i) => {
                 const Icon = s.icon
                 const active = s.key === section
+          const prev = filteredSections[i - 1]
+          const showGroup = !prev || prev.group !== s.group
+          const groupLabel = s.group === "config" ? "Configuración" : "Personalizar"
                 return (
+                  <React.Fragment key={s.key}>
+                  {showGroup && (
+                    <div className="px-2 pt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{groupLabel}</div>
+                  )}
                   <button
                     key={s.key}
                     onClick={() => changeSection(s.key)}
@@ -253,6 +298,7 @@ export function SettingsPanel({
                       <div className="set-nav-desc text-xs text-muted-foreground truncate">{s.desc}</div>
                     </div>
                   </button>
+                  </React.Fragment>
                 )
               })}
               {filteredSections.length === 0 && (
@@ -270,7 +316,7 @@ export function SettingsPanel({
 
   // ── Page variant — full-screen /settings route ──
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background" data-settings-pro="keep-advanced">
       <div className="max-w-[1240px] mx-auto px-4 py-6">
         {/* Top bar — back + save indicator */}
         <div className="flex items-center justify-between mb-6">
@@ -461,10 +507,10 @@ function SelectRow({ title, desc, value, onChange, options, width = "w-[200px]" 
 // ────────────────────────────────────────────────────────────
 
 const THEME_PREVIEWS = [
-  { value: 'light',    label: 'Light',     icon: Sun,      bg: 'bg-white',               ring: 'ring-zinc-300',  dot: 'bg-zinc-900' },
-  { value: 'dark',     label: 'Dark',      icon: Moon,     bg: 'bg-zinc-900',            ring: 'ring-zinc-600',  dot: 'bg-white' },
-  { value: 'midnight', label: 'Midnight',  icon: MoonStar, bg: 'bg-black',               ring: 'ring-zinc-800',  dot: 'bg-zinc-200' },
-  { value: 'system',   label: 'System',    icon: Monitor,  bg: 'bg-gradient-to-br from-white to-zinc-900', ring: 'ring-zinc-400', dot: 'bg-zinc-500' },
+  { value: 'light',    label: 'Claro',     icon: Sun,      bg: 'bg-white',               ring: 'ring-zinc-300',  dot: 'bg-zinc-900' },
+  { value: 'dark',     label: 'Oscuro',      icon: Moon,     bg: 'bg-zinc-900',            ring: 'ring-zinc-600',  dot: 'bg-white' },
+  { value: 'midnight', label: 'Medianoche',  icon: MoonStar, bg: 'bg-black',               ring: 'ring-zinc-800',  dot: 'bg-zinc-200' },
+  { value: 'system',   label: 'Sistema',    icon: Monitor,  bg: 'bg-gradient-to-br from-white to-zinc-900', ring: 'ring-zinc-400', dot: 'bg-zinc-500' },
 ] as const
 
 const ACCENT_SWATCHES = [
@@ -477,15 +523,15 @@ const ACCENT_SWATCHES = [
 ] as const
 
 const FONT_SIZE_PREVIEWS = [
-  { value: 'small',  label: 'Small',  size: 'text-sm',  letter: 'text-base' },
-  { value: 'medium', label: 'Medium', size: 'text-base', letter: 'text-lg' },
-  { value: 'large',  label: 'Large',  size: 'text-lg',  letter: 'text-xl' },
+  { value: 'small',  label: 'Pequeña',  size: 'text-sm',  letter: 'text-base' },
+  { value: 'medium', label: 'Mediana', size: 'text-base', letter: 'text-lg' },
+  { value: 'large',  label: 'Grande',  size: 'text-lg',  letter: 'text-xl' },
 ] as const
 
 const DENSITY_PREVIEWS = [
-  { value: 'compact',     label: 'Compact',     gap: 'gap-[3px]', rowH: 'h-1' },
-  { value: 'comfortable', label: 'Comfortable', gap: 'gap-[6px]', rowH: 'h-1.5' },
-  { value: 'spacious',    label: 'Spacious',    gap: 'gap-[10px]',rowH: 'h-2' },
+  { value: 'compact',     label: 'Compacta',     gap: 'gap-[3px]', rowH: 'h-1' },
+  { value: 'comfortable', label: 'Cómoda', gap: 'gap-[6px]', rowH: 'h-1.5' },
+  { value: 'spacious',    label: 'Espaciosa',    gap: 'gap-[10px]',rowH: 'h-2' },
 ] as const
 
 // Shared with the header ThemeToggle: "Midnight" is an OLED dark flavour
@@ -574,11 +620,11 @@ function GeneralSection() {
         />
       </SectionCard>
 
-      <SectionCard title="Display" desc="Apariencia visual de la aplicación">
+      <SectionCard title="Pantalla" desc="Apariencia visual de la aplicación">
         {/* Theme — 3 visual cards */}
         <div className="p-5">
           <div className="mb-3">
-            <div className="text-sm font-medium">Theme</div>
+            <div className="text-sm font-medium">Tema</div>
             <div className="text-xs text-muted-foreground">Claro, oscuro, medianoche o el del sistema</div>
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -620,7 +666,7 @@ function GeneralSection() {
         {/* Accent — 6 circular swatches */}
         <div className="p-5">
           <div className="mb-3">
-            <div className="text-sm font-medium">Accent color</div>
+            <div className="text-sm font-medium">Color de acento</div>
             <div className="text-xs text-muted-foreground">Color primario usado en botones y acentos</div>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -648,7 +694,7 @@ function GeneralSection() {
         {/* Font size — 3 cards with visual scale */}
         <div className="p-5">
           <div className="mb-3">
-            <div className="text-sm font-medium">Font size</div>
+            <div className="text-sm font-medium">Tamaño de fuente</div>
             <div className="text-xs text-muted-foreground">Tamaño base de la tipografía</div>
           </div>
           <div className="grid grid-cols-3 gap-3">
@@ -674,7 +720,7 @@ function GeneralSection() {
         {/* Density — 3 cards with visual row heights */}
         <div className="p-5">
           <div className="mb-3">
-            <div className="text-sm font-medium">Density</div>
+            <div className="text-sm font-medium">Densidad</div>
             <div className="text-xs text-muted-foreground">Espaciado vertical de la UI</div>
           </div>
           <div className="grid grid-cols-3 gap-3">
@@ -703,14 +749,14 @@ function GeneralSection() {
         </div>
       </SectionCard>
 
-      <SectionCard title="Language & region" desc="Formato de fecha, zona horaria e idioma">
+      <SectionCard title="Idioma y región" desc="Formato de fecha, zona horaria e idioma">
         <SelectRow
-          title="Spoken language"
+          title="Idioma hablado"
           desc="Para reconocimiento de voz"
           value={settings.spokenLanguage}
           onChange={(v) => update({ spokenLanguage: v })}
           options={[
-            { value: "auto", label: "Automatic" },
+            { value: "auto", label: "Automático" },
             { value: "es", label: "Español" },
             { value: "en", label: "English" },
             { value: "pt", label: "Português" },
@@ -718,7 +764,7 @@ function GeneralSection() {
           ]}
         />
         <SelectRow
-          title="Date format"
+          title="Formato de fecha"
           value={settings.dateFormat}
           onChange={(v) => update({ dateFormat: v })}
           options={[
@@ -727,14 +773,14 @@ function GeneralSection() {
             { value: "MM/DD/YYYY", label: "MM/DD/YYYY" },
           ]}
         />
-        <Row title="Time zone" desc="Detectada automáticamente">
+        <Row title="Zona horaria" desc="Detectada automáticamente">
           <Input value={settings.timeZone} onChange={(e) => update({ timeZone: e.target.value })} className="w-[240px] h-9" />
         </Row>
         <SelectRow
-          title="Time format"
+          title="Formato de hora"
           value={settings.timeFormat}
           onChange={(v) => update({ timeFormat: v as any })}
-          options={[{ value: "12h", label: "12-hour" }, { value: "24h", label: "24-hour" }]}
+          options={[{ value: "12h", label: "12 horas" }, { value: "24h", label: "24 horas" }]}
         />
       </SectionCard>
 
@@ -816,7 +862,7 @@ function ModelsSection() {
     const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
     fetch(`${base}/ai/models?type=TEXT`)
       .then((r) => r.ok ? r.json() : { models: [] })
-      .then((d) => setModels(d.models || []))
+      .then((d) => setModels((d.models || []).filter((m: any) => { const p = String(m.provider || "").toLowerCase(); const n = String(m.name || "").toLowerCase(); return p === "deepseek" || n.startsWith("deepseek-") })))
       .catch(() => setModels([]))
       .finally(() => setLoading(false))
   }, [])
@@ -824,7 +870,7 @@ function ModelsSection() {
   const byProvider = React.useMemo(() => {
     const groups: Record<string, any[]> = {}
     for (const m of models) (groups[m.provider || "Other"] ??= []).push(m)
-    const order = ["OpenAI", "Anthropic", "Google", "Gemini", "xAI", "OpenRouter"]
+    const order = ["DeepSeek"]
     return Object.fromEntries(
       Object.entries(groups).sort(([a], [b]) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 99 : order.indexOf(b))),
     )
@@ -842,7 +888,7 @@ function ModelsSection() {
   return (
     <>
       <div className="text-sm text-muted-foreground">
-        Explora los modelos disponibles, marca favoritos y configura tu modelo predeterminado.
+        Explora los modelos DeepSeek disponibles, marca favoritos y configura tu modelo predeterminado.
       </div>
 
       <SectionCard title="Modelo predeterminado" desc="Se usa cuando abres un chat nuevo">
@@ -1141,6 +1187,8 @@ function AppsSection() {
   return (
     <>
       <div className="text-sm text-muted-foreground">Conecta y administra las aplicaciones que siraGPT puede usar.</div>
+      <GmailConnectionCard />
+      <GoogleServicesConnectionCard />
       <McpServersCard />
       {cats.map((cat) => (
         <SectionCard key={cat} title={cat}>
@@ -1330,9 +1378,11 @@ function SecuritySection() {
   const { logout } = useAuth()
   const [sessions, setSessions] = React.useState<{ id: string; createdAt: string; expiresAt: string; current: boolean }[] | null>(null)
   const [revoking, setRevoking] = React.useState(false)
+  const [totpEnabled, setTotpEnabled] = React.useState(false)
 
   const reload = React.useCallback(() => {
     apiClient.getUserSessions().then((d) => setSessions(d.sessions || [])).catch(() => setSessions([]))
+    apiClient.getCurrentUser().then((d) => setTotpEnabled(Boolean(d?.totpEnabled))).catch(() => {})
   }, [])
   React.useEffect(reload, [reload])
 
@@ -1350,6 +1400,7 @@ function SecuritySection() {
 
   return (
     <>
+      <TotpSetupCard enabledInitial={totpEnabled} onChange={(next) => setTotpEnabled(next.enabled)} />
       <SectionCard title="Autenticación multifactor" desc="Refuerza la seguridad de tu cuenta">
         <SwitchRow title="Aplicación de autenticación" desc="Usa códigos únicos desde una app de autenticación" checked={S.mfaApp} onChange={(v) => update({ security: { ...S, mfaApp: v } })} />
         <SwitchRow title="Notificaciones push" desc="Aprueba inicios de sesión con notificación push" checked={S.mfaPush} onChange={(v) => update({ security: { ...S, mfaPush: v } })} />
@@ -1404,7 +1455,7 @@ function SecuritySection() {
 
 function AccountSection() {
   const { settings, update } = useSettings()
-  const { user, refreshUser } = useAuth()
+  const { user, refreshUser, logout } = useAuth()
   const B = settings.builderProfile
   const fileInputRef = React.useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = React.useState(false)
@@ -1455,6 +1506,20 @@ function AccountSection() {
             {uploading ? <ThinkingIndicator size="sm" /> : <><Camera className="h-4 w-4 mr-1" />Subir foto</>}
           </Button>
         </div>
+      </SectionCard>
+
+      <SectionCard title="Datos de la cuenta">
+        <Row title="Correo" desc="El correo no se puede modificar por seguridad">
+          <span className="text-sm">{user?.email || "—"}</span>
+        </Row>
+        <Row title="Plan">
+          <span className="text-sm font-medium">{user?.plan || "Gratis"}</span>
+        </Row>
+        <Row title="Cerrar sesión" desc="Salir de este dispositivo">
+          <Button variant="outline" size="sm" onClick={() => { logout?.(); }}>
+            <LogOut className="h-4 w-4 mr-1" />Cerrar sesión
+          </Button>
+        </Row>
       </SectionCard>
 
       <SectionCard title="Perfil de constructor de GPT" desc="Cómo apareces cuando publicas GPTs">
@@ -1509,3 +1574,114 @@ function LinkField({ inputRef, icon: Icon, label, value, onChange, placeholder }
     </div>
   )
 }
+
+function CapabilitiesSection() {
+  const { settings, update } = useSettings()
+  const C = settings.capabilities
+  return (
+    <>
+      <div className="text-sm text-muted-foreground">Qué puede usar SiraGPT cuando trabaja contigo.</div>
+      <MemorySettingsCard />
+      <SectionCard title="Capacidades" desc="Activa o desactiva herramientas">
+        <SwitchRow title="Memorias" desc="Permite que siraGPT guarde y use memorias al responder" checked={C.memories} onChange={(v) => update({ capabilities: { ...C, memories: v } })} />
+        <SwitchRow title="Consultar historial de grabaciones" desc="Usar transcripciones previas como contexto" checked={C.voiceHistory} onChange={(v) => update({ capabilities: { ...C, voiceHistory: v } })} />
+        <SwitchRow title="Búsqueda en la web" desc="Dejar que siraGPT busque automáticamente cuando lo necesite" checked={C.webSearch} onChange={(v) => update({ capabilities: { ...C, webSearch: v } })} />
+        <SwitchRow title="Código" desc="Dejar que siraGPT ejecute código con el Intérprete" checked={C.codeInterpreter} onChange={(v) => update({ capabilities: { ...C, codeInterpreter: v } })} />
+        <SwitchRow title="Lienzo" desc="Colaborar con siraGPT en texto y código" checked={C.canvas} onChange={(v) => update({ capabilities: { ...C, canvas: v } })} />
+        <SwitchRow title="siraGPT Voice" desc="Habilitar el modo de voz" checked={C.voice} onChange={(v) => update({ capabilities: { ...C, voice: v } })} />
+        <SwitchRow title="Modo de voz avanzado" desc="Conversaciones mas naturales" checked={C.advancedVoice} onChange={(v) => update({ capabilities: { ...C, advancedVoice: v } })} />
+        <SwitchRow title="Búsqueda del conector" desc="Buscar en fuentes conectadas (Gmail, Drive, etc.)" checked={C.connectorSearch} onChange={(v) => update({ capabilities: { ...C, connectorSearch: v } })} />
+      </SectionCard>
+    </>
+  )
+}
+
+function BillingSection() {
+  const { user } = useAuth()
+  return (
+    <>
+      <SectionCard title="Facturación" desc="Tu plan actual y el historial de pagos">
+        <Row title="Plan">
+          <span className="text-sm font-medium">{user?.plan || "Gratis"}</span>
+        </Row>
+        <Row title="Abrir facturacion" desc="Historial de pagos y método">
+          <Link href="/billing" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+            Facturación <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </Row>
+      </SectionCard>
+    </>
+  )
+}
+
+function UsageSection() {
+  const { user } = useAuth()
+  const [credits, setCredits] = React.useState<Credits | null | undefined>(undefined)
+
+  React.useEffect(() => {
+    let cancelled = false
+    getMyCredits()
+      .then((c) => { if (!cancelled) setCredits(c) })
+      .catch(() => { if (!cancelled) setCredits(null) })
+    return () => { cancelled = true }
+  }, [])
+
+  const used = user?.apiUsage
+  const limit = user?.monthlyLimit
+  const hasUsage = typeof used === "number" && typeof limit === "number" && limit > 0
+
+  return (
+    <>
+      <div className="text-sm text-muted-foreground">Consumo real de tu cuenta. No se muestran cifras estimadas.</div>
+      <SectionCard title="Uso">
+        {hasUsage && (
+          <Row title="Uso mensual" desc={String(used) + " de " + String(limit) + " solicitudes"}>
+            <span />
+          </Row>
+        )}
+        {credits && (
+          <Row title="Créditos" desc={"Saldo " + credits.balance}>
+            <span />
+          </Row>
+        )}
+        {!hasUsage && credits === null && (
+          <div className="p-5 text-sm text-muted-foreground">El detalle de uso no está disponible en este momento.</div>
+        )}
+        <Row title="Ver facturacion">
+          <Link href="/billing" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+            Facturación <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </Row>
+      </SectionCard>
+    </>
+  )
+}
+
+function CodeSection() {
+  return (
+    <>
+      <SectionCard title="Code" desc="Espacio de Code de SiraGPT">
+        <Row title="Abrir Code" desc="Repositorios y agente de código">
+          <Link href="/code" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+            Code <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </Row>
+      </SectionCard>
+    </>
+  )
+}
+
+function CoworkSection() {
+  return (
+    <>
+      <SectionCard title="Cowork" desc="Workspace, archivos y tareas del agente">
+        <Row title="Abrir en el chat">
+          <Link href="/chat" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+            Chat <ExternalLink className="h-3.5 w-3.5" />
+          </Link>
+        </Row>
+      </SectionCard>
+    </>
+  )
+}
+

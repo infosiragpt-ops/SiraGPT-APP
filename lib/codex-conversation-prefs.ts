@@ -156,3 +156,53 @@ export function forgetRow(key: string) {
     if (set.delete(key)) writeStringSet(storeKey, set)
   }
 }
+
+const CODE_MODEL_KEY = "code-workspace:model"
+const OPENROUTER_MODEL_RE = /openrouter|openai|gemini|anthropic|gpt-4o|gpt-4|claude/i
+const ALLOWED_MODEL_RE = /deepseek-v4-(flash|pro)/i
+
+export type PersistedCodeModel = { name?: string; provider?: string }
+
+/** FE-055: never persist / restore an OpenRouter (or non-DeepSeek) model. */
+export function sanitizePersistedCodeModel(
+  model: PersistedCodeModel | null | undefined,
+): PersistedCodeModel | null {
+  if (!model || typeof model !== "object") return null
+  const name = String(model.name || "").trim()
+  const provider = String(model.provider || "").trim()
+  const blob = `${name} ${provider}`
+  if (!name) return null
+  if (OPENROUTER_MODEL_RE.test(blob) && !ALLOWED_MODEL_RE.test(name)) return null
+  if (!ALLOWED_MODEL_RE.test(name)) return null
+  return { name, provider: provider && !OPENROUTER_MODEL_RE.test(provider) ? provider : "DeepSeek" }
+}
+
+export function readPersistedCodeModel(): PersistedCodeModel | null {
+  const store = storage()
+  if (!store) return null
+  try {
+    const parsed = JSON.parse(store.getItem(CODE_MODEL_KEY) || "null")
+    const clean = sanitizePersistedCodeModel(parsed)
+    if (!clean && parsed) {
+      try { store.removeItem(CODE_MODEL_KEY) } catch { /* ignore */ }
+    }
+    return clean
+  } catch {
+    return null
+  }
+}
+
+export function writePersistedCodeModel(model: PersistedCodeModel | null | undefined): PersistedCodeModel | null {
+  const store = storage()
+  const clean = sanitizePersistedCodeModel(model)
+  if (!store) return clean
+  try {
+    if (!clean) store.removeItem(CODE_MODEL_KEY)
+    else store.setItem(CODE_MODEL_KEY, JSON.stringify(clean))
+  } catch { /* quota */ }
+  return clean
+}
+
+export function scrubStaleOpenRouterModels(): void {
+  readPersistedCodeModel()
+}

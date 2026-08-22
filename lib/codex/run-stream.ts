@@ -145,6 +145,7 @@ export function openRunStream(opts: RunStreamOptions): RunStreamHandle {
         const qs = new URLSearchParams({ afterSeq: String(lastSeq) })
         const res = await transport!(`${baseUrl}/codex/runs/${encodeURIComponent(runId)}/stream?${qs.toString()}`, {
           signal: controller.signal,
+          headers: lastSeq > 0 ? { 'Last-Event-ID': String(lastSeq) } : undefined,
         }, {
           bearerToken: token,
         })

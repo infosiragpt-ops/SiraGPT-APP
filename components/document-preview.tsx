@@ -903,51 +903,51 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     </div>
   ) : (
     <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center px-4", previewHeaderClass)}>
-      <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
-        <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
-          <FileText className="h-5 w-5" />
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
+            <FileText className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
+              {filename}
+            </span>
+            <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
+          </div>
         </div>
-        <div className="min-w-0">
-          <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
-            {filename}
-          </span>
-          <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={download}
+            disabled={isDownloading}
+            className={cn("shrink-0", previewIconButtonClass)}
+            title={isDownloading ? "Descargando" : "Descargar"}
+            aria-label={isDownloading ? "Descargando" : "Descargar"}
+          >
+            {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={openInNewTab}
+            className={cn("shrink-0", previewIconButtonClass)}
+            title="Abrir en una pestaña"
+            aria-label="Abrir documento en una pestaña"
+          >
+            <ExternalLink className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className={cn("shrink-0", previewIconButtonClass)}
+            title="Cerrar"
+            aria-label="Cerrar previsualización"
+          >
+            <X className="h-4 w-4" />
+          </Button>
         </div>
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-1">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={download}
-          disabled={isDownloading}
-          className={cn("shrink-0", previewIconButtonClass)}
-          title={isDownloading ? "Descargando" : "Descargar"}
-          aria-label={isDownloading ? "Descargando" : "Descargar"}
-        >
-          {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={openInNewTab}
-          className={cn("shrink-0", previewIconButtonClass)}
-          title="Abrir en una pestaña"
-          aria-label="Abrir documento en una pestaña"
-        >
-          <ExternalLink className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onClose}
-          className={cn("shrink-0", previewIconButtonClass)}
-          title="Cerrar"
-          aria-label="Cerrar previsualización"
-        >
-          <X className="h-4 w-4" />
-        </Button>
-      </div>
-    </div>
   )
 
   const body = (
@@ -1108,6 +1108,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           </div>
         </div>
       )}
+
     </>
   )
 

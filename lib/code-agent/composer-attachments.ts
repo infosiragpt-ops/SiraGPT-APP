@@ -76,3 +76,23 @@ export function composeCodePromptWithAttachments(
     block,
   ].join("\n")
 }
+
+const CODE_ATTACH_MAX_BYTES = 25 * 1024 * 1024
+const CODE_ATTACH_ALLOWED = new Set([
+  "image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp",
+  "application/pdf", "text/plain", "text/markdown", "application/json",
+  "text/csv", "application/zip",
+])
+
+export function validateCodeComposerAttachment(file: Pick<CodeComposerAttachment, "name" | "type" | "mimeType" | "size">): { ok: true } | { ok: false; code: string; reason: string } {
+  const size = Number(file.size || 0)
+  if (!Number.isFinite(size) || size <= 0) return { ok: false, code: "empty_file", reason: "El archivo está vacío" }
+  if (size > CODE_ATTACH_MAX_BYTES) return { ok: false, code: "size_exceeded", reason: "El archivo supera 25 MB" }
+  const mime = codeAttachmentType(file).toLowerCase()
+  const ext = String(file.name || "").split(".").pop()?.toLowerCase() || ""
+  const extOk = ["png","jpg","jpeg","gif","webp","pdf","txt","md","json","csv","zip"].includes(ext)
+  if (!CODE_ATTACH_ALLOWED.has(mime) && !extOk) {
+    return { ok: false, code: "type_not_allowed", reason: `Tipo no permitido: ${mime || ext}` }
+  }
+  return { ok: true }
+}

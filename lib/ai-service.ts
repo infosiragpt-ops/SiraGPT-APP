@@ -333,18 +333,18 @@ const createMediaGenerationPattern = (objectPattern: string) =>
     'i'
   )
 
-const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+const DEFAULT_VIDEO_DURATION_SECONDS = Object.freeze([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30])
 const VIDEO_DURATION_SECONDS_RE =
-  /\b(1[0-5]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
+  /\b(30|2[0-9]|1[0-9]|[4-9])\s*(?:s|seg(?:undo)?s?|sec(?:ond)?s?)\b/i
 
 export type RequestedVideoAspectRatio = '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
-export type RequestedVideoResolution = '480p' | '720p'
+export type RequestedVideoResolution = '480p' | '720p' | '1080p'
 
 const VIDEO_RATIO_TOKEN_RE =
   /\b(16:9|9:16|1:1|4:3|3:4|21:9|16x9|9x16|1x1|4x3|3x4|21x9)\b/i
 
 const VIDEO_RESOLUTION_TOKEN_RE =
-  /\b(480|720)\s*p\b/i
+  /\b(480|720|1080)\s*p\b/i
 
 export function extractRequestedVideoDurationSeconds(
   prompt: string,
@@ -379,6 +379,7 @@ export function extractRequestedVideoResolution(prompt: string): RequestedVideoR
   const match = normalized.match(VIDEO_RESOLUTION_TOKEN_RE)
   if (match?.[1] === '480') return '480p'
   if (match?.[1] === '720') return '720p'
+  if (match?.[1] === '1080') return '1080p'
 
   if (/\b(?:sd|baja resolucion|resolucion baja|ligero|liviano)\b/.test(normalized)) return '480p'
   if (/\b(?:hd|alta resolucion|resolucion alta|calidad alta)\b/.test(normalized)) return '720p'
@@ -667,7 +668,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   if (ROUTING_PATTERNS.architecturePlan.test(normalized)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(normalized)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(normalized)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(normalized)) return 'doc'
+  if (ROUTING_PATTERNS.doc.test(normalized) || OUTPUT_FORMAT_REQUEST_RE.test(normalized)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(normalized)) return 'viz'
   if (ROUTING_PATTERNS.video.test(normalized)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(normalized) || ROUTING_PATTERNS.voiceGeneration.test(normalized)) return 'agent_task'
@@ -969,6 +970,12 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
   }
   if (isLightweightConversationalPrompt(normalized)) return false
 
+  // Word / PPT / Excel creation must use the durable agent-task (BullMQ)
+  // so the job survives leaving the page.
+  if (OUTPUT_FORMAT_REQUEST_RE.test(normalized) || ROUTING_PATTERNS.doc.test(normalized)) {
+    return true
+  }
+
   // No-file interactive prompts (research, deliverables, code, data work,
   // long questions, etc.) run through the RELIABLE inline /generate agentic
   // loop — which already owns web_search/read_url + artifact tools, a
@@ -1122,7 +1129,7 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.architecturePlan.test(lc)) return 'plan'
   if (ROUTING_PATTERNS.artifact.test(lc)) return 'artifact'
   if (ROUTING_PATTERNS.math.test(lc)) return 'math'
-  if (ROUTING_PATTERNS.doc.test(lc)) return 'doc'
+  if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
   if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'

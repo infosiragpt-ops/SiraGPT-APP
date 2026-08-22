@@ -15,7 +15,7 @@ describe("agent company placement", () => {
     assert.match(workspaceSource, /<MemoAgentCompanyPanel \/>[\s\S]*?<MemoAICodeChatPanel embedded \/>/)
     assert.match(companySource, /createPortal\(panel, dockSlot\)/)
     assert.match(companySource, /data-agent-company-dock=\{dockedInAppsRail \? "apps" : "workspace"\}/)
-    assert.match(companySource, /const chatLivesInWorkspaceColumn = isMobile === false/)
+    assert.match(companySource, /const chatLivesInWorkspaceColumn = dockedInAppsRail/)
     assert.match(workspaceSource, /useResolvedMobile/)
   })
 

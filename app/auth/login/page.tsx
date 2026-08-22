@@ -81,16 +81,25 @@ function LoginPageContent() {
     if (typeof window === "undefined") return
     const params = new URLSearchParams(window.location.search)
     const errorMsg = params.get("error")
-    if (errorMsg) {
+    const noticeMsg = params.get("notice")
+    const code = errorMsg || noticeMsg
+    if (code) {
       const friendly: Record<string, string> = {
         auth_failed:
           "No pudimos completar el inicio de sesión con Google. Inténtalo de nuevo.",
         db_unavailable:
           "Estamos teniendo problemas para conectar con la base de datos. Inténtalo de nuevo en unos segundos.",
+        google_unavailable:
+          "El inicio con Google no está disponible ahora. Prueba con email y contraseña, o inténtalo de nuevo en un minuto.",
+        oauth_state_unavailable:
+          "No pudimos iniciar el flujo de Google. Inténtalo de nuevo.",
+        invalid_state:
+          "La sesión de Google expiró. Inténtalo de nuevo.",
       }
-      toast.error(friendly[errorMsg] ?? errorMsg)
+      toast.error(friendly[code] ?? code)
       // Clean the URL so a refresh doesn't re-toast the same error
       params.delete("error")
+      params.delete("notice")
       const cleaned = params.toString()
       const target = window.location.pathname + (cleaned ? `?${cleaned}` : "")
       window.history.replaceState(null, "", target)

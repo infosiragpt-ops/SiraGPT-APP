@@ -19,7 +19,7 @@ import {
 import { Ban, CircleCheckBig, RefreshCw, ShieldCheck, ThumbsUp, UsersRound } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { apiClient } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -248,34 +248,23 @@ export default function AnalyticsPage() {
 
   if (!analytics && loading) {
     return (
-      <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-        <div className="animate-pulse">
-          <div className="flex items-center gap-2 sm:gap-3 mb-3 sm:mb-4">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <div className="h-6 sm:h-8 bg-muted rounded w-32 sm:w-48 mb-2"></div>
-              <div className="h-3 sm:h-4 bg-muted rounded w-48 sm:w-64"></div>
-            </div>
+      <>
+        <AdminPageHeader title="Métricas" description="Cargando analítica…" />
+        <AdminPageBody>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+            {[0,1,2,3].map((i) => <div key={i} className="admin-stat animate-pulse h-20" />)}
           </div>
-        </div>
-      </div>
+        </AdminPageBody>
+      </>
     )
   }
 
   return (
-    <div className="flex-1 space-y-4 sm:space-y-6 p-3 sm:p-4 lg:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 sm:gap-3">
-            <SidebarTrigger className="md:hidden" />
-            <div>
-              <h1 className="text-2xl sm:text-3xl font-bold">Métricas</h1>
-              <p className="text-muted-foreground text-sm sm:text-base mt-1">
-                Analítica real desde base de datos, pagos y uso API
-              </p>
-            </div>
-          </div>
-        </div>
+    <>
+      <AdminPageHeader
+        title="Métricas"
+        description="Analítica real desde base de datos, pagos y uso API"
+        actions={
         <div className="flex gap-1 sm:gap-2 flex-shrink-0 flex-wrap">
           {(["7d", "30d", "90d"] as const).map((range) => (
             <Button
@@ -288,12 +277,14 @@ export default function AnalyticsPage() {
               {range === "7d" ? "7 días" : range === "30d" ? "30 días" : "90 días"}
             </Button>
           ))}
-          <Button variant="outline" size="sm" onClick={loadAnalytics} disabled={loading} className="gap-2">
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={loadAnalytics} disabled={loading} className="h-8 gap-1.5 text-[13px]">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
             Recargar
           </Button>
         </div>
-      </div>
+        }
+      />
+      <AdminPageBody className="space-y-4">
 
       <section aria-labelledby="product-quality-title" className="space-y-4">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -517,6 +508,7 @@ export default function AnalyticsPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

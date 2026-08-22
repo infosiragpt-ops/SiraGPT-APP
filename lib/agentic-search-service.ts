@@ -165,12 +165,19 @@ function authHeader(): Record<string, string> {
  */
 export async function* runIterator(args: AgenticRunArgs): AsyncGenerator<AgenticEvent> {
   const { signal, ...body } = args
-  const resp = await authenticatedFetch(`${API_ROOT}/search/agentic`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeader() },
-    body: JSON.stringify(body),
-    signal,
-  })
+  const wrapped = agenticSearchFetchInit(signal)
+  let resp: Response
+  try {
+    resp = await authenticatedFetch(`${API_ROOT}/search/agentic`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeader(), ...(wrapped.headers || {}) },
+      body: JSON.stringify(body),
+      signal: wrapped.signal,
+      cache: wrapped.cache,
+    })
+  } finally {
+    wrapped.cancel()
+  }
 
   if (!resp.ok) {
     let msg = `HTTP ${resp.status}`
@@ -185,7 +192,12 @@ export async function* runIterator(args: AgenticRunArgs): AsyncGenerator<Agentic
   }
   if (!resp.body) throw new Error("Stream body missing")
 
-  for await (const event of streamSseJson<AgenticEvent>(resp.body, { signal })) {
+  for await (const event of streamSseJson<AgenticEvent>(resp.body, {
+    signal,
+    onEventId(id) {
+      try { sessionStorage.setItem("siragpt:lastEventId:search-agentic", String(id)) } catch { /* quota */ }
+    },
+  })) {
     yield event
   }
 }
@@ -284,3 +296,21 @@ export async function runStream(
 }
 
 export const agenticSearchService = { runStream, runIterator }
+
+
+/** OLA200_WAVE_G FE-060 — abort + timeout; never let SW cache generate search. */
+export const AGENTIC_SEARCH_TIMEOUT_MS = 90_000
+export function agenticSearchFetchInit(signal?: AbortSignal, timeoutMs = AGENTIC_SEARCH_TIMEOUT_MS) {
+  const ctrl = new AbortController()
+  const onAbort = () => ctrl.abort()
+  if (signal) { if (signal.aborted) ctrl.abort(); else signal.addEventListener("abort", onAbort, { once: true }) }
+  const timer = setTimeout(() => ctrl.abort(), Math.max(1000, timeoutMs))
+  const lastId = (typeof sessionStorage !== "undefined" && sessionStorage.getItem("siragpt:lastEventId:search-agentic")) || ""
+  const headers: Record<string, string> = { "Cache-Control": "no-store" }
+  if (lastId) headers["Last-Event-ID"] = lastId
+  return { signal: ctrl.signal, cache: "no-store" as RequestCache, headers, cancel: () => { clearTimeout(timer); if (signal) signal.removeEventListener("abort", onAbort) } }
+}
+export async function* runIteratorWithTimeout(args: AgenticRunArgs): AsyncGenerator<AgenticEvent> {
+  const wrapped = agenticSearchFetchInit(args.signal)
+  try { yield* runIterator({ ...args, signal: wrapped.signal }) } finally { wrapped.cancel() }
+}

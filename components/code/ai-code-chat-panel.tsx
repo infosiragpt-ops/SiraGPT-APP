@@ -52,6 +52,14 @@ import {
   StopCircle,
   X,
 } from "lucide-react"
+import {
+  CODE_NEW_DEPT_CONVERSATION_EVENT,
+  CODE_OPEN_DEPT_DRAWER_EVENT,
+  DeptChatDrawer,
+  DeptChatFab,
+  setDeptChatChrome,
+  type DeptChatBardNav,
+} from "@/components/code/dept-chat-bard"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
@@ -822,9 +830,10 @@ export type AICodeChatPanelProps = {
   title?: string
   onBack?: () => void
   proactive?: boolean
+  bardNav?: DeptChatBardNav
 }
 
-export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
+export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -845,6 +854,26 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     patchCodeChatSessionTurns,
     patchAgentState,
   } = useCodeWorkspace()
+
+  const hasBardNav = Boolean(bardNav)
+  const [deptDrawerOpen, setDeptDrawerOpen] = React.useState(false)
+  React.useEffect(() => {
+    setDeptChatChrome(hasBardNav)
+    return () => setDeptChatChrome(false)
+  }, [hasBardNav])
+  React.useEffect(() => {
+    const onOpenDrawer = () => setDeptDrawerOpen(true)
+    const onNewConversation = () => {
+      if (bardNav) bardNav.onNewConversation()
+      else createCodeChatSession()
+    }
+    window.addEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+    window.addEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    return () => {
+      window.removeEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+      window.removeEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    }
+  }, [bardNav, createCodeChatSession])
 
   const sessionId = activeCodeChatSessionId
   const turns = React.useMemo(
@@ -4826,7 +4855,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const activeSessionTitle =
     codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
     "Nuevo chat"
-  const visibleSessionTitle = title?.trim() || activeSessionTitle
 
   // Replit-style "Plan" pill: flips the composer into plan mode and back to
   // whatever mode was active before (defaults to "app").
@@ -4843,90 +4871,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   return (
     <div
-      className="relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      className={cn(
+        "relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950",
+        bardNav && "dept-chat-bard",
+      )}
       data-embedded={embedded ? "true" : undefined}
+      data-testid={bardNav ? "dept-chat-bard" : undefined}
     >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
           Suelta archivos para adjuntarlos al agente de APPS
         </div>
       ) : null}
-      {/* Replit-style panel header: current thread title + history / new-chat
-          actions (the session tabs collapsed into the history dropdown). */}
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
-        {onBack ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-            aria-label="Volver a la empresa"
-            title="Volver a la empresa"
-            onClick={onBack}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <span
-          className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
-          title={visibleSessionTitle}
-        >
-          {visibleSessionTitle}
-        </span>
-        {activeFileLabel ? (
-          <span
-            className="min-w-0 shrink truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-            title={activePath ?? undefined}
-          >
-            {activeFileLabel}
-          </span>
-        ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-              aria-label="Historial de chats"
-              title="Historial de chats"
-            >
-              <History className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5">
-            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
-              Chats del proyecto
-            </DropdownMenuLabel>
-            {codeChatSessions.map((session) => (
-              <DropdownMenuItem
-                key={session.id}
-                className={cn(
-                  "gap-2 rounded-md text-[13px]",
-                  session.id === activeCodeChatSessionId && "bg-muted/70 font-medium",
-                )}
-                onClick={() => setActiveCodeChatSession(session.id)}
-              >
-                <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                {session.id === activeCodeChatSessionId ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-          aria-label="Nuevo agente"
-          title="Nuevo chat en paralelo"
-          onClick={() => createCodeChatSession()}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+
+      {bardNav ? (
+        <DeptChatDrawer
+          open={deptDrawerOpen}
+          nav={bardNav}
+          onClose={() => setDeptDrawerOpen(false)}
+        />
+      ) : null}
+      {/* Duplicate CEO Office | history | + bar removed (data-drop-dup-header). */}
 
       {identityIssue ? (
         <div
@@ -4969,6 +4934,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
           </div>
         )}
       </div>
+
+      {bardNav ? (
+        <div className="dept-chat-fab-wrap pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3">
+          <DeptChatFab onNewConversation={bardNav.onNewConversation} />
+        </div>
+      ) : null}
 
       <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
         <div

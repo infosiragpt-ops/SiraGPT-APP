@@ -132,6 +132,20 @@ export function downloadHref(href: string, filename: string): void {
 }
 
 export async function downloadUrlAsFile(href: string, filename: string, init?: RequestInit): Promise<void> {
+  const { fetchWithPresignRetry } = await import("./attachment-url")
+  const res = await fetchWithPresignRetry(href, init)
+  if (!res.ok) throw new Error(`download_failed_${res.status}`)
+  const blob = await res.blob()
+  const objectUrl = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = objectUrl
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1500)
+  return
+  /* original body kept below for non-presign callers that already built a blob URL */
   if (/^data:/i.test(href)) {
     downloadBlob(dataUrlToBlob(href), filename)
     return

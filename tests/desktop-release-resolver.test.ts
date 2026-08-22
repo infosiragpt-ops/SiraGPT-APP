@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {
   findDesktopRelease,
+  findPublicDesktopRelease,
   parseDesktopChannel,
   parseDesktopPlatform,
   type GitHubDesktopRelease,
@@ -99,4 +100,21 @@ test("desktop release query values fail closed", () => {
   assert.equal(parseDesktopPlatform("macos-x64"), "macos-x64")
   assert.equal(parseDesktopPlatform("windows"), "windows-x64")
   assert.equal(parseDesktopPlatform("linux"), null)
+})
+
+test("public stable channel falls back to newest unsigned beta when no stable exists", () => {
+  const betaOnly = [releases[1]]
+  assert.equal(findDesktopRelease(betaOnly, "macos-arm64", "stable"), null)
+  const fallback = findPublicDesktopRelease(betaOnly, "macos-arm64", "stable")
+  assert.equal(fallback?.version, "0.4.5")
+  assert.equal(fallback?.releaseTag, "native-qa-v0.4.5")
+  assert.equal(fallback?.signed, false)
+  assert.equal(fallback?.prerelease, true)
+})
+
+test("public stable channel still prefers a real stable release over beta", () => {
+  const arm = findPublicDesktopRelease(releases, "macos-arm64", "stable")
+  assert.equal(arm?.fileName, "SiraGPT-0.4.4-arm64.dmg")
+  assert.equal(arm?.signed, true)
+  assert.equal(arm?.prerelease, false)
 })

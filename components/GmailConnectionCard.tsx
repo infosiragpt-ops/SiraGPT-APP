@@ -22,7 +22,13 @@ export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
     try {
       const response = await gmailService.connectGmail();
       if (response.authUrl) {
-        // Open Gmail OAuth in a new window
+        // iOS Safari blocks window.open from async handlers. Use a full-page
+        // navigation on phones; keep the desktop popup.
+        const mobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+        if (mobile) {
+          window.location.href = response.authUrl;
+          return;
+        }
         window.open(response.authUrl, 'gmail-auth', 'width=500,height=600');
         onConnect?.();
       }
@@ -86,6 +92,7 @@ export const GmailConnectionCard: React.FC<GmailConnectionCardProps> = ({
 
         <p className="text-xs text-orange-600 text-center">
           Tus correos siguen siendo privados y seguros. Solo accedemos a lo que pidas explícitamente.
+          Si Google muestra «Google no verificó esta app», es normal: pulsa «Configuración avanzada» y continúa.
         </p>
       </CardContent>
     </Card>

@@ -56,8 +56,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuPortal,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
@@ -478,6 +480,12 @@ export function AppSidebar() {
       const isTyping =
         tag === "input" || tag === "textarea" || target?.isContentEditable === true
       const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
+      const isCmdComma = (event.metaKey || event.ctrlKey) && event.key === ","
+      if (isCmdComma) {
+        event.preventDefault()
+        setSettingsOpen(true)
+        return
+      }
       if (!isCmdK) return
       // ⌘K from anywhere — even mid-input — should still open search.
       // This is the convention every productivity app follows, so the
@@ -1922,6 +1930,13 @@ export function AppSidebar() {
                     "dark:shadow-[0_12px_48px_-12px_rgba(0,0,0,0.55),inset_0_1px_0_0_rgba(255,255,255,0.08)]",
                   )}
                 >
+                  {user?.email && (
+                    <DropdownMenuLabel className="px-2.5 py-2">
+                      <div className="text-[13px] font-medium text-foreground truncate">{user?.name || "Cuenta"}</div>
+                      <div className="text-[12px] font-normal text-muted-foreground truncate">{user.email}</div>
+                    </DropdownMenuLabel>
+                  )}
+                  <DropdownMenuSeparator className={LG_SEP} />
                   <DropdownMenuItem
                     onClick={() => navigate("/profile")}
                     onMouseEnter={() => prefetchOnHover("/profile")}
@@ -1952,6 +1967,7 @@ export function AppSidebar() {
                   >
                     <Settings className="mr-2 h-4 w-4" />
                     {t("settings")}
+                    <DropdownMenuShortcut>⌘,</DropdownMenuShortcut>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onClick={() => navigate("/privacy-policy")}

@@ -269,10 +269,50 @@ describe("professional chat composer surface source contract", () => {
       /export function shouldStackComposer/,
       "stacking the footer toolbar must live in a pure layout helper"
     )
+    assert.match(
+      chatInterface,
+      /data-testid="chat-composer-expand"/,
+      "the /chat composer exposes the same Ampliar/Contraer control as /code"
+    )
+    assert.match(
+      chatInterface,
+      /aria-label=\{composerExpanded \? "Contraer" : "Ampliar"\}/,
+      "expand control uses Ampliar / Contraer labels"
+    )
     assert.doesNotMatch(
       chatInterface,
-      /data-expanded=|getComposerTextareaMaxHeight|composerIsExpanded/,
-      "growth stays CSS/JS layout only — no expanded UI mode flag"
+      /chat-composer-expand[\s\S]{0,500}hidden md:/,
+      "expand must stay visible on phone — not hidden md: only"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /ActionsDropdown[\s\S]{0,220}data-testid="chat-composer-expand"/,
+      "expand must not stay a permanent sibling of +"
+    )
+    assert.match(
+      chatInterface,
+      /composer-textarea-shell[\s\S]{0,500}has-expand-control[\s\S]{0,500}chat-composer-expand/,
+      "expand overlays the textarea shell instead of the bottom toolbar"
+    )
+    assert.match(
+      chatInterface,
+      /composerShowExpand \? \(/,
+      "expand is gated; it is not rendered next to + on every short draft"
+    )
+    assert.match(
+      composerLayout,
+      /export function shouldShowComposerExpandControl/,
+      "overflow gating lives in the shared layout helper"
+    )
+    assert.match(
+      globals,
+      /\.composer-expand-button\s*\{[\s\S]{0,180}position: absolute;[\s\S]{0,80}top: 0\.05rem;[\s\S]{0,80}right: 0\.05rem;/,
+      "expand sits on the textarea top-right corner"
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /getComposerTextareaMaxHeight|composerIsExpanded/,
+      "legacy expand flag names stay unused"
     )
     assert.equal(
       (composerSurface.match(/data-testid="chat-composer-surface"/g) || []).length,

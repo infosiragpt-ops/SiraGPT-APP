@@ -80,6 +80,7 @@ export function useFileProcessingStatus(
     let cancelled = false
     let polls = 0
     let timer: ReturnType<typeof setTimeout> | null = null
+    const abort = new AbortController()
     setState({
       fileId,
       stage: null,
@@ -95,13 +96,23 @@ export function useFileProcessingStatus(
       try {
         const resp = await authenticatedFetch(
           `${API_ROOT}/files/${encodeURIComponent(fileId)}/processing-status`,
-          { headers: authHeader(), credentials: "include" },
+          { headers: authHeader(), credentials: "include", signal: abort.signal },
         )
         if (cancelled) return
+        if (resp.status === 410 || resp.status === 401 || resp.status === 403) {
+          setState((prev) => ({
+            ...prev,
+            loading: false,
+            pending: false,
+            isTerminal: true,
+            stage: prev.stage,
+          }))
+          return
+        }
         if (!resp.ok) {
           // 404 means legacy row (no state machine columns yet) or
           // file removed; either way, stop polling and surface the
-          // last-known state. 401/403 means we shouldn't retry.
+          // last-known state. 401/403/410 means we shouldn't retry.
           setState((prev) => ({
             ...prev,
             loading: false,
@@ -160,6 +171,7 @@ export function useFileProcessingStatus(
 
     return () => {
       cancelled = true
+      abort.abort()
       if (timer) clearTimeout(timer)
     }
   }, [fileId])

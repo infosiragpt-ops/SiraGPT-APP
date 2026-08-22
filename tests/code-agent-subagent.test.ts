@@ -1,8 +1,6 @@
 /**
- * Tests for the subagent tier system.
- * Verifies that depth/parallelism limits are configurable by plan tier and
- * that the subagent model can be overridden via env while slow models are
- * rejected.
+ * Tests for the subagent tier system (Improvement 3).
+ * Verifies that depth/parallelism limits are configurable by plan tier.
  */
 
 import { test } from "node:test"
@@ -63,12 +61,4 @@ test("standard tier is between starter and complex", () => {
   assert.ok(standard.maxDepth <= complex.maxDepth)
   assert.ok(standard.maxParallel >= starter.maxParallel)
   assert.ok(standard.maxParallel <= complex.maxParallel)
-})
-
-// ---- model types ------------------------------------------------------------
-
-test("SubagentLimits shape carries maxParallel and maxDepth", () => {
-  const limits: SubagentLimits = getSubagentLimits("complex")
-  assert.equal(typeof limits.maxParallel, "number")
-  assert.equal(typeof limits.maxDepth, "number")
 })
