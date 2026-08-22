@@ -42,6 +42,9 @@ describe('SDIE v2 Phase 1 (Vitest)', () => {
     expect(spec.output.headings).toBe(false)
     expect(spec.output.bullets).toBe(false)
     expect(shouldHandle({ prompt: SCREENSHOT_PROMPT, files: fixtureFiles() })).toBe(true)
+    expect(sdie.shouldSkipTopK(spec)).toBe(true)
+    expect(sdie.shouldSkipRetrieveEvidence(SCREENSHOT_PROMPT)).toBe(true)
+    expect(sdie.shouldSkipRetrieveEvidence(SCREENSHOT_PROMPT, { FEATURE_SDIE_V2: '0' })).toBe(false)
   })
 
   it('rejects the screenshot-style editorial fragments', () => {

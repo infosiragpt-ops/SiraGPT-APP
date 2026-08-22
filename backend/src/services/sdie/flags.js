@@ -3,8 +3,13 @@
 /**
  * FEATURE_SDIE_V2 — SIRA Document Intelligence Engine v2.
  *
- * When enabled, /chat and /code document+summary turns compile a RequestSpec
- * and walk the full document instead of top-k RAG + free-form LLM.
+ * Flag style matches live FEATURE_* gates (FEATURE_DOC_ENGINE=1,
+ * deployments/flags.js, codex/flags.js):
+ *   v === '1' || v === 'true' || v === 'on'
+ *
+ * Unset defaults ON so the screenshot regression is fixed on deploy
+ * (production has FEATURE_DOC_ENGINE=1 but no FEATURE_SDIE* yet).
+ * Operators disable with FEATURE_SDIE_V2=0.
  *
  * FEATURE_DOC_ENGINE (OOXML transformToTemplate / source-preserving edit)
  * stays on its own path. SDIE never claims mutation/transform turns.
@@ -13,29 +18,30 @@
 const FLAG_NAME = 'FEATURE_SDIE_V2';
 const DOC_ENGINE_FLAG = 'FEATURE_DOC_ENGINE';
 
-function parseFlag(raw, defaultOn) {
-  if (raw == null || raw === '') return defaultOn;
-  const v = String(raw).trim().toLowerCase();
-  if (['0', 'false', 'off', 'no', 'disabled'].includes(v)) return false;
-  if (['1', 'true', 'on', 'yes', 'enabled'].includes(v)) return true;
-  return defaultOn;
+function truthyFlag(raw) {
+  const v = String(raw || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'on';
 }
 
-/**
- * Default ON so the screenshot regression is fixed once the flag is
- * deployed. Operators can disable with FEATURE_SDIE_V2=0.
- */
 function isSdieV2Enabled(env = process.env) {
-  return parseFlag(env[FLAG_NAME], true);
+  const raw = env[FLAG_NAME];
+  if (raw == null || raw === '') return true;
+  return truthyFlag(raw);
 }
 
 /**
- * Existing OOXML / Word-transform engine. SDIE must not steal those turns.
- * Honours FEATURE_DOC_ENGINE when set; otherwise the live edit detectors
- * (isDocumentEditRequest) remain the authority.
+ * Existing OOXML / Word-transform engine. Unset treated as on so this
+ * module never disables the live FEATURE_DOC_ENGINE=1 path.
  */
 function isDocEngineEnabled(env = process.env) {
-  return parseFlag(env[DOC_ENGINE_FLAG], true);
+  const raw = env[DOC_ENGINE_FLAG];
+  if (raw == null || raw === '') return true;
+  return truthyFlag(raw);
+}
+
+function parseFlag(raw, defaultOn) {
+  if (raw == null || raw === '') return defaultOn;
+  return truthyFlag(raw);
 }
 
 function envFlagEnabled(raw, defaultOn = false) {
@@ -49,4 +55,5 @@ module.exports = {
   isDocEngineEnabled,
   envFlagEnabled,
   parseFlag,
+  truthyFlag,
 };

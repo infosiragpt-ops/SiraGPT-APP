@@ -9,18 +9,33 @@ A user uploaded `Formato_para_el_articulo_de_revision_narrativa….docx` and ask
 - «Incluir la imagen del reporte de similitud con el porcentaje…»
 - «Matriz de sistematización de los treinta estudios incluidos.»
 
-Root cause: **top-k RAG + free-form LLM**. Template instructions inside the file scored as “relevant chunks” and were echoed instead of a full-document synthesis.
+Root cause on the live VPS: **top-k `documentIntelligence.retrieveEvidence`**, not the OOXML edit slot.
+
+Live path today:
+
+1. Extract: `POST /api/files/upload` → `fileProcessor.processFile` / `processWord` (mammoth; Docling/MarkItDown when available).
+2. `POST /api/ai/generate` (`/chat` and `/code`; `/code` sets `disableAgentic: true`).
+3. File context: `chat-attachment-recovery.buildChatUploadedFileContext` → `message-attachments.buildUploadedFileContext`.
+4. `isDeepDocumentQuestion` matches «resumen» → `retrieveRelevantEvidence` (`evidenceLimit` 16–18) → `retrieveEvidence` (`topK` 3–8).
+5. Operational RAG (`DEFAULT_RETRIEVAL_K=8`) may also run.
+6. Summaries use the **plain** stream (`shouldUseAgenticChat` skips them). `/code` never enters `agentic-chat-stream`.
+
+Template instructions scored as “relevant chunks” and were echoed instead of a full-document synthesis.
 
 ## Flag
 
+Mirror live `FEATURE_*` style (`FEATURE_DOC_ENGINE=1`, `deployments/flags.js`): `1` / `true` / `on`.
+
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `FEATURE_SDIE_V2` | on (`1`) | Document+summary turns on `/chat` and `/code` compile a `RequestSpec` and skip top-k RAG. Set `0`/`false`/`off` to restore the generic path. |
-| `FEATURE_DOC_ENGINE` | on | Existing OOXML / `transformToTemplate` / source-preserving Word edit path. **SDIE never claims these turns.** |
+| `FEATURE_SDIE_V2` | on when unset (pin `1` in prod like `FEATURE_DOC_ENGINE`) | Document+summary turns compile a `RequestSpec` and bypass `retrieveEvidence`. Set `0`/`false`/`off` to restore the generic path. |
+| `FEATURE_DOC_ENGINE` | on (`1` live) | Existing OOXML / `transformToTemplate` / source-preserving Word edit path. **SDIE never claims these turns.** |
 | `SDIE_DEEPSEEK_MODEL` | `deepseek-v4-flash` | DeepSeek V4 Flash or Pro only. |
 | `SDIE_LLM_TIMEOUT_MS` | `45000` | Per-call timeout for SDIE generation. |
 
 Models: **DeepSeek V4 Flash / Pro only**. OpenRouter is rejected.
+
+Live inventory at Phase 1: `FEATURE_DOC_ENGINE=1`; no `FEATURE_SDIE*` yet. Unset `FEATURE_SDIE_V2` still enables the engine so the screenshot regression is fixed on deploy.
 
 ## Pipeline
 
@@ -33,23 +48,26 @@ Models: **DeepSeek V4 Flash / Pro only**. OpenRouter is rejected.
    Detects «un solo párrafo», «resumen», «in one paragraph», «en N párrafos».  
    Document text is **untrusted** and is never compiled as instructions.
 
-2. **Planner** (`planner.js`)  
-   `summarize_full` ⇒ **no top-k**. Walk every heading/section, compress each to notes, then one hierarchical draft.
+2. **`summarize_full` bypasses `retrieveEvidence`**  
+   When `RequestSpec.strategy === 'summarize_full'` or `scope.coverage === 'full'`, `buildUploadedFileContext` does **not** call `retrieveRelevantEvidence` / `documentIntelligence.retrieveEvidence`. It uses the full extract (headings + body) and skips first-chunk analysis snippets. Operational RAG (`DEFAULT_RETRIEVAL_K=8`) is left running; SDIE does not steal that slot.
 
-3. **Extractors**  
-   Reuse `fileProcessor` DOCX/PDF extracts (mammoth HTML→markdown, PDF streaming). Prefer full text + headings. Editorial/template lines are tagged and excluded from summary evidence by default.
+3. **Planner** (`planner.js`)  
+   `summarize_full` ⇒ **no top-k**. Walk every heading/section, compress each to notes, then one hierarchical draft. Editorial/template lines are tagged and excluded.
 
-4. **Generate + validate**  
+4. **Extractors**  
+   Reuse already-extracted `fileProcessor` text on the file row (mammoth / Docling / MarkItDown). Prefer full text + headings.
+
+5. **Generate + validate**  
    DeepSeek V4 Flash/Pro under the `RequestSpec`. Deterministic validators:
    - exact paragraph count
    - no headings/bullets when forbidden
    - reject editorial contamination  
-   Repair ≤ 3. Only an **approved plain answer** is streamed to the user. If generation fails, the generic path continues **without** top-k RAG for `summarize_full`.
+   Repair ≤ 3. Only an **approved plain answer** is streamed. If generation fails, the generic path continues with the full-document excerpt (still no `retrieveEvidence`).
 
-5. **Wiring**  
-   - `POST /api/ai/generate` (used by `/chat` and `/code`) short-circuits before operational RAG / agentic chat.  
-   - `agentic-chat-stream` runs SDIE only after the source-preserving OOXML preloop has declined the turn.  
-   Edit / “hazme un Word” / agent-runner create turns stay on `FEATURE_DOC_ENGINE`.
+6. **Wiring (only insert)**  
+   `POST /api/ai/generate` — **after** file context + RAG + enrichment, **before** the agentic gate / `generateStream`.  
+   This is the path both `/chat` and `/code` use.  
+   **Do not** put SDIE only in the source-preserving / `FEATURE_DOC_ENGINE` edit slot (`agentic-chat-stream`): that chat-bridge is not wired for resumen, and `/code` sets `disableAgentic: true`.
 
 ## RequestSpec (Phase 1)
 
@@ -70,4 +88,4 @@ Models: **DeepSeek V4 Flash / Pro only**. OpenRouter is rejected.
 - `tests/lib/sdie/sdie-v2-phase1.test.ts` (Vitest)
 - Fixture: `backend/tests/fixtures/sdie-narrative-review-template.txt` mimics the screenshot document.
 
-Success criterion: «dame un resumen en un solo párrafo» yields **one synthesizing paragraph**, not title/editorial fragments.
+Success criterion: «dame un resumen en un solo párrafo» yields **one synthesizing paragraph**, not title/editorial fragments, on both `/chat` and `/code`.

@@ -10,7 +10,12 @@ const { compileIntent, shouldHandle } = require('../src/services/sdie/request-sp
 const { validateAnswer, splitParagraphs, hasHeading, hasBullets } = require('../src/services/sdie/validators');
 const { isEditorialLine, collectEditorialSnippets } = require('../src/services/sdie/editorial');
 const { assertDeepSeekOnly } = require('../src/services/sdie/generate');
-const { isSdieV2Enabled } = require('../src/services/sdie/flags');
+const { isSdieV2Enabled, truthyFlag } = require('../src/services/sdie/flags');
+const { shouldSkipRetrieveEvidence } = require('../src/services/sdie/request-spec');
+const {
+  buildUploadedFileContext,
+  shouldSkipRetrieveEvidenceForQuery,
+} = require('../src/services/message-attachments');
 
 const FIXTURE = fs.readFileSync(
   path.join(__dirname, 'fixtures', 'sdie-narrative-review-template.txt'),
@@ -158,9 +163,121 @@ describe('SDIE v2 Phase 1 · DeepSeek-only + flag', () => {
     assert.equal(assertDeepSeekOnly('deepseek-v4-pro'), 'deepseek-v4-pro');
   });
 
-  it('honours FEATURE_SDIE_V2=0', () => {
+  it('honours FEATURE_SDIE_V2 with live FEATURE_* style (1/true/on)', () => {
+    assert.equal(truthyFlag('1'), true);
+    assert.equal(truthyFlag('true'), true);
+    assert.equal(truthyFlag('on'), true);
+    assert.equal(truthyFlag('0'), false);
+    assert.equal(truthyFlag('false'), false);
+    assert.equal(truthyFlag('off'), false);
     assert.equal(isSdieV2Enabled({ FEATURE_SDIE_V2: '0' }), false);
+    assert.equal(isSdieV2Enabled({ FEATURE_SDIE_V2: 'false' }), false);
     assert.equal(isSdieV2Enabled({ FEATURE_SDIE_V2: '1' }), true);
+    assert.equal(isSdieV2Enabled({ FEATURE_SDIE_V2: 'true' }), true);
+    assert.equal(isSdieV2Enabled({ FEATURE_SDIE_V2: 'on' }), true);
     assert.equal(isSdieV2Enabled({}), true);
+  });
+});
+
+describe('SDIE v2 Phase 1 · retrieveEvidence bypass', () => {
+  it('skips documentIntelligence.retrieveEvidence for summarize_full', () => {
+    assert.equal(shouldSkipRetrieveEvidence(SCREENSHOT_PROMPT), true);
+    assert.equal(shouldSkipRetrieveEvidenceForQuery(SCREENSHOT_PROMPT), true);
+    assert.equal(shouldSkipRetrieveEvidence('extrae el DOI del tercer estudio'), false);
+    assert.equal(shouldSkipRetrieveEvidence(SCREENSHOT_PROMPT, { FEATURE_SDIE_V2: '0' }), false);
+  });
+
+  it('buildUploadedFileContext does not call retrieveEvidence for «dame un resumen en un solo párrafo»', async () => {
+    const rows = [{
+      id: 'file-narrative',
+      filename: 'Formato_para_el_articulo_de_revision_narrativa.docx',
+      originalName: 'Formato_para_el_articulo_de_revision_narrativa.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      extractedText: FIXTURE,
+      openaiFileId: null,
+      documentAnalysis: {
+        id: 'analysis-1',
+        summary: 'Incluir la imagen del reporte de similitud',
+        chunkCount: 2,
+        chunks: [
+          { ordinal: 1, sectionTitle: 'Portada', text: 'Incluir la imagen del reporte de similitud con el porcentaje de coincidencia.' },
+          { ordinal: 2, sectionTitle: 'Matriz', text: 'Matriz de sistematización de los treinta estudios incluidos.' },
+        ],
+        tables: [],
+      },
+    }];
+    const prisma = {
+      file: {
+        findMany: async ({ where }) => {
+          const wanted = new Set((where?.id?.in || []).map(String));
+          return rows.filter((row) => wanted.has(row.id));
+        },
+      },
+    };
+
+    let retrieveCalls = 0;
+    const context = await buildUploadedFileContext(prisma, {
+      userId: 'user-1',
+      fileIds: ['file-narrative'],
+      query: SCREENSHOT_PROMPT,
+      maxChars: 24000,
+      retrieveEvidenceFn: async () => {
+        retrieveCalls += 1;
+        return [{
+          id: 'bad',
+          sectionTitle: 'Portada',
+          text: 'Incluir la imagen del reporte de similitud con el porcentaje de coincidencia.',
+        }];
+      },
+    });
+
+    assert.equal(retrieveCalls, 0);
+    assert.doesNotMatch(context, /Contenido relevante recuperado/);
+    assert.doesNotMatch(context, /Evidencia 1/);
+    assert.doesNotMatch(context, /Primeras referencias estructuradas/);
+    assert.match(context, /revisi[oó]n narrativa|ansiedad|estudios/i);
+
+    let extractCalls = 0;
+    const extractContext = await buildUploadedFileContext(prisma, {
+      userId: 'user-1',
+      fileIds: ['file-narrative'],
+      query: 'extrae el DOI del tercer estudio',
+      maxChars: 24000,
+      retrieveEvidenceFn: async () => {
+        extractCalls += 1;
+        return [{ id: 'doi', sectionTitle: 'Refs', text: 'DOI 10.1234/example' }];
+      },
+    });
+    assert.equal(extractCalls, 1);
+    assert.match(extractContext, /DOI 10\.1234\/example/);
+
+    let flagOffCalls = 0;
+    await buildUploadedFileContext(prisma, {
+      userId: 'user-1',
+      fileIds: ['file-narrative'],
+      query: SCREENSHOT_PROMPT,
+      maxChars: 24000,
+      env: { FEATURE_SDIE_V2: '0' },
+      retrieveEvidenceFn: async () => {
+        flagOffCalls += 1;
+        return [{ id: 'bad', text: 'Incluir la imagen del reporte de similitud' }];
+      },
+    });
+    assert.equal(flagOffCalls, 1);
+  });
+});
+
+describe('SDIE v2 Phase 1 · wiring', () => {
+  it('inserts SDIE in ai.js after enrichment and not in the OOXML edit slot', () => {
+    const ai = fs.readFileSync(path.join(__dirname, '../src/routes/ai.js'), 'utf8');
+    const stream = fs.readFileSync(path.join(__dirname, '../src/services/agentic-chat-stream.js'), 'utf8');
+    const attachments = fs.readFileSync(path.join(__dirname, '../src/services/message-attachments.js'), 'utf8');
+
+    assert.match(ai, /runSdieTurn/);
+    assert.match(ai, /AFTER file context \+ RAG \+ enrichment/);
+    assert.match(ai, /BEFORE agentic gate/);
+    assert.doesNotMatch(stream, /runSdieTurn/);
+    assert.match(attachments, /shouldSkipRetrieveEvidenceForQuery/);
+    assert.match(attachments, /skipTopKEvidence/);
   });
 });

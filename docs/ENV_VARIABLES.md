@@ -24,7 +24,7 @@
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `FEATURE_SDIE_V2` | `1` (on) | Full-document summaries on `/chat` and `/code`. Skips top-k RAG. See `docs/sdie-v2.md`. |
+| `FEATURE_SDIE_V2` | on when unset (pin `1` like `FEATURE_DOC_ENGINE`) | Full-document summaries on `/chat` and `/code`. Bypasses `retrieveEvidence` top-k. See `docs/sdie-v2.md`. |
 | `FEATURE_DOC_ENGINE` | `1` (on) | Existing OOXML / Word transform path. SDIE never claims these turns. |
 | `SDIE_DEEPSEEK_MODEL` | `deepseek-v4-flash` | DeepSeek V4 Flash or Pro only. Never OpenRouter. |
 | `SDIE_LLM_TIMEOUT_MS` | `45000` | Per-call timeout for SDIE generation. |

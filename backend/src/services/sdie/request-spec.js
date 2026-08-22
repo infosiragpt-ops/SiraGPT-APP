@@ -143,11 +143,32 @@ function shouldHandle({ prompt, files, spec, env } = {}) {
   return false;
 }
 
+/**
+ * summarize_full / full-document RequestSpecs must not use the live
+ * message-attachments → documentIntelligence.retrieveEvidence top-k path
+ * (limit 16–18, topK 3–8). That is the screenshot bug.
+ */
+function shouldSkipTopK(spec) {
+  return spec?.strategy === 'summarize_full' || spec?.scope?.coverage === 'full';
+}
+
+function shouldSkipRetrieveEvidence(prompt, env = process.env) {
+  try {
+    const { isSdieV2Enabled } = require('./flags');
+    if (!isSdieV2Enabled(env)) return false;
+    return shouldSkipTopK(compileIntent(prompt));
+  } catch (_) {
+    return false;
+  }
+}
+
 module.exports = {
   VERSION,
   compileIntent,
   shouldHandle,
   hasDocumentText,
+  shouldSkipTopK,
+  shouldSkipRetrieveEvidence,
   detectIntent,
   parseParagraphCount,
   detectLanguage,

@@ -976,41 +976,6 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // instead. (Edit turns claimed via attached files keep the loop: the
     // forced document_edit path edits the user's REAL file and never touches
     // the generic document pipeline.)
-    // SDIE v2 Phase 1 — full-document summary (no top-k) after OOXML /
-    // source-preserving edit has had its chance. FEATURE_DOC_ENGINE
-    // transform turns never reach here: they return above.
-    if (!agentRunnerClaimedTurn && !documentEditPreloopAttempted && !isDocumentEditRequest(userQuery)) {
-      try {
-        const sdie = require('./sdie');
-        if (sdie.isSdieV2Enabled()) {
-          const incomingFiles = Array.isArray(opts && opts.processedFiles) ? opts.processedFiles : [];
-          const docs = incomingFiles.length > 0
-            ? incomingFiles
-            : (attachedDocuments
-              ? [{ originalName: 'document', mimeType: 'text/plain', extractedText: attachedDocuments }]
-              : []);
-          const sdieResult = await sdie.runSdieTurn({
-            prompt: userQuery,
-            files: docs,
-            surface: (opts && opts.surface) || 'chat',
-            signal,
-          });
-          if (sdieResult.handled && sdieResult.answer) {
-            await writeSse(res, { content: sdieResult.answer });
-            logDocRouting('sdie_v2', sdieResult.spec?.strategy);
-            return {
-              finalAnswer: sdieResult.answer,
-              persistedContent: sdieResult.answer,
-              stoppedReason: 'sdie_v2',
-              artifacts: [],
-            };
-          }
-        }
-      } catch (sdieErr) {
-        try { console.warn('[sdie] agentic short-circuit failed:', sdieErr && sdieErr.message || sdieErr); } catch (_) { /* noop */ }
-      }
-    }
-
     if (agentRunnerFailure) {
       let runnerOnly = true;
       let answer = null;

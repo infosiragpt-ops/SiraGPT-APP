@@ -3070,25 +3070,13 @@ router.post(
       // attached/project files are indexed once per chat/project and the
       // prompt receives compact, cited evidence snippets.
       //
-      // SDIE v2 Phase 1: summarize_full walks the entire document. Top-k
-      // RAG is the screenshot bug (editorial fragments instead of a
-      // synthesis). Skip retrieval when SDIE owns the turn.
+      // SDIE v2 insert is AFTER this block + enrichment, BEFORE the
+      // agentic gate / generateStream. The screenshot bug is
+      // message-attachments → retrieveEvidence (topK 3–8), which
+      // summarize_full already bypasses. Do not skip operational RAG
+      // just to "own" the turn.
       let operationalRagContext = null;
-      let __sdieSpec = null;
-      try {
-        if (sdie.isSdieV2Enabled() && processedFiles.length > 0) {
-          __sdieSpec = sdie.compileIntent(prompt);
-          if (sdie.shouldHandle({ prompt, files: processedFiles, spec: __sdieSpec }) && sdie.shouldSkipTopK(__sdieSpec)) {
-            console.log(`[sdie] skipping top-k RAG for ${__sdieSpec.strategy} coverage=${__sdieSpec.scope.coverage}`);
-          } else {
-            __sdieSpec = null;
-          }
-        }
-      } catch (sdieSpecErr) {
-        console.warn('[sdie] spec compile failed (RAG continues):', sdieSpecErr?.message || sdieSpecErr);
-        __sdieSpec = null;
-      }
-      if (userId && !__publicWebReadonly && !__sdieSpec) {
+      if (userId && !__publicWebReadonly) {
         try {
           operationalRagContext = await operationalRag.buildRuntimeContext({
             rag,
@@ -6158,9 +6146,12 @@ router.post(
             // that sentinel first (aiService.generateStream only appends).
             let __agenticDidStream = false;
 
-            // SDIE v2 Phase 1 — /chat and /code document+summary turns.
-            // Runs before generic RAG/agentic. Never claims OOXML edits
-            // (FEATURE_DOC_ENGINE / source-preserving / agent-runner).
+            // SDIE v2 Phase 1 — AFTER file context + RAG + enrichment,
+            // BEFORE agentic gate / generateStream. /chat and /code both
+            // hit this route; /code sets disableAgentic:true so the
+            // agentic-chat-stream OOXML slot never runs for summaries.
+            // Never claims FEATURE_DOC_ENGINE transform / source-preserving
+            // edit turns (those stay on the document-edit preloop).
             try {
               const referer = String(req.headers?.referer || req.get?.('referer') || '');
               const surface = req.body?.surface

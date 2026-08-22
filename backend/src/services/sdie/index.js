@@ -9,16 +9,18 @@
  */
 
 const { isSdieV2Enabled, isDocEngineEnabled, FLAG_NAME } = require('./flags');
-const { compileIntent, shouldHandle, hasDocumentText } = require('./request-spec');
+const {
+  compileIntent,
+  shouldHandle,
+  hasDocumentText,
+  shouldSkipTopK,
+  shouldSkipRetrieveEvidence,
+} = require('./request-spec');
 const { extractDocuments } = require('./extract');
 const { buildPlan } = require('./planner');
 const { validateAnswer } = require('./validators');
 const { generateApprovedAnswer } = require('./generate');
 const { collectEditorialSnippets } = require('./editorial');
-
-function shouldSkipTopK(spec) {
-  return spec?.strategy === 'summarize_full' || spec?.scope?.coverage === 'full';
-}
 
 async function runSdieTurn({
   prompt,
@@ -79,6 +81,7 @@ module.exports = {
   shouldHandle,
   hasDocumentText,
   shouldSkipTopK,
+  shouldSkipRetrieveEvidence,
   extractDocuments,
   buildPlan,
   validateAnswer,
