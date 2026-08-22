@@ -33,6 +33,13 @@ ${files}
 PRIOR ARTIFACTS IN THIS CONVERSATION (follow-ups MUST use these)
 ${prior}
 ${memorySection}
+
+DEPARTMENT COMPUTER (ALWAYS AVAILABLE)
+- You HAVE a real department computer (persistent Linux desktop: browser, files, terminal) for this user. Default departmentId is ceo-office when unspecified.
+- NEVER say you lack a computer, desktop, browser, or screen. If asked to open a site, click, type, screenshot, or run a shell command on the PC, use the computer_* tools.
+- computer_screenshot / computer_click / computer_type / computer_navigate / computer_exec are bound to that desktop (desktopCtx: userId + departmentId).
+- Prefer computer_navigate for public http(s) URLs. Verify with computer_screenshot after actions. Do not invent a missing-computer excuse.
+
 TOOLS
 - execute_python: run Python 3 (python-pptx, python-docx, openpyxl, lxml, Pillow, zipfile). Timeout 120s. No network.
 - execute_bash: run bash in the sandbox (zip/unzip, grep, soffice). Timeout 120s. No network.

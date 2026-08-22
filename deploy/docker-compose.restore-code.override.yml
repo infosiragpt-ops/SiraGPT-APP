@@ -1,0 +1,23 @@
+# Restore-code continuity fragment (merge into docker-compose.production.override.yml)
+# Branch: feat/restore-code-lost
+# Keeps critical FE/BE sources bind-mounted so host restores survive image recreates.
+services:
+  backend:
+    volumes:
+      - ./backend/index.js:/app/index.js:ro
+      - ./backend/src/routes/agent-computer.js:/app/src/routes/agent-computer.js:ro
+      - ./backend/src/services/computer/orch-client.js:/app/src/services/computer/orch-client.js:ro
+      - ./backend/src/services/computer/flags.js:/app/src/services/computer/flags.js:ro
+      - ./backend/src/services/agent-runner:/app/src/services/agent-runner:ro
+  frontend:
+    volumes:
+      - ./components/code/activity-bar.tsx:/app/components/code/activity-bar.tsx:ro
+      - ./components/code/code-workspace.tsx:/app/components/code/code-workspace.tsx:ro
+      - ./components/code/department-computer-pane.tsx:/app/components/code/department-computer-pane.tsx:ro
+      - ./components/code/ComputerViewer.tsx:/app/components/code/ComputerViewer.tsx:ro
+      - ./components/code/agent-company-panel.tsx:/app/components/code/agent-company-panel.tsx:ro
+      - ./lib/code-workspace-context.tsx:/app/lib/code-workspace-context.tsx:ro
+      - ./components/claude-thinking-timeline.tsx:/app/components/claude-thinking-timeline.tsx:ro
+      - ./components/thinking-placeholder.tsx:/app/components/thinking-placeholder.tsx:ro
+      - ./components/agent-trace.tsx:/app/components/agent-trace.tsx:ro
+      - ./components/thinking-trace.tsx:/app/components/thinking-trace.tsx:ro
