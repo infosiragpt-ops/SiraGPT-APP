@@ -94,16 +94,29 @@ async function getFileVersion(prisma, { versionId, userId } = {}) {
 // Restore is non-destructive: it creates a new head that points to the exact
 // immutable artifact from an earlier version. The original upload and every
 // intermediate edit remain available in the history.
+//
+// Two version shapes are restorable:
+//   - artifact-backed (background surgical edits): the new head points at the
+//     same immutable artifact.
+//   - content-backed (manual /chat editor edits, `content` Markdown on the
+//     row, no artifact): the new head carries the same Markdown. Without this
+//     branch every manual edit would be unrestorable — its rows have
+//     artifactId === null by design (see POST /files/:id/edit).
 async function restoreFileVersion(prisma, { fileId, versionId, userId, createdByChatId = null } = {}) {
   if (!prisma?.fileVersion || !fileId || !versionId || !userId) return null;
   const source = await prisma.fileVersion.findFirst({
     where: { id: versionId, fileId, userId, validationPassed: true },
   }).catch(() => null);
-  if (!source?.artifactId || source.validationPassed !== true) return null;
+  if (!source || source.validationPassed !== true) return null;
+  const hasArtifact = typeof source.artifactId === 'string' && source.artifactId.length > 0;
+  const hasContent = typeof source.content === 'string' && source.content.trim().length > 0;
+  // Exactly one payload shape must be present; otherwise there is nothing to
+  // restore (original-upload placeholder rows carry neither).
+  if (!hasArtifact && !hasContent) return null;
   const restored = await recordFileVersion(prisma, {
     fileId,
     userId,
-    artifactId: source.artifactId,
+    artifactId: hasArtifact ? source.artifactId : null,
     filename: source.filename,
     summary: `Restaurada desde la versión ${source.version}${source.summary ? `: ${source.summary}` : ''}`,
     editPlan: {
@@ -113,6 +126,7 @@ async function restoreFileVersion(prisma, { fileId, versionId, userId, createdBy
     },
     validationPassed: source.validationPassed,
     createdByChatId,
+    content: hasContent ? source.content : null,
   });
   return restored ? { source, restored } : null;
 }

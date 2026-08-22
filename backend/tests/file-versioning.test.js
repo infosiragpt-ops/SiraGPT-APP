@@ -121,6 +121,44 @@ describe('versioning', () => {
     }), null);
   });
 
+  test('restore carries content-backed manual edits as a new Markdown head', async () => {
+    const prisma = makeFakePrisma();
+    // A manual /chat edit: no artifact, the edited Markdown lives on the row.
+    const manual = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: null,
+      filename: 'tesis.docx', summary: 'Edición manual desde el editor de documentos',
+      content: '# Título\n\nTexto editado por el usuario.',
+    });
+    await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: null,
+      filename: 'tesis.docx', summary: 'Segunda edición',
+      content: '# Título\n\nOtra edición posterior.',
+    });
+
+    const result = await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: manual.id, userId: 'u1',
+    });
+
+    assert.ok(result, 'a content-only version must be restorable');
+    assert.equal(result.source.version, 1);
+    assert.equal(result.restored.version, 3);
+    assert.equal(result.restored.artifactId, null);
+    assert.equal(result.restored.content, '# Título\n\nTexto editado por el usuario.');
+    assert.equal(result.restored.editPlan.type, 'restore');
+    assert.match(result.restored.summary, /Restaurada desde la versión 1/);
+  });
+
+  test('restore rejects versions with neither artifact nor content (nothing to restore)', async () => {
+    const prisma = makeFakePrisma();
+    const placeholder = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: null,
+      filename: 'tesis.docx', summary: 'placeholder sin payload',
+    });
+    assert.equal(await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: placeholder.id, userId: 'u1',
+    }), null);
+  });
+
   test('best-effort: create failure returns null, never throws', async () => {
     const prisma = makeFakePrisma({ failCreate: true });
     assert.equal(await recordFileVersion(prisma, { fileId: 'f', userId: 'u', filename: 'x' }), null);

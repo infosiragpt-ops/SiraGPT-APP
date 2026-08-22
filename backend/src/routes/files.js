@@ -1002,17 +1002,40 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
     if (!file) return res.status(404).json({ error: 'File not found' });
     const { listFileVersions } = require('../services/document-editing/versioning');
     const versions = await listFileVersions(prisma, { fileId: file.id, userId: req.user.id });
-    // Each version's edited bytes download from the agent-artifact endpoint;
-    // "restore" = fetch that URL (the original upload is always version 0).
+    // Simple windowed pagination for the history UI: `limit`/`offset` over the
+    // newest-first list. Absent params keep the legacy full-list contract.
+    let page = versions;
+    const hasLimit = req.query.limit !== undefined && String(req.query.limit).trim() !== '';
+    const hasOffset = req.query.offset !== undefined && String(req.query.offset).trim() !== '';
+    if (hasLimit || hasOffset) {
+      const limitRaw = Number.parseInt(String(req.query.limit ?? ''), 10);
+      const offsetRaw = Number.parseInt(String(req.query.offset ?? ''), 10);
+      const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 20;
+      const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+      page = versions.slice(offset, offset + limit);
+    }
+    // Each artifact-backed version's edited bytes download from the
+    // agent-artifact endpoint; "restore" = re-serve that payload. Content-
+    // backed manual edits carry no artifact — their Markdown is readable (and
+    // restorable) through the per-version content/restore endpoints, so the
+    // UI gets `hasContent` to distinguish them. `editPlanType` separates
+    // manual edits from background surgical edits; `createdByChatId` says
+    // which conversation produced the version.
     return res.json({
       fileId: file.id,
-      versions: versions.map((v) => ({
+      total: versions.length,
+      versions: page.map((v) => ({
         id: v.id,
         version: v.version,
         filename: v.filename,
         summary: v.summary,
         validationPassed: v.validationPassed,
         createdAt: v.createdAt,
+        editPlanType: v.editPlan && typeof v.editPlan === 'object' && typeof v.editPlan.type === 'string'
+          ? v.editPlan.type
+          : null,
+        createdByChatId: v.createdByChatId || null,
+        hasContent: typeof v.content === 'string' && v.content.trim().length > 0,
         downloadUrl: v.artifactId ? `/api/agent/artifact/${v.artifactId}` : null,
       })),
     });
@@ -1039,6 +1062,11 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
     });
     if (!result) return res.status(404).json({ error: 'Versión restaurable no encontrada' });
     const version = result.restored;
+    // Content-backed restores have no artifact — their payload lives on the
+    // row and is served by GET /:id/versions/:versionId/content.
+    const downloadUrl = version.artifactId
+      ? `/api/agent/artifact/${version.artifactId}`
+      : null;
     return res.status(201).json({
       sourceVersion: result.source.version,
       version: {
@@ -1048,7 +1076,7 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
         summary: version.summary,
         validationPassed: version.validationPassed,
         createdAt: version.createdAt,
-        downloadUrl: `/api/agent/artifact/${version.artifactId}`,
+        downloadUrl,
       },
     });
   } catch (error) {

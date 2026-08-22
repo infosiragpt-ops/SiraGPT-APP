@@ -17,7 +17,7 @@
  */
 
 import * as React from "react"
-import { Loader2, Save, Download, X, FileText } from "lucide-react"
+import { Loader2, Save, Download, X, FileText, History, PencilLine } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -35,6 +35,8 @@ import {
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { TiptapEditor } from "@/components/editor/tiptap-editor"
+import { DocumentVersionsPanel } from "@/components/chat/DocumentVersionsPanel"
+import { clearDocumentDraft } from "@/lib/chat/document-versions"
 import {
   contentToMarkdown,
   buildExportBlob,
@@ -176,6 +178,8 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   const [markdown, setMarkdown] = React.useState<string>("")
   const [saving, setSaving] = React.useState(false)
   const [exporting, setExporting] = React.useState(false)
+  // "editor" = the Tiptap surface; "history" = restorable version history.
+  const [activeSurface, setActiveSurface] = React.useState<"editor" | "history">("editor")
 
   const handleEditorChange = React.useCallback((next: string) => {
     setMarkdown(next)
@@ -190,6 +194,7 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
     setMarkdown("")
     setContent("")
     setContentLoaded(false)
+    setActiveSurface("editor")
     onClose()
   }, [saving, onClose])
 
@@ -208,6 +213,9 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
         chatId,
         summary: summary ?? "Edición manual desde el editor de documentos",
       })
+      // The saved edit becomes the new server base — adopt it as the editor's
+      // baseline so a subsequent "Historial → Comparar" diffs against reality.
+      setContent(markdown)
       toast.success("Documento guardado")
       onSaved?.(result)
       onClose()
@@ -218,6 +226,18 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
       setSaving(false)
     }
   }, [resolvedFileId, saving, markdown, apiClient, onSaved, onClose, chatId, summary])
+
+  /**
+   * Rebase the editor onto a restored version: swap the content baseline,
+   * drop any dirty local draft state and return to the editing surface.
+   */
+  const handleRestored = React.useCallback((restoredMarkdown: string) => {
+    const next = contentToMarkdown(restoredMarkdown)
+    setContent(next)
+    setMarkdown("")
+    setActiveSurface("editor")
+    toast.success("Versión restaurada como nueva versión actual")
+  }, [])
 
   const handleExport = React.useCallback(async (formatKey: DocExportFormat) => {
     if (exporting) return
@@ -251,10 +271,21 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
             <div className="min-w-0">
               <DialogTitle className="truncate text-base">Editor de documentos</DialogTitle>
               <DialogDescription className="truncate text-xs">
-                {resolvedFileName} · {String(resolvedFormat).toUpperCase()} — el guardado crea una nueva versión, el original no se modifica.
+                {resolvedFileName} · {String(resolvedFormat).toUpperCase()} — el guardado crea una nueva versión, el original no se modifica. Consulta el historial para restaurar versiones anteriores.
               </DialogDescription>
             </div>
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant={activeSurface === "history" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setActiveSurface((s) => (s === "history" ? "editor" : "history"))}
+                disabled={!resolvedFileId || saving}
+                className="h-8 gap-1.5 text-muted-foreground"
+                aria-pressed={activeSurface === "history"}
+              >
+                {activeSurface === "history" ? <PencilLine className="h-4 w-4" /> : <History className="h-4 w-4" />}
+                {activeSurface === "history" ? "Volver a editar" : "Historial"}
+              </Button>
               <Button
                 variant="ghost"
                 size="sm"
@@ -303,7 +334,16 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
         </DialogHeader>
 
         <div className="h-[min(72vh,640px)] overflow-hidden px-0 pb-2">
-          {loadingContent ? (
+          {activeSurface === "history" ? (
+            <DocumentVersionsPanel
+              fileId={resolvedFileId}
+              open={open}
+              currentMarkdown={content}
+              apiClient={apiClient}
+              chatId={chatId}
+              onRestored={handleRestored}
+            />
+          ) : loadingContent ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Cargando contenido…
