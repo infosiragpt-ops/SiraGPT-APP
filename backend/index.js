@@ -424,6 +424,7 @@ const {
     initializeWebSocketServer,
     closeComputerUseWebSocketServer,
 } = require('./src/routes/computer-use');
+const agentComputerRoutes = require('./src/routes/agent-computer');
 const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
 const {
     closeUserSessionRevocationBus,
@@ -1254,6 +1255,7 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
@@ -1318,6 +1320,7 @@ app.use('/api/codex', codexRunsRoutes);
 // /runs flow keeps priority; V2 lives under /health + /projects/* (and F2 run
 // routes scoped per project). Flag off ⇒ every V2 route except /health is 404.
 app.use('/api/codex', codexV2Routes);
+app.use('/api/departments', require('./src/routes/dept-computer'));
 // Deployments / Publishing (flag DEPLOYMENTS_V2). Bearer-auth, CSRF-exempt like
 // codex; flag off ⇒ every route except /health is 404.
 app.use('/api/deployments', deploymentsRoutes);

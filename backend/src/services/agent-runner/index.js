@@ -228,6 +228,8 @@ async function runAgentRunner({
   memoryStore = null,
   mcpToolLoader = null,
   persistMemory = true,
+  projectId = null,
+  departmentId = 'ceo-office',
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
@@ -402,6 +404,11 @@ async function runAgentRunner({
         openaiClient,
         synthesize,
         computerDriver,
+        desktopCtx: {
+          userId,
+          projectId: projectId || undefined,
+          departmentId: departmentId || 'ceo-office',
+        },
       });
       f7.applyToMessages(messages);
     } catch (_) { f7 = null; }
