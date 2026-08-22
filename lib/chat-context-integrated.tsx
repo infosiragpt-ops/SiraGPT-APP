@@ -2126,6 +2126,25 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   return { ...prevChat, messages: newMessages };
                 });
               },
+              onStart: (payload) => {
+                // F1-b — honest lifecycle state. The backend's start frame
+                // and 5s heartbeats prove the connection is up and the model
+                // is generating; without this the placeholder stays blind to
+                // state for the whole pre-token window (~100–750 ms typical,
+                // minutes on a cold provider). Only the streaming placeholder
+                // is touched — message content never changes.
+                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+                if (!bg.get(activeChat.id)) return; // chat already terminal/switched
+                setCurrentChat((prevChat) => {
+                  if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                  const msgs = prevChat.messages.map((msg) =>
+                    msg.id === aiMessagePlaceholder.id && !msg.content && !(msg as any).progressStage
+                      ? { ...msg, progressStage: 'Escribiendo…' }
+                      : msg
+                  );
+                  return { ...prevChat, messages: msgs };
+                });
+              },
             }
           );
           throwIfTurnCancelled();

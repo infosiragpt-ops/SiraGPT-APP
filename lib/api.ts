@@ -583,6 +583,12 @@ type AIStreamOptions = {
   onAgentEvent?: (event: AgentStreamEvent) => void
   // Claude-style live activity (tool / thinking beat). One Spanish line.
   onActivity?: (text: string, event?: { type?: string; tool?: string; label?: string }) => void
+  // Backend lifecycle anchor: the server flushes headers early and emits
+  // {"type":"start"} immediately (backend/src/routes/ai.js). Fired once per
+  // attempt on the start frame and again on every heartbeat, so the UI can
+  // distinguish "connecting" from "model is generating" and measure real
+  // network TTFT instead of guessing.
+  onStart?: (payload: { type: 'start' | 'heartbeat'; ts?: number; model?: string }) => void
   // Real token usage (+ optional USD cost) emitted once at stream end, so a
   // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
   // provider list price; costAppliedUsd is after the plan policy (struck-through
@@ -1930,6 +1936,20 @@ class ApiClient {
               } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
                 if (options.onActivity) {
                   options.onActivity(String(jsonData.text || jsonData.label), jsonData);
+                }
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'start') {
+                // Lifecycle anchor from the backend: connection accepted,
+                // model dispatch in flight. Never touches message content.
+                if (options.onStart) {
+                  options.onStart({ type: 'start', ts: typeof jsonData.ts === 'number' ? jsonData.ts : undefined, model: typeof jsonData.model === 'string' ? jsonData.model : undefined });
+                }
+                lastProcessTime = Date.now();
+              } else if (jsonData.type === 'heartbeat') {
+                // Keep-alive proof of life while the model thinks. Same UI
+                // channel as start ("generating"), zero content impact.
+                if (options.onStart) {
+                  options.onStart({ type: 'heartbeat', ts: typeof jsonData.ts === 'number' ? jsonData.ts : undefined });
                 }
                 lastProcessTime = Date.now();
               } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
