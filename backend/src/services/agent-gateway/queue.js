@@ -177,6 +177,15 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.rejectIdempotencyKeyWithWhitespace === 'function') {
+          const wsKey = adWait.rejectIdempotencyKeyWithWhitespace(opts && opts.idempotencyKey);
+          if (wsKey && wsKey.ok === false) {
+            const err = new Error('idempotency_key_ws');
+            err.code = 'idempotency_key_ws';
+            err.status = 400;
+            return Promise.reject(err);
+          }
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

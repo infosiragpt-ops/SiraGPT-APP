@@ -854,6 +854,27 @@ async function governThen(input, run) {
         if (typeof ad.sessionLockRefuseIfTtlExpired === 'function' && input && input.lock) {
           ad.sessionLockRefuseIfTtlExpired({ createdAt: input.lock.createdAt || input.lock.lockAt, now: Date.now() });
         }
+        if (typeof ad.sessionLockRefuseIfOwnerEmpty === 'function' && input && input.lock) {
+          ad.sessionLockRefuseIfOwnerEmpty({ owner: input.lock.owner || input.lock.ownerId || input.lock.pid });
+        }
+        if (typeof ad.ignoreNegativeCachedTokens === 'function' && input && (input.cachedTokens != null || input.promptCacheTokens != null)) {
+          ad.ignoreNegativeCachedTokens({ cachedTokens: input.cachedTokens, promptCacheTokens: input.promptCacheTokens });
+        }
+        if (typeof ad.neverChargeIfPromptFiltered === 'function' && input) {
+          ad.neverChargeIfPromptFiltered({ filtered: input.filtered, promptFiltered: input.promptFiltered, blocked: input.blocked, policy: input.policy });
+        }
+        if (typeof ad.neverRetry401Unauthorized === 'function' && input && (input.status === 401 || input.code === '401' || input.code === 'unauthorized')) {
+          ad.neverRetry401Unauthorized(input);
+        }
+        if (typeof ad.classifyEprotoAsUnavailable === 'function' && input && input.error) {
+          ad.classifyEprotoAsUnavailable(input.error);
+        }
+        if (typeof ad.classifyEnobufsAsUnavailable === 'function' && input && input.error) {
+          ad.classifyEnobufsAsUnavailable(input.error);
+        }
+        if (typeof ad.mapSqliteBusyRetryable === 'function' && input && input.error) {
+          ad.mapSqliteBusyRetryable(input.error);
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

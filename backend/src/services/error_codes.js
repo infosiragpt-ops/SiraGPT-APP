@@ -406,6 +406,38 @@ const CODES = Object.freeze({
   SANDBOX_CWD_ROOT: 'sandbox_cwd_root',
   SANDBOX_CODE_CAP: 'sandbox_code_cap',
   SANDBOX_TIMEOUT_REQUIRED: 'sandbox_timeout_required',
+  TOOL_NAME_SLASH: 'tool_name_slash',
+  TOOL_ARG_ARRAY: 'tool_arg_array',
+  TOOL_NAME_TYPE: 'tool_name_type',
+  PLAN_DEPENDS_TYPE: 'plan_depends_type',
+  PLAN_DESC_CAP: 'plan_desc_cap',
+  PLAN_STEP_EMPTY_ID: 'plan_step_empty_id',
+  MEMORY_NS_BLANK: 'memory_ns_blank',
+  MEMORY_NS_CAP: 'memory_ns_cap',
+  MEMORY_ID_EMPTY: 'memory_id_empty',
+  CKPT_SEQ_MISSING: 'ckpt_seq_missing',
+  LOCK_OWNER_EMPTY: 'lock_owner_empty',
+  GLOB_DOT_GIT: 'glob_dot_git',
+  PATH_OPT: 'path_opt',
+  GLOB_COVERAGE: 'glob_coverage',
+  SSE_PING_DROP: 'sse_ping_drop',
+  SSE_EVENT_NAME: 'sse_event_name',
+  USAGE_IGNORE_NEG_CACHED: 'usage_ignore_neg_cached',
+  CREDIT_PROMPT_FILTERED: 'credit_prompt_filtered',
+  UNAUTHORIZED: 'unauthorized',
+  EPROTO: 'eproto',
+  SQLITE_BUSY: 'sqlite_busy',
+  TOOL_WALL_ABORT: 'tool_wall_abort',
+  IDEMPOTENCY_KEY_WS: 'idempotency_key_ws',
+  USER_MSG_LINES: 'user_msg_lines',
+  GCP_SA_REDACT: 'gcp_sa_redact',
+  ENOBUFS: 'enobufs',
+  SUBAGENT_NAME_SLASH: 'subagent_name_slash',
+  SANDBOX_ENV_KEYS: 'sandbox_env_keys',
+  SANDBOX_NET: 'sandbox_net',
+  SANDBOX_STDOUT_LINES: 'sandbox_stdout_lines',
+  SANDBOX_UID_ZERO: 'sandbox_uid_zero',
+  PLAN_STEP_DEPENDS_SORT: 'plan_step_depends_sort',
 });
 
 function isRetryable(code) {
@@ -466,7 +498,10 @@ function isRetryable(code) {
     || c === 'pg_disconnect'
     || c === 'mysql_disconnect'
     || c === 'etimedout'
-    || c === 'net_unavailable';
+    || c === 'net_unavailable'
+    || c === 'eproto'
+    || c === 'enobufs'
+    || c === 'sqlite_busy';
 }
 
 function publicError(code, extra) {
@@ -489,6 +524,7 @@ function httpStatusFor(code) {
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
   if (c === 'request_timeout' || c === CODES.REQUEST_TIMEOUT) return 408;
+  if (c === 'unauthorized' || c === CODES.UNAUTHORIZED) return 401;
   return 400;
 }
 

@@ -187,6 +187,18 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     if (_ad && typeof _ad.refuseSandboxIfTimeoutMissing === 'function') {
       _ad.refuseSandboxIfTimeoutMissing({ timeoutMs: args.timeoutMs != null ? args.timeoutMs : DEFAULT_TIMEOUT_MS });
     }
+    if (_ad && typeof _ad.refuseSandboxIfNetworkEnabled === 'function') {
+      const netCheck = _ad.refuseSandboxIfNetworkEnabled({ network: args.network != null ? args.network : args.net });
+      if (netCheck && netCheck.ok === false) {
+        return { ok: false, code: 'sandbox_net', message: 'sandbox network is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfUidIsZero === 'function') {
+      const uidCheck = _ad.refuseSandboxIfUidIsZero({ uid: args.uid });
+      if (uidCheck && uidCheck.ok === false) {
+        return { ok: false, code: 'sandbox_uid_zero', message: 'sandbox uid 0 is not allowed' };
+      }
+    }
   } catch (_) {}
 
   const timeoutMs = clampInt(args.timeoutMs, cfg.defaultTimeoutMs, MIN_TIMEOUT_MS, HARD_MAX_TIMEOUT_MS);
@@ -201,6 +213,10 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     if (_ad && typeof _ad.capSandboxArgv24 === 'function') {
       const acap = _ad.capSandboxArgv24(argv);
       if (acap && Array.isArray(acap.argv)) argv = acap.argv;
+    }
+    if (_ad && typeof _ad.capSandboxEnvKeys16 === 'function' && args.env) {
+      const ecap = _ad.capSandboxEnvKeys16(args.env);
+      if (ecap && ecap.env) args.env = ecap.env;
     }
   } catch (_) {}
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;

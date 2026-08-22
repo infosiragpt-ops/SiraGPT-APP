@@ -4817,7 +4817,39 @@ function adapterSnapshot() {
     refuseSandboxIfCwdIsRoot: true,
     capSandboxCode256KiB: true,
     refuseSandboxIfTimeoutMissing: true,
-    wave: '3H47',
+    rejectToolNameWithSlash: true,
+    capToolArgArrayLength64: true,
+    refuseToolIfNameNotString: true,
+    refusePlanIfDependsNotArray: true,
+    capPlanDescription256Chars: true,
+    dropPlanStepsWithEmptyId: true,
+    skipMemoryIfNamespaceBlank: true,
+    capMemoryNamespaceChars32: true,
+    refuseMemoryUpsertIfIdEmpty: true,
+    refuseCheckpointIfSeqMissing: true,
+    sessionLockRefuseIfOwnerEmpty: true,
+    skipDotGitGlobFiles: true,
+    refuseWriteToOpt: true,
+    skipCoverageGlobFiles: true,
+    dropSsePingFramesFromReplay: true,
+    capSseEventName32Chars: true,
+    ignoreNegativeCachedTokens: true,
+    neverChargeIfPromptFiltered: true,
+    neverRetry401Unauthorized: true,
+    classifyEprotoAsUnavailable: true,
+    mapSqliteBusyRetryable: true,
+    abortIfToolWallOver60s: true,
+    rejectIdempotencyKeyWithWhitespace: true,
+    capUserMessageLines400: true,
+    redactGcpServiceAccountInResults: true,
+    classifyEnobufsAsUnavailable: true,
+    refuseSubagentIfNameHasSlash: true,
+    capSandboxEnvKeys16: true,
+    refuseSandboxIfNetworkEnabled: true,
+    capSandboxStdoutLines500: true,
+    refuseSandboxIfUidIsZero: true,
+    sortPlanStepsByDependsThenOrder: true,
+    wave: '3H48',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -7595,6 +7627,363 @@ function refuseSandboxIfTimeoutMissing(opts) {
   return { ok: true, timeoutMs: n, code: null };
 }
 
+
+// ---------------------------------------------------------------------------
+// 3H48 remaining holes vs Claude Code/Cowork after 3H47
+// ---------------------------------------------------------------------------
+
+const TOOL_ARG_ARRAY_MAX = 64;
+const PLAN_DESC_MAX = 256;
+const MEMORY_NS_MAX = 32;
+const SSE_EVENT_NAME_MAX = 32;
+const USER_MSG_LINES_MAX = 400;
+const SANDBOX_ENV_KEYS_MAX = 16;
+const SANDBOX_STDOUT_LINES_MAX = 500;
+const TOOL_WALL_MS = 60_000;
+
+function rejectToolNameWithSlash(name) {
+  const n = String(name == null ? "" : name);
+  if (n.indexOf("/") >= 0 || n.indexOf("\\") >= 0) return { ok: false, name: n, code: "tool_name_slash" };
+  return { ok: true, name: n, code: null };
+}
+
+function capToolArgArrayLength64(args, opts) {
+  const max = (opts && opts.max != null) ? opts.max : TOOL_ARG_ARRAY_MAX;
+  const cap = Math.max(1, Number(max) || TOOL_ARG_ARRAY_MAX);
+  if (args == null) return { args: args, truncated: false, code: null };
+  if (Array.isArray(args)) {
+    if (args.length <= cap) return { args: args, truncated: false, code: null };
+    return { args: args.slice(0, cap), truncated: true, dropped: args.length - cap, code: "tool_arg_array" };
+  }
+  if (typeof args !== "object") return { args: args, truncated: false, code: null };
+  const out = {};
+  let truncated = false;
+  for (const k of Object.keys(args)) {
+    const v = args[k];
+    if (Array.isArray(v) && v.length > cap) {
+      out[k] = v.slice(0, cap);
+      truncated = true;
+    } else {
+      out[k] = v;
+    }
+  }
+  return { args: out, truncated: truncated, code: truncated ? "tool_arg_array" : null };
+}
+
+function refuseToolIfNameNotString(name) {
+  if (typeof name === "string") return { ok: true, name: name, code: null };
+  return { ok: false, name: name, code: "tool_name_type" };
+}
+
+function refusePlanIfDependsNotArray(plan) {
+  const p = plan && typeof plan === "object" ? plan : {};
+  const deps = p.depends != null ? p.depends : (p.dependsOn != null ? p.dependsOn : p.dependencies);
+  if (deps == null) return { ok: true, depends: [], code: null };
+  if (Array.isArray(deps)) return { ok: true, depends: deps, code: null };
+  return { ok: false, depends: [], code: "plan_depends_type" };
+}
+
+function capPlanDescription256Chars(desc, opts) {
+  const max = (opts && opts.max != null) ? opts.max : PLAN_DESC_MAX;
+  const cap = Math.max(1, Number(max) || PLAN_DESC_MAX);
+  const s = String(desc == null ? "" : desc);
+  if (s.length <= cap) return { description: s, truncated: false, code: null };
+  return { description: s.slice(0, cap), truncated: true, code: "plan_desc_cap" };
+}
+
+function dropPlanStepsWithEmptyId(steps) {
+  const list = Array.isArray(steps) ? steps : [];
+  const kept = [];
+  let dropped = 0;
+  for (const st of list) {
+    const id = st && (st.id != null ? st.id : (st.stepId != null ? st.stepId : st.key));
+    if (id == null || String(id).trim() === "") { dropped += 1; continue; }
+    kept.push(st);
+  }
+  return { steps: kept, dropped: dropped, code: dropped ? "plan_step_empty_id" : null };
+}
+
+function skipMemoryIfNamespaceBlank(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const required = opts && opts.requireNamespace === true;
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const ns = h && (h.namespace != null ? h.namespace : (h.ns != null ? h.ns : h.scope));
+    const blank = ns == null || String(ns).trim() === "";
+    if (blank && (required || (h && h.requireNamespace))) { skipped += 1; continue; }
+    if (blank && opts && opts.dropBlank === true) { skipped += 1; continue; }
+    if (blank) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "memory_ns_blank" : null };
+}
+
+function capMemoryNamespaceChars32(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const max = (opts && opts.max != null) ? opts.max : MEMORY_NS_MAX;
+  const cap = Math.max(1, Number(max) || MEMORY_NS_MAX);
+  const out = [];
+  let truncated = false;
+  for (const h of list) {
+    if (h && typeof h === "object") {
+      const ns = h.namespace != null ? h.namespace : (h.ns != null ? h.ns : h.scope);
+      if (typeof ns === "string" && ns.length > cap) {
+        const copy = Object.assign({}, h);
+        if (h.namespace != null) copy.namespace = ns.slice(0, cap);
+        else if (h.ns != null) copy.ns = ns.slice(0, cap);
+        else copy.scope = ns.slice(0, cap);
+        out.push(copy);
+        truncated = true;
+      } else {
+        out.push(h);
+      }
+    } else {
+      out.push(h);
+    }
+  }
+  return { hits: out, truncated: truncated, code: truncated ? "memory_ns_cap" : null };
+}
+
+function refuseMemoryUpsertIfIdEmpty(row) {
+  const r = row && typeof row === "object" ? row : {};
+  const id = r.id != null ? r.id : (r.memoryId != null ? r.memoryId : r.key);
+  if (id == null || String(id).trim() === "") return { ok: false, code: "memory_id_empty" };
+  return { ok: true, code: null };
+}
+
+function refuseCheckpointIfSeqMissing(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const seq = p.seq != null ? p.seq : (p.sequence != null ? p.sequence : p.cas);
+  if (seq == null || seq === "") return { ok: false, code: "ckpt_seq_missing" };
+  const n = Number(seq);
+  if (!Number.isFinite(n)) return { ok: false, code: "ckpt_seq_missing" };
+  return { ok: true, seq: n, code: null };
+}
+
+function sessionLockRefuseIfOwnerEmpty(opts) {
+  opts = opts || {};
+  const owner = opts.owner != null ? opts.owner : (opts.ownerId != null ? opts.ownerId : opts.pid);
+  if (owner == null || String(owner).trim() === "") return { ok: false, code: "lock_owner_empty" };
+  return { ok: true, code: null };
+}
+
+function skipDotGitGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const p = typeof h === "string" ? h : (h && (h.path || h.name || h.file)) || "";
+    const norm = String(p).split("\\").join("/");
+    if (norm.indexOf("/.git/") >= 0 || norm.indexOf(".git/") === 0 || /\/\.git$/.test(norm) || norm === ".git") {
+      skipped += 1;
+      continue;
+    }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_dot_git" : null };
+}
+
+function refuseWriteToOpt(filePath) {
+  const p = String(filePath == null ? "" : filePath).split("\\").join("/");
+  const n = p.charAt(0) === "/" ? p : ("/" + p);
+  function hits(base) { return n === base || n.indexOf(base + "/") === 0 || p === base || p.indexOf(base + "/") === 0; }
+  if (hits("/opt")) return { ok: false, path: p, code: "path_opt" };
+  return { ok: true, path: p, code: null };
+}
+
+function skipCoverageGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const p = typeof h === "string" ? h : (h && (h.path || h.name || h.file)) || "";
+    const norm = String(p).split("\\").join("/");
+    if (norm.indexOf("/coverage/") >= 0 || norm.indexOf("coverage/") === 0 || /\/coverage$/.test(norm) || /\/\.nyc_output\//.test(norm)) {
+      skipped += 1;
+      continue;
+    }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_coverage" : null };
+}
+
+function dropSsePingFramesFromReplay(events) {
+  const list = Array.isArray(events) ? events : [];
+  const kept = [];
+  let dropped = 0;
+  for (const e of list) {
+    if (e == null) { kept.push(e); continue; }
+    const typ = String((e.event || e.type || e.kind || "")).toLowerCase();
+    const frame = typeof e === "string" ? e : String(e.frame || e.data || "");
+    if (typ === "ping" || e.ping === true || /^: ping/i.test(frame) || /^ping:/i.test(frame) || frame === "ping") {
+      dropped += 1;
+      continue;
+    }
+    kept.push(e);
+  }
+  return { events: kept, dropped: dropped, code: dropped ? "sse_ping_drop" : null };
+}
+
+function capSseEventName32Chars(name, opts) {
+  const max = (opts && opts.max != null) ? opts.max : SSE_EVENT_NAME_MAX;
+  const cap = Math.max(1, Number(max) || SSE_EVENT_NAME_MAX);
+  const s = String(name == null ? "" : name);
+  if (s.length <= cap) return { name: s, truncated: false, code: null };
+  return { name: s.slice(0, cap), truncated: true, code: "sse_event_name" };
+}
+
+function ignoreNegativeCachedTokens(opts) {
+  opts = opts || {};
+  const cRaw = Number(opts.cachedTokens != null ? opts.cachedTokens : opts.promptCacheTokens);
+  const ignored = Number.isFinite(cRaw) && cRaw < 0;
+  const cached = ignored ? 0 : (Number.isFinite(cRaw) && cRaw >= 0 ? cRaw : 0);
+  return { cachedTokens: cached, ignored: ignored, code: ignored ? "usage_ignore_neg_cached" : null };
+}
+
+function neverChargeIfPromptFiltered(opts) {
+  opts = opts || {};
+  const filtered = opts.filtered === true || opts.promptFiltered === true || opts.blocked === true || opts.policy === "filtered";
+  if (filtered) return { charge: false, code: "credit_prompt_filtered" };
+  return { charge: true, code: null };
+}
+
+function neverRetry401Unauthorized(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || "");
+  const msg = String(err.message || "");
+  const is401 = status === 401 || code === "401" || code === "unauthorized" || /unauthorized|invalid.?api.?key/i.test(msg);
+  if (is401) return { retry: false, status: 401, code: "unauthorized" };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function classifyEprotoAsUnavailable(err) {
+  if (err == null) return { unavailable: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("EPROTO") >= 0) return { unavailable: true, retryable: true, code: "eproto" };
+  return { unavailable: false, retryable: false, code: null };
+}
+
+function mapSqliteBusyRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.errno || err.name)) || "");
+  const msg = String((err && err.message) || "");
+  const blob = (code + " " + msg).toUpperCase();
+  if (blob.indexOf("SQLITE_BUSY") >= 0 || blob.indexOf("SQLITE_LOCKED") >= 0 || code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") {
+    return { retryable: true, code: "sqlite_busy" };
+  }
+  return { retryable: false, code: null };
+}
+
+function abortIfToolWallOver60s(opts) {
+  opts = opts || {};
+  const lim = Math.max(1000, Number(opts.limitMs) || TOOL_WALL_MS);
+  let elapsed = Number(opts.elapsedMs);
+  if (!Number.isFinite(elapsed)) {
+    const t0 = Number(opts.startedAt != null ? opts.startedAt : opts.lastEventAt);
+    const t1 = Number(opts.now) || Date.now();
+    elapsed = Number.isFinite(t0) ? (t1 - t0) : 0;
+  }
+  if (elapsed >= lim) return { abort: true, elapsedMs: elapsed, code: "tool_wall_abort" };
+  return { abort: false, elapsedMs: elapsed, remainingMs: lim - elapsed, code: null };
+}
+
+function rejectIdempotencyKeyWithWhitespace(key) {
+  const s = String(key == null ? "" : key);
+  if (!s) return { ok: true, key: s, code: null };
+  if (/\s/.test(s)) return { ok: false, key: s, code: "idempotency_key_ws" };
+  return { ok: true, key: s, code: null };
+}
+
+function capUserMessageLines400(text, opts) {
+  const s = text == null ? "" : (Buffer.isBuffer(text) ? text.toString("utf8") : String(text));
+  const max = (opts && opts.max != null) ? opts.max : USER_MSG_LINES_MAX;
+  const cap = Math.max(1, Number(max) || USER_MSG_LINES_MAX);
+  const lines = s.split(/\r?\n/);
+  if (lines.length <= cap) return { text: s, truncated: false, lines: lines.length, code: null };
+  const cut = lines.slice(0, cap).join("\n") + "\n[truncated_lines]";
+  return { text: cut, truncated: true, lines: lines.length, code: "user_msg_lines" };
+}
+
+function redactGcpServiceAccountInResults(text) {
+  if (text == null) return { text: text, redacted: false, code: null };
+  const s = String(text);
+  let out = s.replace(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.iam\.gserviceaccount\.com/g, "[REDACTED_GCP_SA]");
+  out = out.replace(/"type"\s*:\s*"service_account"/g, '"type":"[REDACTED_GCP_SA]"');
+  out = out.replace(/"private_key_id"\s*:\s*"[^"]+"/g, '"private_key_id":"[REDACTED_GCP_SA]"');
+  return { text: out, redacted: out !== s, code: out !== s ? "gcp_sa_redact" : null };
+}
+
+function classifyEnobufsAsUnavailable(err) {
+  if (err == null) return { unavailable: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("ENOBUFS") >= 0) return { unavailable: true, retryable: true, code: "enobufs" };
+  return { unavailable: false, retryable: false, code: null };
+}
+
+function refuseSubagentIfNameHasSlash(opts) {
+  opts = opts || {};
+  const n = String(opts.name != null ? opts.name : (opts.childName != null ? opts.childName : (opts.toolName || "")));
+  if (n.indexOf("/") >= 0 || n.indexOf("\\") >= 0) return { ok: false, refuse: true, code: "subagent_name_slash" };
+  return { ok: true, refuse: false, code: null };
+}
+
+function capSandboxEnvKeys16(env, opts) {
+  const src = env && typeof env === "object" && !Array.isArray(env) ? env : {};
+  const max = (opts && opts.max != null) ? opts.max : SANDBOX_ENV_KEYS_MAX;
+  const cap = Math.max(1, Number(max) || SANDBOX_ENV_KEYS_MAX);
+  const keys = Object.keys(src);
+  if (keys.length <= cap) return { env: src, truncated: false, code: null };
+  const out = {};
+  for (const k of keys.slice(0, cap)) out[k] = src[k];
+  return { env: out, truncated: true, dropped: keys.length - cap, code: "sandbox_env_keys" };
+}
+
+function refuseSandboxIfNetworkEnabled(opts) {
+  opts = opts || {};
+  const net = opts.network != null ? opts.network : (opts.net != null ? opts.net : opts.allowNet);
+  if (net === true || net === "true" || net === 1 || net === "1") return { ok: false, code: "sandbox_net" };
+  return { ok: true, code: null };
+}
+
+function capSandboxStdoutLines500(text, opts) {
+  const s = text == null ? "" : (Buffer.isBuffer(text) ? text.toString("utf8") : String(text));
+  const max = (opts && opts.max != null) ? opts.max : SANDBOX_STDOUT_LINES_MAX;
+  const cap = Math.max(1, Number(max) || SANDBOX_STDOUT_LINES_MAX);
+  const lines = s.split(/\r?\n/);
+  if (lines.length <= cap) return { text: s, truncated: false, lines: lines.length, code: null };
+  const cut = lines.slice(0, cap).join("\n") + "\n[truncated_stdout_lines]";
+  return { text: cut, truncated: true, lines: lines.length, code: "sandbox_stdout_lines" };
+}
+
+function refuseSandboxIfUidIsZero(opts) {
+  opts = opts || {};
+  const uid = opts.uid != null ? opts.uid : opts.userId;
+  if (uid === 0 || uid === "0") return { ok: false, code: "sandbox_uid_zero" };
+  return { ok: true, code: null };
+}
+
+function sortPlanStepsByDependsThenOrder(steps) {
+  const list = Array.isArray(steps) ? steps.slice() : [];
+  function orderOf(st) {
+    const n = Number(st && (st.order != null ? st.order : (st.index != null ? st.index : st.seq)));
+    return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+  }
+  function depCount(st) {
+    const d = st && (st.depends != null ? st.depends : (st.dependsOn != null ? st.dependsOn : st.dependencies));
+    return Array.isArray(d) ? d.length : 0;
+  }
+  const before = list.map(function (st) { return depCount(st) + ":" + orderOf(st); }).join("\0");
+  list.sort(function (a, b) {
+    const dd = depCount(a) - depCount(b);
+    if (dd !== 0) return dd;
+    return orderOf(a) - orderOf(b);
+  });
+  const after = list.map(function (st) { return depCount(st) + ":" + orderOf(st); }).join("\0");
+  return { steps: list, sorted: before !== after, code: before !== after ? "plan_step_depends_sort" : null };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -8045,6 +8434,38 @@ module.exports = {
   refuseSandboxIfCwdIsRoot,
   capSandboxCode256KiB,
   refuseSandboxIfTimeoutMissing,
+  rejectToolNameWithSlash,
+  capToolArgArrayLength64,
+  refuseToolIfNameNotString,
+  refusePlanIfDependsNotArray,
+  capPlanDescription256Chars,
+  dropPlanStepsWithEmptyId,
+  skipMemoryIfNamespaceBlank,
+  capMemoryNamespaceChars32,
+  refuseMemoryUpsertIfIdEmpty,
+  refuseCheckpointIfSeqMissing,
+  sessionLockRefuseIfOwnerEmpty,
+  skipDotGitGlobFiles,
+  refuseWriteToOpt,
+  skipCoverageGlobFiles,
+  dropSsePingFramesFromReplay,
+  capSseEventName32Chars,
+  ignoreNegativeCachedTokens,
+  neverChargeIfPromptFiltered,
+  neverRetry401Unauthorized,
+  classifyEprotoAsUnavailable,
+  mapSqliteBusyRetryable,
+  abortIfToolWallOver60s,
+  rejectIdempotencyKeyWithWhitespace,
+  capUserMessageLines400,
+  redactGcpServiceAccountInResults,
+  classifyEnobufsAsUnavailable,
+  refuseSubagentIfNameHasSlash,
+  capSandboxEnvKeys16,
+  refuseSandboxIfNetworkEnabled,
+  capSandboxStdoutLines500,
+  refuseSandboxIfUidIsZero,
+  sortPlanStepsByDependsThenOrder,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

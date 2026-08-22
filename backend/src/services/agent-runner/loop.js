@@ -1,20 +1,29 @@
 'use strict';
 
-const {
-  throwIfAborted,
-} = require('../../utils/abort-signals');
+const { throwIfAborted } = require('../../utils/abort-signals');
 const {
   rejectToolNameEndingWithDot,
   rejectToolCallIfNameIsObject,
+  rejectToolNameWithSlash,
+  refuseToolIfNameNotString,
   capToolArgString4096,
+  capToolArgArrayLength64,
   refuseWriteToVarLogRun,
+  refuseWriteToOpt,
   redactAwsAccessKeysInResults,
+  redactGcpServiceAccountInResults,
   neverRetry408Timeout,
+  neverRetry401Unauthorized,
   classifyEtimedoutAsTimeout,
   classifyEconnrefusedAsUnavailable,
+  classifyEprotoAsUnavailable,
+  classifyEnobufsAsUnavailable,
   capUserMessage32KiB,
+  capUserMessageLines400,
   abortIfIdleOver30sMidTool,
+  abortIfToolWallOver60s,
   refuseSubagentIfNameEmpty,
+  refuseSubagentIfNameHasSlash,
 } = require('./engine-adapter');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
 const {
@@ -22,15 +31,30 @@ const {
   needsVerification,
   verificationNudge,
 } = require('./verify');
+const {
+  repairToolArgs,
+  isTransientLlmError,
+  backoffMs,
+  sleep,
+  callModelWithRetry,
+} = require('./native-llm');
+
+// Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
+// lazy require so offline tests that never emit a metric still load fast.
+function recordModelTelemetry(event) {
+  try { require('../codex/model-telemetry').recordLlmTurn(event); } catch { /* optional */ }
+}
 
 const MAX_ITERATIONS_DEFAULT = 25;
 
-// Keep tool-call turns SHORT. OpenRouter charges/reserves max_tokens up
-// front: with a low credit balance a 8192-token reservation gets rejected
-// with 402 ("You requested up to 8192 tokens, but can only afford …") even
-// though the actual turn needs a few hundred tokens. 3072 is plenty for a
-// tool call + arguments and lets a low balance still complete a short loop.
-const MAX_TOKENS_DEFAULT = 3072;
+// Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
+// with a low credit balance an 8192-token reservation gets rejected with 402
+// ("You requested up to 8192 tokens, but can only afford …") even though the
+// actual turn needs a few hundred tokens. 2048 still fits a code-bearing tool
+// call (contract floor in agent-runner-routing.test.js) while staying far
+// below the 8192 that 402s on low balances. Env-overridable.
+const MAX_TOKENS_DEFAULT = 2048;
+const LLM_RETRY_MAX = Math.max(1, Number.parseInt(process.env.LLM_RETRY_MAX || '', 10) || 3);
 
 function resolveAgentRunnerMaxTokens(env = process.env) {
   const raw = Number(env.SIRAGPT_AGENT_RUNNER_MAX_TOKENS);
@@ -38,6 +62,85 @@ function resolveAgentRunnerMaxTokens(env = process.env) {
     return Math.max(256, Math.min(8192, Math.floor(raw)));
   }
   return MAX_TOKENS_DEFAULT;
+}
+
+// ── Stream-stall guard ──────────────────────────────────────────────
+// A mid-stream hang (provider stalls after first token, or never emits one)
+// previously left the loop hanging until the outer response timeout. The
+// guard cuts the turn early with `loop_stall` so the SSE stream gets an
+// honest error and the caller can retry cheaply.
+const STREAM_STALL_MS_DEFAULT = 20_000;
+const STREAM_STALL_CANCEL_AFTER = 3;
+
+function stallIfNoEvent20sMidStream({ lastEventAt, firstTokenAt, now, stallMs } = {}) {
+  const budgetMs = Number(stallMs) > 0 ? Number(stallMs) : STREAM_STALL_MS_DEFAULT;
+  // Anchor on the LATEST signal of progress (first token wins when present —
+  // it is by definition newer than the generation start).
+  const candidates = [firstTokenAt, lastEventAt].map(Number).filter((n) => Number.isFinite(n) && n > 0);
+  if (!candidates.length) return { stalled: false };
+  const anchor = Math.max(...candidates);
+  const at = Number(now) || Date.now();
+  return { stalled: at - anchor >= budgetMs, idleMs: at - anchor };
+}
+
+/** Fence token for KV heartbeats — proves "this runner is alive on this thread". */
+function newFenceToken() {
+  return `fence_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * heartbeatFence — refresh a KV lease that marks this runner as the live
+ * owner of `threadId`. A recovering worker compares timestamps before taking
+ * over; a stale fence (no heartbeat within ttlSec) may be stolen. KV shape:
+ * any object with get/set (ioredis, in-memory Map wrapper, …). Fail-open:
+ * fence errors never break the loop.
+ */
+async function heartbeatFence(kv, threadId, token, { now, ttlSec = 60 } = {}) {
+  if (!kv || !threadId || !token) return false;
+  try {
+    const key = `agent:fence:${threadId}`;
+    const payload = JSON.stringify({ token, at: now || Date.now(), ttlSec });
+    if (typeof kv.set === 'function') await kv.set(key, payload, { ttlSec });
+    else await kv.set(key, payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the stored fence is expired (safe to steal). */
+async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
+  if (!kv || !threadId) return { stolen: true, reason: 'no_fence' };
+  try {
+    const raw = typeof kv.get === 'function' ? await kv.get(`agent:fence:${threadId}`) : null;
+    if (!raw) return { stolen: true, reason: 'expired' };
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const ageMs = (now || Date.now()) - Number(parsed.at || 0);
+    if (ageMs >= Math.min(ttlSec, parsed.ttlSec || ttlSec) * 1000) return { stolen: true, reason: 'expired' };
+    return { stolen: false, token: parsed.token };
+  } catch {
+    return { stolen: true, reason: 'error' };
+  }
+}
+
+/** Classify a loop stop into a user-facing code + message. */
+function classifyLoopError({ code } = {}) {
+  switch (code) {
+    case 'loop_stall':
+      return {
+        code,
+        retryable: false,
+        message: 'El bucle se quedó sin tokens ni resultados de herramientas. Lo detuve.',
+      };
+    case 'fence_conflict':
+      return {
+        code,
+        retryable: false,
+        message: 'Otro proceso está atendiendo esta tarea; no la duplicaré.',
+      };
+    default:
+      return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
+  }
 }
 
 /**
@@ -61,11 +164,9 @@ function previewOf(value, max = 200) {
 }
 
 function safeParseArgs(raw) {
-  if (raw == null) return {};
-  if (typeof raw === 'object') return raw;
-  try { return JSON.parse(String(raw)); } catch {
-    return { __parse_error: true, raw: String(raw).slice(0, 500) };
-  }
+  const repaired = repairToolArgs(raw);
+  if (repaired.ok) return repaired.value;
+  return { __parse_error: true, raw: String(raw).slice(0, 500) };
 }
 
 function asNativeCalls(calls, iteration) {
@@ -76,25 +177,30 @@ function asNativeCalls(calls, iteration) {
   }));
 }
 
-async function callModel({ client, model, messages, tools, signal, maxTokens }) {
+async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken }) {
   const max_tokens = maxTokens || resolveAgentRunnerMaxTokens();
-  try {
-    return await client.chat.completions.create({
-      model,
-      messages,
-      tools,
-      tool_choice: 'auto',
-      max_tokens,
-    }, signal ? { signal } : undefined);
-  } catch (err) {
-    if (signal && signal.aborted) throw err;
-    if (!looksLikeToolUnsupportedError(err)) throw err;
-    return client.chat.completions.create({
-      model,
-      messages,
-      max_tokens,
-    }, signal ? { signal } : undefined);
-  }
+  const create = (withTools) => client.chat.completions.create({
+    model,
+    messages,
+    ...(withTools ? { tools, tool_choice: 'auto' } : {}),
+    max_tokens,
+  }, signal ? { signal } : undefined);
+  return callModelWithRetry(async () => {
+    try {
+      const out = await create(true);
+      if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
+      return out;
+    } catch (err) {
+      if (signal && signal.aborted) throw err;
+      if (!looksLikeToolUnsupportedError(err)) throw err;
+      const out = await create(false);
+      if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
+      return out;
+    }
+  }, {
+    signal,
+    retryMax: LLM_RETRY_MAX,
+  });
 }
 
 /**
@@ -111,6 +217,11 @@ async function runAgentLoop({
   maxIterations = MAX_ITERATIONS_DEFAULT,
   onEvent = () => {},
   signal,
+  // Stall-guard + fence seams (optional). `kv` is any { get, set } store;
+  // `threadId` scopes the fence lease. Both fail-open when absent.
+  kv = null,
+  threadId = null,
+  stallMs = STREAM_STALL_MS_DEFAULT,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
   const srcExec = executors && typeof executors === 'object' ? executors : {};
@@ -128,6 +239,38 @@ async function runAgentLoop({
   let finalText = '';
   let stoppedReason = 'max_iterations';
   let verificationAttempts = 0;
+  let stallCount = 0;
+  let lastProgressAt = Date.now();
+  let fenceToken = null;
+  if (kv && threadId) {
+    try {
+      const safety = await stealStaleFence(kv, threadId);
+      if (!safety.stolen) {
+        const classified = classifyLoopError({ code: 'fence_conflict' });
+        onEvent({
+          type: 'error',
+          message: classified.message,
+          code: classified.code,
+          retryable: classified.retryable,
+          iteration: 0,
+        });
+        return {
+          finalText: '',
+          iterations: 0,
+          steps,
+          stoppedReason: 'fence_conflict',
+          verificationAttempts,
+          errorMessage: classified.message,
+        };
+      }
+      fenceToken = newFenceToken();
+      await heartbeatFence(kv, threadId, fenceToken);
+    } catch (_) { /* fail-open: loop still runs */ }
+  }
+  const touchFence = async () => {
+    if (!kv || !fenceToken || !threadId) return;
+    try { await heartbeatFence(kv, threadId, fenceToken); } catch (_) { /* optional */ }
+  };
 
   // F3: a user cancel (Stop button → AbortSignal) must stop the loop AND
   // leave a trace. `bail` emits exactly one 'cancelled' stage event before
@@ -145,17 +288,75 @@ async function runAgentLoop({
   for (let iteration = 1; iteration <= cap; iteration += 1) {
     bail(iteration);
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
+    void touchFence();
+
+    // Stall guard: no progress (no token, no tool result) within the budget
+    // cuts the turn with loop_stall instead of hanging until the outer
+    // response timeout. After STREAM_STALL_CANCEL_AFTER stalls the run is
+    // declared unrecoverable for this iteration budget.
+    const stall = stallIfNoEvent20sMidStream({
+      lastEventAt: lastProgressAt,
+      firstTokenAt: null,
+      now: Date.now(),
+      stallMs,
+    });
+    if (stall.stalled && iteration > 1) {
+      stallCount += 1;
+      const classified = classifyLoopError({ code: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'loop_stall' : 'stream_stall_retryable' });
+      onEvent({
+        type: 'error',
+        code: classified.code,
+        message: classified.message,
+        retryable: classified.retryable,
+        iteration,
+      });
+      if (stallCount >= STREAM_STALL_CANCEL_AFTER) {
+        stoppedReason = 'loop_stall';
+        return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'loop_stall' };
+      }
+      lastProgressAt = Date.now();
+    }
 
     let response;
+    const modelTurnStart = Date.now();
+    let modelTtfbMs = null;
     try {
-      response = await callModel({ client, model, messages, tools, signal });
+      response = await callModel({
+        client,
+        model,
+        messages,
+        tools,
+        signal,
+        onFirstToken: () => { if (modelTtfbMs === null) modelTtfbMs = Date.now() - modelTurnStart; },
+      });
+      recordModelTelemetry({
+        model,
+        agent: 'agent_runner',
+        outcome: 'ok',
+        durationMs: Date.now() - modelTurnStart,
+        ttftMs: modelTtfbMs,
+        tokensIn: response?.usage?.prompt_tokens,
+        tokensOut: response?.usage?.completion_tokens,
+      });
+      lastProgressAt = Date.now();
       bail(iteration);
     } catch (err) {
+      recordModelTelemetry({
+        model,
+        agent: 'agent_runner',
+        outcome: signal?.aborted ? 'cancelled' : 'error',
+        error: err,
+        durationMs: Date.now() - modelTurnStart,
+        ttftMs: modelTtfbMs,
+      });
       if (signal?.aborted) bail(iteration);
       onEvent({ type: 'error', message: err?.message || String(err) });
       try { neverRetry408Timeout(err); } catch (_) {}
+      try { neverRetry401Unauthorized(err); } catch (_) {}
       try { classifyEtimedoutAsTimeout(err); } catch (_) {}
       try { classifyEconnrefusedAsUnavailable(err); } catch (_) {}
+      try { classifyEprotoAsUnavailable(err); } catch (_) {}
+      try { classifyEnobufsAsUnavailable(err); } catch (_) {}
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -184,6 +385,35 @@ async function runAgentLoop({
     }
 
     if (!toolCalls.length) {
+      // A model response with no tool calls and no content is the classic
+      // "provider accepted the request but produced nothing" stall. Count it;
+      // after STREAM_STALL_CANCEL_AFTER empty responses, stop as loop_stall
+      // instead of burning the remaining iterations.
+      if (!String(msg.content || '').trim()) {
+        stallCount += 1;
+        recordModelTelemetry({
+          model,
+          agent: 'agent_runner',
+          outcome: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'stall' : 'error',
+          error: { code: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'loop_stall' : 'stream_stall_retryable' },
+          durationMs: Date.now() - modelTurnStart,
+          ttftMs: modelTtfbMs,
+        });
+        lastProgressAt = Date.now();
+        if (stallCount >= STREAM_STALL_CANCEL_AFTER) {
+          const classified = classifyLoopError({ code: 'loop_stall' });
+          onEvent({
+            type: 'error',
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+            iteration,
+          });
+          stoppedReason = 'loop_stall';
+          return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'loop_stall' };
+        }
+        continue;
+      }
       const gate = needsVerification(steps);
       if (gate.needed && verificationAttempts < MAX_VERIFICATION_RETRIES) {
         verificationAttempts += 1;
@@ -242,6 +472,18 @@ async function runAgentLoop({
       const mapped = name === 'bash' ? 'execute_bash' : name;
       let args = safeParseArgs(call?.function?.arguments);
       try {
+        const typeN = refuseToolIfNameNotString(name);
+        if (typeN && typeN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_type', message: 'El nombre de la herramienta debe ser texto.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
+        const slashN = rejectToolNameWithSlash(name);
+        if (slashN && slashN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_slash', message: 'El nombre de la herramienta no puede contener una barra.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
         const dotN = rejectToolNameEndingWithDot(name);
         if (dotN && dotN.ok === false) {
           onEvent({ type: 'error', code: 'tool_name_dot', message: 'El nombre de la herramienta no puede terminar con un punto.', retryable: false, iteration, name });
@@ -253,11 +495,18 @@ async function runAgentLoop({
         if (capA && capA.args && typeof capA.args === 'object') args = capA.args;
       } catch (_) {}
       try {
+        const capArr = capToolArgArrayLength64(args);
+        if (capArr && capArr.args && typeof capArr.args === 'object') args = capArr.args;
+      } catch (_) {}
+      try {
         const pth = args && (args.path || args.file || args.filename || args.cwd);
         if (pth) refuseWriteToVarLogRun(pth);
+        if (pth) refuseWriteToOpt(pth);
       } catch (_) {}
       try { refuseSubagentIfNameEmpty({ name: mapped }); } catch (_) {}
+      try { refuseSubagentIfNameHasSlash({ name: mapped }); } catch (_) {}
       try { abortIfIdleOver30sMidTool({ lastEventAt: Date.now(), now: Date.now() }); } catch (_) {}
+      try { abortIfToolWallOver60s({ startedAt: Date.now(), now: Date.now() }); } catch (_) {}
       onEvent({
         type: 'tool_call',
         iteration,
@@ -284,6 +533,7 @@ async function runAgentLoop({
           if (signal?.aborted) bail(iteration);
           result = `ERROR: ${err?.message || String(err)}`;
         }
+        lastProgressAt = Date.now();
       }
 
       // ── F7 (multimodal) hook ────────────────────────────────────────────
@@ -305,8 +555,16 @@ async function runAgentLoop({
         if (redAws && redAws.text != null) result = redAws.text;
       } catch (_) {}
       try {
+        const redGcp = redactGcpServiceAccountInResults(result);
+        if (redGcp && redGcp.text != null) result = redGcp.text;
+      } catch (_) {}
+      try {
         const capU = capUserMessage32KiB(typeof result === 'string' ? result : String(result || ''));
         if (capU && capU.truncated && capU.text != null && typeof result === 'string') result = capU.text;
+      } catch (_) {}
+      try {
+        const capL = capUserMessageLines400(typeof result === 'string' ? result : String(result || ''));
+        if (capL && capL.truncated && capL.text != null && typeof result === 'string') result = capL.text;
       } catch (_) {}
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
@@ -343,6 +601,14 @@ module.exports = {
   MAX_ITERATIONS_DEFAULT,
   MAX_VERIFICATION_RETRIES,
   MAX_TOKENS_DEFAULT,
+  LLM_RETRY_MAX,
+  STREAM_STALL_MS_DEFAULT,
+  STREAM_STALL_CANCEL_AFTER,
   resolveAgentRunnerMaxTokens,
   isLlmCreditError,
+  stallIfNoEvent20sMidStream,
+  newFenceToken,
+  heartbeatFence,
+  stealStaleFence,
+  classifyLoopError,
 };

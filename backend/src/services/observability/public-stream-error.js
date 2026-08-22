@@ -46,10 +46,18 @@ const RULES = [
     matches: (error) => /validation/i.test(String(error?.code || '')),
     message: 'La solicitud o el resultado no superó la validación.',
   },
+  { code: 'path_root_mnt', message: 'No escribo en /root, /mnt ni /media.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_root_mnt' },
+  { code: 'proto_pollution', message: 'La solicitud contiene claves reservadas no permitidas.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'proto_pollution' },
+  { code: 'resource_gone', message: 'El recurso ya no esta disponible (410). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'resource_gone' || Number(error && error.status) === 410 },
+  { code: 'subagent_same_tool', message: 'Un subagente no puede reutilizar la misma herramienta del padre.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_same_tool' },
   { code: 'path_var_log', message: 'No escribo en /var/log, /var/run ni /run.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_var_log' },
   { code: 'request_timeout', message: 'La peticion expiro (408). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'request_timeout' || Number(error && error.status) === 408 },
   { code: 'tool_name_dot', message: 'El nombre de la herramienta no puede terminar con un punto.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_dot' },
   { code: 'sandbox_cwd_root', message: 'El sandbox no puede usar / o /root como directorio de trabajo.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_cwd_root' },
+  { code: 'path_opt', message: 'No escribo en /opt.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_opt' },
+  { code: 'unauthorized', message: 'No autorizado (401). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'unauthorized' || Number(error && error.status) === 401 },
+  { code: 'tool_name_slash', message: 'El nombre de la herramienta no puede contener una barra.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_slash' },
+  { code: 'sandbox_uid_zero', message: 'El sandbox no puede ejecutarse como uid 0.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_uid_zero' },
   { code: 'credits_exhausted', retryable: false, matches: (error, text) => Number(error && error.status) === 402 || /llm_402|credits?_exhausted|insufficient (credits|balance)|quota_exhausted|credit_no_usage|credit_ceiling/i.test(String(text || '')) || ['llm_402', 'credit_no_usage', 'credit_ceiling', 'credits_exhausted'].includes(String(error && error.code || '').toLowerCase()), message: 'No quedan creditos suficientes para esta operacion. No cobre el fallo.' },
 ];
 

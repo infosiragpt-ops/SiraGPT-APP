@@ -1,7 +1,8 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H47 live, 2026-08-22 00:57 Lima).
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0057.md` (3H47, tool name trailing dot + arg string 4096 + plan steps must be array + step title 80 + compact keep last user + memory score floor + fact 512 + dup memory ids + ckpt CRC required + lock TTL expire + refuse /var/log /var/run /run + skip node_modules glob + drop SSE retry frames + SSE data 32KiB + idle comment + ignore neg total tokens + no charge if no model call + never retry 408 + ETIMEDOUT timeout + mysql ECONNRESET + idle 30s mid-tool + idempotency key 128 + user msg 32KiB + AWS key redact + ECONNREFUSED unavailable + refuse empty subagent name + sort plan steps + reject object tool name + sandbox argv 24 + refuse cwd / + code 256KiB + sandbox timeout required, frontend untouched)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H48 live, 2026-08-22 03:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0357.md` (3H48, tool name slash + arg array 64 + name must be string + plan depends array + desc 256 + drop empty step ids + memory ns blank + ns 32 + upsert id required + ckpt seq required + lock owner required + skip .git glob + refuse /opt + skip coverage glob + drop SSE ping frames + SSE event name 32 + ignore neg cached tokens + no charge if prompt filtered + never retry 401 + EPROTO unavailable + sqlite busy + tool wall 60s + idempotency key whitespace + user msg 400 lines + GCP SA redact + ENOBUFS unavailable + refuse subagent name slash + sandbox env keys 16 + refuse sandbox net + stdout 500 lines + refuse uid 0 + sort plan by depends then order, frontend untouched)
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0057.md` (3H47)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-2157.md` (3H46)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1557.md` (3H45)
 - 2026-08-21 18:57 Lima: 3H46 was DEFERRED (Word UPN); shipped at 21:57.

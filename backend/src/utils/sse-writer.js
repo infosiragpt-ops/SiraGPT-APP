@@ -136,14 +136,21 @@ function createSSEWriter(res, options = {}) {
     event(payload) {
       let body = payload;
       try {
+        if (_ad && typeof _ad.capSseEventName32Chars === 'function' && body && typeof body === 'object' && body.event) {
+          const nm = _ad.capSseEventName32Chars(body.event);
+          if (nm && nm.truncated) body = Object.assign({}, body, { event: nm.name });
+        }
         if (_ad && typeof _ad.capSseDataBytes32KiB === 'function') {
-          const capd = _ad.capSseDataBytes32KiB(payload);
+          const capd = _ad.capSseDataBytes32KiB(body);
           if (capd && capd.truncated && capd.data != null) {
             try { body = JSON.parse(capd.data); } catch { body = capd.data; }
           }
         }
         if (_ad && typeof _ad.dropSseRetryFramesFromReplay === 'function' && options && options.replayFrames) {
           _ad.dropSseRetryFramesFromReplay(options.replayFrames);
+        }
+        if (_ad && typeof _ad.dropSsePingFramesFromReplay === 'function' && options && options.replayFrames) {
+          _ad.dropSsePingFramesFromReplay(options.replayFrames);
         }
       } catch (_) {}
       return writeWithBackpressure(formatEvent(body));
