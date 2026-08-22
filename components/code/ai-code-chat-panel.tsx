@@ -1976,12 +1976,11 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 },
                 () => {
                   if (streamSettled) return
-                  streamSettled = true
                   if (controller.signal.aborted || abortRef.current !== controller) {
                     cancelled = true
-                    resolve()
                     return
                   }
+                  streamSettled = true
                   // Agentic write modes (app/build, plus debug/patch via explicit
                   // override) = Replit-style "presented output": the agent applies the
                   // generated files itself and opens the live preview, with NO manual
