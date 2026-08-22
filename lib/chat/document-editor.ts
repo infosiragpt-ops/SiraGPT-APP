@@ -89,6 +89,33 @@ export function contentToMarkdown(raw: string, _format?: string): string {
   return text.replace(/\n{3,}/g, "\n\n").trim()
 }
 
+/**
+ * Remove characters that are structurally illegal in XML 1.0 documents:
+ * most C0 control codes, DEL + the C1 range, the noncharacters U+FFFE/U+FFFF,
+ * and unpaired surrogates. `docx@8` writes TextRun text verbatim into
+ * word/document.xml, so a raw \x0b (vertical tab) coming from extracted
+ * document text used to corrupt the exported .docx for strict parsers.
+ * Tabs, LFs and CRs are legal XML characters and are preserved as-is;
+ * astral-plane characters (emoji, CJK ext) survive because iteration is by
+ * code point.
+ */
+export function stripInvalidXmlChars(text: string): string {
+  if (!text) return typeof text === "string" ? text : ""
+  let out = ""
+  for (const ch of String(text)) {
+    const cp = ch.codePointAt(0) ?? 0
+    const legal =
+      cp === 0x09 ||
+      cp === 0x0a ||
+      cp === 0x0d ||
+      (cp >= 0x20 && cp <= 0xd7ff) ||
+      (cp >= 0xe000 && cp <= 0xfffd) ||
+      (cp >= 0x10000 && cp <= 0x10ffff)
+    if (legal) out += ch
+  }
+  return out
+}
+
 function parseMarkdownTableBlock(lines: string[]): Table | null {
   const header = lines[0]
   const separator = lines[1]
@@ -127,12 +154,18 @@ function parseMarkdownTableBlock(lines: string[]): Table | null {
  * parsed into rich TextRuns; anything else stays literal text.
  */
 export async function markdownToDocxBlob(markdown: string): Promise<Blob> {
-  const lines = (markdown || "").replace(/\r\n?/g, "\n").split("\n")
+  // docx@8 writes TextRun text verbatim into word/document.xml; strip the
+  // characters XML 1.0 forbids so strict re-parsers never see raw control
+  // codes (\x0b vertical tab was corrupting real exports).
+  const lines = stripInvalidXmlChars((markdown || "").replace(/\r\n?/g, "\n")).split("\n")
 
-  const inlineRunRegex = /(\*\*[^*]+\*\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\)|^- \[[ xX]\] |^- )/g
+  const inlineRunRegex = /(\*\*\*[^*]+\*\*\*|\*\*[^*]+\*\*|_[^_]+_|`[^`]+`|\[[^\]]+\]\([^)]+\)|^- \[[ xX]\] |^- )/g
   const parseInline = (text: string): TextRun[] => {
     const parts = text.split(inlineRunRegex)
     return parts.filter(Boolean).map((part) => {
+      if (/^\*\*\*[^*]+\*\*\*$/.test(part)) {
+        return new TextRun({ text: part.slice(3, -3), bold: true, italics: true })
+      }
       if (/^\*\*[^*]+\*\*$/.test(part)) {
         return new TextRun({ text: part.slice(2, -2), bold: true })
       }
