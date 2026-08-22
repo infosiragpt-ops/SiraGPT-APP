@@ -7,12 +7,15 @@ import {
   Menu,
   Monitor,
   Play,
+  Plus,
   Search,
   Square,
   UserPlus,
 } from "lucide-react"
 
+import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
+import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 import {
   CODE_PREVIEW_STATE_EVENT,
@@ -63,6 +66,9 @@ export function WorkspaceTopBar({
   computerOpen = false,
 }: WorkspaceTopBarProps) {
   const deptChatChrome = useDeptChatChrome()
+  const { user } = useAuth()
+  const [upgradeOpen, setUpgradeOpen] = React.useState(false)
+  const showUpgrade = Boolean(user && String(user.plan || "FREE").trim().toUpperCase() === "FREE")
   const computerLabel = departmentComputer
     ? `Computadora de ${departmentComputer.name}`
     : "Computadora del departamento"
@@ -123,6 +129,20 @@ export function WorkspaceTopBar({
         >
           <Menu className="h-4 w-4" />
         </Button>
+      ) : null}
+
+      {showUpgrade ? (
+        <button
+          type="button"
+          className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+          title="Ver planes y precios"
+          aria-label="Ver planes y precios"
+          aria-haspopup="dialog"
+          onClick={() => setUpgradeOpen(true)}
+        >
+          <Plus className="h-3 w-3" strokeWidth={2.5} />
+          Upgrade
+        </button>
       ) : null}
 
       <span className="min-w-0 flex-1" />
@@ -226,6 +246,13 @@ export function WorkspaceTopBar({
       >
         <DesktopMonitorGlyph className="h-3.5 w-3.5" />
       </Button>
+      {showUpgrade ? (
+        <UpgradeModal
+          open={upgradeOpen}
+          onOpenChange={setUpgradeOpen}
+          user={user}
+        />
+      ) : null}
     </header>
   )
 }

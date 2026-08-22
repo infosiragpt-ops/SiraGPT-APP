@@ -337,9 +337,9 @@ function artifactDisplayName(artifact: AgentArtifact): string {
 }
 
 function artifactValidationPassed(artifact: AgentArtifact): boolean {
-  const explicitPassed = artifact.validation?.passed
-  if (typeof explicitPassed === "boolean") return explicitPassed
-  return artifact.validation?.ok === true
+  // Only an explicit passed===true is honest. `ok` is a weaker/generic
+  // flag some pipelines set without running quality gates.
+  return artifact.validation?.passed === true
 }
 
 function artifactFormat(artifact: AgentArtifact): string {

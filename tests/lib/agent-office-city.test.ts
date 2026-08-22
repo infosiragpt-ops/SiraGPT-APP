@@ -32,8 +32,9 @@ describe("agent office Edge District", () => {
       variant: "full",
     })
 
-    // secondaryCount full = 86 → landmark + secondaries = 87 larger modern CBD.
-    expect(district.counts.buildings).toBe(87)
+    // secondaryCount full = 118 → landmark + secondaries = 119 larger modern CBD.
+    expect(district.counts.buildings).toBe(119)
+    expect(district.counts.secondaryBuildings).toBe(118)
     expect(district.counts.hqStackedFloors).toBe(11)
     expect(district.counts.hqFloorHeight).toBe(3.85)
     expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(10)
@@ -74,8 +75,9 @@ describe("agent office Edge District", () => {
       variant: "thumbnail",
     })
 
-    // secondaryCount thumbnail = 32 → landmark + secondaries = 33.
-    expect(district.counts.buildings).toBe(33)
+    // secondaryCount thumbnail = 36 → landmark + secondaries = 37.
+    expect(district.counts.buildings).toBe(37)
+    expect(district.counts.secondaryBuildings).toBe(36)
     expect(district.counts.hqStackedFloors).toBe(7)
     expect(district.counts.hqFloorHeight).toBe(3.85)
     expect(district.counts.glassFacades).toBeGreaterThanOrEqual(64)

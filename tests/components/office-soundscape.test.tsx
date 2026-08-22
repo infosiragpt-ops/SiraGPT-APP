@@ -87,10 +87,13 @@ class FakeAudioContext {
     disconnect: vi.fn(),
   }))
   createBiquadFilter = vi.fn(() => {
-    const filter: FakeFilter = {
+    const filter: FakeFilter & { gain: ReturnType<typeof audioParam> } = {
       type: "lowpass",
       frequency: audioParam(),
       Q: audioParam(),
+      // BiquadFilterNode exposes a `gain` AudioParam (DOM lib.dom.d.ts);
+      // the coast-day mix chain reads body.gain/presence.gain.
+      gain: audioParam(),
       connect: vi.fn(),
       disconnect: vi.fn(),
     }
