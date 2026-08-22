@@ -54,6 +54,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { RetryableError } from "@/components/retryable-error"
 import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
@@ -1929,8 +1930,41 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
 
   if (uploadedFiles.length === 0) return null;
 
+  // Recoverable-error summary (Frente 1): when at least one chip failed, an
+  // accessible banner above the rail states what failed and offers
+  // "Reintentar" (replays the failed uploads via the existing retryUpload,
+  // which re-uploads the SAME in-memory File objects) + "Descartar"
+  // (removes the failed chips so the composer is clean again). The per-chip
+  // retry icon below stays as a secondary affordance.
+  const failedFiles = uploadedFiles.filter((file: any) => file.status === 'failed');
+  const firstFailedReason = String(
+    failedFiles[0]?.uploadError || 'No se pudo subir el archivo.'
+  );
+
   return (
     <div className="composer-attachment-rail">
+      {failedFiles.length > 0 && retryUpload && (
+        <RetryableError
+          className="mb-2"
+          message={failedFiles.length === 1
+            ? `La subida de "${failedFiles[0].originalName || failedFiles[0].name || 'archivo'}" falló: ${firstFailedReason}`
+            : `Falló la subida de ${failedFiles.length} archivos: ${firstFailedReason}`}
+          onRetry={() => {
+            // Replay each failed upload exactly as retryUpload does — same
+            // in-memory File objects, no re-drop needed.
+            failedFiles.forEach((file: any) => retryUpload(file));
+          }}
+          onDiscard={() => {
+            // Remove the failed chips (descending index so removals don't
+            // shift the remaining positions).
+            uploadedFiles
+              .map((file: any, idx: number) => ({ file, idx }))
+              .filter(({ file }: { file: any }) => file.status === 'failed')
+              .sort((a, b) => b.idx - a.idx)
+              .forEach(({ idx }) => removeFile(idx));
+          }}
+        />
+      )}
       {/* aria-live announcer so keyboard reordering is narrated. */}
       <span aria-live="polite" className="sr-only">{reorderAnnouncement}</span>
       <div
@@ -5509,6 +5543,11 @@ function ChatInterfaceContent() {
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
+  // Recoverable-error banner (Frente 1): the last FAILED chat send is kept
+  // here so a "Reintentar" button can replay EXACTLY the same turn (same
+  // text + same attachments) without the user retyping it. `null` = no
+  // stuck send. Cleared on successful retry or explicit "Descartar".
+  const [failedChatSend, setFailedChatSend] = React.useState<{ text: string; files: any[] } | null>(null);
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
@@ -9394,6 +9433,11 @@ REWRITTEN TEXT:`;
       const region = editFile.editRegion;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
+    // The message is accepted for delivery — clear any stale failed-send
+    // banner from a previous attempt and snapshot this turn so the
+    // recoverable-error banner can replay it verbatim if delivery fails.
+    setFailedChatSend(null);
+    const sentTurn = { text: msg, files: filesToSend };
     setInput("");
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
@@ -10052,6 +10096,9 @@ REWRITTEN TEXT:`;
       }
       markQueuedSendSucceeded();
     } catch (err: any) {
+      // Remember the exact turn (same text + same files) so the inline
+      // "Reintentar" banner can replay it verbatim — no retyping.
+      setFailedChatSend(sentTurn);
       console.error('Send error', err);
       devLog('Error details:', {
         message: err?.message,
@@ -10118,7 +10165,9 @@ REWRITTEN TEXT:`;
       // For other errors, show generic error message
       toast.error(err?.message || 'An error occurred. Please try again.');
 
-      // Add error message to chat
+      // Add error message to chat — with an inline "Reintentar" CTA that
+      // replays this exact turn (same text + same attachments) instead of
+      // leaving the user stuck retyping it. "Descartar" removes the bubble.
       const errorMessage = {
         id: `msg-error-${Date.now()}`,
         chatId: chatToUpdate?.id || 'unknown',
@@ -10126,6 +10175,7 @@ REWRITTEN TEXT:`;
         content: '',
         timestamp: new Date().toISOString(),
         error: err.message || 'An error occurred. Please try again.',
+        metadata: JSON.stringify({ retryableError: true }),
       };
 
       setCurrentChat(prevChat => {

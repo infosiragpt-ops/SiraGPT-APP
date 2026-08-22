@@ -33,6 +33,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { RetryableError } from "@/components/retryable-error"
 import { toast } from "sonner"
 import { TiptapEditor } from "@/components/editor/tiptap-editor"
 import {
@@ -176,6 +177,9 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   const [markdown, setMarkdown] = React.useState<string>("")
   const [saving, setSaving] = React.useState(false)
   const [exporting, setExporting] = React.useState(false)
+  // Recoverable error (Frente 1): the last save failure, so the banner can
+  // replay the exact same save (same file, same markdown) via "Reintentar".
+  const [saveError, setSaveError] = React.useState<string | null>(null)
 
   const handleEditorChange = React.useCallback((next: string) => {
     setMarkdown(next)
@@ -213,7 +217,9 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
       onClose()
     } catch (err) {
       console.error("[document-editor] save failed:", err)
-      toast.error(`No se pudo guardar: ${err instanceof Error ? err.message : "error desconocido"}`)
+      const reason = `No se pudo guardar el documento: ${err instanceof Error ? err.message : "error desconocido"}`
+      setSaveError(reason)
+      toast.error(reason)
     } finally {
       setSaving(false)
     }
@@ -302,19 +308,33 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
           </div>
         </DialogHeader>
 
-        <div className="h-[min(72vh,640px)] overflow-hidden px-0 pb-2">
+        <div className="flex h-[min(72vh,640px)] flex-col overflow-hidden px-0 pb-2">
+          {saveError ? (
+            <div className="shrink-0 px-3 pt-2">
+              <RetryableError
+                message={saveError}
+                onRetry={() => {
+                  setSaveError(null)
+                  void handleSave()
+                }}
+                onDiscard={() => setSaveError(null)}
+              />
+            </div>
+          ) : null}
           {loadingContent ? (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               Cargando contenido…
             </div>
           ) : (
+            <div className="min-h-0 flex-1">
             <TiptapEditor
               initialMarkdown={editorInitial}
               onChange={handleEditorChange}
               placeholder="Empieza a escribir…"
               editable={canEdit}
             />
+            </div>
           )}
         </div>
       </DialogContent>

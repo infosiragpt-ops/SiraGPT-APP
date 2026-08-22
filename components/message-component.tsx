@@ -4,6 +4,7 @@ import * as React from "react"
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { RetryableError } from "@/components/retryable-error"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
 import dynamic from "next/dynamic"
@@ -1027,31 +1028,22 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     const ErrorMessage = ({ onRegenerate }: { onRegenerate: (messageId: string) => void }) => {
         // The persisted error string (set by chat-context after a failed
-        // generation) is now produced by normalizeAgentTaskErrorMessage,
-        // so it's already user-friendly and Spanish. Display it inline
-        // when present; fall back to a generic line otherwise.
+        // generation) is now produced by normalizeChatError /
+        // normalizeAgentTaskErrorMessage, so it's already user-friendly and
+        // Spanish. Displayed through the shared RetryableError banner
+        // (Frente 1): clear message + "Reintentar" (replays the turn via the
+        // existing regenerate pipeline) + "Descartar" (removes the bubble).
         const friendly =
             typeof (message as any).error === "string" && (message as any).error.trim()
                 ? (message as any).error.trim()
                 : "Ocurrió un error al generar la respuesta."
         return (
-            <div
-                role="alert"
-                className="flex flex-wrap items-center gap-2 rounded-md border border-red-300/50 bg-red-500/10 px-4 py-2 text-red-600 dark:border-red-700/40 dark:text-red-300"
-            >
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <p className="text-sm font-medium">{friendly}</p>
-                <Button
-                    onClick={() => onRegenerate(message.id)}
-                    variant="ghost"
-                    size="sm"
-                    className="ml-auto hover:bg-red-500/15"
-                    aria-label="Reintentar generación"
-                >
-                    <RefreshCw className="h-4 w-4 mr-1" />
-                    Reintentar
-                </Button>
-            </div>
+            <RetryableError
+                message={friendly}
+                retryLabel="Reintentar"
+                onRetry={() => onRegenerate(message.id)}
+                onDiscard={updateMessageInChat ? () => updateMessageInChat(message.id, "") : undefined}
+            />
         )
     };
 

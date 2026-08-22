@@ -39,6 +39,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { RetryableError } from "@/components/retryable-error"
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
@@ -1586,22 +1587,20 @@ export function PreviewPane() {
             </div>
           </div>
         ) : liveRun.phase === "error" ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-center sm:p-8">
             <p className="text-sm font-medium text-rose-500">Detecté un error — el asistente lo está revisando</p>
             <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
-            <button
-              type="button"
-              onClick={() => void runApp()}
-              className="rounded-md bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-500/15 dark:text-red-400"
-            >
-              Reintentar manualmente
-            </button>
+            <RetryableError
+              className="mx-auto max-w-md"
+              message="No se pudo iniciar la vista previa de la app."
+              onRetry={() => void runApp()}
+            />
           </div>
         ) : liveRun.phase === "stuck" ? (
           // Terminal-honest state: the auto-fix budget is spent, nothing is
           // actively "revisando" anymore. Show the truth + the log tail + a
           // manual retry that refills the budget.
-          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-center sm:p-8">
             <p className="text-sm font-medium text-rose-500">Lo intenté {AUTO_FIX_MAX} veces y no pude arreglarlo</p>
             <p className="mx-auto max-w-md text-[12px] leading-relaxed text-muted-foreground">
               Revisa el error de abajo y edita el código, o vuelve a intentarlo.
@@ -1609,13 +1608,11 @@ export function PreviewPane() {
             <pre className="mx-auto max-h-40 w-full max-w-md overflow-auto rounded-md border border-border/50 bg-muted/25 p-2 text-left font-mono text-[10px] leading-relaxed text-muted-foreground">
               {(lastErrorLogRef.current || liveRun.note || "").trim() || "Sin salida de error."}
             </pre>
-            <button
-              type="button"
-              onClick={retryFromStuck}
-              className="rounded-md bg-red-500/10 px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-500/15 dark:text-red-400"
-            >
-              Reintentar
-            </button>
+            <RetryableError
+              className="mx-auto max-w-md"
+              message="El preview sigue fallando después de los intentos automáticos."
+              onRetry={retryFromStuck}
+            />
           </div>
         ) : result.kind === "empty" || result.kind === "unsupported" ? (
           <PreviewLaunchpad kind={result.kind} note={result.note} />

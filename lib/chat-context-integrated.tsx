@@ -3077,6 +3077,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
 
+    // Discard path (Frente 1 "Descartar"): the recoverable-error banner
+    // clears a failed ASSISTANT bubble by passing an empty content. That is
+    // NOT an edit — the backend PUT /messages/:id rejects empty content, and
+    // regenerating from it would fabricate a turn. Remove the bubble locally;
+    // the failed turn never reached durable history as a real answer.
+    if (typeof newContent === 'string' && newContent.trim() === '') {
+      const target = currentChat.messages.find(m => m.id === messageId);
+      if (!target) return;
+      setCurrentChat(prev => {
+        if (!prev || prev.id !== currentChat.id) return prev;
+        return { ...prev, messages: prev.messages.filter(m => m.id !== messageId) };
+      });
+      setChats(prevChats => prevChats.filter(c => c && c.id).map(c =>
+        c.id === currentChat.id
+          ? { ...c, messages: (c.messages || []).filter((m: any) => m.id !== messageId) }
+          : c
+      ));
+      return;
+    }
+
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;
 
