@@ -56,13 +56,9 @@ describe('ola-200 wave D invariants', () => {
     assert.match(read('services/SsoCallbackService.js'), /client_secret=\[REDACTED\]/);
   });
 
-  it('BE-056 agent.js locked to native DeepSeek', () => {
-    const src = read('routes/agent.js');
-    assert.match(src, /resolveAgentLlmClient/);
-    assert.match(src, /resolveNativeDeepSeekModel/);
-    assert.doesNotMatch(src, /new OpenAI\(\{ apiKey: process\.env\.OPENAI_API_KEY \}\)/);
-    assert.doesNotMatch(src, /executorModel: req\.body\.model \|\| 'gpt-4o'/);
-  });
+  // BE-056 (agent model contract) moved to agent-model-contract.test.js —
+  // the DeepSeek-locked assertion encoded the pre-#308 decision; see that
+  // file for the reconciled contract.
 
   it('BE-074 skills executor has timeout and no host shell', () => {
     const src = read('services/skills-executor.js');
