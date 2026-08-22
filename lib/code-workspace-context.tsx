@@ -186,7 +186,6 @@ export function getActiveDepartmentSelection(): ActiveDepartmentSelection {
   return _activeDepartmentSelection
 }
 
-
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string
