@@ -226,6 +226,10 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
 
   // ---- Autosave core ------------------------------------------------------
   const performServerSave = React.useCallback(async (md: string): Promise<EditorSaveResult> => {
+    // Attachments without a resolvable id cannot persist; failing here routes
+    // the autosave machinery into its visible retry/error state instead of
+    // silently pretending the edit was saved.
+    if (!resolvedFileId) throw new Error("document file id unavailable")
     const result = await saveEditedDocument({
       apiClient: apiClient ?? {},
       fileId: resolvedFileId,
