@@ -9,6 +9,7 @@ const sel = require('../src/services/agents/tool-selector');
 const BASE = [
   'web_search', 'read_url', 'web_extract', 'deep_search', 'github_search', 'scientific_search', 'x_search', 'sunat_peru',
   'browser_navigate', 'browser_click', 'browser_type', 'browser_scroll',
+  'computer_navigate', 'computer_screenshot', 'computer_click', 'computer_type',
   'rag_retrieve', 'search_docs', 'read_file', 'list_files', 'search_code', 'get_symbol', 'docintel_analyze', 'deep_analyze',
   'python_exec', 'host_bash', 'host_file', 'list_dir', 'glob_files', 'code_grep', 'clone_project', 'run_tests', 'propose_patch', 'static_checks', 'check_ci', 'monitor_ci',
   'create_document', 'verify_artifact', 'memory_recall', 'session_search', 'session_list',
@@ -108,6 +109,20 @@ describe('scoreTool / categoriesFor', () => {
     assert.deepEqual(sel.categoriesFor('scientific_search'), ['research']);
     assert.ok(sel.categoriesFor('rag_retrieve').includes('rag'));
     assert.ok(sel.categoriesFor('create_chart').includes('media'));
+    assert.deepEqual(sel.categoriesFor('computer_click'), ['computer']);
+    assert.deepEqual(sel.categoriesFor('computer_navigate'), ['computer']);
+  });
+});
+
+describe('selectTools — computer category on web/research', () => {
+  test('keeps computer_navigate and computer_screenshot on research intent', () => {
+    const r = sel.selectTools(
+      { tools: ALL, userQuery: 'busca el sitio oficial y ábrelo', intent: 'research_question', signals: { needsResearch: true } },
+      deps,
+    );
+    assert.equal(r.applied, true);
+    assert.ok(names(r).includes('computer_navigate'), 'computer_navigate stays on research');
+    assert.ok(names(r).includes('computer_screenshot'), 'computer_screenshot stays on research');
   });
 });
 
