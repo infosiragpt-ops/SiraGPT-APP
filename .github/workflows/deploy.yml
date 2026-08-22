@@ -250,6 +250,13 @@ jobs:
             DEPLOY_BUNDLE="${DEPLOY_TRANSFER_DIR}/deploy.bundle"
             DEPLOY_BUNDLE_CHECKSUM="${DEPLOY_TRANSFER_DIR}/deploy.bundle.sha256"
             COMPOSE="docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml -f docker-compose.prometheus.yml --env-file .env"
+            # The VPS-only docker-compose.production.override.yml (not tracked
+            # in this repo) interpolates ${SIRAGPT_AGENT_RUNNER_MAX_TOKENS:-1500},
+            # which contradicts the agent-runner contract floor of 2048
+            # (backend/tests/agent-runner-routing.test.js). Compose interpolation
+            # prefers the process environment over --env-file, so exporting here
+            # pins 2048 for every ${COMPOSE} invocation without touching the VPS.
+            export SIRAGPT_AGENT_RUNNER_MAX_TOKENS="${SIRAGPT_AGENT_RUNNER_MAX_TOKENS:-2048}"
             READY_URL="${READY_URL:-https://siragpt.com/api/health/ready}"
             # Same origin as READY_URL. api.siragpt.com can lag or route
             # differently and caused false rollbacks after healthy deploys
