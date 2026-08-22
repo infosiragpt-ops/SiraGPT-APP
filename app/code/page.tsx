@@ -251,8 +251,8 @@ function CodeWorkspaceSkeleton() {
         <div className="h-4 w-16 rounded bg-muted/50 animate-pulse" />
         <div className="ml-auto h-5 w-[260px] rounded border border-border/60 bg-muted/30 animate-pulse" />
       </div>
-      <div className="grid min-h-0 flex-1 grid-cols-[360px_1fr]">
-        <div className="border-r border-border/60 p-3 space-y-3">
+      <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[360px_1fr]">
+        <div className="hidden border-r border-border/60 p-3 space-y-3 md:block">
           <div className="h-7 w-32 rounded-full bg-muted/40 animate-pulse" />
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-16 rounded-lg bg-muted/30 animate-pulse" />
