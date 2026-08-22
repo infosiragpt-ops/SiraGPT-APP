@@ -1565,6 +1565,25 @@ class ApiClient {
     };
   }
 
+  // Create an editable document WITHOUT a binary upload — used by the
+  // /code → /chat bridge to materialise a generated workspace file as a
+  // first-class File with its initial editable FileVersion.
+  // Backend route: POST /files/documents (files.js).
+  async createDocument(
+    data: { name: string; content: string; summary?: string; sourcePath?: string },
+  ): Promise<{
+    file: { id: string; filename: string; originalName: string; mimeType: string; size: number; createdAt: string };
+    version: { id: string; version: number; filename: string; summary?: string | null; createdAt: string; downloadUrl?: string | null };
+  }> {
+    return (await this.request('/files/documents', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })) as {
+      file: { id: string; filename: string; originalName: string; mimeType: string; size: number; createdAt: string };
+      version: { id: string; version: number; filename: string; summary?: string | null; createdAt: string; downloadUrl?: string | null };
+    };
+  }
+
   // AI endpoints
   // async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
   //   return this.request('/ai/generate', {
