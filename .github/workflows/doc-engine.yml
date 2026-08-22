@@ -54,7 +54,7 @@ jobs:
         run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
 
       - name: Generate Prisma client
-        run: npm --prefix backend exec -- prisma generate
+        run: npm --prefix backend exec -- prisma generate --schema backend/prisma/schema.prisma
 
       - name: Install root dependencies
         run: npm ci --prefer-offline --no-audit --no-fund
