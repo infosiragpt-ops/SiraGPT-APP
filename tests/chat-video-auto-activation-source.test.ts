@@ -383,4 +383,65 @@ describe("chat video auto-activation source contract", () => {
     assert.match(apiSource, /model\?: string;/)
     assert.match(apiSource, /language\?: string;/)
   })
+
+  it("does not clear Video mode on send, in-flight generate, or same-thread chat create", () => {
+    assert.match(
+      source,
+      /const isGeneratingVideoRef = React\.useRef\(false\)/,
+      "Video generation must survive chat creation the same way Voice/Music do",
+    )
+    assert.match(
+      source,
+      /const isVideoGenerationActiveRef = React\.useRef\(false\)/,
+      "Sticky Video mode needs a ref so chat-id effects cannot wipe the chip",
+    )
+    assert.match(
+      source,
+      /preserveVideo\?: boolean/,
+      "closeAllToolsAndConnectors must be able to keep Video mode across send/chat-create",
+    )
+    assert.match(
+      source,
+      /isGeneratingVideoRef\.current \|\| isVideoGenerationActiveRef\.current/,
+      "chat-switch effects must preserve Video mode while it is on or generating",
+    )
+    assert.match(
+      source,
+      /if \(isVideoGenerationActive \|\| chatType === 'video'\) \{[\s\S]{0,220}isGeneratingVideoRef\.current = true;[\s\S]{0,220}isVideoGenerationActiveRef\.current = true;/,
+      "video mode must be stamped before optimistic setCurrentChat / createNewChat",
+    )
+    assert.doesNotMatch(
+      source,
+      /if \(isVideoGenerationActive \|\| chatType === 'video'\) \{[\s\S]{0,180}setIsVideoGenerationActive\(false\)/,
+      "the explicit video send path must not clear videoMode",
+    )
+    assert.match(
+      source,
+      /siragpt\.composer\.videoMode/,
+      "Video mode must persist in the thread/session so the same chat keeps the chip",
+    )
+  })
+
+  it("shows Stop only while a real in-flight job can be cancelled", () => {
+    assert.match(
+      source,
+      /const isSendingForCurrentChat = Boolean\(\s*isSending && sendingChatId && currentChatId && sendingChatId === currentChatId/,
+      "null===null must not count as an in-flight send (ghost Stop on idle home)",
+    )
+    assert.match(
+      source,
+      /const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo/,
+      "idle home / placeholder must be recognized as a non-cancellable composer",
+    )
+    assert.match(
+      source,
+      /const isStopButtonVisible = !isIdlePlaceholderComposer && \(/,
+      "Stop must be gated off on the idle placeholder",
+    )
+    assert.match(
+      composerSurface,
+      /if \(!isStopButtonVisible\) \{[\s\S]{0,500}composer-send-button/,
+      "when Stop is hidden the primary action must be the send arrow",
+    )
+  })
 })

@@ -9,7 +9,7 @@
  */
 
 import * as React from "react"
-import { Command as CommandIcon, Plus } from "lucide-react"
+import { Command as CommandIcon, Monitor, Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { useIsMobile } from "@/hooks/use-mobile"
+import { useResolvedMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import {
   ResizableHandle,
@@ -29,10 +29,6 @@ import {
 import {
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
-  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
-  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
-  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
-  getActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
@@ -43,13 +39,10 @@ import {
   focusCeoChatColumn,
 } from "@/lib/code-agent-company-proactive"
 
-import { CODE_NAV_FULLSCREEN_EVENT, registerAgentCompanyCenterSlot } from "@/lib/agent-company-center-slot"
 import { AgentCompanyPanel } from "./agent-company-panel"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
-import { ToolsRail } from "./activity-bar"
 import { NewTabPane } from "./new-tab-pane"
-import { DepartmentComputerPane, prewarmDepartmentDesktop } from "./department-computer-pane"
 import { PreviewPane } from "./preview-pane"
 
 // The chat panel and preview are the two heaviest subtrees in the workspace
@@ -61,8 +54,9 @@ const MemoAgentCompanyPanel = React.memo(AgentCompanyPanel)
 const MemoAICodeChatPanel = React.memo(AICodeChatPanel)
 const MemoPreviewPane = React.memo(PreviewPane)
 
-const CHAT_DEFAULT_SIZE = 60
-const CHAT_MIN_SIZE = 40
+const CHAT_DEFAULT_SIZE = 40
+const CHAT_MIN_SIZE = 26
+const CHAT_MAX_SIZE = 56
 import { ProjectInviteDialog } from "./project-invite-dialog"
 import { TerminalPanel } from "./terminal-panel"
 import { ToolScreen } from "./tool-screen"
@@ -71,32 +65,6 @@ import { WorkspaceTopBar, type WorkspacePanelId } from "./workspace-top-bar"
 const TERMINAL_DEFAULT_SIZE = 32
 const TERMINAL_MIN_SIZE = 14
 const PENDING_CODE_TOOL_KEY = "code-workspace:pending-tool"
-const CANVAS_OPEN_KEY = "siragpt.code.canvasOpen"
-const LEGACY_PREVIEW_OPEN_KEY = "code-workspace:preview-open"
-
-function readCanvasOpen(): boolean {
-  if (typeof window === "undefined") return true
-  try {
-    const stored = window.localStorage.getItem(CANVAS_OPEN_KEY)
-    if (stored === "false" || stored === "0") return false
-    if (stored === "true" || stored === "1") return true
-    const legacy = window.localStorage.getItem(LEGACY_PREVIEW_OPEN_KEY)
-    if (legacy === "0") return false
-    if (legacy === "1") return true
-    return window.innerWidth >= 768
-  } catch {
-    return true
-  }
-}
-
-function writeCanvasOpen(open: boolean) {
-  try {
-    window.localStorage.setItem(CANVAS_OPEN_KEY, open ? "true" : "false")
-    window.localStorage.setItem(LEGACY_PREVIEW_OPEN_KEY, open ? "1" : "0")
-  } catch {
-    /* storage disabled - fail soft */
-  }
-}
 
 type PaletteCommand = {
   id: string
@@ -119,7 +87,10 @@ export function CodeWorkspace() {
 
   const [chatOpen, setChatOpen] = React.useState(true)
   const [terminalOpen, setTerminalOpen] = React.useState(false)
-  const [previewOpen, setPreviewOpen] = React.useState<boolean>(readCanvasOpen)
+  const [previewOpen, setPreviewOpen] = React.useState<boolean>(() => {
+    if (typeof window === "undefined") return true
+    return window.localStorage.getItem("code-workspace:preview-open") !== "0"
+  })
   const [paletteOpen, setPaletteOpen] = React.useState(false)
   const [paletteQuery, setPaletteQuery] = React.useState("")
   const [openPanels, setOpenPanels] = React.useState<Set<WorkspacePanelId>>(
@@ -133,32 +104,9 @@ export function CodeWorkspace() {
   // Mobile: the desktop side-by-side resizable split crams the chat and the
   // preview into two unusable columns on a phone. Instead, show ONE panel at a
   // time with a bottom toggle (Empresa ↔ Preview).
-  const isMobile = useIsMobile()
-  const [mobileView, setMobileView] = React.useState<"chat" | "preview" | "computer">("chat")
-  const [departmentComputer, setDepartmentComputer] = React.useState<{ id: string; name: string; projectId?: string | null } | null>(
-    () => getActiveDepartmentSelection(),
-  )
-  const [computerOpen, setComputerOpen] = React.useState(false)
-  const canvasBeforeComputerRef = React.useRef<boolean | null>(null)
+  const isMobile = useResolvedMobile()
+  const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
-  const [navFullscreen, setNavFullscreen] = React.useState<string | null>(null)
-  const canvasBeforeNavRef = React.useRef<boolean | null>(null)
-  const previewOpenRef = React.useRef(previewOpen)
-  previewOpenRef.current = previewOpen
-
-  React.useEffect(() => {
-    const sync = (event: Event) => {
-      const selection = (event as CustomEvent<{ selection?: { id: string; name: string; projectId?: string | null } | null }>).detail?.selection
-      setDepartmentComputer(selection ?? { id: "ceo-office", name: "CEO Office" })
-    }
-    setDepartmentComputer(getActiveDepartmentSelection())
-    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
-    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
-  }, [])
-
-  React.useEffect(() => {
-    prewarmDepartmentDesktop("ceo-office")
-  }, [])
 
   React.useEffect(() => {
     const onFocusCeo = () => {
@@ -172,43 +120,12 @@ export function CodeWorkspace() {
     return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
   }, [])
 
-  const registerCenterSlot = React.useCallback((element: HTMLDivElement | null) => {
-    registerAgentCompanyCenterSlot(element)
-  }, [])
-  React.useEffect(() => () => registerAgentCompanyCenterSlot(null), [])
-
   React.useEffect(() => {
-    const onNav = (event: Event) => {
-      const view = (event as CustomEvent<{ view?: string | null }>).detail?.view ?? null
-      setNavFullscreen(view)
-      if (view) {
-        if (canvasBeforeNavRef.current === null) {
-          canvasBeforeNavRef.current = previewOpenRef.current
-        }
-        setPreviewOpen(false)
-        setOpenPanels((prev) => {
-          const next = new Set(prev)
-          next.delete("preview")
-          return next
-        })
-        setActivePanel((current) => (current === "preview" ? null : current))
-        setChatOpen(true)
-        return
-      }
-      const restore = canvasBeforeNavRef.current
-      canvasBeforeNavRef.current = null
-      if (restore) {
-        setPreviewOpen(true)
-        setOpenPanels((prev) => new Set(prev).add("preview"))
-        setActivePanel("preview")
-      }
+    try {
+      window.localStorage.setItem("code-workspace:preview-open", previewOpen ? "1" : "0")
+    } catch {
+      /* storage disabled - fail soft */
     }
-    window.addEventListener(CODE_NAV_FULLSCREEN_EVENT, onNav)
-    return () => window.removeEventListener(CODE_NAV_FULLSCREEN_EVENT, onNav)
-  }, [])
-
-  React.useEffect(() => {
-    writeCanvasOpen(previewOpen)
   }, [previewOpen])
 
   const toggleTerminal = React.useCallback(() => {
@@ -256,17 +173,13 @@ export function CodeWorkspace() {
     })
     setActivePanel((current) => (current === id ? null : current))
     if (id === "terminal") setTerminalOpen(false)
-    if (id === "preview") {
-      setPreviewOpen(false)
-      setChatOpen(true)
-      if (isMobile) setMobileView("chat")
-    }
+    if (id === "preview") setPreviewOpen(false)
     // Git/Validation render through the single-tool screen — closing their
     // tab must also dismiss that screen.
     if (id === "git" || id === "validation") {
       setActiveTool((current) => (current === id ? null : current))
     }
-  }, [isMobile])
+  }, [])
 
   const openComposer = React.useCallback(() => {
     setChatOpen(true)
@@ -296,36 +209,14 @@ export function CodeWorkspace() {
     if (previewOpen || openPanels.has("preview")) ids.add("preview")
     if (terminalOpen || openPanels.has("terminal")) ids.add("shell")
     if (activeTool) ids.add(activeTool)
-    if (codeHubOpen) ids.add("files")
     return Array.from(ids)
-  }, [activeTool, chatOpen, codeHubOpen, openPanels, previewOpen, terminalOpen])
-
-  const railActiveId = React.useMemo(() => {
-    if (newTabOpen) return "all-tools" as const
-    if (activeTool) return activeTool
-    if (codeHubOpen) return "files" as const
-    if (terminalOpen || openPanels.has("terminal")) return "shell" as const
-    if (previewOpen || openPanels.has("preview")) return "preview" as const
-    if (chatOpen) return "agent" as const
-    return null
-  }, [activeTool, chatOpen, codeHubOpen, newTabOpen, openPanels, previewOpen, terminalOpen])
+  }, [activeTool, chatOpen, openPanels, previewOpen, terminalOpen])
 
   const handleSelectTool = React.useCallback(
     (id: WorkspaceToolId) => {
       setNewTabOpen(false)
       const tool = WORKSPACE_TOOLS[id]
       if (!tool) return
-      if (id === "files") {
-        setActiveTool(null)
-        setCodeHubOpen(true)
-        setMobileView("preview")
-        return
-      }
-      if (id === "code-search") {
-        setPaletteQuery("")
-        setPaletteOpen(true)
-        return
-      }
       if (tool.behavior === "action") {
         if (id === "agent") {
           openComposer()
@@ -340,10 +231,10 @@ export function CodeWorkspace() {
       // Preview, Shell, Git and Validation already live as first-class panel
       // tabs — picking them from the "Nueva pestaña" pane goes through the
       // panel toggle so their tab shows up in the strip (Replit behavior).
-      if (id === "preview" || id === "canvas" || id === "shell" || id === "git" || id === "validation") {
+      if (id === "preview" || id === "shell" || id === "git" || id === "validation") {
         setMobileView("preview")
-        handleTogglePanel(id === "shell" ? "terminal" : id === "canvas" ? "preview" : id)
-        if (id === "preview" || id === "canvas" || id === "shell") setActiveTool(null)
+        handleTogglePanel(id === "shell" ? "terminal" : id)
+        if (id === "preview" || id === "shell") setActiveTool(null)
         return
       }
       setCodeHubOpen(false)
@@ -365,18 +256,7 @@ export function CodeWorkspace() {
         focusChat()
         return
       }
-      if (id === "files") {
-        setActiveTool(null)
-        setCodeHubOpen(true)
-        setMobileView("preview")
-        return
-      }
-      if (id === "code-search") {
-        setPaletteQuery("")
-        setPaletteOpen(true)
-        return
-      }
-      if (id === "preview" || id === "canvas" || id === "shell") {
+      if (id === "preview" || id === "shell") {
         setMobileView("preview")
         handleTogglePanel(id === "shell" ? "terminal" : "preview")
         return
@@ -441,91 +321,10 @@ export function CodeWorkspace() {
       setPreviewOpen(true)
       setOpenPanels((prev) => new Set(prev).add("preview"))
       setActivePanel("preview")
-      setChatOpen(true)
-    }
-    const closePreview = () => {
-      // Mobile already has Empresa / Vista previa tabs — closing just
-      // returns to chat. Desktop unmounts the right pane so the agent
-      // column can go full width (siragpt.code.canvasOpen).
-      if (isMobile) {
-        setMobileView("chat")
-        return
-      }
-      setPreviewOpen(false)
-      setOpenPanels((prev) => {
-        const next = new Set(prev)
-        next.delete("preview")
-        return next
-      })
-      setActivePanel((current) => (current === "preview" ? null : current))
-      setChatOpen(true)
     }
     window.addEventListener("siragpt:code-open-preview", openPreview)
-    window.addEventListener("siragpt:code-close-preview", closePreview)
-    return () => {
-      window.removeEventListener("siragpt:code-open-preview", openPreview)
-      window.removeEventListener("siragpt:code-close-preview", closePreview)
-    }
-  }, [isMobile])
-
-  React.useEffect(() => {
-    const openDepartmentComputer = () => {
-      if (canvasBeforeComputerRef.current === null) {
-        canvasBeforeComputerRef.current = previewOpenRef.current
-      }
-      setComputerOpen(true)
-      setChatOpen(true)
-      setCodeHubOpen(false)
-      setNewTabOpen(false)
-      setActiveTool(null)
-      setPreviewOpen(true)
-      setOpenPanels((prev) => {
-        const next = new Set(prev)
-        next.add("preview")
-        return next
-      })
-      setActivePanel("preview")
-      // Reveal the right-hand computer. Empresa/chat stay mounted in the
-      // center column so the department bind is not destroyed.
-      setMobileView("computer")
-    }
-    window.addEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, openDepartmentComputer)
-    window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, openDepartmentComputer)
-    return () => {
-      window.removeEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, openDepartmentComputer)
-      window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, openDepartmentComputer)
-    }
+    return () => window.removeEventListener("siragpt:code-open-preview", openPreview)
   }, [])
-
-  const closeComputer = React.useCallback(() => {
-    setComputerOpen(false)
-    setMobileView((view) => (view === "computer" ? "preview" : view))
-    const restore = canvasBeforeComputerRef.current
-    canvasBeforeComputerRef.current = null
-    if (restore === false) {
-      setPreviewOpen(false)
-      setOpenPanels((prev) => {
-        const next = new Set(prev)
-        next.delete("preview")
-        return next
-      })
-      setActivePanel((current) => (current === "preview" ? null : current))
-    }
-  }, [])
-
-  const toggleDepartmentComputer = React.useCallback(() => {
-    if (computerOpen) {
-      closeComputer()
-      return
-    }
-    // Open the right-hand pane immediately. Empresa still receives CURRENT
-    // so it can bind CEO Office / the active department and project.
-    const current = departmentComputer || getActiveDepartmentSelection()
-    window.dispatchEvent(new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
-      detail: { departmentId: current?.id || undefined, projectId: current?.projectId || undefined },
-    }))
-    window.dispatchEvent(new CustomEvent(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT))
-  }, [closeComputer, computerOpen, departmentComputer])
 
   React.useEffect(() => {
     const onLoadTemplate = (event: Event) => {
@@ -722,48 +521,42 @@ export function CodeWorkspace() {
         }}
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
-        departmentComputer={departmentComputer ?? { id: "ceo-office", name: "CEO Office" }}
-        computerOpen={computerOpen}
-        onOpenDepartmentComputer={toggleDepartmentComputer}
       />
 
-      <div className="relative flex min-h-0 flex-1">
-        <ToolsRail
-          activeId={railActiveId}
-          openToolIds={openToolIds}
-          allToolsOpen={newTabOpen}
-          onSelect={handleSelectTool}
-          onOpenAllTools={() => {
-            setMobileView("preview")
-            setNewTabOpen((value) => !value)
-          }}
-        />
-        <div className="relative min-h-0 min-w-0 flex-1">
-        <NewTabPane
-          open={newTabOpen}
-          onClose={() => setNewTabOpen(false)}
-          onSelectTool={handleSelectTool}
-          onJumpToOpen={handleJumpToOpen}
-          openToolIds={openToolIds}
-        />
-        <div
-          ref={registerCenterSlot}
-          className="absolute inset-0 z-20 empty:pointer-events-none empty:hidden"
-          data-nav-fullscreen={navFullscreen || "off"}
-          data-testid="agent-company-center-slot"
-        />
+      <div className="relative min-h-0 flex-1">
         {(() => {
           // Shared right-hand area: the preview + optional terminal (plus the
           // code-hub / tool / launcher overlays). The panel tabs live in the
           // global header, so the pane starts directly with the preview.
-          const activeDepartment = departmentComputer ?? { id: "ceo-office", name: "CEO Office" as string, projectId: null as string | null }
-          const computerRunId = `dept-${activeDepartment.id}`
-          const previewSurface = (
+          const mainArea = (
+            <>
               <div className="absolute inset-0">
-                {previewOpen ? (
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    <MemoPreviewPane />
+                    {previewOpen ? (
+                      <MemoPreviewPane />
+                    ) : (
+                      <div className="flex h-full min-h-0 items-center justify-center bg-muted/10 px-6 py-10">
+                        <div className="flex max-w-sm flex-col items-center text-center">
+                          <div className="mb-4 flex h-11 w-11 items-center justify-center rounded-xl border border-border/60 bg-background shadow-sm">
+                            <Monitor className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
+                          </div>
+                          <h2 className="text-sm font-semibold text-foreground">Preview cerrado</h2>
+                          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                            Abre el preview para ver y probar los cambios de tu aplicación en vivo.
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="mt-4 min-h-11 gap-2 px-4"
+                            onClick={() => handleTogglePanel("preview")}
+                          >
+                            <Monitor className="h-4 w-4" aria-hidden="true" />
+                            Abrir Preview
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </ResizablePanel>
                   {terminalOpen ? (
                     <>
@@ -774,25 +567,7 @@ export function CodeWorkspace() {
                     </>
                   ) : null}
                 </ResizablePanelGroup>
-                ) : terminalOpen ? (
-                  <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
-                ) : null}
               </div>
-          )
-          const mainArea = (
-            <>
-              {computerOpen ? (
-                <DepartmentComputerPane
-                  key={activeDepartment.id}
-                  departmentName={activeDepartment.name}
-                  departmentId={activeDepartment.id}
-                  projectId={activeDepartment.projectId || undefined}
-                  computerRunId={computerRunId}
-                  onClose={closeComputer}
-                />
-              ) : (
-                previewSurface
-              )}
 
               {codeHubOpen ? (
                 <CodeHub open onClose={() => setCodeHubOpen(false)} />
@@ -807,8 +582,21 @@ export function CodeWorkspace() {
                 />
               ) : null}
 
+              <NewTabPane
+                open={newTabOpen}
+                onClose={() => setNewTabOpen(false)}
+                onSelectTool={handleSelectTool}
+                onJumpToOpen={handleJumpToOpen}
+                openToolIds={openToolIds}
+              />
             </>
           )
+
+          // Wait for the first width measurement so a phone never mounts the
+          // desktop split (that would start Preview and then unmount it).
+          if (isMobile === null) {
+            return <div className="h-full min-h-0 bg-background" data-testid="code-workspace-layout-pending" />
+          }
 
           // ── Mobile: one panel at a time + a bottom Agente/Preview toggle ──
           // The desktop horizontal resizable split is unusable on a phone
@@ -821,40 +609,22 @@ export function CodeWorkspace() {
                   <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
                     <MemoAgentCompanyPanel />
                   </div>
-                  <div className={cn("absolute inset-0", mobileView === "preview" || mobileView === "computer" ? "block" : "hidden")}>
+                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
                     {mainArea}
                   </div>
                 </div>
-                <div
-                  className="flex shrink-0 border-t border-border/60 bg-background pb-[max(0.5rem,env(safe-area-inset-bottom))]"
-                  role="tablist"
-                  aria-label="Vistas de código"
-                >
+                <div className="flex shrink-0 border-t border-border/60 bg-background">
                   {([
                     { id: "chat", label: "Empresa" },
-                    { id: "computer", label: "Computadora" },
-                    { id: "preview", label: "Vista previa" },
+                    { id: "preview", label: "Preview" },
                   ] as const).map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
-                      role="tab"
-                      onClick={() => {
-                        if (tab.id === "preview") {
-                          setPreviewOpen(true)
-                          if (computerOpen) closeComputer()
-                        }
-                        if (tab.id === "computer") {
-                          window.dispatchEvent(new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
-                            detail: { departmentId: "ceo-office" },
-                          }))
-                          window.dispatchEvent(new CustomEvent(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT))
-                        }
-                        setMobileView(tab.id)
-                      }}
-                      aria-selected={mobileView === tab.id}
+                      onClick={() => setMobileView(tab.id)}
+                      aria-pressed={mobileView === tab.id}
                       className={cn(
-                        "min-h-11 flex-1 px-2 py-2.5 text-xs font-medium transition-colors",
+                        "flex-1 px-3 py-2.5 text-xs font-medium transition-colors",
                         mobileView === tab.id
                           ? "border-t-2 border-primary text-foreground"
                           : "border-t-2 border-transparent text-muted-foreground hover:text-foreground",
@@ -871,47 +641,47 @@ export function CodeWorkspace() {
           // ── Desktop: [APPS company rail] | [CEO Office] | [Preview]
           // The company panel portals into the sidebar while CEO Office remains
           // the direct workspace command surface.
-          const rightPaneNeeded =
-            previewOpen || terminalOpen || codeHubOpen || Boolean(activeTool) || computerOpen
-
           return (
             <>
               <MemoAgentCompanyPanel />
-              {rightPaneNeeded ? (
-              <ResizablePanelGroup direction="horizontal" className="h-full">
+              <ResizablePanelGroup
+                autoSaveId="siragpt-code-chat-split"
+                direction="horizontal"
+                className="h-full min-w-0"
+              >
                 {chatOpen ? (
                   <>
                     <ResizablePanel
+                      id="ceo-chat"
+                      order={1}
                       defaultSize={CHAT_DEFAULT_SIZE}
                       minSize={CHAT_MIN_SIZE}
-                      maxSize={75}
+                      maxSize={CHAT_MAX_SIZE}
                       className="min-w-0"
                     >
-                      <div ref={chatColumnRef} className="h-full min-h-0 border-r border-border/50">
+                      <div
+                        ref={chatColumnRef}
+                        className="code-chat-column h-full min-h-0 min-w-0 border-r border-border/50"
+                      >
                         <MemoAICodeChatPanel embedded />
                       </div>
                     </ResizablePanel>
                     <ResizableHandle withHandle />
                   </>
                 ) : null}
-                <ResizablePanel defaultSize={chatOpen ? 40 : 100} minSize={22} className="relative min-w-0" data-preview-rail="1">
+                <ResizablePanel
+                  id="preview-main"
+                  order={2}
+                  defaultSize={chatOpen ? 100 - CHAT_DEFAULT_SIZE : 100}
+                  minSize={32}
+                  className="relative min-w-0"
+                >
                   {mainArea}
                 </ResizablePanel>
               </ResizablePanelGroup>
-              ) : (
-                <div
-                  ref={chatColumnRef}
-                  className="h-full min-h-0"
-                  data-canvas-toggle="collapsed"
-                  data-canvas-collapsed="1"
-                >
-                  <MemoAICodeChatPanel embedded />
-                </div>
-              )}
             </>
           )
         })()}
-        </div>
       </div>
 
       <ProjectInviteDialog open={inviteOpen} onOpenChange={setInviteOpen} />

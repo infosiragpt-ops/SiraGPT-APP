@@ -6915,7 +6915,7 @@ But first, you need to connect your Spotify account securely using the button be
     const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
 
-    textarea.style.setProperty("height", `${measured.height}px`, "important");
+    textarea.style.height = `${measured.height}px`;
     textarea.style.setProperty("overflow-y", measured.overflowY, "important");
     if (shell) {
       shell.style.height = `${measured.height}px`;
@@ -6946,7 +6946,7 @@ But first, you need to connect your Spotify account securely using the button be
 
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
     const currentlyStacked = surface?.dataset.composerStacked === "true";
-    textarea.style.setProperty("height", "0px", "important");
+    textarea.style.height = "0px";
     let contentScrollHeight = textarea.scrollHeight;
     let measured = applyComposerTextareaMetrics(
       textarea,
@@ -6959,7 +6959,7 @@ But first, you need to connect your Spotify account securely using the button be
     // height after the footer layout is applied. Keep the stacked decision
     // from the first pass so a wider line cannot collapse the toolbar.
     if (measured.stacked) {
-      textarea.style.setProperty("height", "0px", "important");
+      textarea.style.height = "0px";
       contentScrollHeight = textarea.scrollHeight;
       const restacked = applyComposerTextareaMetrics(
         textarea,
@@ -9821,7 +9821,7 @@ REWRITTEN TEXT:`;
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
       || (deterministicAgenticIntent
-        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt', 'doc'].includes(deterministicAgenticIntent)
+        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
         && !imageOnlyTurn
         // Same gate as the semantic switch below: no-file analytical turns
         // (web lookups, formulas, charts) belong on the RELIABLE inline

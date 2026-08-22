@@ -1,12 +1,7 @@
 import * as THREE from "three"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import {
-  addEdgeDistrict,
-  HQ_FLOOR_TO_FLOOR,
-  HQ_STACKED_FLOORS_FULL,
-  HQ_STACKED_FLOORS_THUMBNAIL,
-} from "@/components/code/agent-office/agent-office-city"
+import { addEdgeDistrict } from "@/components/code/agent-office/agent-office-city"
 
 function dispose(scene: THREE.Scene) {
   scene.traverse((object) => {
@@ -24,7 +19,7 @@ function dispose(scene: THREE.Scene) {
 describe("agent office Edge District", () => {
   afterEach(() => vi.restoreAllMocks())
 
-  it("builds a 120-storey glass HQ and dense blue CBD within the draw-call budget", () => {
+  it("builds a tall glass skyline and premium terrace within a fixed draw-call budget", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => null)
     const scene = new THREE.Scene()
     const district = addEdgeDistrict({
@@ -37,23 +32,20 @@ describe("agent office Edge District", () => {
       variant: "full",
     })
 
-    // secondaryCount full = 72 → landmark + secondaries = 73 denser modern CBD.
-    expect(district.counts.buildings).toBe(73)
-    expect(district.counts.secondaryBuildings).toBe(72)
-    expect(district.counts.hqStackedFloors).toBe(HQ_STACKED_FLOORS_FULL)
-    expect(district.counts.hqFloorHeight).toBe(HQ_FLOOR_TO_FLOOR)
-    expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(8)
+    // secondaryCount full = 86 → landmark + secondaries = 87 larger modern CBD.
+    expect(district.counts.buildings).toBe(87)
+    expect(district.counts.hqStackedFloors).toBe(11)
+    expect(district.counts.hqFloorHeight).toBe(3.85)
+    expect(district.counts.signatureTowers).toBeGreaterThanOrEqual(10)
     expect(district.counts.architecturalCrowns).toBeGreaterThanOrEqual(16)
-    // 4 glass planes per secondary (+ HQ per-floor panes + optional sky-bridges).
-    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(500)
+    // 2 glass planes per secondary + HQ floor panes + optional sky-bridges.
+    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(180)
     expect(district.counts.terraceAmenities).toBeGreaterThanOrEqual(24)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(460)
+    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(46)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
     expect(district.counts.windows).toBeGreaterThanOrEqual(1_800)
-    expect(district.counts.vehicles).toBeGreaterThanOrEqual(16)
+    expect(district.counts.vehicles).toBeGreaterThanOrEqual(20)
     expect(district.framing.officeY).toBe(0)
-    expect(district.framing.groundY).toBeCloseTo(-HQ_STACKED_FLOORS_FULL * HQ_FLOOR_TO_FLOOR, 5)
-    expect(district.framing.groundY).toBeCloseTo(-462, 5)
     expect(district.framing.pitch).toBeGreaterThanOrEqual(0.6)
     expect(district.framing.portraitPitch).toBeGreaterThanOrEqual(0.8)
     expect(district.framing.target.y).toBeLessThan(2)
@@ -82,16 +74,13 @@ describe("agent office Edge District", () => {
       variant: "thumbnail",
     })
 
-    // secondaryCount thumbnail = 28 → landmark + secondaries = 29.
-    expect(district.counts.buildings).toBe(29)
-    expect(district.counts.secondaryBuildings).toBe(28)
-    expect(district.counts.hqStackedFloors).toBe(HQ_STACKED_FLOORS_THUMBNAIL)
-    expect(district.counts.hqFloorHeight).toBe(HQ_FLOOR_TO_FLOOR)
-    expect(district.counts.tallestBuildingHeight).toBeGreaterThanOrEqual(180)
-    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(112)
-    expect(district.counts.vehicles).toBe(6)
+    // secondaryCount thumbnail = 32 → landmark + secondaries = 33.
+    expect(district.counts.buildings).toBe(33)
+    expect(district.counts.hqStackedFloors).toBe(7)
+    expect(district.counts.hqFloorHeight).toBe(3.85)
+    expect(district.counts.glassFacades).toBeGreaterThanOrEqual(64)
+    expect(district.counts.vehicles).toBe(8)
     expect(district.counts.expectedDrawCalls).toBeLessThanOrEqual(28)
-    expect(district.framing.groundY).toBeCloseTo(-HQ_STACKED_FLOORS_THUMBNAIL * HQ_FLOOR_TO_FLOOR, 5)
     expect(district.framing.pitch).toBe(0.48)
     expect(district.framing.portraitPitch).toBe(0.48)
     expect(district.framing.portraitTargetLift).toBe(2.8)

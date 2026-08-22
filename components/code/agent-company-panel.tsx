@@ -167,6 +167,7 @@ import {
   CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
+  notifyCompanyAssociationChanged,
   setActiveCodexProject,
   setActiveDepartmentComputer,
   setActiveDepartmentSelection,
@@ -1033,6 +1034,7 @@ export function AgentCompanyPanel() {
         "manual",
       )
       await refreshCompanyAssociation()
+      notifyCompanyAssociationChanged()
       setAssociationWizardOpen(false)
       toast.success("Entorno y conectores asociados de forma persistente.")
     } catch (error) {
@@ -1351,6 +1353,7 @@ export function AgentCompanyPanel() {
           "created_for_company",
         )
         if (workspaceId === activeFolder?.id) await refreshCompanyAssociation()
+        notifyCompanyAssociationChanged()
         persistWorkspaceCodexProject(workspaceId, project.id)
         setActiveCodexProject(project.id)
         return project.id

@@ -11,12 +11,12 @@ export interface ModelLike {
 
 const SLOW_PATTERNS: RegExp[] = [
   /gpt-5/i,
-  /\\bo1\\b/i,
-  /\\bo3\\b/i,
-  /\\bo4\\b/i,
+  /\bo1\b/i,
+  /\bo3\b/i,
+  /\bo4\b/i,
   /reason/i,
   /thinking/i,
-  /\\br1\\b/i,
+  /\br1\b/i,
   /deepseek-r/i,
   /opus/i,
 ]

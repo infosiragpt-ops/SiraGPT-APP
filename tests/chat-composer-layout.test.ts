@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 import {
   COMPOSER_TEXTAREA_MIN_PX,
   measureComposerTextarea,
+  shouldShowComposerExpandControl,
   shouldStackComposer,
 } from "../lib/composer-layout"
 
@@ -65,6 +66,52 @@ describe("composer stacked footer layout", () => {
         maxHeight: 200,
       }),
       { height: 200, overflowY: "auto", stacked: true },
+    )
+  })
+})
+
+describe("composer expand control visibility", () => {
+  it("hides Ampliar for a short greeting and empty drafts", () => {
+    assert.equal(
+      shouldShowComposerExpandControl({
+        scrollHeight: COMPOSER_TEXTAREA_MIN_PX,
+        clientHeight: COMPOSER_TEXTAREA_MIN_PX,
+        value: "Hola cómo estas",
+      }),
+      false,
+    )
+    assert.equal(
+      shouldShowComposerExpandControl({
+        scrollHeight: COMPOSER_TEXTAREA_MIN_PX,
+        value: "",
+      }),
+      false,
+    )
+  })
+
+  it("shows Ampliar once the draft wraps or overflows, and Contraer while expanded", () => {
+    assert.equal(
+      shouldShowComposerExpandControl({
+        scrollHeight: 48,
+        clientHeight: 48,
+        value: "una linea que ya se partio en el telefono",
+      }),
+      true,
+    )
+    assert.equal(
+      shouldShowComposerExpandControl({
+        scrollHeight: 26,
+        value: "uno\ndos\ntres",
+      }),
+      true,
+    )
+    assert.equal(
+      shouldShowComposerExpandControl({
+        scrollHeight: 26,
+        value: "hola",
+        expanded: true,
+      }),
+      true,
     )
   })
 })

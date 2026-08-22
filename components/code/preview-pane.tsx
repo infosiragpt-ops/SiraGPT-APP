@@ -33,7 +33,6 @@ import {
   Square,
   Tablet,
   TerminalSquare,
-  X,
   Zap,
   ZapOff,
 } from "lucide-react"
@@ -43,11 +42,9 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
-  CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT,
   CODE_OPEN_TOOL_EVENT,
   CODE_PREVIEW_STATE_EVENT,
   getActiveCodexProject,
-  getActiveDepartmentComputer,
   setActiveCodexProject,
   setActiveHostRunId,
   type CodePreviewState,
@@ -68,6 +65,8 @@ import {
 import {
   shouldCleanupStalePreviewStart,
   startPreviewWithCleanupFence,
+  trackPreviewStartFlight,
+  waitForPreviousPreviewStart,
   type PreviewResourceLease,
 } from "@/lib/code-preview-start-fence"
 import {
@@ -119,6 +118,11 @@ function humanizePreviewError(raw?: string | null): string {
   }
   return value
 }
+
+// Layout remounts (phone first paint, sidebar dock) must not stop a preview
+// that a successor instance is about to claim.
+let previewOwnerGeneration = 0
+
 // A dead remote project/run: the codex mapping is stale (project wiped, or
 // created in another session). Self-heal by dropping the mapping and re-running
 // locally instead of showing a scary error.
@@ -203,14 +207,6 @@ export function PreviewPane() {
   const { files, activePath, activeFolder } = useCodeWorkspace()
 
   const [auto, setAuto] = React.useState(true)
-  React.useEffect(() => {
-    const onSettings = (event: Event) => {
-      const refresh = (event as CustomEvent<{ previewAutoRefresh?: boolean }>).detail?.previewAutoRefresh
-      if (typeof refresh === "boolean") setAuto(refresh)
-    }
-    window.addEventListener("siragpt:code-settings-changed", onSettings)
-    return () => window.removeEventListener("siragpt:code-settings-changed", onSettings)
-  }, [])
   // v2 key: the Replit-style layout defaults everyone back to the full-width
   // responsive viewport; the old key could pin stale phone/tablet choices.
   const [device, setDevice] = React.useState<Device>(() => {
@@ -279,6 +275,7 @@ export function PreviewPane() {
   // Codex response can never resurrect a preview the user already stopped.
   const previewRunGenerationRef = React.useRef(0)
   const previewStartAbortRef = React.useRef<AbortController | null>(null)
+  const previewStartInFlightRef = React.useRef<Promise<void> | null>(null)
   const previewResourceLeaseRef = React.useRef<PreviewResourceLease | null>(null)
   const pendingAutoRunRef = React.useRef(false)
   const forceAutoRunRef = React.useRef(false)
@@ -291,10 +288,6 @@ export function PreviewPane() {
   const [activeCodexProjectId, setActiveCodexProjectIdState] = React.useState<string | null>(() =>
     typeof window === "undefined" ? null : getActiveCodexProject(),
   )
-  const [departmentComputerRunId, setDepartmentComputerRunId] = React.useState<string | null>(() =>
-    typeof window === "undefined" ? null : getActiveDepartmentComputer(),
-  )
-  const departmentComputerRunIdRef = React.useRef<string | null>(departmentComputerRunId)
   const registerCompanySurface = React.useCallback((element: HTMLDivElement | null) => {
     registerAgentCompanyPreviewSlot(element)
   }, [])
@@ -318,8 +311,8 @@ export function PreviewPane() {
     // Hash file contents as well as paths: equal-length edits must invalidate
     // the auto-run dedupe just like insertions and deletions do.
     const revision = workspacePreviewRevision(files || {})
-    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${departmentComputerRunId || "company"}:${revision}`
-  }, [activeCodexProjectId, activeFolder?.id, canRunProject, departmentComputerRunId, files, gitBinding])
+    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${revision}`
+  }, [activeCodexProjectId, activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -346,18 +339,6 @@ export function PreviewPane() {
     refreshCodexProject()
     window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refreshCodexProject)
     return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, refreshCodexProject)
-  }, [])
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return
-    const refreshComputer = () => {
-      const runId = getActiveDepartmentComputer()
-      departmentComputerRunIdRef.current = runId
-      setDepartmentComputerRunId(runId)
-    }
-    refreshComputer()
-    window.addEventListener(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, refreshComputer)
-    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, refreshComputer)
   }, [])
 
   const clearPoll = React.useCallback(() => {
@@ -387,7 +368,7 @@ export function PreviewPane() {
     if (modeRef.current === "codex") {
       const codexProjectId = codexPreviewProjectIdRef.current || activeCodexProjectId || getActiveCodexProject()
       codexPreviewProjectIdRef.current = null
-      if (codexProjectId) void codexApi.stopPreview(codexProjectId, departmentComputerRunIdRef.current).catch(() => {})
+      if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
     } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     // The Shell tool loses its exec target when the run stops.
@@ -483,6 +464,9 @@ export function PreviewPane() {
 
   const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
     const auto = opts?.auto ?? false
+    const previousStart = previewStartInFlightRef.current
+    const startFlight = trackPreviewStartFlight()
+    previewStartInFlightRef.current = startFlight.flight
     previewStartAbortRef.current?.abort()
     const startController = new AbortController()
     previewStartAbortRef.current = startController
@@ -490,8 +474,14 @@ export function PreviewPane() {
     previewRunGenerationRef.current = generation
     const isCurrentRun = () =>
       previewRunGenerationRef.current === generation && !startController.signal.aborted
+    // Listeners read phaseRef before the next paint. Mark starting now so a
+    // second ▶ / event queues instead of overlapping /start on the same runId.
+    phaseRef.current = "starting"
     clearPoll()
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    try {
+    await waitForPreviousPreviewStart(previousStart)
+    if (!isCurrentRun()) return
     if (!runIdRef.current) {
       try {
         runIdRef.current = crypto.randomUUID()
@@ -508,7 +498,7 @@ export function PreviewPane() {
       const resourceKey = `github:${boundRepo}`
       previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
       const fencedStart = await startPreviewWithCleanupFence({
-        start: () => githubService.run(boundRepo, runtimeEnv).catch((err) => ({
+        start: () => githubService.run(boundRepo, runtimeEnv, startController.signal).catch((err) => ({
           error: err instanceof Error ? err.message : "runner unreachable",
         })),
         isCurrent: isCurrentRun,
@@ -557,7 +547,7 @@ export function PreviewPane() {
       if (!isCurrentRun()) return
       const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
       const codexStatus = async (signal?: AbortSignal): Promise<RunnerStatus> => {
-        const st: any = await codexApi.previewStatus(codexProjectId, signal, departmentComputerRunIdRef.current).catch(() => null)
+        const st: any = await codexApi.previewStatus(codexProjectId, signal).catch(() => null)
         const p = st?.previewStatus || st || {}
         return {
           ready: Boolean(p.ready),
@@ -570,13 +560,13 @@ export function PreviewPane() {
       const resourceKey = `codex:${codexProjectId}`
       previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
       const fencedStart = await startPreviewWithCleanupFence({
-        start: () => codexApi.startPreview(codexProjectId, startController.signal, departmentComputerRunIdRef.current).catch((err) => ({
+        start: () => codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
           error: err instanceof Error ? err.message : "runner unreachable",
         })),
         isCurrent: isCurrentRun,
         // stopApp/unmount may have sent an early stop before /preview/start
         // finished. Repeat it after settlement to clean up that late server.
-        cleanup: () => codexApi.stopPreview(codexProjectId, departmentComputerRunIdRef.current),
+        cleanup: () => codexApi.stopPreview(codexProjectId),
         shouldCleanup: () => shouldCleanupStalePreviewStart(
           previewResourceLeaseRef.current,
           resourceKey,
@@ -603,6 +593,7 @@ export function PreviewPane() {
           modeRef.current = "host"
           codexPreviewProjectIdRef.current = null
           setLiveRun({ phase: "starting", devUrl: "", note: "Recuperando el proyecto…" })
+          startFlight.settle()
           await runAppRef.current({ auto })
           return
         }
@@ -632,7 +623,7 @@ export function PreviewPane() {
     const resourceKey = `host:${hostRunId}`
     previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
     const fencedStart = await startPreviewWithCleanupFence({
-      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv),
+      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv, startController.signal),
       isCurrent: isCurrentRun,
       cleanup: () => hostRunnerService.stop(hostRunId),
       shouldCleanup: () => shouldCleanupStalePreviewStart(
@@ -678,6 +669,9 @@ export function PreviewPane() {
       started.devUrl || "",
       generation,
     )
+    } finally {
+      startFlight.settle()
+    }
   }, [activeCodexProjectId, activeFolder?.id, clearPoll, deactivatePreviewResourceLease, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered
@@ -687,8 +681,6 @@ export function PreviewPane() {
   filesRef.current = files
   const runAppRef = React.useRef(runApp)
   runAppRef.current = runApp
-  const stopAppRef = React.useRef(stopApp)
-  stopAppRef.current = stopApp
   const phaseRef = React.useRef(liveRun.phase)
   phaseRef.current = liveRun.phase
   const activeFolderIdRef = React.useRef<string | null>(activeFolder?.id ?? null)
@@ -735,19 +727,26 @@ export function PreviewPane() {
       }
       const hasRunnableProject =
         Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p)) ||
-        Boolean(getGitBinding(activeFolderIdRef.current))
+        Boolean(getGitBinding(activeFolderIdRef.current)) ||
+        Boolean(getActiveCodexProject())
       if (hasRunnableProject) {
+        if (phaseRef.current === "starting") {
+          pendingAutoRunRef.current = true
+          return
+        }
         void runAppRef.current()
       }
     }
     window.addEventListener("siragpt:code-run-app", onRun)
-    window.addEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
-    const onStop = () => stopAppRef.current()
-    window.addEventListener("siragpt:code-stop-app", onStop)
+    const onQueuedPreviewRun = (event: Event) => {
+      const detail = (event as CustomEvent<{ force?: boolean }>).detail
+      if (detail?.force) forceAutoRunRef.current = true
+      queueAutoRun()
+    }
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     return () => {
       window.removeEventListener("siragpt:code-run-app", onRun)
-      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
-      window.removeEventListener("siragpt:code-stop-app", onStop)
+      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     }
   }, [])
 
@@ -941,6 +940,7 @@ export function PreviewPane() {
         /* best-effort — the idle reaper is the safety net */
       }
     }
+    previewOwnerGeneration += 1
     window.addEventListener("pagehide", beaconStop)
     return () => {
       window.removeEventListener("pagehide", beaconStop)
@@ -949,14 +949,19 @@ export function PreviewPane() {
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
       clearPoll()
-      // Component teardown (e.g. switching away from the preview): actively stop
-      // the dev server instead of leaking it to the reaper.
-      if (modeRef.current === "codex") {
-        const codexProjectId = codexPreviewProjectIdRef.current || getActiveCodexProject()
-        codexPreviewProjectIdRef.current = null
-        if (codexProjectId) void codexApi.stopPreview(codexProjectId, departmentComputerRunIdRef.current).catch(() => {})
-      } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
-      else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+      const generation = previewOwnerGeneration
+      const mode = modeRef.current
+      const codexProjectId = mode === "codex"
+        ? (codexPreviewProjectIdRef.current || getActiveCodexProject())
+        : null
+      const runId = runIdRef.current
+      codexPreviewProjectIdRef.current = null
+      window.setTimeout(() => {
+        if (previewOwnerGeneration !== generation) return
+        if (mode === "codex" && codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
+        else if (mode === "github" && runId) void githubService.stop(runId)
+        else if (runId) void hostRunnerService.stop(runId)
+      }, 400)
     }
   }, [clearPoll, deactivatePreviewResourceLease])
 
@@ -1053,17 +1058,12 @@ export function PreviewPane() {
   }, [files, activePath])
 
   const openInNewTab = React.useCallback(() => {
+    // El HTML estático del preview también es salida NO confiable del agente.
+    // Abrirlo como documento top-level hereda el origen de SiraGPT (acceso a
+    // localStorage/cookies/APIs) — mismo vector que el runner en vivo, que ya
+    // está bloqueado. Mantenemos la preview aislada dentro del iframe sandboxed.
     if (typeof window === "undefined") return
-    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
-    // y el código generado NO confiable correría con el origen real de SiraGPT
-    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
-    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
-    if (liveRun.phase === "ready") return
-    const blob = new Blob([result.html], { type: "text/html" })
-    const url = URL.createObjectURL(blob)
-    window.open(url, "_blank", "noopener,noreferrer")
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.phase, result.html])
+  }, [])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -1304,15 +1304,7 @@ export function PreviewPane() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
-      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-2" data-preview-chrome="1">
-        <span
-          className="mr-0.5 flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[12px] font-semibold text-foreground"
-          data-testid="preview-pane-vista-previa"
-        >
-          <Monitor className="h-3.5 w-3.5 text-muted-foreground" />
-          Vista previa
-        </span>
-        <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 bg-background px-2 py-1.5">
         {/* Canvas — opens the agent-driven mockup canvas tool. The device
             switcher lives beside the address bar, not here. */}
         <button
@@ -1326,7 +1318,7 @@ export function PreviewPane() {
           className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60"
         >
           <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>Canvas</span>
+          <span className="hidden md:inline">Canvas</span>
         </button>
 
         <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
@@ -1490,17 +1482,6 @@ export function PreviewPane() {
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </button>
-          <button
-            type="button"
-            data-canvas-toggle="close"
-            data-testid="code-canvas-close"
-            onClick={() => window.dispatchEvent(new CustomEvent("siragpt:code-close-preview"))}
-            className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-            aria-label="Cerrar preview"
-            title="Cerrar preview"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
         </div>
       </div>
 
@@ -1562,8 +1543,6 @@ export function PreviewPane() {
           <DeviceFrame device={device} width={frameW} height={frameH}>
             <iframe
               ref={previewFrameRef}
-              data-workspace-preview="1"
-              aria-label="Vista previa de la app"
               src={liveSrc}
               title="App en vivo (dev server)"
               onLoad={handlePreviewFrameLoad}
@@ -1608,10 +1587,7 @@ export function PreviewPane() {
           </div>
         ) : liveRun.phase === "error" ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-            <p className="text-sm font-medium text-rose-500">No pude arrancar la vista previa</p>
-            <p className="mx-auto max-w-md text-[12px] leading-relaxed text-muted-foreground">
-              El sandbox o el motor de ejecución falló. No hay una preview en vivo.
-            </p>
+            <p className="text-sm font-medium text-rose-500">Detecté un error — el asistente lo está revisando</p>
             <p className="mx-auto max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
             <button
               type="button"

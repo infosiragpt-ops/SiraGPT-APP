@@ -5872,6 +5872,50 @@ footer {
   color: hsl(220 10% 38%);
 }
 
+/* Solid black send disc + white stroke arrow. The shared toolbar color
+   above would otherwise paint the glyph gray on top of the black fill. */
+.composer-input-row .composer-toolbar-actions > button.composer-send-button {
+  background-color: #0a0a0a !important;
+  color: #ffffff !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.14),
+    0 6px 14px -6px rgba(0, 0, 0, 0.32);
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button svg {
+  color: #ffffff;
+  stroke: #ffffff;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
+  background-color: #171717 !important;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
+  background-color: hsl(220 10% 90%) !important;
+  color: hsl(220 8% 62%) !important;
+  box-shadow: none !important;
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled svg {
+  color: hsl(220 8% 62%);
+  stroke: hsl(220 8% 62%);
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button {
+  background-color: #0a0a0a !important;
+  color: #ffffff !important;
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
+  background-color: #1a1a1a !important;
+}
+
+.dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
+  background-color: hsl(220 8% 22%) !important;
+  color: hsl(220 8% 55%) !important;
+}
+
 .composer-input-row .composer-model-inline .chat-model-trigger {
   min-height: 2.75rem;
   border-color: transparent;
@@ -5996,12 +6040,10 @@ footer {
   /* Kill base Textarea `flex` so the first line sits on the top of the shell
      instead of optically floating mid-band with a white gap above. */
   display: block !important;
-  /* Do not lock height: JS grows from scrollHeight. A height:!important
-     here clipped multi-line prompts behind the Video/Seedance toolbar. */
+  height: auto;
   min-height: 1.65rem !important;
   max-height: min(12.5rem, 42vh) !important;
   overflow-y: hidden;
-  /* Comfortable single-line rhythm; stays optically centered with 44px actions. */
   padding: 0.2rem 0.35rem 0.2rem 0.2rem !important;
   font-size: 0.9375rem;
   line-height: 1.5;
@@ -8077,17 +8119,16 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 }
 
 .code-composer__surface {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+  box-sizing: border-box;
   width: 100%;
-  padding: 10px 12px 8px;
+  min-width: 0;
+  padding: 0.7rem 0.75rem 0.5rem;
   border: 1px solid hsl(220 10% 86% / 0.96);
-  border-radius: 18px;
+  border-radius: 1.35rem;
   background-color: hsl(0 0% 100%);
   box-shadow:
-    0 1px 2px hsl(220 20% 12% / 0.04),
-    0 10px 28px -18px hsl(220 24% 14% / 0.22);
+    0 1px 2px hsl(220 20% 12% / 0.035),
+    0 8px 24px -20px hsl(220 24% 14% / 0.24);
   transition:
     border-color 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -8129,13 +8170,11 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 
 .code-composer__footer {
   display: flex;
-  flex-direction: row;
   align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  flex-wrap: nowrap !important;
-  min-height: 36px;
-  padding-top: 2px;
+  gap: 0.3rem;
+  min-width: 0;
+  margin-top: 0.45rem;
+  flex-wrap: nowrap;
 }
 
 .code-composer__leading,
@@ -8231,17 +8270,17 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
 }
 
 .code-composer__send {
-  height: 32px !important;
-  width: 32px !important;
-  min-width: 32px !important;
+  width: 2rem !important;
+  min-width: 2rem;
+  height: 2rem !important;
+  min-height: 2rem;
+  padding: 0 !important;
   border-radius: 999px !important;
-  background-color: #16a34a !important;
+  background-color: #0a0a0a !important;
   color: #fff !important;
-  box-shadow: 0 6px 16px -8px rgba(22, 163, 74, 0.7) !important;
-}
-
-.code-composer__send:hover:not(:disabled) {
-  background-color: #15803d !important;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.14),
+    0 6px 14px -6px rgba(0, 0, 0, 0.32);
 }
 
 .code-composer__send:disabled {
