@@ -36,6 +36,8 @@
  */
 
 const { startSSEHeartbeat } = require('./sse-heartbeat');
+let _ad = null;
+try { _ad = require('../services/agent-runner/engine-adapter'); } catch (_) { _ad = null; }
 
 const SSE_HEADERS = Object.freeze({
   'Content-Type': 'text/event-stream; charset=utf-8',
@@ -131,7 +133,21 @@ function createSSEWriter(res, options = {}) {
 
   return {
     get closed() { return closed || !!res.writableEnded || !!res.destroyed; },
-    event(payload) { return writeWithBackpressure(formatEvent(payload)); },
+    event(payload) {
+      let body = payload;
+      try {
+        if (_ad && typeof _ad.capSseDataBytes32KiB === 'function') {
+          const capd = _ad.capSseDataBytes32KiB(payload);
+          if (capd && capd.truncated && capd.data != null) {
+            try { body = JSON.parse(capd.data); } catch { body = capd.data; }
+          }
+        }
+        if (_ad && typeof _ad.dropSseRetryFramesFromReplay === 'function' && options && options.replayFrames) {
+          _ad.dropSseRetryFramesFromReplay(options.replayFrames);
+        }
+      } catch (_) {}
+      return writeWithBackpressure(formatEvent(body));
+    },
     raw(frame) { return writeWithBackpressure(String(frame)); },
     comment(text) {
       const safe = String(text == null ? '' : text).replace(/\r?\n/g, ' ');
@@ -139,6 +155,14 @@ function createSSEWriter(res, options = {}) {
     },
     done() {
       cancelHeartbeat();
+      try {
+        if (_ad && typeof _ad.endSseWithCommentOnIdle === 'function') {
+          const idle = _ad.endSseWithCommentOnIdle({ idleMs: options && options.idleMs, closed: closed });
+          if (idle && idle.write && idle.frame) {
+            try { if (!res.writableEnded && !res.destroyed) res.write(idle.frame); } catch (_) {}
+          }
+        }
+      } catch (_) {}
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
         try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }

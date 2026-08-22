@@ -46,6 +46,11 @@ const RULES = [
     matches: (error) => /validation/i.test(String(error?.code || '')),
     message: 'La solicitud o el resultado no superó la validación.',
   },
+  { code: 'path_var_log', message: 'No escribo en /var/log, /var/run ni /run.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_var_log' },
+  { code: 'request_timeout', message: 'La peticion expiro (408). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'request_timeout' || Number(error && error.status) === 408 },
+  { code: 'tool_name_dot', message: 'El nombre de la herramienta no puede terminar con un punto.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_dot' },
+  { code: 'sandbox_cwd_root', message: 'El sandbox no puede usar / o /root como directorio de trabajo.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_cwd_root' },
+  { code: 'credits_exhausted', retryable: false, matches: (error, text) => Number(error && error.status) === 402 || /llm_402|credits?_exhausted|insufficient (credits|balance)|quota_exhausted|credit_no_usage|credit_ceiling/i.test(String(text || '')) || ['llm_402', 'credit_no_usage', 'credit_ceiling', 'credits_exhausted'].includes(String(error && error.code || '').toLowerCase()), message: 'No quedan creditos suficientes para esta operacion. No cobre el fallo.' },
 ];
 
 function classifyPublicStreamError(error) {

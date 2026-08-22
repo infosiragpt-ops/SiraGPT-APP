@@ -21,6 +21,8 @@
  */
 
 const { spawn } = require('child_process');
+let _ad = null;
+try { _ad = require('../agent-runner/engine-adapter'); } catch (_) { _ad = null; }
 const { performance } = require('perf_hooks');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -169,6 +171,23 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   if (!code.trim()) {
     return { ok: false, code: 'sandbox_empty_code', message: 'code is required' };
   }
+  try {
+    if (_ad && typeof _ad.capSandboxCode256KiB === 'function') {
+      const ccap = _ad.capSandboxCode256KiB(code);
+      if (ccap && ccap.ok === false) {
+        return { ok: false, code: 'sandbox_code_cap', message: 'sandbox code exceeds 256KiB' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfCwdIsRoot === 'function') {
+      const cwdCheck = _ad.refuseSandboxIfCwdIsRoot(args.cwd || args.workdir);
+      if (cwdCheck && cwdCheck.ok === false) {
+        return { ok: false, code: 'sandbox_cwd_root', message: 'sandbox cwd cannot be / or /root' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfTimeoutMissing === 'function') {
+      _ad.refuseSandboxIfTimeoutMissing({ timeoutMs: args.timeoutMs != null ? args.timeoutMs : DEFAULT_TIMEOUT_MS });
+    }
+  } catch (_) {}
 
   const timeoutMs = clampInt(args.timeoutMs, cfg.defaultTimeoutMs, MIN_TIMEOUT_MS, HARD_MAX_TIMEOUT_MS);
   const maxOutputBytes = clampInt(args.maxOutputBytes, cfg.maxOutputBytes, 1024, HARD_MAX_OUTPUT_BYTES);
@@ -177,7 +196,13 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   const finalCode = language === 'python' ? PYTHON_RESOURCE_PREAMBLE + code : code;
 
   const [bin, baseArgs] = INTERPRETERS[language]();
-  const argv = [...baseArgs, finalCode];
+  let argv = [...baseArgs, finalCode];
+  try {
+    if (_ad && typeof _ad.capSandboxArgv24 === 'function') {
+      const acap = _ad.capSandboxArgv24(argv);
+      if (acap && Array.isArray(acap.argv)) argv = acap.argv;
+    }
+  } catch (_) {}
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;
 
   // Acquire a concurrency slot before spawning.  The deadline is half the

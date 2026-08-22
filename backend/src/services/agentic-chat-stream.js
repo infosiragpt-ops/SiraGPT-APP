@@ -35,6 +35,16 @@
    */
 
   const reactAgent = require('./react-agent');
+  const catalogRouter = require('./catalog-agent-router');
+  const engineAdvance = require('./agent-runner/engine-advance');
+  const engineControl = require('./agent-runner/engine-control');
+let engineCorrectness = null;
+try { engineCorrectness = require('./agent-runner/engine-correctness'); } catch (_) { engineCorrectness = null; }
+let engineLifecycle = null;
+try { engineLifecycle = require('./agent-runner/engine-lifecycle'); } catch (_) { engineLifecycle = null; }
+  let engineAdapter = null;
+  try { engineAdapter = require('./agent-runner/engine-adapter'); } catch (_) { engineAdapter = null; }
+
   const agentTools = require('./agents/agent-tools');
   const conversationUnderstanding = require('./conversation-understanding');
   const { cloneProjectTool } = require('./agents/clone-project-tool');
@@ -634,7 +644,24 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   async function writeSse(res, payload) {
     if (res.writableEnded) return;
     try {
+      if (engineLifecycle && engineLifecycle.assertMonotonicSeq && typeof res._siragptSseSeq === 'number') {
+        const mono = engineLifecycle.assertMonotonicSeq(res._siragptSseSeq, res._siragptSseSeq + 1);
+        if (!mono.ok) return;
+      }
+      if (typeof res._siragptSseSeq !== 'number') res._siragptSseSeq = 0;
+      res._siragptSseSeq += 1;
+      const eventId = String(res._siragptSseStreamId ? `${res._siragptSseStreamId}:${res._siragptSseSeq}` : res._siragptSseSeq);
+      res.write(`id: ${eventId}\n`);
       res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      try { if (payload && payload.type && payload.type !== 'heartbeat') { if (typeof opts !== 'undefined' && opts) opts.__streamOpened = true; } } catch (_) {}
+      if (payload && (payload.type === 'stage' || payload.type === 'activity') && (payload.label || payload.text)) {
+        if (payload.type === 'stage') {
+          res._siragptSseSeq += 1;
+          const activityId = String(res._siragptSseStreamId ? `${res._siragptSseStreamId}:${res._siragptSseSeq}` : res._siragptSseSeq);
+          res.write(`id: ${activityId}\n`);
+          res.write(`data: ${JSON.stringify({ type: 'activity', text: payload.label || payload.text, tool: payload.tool })}\n\n`);
+        }
+      }
     } catch {
       /* socket gone */
     }
@@ -659,6 +686,99 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    * @returns {Promise<{finalAnswer:string, stoppedReason:string, steps:Array}>}
    */
   async function runAgenticChat(opts) {
+    try {
+      if (engineCorrectness && opts && opts.sessionKey) {
+        const gate = engineCorrectness.getSharedCancelGate();
+        if (opts.supersedePrevious !== false && gate && typeof gate.cancel === 'function') {
+          gate.cancel(String(opts.sessionKey));
+        }
+      }
+    } catch (_) { /* optional */ }
+    const terminalSseState = {};
+    const tokenWd = engineLifecycle && engineLifecycle.startFirstTokenWatchdog
+      ? engineLifecycle.startFirstTokenWatchdog({
+        timeoutMs: (function () {
+          try {
+            if (engineAdapter && engineAdapter.splitModelVsToolTimeout) {
+              try {
+                if (engineAdapter.holdThenSettleCredits && opts && opts.requestId) {
+                  engineAdapter.holdThenSettleCredits(String(opts.sessionKey || opts.threadId || 'anon'), { amount: 1, requestId: String(opts.requestId) });
+                }
+                opts.__streamOpened = false;
+              } catch (_) {}
+              return engineAdapter.splitModelVsToolTimeout('model').ttfbMs || 2500;
+            }
+          } catch (_) {}
+          return 2500;
+        }()),
+        onHeartbeat: (frame) => {
+          try { if (opts && opts.res) writeSse(opts.res, frame); } catch (_) {}
+        },
+      })
+      : { mark() {}, stop() {} };
+    const commentHb = engineAdapter && engineAdapter.startCommentHeartbeat
+      ? engineAdapter.startCommentHeartbeat({
+        write: (frame) => { try { if (opts && opts.res && typeof opts.res.write === 'function') opts.res.write(frame); } catch (_) {} },
+        intervalMs: 15000,
+        signal: opts && opts.signal,
+      })
+      : { mark() {}, stop() {} };
+    const turnToolState = { toolCount: 0 };
+    try {
+      if (engineAdapter && engineAdapter.sessionGenerateRateLimit) {
+        const rate = engineAdapter.sessionGenerateRateLimit(String(opts.sessionKey || opts.chatId || 'anon'));
+        if (rate && rate.ok === false) {
+          const err = new Error('rate_limited');
+          err.code = 'rate_limited';
+          throw err;
+        }
+      }
+    } catch (rateErr) {
+      if (rateErr && rateErr.code === 'rate_limited') throw rateErr;
+    }
+    if (opts && opts.res) opts.res._siragptTerminalSse = terminalSseState;
+    try {
+      if (engineAdapter && opts && opts.signal) {
+        engineAdapter.abortCascade({
+          userSignal: opts.signal,
+          modelAbort: () => { try { commentHb.stop(); tokenWd.stop(); } catch (_) {} },
+          backgroundReap: () => { try { engineAdapter.reapBackgroundBashOnAbort(); } catch (_) {} },
+        });
+        try { engineAdapter.snapshotPartialOnAbort({ text: '', toolCount: turnToolState.toolCount || 0 }); } catch (_) {}
+        try {
+          if (engineAdapter.mapDeepSeekHttpError && opts && opts.lastError) {
+            const ds = engineAdapter.mapDeepSeekHttpError(opts.lastError);
+            if (ds && ds.code) opts.lastErrorCode = ds.code;
+          }
+          if (engineAdapter.refundZeroTokenError) {
+            engineAdapter.refundZeroTokenError({ usage: { total_tokens: 0 }, error: true, hold: opts && opts.hold });
+          }
+          if (engineAdapter.refundPartialTokensOnCancel) {
+            engineAdapter.refundPartialTokensOnCancel({
+              requestId: opts && opts.requestId,
+              cancelled: true,
+              promptTokens: (opts && opts.promptTokens) || 0,
+              completionTokens: (opts && opts.completionTokens) || 0,
+            });
+          }
+          if (engineAdapter.classifyNetErrors && opts && opts.lastError) {
+            const net = engineAdapter.classifyNetErrors(opts.lastError);
+            if (net && net.code) opts.lastErrorCode = net.code;
+          }
+          if (engineAdapter.abortSiblingsOnParentCancel) {
+            engineAdapter.abortSiblingsOnParentCancel({
+              parentCancelled: true,
+              siblingIds: (opts && opts.siblingIds) || [],
+            });
+          }
+          if (engineAdapter.settleCreditHoldIfStreamOpened && opts && (opts.sessionKey || opts.threadId) && opts.requestId) {
+            engineAdapter.settleCreditHoldIfStreamOpened(String(opts.sessionKey || opts.threadId), String(opts.requestId), { streamOpened: Boolean(opts.__streamOpened) });
+          } else if (engineAdapter.releaseCreditHold && opts && (opts.sessionKey || opts.threadId) && opts.requestId) {
+            engineAdapter.releaseCreditHold(String(opts.sessionKey || opts.threadId), String(opts.requestId));
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
     const {
       openai,
       model,
@@ -695,12 +815,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // U3: optional turn-policy snapshot (observe/enforce). Observe mode only
       // attaches telemetry + shadow diffs; never changes tool/routing behaviour.
       turnPolicy = null,
+      surface = 'chat',
+      tokenBudget = null,
+      computerOnly = false,
     } = opts || {};
 
     if (!openai) throw new Error('runAgenticChat: openai client is required');
     if (!model)  throw new Error('runAgenticChat: model is required');
     if (!userQuery) throw new Error('runAgenticChat: userQuery is required');
     if (!res) throw new Error('runAgenticChat: res is required');
+    let catalogHit = { matched: false, agent: null };
+    try {
+      catalogHit = catalogRouter.resolveCatalogAgent({ query: userQuery, surface });
+    } catch (_) { catalogHit = { matched: false, agent: null }; }
 
     // DETERMINISTIC EDIT PRE-LOOP (mirrors agent-task-runner): when the user
     // attached a document and asked to edit it, run the surgical
@@ -1018,6 +1145,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       recommendedSkillIds: runtimeRecommendedSkillIds,
     };
     const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
+    if (computerOnly) artifactDeliveryContract.active = false;
 
     let tools = toolsOverride || buildDefaultTools({
       userQuery,
@@ -1025,6 +1153,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       clearance: toolContext && toolContext.clearance,
       capabilities: customGptCapabilities,
       skillPolicy: runtimeSkillPolicy,
+      toolContext,
+      computerOnly,
+      model,
     });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
@@ -1231,6 +1362,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         console.warn('[agentic-chat] prompted tool cap failed (using full set):', capErr && capErr.message);
       }
     }
+    if (computerOnly && !toolsOverride) tools = applyComputerOnlyFilter(tools);
     const availableToolNames = new Set(tools.map((tool) => tool && tool.name).filter(Boolean));
     let initialToolChoice = mediaIntent?.tool && mediaIntent.confidence === 'high' && availableToolNames.has(mediaIntent.tool)
       ? mediaIntent.tool
@@ -1350,6 +1482,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     const state = freshState(tools.map((tool) => tool.name));
     state.meta.goal = truncate(userQuery, 160);
     state.meta.model = model;
+    if (catalogHit && catalogHit.matched && catalogHit.agent) state.meta.catalogAgent = catalogHit.agent.id;
+    state.meta.engineLive = true;
     state.meta.runtime = {
       name: 'openclaw-level',
       version: openclawProfile.version,
@@ -1384,6 +1518,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     }
     if (__coworkRun?.maxSteps) {
       maxStepsOverride = Math.min(maxStepsOverride, __coworkRun.maxSteps);
+    }
+    if (computerOnly) {
+      try {
+        const { capControlSteps, MAX_CONTROL_STEPS } = require('./computer/control-loop');
+        maxStepsOverride = capControlSteps(maxStepsOverride || MAX_CONTROL_STEPS);
+      } catch (_) { maxStepsOverride = Math.min(maxStepsOverride || 25, 25); }
     }
 
     // U3 observe/enforce: attach policy summary + non-fatal shadow diffs before
@@ -1454,6 +1594,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       // Custom-GPT persona FIRST (primacy) so a selected GPT actually follows
       // its configured instructions/format/tone, then the generic agent rules.
       customGptPersona || '',
+      (catalogHit && catalogHit.matched && catalogHit.agent) ? catalogRouter.catalogSystemBlock(catalogHit.agent) : '',
       pluginPromptBlock,
       buildSkillExecutionPrompt(customGptAgentPolicy),
       buildArtifactDeliveryPrompt(artifactDeliveryContract),
@@ -1497,6 +1638,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
       'No afirmes que modificaste repositorios, GitHub o el filesystem local si ninguna herramienta disponible lo hizo realmente.',
+      computerOnly
+        ? 'Este turno es computer-only sobre la computadora persistente Linux del miembro (Chrome en sira-ac-user-*; todos los departamentos comparten la misma VM). Solo puedes usar computer_navigate, computer_screenshot, computer_click, computer_type, web_search y read_url. No tienes shell, artefactos ni filesystem. Si una página pública necesita un navegador real, usa computer_navigate, luego computer_screenshot, y después computer_click/computer_type. No afirmes que abriste la página si no hay un resultado de herramienta que lo confirme. Máximo 25 pasos. Si la misma acción se repite 3 veces, detente. Si el modelo no tiene visión, computer_screenshot devuelve el árbol de accesibilidad CDP (texto), no píxeles.'
+        : 'Si una página pública necesita un navegador real, usa computer_navigate, luego computer_screenshot, y después computer_click/computer_type. No afirmes que abriste la página si no hay un resultado de herramienta que lo confirme.',
       attachedDocuments
         ? `\n=== DOCUMENTOS ADJUNTOS POR EL USUARIO (texto ya extraído) ===\nAnaliza este contenido DIRECTAMENTE para responder. NUNCA digas que no tienes acceso al documento ni que el usuario debe reenviarlo: el texto está aquí. Si necesitas más detalle del que aparece (el contenido puede venir recortado), usa \`rag_retrieve\` o \`docintel_*\` sobre estos mismos archivos.\n${attachedDocuments}\n=== FIN DOCUMENTOS ADJUNTOS ===`
         : '',
@@ -1586,6 +1730,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (pluginLifecycle) tools = pluginLifecycle.wrapTools(tools);
 
     let coreTools = tools;
+    if (catalogHit && catalogHit.matched && catalogHit.agent) {
+      try { coreTools = catalogRouter.filterToolsByCatalog(coreTools, catalogHit.agent); } catch (_) {}
+    }
     let deferredAgentTools = [];
     if (String(process.env.SIRAGPT_TOOL_DEFER || '') === '1') {
       const mustKeep = new Set([
@@ -1596,6 +1743,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       coreTools = tools.filter((t) => t && mustKeep.has(t.name));
       deferredAgentTools = tools.filter((t) => t && !mustKeep.has(t.name));
       try { console.log(`[agentic-chat] tool-defer ON: ${coreTools.length} core, ${deferredAgentTools.length} deferred`); } catch (_) { /* noop */ }
+    }
+    if (computerOnly) {
+      tools = applyComputerOnlyFilter(tools);
+      coreTools = applyComputerOnlyFilter(coreTools);
+      deferredAgentTools = [];
     }
 
     const composedFinalizeGuard = planVerify.composeFinalizeGuards([
@@ -1698,9 +1850,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         query: userQuery,
         tools: coreTools,
         deferredTools: deferredAgentTools,
-        model,
+        model: (catalogHit && catalogHit.matched && catalogHit.agent && catalogHit.agent.model) || model,
         maxSteps: maxStepsOverride,
         maxRuntimeMs: maxRuntimeOverride,
+        tokenBudget,
         extraSystem,
         initialToolChoice,
         toolCallMode,
@@ -1715,6 +1868,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
             userId: toolContext.userId || null,
             clearance: toolContext.clearance || null,
           },
+          userId: toolContext.userId || null,
+          chatId: toolContext.chatId || null,
         },
         finalizeGuard: composedFinalizeGuard,
         onBeforeStep: __coworkRun ? beforeCoworkStep : null,
@@ -1954,9 +2109,25 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       }
     }
 
+    try { tokenWd.mark(Date.now()); tokenWd.stop(); } catch (_) {}
+    try { commentHb.mark(Date.now()); commentHb.stop(); } catch (_) {}
+    try {
+      if (engineAdapter && engineAdapter.recordTurnToolCount) {
+        engineAdapter.recordTurnToolCount(turnToolState, { count: turnToolState.toolCount || 0, cancelled: Boolean(opts && opts.signal && opts.signal.aborted) });
+      }
+    } catch (_) {}
+
     if (!skipDoneSentinel) {
       if (!res.writableEnded) {
-        try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
+        try {
+          if (engineLifecycle && engineLifecycle.emitTerminalSseOnce) {
+            engineLifecycle.emitTerminalSseOnce(res._siragptTerminalSse || terminalSseState, { type: 'done' }, () => {
+              try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
+            });
+          } else {
+            res.write('data: [DONE]\n\n');
+          }
+        } catch { /* socket gone */ }
       }
     }
 
@@ -1995,6 +2166,160 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       ),
     };
   }
+
+
+
+  function persistentComputerTools(opts = {}) {
+    const persist = require('./computer/persistent');
+    const userId = opts.toolContext && opts.toolContext.userId;
+    const tools = [
+      {
+        name: 'computer_navigate',
+        description: 'Abre una URL pública http(s) en Chrome de la computadora persistente Linux del miembro (sira-ac-user-*). Todos los departamentos comparten la misma VM. Úsalo cuando haga falta un navegador real.',
+        parameters: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'URL pública http(s).' },
+          },
+          required: ['url'],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          try {
+            const session = await persist.ensureSession(userId);
+            const url = String(args && args.url || '').trim();
+            const result = await persist.dockerExec(session, 'google-chrome --no-first-run --disable-gpu ' + JSON.stringify(url));
+            return JSON.stringify({
+              ok: true,
+              url,
+              driver: 'agent-computer',
+              sessionId: session.sessionId,
+              userId: session.userId || '',
+              container: result.container,
+              pageLoaded: true,
+            });
+          } catch (err) {
+            return `ERROR: computer_navigate host=${(() => { try { return new URL(String(args && args.url || '')).hostname; } catch (_) { return 'unknown'; } })()} status=${err && err.status != null ? err.status : 'n/a'} ${err && (err.detail || err.message) || err}`;
+          }
+        },
+      },
+      {
+        name: 'computer_screenshot',
+        description: 'Captura la pantalla de la computadora persistente Linux del miembro (Chrome en sira-ac-user-*) y confirma el estado real del escritorio.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (_args) => {
+          try {
+            const session = await persist.ensureSession(userId);
+            const observation = await persist.observe(session, { model: opts.model, cdpMode: opts.cdpMode });
+            if (observation.mode === 'cdp') {
+              const cap = persist.capObserveText || ((s) => String(s || '').slice(0, 8192));
+              const text = cap(observation.error
+                ? ('ERROR: computer_observe ' + observation.error)
+                : (observation.text || '(empty)'));
+              return JSON.stringify({
+                ok: observation.ok !== false && !observation.error,
+                sessionId: session.sessionId,
+                userId: session.userId || '',
+                driver: 'agent-computer',
+                container: persist.containerName(session),
+                mode: 'cdp',
+                url: observation.url || null,
+                title: observation.title || '',
+                text,
+                note: 'CDP accessibility tree from the persistent member desktop (capped ~8KiB). Do not invent pixels.',
+                pageLoaded: !observation.error,
+              });
+            }
+            const shot = observation.shot || {};
+            return JSON.stringify({
+              ok: !!(shot && (shot.pngBase64 || shot.ok !== false)),
+              sessionId: session.sessionId,
+              userId: session.userId || '',
+              driver: 'agent-computer',
+              container: persist.containerName(session),
+              bytes: shot && shot.bytes,
+              mode: 'screenshot',
+              pageLoaded: true,
+            });
+          } catch (err) {
+            return `ERROR: computer_screenshot ${err && (err.detail || err.message) || err}`;
+          }
+        },
+      },
+      {
+        name: 'computer_click',
+        description: 'Haz clic en coordenadas (x, y) de la computadora persistente Linux del miembro. Verifica con computer_screenshot después.',
+        parameters: {
+          type: 'object',
+          properties: {
+            x: { type: 'integer', description: 'Coordenada X en píxeles.' },
+            y: { type: 'integer', description: 'Coordenada Y en píxeles.' },
+            button: { type: 'string', enum: ['left', 'middle', 'right'], description: 'Botón del mouse (default left).' },
+          },
+          required: ['x', 'y'],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          try {
+            const session = await persist.ensureSession(userId);
+            const btn = { left: 'click', middle: 'click', right: 'right_click' }[String(args && args.button || 'left')] || 'click';
+            const result = await persist.agentPost(session, '/action', { type: btn, x: args && args.x, y: args && args.y });
+            return JSON.stringify({ ok: true, driver: 'agent-computer', sessionId: session.sessionId, userId: session.userId || '', ...result });
+          } catch (err) {
+            return `ERROR: computer_click ${err && (err.detail || err.message) || err}`;
+          }
+        },
+      },
+      {
+        name: 'computer_type',
+        description: 'Escribe texto en el elemento enfocado de la computadora persistente Linux del miembro (sira-ac-user-*).',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string', description: 'Texto a escribir (máx 2000 caracteres).' },
+          },
+          required: ['text'],
+          additionalProperties: false,
+        },
+        execute: async (args) => {
+          try {
+            if (!String(args && args.text || '').length) return 'ERROR: computer_type requiere `text`.';
+            const session = await persist.ensureSession(userId);
+            const result = await persist.agentPost(session, '/action', { type: 'type', text: args.text });
+            return JSON.stringify({ ok: true, driver: 'agent-computer', sessionId: session.sessionId, userId: session.userId || '', ...result });
+          } catch (err) {
+            return `ERROR: computer_type ${err && (err.detail || err.message) || err}`;
+          }
+        },
+      },
+    ];
+    try {
+      const { withRepeatGuard } = require('./computer/control-loop');
+      const guarded = withRepeatGuard(tools);
+      tools.splice(0, tools.length, ...guarded);
+    } catch (_) { /* keep unwrapped */ }
+    try {
+      const { wrapExecutors } = require('./agent-runner/engine-gateway');
+      const execs = {};
+      for (const tool of tools) execs[tool.name] = tool.execute;
+      const wrapped = wrapExecutors(execs, { surface: 'agentic-computer' });
+      for (const tool of tools) {
+        if (wrapped[tool.name]) tool.execute = wrapped[tool.name];
+      }
+    } catch (_) { /* keep unwrapped */ }
+    return tools;
+  }
+
+  const COMPUTER_ONLY_TOOL_NAMES = Object.freeze([
+    'computer_navigate', 'computer_screenshot', 'computer_click', 'computer_type',
+    'web_search', 'read_url', 'update_plan',
+  ]);
+
+  function applyComputerOnlyFilter(tools) {
+    const allow = new Set(COMPUTER_ONLY_TOOL_NAMES);
+    return (Array.isArray(tools) ? tools : []).filter((t) => t && allow.has(t.name));
+  }
+
 
   function baseWebTools() {
     return [
@@ -2247,7 +2572,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    *   lean. Calling with no args keeps the legacy base toolset.
    */
   function buildDefaultTools(opts = {}) {
-    const base = [...baseWebTools(), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool];
+    if (opts && opts.computerOnly) {
+      const web = baseWebTools().filter((t) => t && (t.name === 'web_search' || t.name === 'read_url'));
+      return [...web, ...persistentComputerTools(opts)];
+    }
+    const base = [...baseWebTools(), ...persistentComputerTools(opts), ...loadTaskTools(), cloneProjectTool, hostBashTool, hostFileTool, listDirTool, globFilesTool, codeGrepTool, checkCiStatusTool, monitorCiTool];
     const userQuery = opts && typeof opts.userQuery === 'string' ? opts.userQuery : '';
 
     // Phase C: expose the real, policy-gated filesystem skills (openalex,
@@ -2371,6 +2700,9 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       buildThreadWorkContext,
       adaptAgentTool,
       baseWebTools,
+      persistentComputerTools,
+      applyComputerOnlyFilter,
+      COMPUTER_ONLY_TOOL_NAMES,
       buildDefaultTools,
       applyCustomGptCapabilityGates,
       SENTINEL_FENCE_OPEN,

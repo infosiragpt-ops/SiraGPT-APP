@@ -1,6 +1,21 @@
 'use strict';
 
-const { throwIfAborted } = require('../../utils/abort-signals');
+const {
+  throwIfAborted,
+} = require('../../utils/abort-signals');
+const {
+  rejectToolNameEndingWithDot,
+  rejectToolCallIfNameIsObject,
+  capToolArgString4096,
+  refuseWriteToVarLogRun,
+  redactAwsAccessKeysInResults,
+  neverRetry408Timeout,
+  classifyEtimedoutAsTimeout,
+  classifyEconnrefusedAsUnavailable,
+  capUserMessage32KiB,
+  abortIfIdleOver30sMidTool,
+  refuseSubagentIfNameEmpty,
+} = require('./engine-adapter');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
 const {
   MAX_VERIFICATION_RETRIES,
@@ -98,6 +113,16 @@ async function runAgentLoop({
   signal,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
+  const srcExec = executors && typeof executors === 'object' ? executors : {};
+  const wrappedExec = {};
+  for (const k of Object.keys(srcExec)) {
+    const fn = srcExec[k];
+    if (typeof fn !== 'function') { wrappedExec[k] = fn; continue; }
+    wrappedExec[k] = async function wrappedNoThrow(a, o) {
+      try { return await fn(a, o); } catch (e) { return `ERROR: ${e && e.message ? e.message : String(e)}`; }
+    };
+  }
+  executors = wrappedExec;
   const cap = Math.max(1, Math.min(50, Number(maxIterations) || MAX_ITERATIONS_DEFAULT));
   const steps = [];
   let finalText = '';
@@ -128,6 +153,9 @@ async function runAgentLoop({
     } catch (err) {
       if (signal?.aborted) bail(iteration);
       onEvent({ type: 'error', message: err?.message || String(err) });
+      try { neverRetry408Timeout(err); } catch (_) {}
+      try { classifyEtimedoutAsTimeout(err); } catch (_) {}
+      try { classifyEconnrefusedAsUnavailable(err); } catch (_) {}
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -212,7 +240,24 @@ async function runAgentLoop({
       bail(iteration);
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
-      const args = safeParseArgs(call?.function?.arguments);
+      let args = safeParseArgs(call?.function?.arguments);
+      try {
+        const dotN = rejectToolNameEndingWithDot(name);
+        if (dotN && dotN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_dot', message: 'El nombre de la herramienta no puede terminar con un punto.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try { rejectToolCallIfNameIsObject([call]); } catch (_) {}
+      try {
+        const capA = capToolArgString4096(args);
+        if (capA && capA.args && typeof capA.args === 'object') args = capA.args;
+      } catch (_) {}
+      try {
+        const pth = args && (args.path || args.file || args.filename || args.cwd);
+        if (pth) refuseWriteToVarLogRun(pth);
+      } catch (_) {}
+      try { refuseSubagentIfNameEmpty({ name: mapped }); } catch (_) {}
+      try { abortIfIdleOver30sMidTool({ lastEventAt: Date.now(), now: Date.now() }); } catch (_) {}
       onEvent({
         type: 'tool_call',
         iteration,
@@ -255,6 +300,14 @@ async function runAgentLoop({
       // ── end F7 hook ─────────────────────────────────────────────────────
 
       bail(iteration);
+      try {
+        const redAws = redactAwsAccessKeysInResults(result);
+        if (redAws && redAws.text != null) result = redAws.text;
+      } catch (_) {}
+      try {
+        const capU = capUserMessage32KiB(typeof result === 'string' ? result : String(result || ''));
+        if (capU && capU.truncated && capU.text != null && typeof result === 'string') result = capU.text;
+      } catch (_) {}
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
       onEvent({
