@@ -15,6 +15,7 @@ services:
       - ./components/code/code-workspace.tsx:/app/components/code/code-workspace.tsx:ro
       - ./components/code/department-computer-pane.tsx:/app/components/code/department-computer-pane.tsx:ro
       - ./components/code/ComputerViewer.tsx:/app/components/code/ComputerViewer.tsx:ro
+      - ./components/code/workspace-top-bar.tsx:/app/components/code/workspace-top-bar.tsx:ro
       - ./components/code/agent-company-panel.tsx:/app/components/code/agent-company-panel.tsx:ro
       - ./lib/code-workspace-context.tsx:/app/lib/code-workspace-context.tsx:ro
       - ./components/claude-thinking-timeline.tsx:/app/components/claude-thinking-timeline.tsx:ro

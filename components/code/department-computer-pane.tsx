@@ -48,11 +48,35 @@ type AgentSession = {
 
 let cachedAgentSession: AgentSession | null = null
 
+function ensureAutoconnect(url: string, sessionId: string): string {
+  if (!url) return ""
+  try {
+    const u = new URL(url, "https://siragpt.com")
+    u.searchParams.set("autoconnect", "1")
+    u.searchParams.set("reconnect", "1")
+    if (!u.searchParams.get("resize")) u.searchParams.set("resize", "scale")
+    if (!u.searchParams.get("path")) {
+      u.searchParams.set(
+        "path",
+        `agent-computer/sessions/${sessionId}/novnc/websockify`,
+      )
+    }
+    // Keep relative when API gave a same-origin path
+    if (url.startsWith("/")) return u.pathname + u.search
+    return u.toString()
+  } catch {
+    return url
+  }
+}
+
 function embedFrom(session: AgentSession): string {
-  if (session.embedUrl) return session.embedUrl
   const id = session.sessionId
+  if (session.embedUrl) return ensureAutoconnect(session.embedUrl, id || "")
   if (!id) return ""
-  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&reconnect=1&resize=scale&path=agent-computer/sessions/${id}/novnc/websockify`
+  return ensureAutoconnect(
+    `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&reconnect=1&resize=scale&path=agent-computer/sessions/${id}/novnc/websockify`,
+    id,
+  )
 }
 
 async function ensureMemberDesktop(): Promise<AgentSession> {
