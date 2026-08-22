@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Αποθήκευση…",
+    "autosaveSaved": "Αποθηκεύτηκε {time}",
+    "autosaveError": "Αποτυχία αποθήκευσης. Νέα προσπάθεια…",
+    "autosaveErrorFinal": "Αποτυχία αποθήκευσης μετά από πολλές προσπάθειες.",
+    "autosaveRetryNow": "Δοκιμή ξανά τώρα",
+    "autosaveOff": "Η αυτόματη αποθήκευση είναι ανενεργή — υπάρχουν μη αποθηκευμένες αλλαγές.",
+    "draftBannerTitle": "Βρήκαμε πρόχειρο νεότερο από την αποθηκευμένη έκδοση.",
+    "draftRestore": "Επαναφορά πρόχειρου",
+    "draftDiscard": "Απόρριψη"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

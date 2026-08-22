@@ -368,7 +368,16 @@
     "pdfFile": "PDF-bestand",
     "downloadAsWord": "Downloaden als Word (.docx)",
     "downloadAsPdf": "Downloaden als PDF",
-    "generating": "Genereren…"
+    "generating": "Genereren…",
+    "autosaveSaving": "Opslaan…",
+    "autosaveSaved": "Opgeslagen {time}",
+    "autosaveError": "Opslaan mislukt. Nieuwe poging…",
+    "autosaveErrorFinal": "Opslaan is na meerdere pogingen mislukt.",
+    "autosaveRetryNow": "Nu opnieuw proberen",
+    "autosaveOff": "Automatisch opslaan uit — er zijn niet-opgeslagen wijzigingen.",
+    "draftBannerTitle": "We vonden een concept dat nieuwer is dan de opgeslagen versie.",
+    "draftRestore": "Concept herstellen",
+    "draftDiscard": "Weggooien"
   },
   "errors": {
     "serverError": "Er is een probleem opgetreden bij het verwerken van je verzoek. Probeer het opnieuw.",

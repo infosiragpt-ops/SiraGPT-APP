@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "जतन करत आहे…",
+    "autosaveSaved": "जतन केले {time}",
+    "autosaveError": "जतन करता आले नाही. पुन्हा प्रयत्न केला जात आहे…",
+    "autosaveErrorFinal": "अनेक प्रयत्नांनंतरही जतन करता आले नाही.",
+    "autosaveRetryNow": "आता पुन्हा प्रयत्न करा",
+    "autosaveOff": "ऑटोसेव्ह बंद आहे — न जतन केलेले बदल आहेत.",
+    "draftBannerTitle": "जतन केलेल्या आवृत्तीपेक्षा नवीन मसुदा सापडला.",
+    "draftRestore": "मसुदा पुनर्संचयित करा",
+    "draftDiscard": "टाकून द्या"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

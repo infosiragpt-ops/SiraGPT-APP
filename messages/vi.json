@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Đang lưu…",
+    "autosaveSaved": "Đã lưu {time}",
+    "autosaveError": "Không thể lưu. Đang thử lại…",
+    "autosaveErrorFinal": "Không thể lưu sau nhiều lần thử.",
+    "autosaveRetryNow": "Thử lại ngay",
+    "autosaveOff": "Tự động lưu đang tắt — có thay đổi chưa được lưu.",
+    "draftBannerTitle": "Phát hiện bản nháp mới hơn phiên bản đã lưu.",
+    "draftRestore": "Khôi phục bản nháp",
+    "draftDiscard": "Bỏ qua"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

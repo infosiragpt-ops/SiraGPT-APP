@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Збереження…",
+    "autosaveSaved": "Збережено {time}",
+    "autosaveError": "Не вдалося зберегти. Повторна спроба…",
+    "autosaveErrorFinal": "Не вдалося зберегти після кількох спроб.",
+    "autosaveRetryNow": "Повторити зараз",
+    "autosaveOff": "Автозбереження вимкнено — є незбережені зміни.",
+    "draftBannerTitle": "Знайдено чернетку, новішу за збережену версію.",
+    "draftRestore": "Відновити чернетку",
+    "draftDiscard": "Відхилити"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

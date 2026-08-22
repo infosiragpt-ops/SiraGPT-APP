@@ -368,7 +368,16 @@
     "pdfFile": "PDF-Datei",
     "downloadAsWord": "Als Word (.docx) herunterladen",
     "downloadAsPdf": "Als PDF herunterladen",
-    "generating": "Erstelle…"
+    "generating": "Erstelle…",
+    "autosaveSaving": "Speichern…",
+    "autosaveSaved": "Gespeichert {time}",
+    "autosaveError": "Speichern fehlgeschlagen. Wird erneut versucht…",
+    "autosaveErrorFinal": "Speichern nach mehreren Versuchen fehlgeschlagen.",
+    "autosaveRetryNow": "Jetzt erneut versuchen",
+    "autosaveOff": "Autospeichern aus — es gibt ungespeicherte Änderungen.",
+    "draftBannerTitle": "Wir haben einen Entwurf gefunden, der neuer als die gespeicherte Version ist.",
+    "draftRestore": "Entwurf wiederherstellen",
+    "draftDiscard": "Verwerfen"
   },
   "errors": {
     "serverError": "Bei der Verarbeitung Ihrer Anfrage ist ein Problem aufgetreten. Bitte versuchen Sie es erneut.",

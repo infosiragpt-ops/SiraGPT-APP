@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "സേവ് ചെയ്യുന്നു…",
+    "autosaveSaved": "സേവ് ചെയ്തു {time}",
+    "autosaveError": "സേവ് ചെയ്യാനായില്ല. വീണ്ടും ശ്രമിക്കുന്നു…",
+    "autosaveErrorFinal": "നിരവധി ശ്രമങ്ങൾക്ക് ശേഷവും സേവ് ചെയ്യാനായില്ല.",
+    "autosaveRetryNow": "ഇപ്പോൾ വീണ്ടും ശ്രമിക്കുക",
+    "autosaveOff": "ഓട്ടോസേവ് ഓഫാണ് — സേവ് ചെയ്യാത്ത മാറ്റങ്ങളുണ്ട്.",
+    "draftBannerTitle": "സേവ് ചെയ്ത പതിപ്പിനേക്കാൾ പുതിയ ഡ്രാഫ്റ്റ് കണ്ടെത്തി.",
+    "draftRestore": "ഡ്രാഫ്റ്റ് പുനഃസ്ഥാപിക്കുക",
+    "draftDiscard": "ഉപേക്ഷിക്കുക"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

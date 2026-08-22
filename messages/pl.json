@@ -368,7 +368,16 @@
     "pdfFile": "Plik PDF",
     "downloadAsWord": "Pobierz jako Word (.docx)",
     "downloadAsPdf": "Pobierz jako PDF",
-    "generating": "Generowanie…"
+    "generating": "Generowanie…",
+    "autosaveSaving": "Zapisywanie…",
+    "autosaveSaved": "Zapisano {time}",
+    "autosaveError": "Nie udało się zapisać. Ponawianie…",
+    "autosaveErrorFinal": "Nie udało się zapisać po kilku próbach.",
+    "autosaveRetryNow": "Ponów teraz",
+    "autosaveOff": "Autozapis wyłączony — są niezapisane zmiany.",
+    "draftBannerTitle": "Znaleziono szkic nowszy niż zapisana wersja.",
+    "draftRestore": "Przywróć szkic",
+    "draftDiscard": "Odrzuć"
   },
   "errors": {
     "serverError": "Wystąpił problem podczas przetwarzania Twojego żądania. Spróbuj ponownie.",

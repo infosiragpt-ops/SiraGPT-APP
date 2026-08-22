@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "సేవ్ చేస్తోంది…",
+    "autosaveSaved": "సేవ్ చేయబడింది {time}",
+    "autosaveError": "సేవ్ చేయడం సాధ్యం కాలేదు. మళ్లీ ప్రయత్నిస్తోంది…",
+    "autosaveErrorFinal": "అనేక ప్రయత్నాల తర్వాత కూడా సేవ్ చేయడం సాధ్యం కాలేదు.",
+    "autosaveRetryNow": "ఇప్పుడే మళ్లీ ప్రయత్నించండి",
+    "autosaveOff": "ఆటోసేవ్ ఆఫ్‌లో ఉంది — సేవ్ చేయని మార్పులు ఉన్నాయి.",
+    "draftBannerTitle": "సేవ్ చేసిన వెర్షన్ కంటే కొత్త డ్రాఫ్ట్ దొరికింది.",
+    "draftRestore": "డ్రాఫ్ట్‌ను పునరుద్ధరించండి",
+    "draftDiscard": "విస్మరించండి"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

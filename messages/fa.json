@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "در حال ذخیره…",
+    "autosaveSaved": "ذخیره شد {time}",
+    "autosaveError": "ذخیره نشد. در حال تلاش مجدد…",
+    "autosaveErrorFinal": "پس از چند تلاش، ذخیره نشد.",
+    "autosaveRetryNow": "اکنون دوباره تلاش کنید",
+    "autosaveOff": "ذخیره خودکار خاموش است — تغییرات ذخیره‌نشده وجود دارد.",
+    "draftBannerTitle": "پیش‌نویسی جدیدتر از نسخه ذخیره‌شده پیدا کردیم.",
+    "draftRestore": "بازیابی پیش‌نویس",
+    "draftDiscard": "رد کردن"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Se salvează…",
+    "autosaveSaved": "Salvat {time}",
+    "autosaveError": "Salvarea a eșuat. Se reîncearcă…",
+    "autosaveErrorFinal": "Salvarea a eșuat după mai multe încercări.",
+    "autosaveRetryNow": "Încearcă din nou acum",
+    "autosaveOff": "Salvarea automată este dezactivată — există modificări nesalvate.",
+    "draftBannerTitle": "Am găsit o schiță mai nouă decât versiunea salvată.",
+    "draftRestore": "Restabilește schița",
+    "draftDiscard": "Renunță"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

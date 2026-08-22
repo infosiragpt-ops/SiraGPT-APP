@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Mentés folyamatban…",
+    "autosaveSaved": "Mentve {time}",
+    "autosaveError": "A mentés nem sikerült. Újrapróbálás…",
+    "autosaveErrorFinal": "Több próbálkozás után sem sikerült menteni.",
+    "autosaveRetryNow": "Újra most",
+    "autosaveOff": "Az automatikus mentés ki van kapcsolva — vannak nem mentett módosítások.",
+    "draftBannerTitle": "A mentett verziónál újabb vázlatot találtunk.",
+    "draftRestore": "Vázlat visszaállítása",
+    "draftDiscard": "Elvetés"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

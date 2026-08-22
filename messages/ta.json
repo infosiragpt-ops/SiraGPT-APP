@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "சேமிக்கிறது…",
+    "autosaveSaved": "சேமிக்கப்பட்டது {time}",
+    "autosaveError": "சேமிக்க முடியவில்லை. மீண்டும் முயற்சிக்கப்படுகிறது…",
+    "autosaveErrorFinal": "பல முயற்சிகளுக்குப் பிறகும் சேமிக்க முடியவில்லை.",
+    "autosaveRetryNow": "இப்போது மீண்டும் முயற்சிக்கவும்",
+    "autosaveOff": "தானியங்கி சேமிப்பு அணைக்கப்பட்டுள்ளது — சேமிக்கப்படாத மாற்றங்கள் உள்ளன.",
+    "draftBannerTitle": "சேமித்த பதிப்பை விடப் புதிய வரைவு ஒன்று கண்டறியப்பட்டது.",
+    "draftRestore": "வரைவை மீட்டமை",
+    "draftDiscard": "நிராகரி"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

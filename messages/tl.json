@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Nagsa-save…",
+    "autosaveSaved": "Na-save {time}",
+    "autosaveError": "Hindi na-save. Sinusubukang muli…",
+    "autosaveErrorFinal": "Hindi na-save pagkatapos ng ilang pagsubok.",
+    "autosaveRetryNow": "Subukang muli ngayon",
+    "autosaveOff": "Naka-off ang autosave — may mga hindi na-save na pagbabago.",
+    "draftBannerTitle": "May nakitang draft na mas bago kaysa sa naka-save na bersyon.",
+    "draftRestore": "Ibalik ang draft",
+    "draftDiscard": "Itapon"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

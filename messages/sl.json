@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Shranjevanje…",
+    "autosaveSaved": "Shranjeno {time}",
+    "autosaveError": "Shranjevanje ni uspelo. Poskušamo znova…",
+    "autosaveErrorFinal": "Shranjevanje ni uspelo po več poskusih.",
+    "autosaveRetryNow": "Poskusi znova zdaj",
+    "autosaveOff": "Samodejno shranjevanje je izklopljeno — obstajajo neshranjene spremembe.",
+    "draftBannerTitle": "Našli smo osnutek, novejši od shranjene različice.",
+    "draftRestore": "Obnovi osnutek",
+    "draftDiscard": "Zavrzi"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

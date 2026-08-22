@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Inahifadhi…",
+    "autosaveSaved": "Imehifadhiwa {time}",
+    "autosaveError": "Imeshindwa kuhifadhi. Inajaribu tena…",
+    "autosaveErrorFinal": "Imeshindwa kuhifadhi baada ya majaribio kadhaa.",
+    "autosaveRetryNow": "Jaribu tena sasa",
+    "autosaveOff": "Hifadhi otomatiki imezimwa — kuna mabadiliko yasiyohifadhiwa.",
+    "draftBannerTitle": "Tumepata rasimu mpya kuliko toleo lililohifadhiwa.",
+    "draftRestore": "Rejesha rasimu",
+    "draftDiscard": "Tupa"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

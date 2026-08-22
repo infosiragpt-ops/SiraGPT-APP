@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "ກຳລັງບັນທຶກ…",
+    "autosaveSaved": "ບັນທຶກແລ້ວ {time}",
+    "autosaveError": "ບັນທຶກບໍ່ໄດ້. ກຳລັງລອງໃໝ່…",
+    "autosaveErrorFinal": "ລອງຫຼາຍເທື່ອແລ້ວກໍ່ບັນທຶກບໍ່ໄດ້.",
+    "autosaveRetryNow": "ລອງໃໝ່ດຽວນີ້",
+    "autosaveOff": "ການບັນທຶກອັດຕະໂນມັດປິດຢູ່ — ມີການປ່ຽນແປງທີ່ບໍ່ໄດ້ບັນທຶກ.",
+    "draftBannerTitle": "ພົບຮ່າງໃໝ່ກວ່າສະບັບທີ່ບັນທຶກໄວ້.",
+    "draftRestore": "ກູ້ຄືນຮ່າງ",
+    "draftDiscard": "ຍົກເລີກ"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

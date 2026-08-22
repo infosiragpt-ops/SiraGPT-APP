@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Запазване…",
+    "autosaveSaved": "Запазено {time}",
+    "autosaveError": "Не успя да запише. Нов опит…",
+    "autosaveErrorFinal": "Не успя да запише след няколко опита.",
+    "autosaveRetryNow": "Опитай отново сега",
+    "autosaveOff": "Автоматичното запазване е изключено — има незапазени промени.",
+    "draftBannerTitle": "Намерихме чернова, по-нова от запазената версия.",
+    "draftRestore": "Възстанови черновата",
+    "draftDiscard": "Отхвърли"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

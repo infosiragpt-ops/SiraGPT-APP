@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Yadda saxlanılır…",
+    "autosaveSaved": "Yadda saxlanıldı {time}",
+    "autosaveError": "Yadda saxlamaq mümkün olmadı. Yenidən cəhd edilir…",
+    "autosaveErrorFinal": "Bir neçə cəhddən sonra da yadda saxlamaq mümkün olmadı.",
+    "autosaveRetryNow": "İndi yenidən cəhd edin",
+    "autosaveOff": "Avtomatik yadda saxlama bağlıdır — saxlanmamış dəyişikliklər var.",
+    "draftBannerTitle": "Saxlanmış versiyadan daha yeni layihə tapıldı.",
+    "draftRestore": "Layihəni bərpa edin",
+    "draftDiscard": "İmtina edin"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

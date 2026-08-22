@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Tallennetaan…",
+    "autosaveSaved": "Tallennettu {time}",
+    "autosaveError": "Tallennus epäonnistui. Yritetään uudelleen…",
+    "autosaveErrorFinal": "Tallennus epäonnistui useiden yritysten jälkeen.",
+    "autosaveRetryNow": "Yritä uudelleen nyt",
+    "autosaveOff": "Automaattinen tallennus pois käytöstä — tallentamattomia muutoksia on olemassa.",
+    "draftBannerTitle": "Löysimme luonnoksen, joka on uudempi kuin tallennettu versio.",
+    "draftRestore": "Palauta luonnos",
+    "draftDiscard": "Hylkää"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

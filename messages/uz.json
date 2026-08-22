@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Saqlanmoqda…",
+    "autosaveSaved": "Saqlandi {time}",
+    "autosaveError": "Saqlash mumkin bo'lmadi. Qayta urinilmoqda…",
+    "autosaveErrorFinal": "Bir necha urinishdan keyin ham saqlash mumkin bo'lmadi.",
+    "autosaveRetryNow": "Hozir qayta urining",
+    "autosaveOff": "Avtomatik saqlash o'chirilgan — saqlanmagan o'zgarishlar mavjud.",
+    "draftBannerTitle": "Saqlangan versiyadan yangiroq loyiha topildi.",
+    "draftRestore": "Loyihani tiklash",
+    "draftDiscard": "Bekor qilish"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

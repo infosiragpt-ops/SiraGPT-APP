@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Notiek saglabāšana…",
+    "autosaveSaved": "Saglabāts {time}",
+    "autosaveError": "Saglabāt neizdevās. Mēģina vēlreiz…",
+    "autosaveErrorFinal": "Nevarēja saglabāt pēc vairākiem mēģinājumiem.",
+    "autosaveRetryNow": "Mēģināt vēlreiz tagad",
+    "autosaveOff": "Automātiskā saglabāšana ir izslēgta — ir nesaglabātas izmaiņas.",
+    "draftBannerTitle": "Atradām melnrakstu, kas jaunāks par saglabāto versiju.",
+    "draftRestore": "Atjaunot melnrakstu",
+    "draftDiscard": "Atmest"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

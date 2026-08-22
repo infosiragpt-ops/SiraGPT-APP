@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "محفوظ کیا جا رہا ہے…",
+    "autosaveSaved": "محفوظ ہو گیا {time}",
+    "autosaveError": "محفوظ نہیں ہو سکا۔ دوبارہ کوشش کی جا رہی ہے…",
+    "autosaveErrorFinal": "کئی کوششوں کے بعد بھی محفوظ نہیں ہو سکا۔",
+    "autosaveRetryNow": "ابھی دوبارہ کوشش کریں",
+    "autosaveOff": "آٹو سیو بند ہے — غیر محفوظ تبدیلیاں موجود ہیں۔",
+    "draftBannerTitle": "محفوظ شدہ ورژن سے نیا ڈرافٹ مل گیا۔",
+    "draftRestore": "ڈرافٹ بحال کریں",
+    "draftDiscard": "مسترد کریں"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

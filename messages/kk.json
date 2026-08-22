@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Сақталуда…",
+    "autosaveSaved": "Сақталды {time}",
+    "autosaveError": "Сақтау мүмкін болмады. Қайта байқалуда…",
+    "autosaveErrorFinal": "Бірнеше рет байқап көргеннен кейін де сақтау мүмкін болмады.",
+    "autosaveRetryNow": "Қазір қайталаңыз",
+    "autosaveOff": "Автосақтау өшірулі — сақталмаған өзгерістер бар.",
+    "draftBannerTitle": "Сақталған нұсқадан жаңа жоба табылды.",
+    "draftRestore": "Жобаны қалпына келтіру",
+    "draftDiscard": "Қабылдамау"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -371,7 +371,16 @@
     "pdfFile": "ملف PDF",
     "downloadAsWord": "تنزيل كملف Word (.docx)",
     "downloadAsPdf": "تنزيل كملف PDF",
-    "generating": "جارٍ الإنشاء…"
+    "generating": "جارٍ الإنشاء…",
+    "autosaveSaving": "جارٍ الحفظ…",
+    "autosaveSaved": "تم الحفظ {time}",
+    "autosaveError": "تعذّر الحفظ. جارٍ إعادة المحاولة…",
+    "autosaveErrorFinal": "تعذّر الحفظ بعد عدة محاولات.",
+    "autosaveRetryNow": "أعد المحاولة الآن",
+    "autosaveOff": "الحفظ التلقائي متوقف — هناك تغييرات غير محفوظة.",
+    "draftBannerTitle": "وجدنا مسودة أحدث من النسخة المحفوظة.",
+    "draftRestore": "استعادة المسودة",
+    "draftDiscard": "تجاهل"
   },
   "errors": {
     "serverError": "حدثت مشكلة أثناء معالجة طلبك. يرجى المحاولة مرة أخرى.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "خوندي کېږي…",
+    "autosaveSaved": "خوندي شو {time}",
+    "autosaveError": "خوندي نه شو. بیا هڅه کېږي…",
+    "autosaveErrorFinal": "له ډېرو هڅو وروسته هم خوندي نه شو.",
+    "autosaveRetryNow": "اوس بیا هڅه وکړئ",
+    "autosaveOff": "اتوماتیک خوندي کول بند دی — خوندي نه شوې بدلونونه شته.",
+    "draftBannerTitle": "له خوندي شوي نسخې څخه نوی مسوده وموندل شوه.",
+    "draftRestore": "مسوده بیا راګرځول",
+    "draftDiscard": "لرې کول"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Salvestamine…",
+    "autosaveSaved": "Salvestatud {time}",
+    "autosaveError": "Salvestamine ebaõnnestus. Proovitakse uuesti…",
+    "autosaveErrorFinal": "Salvestamine ebaõnnestus pärast mitut katset.",
+    "autosaveRetryNow": "Proovi kohe uuesti",
+    "autosaveOff": "Automaatsalvestus on välja lülitatud — on salvestamata muudatusi.",
+    "draftBannerTitle": "Leidsime salvestatud versioonist uuema mustandi.",
+    "draftRestore": "Taasta mustand",
+    "draftDiscard": "Loobu"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

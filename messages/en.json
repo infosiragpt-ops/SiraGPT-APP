@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Saving…",
+    "autosaveSaved": "Saved {time}",
+    "autosaveError": "Couldn’t save. Retrying…",
+    "autosaveErrorFinal": "Couldn’t save after several attempts.",
+    "autosaveRetryNow": "Retry now",
+    "autosaveOff": "Autosave off — there are unsaved changes.",
+    "draftBannerTitle": "We found a draft newer than the saved version.",
+    "draftRestore": "Restore draft",
+    "draftDiscard": "Discard"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

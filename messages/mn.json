@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Хадгалж байна…",
+    "autosaveSaved": "Хадгалсан {time}",
+    "autosaveError": "Хадгалах боломжгүй боллоо. Дахин оролдож байна…",
+    "autosaveErrorFinal": "Хэд хэдэн удаа оролдсоор хадгалах боломжгүй хэвээр байна.",
+    "autosaveRetryNow": "Одоо дахин оролдоно уу",
+    "autosaveOff": "Автомат хадгалах идэвхгүй — хадгалаагүй өөрчлөлтүүд байна.",
+    "draftBannerTitle": "Хадгалсан хувилбараас шинэ ноорог олдов.",
+    "draftRestore": "Ноорог сэргээх",
+    "draftDiscard": "Орхих"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

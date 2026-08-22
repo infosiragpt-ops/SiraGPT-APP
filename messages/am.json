@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "በመቀመጥ ላይ…",
+    "autosaveSaved": "ተቀምጧል {time}",
+    "autosaveError": "ማስቀመጥ አልተቻለም። እንደገና በመሞከር ላይ…",
+    "autosaveErrorFinal": "ከብዙ ሙከራዎች በኋላም ማስቀመጥ አልተቻለም።",
+    "autosaveRetryNow": "አሁን እንደገና ይሞክሩ",
+    "autosaveOff": "ራስ-አውራጅ ማስቀመጥ ጠፍቷል — ያልተቀመጡ ለውጦች አሉ።",
+    "draftBannerTitle": "ከተቀመጠው ስሪት የበለጠ አዲስ ረቂቅ ተገኘ።",
+    "draftRestore": "ረቂቁን እነበረበት መልስ",
+    "draftDiscard": "አስወግድ"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

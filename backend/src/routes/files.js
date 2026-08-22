@@ -1062,7 +1062,14 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
 // the version's `content` and also mirrored into `summary` so the version list
 // (which only selects summary) shows a human-readable "qué cambió" line, and
 // "recargar conserva el estado" works via GET /:id/versions/{id}/content.
-// The edit route accepts `{ content, chatId?, summary? }`.
+// The edit route accepts `{ content, chatId?, summary?, clientMutationId? }`.
+//
+// Light idempotency (autosave front, 2026-08-22): when the autosave client
+// retries a save whose first response was lost (flaky network), it re-sends
+// the SAME clientMutationId + content. In that case we answer the already
+// recorded version (200) instead of recording a duplicate. Same id with a
+// DIFFERENT content is a client bug → 409, never a silent wrong replay.
+// No key (or an unusable one) keeps the legacy behavior: always create.
 router.post('/:id/edit', authenticateToken, async (req, res) => {
   try {
     const file = await prisma.file.findFirst({
@@ -1083,6 +1090,39 @@ router.post('/:id/edit', authenticateToken, async (req, res) => {
     const createdByChatId = typeof req.body?.chatId === 'string' && req.body.chatId
       ? req.body.chatId
       : null;
+
+    const dedup = require('../services/document-editing/edit-dedup');
+    const mutationId = dedup.normalizeClientMutationId(req.body?.clientMutationId);
+    const contentHash = dedup.hashDocumentContent(content);
+    let dedupRecord = null;
+    if (mutationId && contentHash) {
+      const dedupKey = dedup.buildEditDedupKey(file.id, req.user.id, mutationId);
+      dedupRecord = await prisma.idempotencyRecord.findUnique({ where: { key: dedupKey } }).catch(() => null);
+      const verdict = dedup.classifyEditReplay(dedupRecord, contentHash);
+      if (verdict.action === 'replay') {
+        // Same logical edit already recorded — answer it, do not duplicate.
+        const existing = verdict.existingVersion;
+        return res.status(200).json({
+          fileId: file.id,
+          version: {
+            id: existing.id,
+            version: existing.version,
+            filename: existing.filename,
+            summary: existing.summary ?? null,
+            validationPassed: existing.validationPassed !== false,
+            createdAt: existing.createdAt,
+            downloadUrl: null,
+          },
+          replayed: true,
+        });
+      }
+      if (verdict.action === 'conflict') {
+        return res.status(409).json({
+          error: 'clientMutationId ya usado con contenido distinto',
+          code: 'CLIENT_MUTATION_ID_REUSED_WITH_DIFFERENT_CONTENT',
+        });
+      }
+    }
 
     const { recordFileVersion } = require('../services/document-editing/versioning');
     const version = await recordFileVersion(prisma, {
@@ -1106,6 +1146,37 @@ router.post('/:id/edit', authenticateToken, async (req, res) => {
       where: { id: version.id },
       data: { content },
     }).catch(() => null);
+
+    // Record the dedup fingerprint so a retried save with the same
+    // clientMutationId + content replays this version instead of duplicating
+    // it. Best-effort: a failed write only loses dedup, never durability.
+    if (mutationId && contentHash) {
+      const dedupKey = dedup.buildEditDedupKey(file.id, req.user.id, mutationId);
+      await prisma.idempotencyRecord.upsert({
+        where: { key: dedupKey },
+        create: {
+          key: dedupKey,
+          endpoint: 'files.edit',
+          method: 'POST',
+          requestHash: contentHash,
+          status: 201,
+          responseBody: {
+            fileId: file.id,
+            version: {
+              id: version.id,
+              version: version.version,
+              filename: version.filename,
+              summary: version.summary,
+              validationPassed: version.validationPassed,
+              createdAt: version.createdAt,
+              downloadUrl: null,
+            },
+          },
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        update: {},
+      }).catch(() => null);
+    }
 
     return res.status(201).json({
       fileId: file.id,

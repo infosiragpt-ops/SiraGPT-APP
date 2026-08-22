@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "កំពុងរក្សាទុក…",
+    "autosaveSaved": "បានរក្សាទុក {time}",
+    "autosaveError": "រក្សាទុកមិនបានសម្រេច។ កំពុងព្យាយាមម្តងទៀត…",
+    "autosaveErrorFinal": "ព្យាយាមជាច្រើនដងហើយនៅតែរក្សាទុកមិនបាន។",
+    "autosaveRetryNow": "ព្យាយាមម្តងទៀតឥឡូវនេះ",
+    "autosaveOff": "ការរក្សាទុកស្វ័យប្រវត្តិបានបិទ — មានការផ្លាស់ប្តូរដែលមិនបានរក្សាទុក។",
+    "draftBannerTitle": "រកឃើញព្រាងថ្មីជាងកំណែដែលបានរក្សាទុក។",
+    "draftRestore": "ស្តារព្រាងឡើងវិញ",
+    "draftDiscard": "បោះបង់"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

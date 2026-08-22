@@ -368,7 +368,16 @@
     "pdfFile": "Fichier PDF",
     "downloadAsWord": "Télécharger en Word (.docx)",
     "downloadAsPdf": "Télécharger en PDF",
-    "generating": "Génération…"
+    "generating": "Génération…",
+    "autosaveSaving": "Enregistrement…",
+    "autosaveSaved": "Enregistré {time}",
+    "autosaveError": "Échec de l’enregistrement. Nouvelle tentative…",
+    "autosaveErrorFinal": "Échec de l’enregistrement après plusieurs tentatives.",
+    "autosaveRetryNow": "Réessayer maintenant",
+    "autosaveOff": "Sauvegarde auto désactivée — des modifications ne sont pas enregistrées.",
+    "draftBannerTitle": "Un brouillon plus récent que la version enregistrée a été trouvé.",
+    "draftRestore": "Restaurer le brouillon",
+    "draftDiscard": "Abandonner"
   },
   "errors": {
     "serverError": "Un problème est survenu lors du traitement de votre demande. Veuillez réessayer.",

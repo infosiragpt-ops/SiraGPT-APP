@@ -368,7 +368,16 @@
     "pdfFile": "PDF Dosyası",
     "downloadAsWord": "Word (.docx) olarak indir",
     "downloadAsPdf": "PDF olarak indir",
-    "generating": "Oluşturuluyor…"
+    "generating": "Oluşturuluyor…",
+    "autosaveSaving": "Kaydediliyor…",
+    "autosaveSaved": "Kaydedildi {time}",
+    "autosaveError": "Kaydedilemedi. Yeniden deneniyor…",
+    "autosaveErrorFinal": "Birkaç denemeden sonra kaydedilemedi.",
+    "autosaveRetryNow": "Şimdi yeniden dene",
+    "autosaveOff": "Otomatik kaydetme kapalı — kaydedilmemiş değişiklikler var.",
+    "draftBannerTitle": "Kaydedilmiş sürümden daha yeni bir taslak bulduk.",
+    "draftRestore": "Taslağı geri yükle",
+    "draftDiscard": "At"
   },
   "errors": {
     "serverError": "İsteğiniz işlenirken bir sorun oluştu. Lütfen tekrar deneyin.",

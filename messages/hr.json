@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Spremanje…",
+    "autosaveSaved": "Spremljeno {time}",
+    "autosaveError": "Spremanje nije uspjelo. Pokušava se ponovno…",
+    "autosaveErrorFinal": "Spremanje nije uspjelo nakon više pokušaja.",
+    "autosaveRetryNow": "Pokušaj ponovno sada",
+    "autosaveOff": "Automatsko spremanje isključeno — postoje nespremljene promjene.",
+    "draftBannerTitle": "Pronašli smo noviju skicu od spremljene verzije.",
+    "draftRestore": "Vrati skicu",
+    "draftDiscard": "Odbaci"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

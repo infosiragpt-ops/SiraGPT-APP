@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Ukládání…",
+    "autosaveSaved": "Uloženo {time}",
+    "autosaveError": "Uložení se nezdařilo. Opakuje se…",
+    "autosaveErrorFinal": "Po několika pokusech se uložit nezdařilo.",
+    "autosaveRetryNow": "Zkusit znovu nyní",
+    "autosaveOff": "Automatické ukládání je vypnuto — existují neuložené změny.",
+    "draftBannerTitle": "Našli jsme koncept novější než uložená verze.",
+    "draftRestore": "Obnovit koncept",
+    "draftDiscard": "Zahodit"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "သိမ်းဆည်းနေသည်…",
+    "autosaveSaved": "သိမ်းဆည်းပြီး {time}",
+    "autosaveError": "မသိမ်းဆည်းနိုင်ပါ။ ပြန်ကြိုးစားနေသည်…",
+    "autosaveErrorFinal": "အကြိမ်ကြိမ်ကြိုးစားသော်လည်း မသိမ်းဆည်းနိုင်ပါ။",
+    "autosaveRetryNow": "ယခု ပြန်ကြိုးစားပါ",
+    "autosaveOff": "အလိုအလျောက်သိမ်းခြင်း ပိတ်ထားသည် — မသိမ်းရသေးသော ပြောင်းလဲမှုများရှိသည်။",
+    "draftBannerTitle": "သိမ်းဆည်းထားသော ဗားရှင်းထက် စာမူအသစ် တွေ့ရှိသည်။",
+    "draftRestore": "စာမူကို ပြန်ယူပါ",
+    "draftDiscard": "ဖျက်သိမ်းပါ"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Lagrer…",
+    "autosaveSaved": "Lagret {time}",
+    "autosaveError": "Kunne ikke lagre. Prøver igjen…",
+    "autosaveErrorFinal": "Kunne ikke lagre etter flere forsøk.",
+    "autosaveRetryNow": "Prøv igjen nå",
+    "autosaveOff": "Automatisk lagring er av — det finnes ulagrede endringer.",
+    "draftBannerTitle": "Vi fant et utkast som er nyere enn den lagrede versjonen.",
+    "draftRestore": "Gjenopprett utkast",
+    "draftDiscard": "Forkast"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

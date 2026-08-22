@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "ინახება…",
+    "autosaveSaved": "შენახულია {time}",
+    "autosaveError": "ვერ შეინახა. ხდება ხელახალი მცდელობა…",
+    "autosaveErrorFinal": "რამდენიმე მცდელობის შემდეგაც ვერ შეინახა.",
+    "autosaveRetryNow": "სცადეთ ახლავე",
+    "autosaveOff": "ავტოშენახვა გამორთულია — არის ჩაუნაწერებელი ცვლილებები.",
+    "draftBannerTitle": "ნაპოვნია შავი, უფრო ახალი ვიდრე შენახული ვერსია.",
+    "draftRestore": "შავის აღდგენა",
+    "draftDiscard": "უარყოფა"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

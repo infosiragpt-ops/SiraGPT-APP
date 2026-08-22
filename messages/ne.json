@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "बचत हुँदैछ…",
+    "autosaveSaved": "सुरक्षित भयो {time}",
+    "autosaveError": "बचत गर्न सकिएन। फेरि प्रयास गरिँदैछ…",
+    "autosaveErrorFinal": "धेरै प्रयासपछि पनि बचत गर्न सकिएन।",
+    "autosaveRetryNow": "अहिले फेरि प्रयास गर्नुहोस्",
+    "autosaveOff": "अटोसेभ बन्द छ — नबचाइएका परिवर्तनहरू छन्।",
+    "draftBannerTitle": "सुरक्षित संस्करणभन्दा नयाँ ड्राफ्ट भेटियो।",
+    "draftRestore": "ड्राफ्ट पुनर्स्थापना गर्नुहोस्",
+    "draftDiscard": "खारेज गर्नुहोस्"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

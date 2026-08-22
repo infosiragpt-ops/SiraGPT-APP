@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "שומר…",
+    "autosaveSaved": "נשמר {time}",
+    "autosaveError": "השמירה נכשלה. מנסה שוב…",
+    "autosaveErrorFinal": "השמירה נכשלה לאחר מספר ניסיונות.",
+    "autosaveRetryNow": "נסה שוב עכשיו",
+    "autosaveOff": "שמירה אוטומטית כבויה — יש שינויים שלא נשמרו.",
+    "draftBannerTitle": "מצאנו טיוטה חדשה מהגרסה השמורה.",
+    "draftRestore": "שחזר טיוטה",
+    "draftDiscard": "התעלם"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

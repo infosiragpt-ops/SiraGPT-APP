@@ -38,11 +38,17 @@ export type EditorSaveOptions = {
   markdown: string
   chatId?: string
   summary?: string
+  /**
+   * Stable id for one logical edit (retries reuse it). The backend dedupes
+   * same-id + same-content requests to the already-recorded FileVersion, so
+   * a retried save after a lost response never creates a duplicate version.
+   */
+  clientMutationId?: string
 }
 
 /** Minimal shape of the apiClient surface this module needs. */
 export type EditorApiClient = {
-  saveDocumentEdit?: (fileId: string, body: { content: string; chatId?: string; summary?: string }) => Promise<unknown>
+  saveDocumentEdit?: (fileId: string, body: { content: string; chatId?: string; summary?: string; clientMutationId?: string }) => Promise<unknown>
   getFileContent?: (id: string) => Promise<string>
   request?: (endpoint: string, options?: { method?: string; body?: string }) => Promise<unknown>
 }
@@ -308,12 +314,13 @@ export async function buildExportBlob(
  * version record so the UI can still show "saved" for the current session.
  */
 export async function saveEditedDocument(options: EditorSaveOptions): Promise<EditorSaveResult> {
-  const { fileId, markdown, chatId, summary } = options
+  const { fileId, markdown, chatId, summary, clientMutationId } = options
   const client = fallbackApiClient(options.apiClient)
   const body = {
     content: markdown,
     ...(chatId ? { chatId } : {}),
     ...(summary ? { summary } : {}),
+    ...(clientMutationId ? { clientMutationId } : {}),
   }
 
   const remote = (await (client.saveDocumentEdit

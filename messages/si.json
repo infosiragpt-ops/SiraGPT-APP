@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "සුරකිමින්…",
+    "autosaveSaved": "සුරකින ලදී {time}",
+    "autosaveError": "සුරැකීමට නොහැකි විය. නැවත උත්සාහ කරමින්…",
+    "autosaveErrorFinal": "උත්සාහ කිහිපයකින් පසුවත් සුරැකීමට නොහැකි විය.",
+    "autosaveRetryNow": "දැන් නැවත උත්සාහ කරන්න",
+    "autosaveOff": "ස්වයං-සුරැකීම අක්‍රීයයි — නොසුරැකූ වෙනස්කම් ඇත.",
+    "draftBannerTitle": "සුරැකි අනුවාදයට වඩා නව කෙටුම්පතක් හමු විය.",
+    "draftRestore": "කෙටුම්පත ප්‍රතිසාධනය කරන්න",
+    "draftDiscard": "ඉවත් කරන්න"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

@@ -368,7 +368,16 @@
     "pdfFile": "PDF ファイル",
     "downloadAsWord": "Word (.docx) でダウンロード",
     "downloadAsPdf": "PDF でダウンロード",
-    "generating": "生成中…"
+    "generating": "生成中…",
+    "autosaveSaving": "保存中…",
+    "autosaveSaved": "保存済み {time}",
+    "autosaveError": "保存できませんでした。再試行中…",
+    "autosaveErrorFinal": "何度か試みましたが保存できませんでした。",
+    "autosaveRetryNow": "今すぐ再試行",
+    "autosaveOff": "自動保存がオフです — 未保存の変更があります。",
+    "draftBannerTitle": "保存済みのバージョンより新しい下書きが見つかりました。",
+    "draftRestore": "下書きを復元",
+    "draftDiscard": "破棄"
   },
   "errors": {
     "serverError": "リクエストの処理中に問題が発生しました。もう一度お試しください。",

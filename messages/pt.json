@@ -368,7 +368,16 @@
     "pdfFile": "Arquivo PDF",
     "downloadAsWord": "Baixar como Word (.docx)",
     "downloadAsPdf": "Baixar como PDF",
-    "generating": "Gerando…"
+    "generating": "Gerando…",
+    "autosaveSaving": "Salvando…",
+    "autosaveSaved": "Salvo {time}",
+    "autosaveError": "Não foi possível salvar. Tentando novamente…",
+    "autosaveErrorFinal": "Não foi possível salvar após várias tentativas.",
+    "autosaveRetryNow": "Tentar novamente agora",
+    "autosaveOff": "Salvamento automático desativado — há alterações não salvas.",
+    "draftBannerTitle": "Encontramos um rascunho mais recente do que a versão salva.",
+    "draftRestore": "Restaurar rascunho",
+    "draftDiscard": "Descartar"
   },
   "errors": {
     "serverError": "Houve um problema ao processar sua solicitação. Por favor, tente novamente.",

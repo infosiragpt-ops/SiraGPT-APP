@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Išsaugoma…",
+    "autosaveSaved": "Išsaugota {time}",
+    "autosaveError": "Nepavyko išsaugoti. Bandoma dar kartą…",
+    "autosaveErrorFinal": "Nepavyko išsaugoti po kelių bandymų.",
+    "autosaveRetryNow": "Bandyti dabar",
+    "autosaveOff": "Automatinis išsaugojimas išjungtas — yra neišsaugotų pakeitimų.",
+    "draftBannerTitle": "Radome juodraštį, naujesnį nei išsaugota versija.",
+    "draftRestore": "Atkurti juodraštį",
+    "draftDiscard": "Atmesti"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

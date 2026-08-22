@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "সংরক্ষণ চলছে…",
+    "autosaveSaved": "সংরক্ষিত হয়েছে {time}",
+    "autosaveError": "সংরক্ষণ করা যায়নি। আবার চেষ্টা করা হচ্ছে…",
+    "autosaveErrorFinal": "কয়েকবার চেষ্টার পরও সংরক্ষণ করা যায়নি।",
+    "autosaveRetryNow": "এখনই আবার চেষ্টা করুন",
+    "autosaveOff": "অটোসেভ বন্ধ — অসংরক্ষিত পরিবর্তন রয়েছে।",
+    "draftBannerTitle": "সংরক্ষিত সংস্করণের চেয়ে নতুন একটি খসড়া পাওয়া গেছে।",
+    "draftRestore": "খসড়া পুনরুদ্ধার করুন",
+    "draftDiscard": "বাতিল করুন"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

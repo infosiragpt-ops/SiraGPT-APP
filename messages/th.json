@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "กำลังบันทึก…",
+    "autosaveSaved": "บันทึกแล้ว {time}",
+    "autosaveError": "บันทึกไม่สำเร็จ กำลังลองใหม่…",
+    "autosaveErrorFinal": "บันทึกไม่สำเร็จหลังจากพยายามหลายครั้ง",
+    "autosaveRetryNow": "ลองใหม่ตอนนี้",
+    "autosaveOff": "การบันทึกอัตโนมัติปิดอยู่ — มีการเปลี่ยนแปลงที่ยังไม่ได้บันทึก",
+    "draftBannerTitle": "พบฉบับร่างที่ใหม่กว่าเวอร์ชันที่บันทึกไว้",
+    "draftRestore": "กู้คืนฉบับร่าง",
+    "draftDiscard": "ยกเลิก"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

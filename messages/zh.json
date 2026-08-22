@@ -368,7 +368,16 @@
     "pdfFile": "PDF 文件",
     "downloadAsWord": "下载为 Word (.docx)",
     "downloadAsPdf": "下载为 PDF",
-    "generating": "生成中…"
+    "generating": "生成中…",
+    "autosaveSaving": "正在保存…",
+    "autosaveSaved": "已保存 {time}",
+    "autosaveError": "无法保存，正在重试…",
+    "autosaveErrorFinal": "多次尝试后仍无法保存。",
+    "autosaveRetryNow": "立即重试",
+    "autosaveOff": "自动保存已关闭 — 有未保存的更改。",
+    "draftBannerTitle": "发现比已保存版本更新的草稿。",
+    "draftRestore": "恢复草稿",
+    "draftDiscard": "丢弃"
   },
   "errors": {
     "serverError": "处理您的请求时出现问题，请重试。",

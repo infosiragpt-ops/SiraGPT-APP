@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Menyimpan…",
+    "autosaveSaved": "Disimpan {time}",
+    "autosaveError": "Gagal menyimpan. Sedang mencuba semula…",
+    "autosaveErrorFinal": "Gagal menyimpan selepas beberapa cubaan.",
+    "autosaveRetryNow": "Cuba lagi sekarang",
+    "autosaveOff": "Auto-simpan dimatikan — terdapat perubahan belum disimpan.",
+    "draftBannerTitle": "Draf yang lebih baharu daripada versi tersimpan dijumpai.",
+    "draftRestore": "Pulihkan draf",
+    "draftDiscard": "Buang"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

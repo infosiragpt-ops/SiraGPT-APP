@@ -368,7 +368,16 @@
     "pdfFile": "PDF-файл",
     "downloadAsWord": "Скачать как Word (.docx)",
     "downloadAsPdf": "Скачать как PDF",
-    "generating": "Генерация…"
+    "generating": "Генерация…",
+    "autosaveSaving": "Сохранение…",
+    "autosaveSaved": "Сохранено {time}",
+    "autosaveError": "Не удалось сохранить. Повторная попытка…",
+    "autosaveErrorFinal": "Не удалось сохранить после нескольких попыток.",
+    "autosaveRetryNow": "Повторить сейчас",
+    "autosaveOff": "Автосохранение выключено — есть несохранённые изменения.",
+    "draftBannerTitle": "Найден черновик новее сохранённой версии.",
+    "draftRestore": "Восстановить черновик",
+    "draftDiscard": "Отменить"
   },
   "errors": {
     "serverError": "При обработке запроса возникла проблема. Пожалуйста, попробуйте ещё раз.",

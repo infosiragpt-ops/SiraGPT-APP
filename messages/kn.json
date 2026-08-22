@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "ಉಳಿಸಲಾಗುತ್ತಿದೆ…",
+    "autosaveSaved": "ಉಳಿಸಲಾಗಿದೆ {time}",
+    "autosaveError": "ಉಳಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ. ಮರುಪ್ರಯತ್ನಿಸಲಾಗುತ್ತಿದೆ…",
+    "autosaveErrorFinal": "ಹಲವು ಪ್ರಯತ್ನಗಳ ನಂತರವೂ ಉಳಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
+    "autosaveRetryNow": "ಈಗ ಮರುಪ್ರಯತ್ನಿಸಿ",
+    "autosaveOff": "ಆಟೋಸೇವ್ ಆಫ್ ಆಗಿದೆ — ಉಳಿಸದ ಬದಲಾವಣೆಗಳಿವೆ.",
+    "draftBannerTitle": "ಉಳಿಸಿದ ಆವೃತ್ತಿಗಿಂತ ಹೊಸ ಕರಡು ಸಿಕ್ಕಿದೆ.",
+    "draftRestore": "ಕರಡನ್ನು ಮರುಸ್ಥಾಪಿಸಿ",
+    "draftDiscard": "ತಿರಸ್ಕರಿಸಿ"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

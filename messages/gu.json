@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "સાચવી રહ્યું છે…",
+    "autosaveSaved": "સાચવ્યું {time}",
+    "autosaveError": "સાચવી શકાયું નથી. ફરી પ્રયાસ કરવામાં આવી રહ્યો છે…",
+    "autosaveErrorFinal": "ઘણા પ્રયાસો પછી પણ સાચવી શકાયું નથી.",
+    "autosaveRetryNow": "હવે ફરી પ્રયાસ કરો",
+    "autosaveOff": "ઓટોસેવ બંધ છે — બિનસાચવાયેલા ફેરફારો છે.",
+    "draftBannerTitle": "સાચવેલા સંસ્કરણ કરતાં નવો ડ્રાફ્ટ મળ્યો.",
+    "draftRestore": "ડ્રાફ્ટ પુનઃસ્થાપિત કરો",
+    "draftDiscard": "કાઢી નાખો"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",

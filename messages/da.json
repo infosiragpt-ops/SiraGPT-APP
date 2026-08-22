@@ -368,7 +368,16 @@
     "pdfFile": "PDF File",
     "downloadAsWord": "Download as Word (.docx)",
     "downloadAsPdf": "Download as PDF",
-    "generating": "Generating…"
+    "generating": "Generating…",
+    "autosaveSaving": "Gemmer…",
+    "autosaveSaved": "Gemt {time}",
+    "autosaveError": "Kunne ikke gemme. Prøver igen…",
+    "autosaveErrorFinal": "Kunne ikke gemme efter flere forsøg.",
+    "autosaveRetryNow": "Prøv igen nu",
+    "autosaveOff": "Automatisk gemning er slået fra — der er ugemte ændringer.",
+    "draftBannerTitle": "Vi fandt et udkast, der er nyere end den gemte version.",
+    "draftRestore": "Gendan udkast",
+    "draftDiscard": "Kassér"
   },
   "errors": {
     "serverError": "There was a problem processing your request. Please try again.",
