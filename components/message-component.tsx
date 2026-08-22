@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
@@ -337,16 +338,16 @@ const extractRenderableAgentTaskContent = (content: string) => {
 const getDocumentChipIcon = (name: string) => {
     const extension = name.split('.').pop()?.toLowerCase();
     if (extension === 'doc' || extension === 'docx') {
-        return <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+        return <Image src="/icons/Word.png" alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 shrink-0" />;
     }
     if (extension === 'xls' || extension === 'xlsx' || extension === 'csv') {
-        return <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+        return <Image src="/icons/Excel.png" alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 shrink-0" />;
     }
     if (extension === 'ppt' || extension === 'pptx') {
-        return <img src="/icons/Bigger P powerpoint.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+        return <Image src="/icons/Bigger P powerpoint.png" alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 shrink-0" />;
     }
     if (extension === 'pdf') {
-        return <img src="/icons/pdf.png" alt="" aria-hidden="true" className="h-8 w-8 shrink-0" />;
+        return <Image src="/icons/pdf.png" alt="" aria-hidden="true" width={32} height={32} className="h-8 w-8 shrink-0" />;
     }
     return (
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
@@ -415,6 +416,7 @@ function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "th
         return <VideoCardFilmPlaceholder variant={variant} />;
     }
     return (
+        // eslint-disable-next-line @next/next/no-img-element -- URL de video arbitraria del backend, con onError manual
         <img
             src={src}
             alt=""
@@ -446,6 +448,7 @@ function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => v
         );
     }
     return (
+        // eslint-disable-next-line @next/next/no-img-element -- adjunto de usuario con onError manual y URL arbitraria
         <img
             src={imageUrl}
             alt={file.name || file.originalName || "Image"}
@@ -587,6 +590,7 @@ const ChartDisplay = ({ files, fullResponse, onImageClick }: { files: any[], ful
     if (imageUrl) {
         return (
             <div className="mt-3 relative inline-block w-full group">
+                {/* eslint-disable-next-line @next/next/no-img-element -- gráfico generado por el backend, URL arbitraria */}
                 <img
                     src={imageUrl}
                     alt="Generated chart"
@@ -843,6 +847,7 @@ const GeneratedImageCard = ({
             onPointerUp={finishSelection}
             onPointerCancel={() => setDragStart(null)}
         >
+            {/* eslint-disable-next-line @next/next/no-img-element -- imagen generada con onLoad/onError y selección por pointer events */}
             <img
                 src={src}
                 alt={`Generated image ${index + 1}`}
@@ -2879,9 +2884,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 );
                                 const getFileIcon = () => {
                                     if (fileNameLower.endsWith('.pdf')) {
-                                        return <img src="/icons/pdf.png" alt="PDF" loading="lazy" decoding="async" className="h-10 w-10" />;
+                                        return <Image src="/icons/pdf.png" alt="PDF" width={40} height={40} loading="lazy" className="h-10 w-10" />;
                                     } else if (fileNameLower.endsWith('.docx') || fileNameLower.endsWith('.doc')) {
-                                        return <img src="/icons/Word.png" alt="Word" loading="lazy" decoding="async" className="h-10 w-10" />;
+                                        return <Image src="/icons/Word.png" alt="Word" width={40} height={40} loading="lazy" className="h-10 w-10" />;
                                     } else if (isPowerPoint) {
                                         return <PresentationIcon className="h-10 w-10 text-orange-600" />;
                                     }
@@ -3074,6 +3079,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                 <p className="text-sm text-gray-500">Failed to load image</p>
                                             </div>
                                         ) : (
+                                            // eslint-disable-next-line @next/next/no-img-element -- imagen generada con loading state manual por clave
                                             <img
                                                 src={message.content}
                                                 alt="Generated image"
@@ -3503,10 +3509,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     >
                         <X className="h-6 w-6" />
                     </button>
-                    <div 
+                    <div
                         className="max-w-[90vw] max-h-[90vh] flex items-center justify-center"
                         onClick={(e) => e.stopPropagation()}
                     >
+                        {/* eslint-disable-next-line @next/next/no-img-element -- lightbox a resolución nativa, next/image re-optimizaría */}
                         <img
                             src={selectedImage}
                             alt="Full size image"

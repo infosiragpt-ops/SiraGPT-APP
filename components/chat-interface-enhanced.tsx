@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 import dynamic from "next/dynamic"
 import {
   Send,
@@ -1311,7 +1312,7 @@ const ActionsDropdown = ({
       disabled: isProcessingGmail,
       dotClassName: "bg-red-500",
       iconClassName: "bg-red-100 dark:bg-red-900/20",
-      icon: <img src="/icons/google.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/google.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: handleGmailToggle,
     },
     {
@@ -1322,7 +1323,7 @@ const ActionsDropdown = ({
       disabled: isProcessingGoogleServices,
       dotClassName: "bg-blue-500",
       iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <img src="/icons/google-calendar.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/google-calendar.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: handleGoogleCalendarToggle,
     },
     {
@@ -1333,7 +1334,7 @@ const ActionsDropdown = ({
       disabled: isProcessingGoogleServices,
       dotClassName: "bg-green-500",
       iconClassName: "bg-green-100 dark:bg-green-900/20",
-      icon: <img src="/icons/google-drive.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/google-drive.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: handleGoogleDriveToggle,
     },
     {
@@ -1344,7 +1345,7 @@ const ActionsDropdown = ({
       disabled: isProcessingSpotify,
       dotClassName: "bg-green-500",
       iconClassName: "bg-green-100 dark:bg-green-900/20",
-      icon: <img src="/icons/spotify.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/spotify.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: handleSpotifyToggle,
     },
     {
@@ -1355,7 +1356,7 @@ const ActionsDropdown = ({
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
       iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <img src="/icons/Word.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/Word.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: () => {
         handleWordConnectorToggle?.();
         setIsOpen(false);
@@ -1369,7 +1370,7 @@ const ActionsDropdown = ({
       disabled: isToolSwitchDisabled,
       dotClassName: "bg-blue-500",
       iconClassName: "bg-blue-100 dark:bg-blue-900/20",
-      icon: <img src="/icons/Excel.png" alt="" aria-hidden="true" className="h-4 w-4" />,
+      icon: <Image src="/icons/Excel.png" alt="" aria-hidden="true" width={16} height={16} className="h-4 w-4" />,
       onClick: () => {
         handleExcelConnectorToggle?.();
         setIsOpen(false);
@@ -1762,10 +1763,11 @@ const getFileIcon = (file: any) => {
     const imageUrl = baseUrl + file.url;
 
     return (
+      // eslint-disable-next-line @next/next/no-img-element -- backend URL arbitraria (NEXT_PUBLIC_IMAGE_URL), no cubierta por next/image
       <img
         src={imageUrl}
         alt={file.name}
-        className="h-full w-full object-cover" // Yeh classes <img> ko apne parent container mein fit karengi
+        className="h-full w-full object-cover"
       />
     );
   }
@@ -1775,17 +1777,17 @@ const getFileIcon = (file: any) => {
 
   switch (extension) {
     case 'pdf':
-      return <img src="/icons/pdf.png" alt="PDF" className="h-8 w-8" />;
+      return <Image src="/icons/pdf.png" alt="PDF" width={32} height={32} className="h-8 w-8" />;
     case 'doc':
     case 'docx':
-      return <img src="/icons/Word.png" alt="Word" className="h-8 w-8" />;
+      return <Image src="/icons/Word.png" alt="Word" width={32} height={32} className="h-8 w-8" />;
     case 'xls':
     case 'xlsx':
     case 'csv':
-      return <img src="/icons/Excel.png" alt="Excel" className="h-8 w-8" />;
+      return <Image src="/icons/Excel.png" alt="Excel" width={32} height={32} className="h-8 w-8" />;
     case 'ppt':
     case 'pptx':
-      return <img src="/icons/Bigger P powerpoint.png" alt="PowerPoint" className="h-8 w-8" />;
+      return <Image src="/icons/Bigger P powerpoint.png" alt="PowerPoint" width={32} height={32} className="h-8 w-8" />;
     case 'txt':
       return wrapIconInSmallSquare(<FileText className="h-5 w-5 text-white" />, "#6b7280"); // grey
     case 'mp4':
@@ -2009,8 +2011,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 <>
                   <div className="h-full w-full rounded-md overflow-hidden bg-gray-100 dark:bg-muted/40 flex items-center justify-center relative">
                     {file.preview ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- blob/data preview local, no cubierta por next/image
                       <img src={file.preview} alt={file.name} className="h-full w-full object-cover" />
                     ) : file.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- backend URL arbitraria (NEXT_PUBLIC_IMAGE_URL), no cubierta por next/image
                       <img
                         src={`${process.env.NEXT_PUBLIC_IMAGE_URL || ""}${file.url}`}
                         alt={file.name}
@@ -2062,6 +2066,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 <>
                   {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
                     <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
+                      {/* eslint-disable-next-line @next/next/no-img-element -- dataURL de thumbnail, no cubierta por next/image */}
                       <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
                       {formatChipDuration(file.mediaMeta?.durationSeconds) && (
                         <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
@@ -2419,12 +2424,12 @@ const ActiveToolsDisplay = ({
     </span>
   );
   const activeConnectors = [
-    isGmailActive && { id: 'gmail', label: 'Gmail', icon: <img src="/icons/google.png" alt="Gmail" className="h-4 w-4" /> },
-    isGoogleCalendarActive && { id: 'calendar', label: 'Calendar', icon: <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4" /> },
-    isGoogleDriveActive && { id: 'drive', label: 'Drive', icon: <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4" /> },
-    isSpotifyActive && { id: 'spotify', label: 'Spotify', icon: <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4" /> },
-    isWordConnectorActive && { id: 'word', label: 'Word', icon: <img src="/icons/Word.png" alt="Word" className="h-4 w-4" /> },
-    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4" /> },
+    isGmailActive && { id: 'gmail', label: 'Gmail', icon: <Image src="/icons/google.png" alt="Gmail" width={16} height={16} className="h-4 w-4" /> },
+    isGoogleCalendarActive && { id: 'calendar', label: 'Calendar', icon: <Image src="/icons/google-calendar.png" alt="Google Calendar" width={16} height={16} className="h-4 w-4" /> },
+    isGoogleDriveActive && { id: 'drive', label: 'Drive', icon: <Image src="/icons/google-drive.png" alt="Google Drive" width={16} height={16} className="h-4 w-4" /> },
+    isSpotifyActive && { id: 'spotify', label: 'Spotify', icon: <Image src="/icons/spotify.png" alt="Spotify" width={16} height={16} className="h-4 w-4" /> },
+    isWordConnectorActive && { id: 'word', label: 'Word', icon: <Image src="/icons/Word.png" alt="Word" width={16} height={16} className="h-4 w-4" /> },
+    isExcelConnectorActive && { id: 'excel', label: 'Excel', icon: <Image src="/icons/Excel.png" alt="Excel" width={16} height={16} className="h-4 w-4" /> },
     isComputerUseActive && { id: `computer-use-${activeComputerUseMode}`, label: computerUseAppMeta[activeComputerUseMode].label, icon: activeComputerUseIcon },
   ].filter(Boolean) as { id: string; label: string; icon: JSX.Element }[];
 
@@ -2590,6 +2595,7 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- clamp de duración solo cuando cambia la selección; availableModels dispararía re-clamps espurios
   React.useEffect(() => {
     const fal = (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal
     const durationSpec = resolveVideoDurationSpec(selectedVideoModel, fal)
@@ -2696,7 +2702,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google.png" alt="Gmail" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/google.png" alt="Gmail" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Gmail</span>
           </div>
           <Switch checked={isGmailActive} onCheckedChange={handleGmailToggle} />
@@ -2705,7 +2711,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google-calendar.png" alt="Google Calendar" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/google-calendar.png" alt="Google Calendar" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Google Calendar</span>
           </div>
           <Switch checked={isGoogleCalendarActive} onCheckedChange={handleGoogleCalendarToggle} />
@@ -2714,7 +2720,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/google-drive.png" alt="Google Drive" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/google-drive.png" alt="Google Drive" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Google Drive</span>
           </div>
           <Switch checked={isGoogleDriveActive} onCheckedChange={handleGoogleDriveToggle} />
@@ -2723,7 +2729,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/spotify.png" alt="Spotify" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/spotify.png" alt="Spotify" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Spotify</span>
           </div>
           <Switch checked={isSpotifyActive} onCheckedChange={handleSpotifyToggle} />
@@ -2732,7 +2738,7 @@ const ActiveToolsDisplay = ({
       <DropdownMenuItem className="chat-active-apps-menu-item" onSelect={(e) => e.preventDefault()}>
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/Word.png" alt="Word" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/Word.png" alt="Word" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Word</span>
           </div>
           <Switch checked={isWordConnectorActive} onCheckedChange={handleWordConnectorToggle} />
@@ -2746,7 +2752,7 @@ const ActiveToolsDisplay = ({
       >
         <div className="flex items-center justify-between w-full gap-4">
           <div className="flex min-w-0 items-center gap-2.5">
-            <img src="/icons/Excel.png" alt="Excel" className="h-4 w-4 shrink-0" />
+            <Image src="/icons/Excel.png" alt="Excel" width={16} height={16} className="h-4 w-4 shrink-0" />
             <span className="truncate">Excel</span>
           </div>
           <Switch checked={isExcelConnectorActive} onCheckedChange={handleExcelConnectorToggle} />
@@ -6609,6 +6615,7 @@ But first, you need to connect your Spotify account securely using the button be
       }
       return;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- parseo del input al cambiar de herramienta; el array cubre los campos usados
   }, [
     chatType,
     closeAllToolsAndConnectors,

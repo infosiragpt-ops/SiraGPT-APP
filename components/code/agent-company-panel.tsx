@@ -1262,6 +1262,7 @@ export function AgentCompanyPanel() {
     return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
   }, [])
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- runtime de empresa se resuelve con el estado leído al invocar; ampliar deps recrearía la promesa en vuelo
   const ensureCompanyRuntime = React.useCallback(
     ({
       workspaceId = activeFolder?.id || null,
