@@ -566,7 +566,7 @@ jobs:
                 echo "[deploy-workflow] Rollback runner health check failed"
                 exit "${status}"
               fi
-              if ! ${COMPOSE} up -d --no-deps --force-recreate backend frontend; then
+              if ! ${COMPOSE} up -d --no-deps --force-recreate backend frontend prometheus; then
                 echo "[deploy-workflow] Rollback container start failed"
                 exit "${status}"
               fi
@@ -663,7 +663,7 @@ jobs:
             ${COMPOSE} up -d --no-deps --force-recreate runner
             wait_runner
             echo "[deploy-workflow] Runner health check passed"
-            ${COMPOSE} up -d --no-deps --force-recreate backend frontend
+            ${COMPOSE} up -d --no-deps --force-recreate backend frontend prometheus
             wait_ready
             echo "[deploy-workflow] Deploy health check passed: ${READY_URL}"
             wait_frontend
