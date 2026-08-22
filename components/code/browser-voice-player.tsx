@@ -252,6 +252,17 @@ export function BrowserVoicePlayer({
   const playAudioSrc = React.useCallback((src: string) => {
     let audio = audioRef.current
     if (!audio || audio.src !== src) {
+      // F3 — swap of the underlying blob: URL: revoke the old one first so
+      // repeated plays don't accumulate live blob MP3s. Only `blob:` URLs are
+      // ours; http(s) endpoints from ElevenLabs must never be revoked.
+      const previousSrc = audioRef.current?.src
+      if (typeof previousSrc === "string" && previousSrc.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(previousSrc)
+        } catch {
+          /* ignore */
+        }
+      }
       audio = new Audio(src)
       audio.preload = "auto"
       audioRef.current = audio
@@ -423,6 +434,18 @@ export function BrowserVoicePlayer({
     }
     return () => {
       stopAll()
+      // F3 — the turn is unmounting: nothing can play this blob again, so
+      // revoke it instead of leaking the MP3 bytes for the session's life.
+      const src = audioSrcRef.current
+      if (typeof src === "string" && src.startsWith("blob:")) {
+        try {
+          URL.revokeObjectURL(src)
+        } catch {
+          /* ignore */
+        }
+      }
+      audioSrcRef.current = null
+      usingLocalRef.current = false
       audioRef.current = null
     }
     // Mount-only a propósito: la limpieza corta audio al desmontar el turno.

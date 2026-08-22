@@ -284,6 +284,7 @@ import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
 import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import { isBlobPreviewUrl, revokeUploadPreviews } from "@/lib/composer/upload-preview-lifecycle"
 import {
   isAssistantMessage,
   parseMessageFilesForRender,
@@ -5257,6 +5258,31 @@ function ChatInterfaceContent() {
   const attachmentHashesRef = React.useRef<Set<string>>(new Set());
   const attachmentHashByIdRef = React.useRef<Map<string, string>>(new Map());
 
+  // F3 — revoke the blob: preview objectURLs of every chip we are about to
+  // drop. Object URLs stay alive (pinning their image bytes) until explicitly
+  // revoked, so every path that empties/replaces `uploadedFiles` must pass
+  // through this first. Only `blob:` strings are touched — server/data URLs
+  // that some chips carry instead are left alone.
+  const releaseUploadedFiles = React.useCallback(() => {
+    revokeUploadPreviews(uploadedFilesRef.current);
+    uploadedFilesRef.current = [];
+    setUploadedFiles([]);
+  }, [setUploadedFiles]);
+
+  // Last-resort sweep: when the tab is being hidden/closed for good, nothing
+  // else will run, so revoke whatever blob previews are still alive. Uses the
+  // ref mirror so it sees the latest list without re-subscribing.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPageHide = () => {
+      try {
+        revokeUploadPreviews(uploadedFilesRef.current);
+      } catch {}
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
+  }, []);
+
   const updateUploadedFileById = React.useCallback((
     fileId: string,
     updater: (file: any) => any,
@@ -5347,6 +5373,7 @@ function ChatInterfaceContent() {
         toast.error("No se pudo preparar la imagen para edición.");
         return;
       }
+      releaseUploadedFiles();
 
       const region = detail.region || {};
       const regionText = [
@@ -5384,7 +5411,7 @@ function ChatInterfaceContent() {
 
     window.addEventListener("siragpt:image-region-edit", onImageRegionEdit);
     return () => window.removeEventListener("siragpt:image-region-edit", onImageRegionEdit);
-  }, [setUploadedFiles, setChatType]);
+  }, [setUploadedFiles, setChatType, releaseUploadedFiles]);
 
   // "Reuse-in-prompt" bridge — UnifiedDocumentViewer dispatches a
   // CustomEvent on the window when the user clicks the Reply icon in
@@ -6060,8 +6087,7 @@ function ChatInterfaceContent() {
     setSplitViewContent(null);
     setComposerPreviewIndex(null);
     setSelectedWordText(null);
-    uploadedFilesRef.current = [];
-    setUploadedFiles([]);
+    releaseUploadedFiles();
     setUploadProgress({});
     setInput('');
     setSelectedImageModel(DEFAULT_IMAGE_MODEL);
@@ -6072,7 +6098,7 @@ function ChatInterfaceContent() {
     setComputerUseStatus('idle');
     setComputerUseAppMode(null);
     setComputerUseScreenshot(null);
-  }, [closeAllToolsAndConnectors, setChatType, clearReasoning, setUploadedFiles]);
+  }, [closeAllToolsAndConnectors, setChatType, clearReasoning, releaseUploadedFiles]);
 
   const markImageGenerationStopped = React.useCallback(() => {
     setCurrentChat(prevChat => {
@@ -8375,6 +8401,13 @@ But first, you need to connect your Spotify account securely using the button be
       uploadedFilesRef.current = next;
       return next;
     });
+    // The failed chip is being replaced by a fresh upload — its old blob:
+    // preview (if any) would otherwise stay alive until the next full clear.
+    if (isBlobPreviewUrl(failedFile?.preview)) {
+      try {
+        URL.revokeObjectURL(failedFile.preview);
+      } catch {}
+    }
     const dt = new DataTransfer();
     try {
       dt.items.add(localFile);
@@ -8839,6 +8872,13 @@ But first, you need to connect your Spotify account securely using the button be
     syncQueuedCount(chatId);
     setInput(item.msg);
     chatDraft.save(item.msg);
+    // The queued chips come back to life — revoke the previews of whatever is
+    // attached right now so restoring doesn't orphan their blobs. Queued
+    // snapshots were already revoked when parked (see releaseUploadedFiles);
+    // their `preview` field keeps the stale URL only as a display string and
+    // is re-created by nothing, so chips restored from the queue render via
+    // their server url/file when present.
+    revokeUploadPreviews(uploadedFilesRef.current);
     uploadedFilesRef.current = item.files;
     setUploadedFiles(item.files);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
@@ -9387,8 +9427,7 @@ But first, you need to connect your Spotify account securely using the button be
       syncQueuedCount(currentChat?.id ?? null);
       setInput("");
       chatDraft.clear();
-      uploadedFilesRef.current = [];
-      setUploadedFiles([]);
+      releaseUploadedFiles();
       const now = Date.now();
       queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
       queueBurstTimestampsRef.current.push(now);
@@ -9493,8 +9532,7 @@ REWRITTEN TEXT:`;
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
     chatDraft.clear();
-    uploadedFilesRef.current = [];
-    setUploadedFiles([]);
+    releaseUploadedFiles();
 
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
@@ -10609,7 +10647,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (files && files[0]) {
         payload.fileId = files[0];
       }
-      setUploadedFiles([]);
+      releaseUploadedFiles();
       const imageRequestStartedAt = Date.now();
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
@@ -10861,7 +10899,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
-    setUploadedFiles([]); // Clear UI immediately
+    releaseUploadedFiles(); // Clear UI immediately (revoking blob previews)
 
     try {
       let newChat = currentChat;
@@ -11261,6 +11299,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
       const next = cur.filter((_, i) => i !== index);
       uploadedFilesRef.current = next;
+      // The chip is gone for good — free its blob: preview (if any).
+      if (removed && isBlobPreviewUrl(removed.preview)) {
+        try {
+          URL.revokeObjectURL(removed.preview);
+        } catch {}
+      }
       return next;
     });
     setComposerPreviewIndex((current) => {
