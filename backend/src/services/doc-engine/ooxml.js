@@ -285,6 +285,85 @@ function extractSectPr(documentXml) {
   return last;
 }
 
+function stripSectPr(xml) {
+  return String(xml || '').replace(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g, '');
+}
+
+function attrNum(tag, name) {
+  const m = String(tag || '').match(new RegExp('\\bw:' + name + '="(-?\\d+)"'));
+  return m ? Number(m[1]) : null;
+}
+
+function parsePageGeometry(sectPr) {
+  const blob = String(sectPr || '');
+  const pgSz = (blob.match(/<w:pgSz\b[^>]*\/?>/) || [])[0] || '';
+  const pgMar = (blob.match(/<w:pgMar\b[^>]*\/?>/) || [])[0] || '';
+  const w = attrNum(pgSz, 'w');
+  const h = attrNum(pgSz, 'h');
+  const orient = (pgSz.match(/\bw:orient="([^"]+)"/) || [])[1] || '';
+  const left = attrNum(pgMar, 'left') || 0;
+  const right = attrNum(pgMar, 'right') || 0;
+  const top = attrNum(pgMar, 'top') || 0;
+  const bottom = attrNum(pgMar, 'bottom') || 0;
+  const printable = w != null ? Math.max(0, w - left - right) : 0;
+  return { w, h, orient, left, right, top, bottom, pgSz, pgMar, printable };
+}
+
+function pageGeometryEqual(a, b) {
+  const ga = typeof a === 'string' ? parsePageGeometry(a) : (a || {});
+  const gb = typeof b === 'string' ? parsePageGeometry(b) : (b || {});
+  return ga.w === gb.w && ga.h === gb.h
+    && ga.left === gb.left && ga.right === gb.right
+    && ga.top === gb.top && ga.bottom === gb.bottom
+    && (ga.orient || '') === (gb.orient || '');
+}
+
+function scaleDxATag(tag, scale, forceW) {
+  if (/\bw:type="(?:auto|pct|nil)"/.test(tag)) return tag;
+  return tag.replace(/\bw:w="(-?\d+)"/, (_, n) => {
+    const next = forceW != null ? forceW : Math.max(1, Math.round(Number(n) * scale));
+    return `w:w="${next}"`;
+  });
+}
+
+function tableDxAWidth(tbl) {
+  const tblW = String(tbl || '').match(/<w:tblW\b[^>]*\/?>/);
+  let fromTbl = 0;
+  if (tblW && !/\bw:type="(?:auto|pct|nil)"/.test(tblW[0])) {
+    fromTbl = attrNum(tblW[0], 'w') || 0;
+  }
+  const cols = [...String(tbl || '').matchAll(/<w:gridCol\b[^>]*w:w="(-?\d+)"[^>]*\/?>/g)].map((m) => Number(m[1]));
+  const fromGrid = cols.reduce((acc, n) => acc + n, 0);
+  return Math.max(fromTbl, fromGrid);
+}
+
+function clampTablesToPrintableWidth(xml, maxTwips) {
+  const max = Number(maxTwips) || 0;
+  if (max < 144) return String(xml || '');
+  return String(xml || '').replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tbl) => {
+    const current = tableDxAWidth(tbl);
+    if (!current || current <= max) return tbl;
+    const scale = max / current;
+    return tbl
+      .replace(/<w:tblW\b[^>]*\/?>/g, (tag) => scaleDxATag(tag, scale, max))
+      .replace(/<w:gridCol\b[^>]*\/?>/g, (tag) => scaleDxATag(tag, scale))
+      .replace(/<w:tcW\b[^>]*\/?>/g, (tag) => scaleDxATag(tag, scale));
+  });
+}
+
+function forceTerminalSectPr(documentXml, templateSectPr) {
+  const sect = String(templateSectPr || '');
+  if (!sect) return String(documentXml || '');
+  return String(documentXml || '').replace(
+    /<w:body\b[^>]*>[\s\S]*<\/w:body>/,
+    (whole) => {
+      const open = (whole.match(/^<w:body\b[^>]*>/) || ['<w:body>'])[0];
+      const inner = whole.slice(open.length).replace(/<\/w:body>\s*$/, '');
+      return `${open}${stripSectPr(inner)}${sect}</w:body>`;
+    },
+  );
+}
+
 function isWordTagOpen(src, idx, tag) {
   if (idx < 0) return false;
   if (src.slice(idx, idx + tag.length + 1) !== `<${tag}`) return false;
@@ -320,7 +399,15 @@ function extractTopLevelBlocks(bodyInner) {
       start = t;
       tag = 'w:tbl';
     }
-    if (start > i && /<w:sectPr[\s>]/.test(src.slice(i, start))) break;
+    if (start > i) {
+      const gap = src.slice(i, start);
+      const sect = gap.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/);
+      if (sect) {
+        // Skip source section breaks; never stop the transplant, never keep pgSz.
+        i += sect.index + sect[0].length;
+        continue;
+      }
+    }
     const close = `</${tag}>`;
     const openEnd = src.indexOf('>', start);
     if (openEnd === -1) break;
@@ -403,6 +490,11 @@ module.exports = {
   buildStyleMap,
   remapStyleIds,
   extractSectPr,
+  stripSectPr,
+  parsePageGeometry,
+  pageGeometryEqual,
+  clampTablesToPrintableWidth,
+  forceTerminalSectPr,
   extractTopLevelBlocks,
   indexOfWordTag,
   listHeaderFooterParts,

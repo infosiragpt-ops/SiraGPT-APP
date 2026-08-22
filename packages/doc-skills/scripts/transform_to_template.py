@@ -111,8 +111,8 @@ def remap_styles(element: etree._Element, mapping: dict[str, str], allowed: set[
 def _extract_sectpr_bytes(document_xml_path: str) -> bytes | None:
     raw = open(document_xml_path, "rb").read()
     # último sectPr del body — se conserva byte-a-byte
-    m = re.search(br"<w:sectPr[\s>][\s\S]*?</w:sectPr>", raw)
-    return m.group(0) if m else None
+    matches = list(re.finditer(br"<w:sectPr[\s>][\s\S]*?</w:sectPr>", raw))
+    return matches[-1].group(0) if matches else None
 
 
 def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str], allowed: set[str]) -> None:
@@ -134,6 +134,12 @@ def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str],
         tag = child.tag if isinstance(child.tag, str) else ""
         if tag.endswith("}p") or tag.endswith("}tbl"):
             clone = etree.fromstring(etree.tostring(child, pretty_print=False))
+            for el in list(clone.iter()):
+                eltag = el.tag if isinstance(el.tag, str) else ""
+                if eltag.endswith("}sectPr"):
+                    parent = el.getparent()
+                    if parent is not None:
+                        parent.remove(el)
             remap_styles(clone, mapping, allowed)
             blocks.append(clone)
 

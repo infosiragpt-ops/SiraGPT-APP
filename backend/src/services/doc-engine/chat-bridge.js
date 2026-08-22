@@ -31,7 +31,9 @@ async function readFileBuffer(file, readBuffer) {
 }
 
 function buildValidation(transformed) {
+  const { pageGeometryEqual } = require('./ooxml');
   const sectOk = transformed.templateSectPr === transformed.resultSectPr;
+  const pageOk = pageGeometryEqual(transformed.templateSectPr, transformed.resultSectPr);
   const headersOk = JSON.stringify(transformed.headerFooterBefore)
     === JSON.stringify(transformed.headerFooterAfter);
   const placeholders = bodyStillHasPlaceholders(transformed.documentXml || '');
@@ -45,6 +47,7 @@ function buildValidation(transformed) {
     checks: {
       source_transplanted: transformed.transplantedBlocks > 0,
       template_sectpr_preserved: sectOk,
+      template_page_geometry_preserved: pageOk,
       header_footer_unchanged: headersOk,
       no_leftover_placeholders: !placeholders,
     },

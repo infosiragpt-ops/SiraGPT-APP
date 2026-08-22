@@ -456,3 +456,44 @@ describe('doc-engine hook keeps transplant when mid-body sectPr differs', () => 
     assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, ''), /XXXXXXXX/);
   });
 });
+
+describe('doc-engine page geometry from template', () => {
+  it('output pgSz w/h and pgMar equal template; source sectPr never copied; tables clamped', () => {
+    const tmplSect = '<w:sectPr><w:pgSz w:w="11910" w:h="16840" w:orient="portrait" w:code="9"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>';
+    const srcMid = '<w:sectPr><w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr>';
+    const srcLast = '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>';
+    const wideTbl = '<w:tbl><w:tblPr><w:tblW w:w="14000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="10000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:w="10000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>B wide</w:t></w:r></w:p></w:tc></w:tr></w:tbl>';
+    const template = makeDocx({
+      'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:styleId="TituloUPN"><w:name w:val="heading 1"/></w:style></w:styles>`,
+      'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:r><w:t>XXXXXXXX</w:t></w:r></w:p>${tmplSect}</w:body></w:document>`,
+    });
+    const source = makeDocx({
+      'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
+      'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:pPr>${srcMid}</w:pPr><w:r><w:t>Portada original UPN seccion landscape del source con texto de investigacion.</w:t></w:r></w:p><w:p><w:r><w:t>Capitulo 1 contenido real del source investigacion metodologica y resultados del RSN.</w:t></w:r></w:p>${wideTbl}${srcLast}</w:body></w:document>`,
+    });
+    const out = transformBuffers(source, template);
+    const geomT = ooxml.parsePageGeometry(out.templateSectPr);
+    const geomR = ooxml.parsePageGeometry(out.resultSectPr);
+    assert.equal(geomT.w, 11910);
+    assert.equal(geomT.h, 16840);
+    assert.equal(geomR.w, 11910);
+    assert.equal(geomR.h, 16840);
+    assert.equal(geomR.left, 1440);
+    assert.equal(geomR.right, 1440);
+    assert.equal(geomR.top, 1440);
+    assert.equal(geomR.bottom, 1440);
+    assert.equal(out.templateSectPr, tmplSect);
+    assert.equal(out.resultSectPr, tmplSect);
+    assert.equal(ooxml.pageGeometryEqual(out.templateSectPr, out.resultSectPr), true);
+    const sects = out.documentXml.match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g) || [];
+    assert.equal(sects.length, 1);
+    assert.equal(sects[0], tmplSect);
+    assert.doesNotMatch(out.documentXml, /w:w="16838"/);
+    assert.doesNotMatch(out.documentXml, /w:w="12240"/);
+    assert.doesNotMatch(out.documentXml, /w:orient="landscape"/);
+    assert.match(out.documentXml, /Portada original UPN/);
+    const tblW = Number((out.documentXml.match(/<w:tblW\b[^>]*w:w="(\d+)"/) || [])[1] || 0);
+    assert.ok(tblW > 0);
+    assert.ok(tblW <= 9030, `tblW ${tblW} should be <= 9030 printable twips`);
+  });
+});

@@ -25,6 +25,10 @@ const {
   extractSectPr,
   extractTopLevelBlocks,
   listHeaderFooterParts,
+  stripSectPr,
+  parsePageGeometry,
+  clampTablesToPrintableWidth,
+  forceTerminalSectPr,
 } = require('./ooxml');
 
 function zipFileText(zip, name) {
@@ -255,24 +259,33 @@ function transformBuffers(sourceBuffer, templateBuffer) {
 
   const bodyMatch = sourceDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
   if (!bodyMatch) throw new OoxmlError('el source no tiene w:body', 'missing_body');
+  const templateGeom = parsePageGeometry(templateSectPr);
   const blocks = extractTopLevelBlocks(bodyMatch[1])
-    .map((xml) => remapStyleIds(xml, mapping, allowed));
+    .map((xml) => remapStyleIds(xml, mapping, allowed))
+    .map((xml) => stripSectPr(xml));
   if (!blocks.length) {
     throw new OoxmlError('el source no tiene w:p / w:tbl para transplantar', 'empty_source_body');
   }
 
   const tmplBody = templateDoc.match(/<w:body\b[^>]*>([\s\S]*)<\/w:body>/);
   if (!tmplBody) throw new OoxmlError('la plantilla no tiene w:body', 'missing_body');
-  const newBodyInner = `${blocks.join('')}${templateSectPr}`;
+  // Never copy source sectPr/pgSz. Keep ONLY the plantilla terminal sectPr
+  // (pgSz+pgMar lexical). Clamp wide landscape tables to printable width.
+  let newBodyInner = stripSectPr(blocks.join(''));
+  if (templateGeom.printable) {
+    newBodyInner = clampTablesToPrintableWidth(newBodyInner, templateGeom.printable);
+  }
+  newBodyInner = `${newBodyInner}${templateSectPr}`;
   // Reemplazo del open-tag + inner (no String.replace del inner: $ y
   // substrings duplicados en Word real dejaban el body de la plantilla).
-  const newDocumentXml = templateDoc.replace(
+  let newDocumentXml = templateDoc.replace(
     /<w:body\b[^>]*>[\s\S]*<\/w:body>/,
     (whole) => {
       const open = (whole.match(/^<w:body\b[^>]*>/) || ['<w:body>'])[0];
       return `${open}${newBodyInner}</w:body>`;
     },
   );
+  newDocumentXml = forceTerminalSectPr(newDocumentXml, templateSectPr);
 
   // Copia la plantilla como base: todas las partes salvo document.xml.
   const out = new PizZip();
