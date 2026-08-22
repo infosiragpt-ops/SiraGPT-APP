@@ -1314,6 +1314,118 @@ router.get('/:id/content', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Large-document chunked editing support ───────────────────────────────
+// Documents >8MB of Markdown (>500 pages) never leave the server whole for
+// editing: the /chat editor pages through them chunk by chunk. The split is
+// byte-exact on both sides (server + client twins in
+// services/document-chunks.js and lib/chat/document-chunks.ts), so a paged
+// save reassembles the document exactly as it was read.
+
+// Active version resolution shared by /chunks and /meta. The "active" text is
+// the newest manual edit when one exists (same contract as GET
+// /:id/versions/:versionId/content used by the normal-mode reload), otherwise
+// the original extracted text. Returns null when the caller doesn't own the
+// file or nothing editable exists.
+async function resolveActiveEditableContent(prismaClient, { fileId, userId }) {
+  const file = await prismaClient.file.findFirst({
+    where: { id: fileId, userId },
+    select: { id: true, extractedText: true },
+  });
+  if (!file) return null;
+  const latestVersion = await prismaClient.fileVersion.findFirst({
+    where: { fileId, userId, validationPassed: true },
+    orderBy: { version: 'desc' },
+    select: { id: true, content: true },
+  }).catch(() => null);
+  if (latestVersion && typeof latestVersion.content === 'string' && latestVersion.content.trim()) {
+    return { source: 'version', versionId: latestVersion.id, content: latestVersion.content };
+  }
+  if (typeof file.extractedText === 'string' && file.extractedText.trim()) {
+    return { source: 'original', versionId: null, content: file.extractedText };
+  }
+  return null;
+}
+
+/**
+ * GET /api/files/:id/meta
+ *
+ * Early mode decision WITHOUT transferring the body: the panel asks this
+ * before opening so it can pick single-doc vs chunked mode from
+ * `contentChars` alone. Same ownership rules as every other file route.
+ */
+router.get('/:id/meta', authenticateToken, async (req, res) => {
+  try {
+    const documentChunks = require('../services/document-chunks');
+    const active = await resolveActiveEditableContent(prisma, {
+      fileId: req.params.id,
+      userId: req.user.id,
+    });
+    if (!active) return res.status(404).json({ error: 'File not found or has no editable text' });
+    const charCount = active.content.length;
+    return res.json({
+      fileId: req.params.id,
+      source: active.source,
+      versionId: active.versionId,
+      contentChars: charCount,
+      chunkedMode: documentChunks.shouldUseChunkedMode(charCount),
+      threshold: documentChunks.CHUNKED_MODE_THRESHOLD_CHARS,
+      targetChunkSize: documentChunks.TARGET_CHUNK_SIZE,
+      estimatedTotalChunks: Math.max(1, Math.ceil(charCount / documentChunks.TARGET_CHUNK_SIZE)),
+    });
+  } catch (error) {
+    console.error('[files] meta read failed:', error.message || error);
+    return res.status(500).json({ error: 'Failed to read file metadata' });
+  }
+});
+
+/**
+ * GET /api/files/:id/chunks?index=N&size=S
+ *
+ * One page of the ACTIVE version's content. Response:
+ *   { fileId, totalChunks, size, index, content, nextIndex }
+ * where nextIndex is null on the last page. `size` echoes the effective
+ * target size after clamping (1..256KB); chunks may be smaller than target
+ * and never exceed MAX_CHUNK_SIZE. join(chunks) === original EXACTLY.
+ *
+ * MVP scope: Markdown/text documents of the editor (extracted text or a
+ * manual-edit FileVersion). Binary artifacts are out of scope here.
+ */
+router.get('/:id/chunks', authenticateToken, async (req, res) => {
+  try {
+    const documentChunks = require('../services/document-chunks');
+    const { parsePositiveInt } = require('../services/chat-scope');
+    const index = parsePositiveInt(req.query.index, 0, { min: 0, max: 10_000_000 });
+    const size = parsePositiveInt(req.query.size, documentChunks.TARGET_CHUNK_SIZE, { min: 1024, max: 262_144 });
+
+    const active = await resolveActiveEditableContent(prisma, {
+      fileId: req.params.id,
+      userId: req.user.id,
+    });
+    if (!active) return res.status(404).json({ error: 'File not found or has no editable text' });
+
+    const all = documentChunks.chunkByParagraphs(active.content, size);
+    const totalChunks = all.length;
+    if (index >= totalChunks) {
+      return res.status(416).json({ error: 'Chunk index fuera de rango', totalChunks, index });
+    }
+
+    const chunk = all[index];
+    return res.json({
+      fileId: req.params.id,
+      source: active.source,
+      versionId: active.versionId,
+      size,
+      index: chunk.index,
+      totalChunks,
+      content: chunk.content,
+      nextIndex: chunk.index + 1 < totalChunks ? chunk.index + 1 : null,
+    });
+  } catch (error) {
+    console.error('[files] chunk read failed:', error.message || error);
+    return res.status(500).json({ error: 'Failed to read document chunk' });
+  }
+});
+
 // Render a non-web-native document (PPTX, DOC, RTF, ODP, …) to PDF for
 // high-fidelity preview in the unified viewer. Conversion runs through
 // the documentRenderer service (LibreOffice or Gotenberg) and the

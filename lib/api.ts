@@ -1529,6 +1529,59 @@ class ApiClient {
     return response.text();
   }
 
+  // Early mode decision for the large-document editor WITHOUT downloading the
+  // body. Mirrors GET /files/:id/meta (files.js). Used by DocumentEditorPanel
+  // to pick single-doc vs paginated (chunked) mode before the first fetch.
+  async getFileMeta(id: string): Promise<{
+    fileId: string;
+    source: 'version' | 'original';
+    versionId: string | null;
+    contentChars: number;
+    chunkedMode: boolean;
+    threshold: number;
+    targetChunkSize: number;
+    estimatedTotalChunks: number;
+  }> {
+    return (await this.request(`/files/${encodeURIComponent(id)}/meta`)) as {
+      fileId: string;
+      source: 'version' | 'original';
+      versionId: string | null;
+      contentChars: number;
+      chunkedMode: boolean;
+      threshold: number;
+      targetChunkSize: number;
+      estimatedTotalChunks: number;
+    };
+  }
+
+  // One page of a large document's ACTIVE version for the paginated editor.
+  // Mirrors GET /files/:id/chunks?index=N&size=S (files.js): response carries
+  // { index, totalChunks, content, nextIndex } and pages reassemble EXACTLY
+  // into the original document.
+  async getFileChunk(
+    id: string,
+    index: number,
+    size?: number,
+  ): Promise<{
+    fileId: string;
+    index: number;
+    totalChunks: number;
+    size: number;
+    content: string;
+    nextIndex: number | null;
+  }> {
+    const query = new URLSearchParams({ index: String(index) });
+    if (typeof size === 'number' && Number.isFinite(size)) query.set('size', String(size));
+    return (await this.request(`/files/${encodeURIComponent(id)}/chunks?${query.toString()}`)) as {
+      fileId: string;
+      index: number;
+      totalChunks: number;
+      size: number;
+      content: string;
+      nextIndex: number | null;
+    };
+  }
+
   async getFileVersions(id: string): Promise<{ fileId: string; versions: FileVersionRecord[] }> {
     return (await this.request(`/files/${encodeURIComponent(id)}/versions`)) as { fileId: string; versions: FileVersionRecord[] };
   }
