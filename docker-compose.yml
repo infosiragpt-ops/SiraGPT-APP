@@ -272,7 +272,7 @@ services:
       # OOXML document engine (default off). Chat keeps the paragraph-edit path
       # unless FEATURE_DOC_ENGINE=1. No new public ports.
       FEATURE_DOC_ENGINE: "${FEATURE_DOC_ENGINE:-0}"
-      DOC_ENGINE_IMAGE: "${DOC_ENGINE_IMAGE:-siragpt-doc-sandbox:latest}"
+      DOC_ENGINE_IMAGE: "${DOC_ENGINE_IMAGE:-siragpt-sandbox:doc-engine}"
       DOC_ENGINE_QUEUE_NAME: "${DOC_ENGINE_QUEUE_NAME:-doc-jobs}"
       DOC_ENGINE_CONCURRENCY: "${DOC_ENGINE_CONCURRENCY:-2}"
       DOC_ENGINE_TIMEOUT_MS: "${DOC_ENGINE_TIMEOUT_MS:-180000}"
@@ -409,31 +409,35 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  # ── Doc engine sandbox (optional) — OOXML transform + healthz ──
-  # Enable with: docker compose --profile doc-engine up
-  # No public ports. Healthcheck hits 127.0.0.1:8080/healthz inside
-  # the container. The backend talks to it via docker run (hardened
-  # runner) using image siragpt-sandbox:doc-engine.
+  # ── Doc engine sandbox image (optional profile) ──
+  # Build/tag only. Jobs use ephemeral `docker run --rm` from the backend.
+  # Enable with: docker compose --profile doc-engine build
+  # No public / host ports. Alias tag: iliagpt-sandbox:doc-engine
+  # Healthz for the feature is GET https://siragpt.com/api/documents/healthz
+  # via Caddy → backend (no new published ports).
   doc-engine:
     profiles: ["doc-engine"]
     build:
       context: .
       dockerfile: services/doc-engine/Dockerfile
     image: siragpt-sandbox:doc-engine
-    restart: unless-stopped
+    restart: "no"
     user: "10001:10001"
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
     tmpfs:
-      - /workspace:rw,exec,size=512m
-      - /tmp:rw,exec,size=64m
+      - /workspace:rw,nosuid,nodev,noexec,size=536870912
+      - /tmp:rw,nosuid,nodev,size=67108864
     environment:
       FEATURE_DOC_ENGINE: "${FEATURE_DOC_ENGINE:-0}"
       HOME: /workspace
-    # expose only — no host port mapping
+    # EXPOSE only — no host port mapping
     expose:
       - "8080"
     healthcheck:

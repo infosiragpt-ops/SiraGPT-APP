@@ -1,0 +1,66 @@
+name: Doc engine
+
+on:
+  push:
+    paths:
+      - 'backend/src/services/doc-engine/**'
+      - 'backend/src/routes/documents.js'
+      - 'backend/tests/doc-engine*.test.js'
+      - 'packages/doc-skills/**'
+      - 'services/doc-engine/**'
+      - 'tests/lib/doc-engine/**'
+      - 'docs/doc-engine.md'
+      - '.github/workflows/doc-engine.yml'
+      - 'docker-compose.yml'
+  pull_request:
+    paths:
+      - 'backend/src/services/doc-engine/**'
+      - 'backend/src/routes/documents.js'
+      - 'backend/tests/doc-engine*.test.js'
+      - 'packages/doc-skills/**'
+      - 'services/doc-engine/**'
+      - 'tests/lib/doc-engine/**'
+      - 'docs/doc-engine.md'
+      - '.github/workflows/doc-engine.yml'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: doc-engine-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  tests:
+    name: Doc-engine tests (npm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefix backend --prefer-offline --no-audit --no-fund
+
+      - name: Generate Prisma client
+        run: npm --prefix backend exec -- prisma generate
+
+      - name: Install root dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: Backend doc-engine tests
+        run: npm --prefix backend run test:doc-engine
+
+      - name: Vitest doc-engine tests
+        run: npm run test:unit -- tests/lib/doc-engine --pool=threads

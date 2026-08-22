@@ -6,27 +6,34 @@ Contrato (SiraGPT, Luis Carrera):
   2. Mapea w:styleId source→template desde styles.xml (nombre, luego id).
   3. Transplanta w:p y w:tbl del source al body de la plantilla.
   4. NUNCA altera sectPr, headers, footers ni numbering de la plantilla.
-  5. Los placeholders XXXXXXXX del body de la plantilla se reemplazan
-     por el contenido real del source — ese era el bug de /chat UPN.
+  5. El sectPr terminal (último del body) queda byte-idéntico (SHA-256).
+  6. Rechaza OLE / ActiveX / macros.
+  7. Los placeholders XXXXXXXX del body se reemplazan por el contenido real.
 
-OpenRouter está prohibido en este motor.
+OpenRouter está prohibido en este motor. Vision corre en el control plane.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import sys
 import tempfile
 
-from lxml import etree
+from xml_io import parse_xml_file, write_xml
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-NSMAP_W = {"w": W_NS, "r": R_NS}
 
-# Scripts vecinos en este mismo directorio
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+UNSAFE_NAME_RE = re.compile(
+    r"(vbaproject|vbaData|activex|oleobject|oleObject|\.bin$)",
+    re.I,
+)
+UNSAFE_DIR_RE = re.compile(r"(activex|embeddings|macros|vba)", re.I)
+SECTPR_RE = re.compile(br"<w:sectPr[\s>][\s\S]*?</w:sectPr>")
 
 
 def _die(msg: str, code: int = 2) -> None:
@@ -38,30 +45,37 @@ def _qn(local: str, ns: str = W_NS) -> str:
     return f"{{{ns}}}{local}"
 
 
-def _load(path: str) -> etree._ElementTree:
-    parser = etree.XMLParser(remove_blank_text=False, huge_tree=True)
-    return etree.parse(path, parser)
-
-
-def _write(tree: etree._ElementTree, path: str) -> None:
-    # no pretty_print — conserva whitespace y nsmap del árbol
-    tree.write(
-        path,
-        xml_declaration=True,
-        encoding="UTF-8",
-        standalone=True,
-        pretty_print=False,
-    )
-
-
 def _norm(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (name or "").lower())
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def file_sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def reject_unsafe_package(root: str) -> None:
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        if UNSAFE_DIR_RE.search(rel_dir):
+            _die(f"OLE/ActiveX/macros rechazados en '{rel_dir}'", 6)
+        for name in filenames:
+            rel = f"{rel_dir}/{name}" if rel_dir != "." else name
+            if UNSAFE_NAME_RE.search(name) or UNSAFE_NAME_RE.search(rel):
+                _die(f"OLE/ActiveX/macros rechazados: '{rel}'", 6)
 
 
 def parse_styles(styles_path: str) -> list[dict]:
     if not os.path.isfile(styles_path):
         return []
-    tree = _load(styles_path)
+    tree = parse_xml_file(styles_path)
     out = []
     for el in tree.getroot().findall(_qn("style")):
         sid = el.get(_qn("styleId")) or ""
@@ -95,7 +109,7 @@ def build_style_map(source_styles: list[dict], template_styles: list[dict]) -> d
     return mapping
 
 
-def remap_styles(element: etree._Element, mapping: dict[str, str], allowed: set[str]) -> None:
+def remap_styles(element, mapping: dict[str, str], allowed: set[str]) -> None:
     for el in element.iter():
         tag = el.tag if isinstance(el.tag, str) else ""
         if tag.endswith("}pStyle") or tag.endswith("}rStyle") or tag.endswith("}tblStyle"):
@@ -108,16 +122,43 @@ def remap_styles(element: etree._Element, mapping: dict[str, str], allowed: set[
             el.set(_qn("val"), mapped)
 
 
-def _extract_sectpr_bytes(document_xml_path: str) -> bytes | None:
-    raw = open(document_xml_path, "rb").read()
-    # último sectPr del body — se conserva byte-a-byte
-    m = re.search(br"<w:sectPr[\s>][\s\S]*?</w:sectPr>", raw)
-    return m.group(0) if m else None
+def extract_terminal_sectpr(raw: bytes) -> bytes | None:
+    last = None
+    for m in SECTPR_RE.finditer(raw):
+        last = m.group(0)
+    return last
 
 
-def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str], allowed: set[str]) -> None:
-    src_tree = _load(source_doc)
-    tmpl_tree = _load(template_doc)
+def restore_terminal_sectpr(path: str, original: bytes) -> None:
+    raw = open(path, "rb").read()
+    matches = list(SECTPR_RE.finditer(raw))
+    if not matches:
+        return
+    last = matches[-1]
+    raw2 = raw[: last.start()] + original + raw[last.end() :]
+    open(path, "wb").write(raw2)
+
+
+def _untouched_parts(root: str) -> dict[str, str]:
+    hashes = {}
+    word = os.path.join(root, "word")
+    if not os.path.isdir(word):
+        return hashes
+    numbering = os.path.join(word, "numbering.xml")
+    if os.path.isfile(numbering):
+        hashes["word/numbering.xml"] = file_sha256(numbering)
+    for name in os.listdir(word):
+        if re.match(r"^(header|footer)\d*\.xml$", name, re.I):
+            rel = f"word/{name}"
+            hashes[rel] = file_sha256(os.path.join(word, name))
+    return hashes
+
+
+def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str], allowed: set[str]) -> dict:
+    from lxml import etree
+
+    src_tree = parse_xml_file(source_doc)
+    tmpl_tree = parse_xml_file(template_doc)
     src_body = src_tree.getroot().find(_qn("body"))
     tmpl_body = tmpl_tree.getroot().find(_qn("body"))
     if src_body is None:
@@ -125,9 +166,16 @@ def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str],
     if tmpl_body is None:
         _die("la plantilla no tiene w:body")
 
-    # Conservar sectPr de la PLANTILLA (objeto + bytes originales)
-    tmpl_sect = tmpl_body.find(_qn("sectPr"))
-    original_sectpr = _extract_sectpr_bytes(template_doc)
+    original_sectpr = extract_terminal_sectpr(open(template_doc, "rb").read())
+    if not original_sectpr:
+        _die("la plantilla no tiene w:sectPr terminal; no se puede preservar el layout")
+    original_sha = sha256_bytes(original_sectpr)
+
+    tmpl_sect = None
+    for child in list(tmpl_body):
+        tag = child.tag if isinstance(child.tag, str) else ""
+        if tag.endswith("}sectPr"):
+            tmpl_sect = child
 
     blocks = []
     for child in list(src_body):
@@ -137,14 +185,12 @@ def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str],
             remap_styles(clone, mapping, allowed)
             blocks.append(clone)
 
-    # Vaciar body de la plantilla EXCEPTO sectPr
     for child in list(tmpl_body):
         tag = child.tag if isinstance(child.tag, str) else ""
         if tag.endswith("}sectPr"):
             continue
         tmpl_body.remove(child)
 
-    # Insertar bloques fuente ANTES del sectPr
     if tmpl_sect is not None:
         idx = list(tmpl_body).index(tmpl_sect)
         for i, block in enumerate(blocks):
@@ -153,14 +199,13 @@ def transplant_body(source_doc: str, template_doc: str, mapping: dict[str, str],
         for block in blocks:
             tmpl_body.append(block)
 
-    _write(tmpl_tree, template_doc)
+    write_xml(tmpl_tree, template_doc)
+    restore_terminal_sectpr(template_doc, original_sectpr)
 
-    # Restaurar sectPr byte-idéntico si el serializer lo tocó
-    if original_sectpr:
-        raw = open(template_doc, "rb").read()
-        raw2, n = re.subn(br"<w:sectPr[\s>][\s\S]*?</w:sectPr>", original_sectpr, raw, count=1)
-        if n:
-            open(template_doc, "wb").write(raw2)
+    result_sectpr = extract_terminal_sectpr(open(template_doc, "rb").read())
+    if result_sectpr != original_sectpr or sha256_bytes(result_sectpr or b"") != original_sha:
+        _die("sectPr terminal no quedó byte-idéntico (SHA-256 mismatch)")
+    return {"sectPrSha256": original_sha, "blocks": len(blocks)}
 
 
 def transform(source_docx: str, template_docx: str, out_docx: str, work: str | None = None) -> dict:
@@ -176,6 +221,10 @@ def transform(source_docx: str, template_docx: str, out_docx: str, work: str | N
     os.makedirs(tmpl_dir, exist_ok=True)
     unpack(source_docx, src_dir)
     unpack(template_docx, tmpl_dir)
+    reject_unsafe_package(src_dir)
+    reject_unsafe_package(tmpl_dir)
+
+    before = _untouched_parts(tmpl_dir)
 
     src_styles = parse_styles(os.path.join(src_dir, "word", "styles.xml"))
     tmpl_styles = parse_styles(os.path.join(tmpl_dir, "word", "styles.xml"))
@@ -187,11 +236,21 @@ def transform(source_docx: str, template_docx: str, out_docx: str, work: str | N
     if not os.path.isfile(src_doc) or not os.path.isfile(tmpl_doc):
         _die("falta word/document.xml en source o plantilla")
 
-    transplant_body(src_doc, tmpl_doc, mapping, allowed)
+    meta = transplant_body(src_doc, tmpl_doc, mapping, allowed)
+    after = _untouched_parts(tmpl_dir)
+    if before != after:
+        _die("headers/footers/numbering.xml de la plantilla fueron alterados")
+
     validate(tmpl_dir)
     os.makedirs(os.path.dirname(os.path.abspath(out_docx)) or ".", exist_ok=True)
     repack(tmpl_dir, out_docx)
-    return {"out": out_docx, "mappedStyles": len(mapping), "templateStyles": len(allowed)}
+    return {
+        "out": out_docx,
+        "mappedStyles": len(mapping),
+        "templateStyles": len(allowed),
+        "sectPrSha256": meta["sectPrSha256"],
+        "headerFooterHashes": after,
+    }
 
 
 def main(argv=None) -> int:
@@ -202,7 +261,7 @@ def main(argv=None) -> int:
     p.add_argument("--work")
     args = p.parse_args(argv)
     result = transform(args.source, args.template, args.out, work=args.work)
-    sys.stdout.write(f"ok mapped={result['mappedStyles']}\n")
+    sys.stdout.write(f"ok mapped={result['mappedStyles']} sectPr={result['sectPrSha256'][:12]}\n")
     return 0
 
 

@@ -7,6 +7,18 @@ description: Edición quirúrgica de DOCX (OOXML) para SiraGPT. Transplanta cont
 
 Un `.docx` es un ZIP de XML. Nunca lo edites como binario.
 
+## When to use
+
+- "pasa este word al formato UPN / plantilla"
+- Transplantar `w:p` / `w:tbl` del source al body de una plantilla
+- Preview PDF/PNG y verify visual (host)
+
+## When not to use
+
+- PDF (no es OOXML; ver `../pdf/SKILL.md`)
+- Reconstruir el documento desde texto extraído
+- Pedir XML o código al modelo de visión
+
 ## Pipeline
 
 1. `python3 ../../scripts/ooxml_unpack.py FILE.docx /workspace/{jobId}/unpacked`
@@ -16,8 +28,6 @@ Un `.docx` es un ZIP de XML. Nunca lo edites como binario.
 5. `python3 ../../scripts/render_preview.py /workspace/{jobId}/out.docx /workspace/{jobId}/preview`
 
 ## transformToTemplate (formato UPN / plantilla)
-
-Si el usuario dice "pasa este word al formato X" / "aplica la plantilla":
 
 ```
 python3 ../../scripts/transform_to_template.py \
@@ -29,17 +39,26 @@ Contrato:
 - Copia la **plantilla** como base.
 - Mapea `w:styleId` source→template desde `word/styles.xml`.
 - Transplanta `w:p` y `w:tbl` del source al body de la plantilla.
-- **NUNCA** alteres `w:sectPr`, headers, footers ni `numbering.xml`.
-- Los placeholders `XXXXXXXX` del body de la plantilla se reemplazan por el contenido real. Devolver la plantilla vacía es un bug.
+- **NUNCA** alteres `w:sectPr` (último / terminal, SHA-256 byte-idéntico), headers, footers ni `numbering.xml`.
+- Rechaza OLE / ActiveX / macros.
+- Los placeholders `XXXXXXXX` del body se reemplazan por el contenido real.
 
-## Límites de unpack
+## Visual patch (closed DSL)
 
-- Path traversal rechazado (`..`, rutas absolutas).
-- Zip-bomb: máximo 5000 entradas / 200 MB descomprimidos.
-- Conserva `[Content_Types].xml`.
+El modelo de visión (DeepSeek V4 Flash/Pro, host) solo puede emitir JSON:
 
-## Repack
+```
+{"ops":[{"op":"replace_text","find":"XXXXXXXX","replace":"Titulo"}]}
+```
 
-- `ZIP_DEFLATED`, `[Content_Types].xml` primero, sin `pretty_print`, conservar `nsmap`.
+`apply_visual_patch.py` rechaza XML, código o paths. Nunca pidas `document.xml` al modelo.
+
+## Safety / limits
+
+- Path traversal (`..`, absolutas) y symlinks rechazados.
+- Zip-bomb: máximo 5000 entradas / 200 MB. Sin `extractall`.
+- Requiere `[Content_Types].xml`.
+- Repack: `ZIP_DEFLATED`, Content_Types primero, timestamps 1980-01-01, sin `pretty_print`.
+- Parser XML seguro (sin DTD / entidades / red).
 
 Vision verify (host, no sandbox): solo DeepSeek V4 Flash / Pro. OpenRouter está prohibido.

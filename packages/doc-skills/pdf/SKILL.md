@@ -5,10 +5,28 @@ description: Preview y validación de PDF para el motor documental. No reescribe
 
 # PDF skill
 
-Los PDF no son OOXML. Este skill solo cubre preview / conteo de páginas.
+Los PDF **NO** son OOXML. Este skill **no** hace unpack-edit-repack.
+No uses `ooxml_unpack.py` / `ooxml_repack.py` sobre un PDF.
 
-- `pdftoppm -png -r 110` para páginas de verificación visual.
-- `pypdf` para contar páginas (el job exige ≥ 1 página).
-- LibreOffice convierte DOCX/PPTX/XLSX → PDF; este skill opera sobre el PDF resultante.
+## When to use
 
-El verify visual (host) llama DeepSeek V4 Flash / Pro. OpenRouter está prohibido.
+- Contar páginas del preview (`pypdf` o `/Type /Page`).
+- Rasterizar páginas para verify visual: `pdftoppm -png -r 110`.
+
+## When not to use
+
+- Editar un DOCX/PPTX/XLSX (usa el skill OOXML correspondiente).
+- "Reparar" un PDF reempaquetándolo como ZIP.
+
+## Pipeline
+
+- LibreOffice convierte DOCX/PPTX/XLSX → PDF (`render_preview.py`).
+- Este skill opera sobre el PDF resultante.
+- El job exige ≥ 1 página.
+
+## Safety / limits
+
+- No se extrae el PDF como ZIP.
+- Preview timeout 90s (process-group kill de soffice).
+- Vision (host): DeepSeek V4 Flash / Pro. OpenRouter prohibido.
+- Closed DSL only — el modelo no emite XML ni código.

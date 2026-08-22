@@ -481,6 +481,7 @@ module.exports = {
   pairFromPromptNames,
   peekDocxXml,
   scoreTemplateVsContent,
+  resultFromDocxBuffer,
   transformBuffers,
   transformToTemplate,
   transformViaLocalPython,

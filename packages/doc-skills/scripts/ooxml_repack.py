@@ -4,6 +4,7 @@
 Reglas:
   - [Content_Types].xml SIEMPRE va primero (Word/Excel/PowerPoint lo exigen)
   - ZIP_DEFLATED
+  - timestamps deterministas (1980-01-01) — sin mtime del host
   - no pretty_print — se escriben los bytes tal cual están en disco
   - no se reescribe XML; el nsmap original se conserva
 """
@@ -14,7 +15,7 @@ import os
 import sys
 import zipfile
 
-CONTENT_TYPES = "[Content_Types].xml"
+from limits import CONTENT_TYPES, FIXED_ZIP_TIMESTAMP
 
 
 def _die(msg: str, code: int = 2) -> None:
@@ -27,6 +28,8 @@ def _walk(root: str) -> list[str]:
     for dirpath, _dirnames, filenames in os.walk(root):
         for name in filenames:
             abs_path = os.path.join(dirpath, name)
+            if os.path.islink(abs_path):
+                _die(f"symlink rechazado al reempaquetar: {abs_path}")
             rel = os.path.relpath(abs_path, root).replace(os.sep, "/")
             out.append(rel)
     return out
@@ -48,13 +51,17 @@ def repack(src_dir: str, dest_archive: str) -> dict:
     with zipfile.ZipFile(dest_archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for rel in ordered:
             abs_path = os.path.join(src_dir, rel.replace("/", os.sep))
-            # writestr/write copian bytes crudos — no pretty_print
-            zf.write(abs_path, arcname=rel)
+            data = open(abs_path, "rb").read()
+            info = zipfile.ZipInfo(filename=rel, date_time=FIXED_ZIP_TIMESTAMP)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            # writestr copia bytes crudos — no pretty_print
+            zf.writestr(info, data)
     return {"entries": len(ordered), "archive": dest_archive}
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Repack OOXML with Content_Types first")
+    p = argparse.ArgumentParser(description="Repack OOXML with Content_Types first + deterministic timestamps")
     p.add_argument("src_dir")
     p.add_argument("dest_archive")
     args = p.parse_args(argv)

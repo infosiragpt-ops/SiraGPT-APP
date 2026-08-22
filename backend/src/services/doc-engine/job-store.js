@@ -51,7 +51,9 @@ function getJob(id) {
 function appendEvent(jobId, type, payload = {}) {
   const job = getJob(jobId);
   if (!job) return null;
+  const seq = job.events.length;
   const event = {
+    id: seq,
     type: STAGES.includes(type) ? type : type,
     jobId,
     ts: nowIso(),

@@ -29,6 +29,7 @@ const QUEUE_MODULE_PATHS = [
   '../src/services/codex/run-queue',
   '../src/services/document-collection-queue',
   '../src/services/goal-queue',
+  '../src/services/doc-engine/queue',
 ].map((path) => require.resolve(path));
 
 function fakeQueue({ waiting = 0, completed = 0, paused = false } = {}) {
@@ -171,6 +172,7 @@ test('default registry lists physical queue names without loading producer modul
       CODEX_QUEUE_NAME: 'physical-codex',
       DOCUMENT_COLLECTION_QUEUE_NAME: 'physical-documents',
       GOAL_QUEUE_NAME: 'physical-goals',
+      DOC_ENGINE_QUEUE_NAME: 'physical-doc-jobs',
     },
   });
   const definitions = registry.list();
@@ -182,6 +184,7 @@ test('default registry lists physical queue names without loading producer modul
     'physical-codex',
     'physical-documents',
     'physical-goals',
+    'physical-doc-jobs',
   ]);
   assert.ok(definitions.every((definition) => typeof definition.getter === 'function'));
   assert.ok(definitions.every((definition) => definition.critical === false));

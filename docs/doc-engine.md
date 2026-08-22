@@ -1,4 +1,4 @@
-# FEATURE_DOC_ENGINE — motor OOXML (SiraGPT / Luis Carrera)
+# FEATURE_DOC_ENGINE — isolated OOXML sandbox (SiraGPT / Luis Carrera)
 
 Motor de transformación de documentos Office (DOCX/PPTX/XLSX → plantilla)
 que **transplanta** el contenido fuente al body de la plantilla. Corrige el
@@ -6,112 +6,118 @@ bug de `/chat` «pasa este word al formato UPN»: el entregable ya no es la
 plantilla vacía (`XXXXXXXX`).
 
 **Default: apagado.** `FEATURE_DOC_ENGINE` solo se activa con `1` / `true` /
-`yes` / `on`. Con el flag off, `/chat` y `/code` no cambian: el path de
-edición por párrafos existente sigue igual.
+`yes` / `on`. Con el flag off: **no** se registra el router `/api/documents`,
+**no** arranca el worker `doc-jobs`, y las rutas nuevas responden **404**.
 
 OpenRouter está prohibido en este motor. El verify visual usa únicamente
-DeepSeek V4 Flash / Pro (`DEEPSEEK_API_KEY`). No se inventan API keys: si
-falta la key, el verify se omite.
+DeepSeek V4 Flash / Pro (`DEEPSEEK_API_KEY`) en el **control worker** (tiene
+red). No se inventan API keys: si falta la key, el verify se omite.
 
-## Pipeline
+## Arquitectura aislada
 
 ```
-POST multipart source + template + instructions
-  → jobId
-  → unpack → map (w:styleId) → edit (transplant w:p / w:tbl)
-  → validate (XML + r:id vs .rels) → render (soffice PDF + pdftoppm)
-  → verify (DeepSeek vision, máx 3 iter, token budget cut)
-  → done | error
+POST /api/documents/transform
+  → disco (artifact-store)  — nunca buffers en Redis
+  → BullMQ doc-jobs (conc 2, 180s)
+  → docker run --rm --network=none --read-only --cap-drop=ALL
+       --security-opt=no-new-privileges --user=10001:10001
+       --tmpfs /workspace:rw,nosuid,nodev,noexec,size=536870912
+       --pids-limit=256 --memory=768m --cpus=1
+       siragpt-sandbox:doc-engine
+  → eventos unpack|map|edit|validate|render|verify|done|error
+  → vision (DeepSeek, máx 3 iter, DSL cerrado) en el control worker
+  → cleanup en finally
 ```
 
-Contrato `transformToTemplate`:
+Sin Docker / imagen, el pipeline cae al transform in-process (CI / tests).
+El hook de `/chat` (UPN transplant) **sigue in-process** y no depende de
+este contenedor.
 
-1. Copia la **plantilla** como base.
-2. Mapea `w:styleId` source→template desde `styles.xml` (nombre, luego id).
-3. Transplanta `w:p` y `w:tbl` del source. Los placeholders del body se van.
-4. **Nunca** altera `w:sectPr`, headers, footers ni `numbering.xml`.
+## Imagen
+
+```bash
+docker build -t siragpt-sandbox:doc-engine -t iliagpt-sandbox:doc-engine \
+  -f services/doc-engine/Dockerfile .
+```
+
+- Base: `debian:bookworm-slim`
+- `python3.11` venv en `/opt/venv`
+- LibreOffice writer/calc/impress, poppler, fonts-liberation,
+  fonts-crosextra-carlito, zip/unzip, pandoc
+- uid **10001**
+- `requirements.lock` con versiones **y hashes** (`pip install --require-hashes`)
 
 ## APIs (solo estas; no se tocan `/chat` ni `/code`)
 
+Caddy (siragpt.com) ya proxea `/api/*` al backend. **No** hay puertos
+nuevos ni hostname de túnel.
+
 | Método | Ruta | Auth | Notas |
 |---|---|---|---|
+| GET | `/api/documents/healthz` | no | 200 solo si el flag está on (router registrado) |
 | POST | `/api/documents/transform` | sí | multipart `source`, `template`, `instructions` → `{ jobId }` |
-| GET | `/api/documents/:jobId/stream` | sí | SSE: `unpack\|map\|edit\|validate\|render\|verify\|done\|error` |
-| GET | `/api/documents/:jobId/artifact` | sí / URL firmada | URL HMAC 15 min; `?sig=` descarga el DOCX |
+| GET | `/api/documents/:jobId/stream` | sí | SSE + `Last-Event-ID` replay (stream-resume Redis) |
+| GET | `/api/documents/:jobId/artifact` | sí / URL firmada | HMAC TTL 900s |
 
-Flag off ⇒ las tres responden **404**.
+Flag off ⇒ Express 404 (router no montado).
 
 ## Chat (hook de producción)
 
 El Word path en vivo es in-process PizZip en
-`tryGenerateSourcePreservingDocumentEdit` (callers: `agentic-chat-stream.js`,
-`agent-task-runner.js`, `document-edit-tool.js`, `routes/doc.js`). SSE
-existente: «Editando documento original».
+`tryGenerateSourcePreservingDocumentEdit`. Si `FEATURE_DOC_ENGINE=1` y hay
+≥2 DOCX: `classifyTemplateVsContent` → `transformToTemplate` in-process.
+`extractSectPr` usa el **último** match. El hook **conserva** el transplant
+si `blocks>0` aunque los strings de sectPr intermedios difieran.
 
-`selectSourcePreservingDocumentSet` siempre toma `currentDocx[0]`. Si el
-chip de la plantilla UPN va primero en `/api/ai/generate` → `fileIds`, el
-path viejo edita la plantilla vacía (`fill_cover` deja `XXXXXXXX`).
+## Skills
 
-**Hook (el único en /chat):** después de `selectSourcePreservingDocumentSet`
-y antes de `generateSourcePreservingDocumentEdit`. Si
-`FEATURE_DOC_ENGINE=1` y hay ≥2 DOCX `current_upload`:
-`classifyTemplateVsContent` (styles / `XXXX` / UPN vs cuerpo largo, no el
-orden de subida) → `transformToTemplate` in-process. No se engancha el
-SSE pre-loop ni `fillDocxCoverBuffer`. La cola `doc-jobs` es opcional
-(HTTP `/api/documents/*`); el chat no la necesita.
+`packages/doc-skills/{docx,pptx,xlsx,pdf}/SKILL.md`
 
-Imagen Python existente: `siragpt-doc-sandbox:latest`
-(`services/sandbox/runner/Dockerfile`). El primer ship de /chat no
-requiere un contenedor nuevo.
+Scripts:
 
-## Sandbox
+- `limits.py` `xml_io.py`
+- `ooxml_unpack.py` — sin `extractall`; traversal / symlink / zip-bomb 5000/200MB; exige `[Content_Types].xml`
+- `ooxml_repack.py` — Content_Types primero, `ZIP_DEFLATED`, timestamps 1980-01-01, sin `pretty_print`
+- `ooxml_validate.py` — parser seguro; `r:id` / `r:embed` / `r:link` vs `.rels`
+- `render_preview.py` — soffice 90s process-group kill; `pdftoppm -png -r 110`
+- `transform_to_template.py` — plantilla como base; sectPr terminal SHA-256; no toca headers/footers/`numbering.xml`; style map; rechaza OLE/ActiveX/macros
+- `apply_visual_patch.py` — DSL cerrado solamente
 
-- Imagen opcional de jobs: `siragpt-doc-sandbox:latest` (runner existente
-  con python-docx) o `siragpt-sandbox:doc-engine` (`services/doc-engine/Dockerfile`,
-  `debian:bookworm-slim`, Python 3.11, LibreOffice writer/calc/impress,
-  poppler, fonts-liberation, fonts-crosextra-carlito, zip/unzip, pandoc).
-- Runner: `--network=none`, rootfs read-only, `--cap-drop=ALL`, seccomp
-  por defecto, `--user 10001`, tmpfs `/workspace` 512MB.
-- Workspace: `/workspace/{jobId}`, timeout 180s, cleanup en `finally`.
-- Cola BullMQ `doc-jobs`, concurrency 2.
+PDF **no** es OOXML unpack-edit-repack.
 
-## Env (solo nombres; ver `.env.example`)
+## Env
 
 | Variable | Default | Qué hace |
 |---|---|---|
-| `FEATURE_DOC_ENGINE` | `0` | Activa el motor |
-| `DOC_ENGINE_IMAGE` | `siragpt-doc-sandbox:latest` | Imagen Python existente (opcional) |
-| `DOC_ENGINE_QUEUE_NAME` | `doc-jobs` | Cola BullMQ |
+| `FEATURE_DOC_ENGINE` | `0` | Activa router + worker |
+| `DOC_ENGINE_IMAGE` | `siragpt-sandbox:doc-engine` | Imagen efímera |
+| `DOC_ENGINE_QUEUE_NAME` | `doc-jobs` | Cola BullMQ (registry conc 2) |
 | `DOC_ENGINE_CONCURRENCY` | `2` | Workers |
-| `DOC_ENGINE_TIMEOUT_MS` | `180000` | Timeout del job |
-| `DOC_ENGINE_WORKSPACE_SIZE` | `512m` | tmpfs `/workspace` |
-| `DOC_ENGINE_ARTIFACT_TTL_SEC` | `900` | URL firmada (15 min) |
+| `DOC_ENGINE_TIMEOUT_MS` | `180000` | Deadline del job |
+| `DOC_ENGINE_ARTIFACT_TTL_SEC` | `900` | URL firmada |
 | `DOC_ENGINE_VERIFY_MAX_ITERATIONS` | `3` | Iteraciones vision |
 | `DOC_ENGINE_VERIFY_MAX_TOKENS` | `400` | Tope por llamada |
 | `DOC_ENGINE_DEEPSEEK_FLASH_MODEL` | `deepseek-v4-flash` | Vision rápida |
 | `DOC_ENGINE_DEEPSEEK_PRO_MODEL` | `deepseek-v4-pro` | Última iteración |
-| `DOC_ENGINE_SIGNING_SECRET` | (vacío → `JWT_SECRET`) | HMAC de artefactos |
 | `DEEPSEEK_API_KEY` | (vacío) | Cliente DeepSeek existente |
-| `REDIS_URL` | — | Obligatoria para BullMQ; sin ella el job corre in-process |
+| `REDIS_URL` | `redis://redis:6379` | Obligatoria para BullMQ |
 
-## Compose (opcional, sin puerto público)
+## Compose
 
 ```bash
-docker compose --profile doc-engine up
+docker compose --profile doc-engine build
 ```
 
-El servicio `doc-engine` no publica puertos. El healthcheck interno pega a
-`http://127.0.0.1:8080/healthz` (200). El proxy existente del backend
-(`:5000`) sirve las APIs.
-
-## Skills
-
-`packages/doc-skills/{docx,pptx,xlsx,pdf}/SKILL.md` +
-`packages/doc-skills/scripts/{ooxml_unpack,ooxml_repack,ooxml_validate,render_preview,transform_to_template}.py`
+El servicio `doc-engine` **solo EXPOSE 8080** (sin `ports:`). No publica
+puertos en el host. Health de producto: `GET https://siragpt.com/api/documents/healthz`.
 
 ## Tests
 
-- Vitest: `tests/lib/doc-engine/*.test.ts` (path traversal, zip-bomb,
-  `.rels`, style map, fixture UPN + golden `document.xml`).
-- Backend: `backend/tests/doc-engine.test.js` (flag off, runner harden,
-  verify DeepSeek-only, chat bridge).
+```bash
+npm --prefix backend run test:doc-engine
+npm run test:unit -- tests/lib/doc-engine --pool=threads
+```
+
+Cobertura: path traversal, symlink, zip-bomb, rels, style map, feature flag,
+UPN sectPr SHA + header/footer + numbering hash + PDF ≥1 + golden C14N
+`document.xml`.

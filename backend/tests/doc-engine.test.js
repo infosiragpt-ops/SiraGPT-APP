@@ -90,6 +90,10 @@ describe('doc-engine runner', () => {
     assert.ok(args.includes('--read-only'));
     assert.ok(args.includes('--cap-drop') && args.includes('ALL'));
     assert.ok(args.includes('10001:10001'));
+    assert.ok(args.includes('--pids-limit') && args.includes('256'));
+    assert.ok(args.includes('--memory') && args.includes('768m'));
+    assert.ok(args.includes('--cpus') && args.includes('1'));
+    assert.match(args.join(' '), /nosuid,nodev,noexec/);
     assert.doesNotMatch(args.join(' '), /openrouter/i);
   });
 });

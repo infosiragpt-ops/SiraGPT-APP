@@ -18,6 +18,7 @@
     "pretest": "cd backend && npx prisma generate",
     "test": "rm -rf .test-dist && node ./node_modules/typescript/bin/tsc -p tests/tsconfig.json && node --test \".test-dist/tests/**/*.test.js\"",
     "test:unit": "NODE_ENV=test vitest run",
+    "test:doc-engine": "npm --prefix backend run test:doc-engine && npm run test:unit -- tests/lib/doc-engine --pool=threads",
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",

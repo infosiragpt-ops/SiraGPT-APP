@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Valida un OOXML desempaquetado: XML bien formado + r:id vs .rels.
+"""Valida un OOXML desempaquetado: XML bien formado + r:id / r:embed / r:link vs .rels.
 
-Sale con código distinto de 0 y un mensaje accionable si algo falla.
+Parser seguro (sin DTD, sin entidades, sin red). Sale con código distinto de 0
+y un mensaje accionable si algo falla.
 """
 from __future__ import annotations
 
@@ -9,12 +10,12 @@ import argparse
 import os
 import re
 import sys
-from xml.etree import ElementTree as ET
+
+from xml_io import parse_xml_file
 
 RID_RE = re.compile(r"""(?:r:id|r:embed|r:link)\s*=\s*["']([^"']+)["']""")
 REL_ID_RE = re.compile(r"""\bId\s*=\s*["']([^"']+)["']""")
 
-# Partes cuyo r:id debe resolverse contra su .rels hermano.
 CHECK_PARTS = (
     "word/document.xml",
     "ppt/presentation.xml",
@@ -35,7 +36,6 @@ def _iter_xml_files(root: str):
 
 
 def _rels_for_part(root: str, rel_part: str) -> str | None:
-    # word/document.xml → word/_rels/document.xml.rels
     directory, base = os.path.split(rel_part)
     candidate = os.path.join(root, directory, "_rels", base + ".rels")
     if os.path.isfile(candidate):
@@ -67,14 +67,13 @@ def validate(root: str) -> None:
         _die("no hay XML que validar; ¿olvidaste unpack?")
     for path in xml_files:
         try:
-            ET.parse(path)
-        except ET.ParseError as err:
+            parse_xml_file(path)
+        except Exception as err:
             rel = os.path.relpath(path, root)
             _die(f"XML mal formado en {rel}: {err}. Revisa namespaces y tags cerrados.")
 
     parts = [p for p in CHECK_PARTS if os.path.isfile(os.path.join(root, p))]
     parts.extend(_header_footer_parts(root))
-    # únicos
     seen = set()
     ordered = []
     for p in parts:
@@ -108,7 +107,7 @@ def validate(root: str) -> None:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Validate unpacked OOXML")
+    p = argparse.ArgumentParser(description="Validate unpacked OOXML with a secure parser")
     p.add_argument("root")
     args = p.parse_args(argv)
     validate(args.root)

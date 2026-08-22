@@ -1312,9 +1312,9 @@ app.use('/api/compute', computeRoutes);
 app.use('/api/math', mathRoutes);
 app.use('/api/viz', vizRoutes);
 app.use('/api/doc', docRoutes);
-// FEATURE_DOC_ENGINE (default off): transform-to-template job APIs.
-// Flag off ⇒ 404. Does not shadow /chat or /code.
-app.use('/api/documents', documentsRoutes);
+// FEATURE_DOC_ENGINE (default off): no router registration when the flag
+// is false → Express 404 on /api/documents/*. Does not shadow /chat or /code.
+documentsRoutes.registerDocumentsRoutes(app);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);

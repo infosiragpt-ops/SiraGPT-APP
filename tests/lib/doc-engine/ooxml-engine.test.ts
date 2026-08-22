@@ -165,13 +165,24 @@ describe('transformToTemplate — UPN fixture', () => {
     expect(bodyWithoutSect).not.toContain('XXXXXXXX')
   })
 
-  it('golden document.xml snapshot', () => {
+  it('keeps numbering.xml hash and header/footer counts', () => {
+    const numbering = ooxml.hashZipPart(makeUpnTemplate(), 'word/numbering.xml')
+    expect(numbering).toBeTruthy()
+    expect(ooxml.hashZipPart(result.buffer, 'word/numbering.xml')).toBe(numbering)
+    expect(result.headerFooterBefore).toEqual(result.headerFooterAfter)
+  })
+
+  it('golden C14N document.xml snapshot', () => {
     const goldenDir = path.resolve(process.cwd(), 'tests/lib/doc-engine/__snapshots__')
     fs.mkdirSync(goldenDir, { recursive: true })
     const goldenPath = path.join(goldenDir, 'document.xml')
+    const c14nPath = path.join(goldenDir, 'document.c14n.xml')
+    const canonical = ooxml.c14nXml(documentXml)
     if (!fs.existsSync(goldenPath)) fs.writeFileSync(goldenPath, documentXml)
-    const expected = fs.readFileSync(goldenPath, 'utf8')
-    expect(documentXml).toBe(expected)
+    if (!fs.existsSync(c14nPath)) fs.writeFileSync(c14nPath, canonical)
+    expect(documentXml).toBe(fs.readFileSync(goldenPath, 'utf8'))
+    expect(canonical).toBe(fs.readFileSync(c14nPath, 'utf8'))
+    expect(canonical).toContain('Portada original UPN')
   })
 
   it('PDF preview has ≥ 1 page', async () => {
@@ -189,12 +200,13 @@ describe('transformToTemplate — UPN fixture', () => {
 })
 
 describe('hardened runner', () => {
-  it('emits network=none, read-only, cap-drop ALL, uid 10001', () => {
+  it('emits network=none, read-only, cap-drop ALL, uid 10001, noexec tmpfs, pids/memory/cpus', () => {
     const args = runner.buildHardenedRunArgs({
       name: 'sira-doc-test',
       image: 'siragpt-sandbox:doc-engine',
       jobId: 'job1',
     })
+    const joined = args.join(' ')
     expect(args).toContain('--network')
     expect(args).toContain('none')
     expect(args).toContain('--read-only')
@@ -202,9 +214,16 @@ describe('hardened runner', () => {
     expect(args).toContain('ALL')
     expect(args).toContain('--user')
     expect(args).toContain('10001:10001')
+    expect(args).toContain('--pids-limit')
+    expect(args).toContain('256')
+    expect(args).toContain('--memory')
+    expect(args).toContain('768m')
+    expect(args).toContain('--cpus')
+    expect(args).toContain('1')
+    expect(args.some((a: string) => String(a).includes('nosuid,nodev,noexec'))).toBe(true)
     expect(args.some((a: string) => String(a).includes('/workspace:'))).toBe(true)
-    expect(args.join(' ')).not.toMatch(/unconfined/)
-    expect(args.join(' ')).not.toMatch(/openrouter/i)
+    expect(joined).not.toMatch(/unconfined/)
+    expect(joined).not.toMatch(/openrouter/i)
   })
 })
 

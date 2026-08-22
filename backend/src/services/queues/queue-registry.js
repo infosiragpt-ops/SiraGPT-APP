@@ -17,6 +17,7 @@ const DEFAULT_QUEUE_IDS = Object.freeze([
   'codex-runs',
   'document-collections',
   'goal-runs',
+  'doc-jobs',
 ]);
 // Backward-compatible logical names used by HEALTH_CRITICAL_QUEUES.
 const DEFAULT_QUEUE_NAMES = DEFAULT_QUEUE_IDS;
@@ -51,6 +52,12 @@ const DEFAULT_QUEUE_SPECS = Object.freeze([
     envKey: 'GOAL_QUEUE_NAME',
     defaultName: 'siragpt-goal-runs',
     getter: () => require('../goal-queue').getGoalQueue(),
+  }),
+  Object.freeze({
+    id: 'doc-jobs',
+    envKey: 'DOC_ENGINE_QUEUE_NAME',
+    defaultName: 'doc-jobs',
+    getter: () => require('../doc-engine/queue').getDocQueue(),
   }),
 ]);
 

@@ -5,6 +5,7 @@
  * para tests y para el fallback in-process cuando no hay Docker.
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const PizZip = require('pizzip');
@@ -76,7 +77,14 @@ function unpackBuffer(buffer, destDir, { maxEntries = MAX_ENTRIES, maxUncompress
       throw new OoxmlError(`zip-bomb: descomprimido supera ${maxUncompressed} bytes`, 'zip_bomb');
     }
     fs.mkdirSync(path.dirname(target), { recursive: true });
+    if (fs.existsSync(target) && fs.lstatSync(target).isSymbolicLink()) {
+      throw new OoxmlError(`symlink rechazado: '${rawName}'`, 'symlink');
+    }
     fs.writeFileSync(target, data);
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      fs.unlinkSync(target);
+      throw new OoxmlError(`symlink rechazado: '${rawName}'`, 'symlink');
+    }
   }
   return { entries: names.length, bytes: total, dest: destDir };
 }
@@ -373,6 +381,33 @@ function countPdfPages(pdfBuffer) {
   return count;
 }
 
+function sha256Hex(data) {
+  return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+function hashZipPart(buffer, name) {
+  const zip = loadZip(buffer);
+  const f = zip.file(name);
+  if (!f) return null;
+  return sha256Hex(Buffer.from(f.asUint8Array()));
+}
+
+function c14nXml(xml) {
+  return String(xml || '')
+    .replace(/>\s+</g, '><')
+    .replace(/<([A-Za-zA-Z_][\w:.\-]*)([^>]*?)(\/?)>/g, (full, name, attrs, self) => {
+      if (full.startsWith('<?') || full.startsWith('<!')) return full;
+      const pairs = [];
+      const re = /([A-Za-zA-Z_][\w:.\-]*)\s*=\s*("[^"]*"|'[^']*')/g;
+      let m;
+      while ((m = re.exec(attrs))) pairs.push([m[1], m[2]]);
+      pairs.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+      const sorted = pairs.map(([k, v]) => ` ${k}=${v.startsWith('"') ? v : `"${v.slice(1, -1)}"`}`).join('');
+      return `<${name}${sorted}${self}>`;
+    })
+    .trim();
+}
+
 function makeStubPdf() {
   // PDF mínimo de 1 página para CI sin LibreOffice.
   return Buffer.from(
@@ -410,4 +445,7 @@ module.exports = {
   makeStubPdf,
   loadZip,
   normalizeZipName,
+  sha256Hex,
+  hashZipPart,
+  c14nXml,
 };

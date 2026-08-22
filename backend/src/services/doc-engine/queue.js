@@ -2,14 +2,18 @@
 
 /**
  * BullMQ queue `doc-jobs`, concurrency 2, timeout 180s.
- * Si no hay REDIS_URL el enqueue corre el pipeline in-process
- * (tests / CI). El worker real se arranca solo con FEATURE_DOC_ENGINE=1.
+ * Job payloads are metadata only — never binary buffers / base64.
+ * Files live on disk via artifact-store.
+ *
+ * Without REDIS_URL the enqueue runs the pipeline in-process (tests / CI).
+ * The worker starts only with FEATURE_DOC_ENGINE=1.
  */
 
 const { Queue, Worker } = require('bullmq');
 const { getDocEngineConfig, isDocEngineEnabled } = require('./flags');
 const { createJob, getJob, setError, appendEvent } = require('./job-store');
 const { runPipeline } = require('./pipeline');
+const artifacts = require('./artifact-store');
 
 function withTimeout(promise, ms, label = 'doc-engine') {
   let timer;
@@ -19,14 +23,24 @@ function withTimeout(promise, ms, label = 'doc-engine') {
   return Promise.race([promise, timed]).finally(() => clearTimeout(timer));
 }
 
+function assertNoBinaryPayload(data) {
+  if (!data || typeof data !== 'object') return;
+  for (const key of Object.keys(data)) {
+    if (/b64|buffer|binary|bytes/i.test(key)) {
+      throw new Error('doc-jobs payload must not include binary buffers');
+    }
+    const v = data[key];
+    if (Buffer.isBuffer(v)) {
+      throw new Error('doc-jobs payload must not include binary buffers');
+    }
+  }
+}
+
 async function executeJob(data) {
+  assertNoBinaryPayload(data);
   const cfg = getDocEngineConfig();
-  const sourceBuffer = Buffer.isBuffer(data.sourceBuffer)
-    ? data.sourceBuffer
-    : Buffer.from(data.sourceB64 || '', 'base64');
-  const templateBuffer = Buffer.isBuffer(data.templateBuffer)
-    ? data.templateBuffer
-    : Buffer.from(data.templateB64 || '', 'base64');
+  const sourceBuffer = artifacts.readInput(data.jobId, 'source');
+  const templateBuffer = artifacts.readInput(data.jobId, 'template');
   try {
     const result = await withTimeout(runPipeline({
       sourceBuffer,
@@ -44,6 +58,8 @@ async function executeJob(data) {
       appendEvent(data.jobId, 'error', { message });
     } catch { /* noop */ }
     throw err;
+  } finally {
+    /* artifact files stay until TTL sweep; workspace scratch is cleaned in pipeline */
   }
 }
 
@@ -108,25 +124,19 @@ async function enqueueDocJob({
   templateName,
 } = {}) {
   const job = createJob({ userId, instructions, sourceName, templateName });
+  artifacts.writeInputs(job.id, { sourceBuffer, templateBuffer });
   const payload = {
     jobId: job.id,
     userId,
     instructions,
     sourceName,
     templateName,
-    sourceB64: Buffer.from(sourceBuffer).toString('base64'),
-    templateB64: Buffer.from(templateBuffer).toString('base64'),
   };
+  assertNoBinaryPayload(payload);
 
   if (!process.env.REDIS_URL) {
     setImmediate(() => {
-      executeJob({
-        jobId: job.id,
-        userId,
-        instructions,
-        sourceBuffer,
-        templateBuffer,
-      }).catch((err) => {
+      executeJob(payload).catch((err) => {
         try { console.error('[doc-engine] inline job failed:', err?.message || err); } catch { /* noop */ }
       });
     });
@@ -149,6 +159,7 @@ function startDocEngineWorker({ env = process.env } = {}) {
   workerConnection = createRedisConnection({ label: 'doc-engine-worker' });
   worker = new Worker(getQueueName(env), async (bullJob) => {
     const data = bullJob.data || {};
+    assertNoBinaryPayload(data);
     const result = await executeJob(data);
     if (!result.ok) throw new Error(result.error || 'doc-engine job failed');
     return { jobId: data.jobId, ok: true };
@@ -190,4 +201,6 @@ module.exports = {
   closeDocEngineWorker,
   closeDocEngineQueue,
   getJob,
+  assertNoBinaryPayload,
+  executeJob,
 };

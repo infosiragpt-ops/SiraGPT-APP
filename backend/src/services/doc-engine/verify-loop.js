@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getDocEngineConfig } = require('./flags');
+const { parseClosedDsl, looksLikeXmlOrCode } = require('./visual-dsl');
 
 function createDeepSeekClient(env = process.env, OpenAIImpl) {
   const key = String(env.DEEPSEEK_API_KEY || '').trim();
@@ -80,7 +81,10 @@ async function runVerifyLoop(opts = {}, deps = {}) {
           'Eres el verificador visual de SiraGPT (Luis Carrera).',
           'El DOCX debe mostrar el CONTENIDO FUENTE transplantado a la plantilla.',
           'Si ves placeholders XXXXXXXX o una plantilla vacía, ok=false.',
-          'Responde SOLO JSON: {"ok":true|false,"placeholdersVisible":bool,"issues":[]}',
+          'Responde SOLO JSON cerrado (sin XML, sin código, sin markdown):',
+          '{"ok":true|false,"placeholdersVisible":bool,"issues":[],"ops":[]}',
+          'ops es un DSL cerrado: replace_text{find,replace} o set_style{styleId,textEquals}.',
+          'NUNCA emitas XML, w:p, document.xml, Python ni JavaScript.',
           opts.instructions ? `Instrucción del usuario: ${String(opts.instructions).slice(0, 500)}` : '',
         ].filter(Boolean).join('\n'),
       },
@@ -109,6 +113,17 @@ async function runVerifyLoop(opts = {}, deps = {}) {
       text = res?.choices?.[0]?.message?.content || '';
       const used = Number(res?.usage?.total_tokens) || maxTokens;
       remainingTokens -= used;
+      if (looksLikeXmlOrCode(text)) {
+        log.push({
+          jobId: opts.jobId || null,
+          iteration: i,
+          model,
+          rejected: true,
+          reason: 'model emitted XML/code — closed DSL only',
+        });
+        last = { ok: false, placeholdersVisible: true, issues: ['xml_or_code_rejected'], ops: [] };
+        continue;
+      }
       last = parseVerdict(text);
       log.push({
         jobId: opts.jobId || null,
@@ -119,6 +134,7 @@ async function runVerifyLoop(opts = {}, deps = {}) {
         durationMs: Date.now() - started,
         ok: last.ok,
         placeholdersVisible: last.placeholdersVisible,
+        ops: last.ops.length,
         // OpenRouter is forbidden for the document-engine vision loop.
       });
       if (last.ok && !last.placeholdersVisible) break;
@@ -141,6 +157,7 @@ async function runVerifyLoop(opts = {}, deps = {}) {
     iterations: log.filter((e) => !e.skipped).length,
     log,
     verdict: last,
+    ops: last.ops || [],
   };
 }
 
@@ -150,15 +167,22 @@ function parseVerdict(text) {
     const start = json.indexOf('{');
     const end = json.lastIndexOf('}');
     const parsed = JSON.parse(json.slice(start, end + 1));
+    let ops = [];
+    try {
+      ops = Array.isArray(parsed.ops) ? parseClosedDsl(parsed.ops) : [];
+    } catch {
+      ops = [];
+    }
     return {
       ok: parsed.ok !== false,
       placeholdersVisible: Boolean(parsed.placeholdersVisible),
       issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+      ops,
     };
   } catch {
     const lower = String(text || '').toLowerCase();
     const placeholdersVisible = /xxxxxxxx|placeholder|plantilla vac/.test(lower);
-    return { ok: !placeholdersVisible, placeholdersVisible, issues: [] };
+    return { ok: !placeholdersVisible, placeholdersVisible, issues: [], ops: [] };
   }
 }
 
