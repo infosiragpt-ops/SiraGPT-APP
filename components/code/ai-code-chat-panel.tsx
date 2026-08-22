@@ -177,6 +177,12 @@ import {
   nextWorkTaskAction,
   stepIterationBudget,
 } from "@/lib/code-agent/autonomy"
+import {
+  buildRecoveryPrompt,
+  compactContext,
+  shouldCompactContext,
+  type ContextRecoveryTurn,
+} from "@/lib/code-agent/context-recovery"
 import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
 import { runQualityGate } from "@/lib/code-agent/quality-gate"
 import {
@@ -855,6 +861,17 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   React.useEffect(() => {
     turnsRef.current = turns
   }, [turns])
+  // Mirror of the agent FSM state (plan/tasks/budget) for stable callbacks:
+  // sendPrompt reads it to gate context compaction without growing its
+  // dependency array with the whole session object.
+  const agentStateRef = React.useRef(activeCodeChatSession?.agent ?? null)
+  React.useEffect(() => {
+    agentStateRef.current = activeCodeChatSession?.agent ?? null
+  }, [activeCodeChatSession?.agent])
+  const sessionTitleRef = React.useRef(activeCodeChatSession?.title ?? "")
+  React.useEffect(() => {
+    sessionTitleRef.current = activeCodeChatSession?.title ?? ""
+  }, [activeCodeChatSession?.title])
   const agentPhase = activeCodeChatSession?.agent?.phase ?? "idle"
 
   const setTurns = React.useCallback(
@@ -1872,7 +1889,38 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         .slice(-12)
         .map((t) => `${t.role === "user" ? "Usuario" : "Asistente"}: ${t.content}`)
         .join("\n\n")
-      const convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      // Frente 3 — recuperación de contexto (sesión larga): when the FULL prior
+      // history estimates over the context budget, swap the naive last-12 slice
+      // for a deterministic recovery prompt: original brief + INTACT plan +
+      // every task (id/title/status) + regex-extracted facts of the dropped
+      // middle + head/tail verbatim + an explicit "continue from the first
+      // non-completed task" instruction. The agent's own instruction for this
+      // turn (`text`) is always appended AFTER, untouched. The plan/tasks live
+      // in the FSM state (agentStateRef), so nothing is ever lost even though
+      // old bubbles no longer fit.
+      const recoveryTurns: ContextRecoveryTurn[] = turns
+        .filter((t) => !t.streaming && t.content.trim())
+        .map((t) => ({ role: t.role, content: t.content }))
+      const agentFsm = agentStateRef.current
+      let convoBlock = transcript ? `Conversación hasta ahora:\n${transcript}\n\n---\n\n` : ""
+      if (
+        !webGroundedConversation
+        && shouldCompactContext(recoveryTurns)
+        && agentFsm
+      ) {
+        const compacted = compactContext(
+          agentFsm.context as unknown as Record<string, unknown>,
+          (agentFsm.tasks || []) as unknown as Array<Record<string, unknown>>,
+          recoveryTurns,
+          {},
+        )
+        const originalBrief =
+          briefFromConversation(recoveryTurns) ||
+          promptFromContext(agentFsm.context) ||
+          sessionTitleRef.current ||
+          text
+        convoBlock = `${buildRecoveryPrompt(originalBrief, compacted)}\n\n---\n\n`
+      }
       const scopedConvoBlock = webGroundedConversation ? "" : convoBlock
       const proactiveState = getProactiveCompanyState()
       if (proactiveState.enabled && !webGroundedConversation && text.trim() && !proactiveState.objective) {
