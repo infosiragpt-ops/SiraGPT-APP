@@ -1186,6 +1186,9 @@ async function run(openai, opts) {
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
     let resp;
+    // Per-model canary telemetry timers (best-effort; never alters behavior).
+    const modelTelemetryStepStart = Date.now();
+    let modelTelemetryTtfbAt = null;
     // Per-step wall-clock timeout. A single hung/slow provider completion
     // must NOT exceed the chat UI's 90s "stale" threshold (agentic-steps.tsx)
     // — otherwise the user sees "El asistente dejó de responder" while the
@@ -1240,6 +1243,17 @@ async function run(openai, opts) {
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
         : `model_error: ${err.message}`;
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model: activeModel,
+          provider: activeProvider,
+          agent: 'react_agent',
+          outcome: (ctx?.signal && ctx.signal.aborted) ? 'cancelled' : 'error',
+          error: timedOut ? { code: 'timeout', message: `step_timeout_${stepTimeoutMs}ms` } : err,
+          durationMs: Date.now() - modelTelemetryStepStart,
+          ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        });
+      } catch { /* optional */ }
       break;
     } finally {
       clearTimeout(stepTimer);
@@ -1250,11 +1264,37 @@ async function run(openai, opts) {
 
     const choice = resp.choices?.[0];
     const msg = choice?.message;
-    if (!msg) { stoppedReason = 'no_message'; break; }
+    if (!msg) {
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model: activeModel,
+          provider: activeProvider,
+          agent: 'react_agent',
+          outcome: 'stall',
+          error: { code: 'no_message' },
+          durationMs: Date.now() - modelTelemetryStepStart,
+          ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        });
+      } catch { /* optional */ }
+      stoppedReason = 'no_message';
+      break;
+    }
     const usage = responseUsage(resp, {
       model: activeModel,
       provider: activeProvider,
     });
+    try {
+      require('../codex/model-telemetry').recordLlmTurn({
+        model: activeModel,
+        provider: activeProvider,
+        agent: 'react_agent',
+        outcome: 'ok',
+        durationMs: Date.now() - modelTelemetryStepStart,
+        ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+      });
+    } catch { /* optional */ }
 
     // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
     // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside

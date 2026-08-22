@@ -15,6 +15,12 @@ const {
   callModelWithRetry,
 } = require('./native-llm');
 
+// Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
+// lazy require so offline tests that never emit a metric still load fast.
+function recordModelTelemetry(event) {
+  try { require('../codex/model-telemetry').recordLlmTurn(event); } catch { /* optional */ }
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 
 // Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
@@ -147,7 +153,7 @@ function asNativeCalls(calls, iteration) {
   }));
 }
 
-async function callModel({ client, model, messages, tools, signal, maxTokens }) {
+async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken }) {
   const max_tokens = maxTokens || resolveAgentRunnerMaxTokens();
   const create = (withTools) => client.chat.completions.create({
     model,
@@ -157,11 +163,15 @@ async function callModel({ client, model, messages, tools, signal, maxTokens }) 
   }, signal ? { signal } : undefined);
   return callModelWithRetry(async () => {
     try {
-      return await create(true);
+      const out = await create(true);
+      if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
+      return out;
     } catch (err) {
       if (signal && signal.aborted) throw err;
       if (!looksLikeToolUnsupportedError(err)) throw err;
-      return create(false);
+      const out = await create(false);
+      if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
+      return out;
     }
   }, {
     signal,
@@ -274,11 +284,37 @@ async function runAgentLoop({
     }
 
     let response;
+    const modelTurnStart = Date.now();
+    let modelTtfbMs = null;
     try {
-      response = await callModel({ client, model, messages, tools, signal });
+      response = await callModel({
+        client,
+        model,
+        messages,
+        tools,
+        signal,
+        onFirstToken: () => { if (modelTtfbMs === null) modelTtfbMs = Date.now() - modelTurnStart; },
+      });
+      recordModelTelemetry({
+        model,
+        agent: 'agent_runner',
+        outcome: 'ok',
+        durationMs: Date.now() - modelTurnStart,
+        ttftMs: modelTtfbMs,
+        tokensIn: response?.usage?.prompt_tokens,
+        tokensOut: response?.usage?.completion_tokens,
+      });
       lastProgressAt = Date.now();
       bail(iteration);
     } catch (err) {
+      recordModelTelemetry({
+        model,
+        agent: 'agent_runner',
+        outcome: signal?.aborted ? 'cancelled' : 'error',
+        error: err,
+        durationMs: Date.now() - modelTurnStart,
+        ttftMs: modelTtfbMs,
+      });
       if (signal?.aborted) bail(iteration);
       onEvent({ type: 'error', message: err?.message || String(err) });
       if (isLlmCreditError(err)) {
@@ -315,6 +351,14 @@ async function runAgentLoop({
       // instead of burning the remaining iterations.
       if (!String(msg.content || '').trim()) {
         stallCount += 1;
+        recordModelTelemetry({
+          model,
+          agent: 'agent_runner',
+          outcome: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'stall' : 'error',
+          error: { code: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'loop_stall' : 'stream_stall_retryable' },
+          durationMs: Date.now() - modelTurnStart,
+          ttftMs: modelTtfbMs,
+        });
         lastProgressAt = Date.now();
         if (stallCount >= STREAM_STALL_CANCEL_AFTER) {
           const classified = classifyLoopError({ code: 'loop_stall' });

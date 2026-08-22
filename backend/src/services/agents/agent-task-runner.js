@@ -3695,6 +3695,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     metrics.counter('agent_task_invocations_total', { status });
     metrics.observe('agent_task_duration_ms', { status }, Date.now() - startedAt);
     metrics.counter('agent_task_artifacts_total', { status }, artifacts.length);
+    // Per-model canary gate: task-level terminal observation segmented by the
+    // runtime model that actually served the steps (last step's usage wins).
+    try {
+      const telemetryModel = (() => {
+        const steps = Array.isArray(result?.steps) ? result.steps : [];
+        for (let i = steps.length - 1; i >= 0; i -= 1) {
+          const m = steps[i]?.usage?.model;
+          if (m) return m;
+        }
+        return model;
+      })();
+      require('../../services/codex/model-telemetry').recordLlmTurn({
+        model: telemetryModel,
+        provider: null,
+        agent: 'agent_task',
+        outcome: ['done', 'completed', 'success'].includes(String(status).toLowerCase()) ? 'ok' : 'error',
+        error: ['done', 'completed', 'success'].includes(String(status).toLowerCase())
+          ? null
+          : { code: String(stoppedReason || status || 'task_failed') },
+      });
+    } catch { /* optional */ }
     persistProgress(status);
     auditLog.audit({
       event: 'agent_task_worker_finished',
