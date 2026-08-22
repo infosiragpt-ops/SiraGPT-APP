@@ -4,6 +4,7 @@ import * as React from "react"
 import {
   Braces,
   ChevronRight,
+  ExternalLink,
   File,
   FileCode2,
   FileCog,
@@ -12,16 +13,27 @@ import {
   Folder,
   FolderOpen,
   type LucideIcon,
+  Loader2,
   ScrollText,
   Search,
   SquareTerminal,
   Trash2,
   X,
 } from "lucide-react"
+import { toast } from "sonner"
+
+import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useCodeWorkspace } from "@/lib/code-workspace-context"
+import { apiClient } from "@/lib/api"
+import { codexApi } from "@/lib/codex/codex-api"
+import { readWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
+import {
+  DocBridgeError,
+  openCodeFileInEditor,
+} from "@/lib/code-doc-bridge"
+import { getActiveCodexProject, useCodeWorkspace } from "@/lib/code-workspace-context"
 
 // Cursor / VS-Code-style file-type icons + accent colors. Keeps the tree
 // scannable: JSON in amber braces, shell in green, code in blue/yellow,
@@ -169,6 +181,11 @@ function dirname(path: string): string {
   return parts.slice(0, -1).join("/")
 }
 
+/** Text-ish files that make sense as editable /chat documents. */
+export function isDocumentLikePath(path: string): boolean {
+  return /\.(md|markdown|txt|text)$/i.test(basename(String(path || "")))
+}
+
 // ── Presentational tree (context-free, so it can be previewed) ───────────
 type FileTreeProps = {
   nodes: TreeNode[]
@@ -178,9 +195,12 @@ type FileTreeProps = {
   onToggle: (path: string) => void
   onOpen: (path: string) => void
   onDelete: (path: string) => void
+  /** Optional code→doc bridge action; rendered only for document-like files. */
+  onOpenInEditor?: (path: string) => void
+  docBusyPath?: string | null
 }
 
-export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen, onDelete }: FileTreeProps) {
+export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen, onDelete, onOpenInEditor, docBusyPath }: FileTreeProps) {
   return (
     <ul className="space-y-px">
       {nodes.map((node) => {
@@ -215,6 +235,8 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
                   onToggle={onToggle}
                   onOpen={onOpen}
                   onDelete={onDelete}
+                  onOpenInEditor={onOpenInEditor}
+                  docBusyPath={docBusyPath}
                 />
               )}
             </li>
@@ -239,6 +261,27 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
               <FileIcon className="h-3.5 w-3.5 shrink-0" style={{ color: iconColor }} />
               <span className="truncate">{node.name}</span>
             </button>
+            {onOpenInEditor && isDocumentLikePath(node.path) ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                aria-label={`Abrir ${node.path} en el editor de documentos`}
+                title="Abrir en el editor de documentos (/chat)"
+                disabled={docBusyPath === node.path}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenInEditor(node.path)
+                }}
+              >
+                {docBusyPath === node.path ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ExternalLink className="h-3 w-3" />
+                )}
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -263,6 +306,7 @@ export function FileTree({ nodes, depth, activePath, collapsed, onToggle, onOpen
 export function FileTreePanel() {
   const { files, activePath, openFile, deleteFile, openLocalFolderWorkspace, workspaceSource } =
     useCodeWorkspace()
+  const tBridge = useTranslations("documents.docBridge")
 
   const [query, setQuery] = React.useState("")
   const [collapsed, setCollapsed] = React.useState<Set<string>>(() => new Set())
@@ -291,6 +335,61 @@ export function FileTreePanel() {
       deleteFile(path)
     },
     [deleteFile],
+  )
+
+  // ── Code → Doc bridge ──────────────────────────────────────────────────
+  // Push a workspace file into the /chat documents surface as an editable
+  // document. Resolves the Codex project id from the active-folder link
+  // (persisted by the chat panel when a run starts) and falls back to the
+  // active project singleton.
+  const [docBusyPath, setDocBusyPath] = React.useState<string | null>(null)
+  const handleOpenInDocumentEditor = React.useCallback(
+    async (path: string) => {
+      if (docBusyPath) return
+      setDocBusyPath(path)
+      try {
+        let projectId = getActiveCodexProject()
+        if (!projectId && typeof window !== "undefined") {
+          const folderId = window.localStorage.getItem("code-workspace:active-folder")
+          if (folderId) {
+            try {
+              const parsed = JSON.parse(folderId) as { id?: string }
+              projectId = readWorkspaceCodexProject(parsed?.id ?? null)
+            } catch {
+              /* malformed storage — treated as no link */
+            }
+          }
+        }
+        if (!projectId) {
+          toast.error(tBridge("openInEditorNoProject"))
+          return
+        }
+        await openCodeFileInEditor({
+          projectId,
+          filePath: path,
+          readFileContent: codexApi.readFileContent,
+          createDocument: async (input) => {
+            const created = await apiClient.createDocument(input)
+            return {
+              fileId: created.file.id,
+              filename: created.file.originalName || created.file.filename,
+              versionId: created.version.id,
+            }
+          },
+        })
+        toast.success(tBridge("openedAsDocument", { name: basename(path) }))
+      } catch (error) {
+        if (error instanceof DocBridgeError && error.code === "empty_content") {
+          toast.error(tBridge("openInEditorEmpty"))
+        } else {
+          console.error("[file-tree] open-in-document-editor failed:", error)
+          toast.error(`${tBridge("openInEditorFailed")}: ${error instanceof Error ? error.message : ""}`.trim())
+        }
+      } finally {
+        setDocBusyPath(null)
+      }
+    },
+    [docBusyPath, tBridge],
   )
 
   return (
@@ -393,6 +492,8 @@ export function FileTreePanel() {
             onToggle={toggle}
             onOpen={openFile}
             onDelete={handleDelete}
+            onOpenInEditor={(path) => void handleOpenInDocumentEditor(path)}
+            docBusyPath={docBusyPath}
           />
         )}
       </div>
