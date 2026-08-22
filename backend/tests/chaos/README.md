@@ -31,6 +31,8 @@ Every chaos test in this folder must:
 | `stripe-bad-signature.test.js` | Webhook returns 400 when `constructWebhookEvent` throws |
 | `smtp-timeout.test.js`         | Mail send wrapped in `withRetry` does not hang past its deadline |
 | `ai-provider-5xx.test.js`      | OpenAI/Anthropic 5xx → retry-with-backoff exhausts, classifies as retryable, propagates a 503-shaped error |
+| `codex-stream-cut-mid-task.test.js` | Provider stream cut mid-answer (no `[DONE]`): fail-closed on partial output (no provider splice), pre-delta cut quarantines the rung for `FAILOVER_TTL_MS` with injectable `now`, all-rungs-cut rejects loudly |
+| `codex-worker-death-mid-build.test.js` | Worker death mid-build: clean terminal error through the real processor lifecycle, fail-closed checkpoint write (`{ ok:false }`, committed work preserved), boot recovery re-enqueues the SAME run twice then errors at `MAX_BOOT_RESUMES` |
 
 ## Why not `nock`
 
