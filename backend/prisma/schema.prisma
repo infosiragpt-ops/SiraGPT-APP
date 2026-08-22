@@ -4069,6 +4069,7 @@ model FileVersion {
   editPlan         Json? // the structured operations that produced it
   validationPassed Boolean  @default(true)
   createdByChatId  String?
+  content          String?  @db.Text // edited Markdown for manual /chat edits (MVP; null for artifact-based versions)
   createdAt        DateTime @default(now())
 
   @@unique([fileId, version])
