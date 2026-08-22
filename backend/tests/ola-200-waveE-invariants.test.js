@@ -19,13 +19,9 @@ describe('ola-200 wave E invariants', () => {
     assert.doesNotMatch(src, /Recarga OpenRouter/);
   });
 
-  it('BE-050 generate-document is DeepSeek-locked', () => {
-    const src = read('routes/generate-document.js');
-    assert.match(src, /model_forbidden/);
-    assert.match(src, /api\.deepseek\.com/);
-    assert.doesNotMatch(src, /apiKey: process\.env\.OPENAI_API_KEY/);
-    assert.doesNotMatch(src, /provider === "OpenRouter"/);
-  });
+  // BE-050 (generate-document model contract) moved to agent-model-contract.test.js —
+  // the DeepSeek-locked assertion encoded the pre-#308 decision; see that
+  // file for the reconciled contract.
 
   it('BE-068 dummy DeepSeek key is fail-closed in prod', () => {
     const src = read('services/observability/health-check.js');
@@ -52,13 +48,9 @@ describe('ola-200 wave E invariants', () => {
     assert.match(src, /sira:chat:lastArtifactId/);
   });
 
-  it('BE-057 agent-batch idempotency + DeepSeek lock', () => {
-    const src = read('routes/agent-batch.js');
-    assert.match(src, /resolveBatchModel/);
-    assert.match(src, /Idempotency-Key/);
-    assert.match(src, /credits_exhausted/);
-    assert.doesNotMatch(src, /model: task\.model \|\| 'gpt-4o'/);
-  });
+  // BE-057 (agent-batch model contract) moved to agent-model-contract.test.js —
+  // the DeepSeek-locked assertion encoded the pre-#308 decision; see that
+  // file for the reconciled contract.
 
   it('BE-058 agent-runs cancel AbortSignal', () => {
     const src = read('routes/agent-runs.js');
