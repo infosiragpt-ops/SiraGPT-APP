@@ -16,7 +16,11 @@ export type AgentGoal = "landing" | "app"
 export type AgentTask = {
   id: string
   title: string
-  status: "pending" | "in_progress" | "completed" | "blocked"
+  /**
+   * "error" marks a task that genuinely failed after its bounded retries
+   * (Frente 4): it is the resume point for "reintentar desde el paso roto".
+   */
+  status: "pending" | "in_progress" | "completed" | "blocked" | "error"
   /** Brief description of what this task involves. */
   detail?: string
   /** Files affected by this task. */
