@@ -64,6 +64,13 @@ function sanitizeErrorDetails(details) {
   return redactPayloadDeep(details, { maxDepth: 6, maxArrayItems: 25 });
 }
 
+// A caller-supplied message on a >=500 response is by definition an
+// internal detail (route code interpolates err.message into it). The
+// client contract for unmapped server failures is the generic phrase;
+// known-error classifications bypass res.json entirely via their own
+// mapped bodies, so this only masks genuinely unexpected leaks.
+const GENERIC_5XX_MESSAGE = 'Internal server error';
+
 function normalizeErrorBody(body, { statusCode = 500, requestId = null } = {}) {
   const source = body && typeof body === 'object' && !Buffer.isBuffer(body)
     ? redactPayloadDeep({ ...body }, { maxDepth: 6, maxArrayItems: 25 })
@@ -73,13 +80,18 @@ function normalizeErrorBody(body, { statusCode = 500, requestId = null } = {}) {
   if (validationErrors) {
     source.errors = sanitizeValidationErrors(source.errors);
   }
+  const maskMessage = statusCode >= 500;
   const rawError = source.error;
   const rawMessage = source.message;
+  // On 5xx the `error` slot is only safe if it is an HTTP status phrase
+  // ('Internal Server Error'); a caller-supplied string like
+  // 'boom_failed' or an interpolated err.message is internal detail.
+  const httpErrorPhrase = statusMessage(statusCode);
   const error = typeof rawError === 'string' && rawError.trim()
     ? rawError
     : validationErrors
       ? 'Validation failed'
-      : statusMessage(statusCode);
+      : httpErrorPhrase;
   const message = typeof rawMessage === 'string' && rawMessage.trim()
     ? rawMessage
     : validationErrors
@@ -89,8 +101,8 @@ function normalizeErrorBody(body, { statusCode = 500, requestId = null } = {}) {
   return {
     ...source,
     ok: false,
-    error,
-    message,
+    error: maskMessage && error !== httpErrorPhrase ? GENERIC_5XX_MESSAGE : error,
+    message: maskMessage ? GENERIC_5XX_MESSAGE : message,
     ...(requestId && !source.requestId ? { requestId } : {}),
   };
 }
@@ -162,6 +174,86 @@ function validateRequest(req, _res, next) {
 // production get a special status — everything else falls through
 // to the generic 500 / err.status path so we don't silently mask
 // novel errors with stale mappings.
+//
+// Mapped results carry `clientCode` so the stable snake_case contract
+// code wins over raw provider/system codes (err.code like
+// 'rate_limit_exceeded' or 'ECONNREFUSED' must never reach the body).
+
+const OPENAI_ERROR_NAMES = new Set([
+  'APIError',
+  'APIConnectionError',
+  'APIConnectionTimeoutError',
+  'APIUserAbortError',
+  'BadRequestError',
+  'AuthenticationError',
+  'PermissionDeniedError',
+  'NotFoundError',
+  'ConflictError',
+  'UnprocessableEntityError',
+  'RateLimitError',
+  'InternalServerError',
+]);
+
+function openaiErrorModule() {
+  try {
+    return require('openai');
+  } catch (_err) {
+    return null;
+  }
+}
+
+function isOpenAiApiError(err) {
+  if (err.name === 'APIError') return true;
+  if (OPENAI_ERROR_NAMES.has(err.name)) return true;
+  const mod = openaiErrorModule();
+  // openai v5 leaves err.name as 'Error'; constructor/prototype chain
+  // is the only reliable discriminator for real SDK instances.
+  return Boolean(
+    mod
+    && typeof mod.APIError === 'function'
+    && (err instanceof mod.APIError || err.constructor?.name === 'APIError'),
+  );
+}
+
+function parseRetryAfterHeader(headers) {
+  if (!headers || typeof headers.get !== 'function') {
+    const raw = headers && headers['retry-after'];
+    if (raw == null) return null;
+    return parseRetryAfterValue(raw);
+  }
+  return parseRetryAfterValue(headers.get('retry-after'));
+}
+
+function parseRetryAfterValue(raw) {
+  if (raw == null) return null;
+  const seconds = Number.parseFloat(raw);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
+  const date = Date.parse(String(raw));
+  if (Number.isFinite(date)) {
+    const delta = Math.ceil((date - Date.now()) / 1000);
+    return delta > 0 ? delta : 1;
+  }
+  return null;
+}
+
+function axiosNetworkFailure(err) {
+  // A response-less axios error is a transport failure by definition;
+  // the code set makes intent explicit for common system codes.
+  return NETWORK_FAILURE_CODES.has(err.code)
+    || !Number.isFinite(Number(err.response?.status));
+}
+
+const NETWORK_FAILURE_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+]);
+
 function classifyKnownError(err) {
   if (!err || typeof err !== 'object') return null;
   const name = err.name || '';
@@ -219,7 +311,113 @@ function classifyKnownError(err) {
       || name === 'StripeAPIError' || err.type === 'StripeAPIError') {
     return { statusCode: 503, code: 'stripe_unavailable', error: 'Service unavailable', message: 'Payment provider temporarily unavailable' };
   }
+  // Circuit breaker OPEN/HALF_OPEN — the AI provider is known to be
+  // failing; fail fast with an honest 503. breakerName/state stay in
+  // logs only.
+  if (name === 'CircuitBreakerError') {
+    return {
+      statusCode: 503,
+      clientCode: 'provider_unavailable',
+      error: 'Service unavailable',
+      message: 'El proveedor de IA está temporalmente saturado; reintentá en unos segundos',
+      retryAfterSeconds: secondsUntil(err.nextAttemptAt) || undefined,
+    };
+  }
+  // OpenAI SDK — never forward the provider's status/message verbatim:
+  // auth failures would leak key validity and 5xx text is provider
+  // internals. Auth/config problems are our operational issue → 503,
+  // not a 401 the client could misread as "your credentials". The
+  // mapped status overrides err.status (errorToResponse prefers it)
+  // so a raw provider 401/5xx cannot leak through.
+  if (isOpenAiApiError(err)) {
+    const retryAfter = parseRetryAfterHeader(err.headers);
+    if (name === 'RateLimitError' || toStatusCode(err.status, 0) === 429) {
+      return {
+        overrideStatus: 429,
+        clientCode: 'rate_limited',
+        error: 'Too many requests',
+        message: 'Demasiadas solicitudes; esperá un momento antes de reintentar',
+        ...(retryAfter ? { retryAfterSeconds: retryAfter } : {}),
+      };
+    }
+    if (name === 'APIConnectionError' || name === 'APIConnectionTimeoutError'
+        || name === 'APIUserAbortError' || !Number.isFinite(Number(err.status))) {
+      return {
+        overrideStatus: 503,
+        clientCode: 'ai_provider_unavailable',
+        error: 'Service unavailable',
+        message: 'El proveedor de IA no está disponible en este momento; reintentá en unos segundos',
+      };
+    }
+    const upstreamStatus = Number(err.status);
+    if (upstreamStatus >= 500) {
+      return {
+        overrideStatus: 503,
+        clientCode: 'ai_provider_unavailable',
+        error: 'Service unavailable',
+        message: 'El proveedor de IA no está disponible en este momento; reintentá en unos segundos',
+      };
+    }
+    if (upstreamStatus === 401 || upstreamStatus === 403) {
+      return {
+        overrideStatus: 503,
+        clientCode: 'ai_provider_misconfigured',
+        error: 'Service unavailable',
+        message: 'El servicio de IA está mal configurado; contactá a soporte',
+      };
+    }
+    return null;
+  }
+  // Axios — same contract as OpenAI above, for generic HTTP upstreams.
+  if (err.isAxiosError === true) {
+    const upstreamStatus = Number(err.response?.status);
+    const retryAfter = parseRetryAfterHeader(err.response?.headers);
+    if (!Number.isFinite(upstreamStatus)) {
+      return {
+        overrideStatus: 503,
+        clientCode: 'upstream_unavailable',
+        error: 'Service unavailable',
+        message: 'El servicio solicitado no está disponible en este momento; reintentá en unos segundos',
+      };
+    }
+    if (upstreamStatus >= 500) {
+      return {
+        overrideStatus: 503,
+        clientCode: 'upstream_unavailable',
+        error: 'Service unavailable',
+        message: 'El servicio solicitado no está disponible en este momento; reintentá en unos segundos',
+        ...(retryAfter ? { retryAfterSeconds: retryAfter } : {}),
+      };
+    }
+    if (upstreamStatus === 429) {
+      return {
+        overrideStatus: 429,
+        clientCode: 'rate_limited',
+        error: 'Too many requests',
+        message: 'Demasiadas solicitudes; esperá un momento antes de reintentar',
+        ...(retryAfter ? { retryAfterSeconds: retryAfter } : {}),
+      };
+    }
+    return null;
+  }
   return null;
+}
+
+function secondsUntil(date) {
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) return null;
+  const delta = Math.ceil((date.getTime() - Date.now()) / 1000);
+  return delta > 0 ? delta : 1;
+}
+
+// Client-initiated cancellations (SSE stream closed mid-turn, user
+// navigated away, AbortController fired) are not server faults. The
+// openai SDK's APIUserAbortError is handled by the OpenAI mapping
+// above; everything else with abort markers is treated here.
+function isClientAbortError(err) {
+  if (!err || typeof err !== 'object') return false;
+  return err.name === 'AbortError'
+    || err.code === 'ABORT_ERR'
+    || (err instanceof DOMException && err.code === DOMException.ABORT_ERR);
 }
 
 // Cap the stack to 2 KB so a runaway recursion or compiled regex
@@ -260,38 +458,68 @@ function errorToResponse(err, req, { exposeStack = false } = {}) {
   }
 
   // Try known-error classification first (ZodError, Prisma, Stripe,
-  // ValidationError). If a match is found and the original error
-  // didn't already carry a status, use the classified status.
+  // ValidationError). overrideStatus beats err.status: a mapped
+  // provider/upstream error must present the contract status even
+  // though the SDK attached a raw status (a provider 401/5xx must
+  // never leak through as-is).
   const classified = classifyKnownError(err);
-  const rawStatus = err?.status || err?.statusCode || (classified && classified.statusCode);
+  const rawStatus = (classified && (classified.overrideStatus || classified.statusCode))
+    || err?.status
+    || err?.statusCode;
   const statusCode = toStatusCode(rawStatus, 500);
-  const production = process.env.NODE_ENV === 'production';
   const expose = err?.expose === true || statusCode < 500 || Boolean(classified);
   const baseMessage = (classified && classified.message) || err?.message || statusMessage(statusCode);
-  const safeMessage = production && statusCode >= 500 && !expose
+  const safeMessage = statusCode >= 500 && !expose
     ? 'Internal server error'
     : baseMessage;
   const reqId = getRequestId(req);
+  const contractCode = (classified && (classified.clientCode || classified.code)) || err?.code;
+  // err.error on openai SDK errors is the raw provider payload object
+  // (e.g. {message:'The server had an error'}) — never expose it when
+  // a mapping exists; the mapped phrase is the contract.
+  const mappedError = (classified && classified.error) || safeMessage;
   const body = {
     ok: false,
-    error: err?.error || (classified && classified.error) || safeMessage,
+    error: classified ? mappedError : (err?.error || mappedError),
     message: safeMessage,
-    ...(err?.code || (classified && classified.code) ? { code: err?.code || classified.code } : {}),
+    ...(contractCode ? { code: contractCode } : {}),
     ...(Array.isArray(err?.errors) ? { errors: sanitizeValidationErrors(err.errors) } : {}),
     ...(err?.details ? { details: sanitizeErrorDetails(err.details) } : {}),
     ...(err?.retryable === true ? { retryable: true } : {}),
     ...(reqId ? { requestId: reqId, reqId } : {}),
-    ...(exposeStack && err?.stack ? { stack: truncateStack(err.stack) } : {}),
+    ...(exposeStack && statusCode < 500 && err?.stack ? { stack: truncateStack(err.stack) } : {}),
   };
-  return { statusCode, body };
+  const retryAfterSeconds = Number(err?.retryAfterSeconds)
+    || Number(classified && classified.retryAfterSeconds);
+  return {
+    statusCode,
+    body,
+    ...(Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+      ? { retryAfterSeconds: Math.ceil(retryAfterSeconds) }
+      : {}),
+  };
 }
 
 function globalErrorHandler({ logger = defaultLogger, captureException = null, stdout = null } = {}) {
   return (err, req, res, next) => {
     if (res.headersSent) return next(err);
+    if (isClientAbortError(err)) {
+      const log = req.log || logger;
+      // The client is gone — no response can be delivered. Log at
+      // info so a user closing a tab mid-SSE stream doesn't pollute
+      // the error dashboards.
+      log.info(
+        { ...getRequestLogContext(req, 499), clientDisconnected: true },
+        'request_client_disconnected',
+      );
+      return;
+    }
 
-    const { statusCode, body } = errorToResponse(err, req, {
-      exposeStack: process.env.NODE_ENV !== 'production',
+    const { statusCode, body, retryAfterSeconds } = errorToResponse(err, req, {
+      // Stack traces are log-only material in EVERY environment: a
+      // dev/staging client is still an outside client, and stacks carry
+      // paths, provider messages and internal hostnames.
+      exposeStack: false,
     });
     const reqId = getRequestId(req);
     const log = req.log || logger;
@@ -349,9 +577,8 @@ function globalErrorHandler({ logger = defaultLogger, captureException = null, s
       });
     }
 
-    const retryAfterSeconds = Number(err?.retryAfterSeconds);
     if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
-      res.setHeader('Retry-After', String(Math.ceil(retryAfterSeconds)));
+      res.setHeader('Retry-After', String(retryAfterSeconds));
     }
     res.status(statusCode).json(body);
   };
@@ -371,6 +598,7 @@ module.exports = {
   createValidationError,
   errorToResponse,
   globalErrorHandler,
+  isClientAbortError,
   normalizeErrorBody,
   notFoundHandler,
   sanitizeValidationErrors,
