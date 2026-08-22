@@ -29,9 +29,10 @@ const LLM_RETRY_MAX = Math.max(1, Number.parseInt(process.env.LLM_RETRY_MAX || '
 
 // Tool-call turns are SHORT. Providers charge/reserve max_tokens up front:
 // with a low balance a big reservation gets rejected with 402 before a single
-// token is generated. 1500 fits a tool call + arguments and keeps the loop
-// usable on a near-empty account.
-const MAX_TOKENS_DEFAULT = 1500;
+// token is generated. 2048 fits a code-bearing tool call (contract floor in
+// agent-runner-routing.test.js) while staying far below the 8192 reservation
+// that 402s on low balances.
+const MAX_TOKENS_DEFAULT = 2048;
 
 function resolveAgentRunnerMaxTokens(env = process.env) {
   const raw = Number(env.SIRAGPT_AGENT_RUNNER_MAX_TOKENS);

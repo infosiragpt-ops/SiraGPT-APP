@@ -18,8 +18,8 @@ describe('native-llm module', () => {
   test('tiers and anti-402 cap', () => {
     assert.match(FLASH, /deepseek-v4-flash/);
     assert.match(PRO, /deepseek-v4-pro/);
-    assert.equal(MAX_TOKENS_DEFAULT, 1500);
-    assert.equal(loop.MAX_TOKENS_DEFAULT, 1500);
+    assert.equal(MAX_TOKENS_DEFAULT, 2048);
+    assert.equal(loop.MAX_TOKENS_DEFAULT, 2048);
   });
 
   test('resolveNativeDeepSeekModel tier mapping', () => {

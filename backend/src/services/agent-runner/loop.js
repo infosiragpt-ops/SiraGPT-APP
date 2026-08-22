@@ -20,9 +20,10 @@ const MAX_ITERATIONS_DEFAULT = 25;
 // Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
 // with a low credit balance an 8192-token reservation gets rejected with 402
 // ("You requested up to 8192 tokens, but can only afford …") even though the
-// actual turn needs a few hundred tokens. 1500 still fits a tool call plus
-// arguments and lets a low balance complete a short loop. Env-overridable.
-const MAX_TOKENS_DEFAULT = 1500;
+// actual turn needs a few hundred tokens. 2048 still fits a code-bearing tool
+// call (contract floor in agent-runner-routing.test.js) while staying far
+// below the 8192 that 402s on low balances. Env-overridable.
+const MAX_TOKENS_DEFAULT = 2048;
 const LLM_RETRY_MAX = Math.max(1, Number.parseInt(process.env.LLM_RETRY_MAX || '', 10) || 3);
 
 function resolveAgentRunnerMaxTokens(env = process.env) {
