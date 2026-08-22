@@ -106,6 +106,9 @@ const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../config/document-batch-limits');
 const {
+  createReplayRegistry,
+} = require('../services/ai-product-os/sse-replay-buffer');
+const {
   hasRecentGeneratedArtifactSource,
   isSourcePreservingEditRequest,
 } = require('../services/source-preserving-document-edit');
@@ -408,6 +411,13 @@ if (!AGENT_RATE_DISABLED) {
 const ACTIVE_AGENT_TASKS = new Map();
 const TASK_RETENTION_MS = 6 * 60 * 60 * 1000;
 const TASK_EVENT_LIMIT = 600;
+
+// Per-task SSE replay buffer so a dropped connection can resume with
+// Last-Event-ID instead of losing the (already paid-for) generation.
+// Short TTL: the durable task snapshot + GET /task/:taskId/events already
+// cover older history; this buffer only bridges live reconnects.
+const SSE_REPLAY_REGISTRY = createReplayRegistry({ capacity: 512, ttlMs: 5 * 60_000 });
+const SSE_REPLAY_STOP_GC = SSE_REPLAY_REGISTRY.startGcLoop();
 
 const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude Code: plan briefly, then call tools to reach a deliverable answer.
 
@@ -2502,6 +2512,8 @@ function streamTaskEvents(req, res, taskId, userId) {
   // path (timeout, worker stall, abnormal socket error) below.
   let terminalEmitted = false;
 
+  const replayBuffer = SSE_REPLAY_REGISTRY.openStream(`agent-task:${taskId}`);
+
   /** Safe SSE write — never throws. */
   const send = (obj) => {
     if (!clientConnected || res.writableEnded || res.destroyed) return false;
@@ -2509,7 +2521,10 @@ function streamTaskEvents(req, res, taskId, userId) {
       const serialized = safeJsonStringify(obj);
       const t = obj && obj.type;
       if (t === 'done' || t === 'error') terminalEmitted = true;
-      return res.write(`data: ${serialized}\n\n`) !== false;
+      // Replayable frames carry an incremental id so EventSource reconnects
+      // come back with Last-Event-ID and we resume instead of restarting.
+      const frameId = replayBuffer.append({ data: serialized });
+      return res.write(`id: ${frameId}\ndata: ${serialized}\n\n`) !== false;
     } catch {
       safeCloseQueuedConnection();
       return false;
@@ -2523,10 +2538,12 @@ function streamTaskEvents(req, res, taskId, userId) {
     if (!terminalEmitted && clientConnected && !res.writableEnded && !res.destroyed) {
       terminalEmitted = true;
       try {
-        res.write(`data: ${safeJsonStringify({
+        const terminal = safeJsonStringify({
           type: 'error',
           message: reason || 'La tarea agéntica se cerró sin completar. Intenta de nuevo.',
-        })}\n\n`);
+        });
+        const frameId = replayBuffer.append({ data: terminal });
+        res.write(`id: ${frameId}\ndata: ${terminal}\n\n`);
       } catch { /* socket already gone */ }
     }
     clientConnected = false;
@@ -2535,6 +2552,7 @@ function streamTaskEvents(req, res, taskId, userId) {
     if (!res.writableEnded && !res.destroyed) {
       try { res.end(); } catch { /* already closed */ }
     }
+    try { SSE_REPLAY_REGISTRY.closeStream(`agent-task:${taskId}`); } catch { /* already closed */ }
   }
 
   // Error / close handlers. Do not treat req.close as client
@@ -2555,6 +2573,35 @@ function streamTaskEvents(req, res, taskId, userId) {
     safeCloseQueuedConnection('La tarea agéntica no respondió a tiempo (timeout). El runtime puede estar saturado; intenta de nuevo.');
     console.warn('[agent-task] queued SSE response timeout');
   });
+
+  // Resume: Last-Event-ID header (EventSource reconnect) or ?lastEventId=
+  // query both mean "skip everything up to this frame id". A client that
+  // never received a frame (absent header, or id 0) starts from scratch.
+  const lastEventIdRaw = String(req.headers?.['last-event-id'] ?? '').trim();
+  const parsedLastEventId = Number.parseInt(lastEventIdRaw, 10);
+  if (Number.isFinite(parsedLastEventId)) lastSeq = Math.max(0, parsedLastEventId);
+
+  // Replay buffered frames past the client's cursor before going live. The
+  // durable snapshot below re-reads task events with the same seq gate, so
+  // this only adds frames the buffer holds past what the store knows (e.g.
+  // the guaranteed terminal written after a drop), and it makes a finished
+  // task replay + close cleanly without touching the worker again.
+  // lastEventId=0 via query means "replay everything"; a bare header of 0
+  // is equivalent to no cursor (fresh EventSource), not a replay request.
+  const replayFrom = req.query?.lastEventId !== undefined && lastSeq === 0 ? 0 : lastSeq;
+  if (replayFrom > 0 || (req.query?.lastEventId !== undefined && replayFrom === 0)) {
+    for (const ev of replayBuffer.replayFrom(replayFrom)) {
+      if (!clientConnected) break;
+      try {
+        res.write(`id: ${ev.id}\ndata: ${ev.data}\n\n`);
+        let parsedType = null;
+        try { parsedType = JSON.parse(ev.data)?.type || null; } catch { parsedType = null; }
+        if (parsedType === 'done' || parsedType === 'error') terminalEmitted = true;
+        const seqMatch = (() => { try { return Number(JSON.parse(ev.data)?.seq); } catch { return NaN; } })();
+        if (Number.isFinite(seqMatch) && seqMatch > lastSeq) lastSeq = seqMatch;
+      } catch { break; }
+    }
+  }
 
   const flush = () => {
     if (!clientConnected) return;
@@ -2591,6 +2638,9 @@ function streamTaskEvents(req, res, taskId, userId) {
     if (!clientConnected || res.writableEnded || res.destroyed) return;
     try {
       res.write(': keep-alive\n\n');
+      // Heartbeat frames are intentionally NOT buffered in the replay
+      // buffer: they are protocol keep-alives, not task state, and a
+      // reconnecting client must not replay stale heartbeats.
       res.write(`data: ${safeJsonStringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
     } catch { safeCloseQueuedConnection(); }
   };
@@ -3370,6 +3420,7 @@ function toSerializableAgentState(state = {}) {
 router.INTERNAL = {
   ACTIVE_AGENT_TASKS,
   TASK_EVENT_LIMIT,
+  SSE_REPLAY_REGISTRY,
   appendTaskEvent,
   buildAgentSystemPrompt,
   createTaskRecord,

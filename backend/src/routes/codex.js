@@ -2472,7 +2472,10 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   function write(envelope) {
     if (closed || res.writableEnded) return false;
     try {
-      res.write(`data: ${JSON.stringify(envelope)}\n\n`);
+      // Frame id = envelope.seq so a standard EventSource reconnect sends
+      // Last-Event-ID=<seq> and the client can resume without re-executing.
+      const frameId = Number(envelope?.seq);
+      res.write(Number.isFinite(frameId) ? `id: ${frameId}\ndata: ${JSON.stringify(envelope)}\n\n` : `data: ${JSON.stringify(envelope)}\n\n`);
       if (!firstEventEmitted) {
         firstEventEmitted = true;
         observabilityMetrics.recordStreamTtfb({ mode: run?.mode || 'unknown', ttfbMs: Date.now() - streamOpenedAt });
