@@ -1540,6 +1540,31 @@ class ApiClient {
     })) as { sourceVersion: number; version: FileVersionRecord };
   }
 
+  // Persist a manual edit from the /chat document editor as a new FileVersion.
+  // Returns `{ fileId, version }` mirroring the backend edit route. Available
+  // on the backend via POST /files/:id/edit (files.js).
+  async saveDocumentEdit(
+    fileId: string,
+    data: { content: string; chatId?: string; summary?: string },
+  ): Promise<{ fileId: string; version: FileVersionRecord }> {
+    return (await this.request(`/files/${encodeURIComponent(fileId)}/edit`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })) as { fileId: string; version: FileVersionRecord };
+  }
+
+  // Read the edited Markdown of a specific FileVersion (rehydrates the /chat
+  // document editor after a reload). GET /files/:id/versions/:versionId/content.
+  async getFileVersionContent(
+    fileId: string,
+    versionId: string,
+  ): Promise<{ fileId: string; version: { id: string; version: number; filename: string; content: string } }> {
+    return (await this.request(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/content`, {})) as {
+      fileId: string;
+      version: { id: string; version: number; filename: string; content: string };
+    };
+  }
+
   // AI endpoints
   // async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
   //   return this.request('/ai/generate', {
