@@ -228,6 +228,8 @@ async function runAgentRunner({
   memoryStore = null,
   mcpToolLoader = null,
   persistMemory = true,
+  projectId = null,
+  departmentId = 'ceo-office',
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
@@ -404,8 +406,8 @@ async function runAgentRunner({
         computerDriver,
         desktopCtx: {
           userId,
-          projectId: (typeof projectId !== 'undefined' ? projectId : undefined),
-          departmentId: (typeof departmentId !== 'undefined' ? departmentId : 'ceo-office'),
+          projectId: projectId || undefined,
+          departmentId: departmentId || 'ceo-office',
         },
       });
       f7.applyToMessages(messages);

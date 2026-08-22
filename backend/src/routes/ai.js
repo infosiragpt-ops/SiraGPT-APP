@@ -1888,6 +1888,7 @@ router.post(
         && typeof req.body.webGroundingQuery === 'string'
         ? req.body.webGroundingQuery.trim().slice(0, 12000)
         : '';
+      const __computerTurn = __publicWebReadonly && /\b(computadora|computer|webtop|ceo-?office|abre la p[aá]gina|usa la computadora|busca(r)?|navega(r)?|browse|abrir (https?:|www\.)|github)\b/i.test(__publicWebQuery);
       if (__publicWebReadonly && !__publicWebQuery) {
         controller.abort();
         return res.status(400).json({
@@ -1912,6 +1913,18 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+      // /code sends disableAgentic:true. When the persistent member computer
+      // is on, a NARROW computer-only agentic loop can still run (computer_* +
+      // web_search + read_url).
+      let __computerOnly = false;
+      try {
+        const { agentComputerEnabled } = require('../services/computer/flags');
+        __computerOnly = agentComputerEnabled() && req.body.disableAgentic === true && !!userId;
+      } catch (_) { __computerOnly = false; }
+      const __computerOnlyTurn = __computerOnly && (
+        __publicWebReadonly
+        || /\b(computadora|computer|webtop|ceo-?office|abre la p[aá]gina|usa la computadora|busca(r)?|navega(r)?|browse|abrir (https?:|www\.)|github|google)\b/i.test(String(prompt || ''))
+      );
 
       // 🔒 IDOR guard (read side): a supplied chatId must reference a chat THIS
       // user owns — or one that doesn't exist yet (brand-new chat). The
@@ -5189,7 +5202,11 @@ router.post(
           userId: __publicWebReadonly ? null : (userId || null),
           chatId: canPersist ? chatId : null,
           attachmentCount: __publicWebReadonly ? 0 : processedFiles.length,
-          toolNames: __publicWebReadonly ? ['web_fetch', 'web_search'] : undefined,
+          toolNames: __publicWebReadonly
+            ? ((typeof __computerTurn !== 'undefined' && __computerTurn) || (typeof __computerOnlyTurn !== 'undefined' && __computerOnlyTurn)
+              ? ['web_fetch', 'web_search', 'computer_navigate', 'computer_screenshot', 'computer_exec']
+              : ['web_fetch', 'web_search'])
+            : undefined,
           memoryFacts: recalledMemoryFacts,
           recentTurnCount: Array.isArray(__conversationHistoryForUnderstanding)
             ? __conversationHistoryForUnderstanding.length
@@ -6178,8 +6195,9 @@ router.post(
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && (shouldRunAgentic || documentEditRequested || createDocRequested)
-                && req.body.disableAgentic !== true
+                && (shouldRunAgentic || documentEditRequested || createDocRequested || __computerOnlyTurn || __computerTurn)
+                && (req.body.disableAgentic !== true || __computerTurn || __computerOnlyTurn)
+                && (!__publicWebReadonly || __computerTurn || __computerOnlyTurn)
                 && !__publicWebReadonly
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
@@ -6315,6 +6333,7 @@ router.post(
                 } catch (_) { agenticCustomGptPersona = ''; }
                 __agenticDidStream = true;
                 const agenticResult = await agenticStream.runAgenticChat({
+                  computerOnly: __computerOnlyTurn,
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,

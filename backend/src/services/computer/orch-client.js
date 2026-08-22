@@ -65,22 +65,29 @@ function rewriteUrls(session, env = process.env) {
   if (!id) return session;
   const base = publicBase(env);
   const sameOriginAgent = /\/agent-computer$/i.test(base) || base.includes('/agent-computer');
-  // When embedding via siragpt.com/agent-computer/*, websockify path must keep
-  // the prefix so the browser hits Caddy's handle. On computer.siragpt.com,
-  // path is orch-relative.
+  // Relative embed URLs keep the iframe same-origin with /code (www vs apex,
+  // cookie SameSite). Absolute https://siragpt.com/... from www leaves noVNC
+  // stuck on Conectar because forward_auth never sees the session cookie.
   const wsPath = sameOriginAgent
     ? ('agent-computer/sessions/' + id + '/novnc/websockify')
     : ('sessions/' + id + '/novnc/websockify');
-  const embedUrl = base
-    + '/sessions/' + id
+  const pathAndQuery = '/sessions/' + id
     + '/novnc/vnc.html?autoconnect=1&reconnect=1&resize=scale&path='
     + wsPath;
+  const embedUrl = sameOriginAgent
+    ? ('/agent-computer' + pathAndQuery)
+    : (base + pathAndQuery);
+  const absForWs = sameOriginAgent
+    ? '' // unused when relative
+    : base;
   return {
     ...session,
     embedUrl,
     novncEmbedUrl: embedUrl,
     novncUrl: embedUrl,
-    novncWsUrl: base.replace(/^http/, 'ws') + '/sessions/' + id + '/novnc/websockify',
+    novncWsUrl: sameOriginAgent
+      ? ('/agent-computer/sessions/' + id + '/novnc/websockify')
+      : (base.replace(/^http/, 'ws') + '/sessions/' + id + '/novnc/websockify'),
   };
 }
 
