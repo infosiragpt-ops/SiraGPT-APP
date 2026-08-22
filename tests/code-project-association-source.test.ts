@@ -25,7 +25,11 @@ test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
   assert.match(page, /setActiveCodexProject\(directCodexProject \? project\.id : null\)/)
   assert.match(workspaceRoute, /folderId\.replace\(\/\^\\w\+:\//)
   assert.match(workspaceRoute, /getProject\(projectId\)[\s\S]*status\?[\s\S]*getCodexProject/)
-  assert.match(page, /status\?[\s\S]*setRouteIssue\(1\)/)
+  assert.match(page, /classifyWorkspaceError\(error\)/)
+  assert.match(
+    page,
+    /classified\.status === 404 \|\| classified\.code === "WORKSPACE_NOT_FOUND"[\s\S]*setRouteIssue\(1\)/,
+  )
   assert.match(sidebar, /codexProjectIdFromWorkspaceId\(opts\.folderId, \{ assumeProject: true \}\)/)
   assert.match(sidebar, /codexWorkspaceIdForProject\(projectId\)/)
   assert.match(company, /codexProjectIdFromWorkspaceId\(activeFolder\?\.id, \{ assumeProject: true \}\)/)
