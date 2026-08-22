@@ -168,6 +168,15 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.rejectIdempotencyKeyOver128Chars === 'function') {
+          const tooLong = adWait.rejectIdempotencyKeyOver128Chars(opts && opts.idempotencyKey);
+          if (tooLong && tooLong.ok === false) {
+            const err = new Error('idempotency_key_len');
+            err.code = 'idempotency_key_len';
+            err.status = 400;
+            return Promise.reject(err);
+          }
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

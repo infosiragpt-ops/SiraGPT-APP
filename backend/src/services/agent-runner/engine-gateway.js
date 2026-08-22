@@ -836,6 +836,24 @@ async function governThen(input, run) {
         if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
           ad.classifyEconnabortedAsCancelled(input.error);
         }
+        if (typeof ad.ignoreNegativeTotalTokens === 'function' && input && input.totalTokens != null) {
+          ad.ignoreNegativeTotalTokens({ totalTokens: input.totalTokens, promptTokens: input.promptTokens, completionTokens: input.completionTokens });
+        }
+        if (typeof ad.neverChargeIfNoModelCall === 'function' && input) {
+          ad.neverChargeIfNoModelCall({ modelCalled: input.modelCalled, llmCalled: input.llmCalled, tokens: input.tokens });
+        }
+        if (typeof ad.classifyEtimedoutAsTimeout === 'function' && input && input.error) {
+          ad.classifyEtimedoutAsTimeout(input.error);
+        }
+        if (typeof ad.mapMysqlEconnresetRetryable === 'function' && input && input.error) {
+          ad.mapMysqlEconnresetRetryable(input.error);
+        }
+        if (typeof ad.neverRetry408Timeout === 'function' && input && (input.status === 408 || input.code === '408')) {
+          ad.neverRetry408Timeout(input);
+        }
+        if (typeof ad.sessionLockRefuseIfTtlExpired === 'function' && input && input.lock) {
+          ad.sessionLockRefuseIfTtlExpired({ createdAt: input.lock.createdAt || input.lock.lockAt, now: Date.now() });
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

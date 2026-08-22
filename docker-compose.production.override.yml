@@ -413,6 +413,7 @@ services:
       - ./backend/tests/ola-3h44-invariants.test.js:/app/tests/ola-3h44-invariants.test.js:ro
       - ./backend/tests/ola-3h45-invariants.test.js:/app/tests/ola-3h45-invariants.test.js:ro
       - ./backend/tests/ola-3h46-invariants.test.js:/app/tests/ola-3h46-invariants.test.js:ro
+      - ./backend/tests/ola-3h47-invariants.test.js:/app/tests/ola-3h47-invariants.test.js:ro
       - ./backend/src/services/agent-runner/engine-gateway.js:/app/src/services/agent-runner/engine-gateway.js:ro
       - ./agents:/app/agents:ro
       # FEATURE_DOC_ENGINE PR 301 — /chat two-docx UPN transform (PizZip)

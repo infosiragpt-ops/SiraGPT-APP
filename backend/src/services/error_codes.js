@@ -374,6 +374,38 @@ const CODES = Object.freeze({
   SUBAGENT_SAME_TOOL: 'subagent_same_tool',
   MEMORY_SORT: 'memory_sort',
   TOOL_ARGS_ARRAY: 'tool_args_array',
+  TOOL_NAME_DOT: 'tool_name_dot',
+  TOOL_ARG_STRING: 'tool_arg_string',
+  PLAN_STEPS_TYPE: 'plan_steps_type',
+  PLAN_STEP_TITLE_CAP: 'plan_step_title_cap',
+  COMPACT_KEEP_LAST_USER: 'compact_keep_last_user',
+  MEMORY_SCORE_FLOOR: 'memory_score_floor',
+  MEMORY_FACT_CAP: 'memory_fact_cap',
+  MEMORY_ID_DUP: 'memory_id_dup',
+  CKPT_CRC_MISSING: 'ckpt_crc_missing',
+  LOCK_TTL_EXPIRED: 'lock_ttl_expired',
+  PATH_VAR_LOG: 'path_var_log',
+  GLOB_NODE_MODULES: 'glob_node_modules',
+  SSE_RETRY_DROP: 'sse_retry_drop',
+  SSE_DATA_CAP: 'sse_data_cap',
+  SSE_IDLE_COMMENT: 'sse_idle_comment',
+  USAGE_IGNORE_NEG_TOTAL: 'usage_ignore_neg_total',
+  CREDIT_NO_MODEL: 'credit_no_model',
+  REQUEST_TIMEOUT: 'request_timeout',
+  ETIMEDOUT: 'etimedout',
+  MYSQL_DISCONNECT: 'mysql_disconnect',
+  TOOL_IDLE_ABORT: 'tool_idle_abort',
+  IDEMPOTENCY_KEY_LEN: 'idempotency_key_len',
+  USER_MSG_CAP: 'user_msg_cap',
+  AWS_KEY_REDACT: 'aws_key_redact',
+  NET_UNAVAILABLE: 'net_unavailable',
+  SUBAGENT_NAME_EMPTY: 'subagent_name_empty',
+  PLAN_STEP_SORT: 'plan_step_sort',
+  TOOL_NAME_OBJECT: 'tool_name_object',
+  SANDBOX_ARGV_CAP: 'sandbox_argv_cap',
+  SANDBOX_CWD_ROOT: 'sandbox_cwd_root',
+  SANDBOX_CODE_CAP: 'sandbox_code_cap',
+  SANDBOX_TIMEOUT_REQUIRED: 'sandbox_timeout_required',
 });
 
 function isRetryable(code) {
@@ -431,7 +463,10 @@ function isRetryable(code) {
     || c === 'client_gone'
     || c === 'queue_generate_cap'
     || c === 'net_timeout'
-    || c === 'pg_disconnect';
+    || c === 'pg_disconnect'
+    || c === 'mysql_disconnect'
+    || c === 'etimedout'
+    || c === 'net_unavailable';
 }
 
 function publicError(code, extra) {
@@ -453,6 +488,7 @@ function httpStatusFor(code) {
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
+  if (c === 'request_timeout' || c === CODES.REQUEST_TIMEOUT) return 408;
   return 400;
 }
 

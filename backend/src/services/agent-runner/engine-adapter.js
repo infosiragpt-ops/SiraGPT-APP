@@ -4785,7 +4785,39 @@ function adapterSnapshot() {
     refuseSubagentIfSameToolAsParent: true,
     sortMemoryHitsByScoreDesc: true,
     rejectToolCallIfArgsIsArray: true,
-    wave: '3H46',
+    rejectToolNameEndingWithDot: true,
+    capToolArgString4096: true,
+    refusePlanIfStepsNotArray: true,
+    capPlanStepTitle80Chars: true,
+    compactNeverDropLastUserMessage: true,
+    skipMemoryIfScoreBelowFloor: true,
+    capMemoryFactChars512: true,
+    dropDuplicateMemoryIds: true,
+    refuseCheckpointIfCrcMissing: true,
+    sessionLockRefuseIfTtlExpired: true,
+    refuseWriteToVarLogRun: true,
+    skipNodeModulesGlobFiles: true,
+    dropSseRetryFramesFromReplay: true,
+    capSseDataBytes32KiB: true,
+    endSseWithCommentOnIdle: true,
+    ignoreNegativeTotalTokens: true,
+    neverChargeIfNoModelCall: true,
+    neverRetry408Timeout: true,
+    classifyEtimedoutAsTimeout: true,
+    mapMysqlEconnresetRetryable: true,
+    abortIfIdleOver30sMidTool: true,
+    rejectIdempotencyKeyOver128Chars: true,
+    capUserMessage32KiB: true,
+    redactAwsAccessKeysInResults: true,
+    classifyEconnrefusedAsUnavailable: true,
+    refuseSubagentIfNameEmpty: true,
+    sortPlanStepsByOrderAsc: true,
+    rejectToolCallIfNameIsObject: true,
+    capSandboxArgv24: true,
+    refuseSandboxIfCwdIsRoot: true,
+    capSandboxCode256KiB: true,
+    refuseSandboxIfTimeoutMissing: true,
+    wave: '3H47',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -7179,6 +7211,390 @@ function rejectToolCallIfArgsIsArray(calls) {
   return { calls: kept, dropped: dropped, ok: dropped === 0, code: dropped ? "tool_args_array" : null };
 }
 
+
+// ---------------------------------------------------------------------------
+// 3H47 remaining holes vs Claude Code/Cowork after 3H46
+// ---------------------------------------------------------------------------
+
+const TOOL_ARG_STRING_MAX = 4096;
+const PLAN_STEP_TITLE_MAX = 80;
+const MEMORY_FACT_CHARS_MAX = 512;
+const MEMORY_SCORE_FLOOR = 0.05;
+const SSE_DATA_MAX = 32 * 1024;
+const USER_MSG_MAX = 32 * 1024;
+const IDEMPOTENCY_KEY_MAX = 128;
+const SANDBOX_ARGV_MAX = 24;
+const SANDBOX_CODE_MAX = 256 * 1024;
+const TOOL_IDLE_MS = 30_000;
+const SESSION_LOCK_TTL_EXPIRE_MS = 90_000;
+
+function rejectToolNameEndingWithDot(name) {
+  const n = String(name == null ? "" : name);
+  if (n.length && n.charAt(n.length - 1) === ".") return { ok: false, name: n, code: "tool_name_dot" };
+  return { ok: true, name: n, code: null };
+}
+
+function capToolArgString4096(args, opts) {
+  const max = (opts && opts.max != null) ? opts.max : TOOL_ARG_STRING_MAX;
+  const cap = Math.max(32, Number(max) || TOOL_ARG_STRING_MAX);
+  if (args == null || typeof args !== "object" || Array.isArray(args)) {
+    if (typeof args === "string" && args.length > cap) {
+      return { args: args.slice(0, cap), truncated: true, code: "tool_arg_string" };
+    }
+    return { args: args, truncated: false, code: null };
+  }
+  let truncated = false;
+  const out = {};
+  for (const k of Object.keys(args)) {
+    const v = args[k];
+    if (typeof v === "string" && v.length > cap) {
+      out[k] = v.slice(0, cap);
+      truncated = true;
+    } else {
+      out[k] = v;
+    }
+  }
+  return { args: out, truncated: truncated, code: truncated ? "tool_arg_string" : null };
+}
+
+function refusePlanIfStepsNotArray(plan) {
+  const steps = plan && (plan.steps != null ? plan.steps : (plan.planSteps != null ? plan.planSteps : plan));
+  if (Array.isArray(steps)) return { ok: true, steps: steps, code: null };
+  return { ok: false, steps: [], code: "plan_steps_type" };
+}
+
+function capPlanStepTitle80Chars(title, opts) {
+  const max = (opts && opts.max != null) ? opts.max : PLAN_STEP_TITLE_MAX;
+  const cap = Math.max(1, Number(max) || PLAN_STEP_TITLE_MAX);
+  const s = String(title == null ? "" : title);
+  if (s.length <= cap) return { title: s, truncated: false, code: null };
+  return { title: s.slice(0, cap), truncated: true, code: "plan_step_title_cap" };
+}
+
+function compactNeverDropLastUserMessage(original, compacted) {
+  const src = Array.isArray(original) ? original : [];
+  const out = Array.isArray(compacted) ? compacted.slice() : (Array.isArray(original) ? original.slice() : []);
+  let lastUser = null;
+  for (let i = src.length - 1; i >= 0; i -= 1) {
+    if (src[i] && src[i].role === "user") { lastUser = src[i]; break; }
+  }
+  if (!lastUser) return { messages: out, restored: false, code: null };
+  const has = out.some(function (m) { return m && m.role === "user" && m === lastUser; });
+  if (has) return { messages: out, restored: false, code: null };
+  const same = out.some(function (m) {
+    return m && m.role === "user" && String(m.content || "") === String(lastUser.content || "");
+  });
+  if (same) return { messages: out, restored: false, code: null };
+  out.push(lastUser);
+  return { messages: out, restored: true, code: "compact_keep_last_user" };
+}
+
+function skipMemoryIfScoreBelowFloor(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const floor = (opts && opts.floor != null) ? Number(opts.floor) : MEMORY_SCORE_FLOOR;
+  const lim = Number.isFinite(floor) ? floor : MEMORY_SCORE_FLOOR;
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const n = Number(h && (h.score != null ? h.score : (h.similarity != null ? h.similarity : h.rank)));
+    if (Number.isFinite(n) && n < lim) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "memory_score_floor" : null };
+}
+
+function capMemoryFactChars512(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const max = (opts && opts.max != null) ? opts.max : MEMORY_FACT_CHARS_MAX;
+  const cap = Math.max(16, Number(max) || MEMORY_FACT_CHARS_MAX);
+  const out = [];
+  let truncated = false;
+  for (const h of list) {
+    if (h && typeof h === "object") {
+      const text = h.text != null ? h.text : (h.fact != null ? h.fact : h.content);
+      if (typeof text === "string" && text.length > cap) {
+        const copy = Object.assign({}, h);
+        if (h.text != null) copy.text = text.slice(0, cap);
+        else if (h.fact != null) copy.fact = text.slice(0, cap);
+        else copy.content = text.slice(0, cap);
+        out.push(copy);
+        truncated = true;
+      } else {
+        out.push(h);
+      }
+    } else if (typeof h === "string" && h.length > cap) {
+      out.push(h.slice(0, cap));
+      truncated = true;
+    } else {
+      out.push(h);
+    }
+  }
+  return { hits: out, truncated: truncated, code: truncated ? "memory_fact_cap" : null };
+}
+
+function dropDuplicateMemoryIds(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const seen = new Set();
+  const kept = [];
+  let dropped = 0;
+  for (const h of list) {
+    const id = h && (h.id != null ? h.id : (h.memoryId != null ? h.memoryId : h.key));
+    if (id == null || id === "") { kept.push(h); continue; }
+    const key = String(id);
+    if (seen.has(key)) { dropped += 1; continue; }
+    seen.add(key);
+    kept.push(h);
+  }
+  return { hits: kept, dropped: dropped, code: dropped ? "memory_id_dup" : null };
+}
+
+function refuseCheckpointIfCrcMissing(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const crc = p.crc32 != null ? p.crc32 : (p.crc != null ? p.crc : p.checksum);
+  if (crc == null || crc === "") return { ok: false, code: "ckpt_crc_missing" };
+  return { ok: true, code: null };
+}
+
+function sessionLockRefuseIfTtlExpired(opts) {
+  opts = opts || {};
+  const t0 = Number(opts.createdAt != null ? opts.createdAt : opts.lockAt);
+  const t1 = Number(opts.now) || Date.now();
+  const lim = Math.max(1000, Number(opts.ttlMs) || SESSION_LOCK_TTL_EXPIRE_MS);
+  if (!Number.isFinite(t0)) return { ok: true, expired: false, code: null };
+  const age = t1 - t0;
+  if (age > lim) return { ok: false, expired: true, ageMs: age, code: "lock_ttl_expired" };
+  return { ok: true, expired: false, ageMs: age, code: null };
+}
+
+function refuseWriteToVarLogRun(filePath) {
+  const p = String(filePath == null ? "" : filePath).split("\\").join("/");
+  const n = p.charAt(0) === "/" ? p : ("/" + p);
+  function hits(base) { return n === base || n.indexOf(base + "/") === 0 || p === base || p.indexOf(base + "/") === 0; }
+  if (hits("/var/log") || hits("/var/run") || hits("/run")) return { ok: false, path: p, code: "path_var_log" };
+  return { ok: true, path: p, code: null };
+}
+
+function skipNodeModulesGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const p = typeof h === "string" ? h : (h && (h.path || h.name || h.file)) || "";
+    const norm = String(p).split("\\").join("/");
+    if (norm.indexOf("/node_modules/") >= 0 || norm.indexOf("node_modules/") === 0 || /\/node_modules$/.test(norm)) {
+      skipped += 1;
+      continue;
+    }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_node_modules" : null };
+}
+
+function dropSseRetryFramesFromReplay(events) {
+  const list = Array.isArray(events) ? events : [];
+  const kept = [];
+  let dropped = 0;
+  for (const e of list) {
+    if (e == null) { kept.push(e); continue; }
+    const typ = String((e.event || e.type || e.kind || "")).toLowerCase();
+    const frame = typeof e === "string" ? e : String(e.frame || "");
+    if (typ === "retry" || e.retry === true || /^retry:/i.test(frame) || frame.indexOf("retry:") === 0) {
+      dropped += 1;
+      continue;
+    }
+    kept.push(e);
+  }
+  return { events: kept, dropped: dropped, code: dropped ? "sse_retry_drop" : null };
+}
+
+function capSseDataBytes32KiB(payload, opts) {
+  const max = (opts && opts.maxBytes != null) ? opts.maxBytes : SSE_DATA_MAX;
+  const cap = Math.max(256, Number(max) || SSE_DATA_MAX);
+  let s;
+  if (payload == null) s = "";
+  else if (typeof payload === "string") s = payload;
+  else {
+    try { s = JSON.stringify(payload); } catch (e) { s = String(payload); }
+  }
+  const bytes = Buffer.byteLength(s, "utf8");
+  if (bytes <= cap) return { data: s, truncated: false, bytes: bytes, code: null };
+  const marker = "\n[truncated_sse]";
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, "utf8"));
+  const cut = Buffer.from(s, "utf8").subarray(0, keep).toString("utf8");
+  return { data: cut + marker, truncated: true, bytes: bytes, code: "sse_data_cap" };
+}
+
+function endSseWithCommentOnIdle(opts) {
+  opts = opts || {};
+  if (opts.closed) return { write: false, frame: null, code: null };
+  const idle = Number(opts.idleMs);
+  const lim = Math.max(1000, Number(opts.limitMs) || 15000);
+  if (!Number.isFinite(idle) || idle < lim) return { write: false, frame: null, code: null };
+  const msg = String(opts.comment || "idle");
+  return { write: true, frame: ": " + msg + "\n\n", event: "comment", code: "sse_idle_comment" };
+}
+
+function ignoreNegativeTotalTokens(opts) {
+  opts = opts || {};
+  const tRaw = Number(opts.totalTokens);
+  const pRaw = Number(opts.promptTokens);
+  const cRaw = Number(opts.completionTokens);
+  const ignored = Number.isFinite(tRaw) && tRaw < 0;
+  const prompt = Number.isFinite(pRaw) && pRaw > 0 ? pRaw : 0;
+  const completion = Number.isFinite(cRaw) && cRaw > 0 ? cRaw : 0;
+  const tokens = ignored ? (prompt + completion) : (Number.isFinite(tRaw) && tRaw >= 0 ? tRaw : prompt + completion);
+  return { totalTokens: tokens, promptTokens: prompt, completionTokens: completion, ignored: ignored, code: ignored ? "usage_ignore_neg_total" : null };
+}
+
+function neverChargeIfNoModelCall(opts) {
+  opts = opts || {};
+  const called = opts.modelCalled === true || opts.llmCalled === true || (Number(opts.tokens) > 0);
+  if (!called) return { charge: false, code: "credit_no_model" };
+  return { charge: true, code: null };
+}
+
+function neverRetry408Timeout(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || "");
+  const msg = String(err.message || "");
+  const is408 = status === 408 || code === "408" || msg.indexOf("408") >= 0 || /request.?timeout/i.test(msg);
+  if (is408) return { retry: false, status: 408, code: "request_timeout" };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function classifyEtimedoutAsTimeout(err) {
+  if (err == null) return { timeout: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("ETIMEDOUT") >= 0) return { timeout: true, retryable: true, code: "etimedout" };
+  return { timeout: false, retryable: false, code: null };
+}
+
+function mapMysqlEconnresetRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.errno || err.name)) || "");
+  const msg = String((err && err.message) || "");
+  const client = String((err && (err.client || err.driver || err.source)) || "");
+  const blob = (code + " " + msg + " " + client).toLowerCase();
+  const isMysql = blob.indexOf("mysql") >= 0 || client === "mysql" || client === "mysql2" || code === "PROTOCOL_CONNECTION_LOST";
+  const isReset = code === "ECONNRESET" || blob.indexOf("econnreset") >= 0 || code === "PROTOCOL_CONNECTION_LOST";
+  if (isMysql && isReset) return { retryable: true, code: "mysql_disconnect" };
+  return { retryable: false, code: null };
+}
+
+function abortIfIdleOver30sMidTool(opts) {
+  opts = opts || {};
+  const lim = Math.max(1000, Number(opts.limitMs) || TOOL_IDLE_MS);
+  let elapsed = Number(opts.idleMs);
+  if (!Number.isFinite(elapsed)) {
+    const t0 = Number(opts.lastEventAt != null ? opts.lastEventAt : opts.startedAt);
+    const t1 = Number(opts.now) || Date.now();
+    elapsed = Number.isFinite(t0) ? (t1 - t0) : 0;
+  }
+  if (elapsed >= lim) return { abort: true, idleMs: elapsed, code: "tool_idle_abort" };
+  return { abort: false, idleMs: elapsed, remainingMs: lim - elapsed, code: null };
+}
+
+function rejectIdempotencyKeyOver128Chars(key, opts) {
+  const max = (opts && opts.max != null) ? opts.max : IDEMPOTENCY_KEY_MAX;
+  const cap = Math.max(8, Number(max) || IDEMPOTENCY_KEY_MAX);
+  const s = String(key == null ? "" : key);
+  if (!s) return { ok: true, key: s, code: null };
+  if (s.length > cap) return { ok: false, key: s.slice(0, cap), truncated: true, code: "idempotency_key_len" };
+  return { ok: true, key: s, truncated: false, code: null };
+}
+
+function capUserMessage32KiB(text, opts) {
+  const s = text == null ? "" : (Buffer.isBuffer(text) ? text.toString("utf8") : String(text));
+  const maxBytes = (opts && opts.maxBytes != null) ? opts.maxBytes : USER_MSG_MAX;
+  const cap = Math.max(256, Number(maxBytes) || USER_MSG_MAX);
+  const bytes = Buffer.byteLength(s, "utf8");
+  if (bytes <= cap) return { text: s, truncated: false, bytes: bytes, code: null };
+  const marker = "\n[truncated_user]";
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, "utf8"));
+  const cut = Buffer.from(s, "utf8").subarray(0, keep).toString("utf8");
+  return { text: cut + marker, truncated: true, bytes: bytes, code: "user_msg_cap" };
+}
+
+function redactAwsAccessKeysInResults(text) {
+  if (text == null) return { text: text, redacted: false, code: null };
+  const s = String(text);
+  const out = s.replace(/(AKIA[0-9A-Z]{16})/g, "[REDACTED_AWS]").replace(/(ASIA[0-9A-Z]{16})/g, "[REDACTED_AWS]");
+  return { text: out, redacted: out !== s, code: out !== s ? "aws_key_redact" : null };
+}
+
+function classifyEconnrefusedAsUnavailable(err) {
+  if (err == null) return { unavailable: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("ECONNREFUSED") >= 0) return { unavailable: true, retryable: true, code: "net_unavailable" };
+  return { unavailable: false, retryable: false, code: null };
+}
+
+function refuseSubagentIfNameEmpty(opts) {
+  opts = opts || {};
+  const n = String(opts.name != null ? opts.name : (opts.childName != null ? opts.childName : (opts.toolName || ""))).trim();
+  if (!n) return { ok: false, refuse: true, code: "subagent_name_empty" };
+  return { ok: true, refuse: false, code: null };
+}
+
+function sortPlanStepsByOrderAsc(steps) {
+  const list = Array.isArray(steps) ? steps.slice() : [];
+  function orderOf(st) {
+    const n = Number(st && (st.order != null ? st.order : (st.index != null ? st.index : st.seq)));
+    return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+  }
+  const before = list.map(orderOf).join("\0");
+  list.sort(function (a, b) { return orderOf(a) - orderOf(b); });
+  const after = list.map(orderOf).join("\0");
+  return { steps: list, sorted: before !== after, code: before !== after ? "plan_step_sort" : null };
+}
+
+function rejectToolCallIfNameIsObject(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    const name = c && (c.name != null ? c.name : (c.function && c.function.name));
+    if (name != null && typeof name === "object") { dropped += 1; continue; }
+    kept.push(c);
+  }
+  return { calls: kept, dropped: dropped, ok: dropped === 0, code: dropped ? "tool_name_object" : null };
+}
+
+function capSandboxArgv24(argv, opts) {
+  const list = Array.isArray(argv) ? argv : [];
+  const max = (opts && opts.max != null) ? opts.max : SANDBOX_ARGV_MAX;
+  const cap = Math.max(1, Number(max) || SANDBOX_ARGV_MAX);
+  if (list.length <= cap) return { argv: list, truncated: false, code: null };
+  return { argv: list.slice(0, cap), truncated: true, dropped: list.length - cap, code: "sandbox_argv_cap" };
+}
+
+function refuseSandboxIfCwdIsRoot(cwd) {
+  const p = String(cwd == null ? "" : cwd).split("\\").join("/");
+  if (!p) return { ok: true, path: p, code: null };
+  const n = p.replace(/\/+$/, "") || "/";
+  if (n === "/" || n === "/root" || n === "/root/") return { ok: false, path: p, code: "sandbox_cwd_root" };
+  return { ok: true, path: p, code: null };
+}
+
+function capSandboxCode256KiB(code, opts) {
+  const s = code == null ? "" : (Buffer.isBuffer(code) ? code.toString("utf8") : String(code));
+  const maxBytes = (opts && opts.maxBytes != null) ? opts.maxBytes : SANDBOX_CODE_MAX;
+  const cap = Math.max(1024, Number(maxBytes) || SANDBOX_CODE_MAX);
+  const bytes = Buffer.byteLength(s, "utf8");
+  if (bytes <= cap) return { ok: true, code: s, truncated: false, bytes: bytes, err: null };
+  return { ok: false, code: null, truncated: true, bytes: bytes, err: "sandbox_code_cap" };
+}
+
+function refuseSandboxIfTimeoutMissing(opts) {
+  opts = opts || {};
+  const t = opts.timeoutMs != null ? opts.timeoutMs : opts.timeout;
+  if (t == null || t === "") return { ok: false, code: "sandbox_timeout_required" };
+  const n = Number(t);
+  if (!Number.isFinite(n) || n <= 0) return { ok: false, code: "sandbox_timeout_required" };
+  return { ok: true, timeoutMs: n, code: null };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -7597,6 +8013,38 @@ module.exports = {
   refuseSubagentIfSameToolAsParent,
   sortMemoryHitsByScoreDesc,
   rejectToolCallIfArgsIsArray,
+  rejectToolNameEndingWithDot,
+  capToolArgString4096,
+  refusePlanIfStepsNotArray,
+  capPlanStepTitle80Chars,
+  compactNeverDropLastUserMessage,
+  skipMemoryIfScoreBelowFloor,
+  capMemoryFactChars512,
+  dropDuplicateMemoryIds,
+  refuseCheckpointIfCrcMissing,
+  sessionLockRefuseIfTtlExpired,
+  refuseWriteToVarLogRun,
+  skipNodeModulesGlobFiles,
+  dropSseRetryFramesFromReplay,
+  capSseDataBytes32KiB,
+  endSseWithCommentOnIdle,
+  ignoreNegativeTotalTokens,
+  neverChargeIfNoModelCall,
+  neverRetry408Timeout,
+  classifyEtimedoutAsTimeout,
+  mapMysqlEconnresetRetryable,
+  abortIfIdleOver30sMidTool,
+  rejectIdempotencyKeyOver128Chars,
+  capUserMessage32KiB,
+  redactAwsAccessKeysInResults,
+  classifyEconnrefusedAsUnavailable,
+  refuseSubagentIfNameEmpty,
+  sortPlanStepsByOrderAsc,
+  rejectToolCallIfNameIsObject,
+  capSandboxArgv24,
+  refuseSandboxIfCwdIsRoot,
+  capSandboxCode256KiB,
+  refuseSandboxIfTimeoutMissing,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

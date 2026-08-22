@@ -1,7 +1,8 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H46 live, 2026-08-21 21:57 Lima).
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-2157.md` (3H46, proto pollution + dup tool ids + hyphen tool name + arg keys 32 + plan title 128 + dup plan steps + compact keep system + memory TTL + memory hits 8 + ckpt CRC stamp + lock steal if stale + refuse /root /mnt /media + skip vendor glob + drop SSE comments + replay cap 64 + SSE abort event + ignore neg prompt tokens + no charge if cancel before first token + never retry 410 + EHOSTUNREACH timeout + pg ECONNRESET + TTFB abort 45s + stale idempotency 1h + assistant 64KiB + PEM redact + ECONNABORTED cancelled + refuse subagent same tool + memory sort by score + reject array tool args, frontend untouched)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H47 live, 2026-08-22 00:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0057.md` (3H47, tool name trailing dot + arg string 4096 + plan steps must be array + step title 80 + compact keep last user + memory score floor + fact 512 + dup memory ids + ckpt CRC required + lock TTL expire + refuse /var/log /var/run /run + skip node_modules glob + drop SSE retry frames + SSE data 32KiB + idle comment + ignore neg total tokens + no charge if no model call + never retry 408 + ETIMEDOUT timeout + mysql ECONNRESET + idle 30s mid-tool + idempotency key 128 + user msg 32KiB + AWS key redact + ECONNREFUSED unavailable + refuse empty subagent name + sort plan steps + reject object tool name + sandbox argv 24 + refuse cwd / + code 256KiB + sandbox timeout required, frontend untouched)
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-2157.md` (3H46)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1557.md` (3H45)
 - 2026-08-21 18:57 Lima: 3H46 was DEFERRED (Word UPN); shipped at 21:57.
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1257.md` (3H44)
