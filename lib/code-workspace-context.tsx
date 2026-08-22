@@ -152,6 +152,41 @@ export function getActiveCodexProject(): string | null {
   return _activeCodexProjectId
 }
 
+// Department computer: a stable synthetic run id `dept-<departmentId>` that
+// scopes Files / Shell / Preview to that department's worktree on the shared
+// company machine. Same late-consumer singleton as the Codex project id.
+let _activeDepartmentComputerRunId: string | null = null
+export const CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT = "siragpt:active-department-computer"
+export const CODE_OPEN_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-department-computer"
+export function setActiveDepartmentComputer(runId: string | null) {
+  _activeDepartmentComputerRunId = runId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, { detail: { runId } }),
+    )
+  }
+}
+export function getActiveDepartmentComputer(): string | null {
+  return _activeDepartmentComputerRunId
+}
+
+export type ActiveDepartmentSelection = { id: string; name: string; projectId?: string | null } | null
+let _activeDepartmentSelection: ActiveDepartmentSelection = null
+export const CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT = "siragpt:active-department-selection"
+export const CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-current-department-computer"
+export function setActiveDepartmentSelection(selection: ActiveDepartmentSelection) {
+  _activeDepartmentSelection = selection
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, { detail: { selection } }),
+    )
+  }
+}
+export function getActiveDepartmentSelection(): ActiveDepartmentSelection {
+  return _activeDepartmentSelection
+}
+
+
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string

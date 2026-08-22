@@ -58,6 +58,7 @@ import {
   UsersRound,
   Workflow,
   X,
+  Monitor,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -154,10 +155,14 @@ import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   notifyCompanyAssociationChanged,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
   setActiveCodexProject,
+  setActiveDepartmentComputer,
+  setActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import {
@@ -703,6 +708,7 @@ export function AgentCompanyPanel() {
   const [view, setView] = React.useState<CompanyView>("home")
   const [previewView, setPreviewView] = React.useState<CompanyPreviewView | null>(null)
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState("ceo-office")
+  const [computerStatus, setComputerStatus] = React.useState<{ loading: boolean; error: string | null }>({ loading: false, error: null })
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null)
   const [officeOpen, setOfficeOpen] = React.useState(false)
   const [companyMenuOpen, setCompanyMenuOpen] = React.useState(false)
@@ -1321,6 +1327,19 @@ export function AgentCompanyPanel() {
   )
 
   const openCeoOffice = React.useCallback(() => {
+    const computerRunId = "dept-ceo-office"
+    setSelectedDepartmentId("ceo-office")
+    setActiveDepartmentComputer(computerRunId)
+    const projectId = associatedCodexProjectId || companyProjectId || getActiveCodexProject()
+    if (projectId) setActiveCodexProject(projectId)
+    setActiveDepartmentSelection({ id: "ceo-office", name: "CEO Office", projectId: projectId || null })
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
+          detail: { runId: computerRunId, departmentId: "ceo-office", projectId },
+        }),
+      )
+    }
     let rootSessionId = codeChatSessions.find(
       (session) => session.title.trim().toLowerCase() === "ceo office",
     )?.id
@@ -1333,13 +1352,91 @@ export function AgentCompanyPanel() {
     }
     setView("chat")
   }, [
+    associatedCodexProjectId,
+    companyProjectId,
+
     chatLivesInWorkspaceColumn,
     createCodeChatSession,
     codeChatSessions,
     setActiveCodeChatSession,
   ])
 
+
+  const openDepartmentComputer = React.useCallback((departmentId: string) => {
+    const department = allDepartments.find((entry) => entry.id === departmentId)
+    if (!department) return
+    setSelectedDepartmentId(departmentId)
+    const computerRunId = (department as { computerRunId?: string }).computerRunId || `dept-${departmentId}`
+    setActiveDepartmentComputer(computerRunId)
+    setComputerStatus({ loading: false, error: null })
+    const projectId = associatedCodexProjectId
+      || (activeFolder?.id ? codexProjectIdFromWorkspaceId(activeFolder.id, { assumeProject: true }) : null)
+      || companyProjectId
+      || getActiveCodexProject()
+    if (projectId) setActiveCodexProject(projectId)
+    setActiveDepartmentSelection({
+      id: department.id,
+      name: department.name,
+      projectId: projectId || null,
+    })
+    if (!projectId) {
+      void ensureCompanyRuntime({ silent: true }).then((id) => {
+        if (!id) return
+        setActiveCodexProject(id)
+        setActiveDepartmentSelection({
+          id: department.id,
+          name: department.name,
+          projectId: id,
+        })
+      }).catch(() => {})
+    }
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
+          detail: { runId: computerRunId, departmentId, projectId },
+        }),
+      )
+    }
+  }, [
+    activeFolder?.id,
+    allDepartments,
+    associatedCodexProjectId,
+    companyProjectId,
+    ensureCompanyRuntime,
+  ])
+
+  React.useEffect(() => {
+    const projectId = associatedCodexProjectId || companyProjectId || getActiveCodexProject()
+    const dept = selectedDepartment?.department
+      ? {
+          id: selectedDepartment.department.id,
+          name: selectedDepartment.department.name,
+          projectId: projectId || null,
+        }
+      : { id: "ceo-office", name: "CEO Office", projectId: projectId || null }
+    setActiveDepartmentSelection(dept)
+    if (projectId) setActiveCodexProject(projectId)
+  }, [associatedCodexProjectId, companyProjectId, selectedDepartment])
+
+  React.useEffect(() => {
+    return () => {
+      setActiveDepartmentSelection(null)
+      setActiveDepartmentComputer(null)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    const onRequestCurrent = () => {
+      const id = selectedDepartmentId || "ceo-office"
+      openDepartmentComputer(id)
+    }
+    window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent as EventListener)
+    return () => window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent as EventListener)
+  }, [openDepartmentComputer, selectedDepartmentId])
+
   const openDepartmentChat = React.useCallback((departmentId: string) => {
+    // Keep the CEO Office / department desktop dock alive alongside chat.
+    openDepartmentComputer(departmentId)
     if (departmentId === "ceo-office") {
       openCeoOffice()
       return
@@ -1365,6 +1462,7 @@ export function AgentCompanyPanel() {
     codeChatSessions,
     createCodeChatSession,
     openCeoOffice,
+    openDepartmentComputer,
     setActiveCodeChatSession,
   ])
 
