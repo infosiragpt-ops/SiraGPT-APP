@@ -39,6 +39,10 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import {
+  WaitingWithEscape,
+  PREVIEW_START_TIMEOUT_MS,
+} from "@/components/common/waiting-with-escape"
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
@@ -1578,12 +1582,25 @@ export function PreviewPane() {
             </div>
           </div>
         ) : liveRun.phase === "starting" ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-4 text-center sm:p-8">
             <ThinkingIndicator size="sm" />
             <div>
               <p className="text-sm font-medium text-foreground">Compilando tu app…</p>
               <p className="mx-auto mt-1 max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
             </div>
+            {/* Frente "Cero spinners infinitos": si el arranque supera 20s,
+                di la verdad y ofrece salidas. El resetKey sigue el note del
+                poll (cada avance real del instalador rearma el temporizador). */}
+            <WaitingWithEscape
+              timeoutMs={PREVIEW_START_TIMEOUT_MS}
+              resetKey={liveRun.note}
+              message="Esto está tardando más de lo normal."
+              description="La instalación de dependencias puede demorarse; puedes detenerla o volver a intentarlo."
+              onCancel={stopApp}
+              cancelLabel="Cancelar"
+              onRetry={() => void runApp()}
+              retryLabel="Reintentar"
+            />
           </div>
         ) : liveRun.phase === "error" ? (
           <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">

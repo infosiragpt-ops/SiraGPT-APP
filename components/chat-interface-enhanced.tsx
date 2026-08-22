@@ -119,6 +119,11 @@ import {
   measureComposerTextarea,
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
+import {
+  WaitingWithEscape,
+  UPLOAD_TIMEOUT_MS,
+  useWaitProgressKey,
+} from "@/components/common/waiting-with-escape"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
@@ -4870,6 +4875,8 @@ type ChatMessageListProps = {
   onDocumentPreview: (target: DocumentPreviewTarget) => void
   onAttachmentPreview: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void
   onOpenSources: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void
+  /** Frente "Cero spinners infinitos": cortar el stream desde el aviso de espera. */
+  onStopStream?: () => void
 }
 
 // The transcript is intentionally isolated from composer state. Typing used
@@ -4889,6 +4896,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
   onDocumentPreview,
   onAttachmentPreview,
   onOpenSources,
+  onStopStream,
 }: ChatMessageListProps) {
   const { stableMessages, streamingMessage } = React.useMemo(() => {
     // Two passes are deliberate: the first collapses optimistic/server twins;
@@ -4973,6 +4981,7 @@ const ChatMessageList = React.memo(function ChatMessageList({
               onToggleSplitView={onToggleSplitView}
               onDocumentPreview={onDocumentPreview}
               onAttachmentPreview={onAttachmentPreview}
+              onStopStream={onStopStream}
             />
           </ErrorBoundary>
         </div>
@@ -5509,6 +5518,15 @@ function ChatInterfaceContent() {
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
+  // Frente "Cero spinners infinitos": aborta los XHR de subida desde el
+  // aviso de espera prolongada (Cancelar). Se crea por lote en
+  // handleAndUploadFiles y se limpia en su finally.
+  const uploadAbortControllerRef = React.useRef<AbortController | null>(null);
+  // Progreso real agregado (suma de % de los chips) cuantizado — rearma el
+  // temporizador del aviso cuando la subida avanza de verdad.
+  const uploadStallResetKey = useWaitProgressKey(
+    Object.values(uploadProgress).reduce((sum, pct) => sum + (pct || 0), 0),
+  );
 
   // Local sending / intent state so Stop button appears immediately on Enter
   const [isSending, setIsSending] = React.useState(false);
@@ -7611,6 +7629,23 @@ But first, you need to connect your Spotify account securely using the button be
             onFileProcessingStatusChange={handleFileProcessingStatusChange}
             onEditDocument={handleDocumentEditorSaved}
           />
+          {/* Frente "Cero spinners infinitos": si la subida lleva >60s en
+              curso, di la verdad y ofrece Cancelar (aborta los XHR) o
+              Reintentar. El resetKey sigue el progreso real: cualquier
+              avance rearma el temporizador. */}
+          {isUploading ? (
+            <WaitingWithEscape
+              timeoutMs={UPLOAD_TIMEOUT_MS}
+              resetKey={uploadStallResetKey}
+              message="Esto está tardando más de lo normal."
+              description="La subida de archivos grandes puede demorarse."
+              onCancel={() => {
+                uploadAbortControllerRef.current?.abort();
+                toast.info("Subida cancelada.");
+              }}
+              cancelLabel="Cancelar"
+            />
+          ) : null}
           <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
         </>
       }
@@ -8080,6 +8115,10 @@ But first, you need to connect your Spotify account securely using the button be
     });
 
     setIsUploading(true);
+    // Frente "Cero spinners infinitos": un AbortController por lote para
+    // que "Cancelar" en el aviso de espera aborte los XHR de verdad.
+    const batchUploadController = new AbortController();
+    uploadAbortControllerRef.current = batchUploadController;
     let optimisticTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
@@ -8118,6 +8157,7 @@ But first, you need to connect your Spotify account securely using the button be
             sourceChannel,
             idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
             asyncProcessing: true,
+            signal: batchUploadController.signal,
             onProgress: (pct) => {
               setUploadProgress(prev => {
                 const next = { ...prev };
@@ -8198,6 +8238,16 @@ But first, you need to connect your Spotify account securely using the button be
             });
           }, 500);
         } catch (chunkError: any) {
+          // Cancelar desde el aviso de espera aborta los XHR — eso NO es un
+          // fallo: quita los chips en silencio y no ensucia la UI con rojo.
+          if (chunkError?.name === 'AbortError' || batchUploadController.signal.aborted) {
+            setUploadedFiles((cur: any[]) => {
+              const next = cur.filter(f => !chunkTempIds.has(f.tempId));
+              uploadedFilesRef.current = next;
+              return next;
+            });
+            continue;
+          }
           failedChunkCount += 1;
           console.error('File upload chunk failed:', chunkError);
           const reason = chunkError?.message || 'Error de subida';
@@ -8229,6 +8279,9 @@ But first, you need to connect your Spotify account securely using the button be
       // can render its thumbnail next to the retry button.
     } finally {
       if (optimisticTimer) clearInterval(optimisticTimer);
+      if (uploadAbortControllerRef.current === batchUploadController) {
+        uploadAbortControllerRef.current = null;
+      }
       setIsUploading(false);
       setUploadProgress(prev => {
         const next = { ...prev };
@@ -12894,6 +12947,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onDocumentPreview={handleDocumentPreview}
                         onAttachmentPreview={handleAttachmentPreview}
                         onOpenSources={handleOpenSources}
+                        onStopStream={stopActiveGeneration}
                       />
                     </div>
                   </ScrollArea>

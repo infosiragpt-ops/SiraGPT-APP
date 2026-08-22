@@ -88,6 +88,11 @@ import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
 import ThinkingTrace from "./thinking-trace"
 import AgentTrace from "./agent-trace"
+import {
+  WaitingWithEscape,
+  useWaitProgressKey,
+  STREAM_STALL_TIMEOUT_MS,
+} from "@/components/common/waiting-with-escape"
 import MessageActionRail from "./MessageActionRail"
 import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
@@ -814,7 +819,7 @@ const GeneratedImageCard = ({
     );
 };
 
-const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, children }: {
+const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessageInChat, isStreaming, onToggleSplitView, isGeneratingImage, onDocumentPreview, onAttachmentPreview, onOpenSources, onStopStream, onBackFromStream, children }: {
     message: any;
     user: any;
     onRegenerate: (messageId: string) => void;
@@ -828,6 +833,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     onDocumentPreview?: (target: DocumentPreviewTarget) => void;
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
     onOpenSources?: (payload: { sources: any[]; activity: any; memory?: any[]; memoryMeta?: any; messageId?: string }) => void;
+    /** Frente "Cero spinners infinitos": cancelar el stream en curso
+     *  desde el aviso de espera prolongada. Opcional — sin él no se
+     *  renderiza la acción "Cancelar". */
+    onStopStream?: () => void;
+    /** Salida honesta alternativa ("Volver"): limpiar el borrador del
+     *  asistente en curso y volver al estado idle del chat. */
+    onBackFromStream?: () => void;
     children?: React.ReactNode;
 }) => {
     const tCommon = useTranslations("common")
@@ -1073,6 +1085,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
     const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
       (isStreaming && !message.content) || !!(message as any).progressStage
+    );
+    // Frente "Cero spinners infinitos": progreso real del stream (etapas +
+    // tokens) cuantizado, usado para rearmar el temporizador del aviso de
+    // espera estancada. Hook a nivel superior — reglas de hooks.
+    const streamResetKey = useWaitProgressKey(
+        ((message as any).progressStage || "").length
+        + ((message as any).content || "").length,
     );
     // const isThinking = isAssistant && message.content === null;
 
@@ -3241,10 +3260,36 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
                         ) : isThinking ? (
-                            <ThinkingPlaceholder
-                                stage={(message as any).progressStage || null}
-                                pct={(message as any).progressPct ?? null}
-                            />
+                            <>
+                                <ThinkingPlaceholder
+                                    stage={(message as any).progressStage || null}
+                                    pct={(message as any).progressPct ?? null}
+                                />
+                                {/* Frente "Cero spinners infinitos": si el
+                                    stream no ha entregado NADA en 45s, di la
+                                    verdad y ofrece salidas. streamResetKey
+                                    (arriba) avanza con el progreso real, así
+                                    que el aviso solo se dispara ante una
+                                    espera genuinamente estancada. */}
+                                <WaitingWithEscape
+                                    timeoutMs={STREAM_STALL_TIMEOUT_MS}
+                                    resetKey={streamResetKey}
+                                    message="Esto está tardando más de lo normal."
+                                    description="Sigue esperando o corta la respuesta y vuelve a intentarlo."
+                                    onCancel={onStopStream}
+                                    cancelLabel="Cancelar"
+                                    onRetry={() => {
+                                        // Reintentar = cortar el stream atascado y
+                                        // regenerar. regenerateMessage ignora el chat
+                                        // mientras esté en activeStreamingChatIds, así
+                                        // que el Stop debe ejecutarse primero.
+                                        onStopStream?.();
+                                        onRegenerate(message.id);
+                                    }}
+                                    retryLabel="Reintentar"
+                                    onBack={onBackFromStream}
+                                />
+                            </>
                         ) : (
                             <>
                                 {hasGmailEntry ? (
