@@ -139,7 +139,7 @@ test('bundle cleanup is scoped while rollback, override, config validation, and 
   assert.ok(disableErrexit >= 0 && cleanup > disableErrexit, 'cleanup must run only after rollback disables errexit');
   assert.ok(reset > cleanup, 'rollback checkout must follow best-effort transfer cleanup');
 
-  assert.match(ssh, /docker-compose\.production\.override\.yml --env-file \.env/);
+  assert.match(ssh, /docker-compose\.production\.override\.yml -f docker-compose\.prometheus\.yml --env-file \.env/);
   assert.doesNotMatch(ssh, /git clean|rsync[^\n]*--delete/);
   assert.match(ssh, /\$\{COMPOSE\} config -q/);
   assert.match(ssh, /verify_backend_image_metadata siragpt-backend:latest/);
