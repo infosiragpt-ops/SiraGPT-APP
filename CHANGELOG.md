@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- `/code` workspace bootstrap P0: structured `WorkspaceErrorCode` payloads,
+  idempotent `POST /api/code/workspaces/ensure`, a frontend state machine
+  with progress («Preparando tu espacio…») and auto-retry, plus
+  `app/code/error.tsx` that reconnects first and only shows
+  «No se pudo cargar el espacio de código» after recovery is exhausted.
+  ChunkLoad / version-skew shares the root hard-reload helper
+  (`lib/client-bundle-recovery.ts`). See `docs/code-workspace-bootstrap.md`.
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

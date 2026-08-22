@@ -21,6 +21,7 @@ import dynamic from "next/dynamic"
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 
+import { CodeWorkspaceBootstrap } from "@/components/code/code-workspace-bootstrap"
 import {
   CODE_NEW_CODE_CHAT_EVENT,
   CODE_OPEN_TOOL_EVENT,
@@ -29,6 +30,7 @@ import {
   type CodeNewChatDetail,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
+import { classifyWorkspaceError, isRetryableHttpStatus } from "@/lib/code-workspace-errors"
 import { listCodexProjects } from "@/lib/codex-projects"
 import { codexProjectIdFromWorkspaceId } from "@/lib/codex-workspace-identity"
 import { resolveCodeWorkspaceFolder } from "@/lib/code-workspace-route"
@@ -48,12 +50,14 @@ const CodeWorkspace = dynamic(
 export default function CodeWorkspacePage() {
   return (
     <CodeWorkspaceGate>
-      <CodeWorkspaceProvider>
-        <React.Suspense fallback={null}>
-          <ActiveFolderHydrator />
-        </React.Suspense>
-        <CodeWorkspace />
-      </CodeWorkspaceProvider>
+      <React.Suspense fallback={<CodeWorkspaceSkeleton />}>
+        <CodeWorkspaceBootstrap>
+          <CodeWorkspaceProvider>
+            <ActiveFolderHydrator />
+            <CodeWorkspace />
+          </CodeWorkspaceProvider>
+        </CodeWorkspaceBootstrap>
+      </React.Suspense>
     </CodeWorkspaceGate>
   )
 }
@@ -145,11 +149,14 @@ function ActiveFolderHydrator() {
             })
       } catch (error) {
         if (cancelled) return
-        if ((error as { status?: unknown } | null)?.status === 404) {
+        const classified = classifyWorkspaceError(error)
+        if (classified.status === 404 || classified.code === "WORKSPACE_NOT_FOUND") {
           setRouteIssue(1)
           hydratedFolderRef.current = folderId
           setActiveCodexProject(null)
           setActiveFolder(null)
+        } else if (classified.retryable || isRetryableHttpStatus(classified.status)) {
+          setRouteIssue(2)
         } else {
           setRouteIssue(2)
         }
