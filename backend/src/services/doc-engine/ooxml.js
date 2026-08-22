@@ -274,8 +274,15 @@ function remapStyleIds(xml, mapping, allowed) {
 }
 
 function extractSectPr(documentXml) {
-  const m = String(documentXml || '').match(/<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/);
-  return m ? m[0] : '';
+  // LAST w:sectPr is the document section (layout). The first match is often
+  // a mid-body section break transplanted from the source thesis — comparing
+  // that to the plantilla made validation.passed=false and /chat dropped a
+  // good transplant (173 blocks / 16k words) for a professional-edit of XXXX.
+  const re = /<w:sectPr[\s>][\s\S]*?<\/w:sectPr>/g;
+  let last = '';
+  let m;
+  while ((m = re.exec(String(documentXml || '')))) last = m[0];
+  return last;
 }
 
 function isWordTagOpen(src, idx, tag) {

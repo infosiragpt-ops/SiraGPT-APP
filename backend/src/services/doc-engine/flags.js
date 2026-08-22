@@ -51,10 +51,12 @@ function isTemplateTransformRequest(prompt = '', files = []) {
   });
   // Chat preloop pasa fileIds (strings). Cuenta esos ids cuando no hay MIME.
   const count = docs.length > 0 ? docs.length : list.length;
-  // Cualquier 2+ docx + formato|plantilla|UPN|pasalo. "pasalo" no matchea \bpasa\b.
-  const templateCue = /\b(formato|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text);
+  // Cualquier 2+ docx + formato|format|plantilla|UPN|pasalo. "pasalo" no
+  // matchea \bpasa\b. "format" (sin o) es el typo de "pasalo a mi format".
+  const templateCue = /\b(formato|format|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text);
   const passCue = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/.test(text);
-  if (count >= 2 && (templateCue || passCue)) return true;
+  const hashNames = (String(prompt || '').match(/##\s*\S+\.docx/gi) || []).length >= 2;
+  if (count >= 2 && (templateCue || passCue || hashNames)) return true;
   if (count >= 1 && templateCue && passCue) return true;
   return false;
 }

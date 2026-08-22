@@ -13,6 +13,7 @@ const { isDocEngineEnabled } = require('./flags');
 const {
   classifyTemplateVsContent,
   transformToTemplate,
+  bodyStillHasPlaceholders,
 } = require('./transform-to-template');
 
 function isDocxLike(file = {}) {
@@ -33,13 +34,19 @@ function buildValidation(transformed) {
   const sectOk = transformed.templateSectPr === transformed.resultSectPr;
   const headersOk = JSON.stringify(transformed.headerFooterBefore)
     === JSON.stringify(transformed.headerFooterAfter);
+  const placeholders = bodyStillHasPlaceholders(transformed.documentXml || '');
+  // Live 23:57Z: PizZip transplanted 173 blocks / 16k words but first-sectPr
+  // !== last-sectPr (source section break) → passed=false → hook returned
+  // null → professional-edit of the XXXX plantilla. Keep a real transplant.
+  const passed = Boolean(transformed.transplantedBlocks > 0 && !placeholders);
   return {
     format: 'docx',
-    passed: Boolean(sectOk && transformed.transplantedBlocks > 0),
+    passed,
     checks: {
       source_transplanted: transformed.transplantedBlocks > 0,
       template_sectpr_preserved: sectOk,
       header_footer_unchanged: headersOk,
+      no_leftover_placeholders: !placeholders,
     },
     details: {
       editMode: 'doc_engine_transform_to_template',
@@ -107,7 +114,7 @@ async function tryDocEngineAfterSelection({
     withBuffers.push({ ...file, buffer });
   }
 
-  const pair = classifyTemplateVsContent(withBuffers);
+  const pair = classifyTemplateVsContent(withBuffers, displayPrompt || prompt);
   try {
     console.info(`[doc-engine] classify reason=${pair.reason || '?'} template=${pair.template?.originalName || pair.template?.filename || pair.template?.name || '-'} content=${pair.content?.originalName || pair.content?.filename || pair.content?.name || '-'}`);
   } catch { /* noop */ }
@@ -123,7 +130,12 @@ async function tryDocEngineAfterSelection({
   });
   try {
     const validation = buildValidation(transformed);
-    if (validation.passed !== true) return null;
+    if (validation.passed !== true) {
+      try {
+        console.warn(`[doc-engine] validation failed transplanted=${transformed.transplantedBlocks || 0} sectOk=${validation.checks && validation.checks.template_sectpr_preserved} placeholders=${validation.checks && !validation.checks.no_leftover_placeholders}`);
+      } catch { /* noop */ }
+      return null;
+    }
 
     const contentName = pair.content.originalName || pair.content.filename || pair.content.name || 'documento.docx';
     const base = path.basename(contentName, path.extname(contentName)).replace(/[^\w.-]+/g, '_') || 'documento';

@@ -147,6 +147,11 @@ describe('doc-engine transform request cues', () => {
     assert.equal(flags.isTemplateTransformRequest('usa esta plantilla', ['a', 'b']), true);
     assert.equal(flags.isTemplateTransformRequest('formato', ['a', 'b']), true);
     assert.equal(flags.isTemplateTransformRequest('hola', ['a', 'b']), false);
+    assert.equal(flags.isTemplateTransformRequest('pasalo a mi format de la upn', ['a', 'b']), true);
+    assert.equal(flags.isTemplateTransformRequest(
+      'este word ## RSN_tesis.docx pasalo a mi format ## Formato_upn.docx',
+      ['a', 'b'],
+    ), true);
   });
 });
 
@@ -398,5 +403,56 @@ describe('doc-engine job store SSE stages', () => {
       'unpack', 'map', 'edit', 'validate', 'render', 'verify', 'done',
     ]);
     assert.equal(stored.status, 'done');
+  });
+});
+
+describe('extractSectPr last wins', () => {
+  it('returns the document-level (last) sectPr not a mid-body break', () => {
+    const xml = `<w:document><w:body><w:p><w:pPr><w:sectPr><w:pgMar w:top="1"/></w:sectPr></w:pPr></w:p>${SECT}</w:body></w:document>`;
+    assert.equal(ooxml.extractSectPr(xml), SECT);
+  });
+});
+
+describe('classify prompt ## names', () => {
+  it('uses formato/plantilla as template when prompt names both files', () => {
+    const { classifyTemplateVsContent } = require('../src/services/doc-engine/transform-to-template');
+    const plantilla = {
+      originalName: 'Formato para el articulo de revision narrativa.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: templateDocx(),
+    };
+    const rsn = {
+      originalName: 'RSN_Comunicacion_publicitaria_redes_sociales_posicionamiento_calzados.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: sourceDocx(),
+    };
+    const prompt = 'este word ## RSN_Comunicacion_publicitaria_redes_sociales_posicionamiento_calzados.docx pasalo a mi format de la upn tal cual ## Formato para el articulo de revision narrativa.docx';
+    const pair = classifyTemplateVsContent([rsn, plantilla], prompt);
+    assert.equal(pair.template, plantilla);
+    assert.equal(pair.content, rsn);
+    assert.equal(pair.reason, 'prompt_names');
+  });
+});
+
+describe('doc-engine hook keeps transplant when mid-body sectPr differs', () => {
+  it('does not drop a real transplant if first sectPr != last', async () => {
+    const mid = makeDocx({
+      'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
+      'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:sectPr><w:pgMar w:top="1"/></w:sectPr></w:pPr><w:r><w:t>Portada original UPN seccion interna del source con bastante texto de investigacion metodologica.</w:t></w:r></w:p><w:p><w:r><w:t>Capitulo 1 contenido real del source investigacion metodologica y resultados del RSN para no quedar vacio.</w:t></w:r></w:p>${SECT}</w:body></w:document>`,
+    });
+    const hit = await tryDocEngineAfterSelection({
+      prompt: 'pasalo a mi format de la upn',
+      files: [
+        { name: 'Formato_upn.docx', buffer: templateDocx(), originalName: 'Formato_upn.docx' },
+        { name: 'RSN_tesis.docx', buffer: mid, originalName: 'RSN_tesis.docx' },
+      ],
+      env: { FEATURE_DOC_ENGINE: '1' },
+      readBuffer: async (f) => f.buffer,
+    });
+    assert.ok(hit);
+    assert.equal(hit.validation.passed, true);
+    const xml = new PizZip(hit.file.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Portada original UPN/);
+    assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, ''), /XXXXXXXX/);
   });
 });

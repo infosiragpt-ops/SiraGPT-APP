@@ -108,7 +108,56 @@ function scoreTemplateVsContent(file = {}, peek = {}) {
  * No depende del orden de chips / fileIds (selectSourcePreservingDocumentSet
  * siempre toma currentDocx[0]).
  */
-function classifyTemplateVsContent(files = []) {
+function fileDocxName(file = {}) {
+  return String(file.originalName || file.filename || file.name || '');
+}
+
+function looksLikePlaceholderDocx(file = {}, peek = {}) {
+  const body = String(peek.visibleText || file.extractedText || extractVisibleText(peek.documentXml || ''));
+  const xxxx = (body.match(/X{4,}/gi) || []).length;
+  const words = body.trim().split(/\s+/).filter((w) => w && !/^X{4,}$/i.test(w));
+  return xxxx >= 1 && words.length < 2000;
+}
+
+function looksLikeRealProseDocx(file = {}, peek = {}) {
+  const body = String(peek.visibleText || file.extractedText || extractVisibleText(peek.documentXml || ''));
+  const xxxx = (body.match(/X{4,}/gi) || []).length;
+  const words = body.trim().split(/\s+/).filter((w) => w && !/^X{4,}$/i.test(w));
+  return xxxx === 0 && words.length >= 40;
+}
+
+function pairFromPromptNames(docs, prompt = '') {
+  const text = String(prompt || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (!text || docs.length < 2) return null;
+  const hashes = [...String(prompt || '').matchAll(/##\s*([^\n#]+\.docx)/gi)]
+    .map((m) => m[1].trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
+  const isTmplName = (f) => /(formato|plantilla|template|\bupn\b)/i.test(fileDocxName(f));
+  const mentioned = docs.filter((f) => {
+    const name = fileDocxName(f).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const base = name.replace(/\.docx$/i, '');
+    if (hashes.some((h) => h.includes(base.slice(0, 18)) || name.includes(h.slice(0, 18)))) return true;
+    return Boolean(base.length >= 12 && text.includes(base.slice(0, 24)));
+  });
+  const pool = mentioned.length >= 2 ? mentioned : (hashes.length >= 2 ? docs : null);
+  if (!pool) return null;
+  const template = pool.find(isTmplName) || docs.find(isTmplName);
+  const content = pool.find((f) => f !== template && !isTmplName(f)) || docs.find((f) => f !== template);
+  if (template && content && template !== content) {
+    return {
+      template,
+      content,
+      source: content,
+      docs,
+      reason: 'prompt_names',
+    };
+  }
+  return null;
+}
+
+function classifyTemplateVsContent(files = [], prompt = '') {
   const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
   if (docs.length < 2) {
     return {
@@ -119,6 +168,8 @@ function classifyTemplateVsContent(files = []) {
       reason: 'need_two_docx',
     };
   }
+  const fromPrompt = pairFromPromptNames(docs, prompt);
+  if (fromPrompt) return fromPrompt;
   const scored = docs.map((file) => {
     const peek = peekDocxXml(file);
     return { file, peek, ...scoreTemplateVsContent(file, peek) };
@@ -425,6 +476,9 @@ module.exports = {
   classifyTemplateVsContent,
   extractVisibleText,
   findTransformScript,
+  looksLikePlaceholderDocx,
+  looksLikeRealProseDocx,
+  pairFromPromptNames,
   peekDocxXml,
   scoreTemplateVsContent,
   transformBuffers,

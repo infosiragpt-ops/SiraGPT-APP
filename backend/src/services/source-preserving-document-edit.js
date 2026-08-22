@@ -200,7 +200,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // structural verb, so "pasalo a UPN" used to return false here and the
   // SSE pre-loop never called tryGenerate.
   const fileCount = Array.isArray(files) ? files.length : (files ? 1 : 0);
-  const transformCue = /\b(formato|plantilla|template|upn|pasalo|pasala)\b/.test(text);
+  const transformCue = /\b(formato|format|plantilla|template|upn|pasalo|pasala)\b/.test(text);
   const passCue = /\bpasa\w*\b/.test(text);
   // 2+ adjuntos + cue. 1 adjunto + pasa. 0 adjuntos + pasa (para que
   // resolveRecentEditableFileIds no se corte con files=[]).
@@ -219,7 +219,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   if (hasFiles) {
     // "pasa este word al formato UPN" — pasa no está en structuralEditVerb;
     // sin esto el SSE pre-loop nunca llama tryGenerate y el hook no corre.
-    if (/\bpasa\w*\b/.test(text) && /\b(formato|plantilla|template|upn)\b/.test(text)) return true;
+    if (/\bpasa\w*\b/.test(text) && /\b(formato|format|plantilla|template|upn)\b/.test(text)) return true;
     if (professionalEditingIntent) return true;
     if (editorialCorrectionIntent) return true;
     // Image noun + image-edit verb on an attachment turn is unambiguous: the
@@ -8461,6 +8461,39 @@ async function tryGenerateSourcePreservingDocumentEdit({
     }
   } catch (err) {
     try { console.warn(`[doc-engine] post-select hook fell through: ${err?.message || err}`); } catch { /* noop */ }
+  }
+
+  // NEVER professional-edit a plantilla (XXXX / placeholders) when another
+  // DOCX has real prose. Live 23:57Z: hook classified correctly, transform
+  // produced 16k words, validation dropped it, then referenced_filename
+  // picked Formato and "mejoré 11 párrafo(s)" of XXXX.
+  if (allDocx.length >= 2) {
+    try {
+      const {
+        peekDocxXml,
+        looksLikePlaceholderDocx,
+        looksLikeRealProseDocx,
+      } = require('./doc-engine/transform-to-template');
+      const scored = allDocx.map((file) => {
+        const peek = peekDocxXml(file);
+        return { file, peek, placeholder: looksLikePlaceholderDocx(file, peek), prose: looksLikeRealProseDocx(file, peek) };
+      });
+      const plantilla = scored.find((row) => row.placeholder);
+      const prose = scored.find((row) => row.prose && row.file !== (plantilla && plantilla.file));
+      const supportedIsPlantilla = Boolean(
+        plantilla
+        && supported
+        && (supported === plantilla.file
+          || supported.id === plantilla.file.id
+          || String(supported.originalName || supported.filename || '') === String(plantilla.file.originalName || plantilla.file.filename || ''))
+      );
+      if (plantilla && prose && (supportedIsPlantilla || !supported)) {
+        try { console.warn('[doc-engine] refusing professional-edit on placeholder plantilla; another docx has real prose'); } catch { /* noop */ }
+        return null;
+      }
+    } catch (guardErr) {
+      try { console.warn(`[doc-engine] placeholder guard skipped: ${guardErr && guardErr.message || guardErr}`); } catch { /* noop */ }
+    }
   }
 
   // Explicit plural scope ("todos los documentos", "cada archivo", "ambos")
