@@ -193,6 +193,13 @@ import {
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import {
+  ModelCircuitBreakerRegistry,
+  computeBackoffMs,
+  isRetryableFailure,
+  retryWithBackoff,
+  shouldRetryOpenRouter,
+} from "@/lib/code-agent/resilience"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
@@ -263,6 +270,11 @@ import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
+
+// Per-model circuit breakers for the application-layer stream retry. Module-
+// level so breaker state survives component remounts (a sick model stays
+// "open" between turns instead of tripping fresh every render).
+const modelBreakers = new ModelCircuitBreakerRegistry()
 
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
@@ -1922,318 +1934,306 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }),
           })
         }
-        await apiClient.generateAIStream(
-          {
-            provider: activeProvider,
-            model: activeModelName,
-            prompt: finalPrompt,
-            streamId: id,
-            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
-            // /code stays on the reliable plain stream. For an explicit public
-            // web turn the backend performs a deterministic, read-only fetch /
-            // search first and injects the result as untrusted evidence. We do
-            // NOT enable the general agent toolset here: a malicious page must
-            // never gain access to code, shell, files or private connectors.
-            disableAgentic: true,
-            enableWebGrounding: webGroundedConversation,
-            webGroundingQuery: webGroundingQuery || undefined,
-            reasoningEffort: selectedEffort,
-          },
-          (chunk) => {
-            if (firstChunkAt == null) firstChunkAt = Date.now()
-            streamChunks += 1
-            assistantText += chunk
-            setTurns((prev) =>
-              prev.map((t) => {
-                if (t.id !== assistantId) return t
-                const nextContent = t.content + chunk
-                // The first completed line = the planning line is done → stamp the
-                // REAL planning duration once (turn start → first line emitted).
-                const planPatch =
-                  t.planMs == null && nextContent.includes("\n")
-                    ? { planMs: Date.now() - startedAt }
-                    : {}
-                return { ...t, content: nextContent, ...planPatch }
-              }),
-            )
-          },
-          () => {
-            if (controller.signal.aborted || abortRef.current !== controller) {
-              cancelled = true
-              return
-            }
-            // Agentic write modes (app/build, plus debug/patch via explicit
-            // override) = Replit-style "presented output": the agent applies the
-            // generated files itself and opens the live preview, with NO manual
-            // "Aplicar" button (the user asked the agentic system to do the
-            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
-            // never apply. `applied` feeds the Worked-Summary/action-log metrics
-            // on the turn (real numbers).
-            if (!conversational) {
-              patchAssistant({
-                agentLabel: "Aplicando cambios al workspace",
-                agentPhases: buildCodeAgentPhases("apply", {
-                  context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                  generate: { status: "done", detail: "Stream completado" },
-                }),
-              })
-            }
-            // Blocklist, not allowlist: any mode that is not explicitly
-            // read-only (ask/plan/image) applies the files the model wrote.
-            // The old app|build allowlist left deps/debug — and any build
-            // misrouted through another mode — streaming file cards into
-            // chat while the workspace and preview stayed empty.
-            if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
-              try {
-                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
-                if (blocks.length > 0) {
-                  // Mejora 3 (stream validator): when the streamed content fails
-                  // the deterministic structural checks, do NOT ship a broken
-                  // file to the preview. The work_task loop retries with the
-                  // returned instruction. Debug spoken turns still apply so a
-                  // targeted SRE patch is not blocked by a leftover fence.
-                  const streamCheck = validateStreamedFiles(
-                    blocks.map((b) => ({ path: b.path as string, content: b.content })),
+        await retryWithBackoff(
+          async () => {
+            let streamError: Error | null = null
+            let streamSettled = false
+            await new Promise<void>((resolve) => {
+              apiClient.generateAIStream(
+                {
+                  provider: activeProvider,
+                  model: activeModelName,
+                  prompt: finalPrompt,
+                  streamId: id,
+                  files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+                  // /code stays on the reliable plain stream. For an explicit public
+                  // web turn the backend performs a deterministic, read-only fetch /
+                  // search first and injects the result as untrusted evidence. We do
+                  // NOT enable the general agent toolset here: a malicious page must
+                  // never gain access to code, shell, files or private connectors.
+                  disableAgentic: true,
+                  enableWebGrounding: webGroundedConversation,
+                  webGroundingQuery: webGroundingQuery || undefined,
+                  reasoningEffort: selectedEffort,
+                },
+                (chunk) => {
+                  if (firstChunkAt == null) firstChunkAt = Date.now()
+                  streamChunks += 1
+                  assistantText += chunk
+                  setTurns((prev) =>
+                    prev.map((t) => {
+                      if (t.id !== assistantId) return t
+                      const nextContent = t.content + chunk
+                      // The first completed line = the planning line is done → stamp the
+                      // REAL planning duration once (turn start → first line emitted).
+                      const planPatch =
+                        t.planMs == null && nextContent.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}
+                      return { ...t, content: nextContent, ...planPatch }
+                    }),
                   )
-                  if (!streamCheck.valid && override?.spokenKind !== "debug") {
-                    rejectedStream = streamCheck
-                    toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                },
+                () => {
+                  if (streamSettled) return
+                  if (controller.signal.aborted || abortRef.current !== controller) {
+                    cancelled = true
+                    return
+                  }
+                  streamSettled = true
+                  // Agentic write modes (app/build, plus debug/patch via explicit
+                  // override) = Replit-style "presented output": the agent applies the
+                  // generated files itself and opens the live preview, with NO manual
+                  // "Aplicar" button (the user asked the agentic system to do the
+                  // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+                  // never apply. `applied` feeds the Worked-Summary/action-log metrics
+                  // on the turn (real numbers).
+                  let applied: Array<{ path: string; content: string }> = []
+                  if (!conversational) {
                     patchAssistant({
-                      agentLabel: "Validación bloqueó la aplicación",
+                      agentLabel: "Aplicando cambios al workspace",
                       agentPhases: buildCodeAgentPhases("apply", {
                         context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
                         generate: { status: "done", detail: "Stream completado" },
-                        apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
                       }),
                     })
-                  } else {
-                    for (const b of blocks) {
-                      if (b.path) applyBlock(b.path, b.content)
-                    }
-                    applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
-                    lastAppliedFilesRef.current = applied
-                    const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
-                    const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
-                    toast.success(
-                      hasPkg
-                        ? "Proyecto generado — levantando el dev server…"
-                        : hasHtml
-                          ? "App generada — revisa el preview en vivo →"
-                          : `Generados ${blocks.length} archivo(s) — abriendo preview`,
-                    )
-                    openPreviewAndMaybeRun(applied)
                   }
-                }
-              } catch {
-                // Auto-apply failed (parse/write error). There is no manual
-                // "Aplicar" button anymore, so surface the failure explicitly and
-                // tell the user they can still copy the code as a fallback.
-                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
-                void recordRun({
-                  id: runId,
-                  conversational,
-                  startedAt,
-                  finishedAt: Date.now(),
-                  totalMs: Date.now() - startedAt,
-                  streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-                  outcome: "error",
-                  phases: [
-                    { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                    { name: "generate", ms: Date.now() - startedAt },
-                    { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
-                  ],
-                })
-                patchAssistant({
-                  agentLabel: "No se pudieron aplicar los cambios",
-                  agentPhases: buildCodeAgentPhases("apply", {
-                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                    generate: { status: "done", detail: "Stream completado" },
-                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
-                  }),
-                })
-              }
-            }
-            const verifyDetail = applied.length > 0
-              ? `${applied.length} archivo(s) aplicado(s)`
-              : "Respuesta sin escritura de archivos"
-            if (applied.length > 0) markVoiced(assistantId)
-            setTurns((prev) =>
-              prev.map((t) => {
-                if (t.id !== assistantId) return t
-                // Conversational close: the turn ends quietly (no rail, no
-                // "Turno completado" banner) — like any chat answer. The token
-                // usage still attaches below so costs stay visible.
-                const base = conversational
-                  ? { ...t, streaming: false, agentLabel: undefined }
-                  : {
-                      ...t,
-                      streaming: false,
-                      agentLabel: "Turno completado",
-                      agentPhases: buildCodeAgentPhases("verify", {
-                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                        generate: { status: "done", detail: "Respuesta generada" },
-                        apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
-                        verify: { status: "done", detail: verifyDetail },
-                      }),
-                    }
-                // Attach the Worked Summary when the turn did file work OR the
-                // stream reported real token usage (the Agent Usage figure).
-                if (applied.length > 0 || usage) {
-                  const { actions, metrics } = buildWriteMetrics(applied, {
-                    startedAt,
-                    now: Date.now(),
-                    getPrevContent: (p) => files[p]?.content ?? "",
-                  })
-                  // Even a no-file text answer shows an action row (the model
-                  // reasoned + produced the reply).
-                  const effectiveActions =
-                    actions.length > 0
-                      ? actions
-                      : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
-                  const withUsage = usage
-                    ? {
-                        ...metrics,
-                        tokensIn: usage.tokensIn,
-                        tokensOut: usage.tokensOut,
-                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
-                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
-                      }
-                    : metrics
-                  return {
-                    ...base,
-                    actions: effectiveActions,
-                    metrics: withUsage,
-                    // Claude Code-style spoken completion digest — only when the
-                    // turn did real multi-step file work (never for plain answers).
-                    ...(applied.length > 0
-                      ? {
-                          voice: buildSpokenSummary({
-                            kind: override?.spokenKind ?? "patch",
-                            filesChanged: withUsage.filesChanged,
-                            durationMs: withUsage.timeWorkedMs,
-                          }),
+                  // Blocklist, not allowlist: any mode that is not explicitly
+                  // read-only (ask/plan/image) applies the files the model wrote.
+                  // The old app|build allowlist left deps/debug — and any build
+                  // misrouted through another mode — streaming file cards into
+                  // chat while the workspace and preview stayed empty.
+                  if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
+                    try {
+                      const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                      if (blocks.length > 0) {
+                        // Mejora 3 (stream validator): when the streamed content fails
+                        // the deterministic structural checks, do NOT ship a broken
+                        // file to the preview. The work_task loop retries with the
+                        // returned instruction. Debug spoken turns still apply so a
+                        // targeted SRE patch is not blocked by a leftover fence.
+                        const streamCheck = validateStreamedFiles(
+                          blocks.map((b) => ({ path: b.path as string, content: b.content })),
+                        )
+                        if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                          rejectedStream = streamCheck
+                          toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
+                          patchAssistant({
+                            agentLabel: "Validación bloqueó la aplicación",
+                            agentPhases: buildCodeAgentPhases("apply", {
+                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                              generate: { status: "done", detail: "Stream completado" },
+                              apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
+                            }),
+                          })
+                        } else {
+                          for (const b of blocks) {
+                            if (b.path) applyBlock(b.path, b.content)
+                          }
+                          applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                          lastAppliedFilesRef.current = applied
+                          const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                          const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                          toast.success(
+                            hasPkg
+                              ? "Proyecto generado — levantando el dev server…"
+                              : hasHtml
+                                ? "App generada — revisa el preview en vivo →"
+                                : `Generados ${blocks.length} archivo(s) — abriendo preview`,
+                          )
+                          openPreviewAndMaybeRun(applied)
                         }
-                      : {}),
+                      }
+                    } catch {
+                      // Auto-apply failed (parse/write error). There is no manual
+                      // "Aplicar" button anymore, so surface the failure explicitly and
+                      // tell the user they can still copy the code as a fallback.
+                      toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                      void recordRun({
+                        id: runId,
+                        conversational,
+                        startedAt,
+                        finishedAt: Date.now(),
+                        totalMs: Date.now() - startedAt,
+                        streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+                        outcome: "error",
+                        phases: [
+                          { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                          { name: "generate", ms: Date.now() - startedAt },
+                          { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
+                        ],
+                      })
+                      patchAssistant({
+                        agentLabel: "No se pudieron aplicar los cambios",
+                        agentPhases: buildCodeAgentPhases("apply", {
+                          context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                          generate: { status: "done", detail: "Stream completado" },
+                          apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                        }),
+                      })
+                    }
                   }
-                }
-                return base
-              }),
-            )
-            // Observability: the turn is closed and the run is fully known
-            // (outcome, applied files, token usage). The `success` branch above
-            // already recorded apply failures; this covers the common path.
-            void recordRun({
-              id: runId,
-              conversational,
-              startedAt,
-              finishedAt: Date.now(),
-              totalMs: Date.now() - startedAt,
-              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-              outcome: "success",
-              phases: [
-                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                { name: "generate", ms: Date.now() - startedAt },
-                ...(applied.length > 0
-                  ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
-                  : []),
-                { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
-              ],
-              files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
-              usage: usage ?? undefined,
-            })
-            // Only release the latch if this turn is still the active one — a
-            // newer turn may have replaced abortRef, and clearing it here would
-            // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
-            if (abortRef.current === controller) {
-              abortRef.current = null
-              setBusy(false)
-            }
-          },
-          (err) => {
-            // A cancelled/aborted stream (user started a new turn, navigated
-            // away, or the SSE socket was cut) is NOT a failure — surface it as
-            // a soft "stopped" state that keeps whatever partial content arrived,
-            // instead of a scary red "Fetch is aborted" error turn.
-            const aborted =
-              err?.name === "AbortError" ||
-              /\babort|cancel|operation was aborted/i.test(err?.message || "")
-            const msg = err?.message || "Error en el chat de código"
-            void recordRun({
-              id: runId,
-              conversational: false,
-              startedAt,
-              finishedAt: Date.now(),
-              totalMs: Date.now() - startedAt,
-              streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-              outcome: aborted ? "aborted" : "error",
-              phases: [
-                { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                { name: "generate", ms: Date.now() - startedAt, detail: msg },
-              ],
-            })
-            setTurns((prev) =>
-              prev.map((t) =>
-                t.id === assistantId
-                  ? aborted
-                    ? {
-                        ...t,
-                        streaming: false,
-                        agentLabel: "Generación detenida",
-                        ...(conversational
-                          ? {}
-                          : {
-                              agentPhases: buildCodeAgentPhases("generate", {
-                                generate: { status: "done", detail: "Detenida" },
-                              }),
+                  const verifyDetail = applied.length > 0
+                    ? `${applied.length} archivo(s) aplicado(s)`
+                    : "Respuesta sin escritura de archivos"
+                  if (applied.length > 0) markVoiced(assistantId)
+                  setTurns((prev) =>
+                    prev.map((t) => {
+                      if (t.id !== assistantId) return t
+                      // Conversational close: the turn ends quietly (no rail, no
+                      // "Turno completado" banner) — like any chat answer. The token
+                      // usage still attaches below so costs stay visible.
+                      const base = conversational
+                        ? { ...t, streaming: false, agentLabel: undefined }
+                        : {
+                            ...t,
+                            streaming: false,
+                            agentLabel: "Turno completado",
+                            agentPhases: buildCodeAgentPhases("verify", {
+                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                              generate: { status: "done", detail: "Respuesta generada" },
+                              apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                              verify: { status: "done", detail: verifyDetail },
                             }),
-                        content: t.content
-                          ? `${t.content}\n\n_Generación detenida._`
-                          : "_Generación detenida — vuelve a enviar para reintentar._",
+                          }
+                      // Attach the Worked Summary when the turn did file work OR the
+                      // stream reported real token usage (the Agent Usage figure).
+                      if (applied.length > 0 || usage) {
+                        const { actions, metrics } = buildWriteMetrics(applied, {
+                          startedAt,
+                          now: Date.now(),
+                          getPrevContent: (p) => files[p]?.content ?? "",
+                        })
+                        // Even a no-file text answer shows an action row (the model
+                        // reasoned + produced the reply).
+                        const effectiveActions =
+                          actions.length > 0
+                            ? actions
+                            : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
+                        const withUsage = usage
+                          ? {
+                              ...metrics,
+                              tokensIn: usage.tokensIn,
+                              tokensOut: usage.tokensOut,
+                              ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                              ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                            }
+                          : metrics
+                        return {
+                          ...base,
+                          actions: effectiveActions,
+                          metrics: withUsage,
+                          // Claude Code-style spoken completion digest — only when the
+                          // turn did real multi-step file work (never for plain answers).
+                          ...(applied.length > 0
+                            ? {
+                                voice: buildSpokenSummary({
+                                  kind: override?.spokenKind ?? "patch",
+                                  filesChanged: withUsage.filesChanged,
+                                  durationMs: withUsage.timeWorkedMs,
+                                }),
+                              }
+                            : {}),
+                        }
                       }
-                    : {
-                        ...t,
-                        streaming: false,
-                        agentLabel: "Error en el turno",
-                        ...(conversational
-                          ? {}
-                          : {
-                              agentPhases: buildCodeAgentPhases("generate", {
-                                generate: { status: "error", detail: msg },
-                              }),
-                            }),
-                        content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
-                      }
-                  : t,
-              ),
-            )
-            if (abortRef.current === controller) {
-              abortRef.current = null
-              setBusy(false)
-            }
-          },
-          controller.signal,
-          {
-            // The backend may replace already-streamed text after its final
-            // safety scrub. Keep both the UI turn and the local accumulator in
-            // sync; appending the replacement would duplicate the answer and
-            // could reintroduce text the scrub intentionally removed.
-            onReplace: (content) => {
-              assistantText = content
-              setTurns((prev) =>
-                prev.map((t) =>
-                  t.id === assistantId
-                    ? {
-                        ...t,
-                        content,
-                        ...(t.planMs == null && content.includes("\n")
-                          ? { planMs: Date.now() - startedAt }
-                          : {}),
-                      }
-                    : t,
-                ),
+                      return base
+                    }),
+                  )
+                  // Observability: the turn is closed and the run is fully known
+                  // (outcome, applied files, token usage). The `success` branch above
+                  // already recorded apply failures; this covers the common path.
+                  void recordRun({
+                    id: runId,
+                    conversational,
+                    startedAt,
+                    finishedAt: Date.now(),
+                    totalMs: Date.now() - startedAt,
+                    streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
+                    outcome: "success",
+                    phases: [
+                      { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
+                      { name: "generate", ms: Date.now() - startedAt },
+                      ...(applied.length > 0
+                        ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
+                        : []),
+                      { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
+                    ],
+                    files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
+                    usage: usage ?? undefined,
+                  })
+                  resolve()
+                },
+                (err) => {
+                  // The transport (lib/api.ts) has already retried 5 times with
+                  // cursor resume. This is the application-layer verdict: hold the
+                  // error until the outer retryWithBackoff decides, so a retriable
+                  // failure never flashes a red "Error en el turno" mid-recovery.
+                  if (streamSettled) return
+                  streamSettled = true
+                  streamError = err || new Error("Error en el chat de código")
+                  resolve()
+                },
+                controller.signal,
+                {
+                  // The backend may replace already-streamed text after its final
+                  // safety scrub. Keep both the UI turn and the local accumulator in
+                  // sync; appending the replacement would duplicate the answer and
+                  // could reintroduce text the scrub intentionally removed.
+                  onReplace: (content) => {
+                    assistantText = content
+                    setTurns((prev) =>
+                      prev.map((t) =>
+                        t.id === assistantId
+                          ? {
+                              ...t,
+                              content,
+                              ...(t.planMs == null && content.includes("\n")
+                                ? { planMs: Date.now() - startedAt }
+                                : {}),
+                            }
+                          : t,
+                      ),
+                    )
+                  },
+                  onUsage: (u) => { usage = u },
+                },
               )
+            })
+            if (streamError) throw streamError
+          },
+          {
+            // Application-layer retry ON TOP of the transport's 5 attempts.
+            // Only retried before any content reached the UI (re-sending after
+            // content would duplicate the turn / break the e2e contract), and
+            // only while the autonomous-iteration budget still allows it.
+            shouldRetry: (err: unknown, attempt: number): boolean => {
+              if (assistantText.trim()) return false
+              const budget = activeCodeChatSession?.agent?.budget
+              const budgetExhausted = budget ? budget.count >= budget.max : false
+              const breaker = modelBreakers.get(activeProvider, activeModelName)
+              if (!breaker.allowRequest()) {
+                toast.error("El modelo está temporalmente degradado. Intenta de nuevo en un momento.")
+                return false
+              }
+              const verdict = shouldRetryOpenRouter(err as any, attempt, { budgetExhausted })
+              if (verdict) breaker.recordFailure()
+              else breaker.recordSuccess()
+              return verdict
             },
-            onUsage: (u) => { usage = u },
+            delayMs: (attempt) => computeBackoffMs(attempt),
+            onRetry: (attempt, delayMs) => {
+              toast.info(
+                `El stream se interrumpió — reintentando (${attempt}/2, en ${Math.round(delayMs / 1000)}s)…`,
+                { duration: 4000 },
+              )
+              patchAssistant({
+                agentLabel: "Reconectando con el modelo",
+                agentPhases: buildCodeAgentPhases("generate", {
+                  context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
+                  generate: { status: "running", detail: `Reintento ${attempt}/2 tras interrupción` },
+                }),
+              })
+            },
           },
         )
       } catch (err: any) {
@@ -2338,6 +2338,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setTurns,
       turns,
       user,
+      activeCodeChatSession?.agent?.budget,
     ],
   )
 
