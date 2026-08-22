@@ -35,6 +35,7 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: false,
   },
+  transpilePackages: ['@novnc/novnc'],
   typescript: {
     // Type-checking is enforced in CI via `npm run type-check`. Skipping
     // it inside `next build` shaves ~30s off the production build and

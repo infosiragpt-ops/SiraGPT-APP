@@ -1,0 +1,20 @@
+{
+  "name": "siragpt-computer-orchestrator",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Per-session Docker orchestrator for SiraGPT agent computers (TTL, noVNC, CDP). Never touches sira-dpc-* webtops.",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test ../tests/orchestrator-unit.test.js ../tests/agent-unit.test.js ../tests/integration.test.js"
+  },
+  "dependencies": {
+    "dockerode": "^4.0.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0"
+  }
+}
