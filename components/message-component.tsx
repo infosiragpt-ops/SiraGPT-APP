@@ -1056,6 +1056,82 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     };
 
 
+    // ── SSE cut-mid-stream recovery (Frente 3) ─────────────────────────
+    // When the SSE socket died mid-answer and every automatic retry failed,
+    // chat-context leaves an honest error plus the partial text received so
+    // far (metadata.siraStreamRecovery === 'cut_short'). The user keeps the
+    // context and gets two manual exits: relaunch or copy what arrived.
+    const streamRecoveryMeta = (() => {
+        if (message.role !== 'ASSISTANT' || !message.error) return null;
+        try {
+            const parsed = typeof message.metadata === 'string' && message.metadata.trim().startsWith('{')
+                ? JSON.parse(message.metadata)
+                : null;
+            if (parsed?.siraStreamRecovery !== 'cut_short') return null;
+            return { partialContent: typeof parsed.partialContent === 'string' ? parsed.partialContent : '' };
+        } catch {
+            return null;
+        }
+    })();
+
+    const StreamRecoveryBanner = streamRecoveryMeta ? (() => {
+        const partial = streamRecoveryMeta.partialContent;
+        const [copiedPartial, setCopiedPartial] = React.useState(false);
+        return (
+            <div
+                role="alert"
+                className="flex flex-col gap-2 rounded-lg border border-amber-300/60 bg-amber-500/10 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between dark:border-amber-700/50"
+            >
+                <div className="flex items-start gap-2 min-w-0">
+                    <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-300" aria-hidden />
+                    <div className="min-w-0">
+                        <p className="text-sm font-medium text-amber-700 dark:text-amber-200">
+                            Se perdió la conexión a mitad de la respuesta.
+                        </p>
+                        {partial?.trim() && (
+                            <p className="text-xs text-amber-600/80 dark:text-amber-200/70">
+                                Conservamos lo recibido ({partial.length.toLocaleString('es')} caracteres). Puedes reintentar o copiarlo antes de seguir.
+                            </p>
+                        )}
+                    </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-1.5 self-stretch sm:self-auto">
+                    {partial?.trim() && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 border-amber-400/60 text-amber-700 hover:bg-amber-500/15 dark:text-amber-200 dark:border-amber-600/60"
+                            aria-label="Copiar lo recibido"
+                            onClick={() => {
+                                copyMarkdownToWordClipboard(partial)
+                                    .then(() => {
+                                        setCopiedPartial(true);
+                                        setTimeout(() => setCopiedPartial(false), 2000);
+                                        toast.success("Texto parcial copiado.");
+                                    })
+                                    .catch((err) => {
+                                        toast.error(`No se pudo copiar: ${err?.message || "error desconocido"}`);
+                                    });
+                            }}
+                        >
+                            {copiedPartial ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                            Copiar lo recibido
+                        </Button>
+                    )}
+                    <Button
+                        size="sm"
+                        className="h-8 bg-amber-600 text-white hover:bg-amber-700"
+                        aria-label="Reintentar respuesta perdida"
+                        onClick={() => onRegenerate(message.id)}
+                    >
+                        <RefreshCw className="h-4 w-4 mr-1" />
+                        Reintentar
+                    </Button>
+                </div>
+            </div>
+        );
+    })() : null;
+
     const isAssistant = message.role === "ASSISTANT";
     const isUser = message.role === "USER";
 
@@ -3239,7 +3315,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             />
                         ) : null}
                         {message.error ? (
-                            <ErrorMessage onRegenerate={onRegenerate} />
+                            streamRecoveryMeta ? (
+                                // Cut-mid-stream recovery: amber banner with the
+                                // partial text preserved + Reintentar / Copiar.
+                                StreamRecoveryBanner
+                            ) : (
+                                <ErrorMessage onRegenerate={onRegenerate} />
+                            )
                         ) : isThinking ? (
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}

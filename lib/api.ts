@@ -1,5 +1,5 @@
 // Frontend API client for backend integration
-import { streamSseJson } from "./sse-client"
+import { streamSseJson, decideSseStreamRetry } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import {
   authenticatedFetch,
@@ -3656,45 +3656,128 @@ class ApiClient {
       files?: string[];
       streamId: string;
     },
-    onData: (chunk: string) => void,
+    onData: (chunk: string, meta?: { _webdevResume?: boolean }) => void,
     onClose: () => void,
     onError: (error: Error) => void,
+    signal?: AbortSignal
   ) {
     const url = `${this.baseURL}/ai/generate-webdev`;
-    const config = await this.prepareMutatingFetch({
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
 
     try {
-      const response = await this.authenticatedFetch(url, config);
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: response.statusText }));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-      }
+      // ── SSE cut-mid-stream recovery (Frente 3) ─────────────────────
+      // The webdev endpoint buffers the whole artifact and emits it in a
+      // single frame followed by `[DONE]`, so there is no documented
+      // Last-Event-ID / cursor resume for this route. Recovery policy:
+      //   - Re-run the request up to MAX_WEBDEV_ATTEMPTS total attempts.
+      //   - Each attempt REBUILDS the partial from scratch — the caller's
+      //     onData receives the full prefix again and must REPLACE, never
+      //     concatenate. A `_webdevResume` flag tells the UI to mark the
+      //     bubble as "recuperando…" during the retry.
+      //   - After the last failed attempt we deliver an honest error with
+      //     whatever prefix arrived (`partialContent`) so the UI can offer
+      //     Reintentar / Copiar lo recibido.
+      const MAX_WEBDEV_ATTEMPTS = 3; // initial try + 2 retries
+      let attempt = 0;
+      let partialContent = '';
+      let lastError: Error | null = null;
+      let completed = false;
 
-      if (!response.body) {
-        throw new Error('Response body is null');
-      }
-
-      for await (const event of streamSseJson<any>(response.body, {
-        stopOnDoneMessage: true,
-        onMalformedMessage: (_raw, parseError) => {
-          console.warn('Failed to parse SSE data:', parseError);
-        },
-      })) {
-        if (event.content) {
-          onData(event.content);
+      while (attempt < MAX_WEBDEV_ATTEMPTS && !completed && !signal?.aborted) {
+        attempt += 1;
+        const isRetry = attempt > 1;
+        if (isRetry) {
+          const decision = decideSseStreamRetry({
+            attempt: attempt - 1,
+            maxAttempts: MAX_WEBDEV_ATTEMPTS,
+            cutShort: true,
+            aborted: signal?.aborted,
+          });
+          if (decision.action !== 'retry') break;
+          await new Promise(r => setTimeout(r, decision.delayMs));
+          if (signal?.aborted) break;
+          // The partial prefix survives across attempts; the next onData
+          // delivery replaces it wholesale in the UI.
+          onData(partialContent, { _webdevResume: true });
         }
-        if (event.error) {
-          onError(new Error(event.error));
-          return;
+
+        // Per-attempt buffer: each successful reconnect re-emits the full
+        // artifact, so this resets every attempt and onData replaces the
+        // visible content — no duplication by construction.
+        let attemptContent = '';
+        let cutShort = false;
+
+        try {
+          const config = await this.prepareMutatingFetch({
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+          });
+
+          const response = await this.authenticatedFetch(url, config);
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ error: response.statusText }));
+            throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          if (!response.body) {
+            throw new Error('Response body is null');
+          }
+
+          for await (const event of streamSseJson<any>(response.body, {
+            stopOnDoneMessage: true,
+            onMalformedMessage: (_raw, parseError) => {
+              console.warn('Failed to parse SSE data:', parseError);
+            },
+            onStreamCutShort: () => { cutShort = true; },
+          })) {
+            if (event.content) {
+              attemptContent = event.content;
+            }
+            if (event.error) {
+              onError(new Error(event.error));
+              return;
+            }
+          }
+
+          if (cutShort) {
+            // Keep the longest prefix seen so far as the recoverable partial.
+            if (attemptContent.length > partialContent.length) {
+              partialContent = attemptContent;
+            }
+            const decision = decideSseStreamRetry({
+              attempt,
+              maxAttempts: MAX_WEBDEV_ATTEMPTS,
+              cutShort: true,
+              aborted: signal?.aborted,
+            });
+            lastError = new Error('Se perdió la conexión a mitad de la respuesta.');
+            if (decision.action === 'retry') continue;
+            break;
+          }
+
+          completed = true;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          if (attempt >= MAX_WEBDEV_ATTEMPTS || signal?.aborted) break;
+          console.warn(`[webdev-stream] attempt ${attempt}/${MAX_WEBDEV_ATTEMPTS} failed: ${lastError.message} — retrying`);
         }
       }
 
-      onClose();
+      if (completed) {
+        onClose();
+        return;
+      }
+      if (signal?.aborted) {
+        return;
+      }
+      console.error('WebDev streaming error:', lastError);
+      const finalError = new Error(
+        lastError?.message || 'Se perdió la conexión a mitad de la respuesta.',
+      );
+      (finalError as any).partialContent = partialContent;
+      onError(finalError);
     } catch (error) {
       console.error('WebDev streaming error:', error);
       onError(error instanceof Error ? error : new Error(String(error)));

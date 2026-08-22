@@ -10807,13 +10807,23 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       // Use streaming webdev API
       await apiClient.generateWebDevStream(
         payload,
-        (chunk) => {
-          // Update AI message content with streaming chunks
+        (chunk, meta) => {
+          // Update AI message content. The webdev endpoint emits the FULL
+          // artifact per frame and the recovery layer re-emits it after a
+          // reconnect, so we REPLACE content instead of appending — that
+          // guarantees a retried stream never duplicates text.
+          const isResume = !!(meta as any)?._webdevResume;
           setCurrentChat((prevChat) => {
             if (!prevChat) return prevChat;
             const newMessages = prevChat.messages.map((msg) => {
               if (msg.id === aiMessagePlaceholder.id) {
-                return { ...msg, content: msg.content + chunk };
+                if (isResume) {
+                  // Mid-recovery ping: keep the received prefix visible but
+                  // flag the bubble so the user knows the answer is being
+                  // rebuilt, not lost.
+                  return { ...msg, content: chunk || msg.content, progressStage: 'Recuperando respuesta…' };
+                }
+                return { ...msg, content: chunk, progressStage: undefined };
               }
               return msg;
             });
@@ -10823,11 +10833,50 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         () => {
           // Stream completed
           devLog('Web development generation completed');
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id && (msg as any).progressStage === 'Recuperando respuesta…') {
+                return { ...msg, progressStage: undefined };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          });
         },
         (error) => {
           console.error('Web development generation error:', error);
-          toast.error(error.message || 'Web development generation failed');
-        }
+          const partialContent = typeof (error as any)?.partialContent === 'string'
+            ? (error as any).partialContent
+            : '';
+          if ((error as any)?.name === 'AbortError') {
+            return;
+          }
+          // Honest terminal state after retries were exhausted: keep the
+          // partial prefix in the bubble, tell the user exactly what
+          // happened, and give them Reintentar + Copiar lo recibido.
+          setCurrentChat((prevChat) => {
+            if (!prevChat) return prevChat;
+            const newMessages = prevChat.messages.map((msg) => {
+              if (msg.id === aiMessagePlaceholder.id) {
+                return {
+                  ...msg,
+                  content: partialContent,
+                  progressStage: undefined,
+                  error: 'Se perdió la conexión a mitad de la respuesta.',
+                  metadata: JSON.stringify({
+                    siraStreamRecovery: 'cut_short',
+                    partialContent,
+                  }),
+                };
+              }
+              return msg;
+            });
+            return { ...prevChat, messages: newMessages };
+          });
+          toast.error('Se perdió la conexión a mitad de la respuesta.');
+        },
+        undefined
       );
 
     } catch (error: any) {

@@ -21,6 +21,13 @@ export interface StreamSseJsonOptions<T> extends SseJsonParserOptions<T> {
   signal?: AbortSignal
   stopOnDoneMessage?: boolean
   onChunk?: () => void
+  /**
+   * Fired when the underlying stream closes WITHOUT a `[DONE]` sentinel and
+   * without an explicit in-band error — i.e. the connection was cut mid-
+   * response (flaky network, proxy timeout, laptop sleep). Consumers use this
+   * to drive resume/retry UX instead of silently keeping a truncated answer.
+   */
+  onStreamCutShort?: () => void
 }
 
 export function createSseJsonParser<T = unknown>(
@@ -94,6 +101,7 @@ export async function* streamSseJson<T = unknown>(
     else options.signal.addEventListener("abort", abortReader, { once: true })
   }
 
+  let streamCutShort = false
   try {
     while (true) {
       const { value, done } = await reader.read()
@@ -120,6 +128,14 @@ export async function* streamSseJson<T = unknown>(
         yield event.data
       }
     }
+    // Anomalous end: the socket closed cleanly from the reader's point of
+    // view but the server never sent the `[DONE]` terminator. The answer is
+    // truncated — surface it so the consumer can resume instead of leaving
+    // the user with a silently cut-off reply.
+    if (!doneMessageSeen && !options.signal?.aborted) {
+      streamCutShort = true
+      options.onStreamCutShort?.()
+    }
   } finally {
     if (options.signal) options.signal.removeEventListener("abort", abortReader)
     try {
@@ -128,4 +144,44 @@ export async function* streamSseJson<T = unknown>(
       /* already released */
     }
   }
+  return streamCutShort
+}
+
+/**
+ * Pure retry decision for a cut-off SSE chat stream. Kept free of I/O and
+ * framework deps so vitest can pin the policy:
+ *
+ *   - A user abort is never retried.
+ *   - A stream that ended with the `[DONE]` sentinel (or an in-band error
+ *     frame) completed normally — no retry, no partial-recovery UX.
+ *   - A stream cut short mid-answer is retried while attempts remain
+ *     (`attempt` is 1-based); once exhausted the caller must show the
+ *     honest "connection lost" state with manual actions.
+ */
+export interface SseRetryDecisionInput {
+  /** 1-based index of the attempt that just failed. */
+  attempt: number
+  /** Total attempts allowed (initial try included). */
+  maxAttempts: number
+  /** The socket closed before `[DONE]`. */
+  cutShort: boolean
+  /** User pressed Stop — always wins. */
+  aborted?: boolean
+}
+
+export type SseRetryDecision =
+  | { action: "retry"; nextAttempt: number; delayMs: number }
+  | { action: "give_up" }
+  | { action: "completed" }
+
+export const SSE_RETRY_DELAYS_MS = [1000, 3000] as const
+
+export function decideSseStreamRetry(input: SseRetryDecisionInput): SseRetryDecision {
+  const { attempt, maxAttempts, cutShort, aborted } = input
+  if (aborted) return { action: "give_up" }
+  if (!cutShort) return { action: "completed" }
+  if (attempt >= maxAttempts) return { action: "give_up" }
+  const nextAttempt = attempt + 1
+  const delayMs = SSE_RETRY_DELAYS_MS[Math.min(attempt - 1, SSE_RETRY_DELAYS_MS.length - 1)]
+  return { action: "retry", nextAttempt, delayMs }
 }
