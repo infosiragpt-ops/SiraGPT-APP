@@ -194,6 +194,14 @@ export function BrowserVoicePlayer({
 
   const audioRef = React.useRef<HTMLAudioElement | null>(null)
   const audioSrcRef = React.useRef<string | null>(null)
+  const revokeAudioSrc = React.useCallback(() => {
+    if (audioSrcRef.current?.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(audioSrcRef.current)
+      } catch {}
+    }
+    audioSrcRef.current = null
+  }, [])
   const usingLocalRef = React.useRef(false)
   const startedAtRef = React.useRef<number | null>(null)
   const rafRef = React.useRef<number | null>(null)
@@ -389,6 +397,7 @@ export function BrowserVoicePlayer({
         const blob = await kokoroSynthesize(speakable, KOKORO_VOICE)
         if (blob) {
           const src = URL.createObjectURL(blob)
+          revokeAudioSrc()
           audioSrcRef.current = src
           playAudioSrc(src)
           return
@@ -412,7 +421,7 @@ export function BrowserVoicePlayer({
     } catch {
       void playLocal()
     }
-  }, [playAudioSrc, playLocal, speakable, state, stopAll, kokoroReady])
+  }, [playAudioSrc, playLocal, speakable, state, stopAll, kokoroReady, revokeAudioSrc])
 
   React.useEffect(() => {
     // Solo sondea soporte; sin auto-play. El botón queda listo para el clic.
@@ -423,6 +432,7 @@ export function BrowserVoicePlayer({
     }
     return () => {
       stopAll()
+      revokeAudioSrc()
       audioRef.current = null
     }
     // Mount-only a propósito: la limpieza corta audio al desmontar el turno.

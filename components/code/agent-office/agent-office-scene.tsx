@@ -1077,6 +1077,12 @@ export function AgentOfficeScene({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioCap))
     renderer.shadowMap.enabled = variant === "full"
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // The scene is static per build (phase changes rebuild the effect), so the
+    // shadow pass only needs to track the walking worker rigs. Rendering it
+    // every frame re-culled ~900 meshes at 2048² for near-zero visual gain;
+    // a 200 ms refresh keeps those shadows visually current at ~1/12 of the cost.
+    renderer.shadowMap.autoUpdate = false
+    renderer.shadowMap.needsUpdate = true
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
     renderer.domElement.dataset.officeCanvas = variant
@@ -1883,6 +1889,7 @@ export function AgentOfficeScene({
     const projectedWorker = new THREE.Vector3()
     let frameCount = 0
     let readyReported = false
+    let lastShadowRefreshAt = -Infinity
 
     /**
      * Pose a worker for its stance. The office used to walk everyone around
@@ -2033,6 +2040,11 @@ export function AgentOfficeScene({
         edgeDistrict.animateVehicles(elapsed)
         const pulse = 1 + Math.sin(elapsed * 0.38) * 0.012
         beacon.scale.setScalar(pulse)
+      }
+
+      if (variant === "full" && canAnimate && elapsed - lastShadowRefreshAt >= 0.2) {
+        lastShadowRefreshAt = elapsed
+        renderer.shadowMap.needsUpdate = true
       }
 
       renderer.render(scene, camera)

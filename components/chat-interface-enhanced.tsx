@@ -379,6 +379,21 @@ const GPT_RATING_OPTIONS = [
 const getGptRatingLabel = (rating: number): string =>
   GPT_RATING_OPTIONS.find((option) => option.value === rating)?.label || ""
 
+// Blob previews created via URL.createObjectURL stay in the browser's blob
+// registry until revoked; clearing the chips array alone leaks them for the
+// whole tab session (measured ~60 MB/h under heavy image attachment use).
+function revokeUploadPreviews(files: unknown): void {
+  if (!Array.isArray(files)) return
+  for (const f of files as any[]) {
+    const p = f?.preview
+    if (typeof p === "string" && p.startsWith("blob:")) {
+      try {
+        URL.revokeObjectURL(p)
+      } catch {}
+    }
+  }
+}
+
 // Universal ingest: pasted plain text longer than this becomes a "PEGADO"
 // (.txt) chip next to the input — expandable/removable — so the bar stays
 // clean. Shorter pastes insert inline at the caret. Configurable per
@@ -6045,6 +6060,7 @@ function ChatInterfaceContent() {
     setSplitViewContent(null);
     setComposerPreviewIndex(null);
     setSelectedWordText(null);
+    revokeUploadPreviews(uploadedFilesRef.current)
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
     setUploadProgress({});
@@ -8249,6 +8265,7 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
     setUploadedFiles((cur: any[]) => {
+      revokeUploadPreviews(cur.filter(f => f.tempId === failedFile.tempId || f.id === failedFile.id));
       const next = cur.filter(f => f.tempId !== failedFile.tempId && f.id !== failedFile.id);
       uploadedFilesRef.current = next;
       return next;
@@ -9293,6 +9310,7 @@ But first, you need to connect your Spotify account securely using the button be
       syncQueuedCount(currentChat?.id ?? null);
       setInput("");
       chatDraft.clear();
+      revokeUploadPreviews(uploadedFilesRef.current);
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
       const now = Date.now();
@@ -9399,6 +9417,7 @@ REWRITTEN TEXT:`;
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
     chatDraft.clear();
+    revokeUploadPreviews(uploadedFilesRef.current);
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
 
@@ -10491,6 +10510,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (files && files[0]) {
         payload.fileId = files[0];
       }
+      revokeUploadPreviews(uploadedFilesRef.current);
       setUploadedFiles([]);
       const imageRequestStartedAt = Date.now();
       try {
@@ -10735,6 +10755,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
+    revokeUploadPreviews(filesToSend);
     setUploadedFiles([]); // Clear UI immediately
 
     try {
@@ -11133,6 +11154,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         attachmentHashesRef.current.delete(removedHash);
         attachmentHashByIdRef.current.delete(removed.tempId || removed.id);
       }
+      if (removed) revokeUploadPreviews([removed]);
       const next = cur.filter((_, i) => i !== index);
       uploadedFilesRef.current = next;
       return next;
