@@ -328,6 +328,23 @@ registerGauge('siragpt_org_members_total', {
   labels: ['orgId'],
 });
 
+// ── Growth gauges («1.000 clientes» dashboard) ──────────────────────
+// Absolute counts read from the existing User/Organization tables by the
+// daily growth-gauges cron job (same family as users_idle_total). Zero
+// label cardinality — one series per family, no storage.
+registerGauge('siragpt_users_registered_total', {
+  help: 'Non-deleted, non-super-admin user accounts (point-in-time count, not a counter)',
+  labels: [],
+});
+registerGauge('siragpt_users_active_7d', {
+  help: 'Users with lastActiveAt within the active window (default 7d)',
+  labels: [],
+});
+registerGauge('siragpt_orgs_registered_total', {
+  help: 'Organizations in the database (point-in-time count, not a counter)',
+  labels: [],
+});
+
 // ── API-key request latency + active gauge (ratchet 44) ────────────
 // Histogram observed from `requireScope` middleware on every authenticated
 // API-key request. Labels:
