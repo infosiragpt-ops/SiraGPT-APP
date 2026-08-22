@@ -1,0 +1,51 @@
+# ──────────────────────────────────────────────────────────────
+# SiraGPT — Prometheus scrape stack (production)
+# ──────────────────────────────────────────────────────────────
+# Standalone compose file owned by Ingeniería Ops. Scrapes the backend's
+# protected exposition endpoint (/internal/metrics) over the internal Docker
+# network — nothing is exposed to the public internet.
+#
+# Usage (from the repo root on the VPS):
+#   docker compose -f docker-compose.prod.yml \
+#                  -f docker-compose.production.override.yml \
+#                  -f docker-compose.prometheus.yml --env-file .env up -d prometheus
+#
+# Auth reuses METRICS_TOKEN from .env (the same credential the backend's
+# metricsAccessPolicy enforces). The token is written into a tmpfs
+# credentials_file at boot (umask 077, mode 0600) — it never lands on disk
+# or in the image.
+# ──────────────────────────────────────────────────────────────
+
+services:
+  prometheus:
+    # Pinned by digest; bump deliberately with a new review.
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    restart: unless-stopped
+    read_only: true
+    user: "65534:65534"   # nobody: token y datos no requieren privilegios
+    networks:
+      - default
+    ports:
+      - "127.0.0.1:9090:9090"   # UI/API loopback-only on the host
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    environment:
+      # From .env; same value the backend validates on every scrape.
+      METRICS_TOKEN: ${METRICS_TOKEN:?METRICS_TOKEN is required}
+    tmpfs:
+      - /tmp:uid=65534,gid=65534,mode=0700,noexec,size=16m
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        umask 077
+        printf '%s' "$${METRICS_TOKEN}" > /tmp/metrics_token
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=30d \
+          --web.listen-address=0.0.0.0:9090
+
+volumes:
+  prometheus_data:
+    driver: local

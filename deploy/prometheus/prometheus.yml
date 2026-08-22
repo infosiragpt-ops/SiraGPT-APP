@@ -1,0 +1,20 @@
+# Prometheus scrape config for SiraGPT production (docker-compose.prometheus.yml).
+#
+# Scrapes the backend's protected exposition endpoint over the internal Docker
+# network — nothing is exposed to the public internet. Auth uses the same
+# METRICS_TOKEN the backend already enforces via metricsAccessPolicy; the
+# credential is mounted as a tmpfs credentials_file so it never touches disk
+# or the image.
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: siragpt
+    metrics_path: /internal/metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/metrics_token
+    static_configs:
+      - targets: ["backend:5000"]
