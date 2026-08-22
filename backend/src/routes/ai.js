@@ -1,4 +1,3 @@
-const { createAiPathLogger, logAiGenerate } = require('../services/observability/structured-logger');
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
@@ -71,12 +70,6 @@ const geminiTts = require('../services/ai/gemini-tts');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
 const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
-const {
-  clearChatAbort,
-  isChatAborted,
-  markChatAborted,
-  resolveAbortedAssistantContent,
-} = require('../services/chat-abort-persistence');
 const { classifyImageGenError } = require('../services/image-error-classifier');
 const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
@@ -103,7 +96,6 @@ const {
   curateVisibleAdminMediaModels,
   curateVisibleTextModels,
 } = require('../services/visible-model-catalog');
-const { getModelCatalogVersion } = require('../services/model-catalog-version');
 const { sortFalVideoModels } = require('../services/fal-video-model-catalog');
 const streamResume = require('../services/ai/stream-resume');
 const promptInjectionDetector = require('../services/ai/prompt-injection-detector');
@@ -205,7 +197,6 @@ const memoryDocument = require('../services/memory-document');
 const conversationUnderstanding = require('../services/conversation-understanding');
 const chatAttachmentRecovery = require('../services/chat-attachment-recovery');
 const messageAttachments = require('../services/message-attachments');
-const documentTurnContext = require('../services/document-turn-context');
 const {
   MESSAGE_IDEMPOTENCY_HASH_FIELD,
   buildActiveGenerateTurnKey,
@@ -312,13 +303,13 @@ function createProviderClient(provider) {
   }
 
   if (provider === "OpenRouter") {
-    // WAVE1: chat/doc generate is native DeepSeek only. Image/media still
-    // uses createOpenRouterClient() on /generate-image. Do not hop text here.
-    try { console.warn('[ai] OpenRouter generate client closed — using native DeepSeek'); } catch (_) { /* noop */ }
-    return new OpenAI({
-      apiKey: process.env.DEEPSEEK_API_KEY,
-      baseURL: "https://api.deepseek.com",
-    });
+    // afford-guard: low-credit 402s retry once with a clamped max_tokens
+    // instead of dead-ending the turn. See services/ai/openrouter-afford-guard.
+    const { wrapOpenRouterClient } = require('../services/ai/openrouter-afford-guard');
+    return wrapOpenRouterClient(new OpenAI({
+      apiKey: process.env.OPENROUTER_API_KEY,
+      baseURL: "https://openrouter.ai/api/v1",
+    }));
   }
 
   if (provider === "DeepSeek") {
@@ -371,19 +362,6 @@ function createProviderClient(provider) {
  *
  * @returns {{ client: OpenAI, via: 'gateway' | 'direct' }}
  */
-
-function lockTextGenerationToNativeDeepSeek(provider, model) {
-  // 3H8 leftover candado: text generate is native DeepSeek Flash/Pro only.
-  // Previous lock only remapped OpenRouter; leftover OpenAI/Gemini/Anthropic
-  // org prefs and agentic loops still constructed foreign clients.
-  const native = require('../services/agent-runner/native-llm');
-  const nextModel = native.resolveNativeDeepSeekModel(model);
-  const p = String(provider || '').trim();
-  const already = /^deepseek$/i.test(p) && String(model || '').trim() === nextModel;
-  if (already) return { provider: 'DeepSeek', model: nextModel, locked: false };
-  return { provider: 'DeepSeek', model: nextModel, locked: true };
-}
-
 function createProviderClientForRequest(provider, req) {
   try {
     // Lazy require so the route module loads even if the gateway client
@@ -728,38 +706,16 @@ router.post(
 // ✅ Full fal.ai creative-model catalog for the chat model gallery (image /
 // video / audio / 3d), ordered highest→lowest quality. Public + cached; the
 // list is a baked manifest (scripts/build-fal-catalog.js), so this is cheap.
-router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, namespace: 'fal-models' }), async (req, res) => {
+router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, namespace: 'fal-models' }), (req, res) => {
   try {
     const { listFalModels, getFalCatalog } = require('../services/fal-model-catalog');
     const group = Array.isArray(req.query.group) ? req.query.group[0] : req.query.group;
     const search = Array.isArray(req.query.search) ? req.query.search[0] : req.query.search;
-    const catalog = !group && !search ? getFalCatalog() : null;
-    let models = catalog ? (Array.isArray(catalog.models) ? catalog.models : []) : listFalModels({ group, search });
-
-    // Video entries must match Admin > AI Models (type=VIDEO, isActive=true).
-    // A fal.ai id that is not in the admin catalog is treated as hidden.
-    const activeVideoRows = await prisma.aiModel.findMany({
-      where: { type: 'VIDEO', isActive: true },
-      select: { name: true },
-    });
-    const allowedVideo = new Set(activeVideoRows.map((row) => String(row.name || '').trim()).filter(Boolean));
-    models = models.filter((model) => {
-      if (String(model?.group || '').toLowerCase() !== 'video') return true;
-      const id = String(model?.id || model?.endpoint || '').trim();
-      return Boolean(id) && allowedVideo.has(id);
-    });
-
-    if (catalog) {
-      const byGroup = { ...(catalog.byGroup || {}) };
-      if (typeof byGroup.video === 'number') byGroup.video = models.filter((m) => m.group === 'video').length;
-      return res.json({
-        success: true,
-        ...catalog,
-        byGroup,
-        count: models.length,
-        models,
-      });
+    if (!group && !search) {
+      const catalog = getFalCatalog();
+      return res.json({ success: true, ...catalog });
     }
+    const models = listFalModels({ group, search });
     return res.json({ success: true, count: models.length, models });
   } catch (err) {
     return res.status(500).json({ success: false, error: 'fal_catalog_unavailable', message: err.message });
@@ -767,7 +723,7 @@ router.get('/fal-models', optionalAuth, responseCache({ ttlMs: 10 * 60_000, name
 });
 
 // ✅ Get available AI models
-router.get('/models', optionalAuth, responseCache({ ttlMs: 15_000, namespace: 'ai-models' }), async (req, res) => {
+router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace: 'ai-models' }), async (req, res) => {
   const __dbgT0 = Date.now();
   const __dbg = (m) => { try { console.error(`[models-dbg] +${Date.now() - __dbgT0}ms ${m}`); } catch (_) {} };
   try {
@@ -998,10 +954,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 15_000, namespace: 'a
     // hidden from the picker.
 
     __dbg(`before-res-json count=${models.length}`);
-    const catalogVersion = getModelCatalogVersion();
-    res.setHeader('Cache-Control', 'private, no-store, max-age=0, must-revalidate');
-    res.setHeader('X-Models-Version', String(catalogVersion));
-    res.json({ models, policy: modelPolicy, catalogVersion });
+    res.json({ models, policy: modelPolicy });
     __dbg('after-res-json');
   } catch (error) {
     console.error('Get AI models error:', error);
@@ -1200,32 +1153,6 @@ function routeCanReachVision(provider, model) {
   return !!(process.env.OPENAI_API_KEY || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY);
 }
 
-function currentUserUtterance(text) {
-  const s = String(text || '');
-  if (!s) return '';
-  const chunks = s.split(/\n---+\n/);
-  const last = chunks[chunks.length - 1] || s;
-  const matches = [...last.matchAll(/(?:^|\n)(?:Usuario|User|Human)\s*:\s*([\s\S]*?)(?=\n(?:Asistente|Assistant|Usuario|User|Human)\s*:|\s*$)/gi)];
-  if (matches.length) return String(matches[matches.length - 1][1] || '').trim();
-  if (s.length < 400 && !/MODO CONVERSACI[OÓ]N/i.test(s)) return s.trim();
-  const lower = s.toLowerCase();
-  const idx = Math.max(lower.lastIndexOf('\nusuario:'), lower.lastIndexOf('usuario:'));
-  if (idx >= 0) {
-    const rest = s.slice(idx).replace(/^[\s\S]*?:\s*/, '');
-    return rest.split(/\n(?:Asistente|Assistant)\s*:/i)[0].trim();
-  }
-  return s.trim();
-}
-
-function hasComputerOrWebIntent(text) {
-  const t = String(text || '');
-  if (!t) return false;
-  if (/\b(computadora|computer|webtop|abre la p[aá]gina|usa la computadora|en tu (propia )?computadora)\b/i.test(t)) return true;
-  if (/\b(google|duckduckgo|chrome|navegador|https?:\/\/|www\.)\b/i.test(t)) return true;
-  if (/\b(buscar en (la )?(web|internet|google)|abre (esta |la )?url|open (the )?(url|page|browser))\b/i.test(t)) return true;
-  return false;
-}
-
 function sanitizeErrorForUser(error) {
   const msg = String(error?.message || error || 'AI generation failed');
   if (/does not support image/i.test(msg)) {
@@ -1243,22 +1170,10 @@ function sanitizeErrorForUser(error) {
   if (/context.*(window|length|token|exceed)/i.test(msg)) {
     return 'El mensaje es demasiado largo para el modelo seleccionado. Intenta reducir el contenido o usar un modelo con mayor capacidad de contexto.';
   }
-  if (/402|insufficient (balance|credits)|credits?_exhausted|credit_no_usage|credit_ceiling|quota_exhausted|quota|billing|payment|subscription/i.test(msg)) {
-    try {
-      const pub = require('../services/observability/public-stream-error').classifyPublicStreamError(
-        { status: /429/.test(msg) ? 429 : 402, message: msg, code: /credit_no_usage/i.test(msg) ? 'credit_no_usage' : 'credits_exhausted' },
-      );
-      if (pub && pub.message) return pub.message;
-    } catch (_) { /* keep explicit copy below */ }
-    return 'No quedan créditos suficientes para esta operación. No cobré el fallo. Recarga /code e inténtalo de nuevo.';
+  if (/quota|billing|payment|subscription/i.test(msg)) {
+    return 'Se alcanzó el límite de uso del proveedor. Intenta más tarde o usa un modelo diferente.';
   }
   if (/429|rate.?limit|too many/i.test(msg)) {
-    try {
-      const pub = require('../services/observability/public-stream-error').classifyPublicStreamError(
-        { status: 429, message: msg, code: 'rate_limited' },
-      );
-      if (pub && pub.message) return pub.message;
-    } catch (_) { /* keep copy */ }
     return 'El servidor está procesando muchas solicitudes. Intenta de nuevo en unos segundos.';
   }
   if (/auth|api.?key|401|403|invalid.*key/i.test(msg)) {
@@ -1490,7 +1405,6 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
   res.setHeader('X-Accel-Buffering', 'no');
   try { res.setHeader('X-Model-Actual', String(actualModel || '')); } catch { /* noop */ }
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
-  try { require('../services/observability/sse-event-id').attachSseIds(res, { method: 'POST' }); } catch (_) {} // 3H10 leftover SSE ids
   res.write(`data: ${JSON.stringify({
     replace: true,
     content,
@@ -1857,7 +1771,7 @@ router.post(
   '/generate',
   [
     body('model').trim().notEmpty().withMessage('Model is required'),
-    body('prompt').optional({ values: 'falsy' }).isString().withMessage('Prompt must be a string'),
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('provider').trim().notEmpty().withMessage('Provider is required'),
 
     body('chatId').optional().isString(),
@@ -1879,10 +1793,6 @@ router.post(
     const controller = new AbortController();
     const signal = controller.signal;
     const { streamId } = req.body;
-    try {
-      const __genChatId = String(req.body?.chatId || '').trim();
-      if (req.user?.id && __genChatId) clearChatAbort(req.user.id, __genChatId);
-    } catch { /* abort TTL store must never block generate */ }
     const __lastEventIdHeader = req.get && req.get('Last-Event-ID');
     const __hasResumeRequest = typeof __lastEventIdHeader === 'string' && __lastEventIdHeader.trim().length > 0;
     // Wall-clock anchor for the end-to-end streaming duration metric
@@ -1978,7 +1888,6 @@ router.post(
         && typeof req.body.webGroundingQuery === 'string'
         ? req.body.webGroundingQuery.trim().slice(0, 12000)
         : '';
-      const __computerTurn = __publicWebReadonly && hasComputerOrWebIntent(__publicWebQuery);
       if (__publicWebReadonly && !__publicWebQuery) {
         controller.abort();
         return res.status(400).json({
@@ -2003,24 +1912,6 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
-      // /code sends disableAgentic:true. When the persistent member computer
-      // is on, a NARROW computer-only agentic loop can still run (computer_* +
-      // web_search + read_url). Do NOT flip __computerTurn — that would dump
-      // the full host_bash/artifact set onto /code.
-      // computerOnly is NOT "every /code disableAgentic turn". Only the
-      // current user utterance (not chat history / MODO CONVERSACIÓN wrap)
-      // plus enableWebGrounding / computer-or-web intent attach computer_*.
-      // A plain "hola" must use the normal /code stream.
-      let __computerOnly = false;
-      try {
-        const { agentComputerEnabled } = require('../services/computer/flags');
-        __computerOnly = agentComputerEnabled() && req.body.disableAgentic === true && !!userId;
-      } catch (_) { __computerOnly = false; }
-      const __computerOnlyIntentText = currentUserUtterance(prompt);
-      const __computerOnlyTurn = __computerOnly && (
-        __publicWebReadonly
-        || hasComputerOrWebIntent(__computerOnlyIntentText)
-      );
 
       // 🔒 IDOR guard (read side): a supplied chatId must reference a chat THIS
       // user owns — or one that doesn't exist yet (brand-new chat). The
@@ -2135,7 +2026,6 @@ router.post(
           res.setHeader('Connection', 'keep-alive');
           res.setHeader('X-Accel-Buffering', 'no');
           if (typeof res.flushHeaders === 'function') res.flushHeaders();
-          try { require('../services/observability/sse-event-id').attachSseIds(res, req); } catch (_) {} // 3H10 leftover public-web replay SSE ids
           try { res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now(), replay: true })}\n\n`); } catch {}
           keepAlive = setInterval(() => {
             try { res.write(`: ping ${Date.now()}\n\n`); }
@@ -2596,20 +2486,12 @@ router.post(
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
-      try {
-        if (typeof res._siragptSseSeq !== 'number') res._siragptSseSeq = 0;
-        res._siragptSseSeq += 1;
-        res.write(`id: ${res._siragptSseSeq}\n`);
-        res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now() })}\n\n`);
-      } catch { /* socket gone */ }
+      try { res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now() })}\n\n`); } catch { /* socket gone */ }
       // Start keep-alive heartbeat right away so proxies / Replit's edge
       // don't time out while enrichment runs. Cleared in the outer finally.
       keepAlive = setInterval(() => {
         try {
           res.write(`: ping ${Date.now()}\n\n`);
-          if (typeof res._siragptSseSeq !== 'number') res._siragptSseSeq = 0;
-          res._siragptSseSeq += 1;
-          res.write(`id: ${res._siragptSseSeq}\n`);
           res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
         } catch { clearInterval(keepAlive); keepAlive = null; }
       }, 5000);
@@ -2698,20 +2580,6 @@ router.post(
         }
       }
 
-      const emptyDocumentExtract = documentTurnContext.assessEmptyDocumentExtract(processedFiles);
-      if (emptyDocumentExtract.failClosed) {
-        console.warn('[ai/generate] empty document extract fail-closed:', emptyDocumentExtract.error);
-        try {
-          res.write(`data: ${JSON.stringify({
-            type: 'error',
-            code: emptyDocumentExtract.code,
-            error: emptyDocumentExtract.error,
-          })}\n\n`);
-        } catch { /* socket gone */ }
-        try { res.end(); } catch { /* noop */ }
-        return;
-      }
-
       // ✅ NEW: Check if chat is associated with a custom GPT OR a Project.
       // Projects use the same injection pattern as CustomGpts (persona
       // block + knowledge files) but do NOT override model/temperature —
@@ -2732,7 +2600,7 @@ router.post(
       // response postprocessor. Public pages are adversarial input; their
       // contents may inform a text answer, but can never reach CREATE_DOCUMENT,
       // shell/files/connectors or durable user/company memory.
-      if (__publicWebReadonly && !__computerTurn && !__computerOnlyTurn) {
+      if (__publicWebReadonly) {
         const langResolution = await _langResolutionPromise;
         const webContext = await enrichWithWebSearch(__publicWebQuery, {
           mode: 'auto',
@@ -2957,14 +2825,6 @@ router.post(
         console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
       }
 
-      // WAVE1: chat/doc generate never hops to OpenRouter.
-      {
-        const __lock = lockTextGenerationToNativeDeepSeek(actualProvider, actualModel);
-        if (__lock.locked) {
-          actualProvider = __lock.provider;
-          actualModel = __lock.model;
-        }
-      }
       // ✅ Re-initialize OpenAI client with actualProvider
       _providerResolution = createProviderClientForRequest(actualProvider, req);
       openai = _providerResolution.client;
@@ -5002,13 +4862,6 @@ router.post(
               console.log(`[reasoning-orchestrator] re-route ${actualProvider}:${actualModel} → ${__targetProvider}:${__targetModel} (${__route.action}/${__route.reason})`);
               actualModel = __targetModel;
               actualProvider = __targetProvider;
-              {
-                const __lock = lockTextGenerationToNativeDeepSeek(actualProvider, actualModel);
-                if (__lock.locked) {
-                  actualProvider = __lock.provider;
-                  actualModel = __lock.model;
-                }
-              }
             } else {
               console.log(`[reasoning-orchestrator] re-route skipped for ${__targetModel} (planOk=${__planOk} provider=${__targetProvider || 'none'})`);
             }
@@ -5336,11 +5189,7 @@ router.post(
           userId: __publicWebReadonly ? null : (userId || null),
           chatId: canPersist ? chatId : null,
           attachmentCount: __publicWebReadonly ? 0 : processedFiles.length,
-          toolNames: __publicWebReadonly
-            ? (__computerTurn
-              ? ['web_fetch', 'web_search', 'computer_navigate', 'computer_screenshot', 'computer_exec']
-              : ['web_fetch', 'web_search'])
-            : undefined,
+          toolNames: __publicWebReadonly ? ['web_fetch', 'web_search'] : undefined,
           memoryFacts: recalledMemoryFacts,
           recentTurnCount: Array.isArray(__conversationHistoryForUnderstanding)
             ? __conversationHistoryForUnderstanding.length
@@ -5742,11 +5591,6 @@ router.post(
           fileContext = uploadedFileContextForTurn
             || rawFileContext;
         }
-        fileContext = documentTurnContext.buildAttachedFilePrompt({
-          processedFiles,
-          prompt,
-          uploadedFileContext: fileContext,
-        }) || fileContext;
 
         // ✅ Check if there are any image files that might contain math
         const hasImageFiles = processedFiles.some(f => f.mimeType && f.mimeType.startsWith('image/'));
@@ -5764,15 +5608,9 @@ router.post(
 
         let truncatedFileContext = fileContext;
         const preserveFullSpreadsheetContext = chatAttachmentRecovery.wantsBibliographyAnswer(prompt);
-        const keepAttachedBody = documentTurnContext.shouldKeepAttachedBody(processedFiles);
         if (
-          !keepAttachedBody
-          && !preserveFullSpreadsheetContext
-          && operationalRag.shouldCompactFilePrompt(
-            fileContextTokens,
-            Boolean(operationalRagContext?.contextBlock),
-            { keepAttachedBody },
-          )
+          !preserveFullSpreadsheetContext
+          && operationalRag.shouldCompactFilePrompt(fileContextTokens, Boolean(operationalRagContext?.contextBlock))
         ) {
           const manifest = processedFiles.map(f => {
             const chars = typeof f.extractedText === 'string' ? f.extractedText.length : 0;
@@ -5785,11 +5623,9 @@ router.post(
             manifest,
           ].join('\n');
         } else if (fileContextTokens > MAX_CONTEXT_TOKENS) {
-          const charPerToken = fileContext.length / Math.max(1, fileContextTokens);
+          const charPerToken = fileContext.length / fileContextTokens;
           const estimatedCharLimit = Math.floor(MAX_CONTEXT_TOKENS * charPerToken);
-          truncatedFileContext = documentTurnContext.applyTokenBudget(fileContext, {
-            maxChars: Math.max(8000, estimatedCharLimit),
-          }).text;
+          truncatedFileContext = fileContext.substring(0, estimatedCharLimit) + "\n... [CONTENT TRUNCATED DUE TO TOKEN LIMIT] ...";
         }
 
         // ✅ Add LaTeX instruction for images
@@ -6231,17 +6067,13 @@ router.post(
               console.warn('[artifact] failed to read image for vision:', readErr.message);
             }
           }
-          // 3H8 leftover candado: artifact generate is native DeepSeek, never OpenAI.
-          const native = require('../services/agent-runner/native-llm');
-          if (!native.hasUsableDeepSeekKey()) {
-            throw new Error('DEEPSEEK_API_KEY is not configured');
-          }
-          const artifactOpenai = native.createNativeDeepSeekClient();
+          // Vision-capable model only when provider is OpenAI; gpt-4o
+          // is the reliable default for the visual understanding step.
+          const artifactOpenai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
           const art = await artifactGenerator.generate({
             openai: artifactOpenai,
             userRequest: prompt,
             imageDataUrls,
-            model: native.resolveNativeDeepSeekModel('deepseek-v4-flash'),
             maxHtmlChars: 80000,
           });
           if (!art.refused && art.html) {
@@ -6318,12 +6150,27 @@ router.post(
               const agenticStream = require('../services/agentic-chat-stream');
               const hasImages = (filesForVision || []).some(f => f && f.mimeType && f.mimeType.startsWith('image/'));
               const priorHistory = Array.isArray(messages) ? messages.slice(0, -1) : [];
+              // Count Office/PDF attachments even when vision images were
+              // stripped from filesForVision. The document-edit preloop needs
+              // this gate, not the vision subset.
+              let documentEditRequested = false;
+              try {
+                documentEditRequested = require('../services/agents/agentic-trigger')
+                  .isDocumentEditRequest(prompt);
+              } catch (_) { documentEditRequested = false; }
               const shouldRunAgentic = agenticStream.shouldUseAgenticChat({
                 prompt,
                 history: priorHistory,
-                files: filesForVision || [],
+                files: processedFiles || [],
                 customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
               });
+              let createDocRequested = false;
+              try {
+                createDocRequested = require('../services/agent-runner').shouldRunAgentRunner({
+                  files: processedFiles || [],
+                  text: prompt,
+                });
+              } catch (_) { createDocRequested = false; }
               // Tool-calling fallback ladder: 'native' (OpenAI-style
               // tool_calls), 'prompted' (tools described in the system prompt,
               // fenced-JSON calls parsed back — lets ANY model drive the
@@ -6331,18 +6178,30 @@ router.post(
               const __toolCallMode = agenticStream.resolveToolCallMode(actualProvider, actualModel);
               const __agenticWillRun = (
                 agenticStream.isEnabled()
-                && (shouldRunAgentic || __computerOnlyTurn)
-                // Callers that want a plain LLM stream (e.g. the /code chat,
-                // which generates code blocks and must never detour into the
-                // web_search/artifact agentic loop) set disableAgentic:true.
-                // Persistent-computer /code turns run a computer-only toolset.
-                && (req.body.disableAgentic !== true || __computerTurn || __computerOnlyTurn)
-                // Public-web-only stays isolated, except when the user asks
-                // the /code agent to use its own computer / open the page.
-                && (!__publicWebReadonly || __computerTurn || __computerOnlyTurn)
-                && __toolCallMode !== 'none'
-                && !hasImages
+                && (shouldRunAgentic || documentEditRequested || createDocRequested)
+                && req.body.disableAgentic !== true
+                && !__publicWebReadonly
+                && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
+                && (!hasImages || documentEditRequested || createDocRequested)
               );
+              // F2 telemetry: a document turn (the AgentRunner would claim it)
+              // that does NOT enter the agentic loop is logged as 'skipped'
+              // with the gate that stopped it — the plain stream can only
+              // answer with text, never a file.
+              if (createDocRequested && !__agenticWillRun) {
+                try {
+                  require('../services/agent-runner/telemetry').logDocumentRouting({
+                    entry: 'ai_generate',
+                    path: 'skipped',
+                    reason: !agenticStream.isEnabled()
+                      ? 'agentic_disabled'
+                      : (req.body.disableAgentic === true
+                        ? 'caller_disabled'
+                        : (__publicWebReadonly ? 'public_web_readonly' : 'routing_gate')),
+                    chatId: canPersist ? chatId : null,
+                  });
+                } catch (_) { /* telemetry is best-effort */ }
+              }
               // U3: shadow turn-policy snapshot (observe by default). Never
               // overrides routing/tool decisions in this unit.
               let __turnPolicy = null;
@@ -6356,7 +6215,7 @@ router.post(
                       ? 'caller_disabled'
                       : (__toolCallMode === 'none'
                         ? 'tool_call_mode_none'
-                        : (hasImages
+                        : ((hasImages && !documentEditRequested)
                           ? 'images_attached'
                           : (shouldRunAgentic ? null : 'routing_gate')))));
                 __turnPolicy = turnPolicyService.buildTurnPolicy({
@@ -6459,8 +6318,6 @@ router.post(
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
-                  computerOnly: __computerOnlyTurn,
-                  surface: (req.body && req.body.surface) || (String(req.path||"").includes("code") ? "code" : "chat"),
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
@@ -6482,11 +6339,9 @@ router.post(
                   history: priorHistory,
                   res,
                   signal,
-                  maxSteps: __computerOnlyTurn
-                    ? 25
-                    : (Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
+                  maxSteps: Number.isFinite(Number(req.body?.coworkBudget?.maxSteps))
                     ? Math.min(160, Math.max(1, Math.round(Number(req.body.coworkBudget.maxSteps))))
-                    : undefined),
+                    : undefined,
                   toolCallMode: __toolCallMode,
                   turnPolicy: __turnPolicy,
                   // A1: per-turn tool selection context — the cognitive decision
@@ -6520,15 +6375,14 @@ router.post(
                     ),
                   },
                 });
-                // The agentic loop reports success via stoppedReason:
-                // 'finalized' (model called the finalize tool) or
-                // 'plain_text_finalize' (model answered directly). ANY other
-                // reason (max_steps / model_error / no_message / aborted /
-                // runtime_budget_exhausted / degraded_no_finalize / tool_*) is
-                // a degraded run whose finalAnswer is empty OR a generic
-                // apology ("No logré cerrar la tarea…"). Returning either of
-                // those is what surfaced "El asistente dejó de responder" /
-                // the apology on perfectly simple prompts.
+                // The agentic loop reports success via isHandledAgenticChatResult:
+                // finalize, last-step rescue, AND the document-edit preloop
+                // (source_preserving_document_edit*). Anything else
+                // (max_steps / model_error / no_message / aborted /
+                // runtime_budget_exhausted / tool_*) is degraded and falls
+                // through to the plain stream. The old 3-reason allowlist
+                // treated a successful Office edit as degraded, wiped the
+                // file_artifact card, and let the LLM invent a refusal.
                 const __agenticAnswer = (agenticResult && typeof agenticResult.finalAnswer === 'string')
                   ? agenticResult.finalAnswer.trim()
                   : '';
@@ -6538,19 +6392,7 @@ router.post(
                 // degraded-but-real answer) both carry a genuine answer — treat
                 // them as success so the route delivers it instead of discarding
                 // it and re-generating via the plain stream.
-                const __SUCCESS_REASONS = new Set(['finalized', 'plain_text_finalize', 'finalized_last_step_guard_override']);
-                const __agenticReason = String((agenticResult && agenticResult.stoppedReason) || '');
-                // source_preserving_document_edit / agent_runner already streamed
-                // file_artifact cards. Treating them as degraded wiped the
-                // transplanted DOCX and let the plain LLM invent a wrong file.
-                const __handledDoc = (() => {
-                  try { return agenticStream.isHandledAgenticChatResult(agenticResult); } catch (_) { return false; }
-                })();
-                const __agenticOk =
-                  agenticResult
-                  && (__handledDoc || __SUCCESS_REASONS.has(agenticResult.stoppedReason) || __agenticReason.startsWith('finalized_guard_breaker'))
-                  && __agenticAnswer.length > 0
-                  && __agenticAnswer !== '(agent returned empty message)';
+                const __agenticOk = agenticStream.isHandledAgenticChatResult(agenticResult);
                 if (__agenticOk) {
                   // Carry the harness trace to the persistence layer so the
                   // assistant message gets agent_steps + agent_metadata.
@@ -6575,26 +6417,6 @@ router.post(
                 // reliable plain stream below; aiService.generateStream emits a
                 // `replace` frame that overwrites any agent-task-state sentinel
                 // already streamed, so the user always gets a real answer.
-                // 402 / credit_no_usage after a computer tool must NOT fall
-                // through to a doomed DeepSeek stream that paints the generic
-                // "Hubo un problema..." string. Deliver the public ES credit
-                // message (or the loop's own answer) so the turn completes.
-                if (/credit_no_usage|credit_ceiling|rate_limited|credits_exhausted|llm_402/.test(__agenticReason)) {
-                  let publicCredit = __agenticAnswer;
-                  try {
-                    const pub = require('../services/observability/public-stream-error').classifyPublicStreamError({
-                      code: __agenticReason,
-                      status: /rate_limited/.test(__agenticReason) ? 429 : 402,
-                      message: __agenticAnswer || __agenticReason,
-                    });
-                    if (pub && pub.message) publicCredit = pub.message;
-                  } catch (_) { /* keep loop answer */ }
-                  if (!publicCredit || /No logré cerrar|Hubo un problema procesando/i.test(publicCredit)) {
-                    publicCredit = 'El proveedor se quedó sin crédito en este turno. No cobré el fallo. Recarga /code e inténtalo de nuevo.';
-                  }
-                  req._agentRun = agenticResult.agentRun || null;
-                  return publicCredit;
-                }
                 console.warn('[agentic-chat] degraded result (stoppedReason=' + (agenticResult && agenticResult.stoppedReason) + ', len=' + __agenticAnswer.length + ') — falling back to plain stream');
               }
             } catch (agenticErr) {
@@ -6879,8 +6701,7 @@ router.post(
         // tick so the reply is already ack'd to the client.
         if (userId && !__publicWebReadonly && typeof prompt === 'string' && fullResponseContent) {
           try {
-            const { createNativeDeepSeekClient, hasUsableDeepSeekKey } = require('../services/agent-runner/native-llm');
-            const memoryOpenAI = hasUsableDeepSeekKey() ? createNativeDeepSeekClient() : null;
+            const memoryOpenAI = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
             longTermMemory.extractFactsAsync({
               openai: memoryOpenAI,
               userId,
@@ -7018,6 +6839,7 @@ router.post(
           // duplicate-guarded; needs no live socket) so the partial answer is
           // still there after a reload — instead of silently vanishing.
           try {
+            const { resolveAbortedAssistantContent } = require('../services/chat-abort-persistence');
             const abortedContent = resolveAbortedAssistantContent(fullResponseContent);
             if (canPersist) {
               const savedChat = await saveChatAndTrackUsage(
@@ -8059,20 +7881,6 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
   // A Cowork approval intentionally outlives the browser stream. Therefore an
   // explicit Stop must also cancel the persisted run and settle any in-memory
   // approval promise; merely aborting fetch is not sufficient.
-  const cancelledAgentTaskIds = [];
-  if (chatId && uid) {
-    try {
-      markChatAborted(uid, chatId);
-      const agentTaskRouter = require('./agent-task');
-      const cancelled = agentTaskRouter.INTERNAL && typeof agentTaskRouter.INTERNAL.cancelAgentTasksForChat === 'function'
-        ? agentTaskRouter.INTERNAL.cancelAgentTasksForChat(uid, chatId)
-        : [];
-      if (Array.isArray(cancelled)) cancelledAgentTaskIds.push(...cancelled);
-    } catch (error) {
-      console.warn('[ai] stop-stream agent-task cancel failed:', error && error.message);
-    }
-  }
-
   const cancelledRunIds = [];
   if (chatId && uid && prisma.coworkRun) {
     try {
@@ -8102,7 +7910,7 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
     }
   }
 
-  const stopped = Boolean(controller || cancelledRunIds.length || cancelledAgentTaskIds.length);
+  const stopped = Boolean(controller || cancelledRunIds.length);
   if (!stopped) {
     // The client aborts its local fetch immediately before notifying the
     // backend, so this endpoint can legitimately arrive after cleanup.
@@ -8112,7 +7920,6 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
     message: stopped ? 'Stop signal sent.' : 'Stream not found or already finished.',
     stopped,
     cancelledRunIds,
-    cancelledAgentTaskIds,
     ...(!stopped ? { alreadyFinished: true } : {}),
   });
 });
@@ -8513,14 +8320,6 @@ function createOpenRouterClient() {
 const BEST_OPENROUTER_IMAGE_MODEL = 'google/gemini-2.5-flash-image';
 
 async function generateOpenRouterImage(openrouter, { model, prompt, aspectRatio, quality, signal }) {
-  // BE-016: isolated IMAGE path only. Text generate must never call this.
-  const requested = String(model || '');
-  if (/deepseek|gpt-4o$|claude|gemini-2\.5-pro|gemini-3|text-only/i.test(requested)
-      && !/image|dall|flux|imagen|seedream/i.test(requested)) {
-    const err = new Error('generateOpenRouterImage is isolated to image models; text generate is native DeepSeek only');
-    err.code = 'image_path_isolated';
-    throw err;
-  }
   if (!process.env.OPENROUTER_API_KEY) {
     throw new Error('OPENROUTER_API_KEY is required for OpenRouter image generation.');
   }
@@ -9168,26 +8967,6 @@ router.post(
 );
 // Add this route after the existing generate-image route (around line 580)
 
-
-function buildInternalVideoServiceHeaders(req) {
-  // Cookie-session users authenticate /ai/generate-video without an
-  // Authorization header. The loopback /api/video/* call must reuse the
-  // already-validated token (req.token) or the cookie; otherwise fal never
-  // runs and the user sees "Access token required".
-  const headerAuth = String((req.headers && req.headers.authorization) || '').trim();
-  const token = headerAuth || (req.token ? `Bearer ${req.token}` : '');
-  const headers = {
-    'Content-Type': 'application/json',
-    'User-Agent': (req.headers && req.headers['user-agent']) || 'siragpt-internal',
-    'X-Forwarded-For': req.ip,
-  };
-  if (token) headers.Authorization = token;
-  if (!headerAuth && req.headers && req.headers.cookie) {
-    headers.Cookie = req.headers.cookie;
-  }
-  return headers;
-}
-
 // ✅ Generate AI video response (New Video Generation Route)
 // Replace the existing video generation route with this corrected version:
 
@@ -9195,23 +8974,17 @@ function buildInternalVideoServiceHeaders(req) {
 router.post(
   '/generate-video',
   [
-    body('prompt').optional({ values: 'falsy' }).isString().withMessage('Prompt must be a string'),
+    body('prompt').trim().notEmpty().withMessage('Prompt is required'),
     body('chatId').optional().isString(),
     body('aspect_ratio').optional().isIn(['auto', '16:9', '9:16', '1:1', '4:3', '3:4', '21:9']).withMessage('Invalid aspect ratio'),
-    body('resolution').optional().isIn(['480p', '720p', '1080p']).withMessage('Invalid resolution'),
-    body('duration').optional().isInt({ min: 4, max: 30 }).withMessage('Invalid duration'),
+    body('resolution').optional().isIn(['480p', '720p']).withMessage('Invalid resolution'),
+    body('duration').optional().isInt({ min: 4, max: 15 }).withMessage('Invalid duration'),
     body('audio').optional().isBoolean().withMessage('Invalid audio option'),
     body('negative_prompt').optional().isString(),
     body('files').optional().isArray(),
     body('image_url').optional().isString(),
     body('image_urls').optional().isArray({ max: 12 }),
     body('image_urls.*').optional().isString(),
-    body('video_url').optional().isString(),
-    body('video_urls').optional().isArray({ max: 10 }),
-    body('video_urls.*').optional().isString(),
-    body('audio_url').optional().isString(),
-    body('audio_urls').optional().isArray({ max: 10 }),
-    body('audio_urls.*').optional().isString(),
     body('model').optional().isString().withMessage('Invalid video model'),
   ],
   authenticateToken,
@@ -9223,27 +8996,8 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, video_url, video_urls, audio_url, audio_urls, model
+      const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
       } = req.body;
-      const hasMediaInput = Boolean(
-        String(image_url || '').trim()
-        || (Array.isArray(image_urls) && image_urls.some((value) => String(value || '').trim()))
-        || String(video_url || '').trim()
-        || (Array.isArray(video_urls) && video_urls.some((value) => String(value || '').trim()))
-        || String(audio_url || '').trim()
-        || (Array.isArray(audio_urls) && audio_urls.some((value) => String(value || '').trim()))
-        || (Array.isArray(files) && files.length > 0)
-      );
-      prompt = String(prompt || '').trim();
-      if (!prompt && hasMediaInput) {
-        prompt = 'Anima esta imagen con movimiento cinematografico natural y realista.';
-      }
-      if (!prompt) {
-        return res.status(400).json({
-          error: 'Escribe una descripcion del video o adjunta una imagen, audio o video de referencia para poder generarlo.',
-          code: 'video_prompt_required',
-        });
-      }
       const userId = req.user.id;
       let effectiveAspectRatio = aspect_ratio;
       try {
@@ -9288,10 +9042,6 @@ router.post(
         hasFiles: !!files?.length,
         hasImageUrl: !!image_url,
         imageUrlCount: Array.isArray(image_urls) ? image_urls.length : 0,
-        hasVideoUrl: !!video_url,
-        videoUrlCount: Array.isArray(video_urls) ? video_urls.length : 0,
-        hasAudioUrl: !!audio_url,
-        audioUrlCount: Array.isArray(audio_urls) ? audio_urls.length : 0,
       });
 
       // ✅ Paid-plan token cap (single source of truth: plan-quota.js).
@@ -9299,88 +9049,40 @@ router.post(
       const quotaCap = checkPaidTokenCap(req.user, { message: 'Monthly video generation limit exceeded' });
       if (!quotaCap.ok) return res.status(quotaCap.status).json(quotaCap.body);
 
-      // ✅ Process attached files (image / audio / reference video)
+      // ✅ Process attached files (for image-to-video/reference-to-video)
       const processedImageUrls = [];
-      const processedVideoUrls = [];
-      const processedAudioUrls = [];
-      const canonicalizeUploadMediaUrl = (rawUrl) => {
+      const addProcessedImageUrl = (rawUrl) => {
         const value = String(rawUrl || '').trim();
-        if (!value) return '';
-        try {
-          const parsed = /^(https?:|\/\/)/i.test(value)
-            ? new URL(value)
-            : new URL(value, 'http://local.invalid');
-          if (parsed.pathname.startsWith('/uploads/')) {
-            return parsed.pathname;
-          }
-        } catch {
-          /* keep original */
-        }
-        return value;
-      };
-      const addUniqueUrl = (list, rawUrl) => {
-        const value = canonicalizeUploadMediaUrl(rawUrl);
         if (!value) return;
-        if (!list.includes(value)) list.push(value);
+        if (!processedImageUrls.includes(value)) processedImageUrls.push(value);
       };
-      const addProcessedImageUrl = (rawUrl) => addUniqueUrl(processedImageUrls, rawUrl);
-      const addProcessedVideoUrl = (rawUrl) => addUniqueUrl(processedVideoUrls, rawUrl);
-      const addProcessedAudioUrl = (rawUrl) => addUniqueUrl(processedAudioUrls, rawUrl);
 
       if (Array.isArray(image_urls)) {
         image_urls.forEach(addProcessedImageUrl);
       }
       addProcessedImageUrl(image_url);
-      if (Array.isArray(video_urls)) {
-        video_urls.forEach(addProcessedVideoUrl);
-      }
-      addProcessedVideoUrl(video_url);
-      if (Array.isArray(audio_urls)) {
-        audio_urls.forEach(addProcessedAudioUrl);
-      }
-      addProcessedAudioUrl(audio_url);
 
-      console.log('Initial media URLs:', {
-        images: processedImageUrls.length,
-        videos: processedVideoUrls.length,
-        audios: processedAudioUrls.length,
-      });
+      console.log('Initial image URLs:', processedImageUrls.length);
       if (files && files.length > 0) {
         try {
-          const mediaFiles = await prisma.file.findMany({
+          const imageFiles = await prisma.file.findMany({
             where: {
               id: { in: files },
               userId,
+              mimeType: { startsWith: 'image/' }
             }
           });
 
-          if (mediaFiles.length > 0) {
+          if (imageFiles.length > 0) {
             const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
             const fileOrder = new Map(files.map((id, index) => [id, index]));
-            mediaFiles
+            imageFiles
               .sort((a, b) => (fileOrder.get(a.id) ?? 9999) - (fileOrder.get(b.id) ?? 9999))
-              .forEach((mediaFile) => {
-                const url = `${baseUrl}/uploads/${userId}/${mediaFile.filename}`;
-                const mime = String(mediaFile.mimeType || '').toLowerCase();
-                if (mime.startsWith('image/')) addProcessedImageUrl(url);
-                else if (mime.startsWith('video/')) addProcessedVideoUrl(url);
-                else if (mime.startsWith('audio/')) addProcessedAudioUrl(url);
-              });
-            console.log('🖼️ Using media for video generation:', {
-              images: processedImageUrls.length,
-              videos: processedVideoUrls.length,
-              audios: processedAudioUrls.length,
-            });
+              .forEach((imageFile) => addProcessedImageUrl(`${baseUrl}/uploads/${userId}/${imageFile.filename}`));
+            console.log('🖼️ Using images for video generation:', processedImageUrls.length);
           }
         } catch (fileError) {
           console.error('Error processing files for video:', fileError);
-        }
-      }
-      if (!prompt || prompt === 'Anima esta imagen con movimiento cinematografico natural y realista.') {
-        if (!processedImageUrls.length && processedVideoUrls.length) {
-          prompt = 'Continua o transforma este video de referencia con movimiento cinematografico natural y realista.';
-        } else if (!processedImageUrls.length && !processedVideoUrls.length && processedAudioUrls.length) {
-          prompt = 'Genera un video que use este audio como voz o pista de referencia.';
         }
       }
       const processedImageUrl = processedImageUrls[0] || null;
@@ -9408,13 +9110,22 @@ router.post(
           negative_prompt,
           ...(processedImageUrl && { image_url: processedImageUrl }),
           ...(processedImageUrls.length > 0 && { image_urls: processedImageUrls }),
-          ...(processedVideoUrls.length > 0 && { video_urls: processedVideoUrls, video_url: processedVideoUrls[0] }),
-          ...(processedAudioUrls.length > 0 && { audio_urls: processedAudioUrls, audio_url: processedAudioUrls[0] }),
           model: requestedVideoModel
         };
 
         const videoResponse = await axios.post(url, videoPayload, {
-          headers: buildInternalVideoServiceHeaders(req),
+          headers: {
+            'Authorization': req.headers.authorization,
+            'Content-Type': 'application/json',
+            // Session fingerprint binding (session-fingerprint.js) ties the
+            // token to `${req.ip}:hash(user-agent)`. Without forwarding the
+            // ORIGINAL UA + IP, this loopback call presents UA "axios/x" and
+            // ip 127.0.0.1 → fingerprint mismatch → auth REVOKES the user's
+            // session (deleteMany) and returns 401, logging the user out.
+            // Forward both so the internal request's fingerprint matches.
+            'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+            'X-Forwarded-For': req.ip,
+          },
           timeout: 120000 // image-to-video first frame can exceed 30s
         });
 
@@ -9547,11 +9258,7 @@ router.post(
                 sourceImageUrl: processedImageUrl,
                 sourceImageUrls: processedImageUrls,
                 imageCount: processedImageUrls.length,
-                sourceVideoUrls: processedVideoUrls,
-                sourceAudioUrls: processedAudioUrls,
-                generationType: (processedVideoUrls.length || processedAudioUrls.length || processedImageUrls.length > 1)
-                  ? 'reference-to-video'
-                  : (processedImageUrl ? 'image-to-video' : 'text-to-video')
+                generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
               }])
             }
           });
@@ -9595,11 +9302,7 @@ router.post(
           sourceImageUrl: processedImageUrl,
           sourceImageUrls: processedImageUrls,
           imageCount: processedImageUrls.length,
-          sourceVideoUrls: processedVideoUrls,
-          sourceAudioUrls: processedAudioUrls,
-          generationType: (processedVideoUrls.length || processedAudioUrls.length || processedImageUrls.length > 1)
-            ? 'reference-to-video'
-            : (processedImageUrl ? 'image-to-video' : 'text-to-video')
+          generationType: processedImageUrls.length > 1 ? 'reference-to-video' : (processedImageUrl ? 'image-to-video' : 'text-to-video')
         });
 
       } catch (videoServiceError) {
@@ -9648,7 +9351,11 @@ router.post('/video-cancel/:operationId', authenticateToken, async (req, res) =>
     const url = `${internalBase}/api/video/cancel/${operationId}`;
 
     const cancelResponse = await axios.post(url, {}, {
-      headers: buildInternalVideoServiceHeaders(req),
+      headers: {
+        'Authorization': req.headers.authorization,
+        'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+        'X-Forwarded-For': req.ip,
+      },
       timeout: 10000,
     });
 
@@ -9728,7 +9435,14 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
 
     try {
       const statusResponse = await axios.get(url, {
-        headers: buildInternalVideoServiceHeaders(req),
+        headers: {
+          'Authorization': req.headers.authorization,
+          // Forward original UA + IP so the loopback call's session
+          // fingerprint matches (see generate-video above) — otherwise
+          // polling status would revoke the user's session.
+          'User-Agent': req.headers['user-agent'] || 'siragpt-internal',
+          'X-Forwarded-For': req.ip,
+        },
         timeout: 10000 // 10 second timeout
       });
 
@@ -9853,12 +9567,7 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
                     sourceImageUrl: result.sourceImageUrl || statusResponse.data.sourceImageUrl || f.sourceImageUrl,
                     sourceImageUrls: result.sourceImageUrls || statusResponse.data.sourceImageUrls || f.sourceImageUrls,
                     imageCount: result.imageCount || statusResponse.data.imageCount || f.imageCount,
-                    generationType: result.generationType || statusResponse.data.generationType || f.generationType,
-                    model: result.model || statusResponse.data.resolvedModel || f.model,
-                    modelDisplayName: result.modelDisplayName || statusResponse.data.modelDisplayName || f.modelDisplayName,
-                    requestedModel: result.requestedModel || statusResponse.data.requestedModel || f.requestedModel,
-                    fallbackUsed: Boolean(result.fallbackUsed || statusResponse.data.fallbackModel),
-                    fallbackModel: result.fallbackModel || statusResponse.data.fallbackModel || f.fallbackModel,
+                    generationType: result.generationType || statusResponse.data.generationType || f.generationType
                   }
                   : f
               )
@@ -9926,10 +9635,6 @@ router.get('/video-status/:operationId', authenticateToken, async (req, res) => 
                     errorDetails: statusResponse.data.errorDetails || statusResponse.data.details || f.errorDetails,
                     cancelledAt: finalStatus === 'cancelled' ? (statusResponse.data.cancelledAt || new Date().toISOString()) : f.cancelledAt,
                     failedAt: finalStatus === 'failed' ? (statusResponse.data.updatedAt || new Date().toISOString()) : f.failedAt,
-                    model: statusResponse.data.resolvedModel || statusResponse.data.result?.model || f.model,
-                    modelDisplayName: statusResponse.data.modelDisplayName || statusResponse.data.result?.modelDisplayName || f.modelDisplayName,
-                    fallbackUsed: Boolean(statusResponse.data.fallbackModel || f.fallbackUsed),
-                    fallbackModel: statusResponse.data.fallbackModel || f.fallbackModel,
                   }
                   : f
               )
@@ -10070,16 +9775,11 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { prompt, chatId, provider = 'DeepSeek', model = 'deepseek-v4-flash', files } = req.body;
-      {
-        const native = require('../services/agent-runner/native-llm');
-        provider = 'DeepSeek';
-        model = native.resolveNativeDeepSeekModel(model);
-      }
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
       const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
-      console.log('🎨 Vector PPT generation request:', { promptLen: String(prompt||'').length, chatId, provider, model });
+      console.log('🎨 Vector PPT generation request:', { prompt, chatId, provider, model });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -10196,16 +9896,11 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { prompt, chatId, provider = 'DeepSeek', model = 'deepseek-v4-flash', files } = req.body;
-      {
-        const native = require('../services/agent-runner/native-llm');
-        provider = 'DeepSeek';
-        model = native.resolveNativeDeepSeekModel(model);
-      }
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
       const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
-      console.log('📊 PPT generation request:', { promptLen: String(prompt||'').length, chatId, provider, model });
+      console.log('📊 PPT generation request:', { prompt, chatId, provider, model });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -10318,7 +10013,7 @@ router.post(
       const { prompt, chatId, model } = req.body;
       const userId = req.user.id;
 
-      console.log('📧 Gmail AI request:', { promptLen: String(prompt||'').length, chatId, model, userId });
+      console.log('📧 Gmail AI request:', { prompt, chatId, model, userId });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -10834,16 +10529,11 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { prompt, chatId, provider = 'DeepSeek', model = 'deepseek-v4-flash', files } = req.body;
-      {
-        const native = require('../services/agent-runner/native-llm');
-        provider = 'DeepSeek';
-        model = native.resolveNativeDeepSeekModel(model);
-      }
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
       const displayPrompt = (req.body.displayPrompt || prompt).trim();
       const userId = req.user.id;
 
-      console.log('🌐 Web development streaming request:', { promptLen: String(prompt||'').length, chatId, provider, model, hasFiles: !!files?.length });
+      console.log('🌐 Web development streaming request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -11008,7 +10698,6 @@ Every element should feel intentionally designed, polished, and premium. The use
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
-      try { require('../services/observability/sse-event-id').attachSseIds(res, req); } catch (_) {}
       res.flushHeaders();
 
       let fullResponseContent = '';
@@ -11138,7 +10827,7 @@ router.post(
       let { service } = req.body;
       const userId = req.user.id;
 
-      console.log('📅🗂️ Google Services AI request:', { promptLen: String(prompt||'').length, chatId, model, service, userId });
+      console.log('📅🗂️ Google Services AI request:', { prompt, chatId, model, service, userId });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -11511,16 +11200,10 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      let { prompt, chatId, provider = 'DeepSeek', model = 'deepseek-v4-flash', files } = req.body;
-      {
-        const native = require('../services/agent-runner/native-llm');
-        const locked = native.resolveNativeDeepSeekModel(model);
-        provider = 'DeepSeek';
-        model = locked;
-      }
+      const { prompt, chatId, provider = 'OpenAI', model = 'gpt-4o', files } = req.body;
       const userId = req.user.id;
 
-      console.log('📊 Excel Workbook generation request:', { promptLen: String(prompt||'').length, chatId, provider, model, hasFiles: !!files?.length });
+      console.log('📊 Excel Workbook generation request:', { prompt, chatId, provider, model, hasFiles: !!files?.length });
 
       // Check monthly limit
       const quota = await tryConsumePlanQuota({ userId, prisma, user: req.user });
@@ -11633,15 +11316,8 @@ Generate the workbook based on the user's request.`;
 
       messages.push({ role: 'user', content: prompt });
 
-      // 3H8 leftover candado: excel generate is native DeepSeek Flash/Pro only.
-      const native = require('../services/agent-runner/native-llm');
-      if (!native.hasUsableDeepSeekKey()) {
-        return res.status(503).json({ error: { code: 'no_llm', retryable: false } });
-      }
-      const openai = native.createNativeDeepSeekClient();
-      model = native.resolveNativeDeepSeekModel(model);
-      const providerLocked = 'DeepSeek';
-      void providerLocked;
+      // Initialize OpenAI client based on provider
+      const openai = createProviderClient(provider);
 
       // Generate response without streaming
       const __excelGenStartedAt = Date.now();
