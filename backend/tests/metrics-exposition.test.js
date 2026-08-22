@@ -106,6 +106,27 @@ test('composes process, utility, agent, cognitive, and Free IA metric families',
   assert.deepEqual(findDuplicateMetricFamilies(text), []);
 });
 
+test('per-model canary families (#311) are registered eagerly at exposition load', () => {
+  // Regression: these families self-register at model-telemetry/run-completion
+  // module load, whose only other requires sit inside LLM-turn call sites.
+  // If the exposition stops loading them eagerly, the canary D0 gate loses all
+  // series until the first post-deploy agent turn.
+  const { formatMetricsExposition } = loadSubject();
+  const text = formatMetricsExposition();
+
+  for (const family of [
+    'siragpt_agent_llm_calls_total',
+    'siragpt_agent_llm_errors_total',
+    'siragpt_agent_llm_ttft_ms',
+    'siragpt_agent_llm_duration_ms',
+    'siragpt_agent_llm_tokens_total',
+    'siragpt_agent_llm_calls_by_agent_total',
+    'siragpt_codex_runs_terminal_by_model_total',
+  ]) {
+    assert.match(text, new RegExp(`^# TYPE ${family} `, 'm'), `missing ${family}`);
+  }
+});
+
 test('database pool estimate gauges are bounded, label-free, and include the advisory target', () => {
   const subject = loadSubject();
   const {

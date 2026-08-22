@@ -9,6 +9,12 @@ const {
 // Keep that side effect here so every direct formatter call has the same
 // inventory as the HTTP handlers, without depending on index.js boot order.
 require('../sira/metrics');
+// Per-model canary families (#311) self-register at module load, but their
+// only other requires sit inside LLM-turn call sites — without this eager
+// load the registry stays blind and /internal/metrics emits no series until
+// an agent turn runs post-deploy.
+require('../codex/model-telemetry');
+require('../codex/run-completion');
 const {
   isLoopbackPeer,
   constantTimeTokenEquals,
