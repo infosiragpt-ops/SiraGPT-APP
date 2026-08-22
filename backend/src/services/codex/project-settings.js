@@ -172,6 +172,25 @@ function toolDecision(settings, toolName) {
   return { allowed: true, reason: '' };
 }
 
+// Safety floor: destructive patterns denied even when the project's own
+// denylist is empty. These escape the workspace sandbox (host-wide deletes,
+// permission changes, remote destruction) — the agent must be able to try a
+// lot INSIDE the sandbox without ever being able to break anything outside
+// it, regardless of project configuration.
+const DESTRUCTIVE_COMMAND_FLOOR = [
+  'rm -rf /*', 'rm -rf ~*', 'rm -rf ~/*', 'rm -rf /',
+  'rm -rf ..', 'rm -rf ../*',
+  'sudo *', 'su *',
+  'chmod -R 777*', 'chown -R *',
+  'mkfs*', 'dd if=*of=/dev/*', 'dd if=* of=/dev/*',
+  'shutdown*', 'reboot*', 'halt*', 'poweroff*',
+  '*curl*|*sh', '*curl* | *sh', '*curl*|* bash', '*wget*|*sh', '*wget* | *sh',
+  ':(){ :* };:',
+  'git push --force *origin main*', 'git push --force *origin master*',
+  'git push *--force*', 'git reset --hard *origin/main*', 'git reset --hard *origin/master*',
+  'DROP DATABASE*', 'DROP SCHEMA*',
+];
+
 function commandDecision(settings, cmd) {
   const policy = settings || mergeSettings();
   if (!Array.isArray(cmd) || cmd.some((part) => typeof part !== 'string')) {
@@ -180,6 +199,10 @@ function commandDecision(settings, cmd) {
   const full = cmd.join(' ').trim();
   const executable = String(cmd[0] || '').trim();
   const matches = (patterns) => matchesAny(patterns, full) || matchesAny(patterns, executable);
+  // Floor first — a project cannot allowlist its way around it.
+  if (matches(DESTRUCTIVE_COMMAND_FLOOR)) {
+    return { allowed: false, reason: `command denied by safety floor (destructive outside sandbox): ${full}` };
+  }
   if (matches(policy.commands.deny)) return { allowed: false, reason: `command denied by project settings: ${full}` };
   if (policy.commands.allow.length && !matches(policy.commands.allow)) {
     return { allowed: false, reason: `command is outside the project allowlist: ${full}` };
