@@ -1364,6 +1364,7 @@ export function AgentCompanyPanel() {
     [
       activeCodeChatSessionId,
       activeFolder?.id,
+      activeFolder?.name,
       associationState,
       codexAccess,
       companyName,
@@ -1466,9 +1467,11 @@ export function AgentCompanyPanel() {
       void codexApi.ensureDepartmentComputer(projectId, departmentId).catch(() => {})
     }
   }, [
+    activeFolder?.id,
     allDepartments,
     associatedCodexProjectId,
     companyProjectId,
+    ensureCompanyRuntime,
   ])
 
   React.useEffect(() => {
@@ -1522,7 +1525,7 @@ export function AgentCompanyPanel() {
     }
     window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent)
     return () => window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent)
-  }, [allDepartments, associatedCodexProjectId, chatDepartment, companyProjectId, selectedDepartmentId])
+  }, [activeFolder?.id, allDepartments, associatedCodexProjectId, chatDepartment, companyProjectId, ensureCompanyRuntime, selectedDepartmentId])
 
   const openOfficeWorker = React.useCallback((worker: AgentOfficeWorker) => {
     setOfficeOpen(false)

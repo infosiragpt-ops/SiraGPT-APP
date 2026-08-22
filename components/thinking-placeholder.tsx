@@ -54,7 +54,7 @@ export const ThinkingPlaceholder = ({ stage, compact = false, className, steps }
     }
     lastRef.current = label
   }, [label])
-  const incoming = Array.isArray(steps) ? steps : []
+  const incoming = useMemo(() => (Array.isArray(steps) ? steps : []), [steps])
   const rows = useMemo(() => {
     if (incoming.length > 0) {
       const lastRun = [...incoming].reverse().findIndex((s) => s.status === "planned" || s.status === "executing" || s.status === "running")

@@ -2594,7 +2594,7 @@ const ActiveToolsDisplay = ({
     const durationSpec = resolveVideoDurationSpec(selectedVideoModel, fal)
     const next = clampVideoDuration(selectedVideoDuration, durationSpec, undefined, selectedVideoResolution)
     if (next != null && next !== selectedVideoDuration) setSelectedVideoDuration(next)
-  }, [availableModels, selectedVideoModel, selectedVideoDuration, setSelectedVideoDuration]);
+  }, [availableModels, selectedVideoModel, selectedVideoDuration, selectedVideoResolution, setSelectedVideoDuration]);
 
   // Activate a model chosen from the floating fal.ai model gallery (mounted at
   // the page level, decoupled from this composer). Image/video map onto the
@@ -6205,7 +6205,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -6627,6 +6627,7 @@ But first, you need to connect your Spotify account securely using the button be
     selectedVideoAspectRatio,
     selectedVideoAudio,
     selectedVideoDuration,
+    selectedVideoModel,
     selectedVideoResolution,
     setChatType,
   ]);

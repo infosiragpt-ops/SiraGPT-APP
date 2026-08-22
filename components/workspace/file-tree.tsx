@@ -56,6 +56,7 @@ function Row({
     <div>
       <div
         role="treeitem"
+        aria-selected={active}
         aria-expanded={isDir ? open : undefined}
         aria-label={isDir ? `Carpeta ${node.name}` : `Archivo ${node.name}`}
         className={cn(

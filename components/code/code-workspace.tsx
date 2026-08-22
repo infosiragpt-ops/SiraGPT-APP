@@ -852,7 +852,7 @@ export function CodeWorkspace() {
                         }
                         setMobileView(tab.id)
                       }}
-                      aria-pressed={mobileView === tab.id}
+                      aria-selected={mobileView === tab.id}
                       className={cn(
                         "min-h-11 flex-1 px-2 py-2.5 text-xs font-medium transition-colors",
                         mobileView === tab.id

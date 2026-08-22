@@ -379,7 +379,7 @@ export function TerminalPanel({ open, onClose }: TerminalPanelProps) {
         setBusy(false)
       }
     },
-    [clearLines, ensureHostSession, print],
+    [clearLines, ensureHostSession, print, workspaceProjectId],
   )
 
   const handleSubmit = (e: React.FormEvent) => {
