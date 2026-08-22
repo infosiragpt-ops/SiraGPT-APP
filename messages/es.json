@@ -368,7 +368,20 @@
     "pdfFile": "Archivo PDF",
     "downloadAsWord": "Descargar como Word (.docx)",
     "downloadAsPdf": "Descargar como PDF",
-    "generating": "Generando…"
+    "generating": "Generando…",
+    "docBridge": {
+      "sendToCode": "Enviar a /code",
+      "sendToCodeTitle": "Envía el Markdown actual como docs/<nombre>.md al proyecto del Agente en /code",
+      "sentToCode": "Documento enviado al proyecto del Agente ({name})",
+      "sendToCodeNoProject": "Abre o crea un proyecto en /code y vuelve a intentarlo",
+      "sendToCodeFailed": "No se pudo enviar a /code",
+      "openInEditor": "Abrir en el editor de documentos (/chat)",
+      "openInEditorAria": "Abrir {path} en el editor de documentos",
+      "openedAsDocument": "{name} abierta como documento editable en /chat",
+      "openInEditorEmpty": "El archivo está vacío o no tiene texto exportable",
+      "openInEditorNoProject": "Abre una tarea del Agente para sincronizar este archivo primero",
+      "openInEditorFailed": "No se pudo abrir en el editor de documentos"
+    }
   },
   "errors": {
     "serverError": "Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.",

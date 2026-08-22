@@ -368,7 +368,20 @@
     "pdfFile": "PDF-bestand",
     "downloadAsWord": "Downloaden als Word (.docx)",
     "downloadAsPdf": "Downloaden als PDF",
-    "generating": "Genereren…"
+    "generating": "Genereren…",
+    "docBridge": {
+      "sendToCode": "Send to /code",
+      "sendToCodeTitle": "Send the current Markdown as docs/<name>.md to the Agent project in /code",
+      "sentToCode": "Document sent to the Agent project ({name})",
+      "sendToCodeNoProject": "Open or create a project in /code and try again",
+      "sendToCodeFailed": "Could not send to /code",
+      "openInEditor": "Open in the document editor (/chat)",
+      "openInEditorAria": "Open {path} in the document editor",
+      "openedAsDocument": "{name} opened as an editable document in /chat",
+      "openInEditorEmpty": "The file is empty or has no exportable text",
+      "openInEditorNoProject": "Open an Agent task first so this file can be synced",
+      "openInEditorFailed": "Could not open in the document editor"
+    }
   },
   "errors": {
     "serverError": "Er is een probleem opgetreden bij het verwerken van je verzoek. Probeer het opnieuw.",

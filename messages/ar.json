@@ -371,7 +371,20 @@
     "pdfFile": "ملف PDF",
     "downloadAsWord": "تنزيل كملف Word (.docx)",
     "downloadAsPdf": "تنزيل كملف PDF",
-    "generating": "جارٍ الإنشاء…"
+    "generating": "جارٍ الإنشاء…",
+    "docBridge": {
+      "sendToCode": "Send to /code",
+      "sendToCodeTitle": "Send the current Markdown as docs/<name>.md to the Agent project in /code",
+      "sentToCode": "Document sent to the Agent project ({name})",
+      "sendToCodeNoProject": "Open or create a project in /code and try again",
+      "sendToCodeFailed": "Could not send to /code",
+      "openInEditor": "Open in the document editor (/chat)",
+      "openInEditorAria": "Open {path} in the document editor",
+      "openedAsDocument": "{name} opened as an editable document in /chat",
+      "openInEditorEmpty": "The file is empty or has no exportable text",
+      "openInEditorNoProject": "Open an Agent task first so this file can be synced",
+      "openInEditorFailed": "Could not open in the document editor"
+    }
   },
   "errors": {
     "serverError": "حدثت مشكلة أثناء معالجة طلبك. يرجى المحاولة مرة أخرى.",

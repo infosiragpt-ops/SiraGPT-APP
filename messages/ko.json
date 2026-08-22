@@ -368,7 +368,20 @@
     "pdfFile": "PDF 파일",
     "downloadAsWord": "Word (.docx)로 다운로드",
     "downloadAsPdf": "PDF로 다운로드",
-    "generating": "생성 중…"
+    "generating": "생성 중…",
+    "docBridge": {
+      "sendToCode": "Send to /code",
+      "sendToCodeTitle": "Send the current Markdown as docs/<name>.md to the Agent project in /code",
+      "sentToCode": "Document sent to the Agent project ({name})",
+      "sendToCodeNoProject": "Open or create a project in /code and try again",
+      "sendToCodeFailed": "Could not send to /code",
+      "openInEditor": "Open in the document editor (/chat)",
+      "openInEditorAria": "Open {path} in the document editor",
+      "openedAsDocument": "{name} opened as an editable document in /chat",
+      "openInEditorEmpty": "The file is empty or has no exportable text",
+      "openInEditorNoProject": "Open an Agent task first so this file can be synced",
+      "openInEditorFailed": "Could not open in the document editor"
+    }
   },
   "errors": {
     "serverError": "요청을 처리하는 중에 문제가 발생했습니다. 다시 시도해 주세요.",
