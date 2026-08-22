@@ -1224,6 +1224,11 @@ app.use('/api/apps-ai', require('./src/routes/apps-ai').buildAppsAiRouter());
 app.use('/api/apps-kv', express.json({ limit: '256kb' }), require('./src/routes/apps-kv').buildAppsKvRouter());
 app.use('/api/admin/rbac', rbacRoutes.adminRouter);
 app.use('/api/rbac', rbacRoutes);
+// Media generation charges credits per call and hits paid fal/OpenAI
+// providers; a client retry after a network blip must not re-bill.
+// The middleware is a no-op without an Idempotency-Key header, so
+// un-keyed traffic behaves exactly as before.
+app.use('/api/images', idempotency);
 app.use('/api/images', imagesRoutes);
 app.use('/api/video/provider', videoProviderStatusRoutes);
 app.use('/api/admin/security', adminSecurityRoutes);
@@ -1239,6 +1244,7 @@ app.use('/api/public', publicRoutes);
 app.use('/api/publishing', authenticateToken, requireAdmin, publishingRoutes);
 app.use('/api/download', downloadRoutes);
 app.use('/api/elevenlabs', elevenlabsRoutes);
+app.use('/api/video', idempotency);
 app.use('/api/video', videoRoutes);
 app.use('/api/search', searchAgenticRoutes);
 app.use('/api/search', searchRoutes);
@@ -1295,6 +1301,11 @@ app.use('/api/agent', agentRoutes);
 app.use('/api/agent', agentHarnessRoutes);
 app.use('/api/se-agents', seAgentsRoutes);
 app.use('/api/artifacts', artifactsRoutes);
+// LLM document generation is token-expensive; header-key replay keeps a
+// retried POST /generate-word from paying twice. The handler streams SSE,
+// which the middleware intentionally never captures (2xx JSON only), and
+// its own body-level idempotency in doc.js stays authoritative for /api/doc.
+app.use('/api/document-ai', idempotency);
 app.use('/api/document-ai', documentGenerateAiRoutes);
 app.use('/api/hooks', hooksRoutes);
 app.use('/api/agent/keys', agentKeysRoutes);
@@ -1308,6 +1319,11 @@ app.use('/api/plan', planRoutes);
 app.use('/api/compute', computeRoutes);
 app.use('/api/math', mathRoutes);
 app.use('/api/viz', vizRoutes);
+// doc.js already has body-level idempotency (idempotencyKey field) but a
+// request WITHOUT one runs the LLM pipeline again; this header layer only
+// engages when Idempotency-Key is present, and its 'disabled' outcome in
+// prepareDocumentReplay lets un-keyed traffic pass untouched.
+app.use('/api/doc', idempotency);
 app.use('/api/doc', docRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
