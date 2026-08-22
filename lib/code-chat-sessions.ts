@@ -3,6 +3,7 @@
  */
 
 import type { AgentState } from "./code-agent/types"
+
 import { defaultAgentState } from "./code-agent/types"
 import { canonicalCodexWorkspaceId } from "./codex-workspace-identity"
 import type { CodexTurnCancellationState } from "./codex/turn-cancellation"
@@ -53,6 +54,13 @@ export type CodeChatSession = {
   agent?: AgentState
 }
 
+/** Payload of CODE_CHAT_SESSIONS_UPDATED_EVENT. `activeSessionId` lets each
+ *  listener ignore echoes of the session it just wrote itself (F4/H1). */
+export type CodeChatSessionsUpdatedDetail = {
+  /** Session whose write triggered the event, when known. */
+  activeSessionId?: string
+}
+
 type SessionStore = {
   sessions: CodeChatSession[]
   activeByWorkspace: Record<string, string>
@@ -101,6 +109,100 @@ function storage(): Storage | null {
   }
   return null
 }
+
+/**
+ * F4/H1 — debounce localStorage persistence of the session store.
+ *
+ * During a Codex stream every batch used to run the full
+ * `JSON.stringify(store) + setItem` synchronously (200–500 ms blocked per
+ * second of streaming, measured at production-main 1a2b10e65). Writes are now
+ * coalesced behind a trailing timer; `flushCodeChatStorePersistence()` makes
+ * the write durable immediately for unload and explicit-session-change paths.
+ *
+ * The timer lives on globalThis so tests can drive it with fake timers and so
+ * the module keeps a single scheduler regardless of how many call sites save.
+ */
+const CODE_CHAT_PERSIST_DEBOUNCE_MS = 1000
+
+type CodeChatPersistScheduler = {
+  pendingStore: SessionStore | null
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+function codeChatPersistScheduler(): CodeChatPersistScheduler {
+  const g = globalThis as typeof globalThis & { __codeChatPersistScheduler?: CodeChatPersistScheduler }
+  if (!g.__codeChatPersistScheduler) {
+    g.__codeChatPersistScheduler = { pendingStore: null, timer: null }
+  }
+  return g.__codeChatPersistScheduler
+}
+
+/** Write the store to localStorage right now (used by flush paths). */
+function writeStoreNow(store: SessionStore): boolean {
+  const s = storage()
+  if (!s) return false
+  try {
+    s.setItem(STORAGE_KEY, JSON.stringify(store))
+    return true
+  } catch {
+    /* quota */
+    return false
+  }
+}
+
+/**
+ * Fire the cross-component notification outside React's render/commit work.
+ * saveStore runs inside setState updaters (ensureDefaultSession /
+ * setActiveCodeChatSession passed to setChatSessionStore), which React runs in
+ * the render phase and which must stay side-effect-free. A microtask can still
+ * run before a concurrent render commits and re-enter it; a task runs after
+ * React work has yielded.
+ */
+function scheduleUpdatedEvent() {
+  try {
+    window.setTimeout(() => {
+      try {
+        window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+      } catch {
+        /* noop */
+      }
+    }, 0)
+  } catch {
+    /* noop */
+  }
+}
+
+/**
+ * Flush any debounced persistence immediately. Wired to pagehide/beforeunload
+ * below so a tab close or navigation never loses the last coalesced writes;
+ * also exported for explicit flush points (e.g. switching sessions).
+ */
+export function flushCodeChatStorePersistence() {
+  const sched = codeChatPersistScheduler()
+  if (sched.timer !== null) {
+    clearTimeout(sched.timer)
+    sched.timer = null
+  }
+  const pending = sched.pendingStore
+  if (!pending) return
+  sched.pendingStore = null
+  writeStoreNow(pending)
+}
+
+/** Trailing debounce window (ms) — exported for tests and flush call sites. */
+export const CODE_CHAT_PERSIST_DEBOUNCE_MS_EXPORT = CODE_CHAT_PERSIST_DEBOUNCE_MS
+
+if (typeof window !== "undefined") {
+  // pagehide covers tab close, navigation, and mobile backgrounding;
+  // beforeunload is the belt-and-suspenders desktop fallback.
+  try {
+    window.addEventListener("pagehide", flushCodeChatStorePersistence)
+    window.addEventListener("beforeunload", flushCodeChatStorePersistence)
+  } catch {
+    /* very old engines */
+  }
+}
+
 
 const PHASE_STATUSES: ReadonlySet<string> = new Set([
   "pending",
@@ -224,38 +326,67 @@ function loadStore(): SessionStore {
   }
 }
 
-function saveStore(store: SessionStore) {
-  const s = storage()
-  if (!s) return
-  try {
-    s.setItem(STORAGE_KEY, JSON.stringify(store))
-    if (typeof window !== "undefined") {
-      // Defer the cross-component notification so it never fires during a
-      // React render. saveStore is invoked from inside setState updaters
-      // (e.g. ensureDefaultSession / setActiveCodeChatSession passed to
-      // setChatSessionStore), which React runs in the render phase and
-      // which must stay side-effect-free. Dispatching synchronously there
-      // makes listeners (SidebarFoldersDropdown) call setState mid-render —
-      // the "Cannot update a component while rendering a different
-      // component" warning. The localStorage write above stays synchronous
-      // so any immediate readCodeChatStore() still sees fresh data; only
-      // the event is pushed past the current render/commit.
-      const fire = () => {
+function saveStore(store: SessionStore, detail?: CodeChatSessionsUpdatedDetail) {
+  // F4/H1 — coalesce writes: keep only the newest store and restart the
+  // trailing timer. A burst of stream batches costs one timer bump each
+  // (nanoseconds) instead of a full synchronous serialize per batch; the
+  // single trailing write lands DEBOUNCE_MS after the last mutation.
+  const sched = codeChatPersistScheduler()
+  sched.pendingStore = store
+  if (sched.timer !== null) clearTimeout(sched.timer)
+  sched.timer = setTimeout(() => {
+    sched.timer = null
+    const pending = sched.pendingStore
+    if (!pending) return
+    sched.pendingStore = null
+    writeStoreNow(pending)
+  }, CODE_CHAT_PERSIST_DEBOUNCE_MS)
+  if (typeof window !== "undefined") {
+    // Cross-component notification (SidebarFoldersDropdown). Listeners that
+    // belong to the surface which just wrote re-parse storage for nothing;
+    // they pass their active session id so they can skip their own echo
+    // (see notifyCodeChatStoreExternally).
+    try {
+      window.setTimeout(() => {
         try {
-          window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT))
+          window.dispatchEvent(new CustomEvent(CODE_CHAT_SESSIONS_UPDATED_EVENT, { detail }))
         } catch {
           /* noop */
         }
-      }
-      // A microtask can run before React commits a concurrent render. That is
-      // still re-entrant when saveStore is reached from a state updater and can
-      // keep a fresh workspace in an endless render/restart cycle. A task runs
-      // after the current React work has yielded and committed.
-      window.setTimeout(fire, 0)
+      }, 0)
+    } catch {
+      /* noop */
     }
-  } catch {
-    /* quota */
   }
+}
+
+/**
+ * F4/H1 — re-notify surfaces that skipped their own echo.
+ *
+ * saveStore always fires CODE_CHAT_SESSIONS_UPDATED_EVENT so every listener
+ * (provider context, SidebarFoldersDropdown) stays correct. Listeners may pass
+ * the session they just wrote to storage; for that session the notification is
+ * a pure echo (the writer already holds the new store in React state), and
+ * re-parsing the whole localStorage blob on every stream batch was half of the
+ * measured 200–500 ms/s hot path. Call this only when an EXTERNAL change to a
+ * session must be pushed onto a surface that ignored its own echoes — e.g.
+ * after a background agent finished mutating a session that a mounted panel
+ * has open. Never call it from the same tick as the mutation it mirrors: the
+ * event fires via setTimeout(0) and would then run before this one.
+ */
+export function notifyCodeChatStoreExternally(activeSessionId?: string) {
+  if (typeof window === "undefined") return
+  window.setTimeout(() => {
+    try {
+      window.dispatchEvent(
+        new CustomEvent<CodeChatSessionsUpdatedDetail>(CODE_CHAT_SESSIONS_UPDATED_EVENT, {
+          detail: { activeSessionId },
+        }),
+      )
+    } catch {
+      /* noop */
+    }
+  }, 0)
 }
 
 export function readCodeChatStore(): SessionStore {
@@ -380,7 +511,7 @@ export function updateCodeChatSessionTurns(
       return { ...s, turns, title, updatedAt: Date.now() }
     }),
   }
-  saveStore(next)
+  saveStore(next, { activeSessionId: sessionId })
   return next
 }
 
@@ -398,7 +529,7 @@ export function updateCodeChatSessionAgent(
       return { ...s, agent, updatedAt: Date.now() }
     }),
   }
-  saveStore(next)
+  saveStore(next, { activeSessionId: sessionId })
   return next
 }
 

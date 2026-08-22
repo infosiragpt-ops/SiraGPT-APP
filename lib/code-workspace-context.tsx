@@ -60,6 +60,7 @@ import {
 import {
   CODE_CHAT_SESSIONS_UPDATED_EVENT,
   type CodeChatSession,
+  type CodeChatSessionsUpdatedDetail,
   type CodeChatTurn,
   codeWorkspaceKey,
   codexWorkspaceSessionKey,
@@ -461,10 +462,25 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
-    const sync = () => setChatSessionStore(readCodeChatStore())
+    const sync = (event: Event) => {
+      // F4/H1 — ignore echoes of the session this surface just wrote itself:
+      // the writer already holds the new store in React state, so re-parsing
+      // the whole localStorage blob per stream batch was half of the measured
+      // 200–500 ms/s hot path. Events without a session id (external writers,
+      // legacy dispatches) always re-sync to stay correct.
+      const detail = (event as CustomEvent<CodeChatSessionsUpdatedDetail | undefined>).detail
+      if (detail?.activeSessionId) {
+        setChatSessionStore(prev => {
+          if (prev.activeByWorkspace[workspaceSessionKey] === detail.activeSessionId) return prev
+          return readCodeChatStore()
+        })
+        return
+      }
+      setChatSessionStore(readCodeChatStore())
+    }
     window.addEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
     return () => window.removeEventListener(CODE_CHAT_SESSIONS_UPDATED_EVENT, sync)
-  }, [])
+  }, [workspaceSessionKey])
 
   const setActiveFolder = React.useCallback((folder: ActiveFolder | null) => {
     const previousFolderId = lastFolderIdRef.current
