@@ -17,6 +17,10 @@ export function createStreamBuffer({ onFlush }: CreateOpts): StreamBuffer {
   let rafId: number | null = null;
   let timerId: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  // First-chunk fast path: deliver the very first chunk synchronously so
+  // TTFB matches the network instead of waiting for the first frame/tick
+  // of the batching timer.
+  let hasFlushedOnce = false;
 
   const cancelScheduled = () => {
     if (rafId !== null && typeof window !== 'undefined') {
@@ -34,6 +38,7 @@ export function createStreamBuffer({ onFlush }: CreateOpts): StreamBuffer {
     if (queue.length === 0) return;
     const joined = queue.join('');
     queue = [];
+    hasFlushedOnce = true;
     try {
       onFlush(joined);
     } catch {
@@ -68,6 +73,19 @@ export function createStreamBuffer({ onFlush }: CreateOpts): StreamBuffer {
   return {
     append(chunk: string) {
       if (disposed || !chunk) return;
+      // Chunk-0 fast path: with nothing queued and no flush delivered yet,
+      // hand the first token to the consumer immediately instead of making
+      // it wait for the batching timer's first tick. Later appends keep the
+      // normal per-frame batching.
+      if (!hasFlushedOnce && queue.length === 0) {
+        hasFlushedOnce = true;
+        try {
+          onFlush(chunk);
+        } catch {
+          // swallow — same contract as flushNow
+        }
+        return;
+      }
       queue.push(chunk);
       schedule();
     },
