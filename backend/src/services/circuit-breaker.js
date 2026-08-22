@@ -173,8 +173,21 @@ function allStats() {
   return Array.from(registry.values()).map(b => b.stats());
 }
 
+/**
+ * Minimal read-only view of every registered breaker (name/state/failures).
+ * Meant for /health payloads and structured logs where the full stats()
+ * shape (Date objects, nextAttemptAt) is more than callers need.
+ */
+function getBreakerSnapshot() {
+  return Array.from(registry.values()).map(b => ({
+    name: b.name,
+    state: b.state,
+    failures: b.failureCount,
+  }));
+}
+
 function resetAll() {
   for (const b of registry.values()) b.reset();
 }
 
-module.exports = { CircuitBreaker, CircuitBreakerError, getBreaker, allStats, resetAll, STATES };
+module.exports = { CircuitBreaker, CircuitBreakerError, getBreaker, allStats, getBreakerSnapshot, resetAll, STATES };

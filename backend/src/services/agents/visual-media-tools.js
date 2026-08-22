@@ -25,6 +25,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const sandbox = require('./code-sandbox');
 const { saveArtifact, EXTENSION_TO_MIME, INTERNAL } = require('./task-tools');
+const { withRetry } = require('../../utils/retry-with-backoff');
 
 const { previewText, validateAgentArtifactBuffer } = INTERNAL;
 
@@ -76,6 +77,65 @@ function finalizeArtifact({ filename, buffer, mime, ctx }) {
     ownerUserId: ctx?.userId,
     chatId: ctx?.chatId,
   });
+}
+
+// ── Transient-failure retry for outbound media calls ────────────────────
+// fal.ai and the raw video-download fetches fail occasionally with network
+// errors, 429s or 5xx. One retry with jittered backoff rescues most of
+// them; validation 4xx are never retried (the request itself is wrong).
+// The storyboard fallback below stays the last resort for persistent failures.
+
+function isTransientMediaStatus(status) {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function classifyMediaToolError(error) {
+  // Client cancellation — never retry an aborted download/subscription.
+  if (error?.name === 'AbortError') {
+    return { retryable: false, reason: 'aborted' };
+  }
+  if (error && typeof error === 'object' && 'status' in error && error.status !== undefined) {
+    const status = Number(error.status);
+    if (!Number.isNaN(status)) {
+      return { retryable: isTransientMediaStatus(status), reason: `http_${status}` };
+    }
+  }
+  const code = String(error?.code || '');
+  if (code.startsWith('ERR_')) {
+    // undici / node-fetch network-layer failures: ECONNRESET, ETIMEDOUT...
+    return { retryable: true, reason: code };
+  }
+  return { retryable: true, reason: 'network_error' };
+}
+
+async function fetchWithTransientRetry(fetchImpl, url, init = {}, { maxRetries = 2, baseDelayMs = 500 } = {}) {
+  let lastTransientResponse = null;
+  try {
+    return await withRetry(async () => {
+      const resp = await fetchImpl(url, init);
+      // Raw fetch resolves with ok:false on HTTP errors instead of
+      // throwing, so transient statuses must be surfaced as errors here
+      // for the retry loop to see them.
+      if (resp && typeof resp.ok === 'boolean' && !resp.ok && isTransientMediaStatus(resp.status)) {
+        lastTransientResponse = resp;
+        const error = new Error(`HTTP ${resp.status} fetching ${url}`);
+        error.status = resp.status;
+        throw error;
+      }
+      return resp;
+    }, {
+      maxRetries,
+      baseDelayMs,
+      maxDelayMs: 8_000,
+      classifyError: classifyMediaToolError,
+      signal: init.signal || null,
+    });
+  } catch (error) {
+    // Exhausted transient failures: hand back the last real response so
+    // callers keep their existing `if (resp.ok)` degrade path.
+    if (lastTransientResponse) return lastTransientResponse;
+    throw error;
+  }
 }
 
 /**
@@ -2067,7 +2127,7 @@ const generateVideo = {
           const videoUrl = result.videoUrl || result.downloadUrl;
           emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: 'Descargando video generado…', partial: true });
 
-          const videoResp = await fetch(videoUrl, { signal: ctx.signal });
+          const videoResp = await fetchWithTransientRetry(fetch, videoUrl, { signal: ctx.signal });
           if (videoResp.ok) {
             const videoBuf = Buffer.from(await videoResp.arrayBuffer());
             const filename = `video_${crypto.randomBytes(4).toString('hex')}.mp4`;
@@ -2185,11 +2245,14 @@ const generateVideo = {
             audio: true,
           });
           emitEvent(ctx, 'tool_output', { tool: 'generate_video', preview: `Generando video real con ${endpoint} (${secs}s)…`, partial: true });
-          const falResult = await fal.subscribe(endpoint, { input: falInput, logs: false });
+          const falResult = await withRetry(
+            () => fal.subscribe(endpoint, { input: falInput, logs: false }),
+            { maxRetries: 2, baseDelayMs: 800, maxDelayMs: 10_000, classifyError: classifyMediaToolError },
+          );
           const veoUrl = falVideoCatalog.extractFalVideoUrl(falResult)
             || (falResult && falResult.data && falResult.data.video && falResult.data.video.url);
           if (veoUrl) {
-            const dl = await fetch(veoUrl, { signal: ctx.signal });
+            const dl = await fetchWithTransientRetry(fetch, veoUrl, { signal: ctx.signal });
             if (dl && dl.ok) {
               const videoBuf = Buffer.from(await dl.arrayBuffer());
               const filename = `video_${crypto.randomBytes(4).toString('hex')}.mp4`;
@@ -8531,6 +8594,9 @@ const __test_helpers = {
   generateScenesFromPrompt,
   svgDocument,
   xmlEscape,
+  isTransientMediaStatus,
+  classifyMediaToolError,
+  fetchWithTransientRetry,
 };
 
 module.exports = { VISUAL_MEDIA_TOOLS, __test_helpers };

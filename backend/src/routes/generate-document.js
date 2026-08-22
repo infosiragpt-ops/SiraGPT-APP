@@ -5,6 +5,8 @@ const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const prisma = require('../config/database');
 const aiService = require('../services/ai-service');
 const OpenAI = require('openai');
+const { getBreaker, CircuitBreakerError } = require('../services/circuit-breaker');
+const { withRetry } = require('../utils/retry-with-backoff');
 const usageService = require("../services/usage-service");
 const { recordLLMUsage } = require("../services/observability/record-llm-usage");
 const { optionalAuth } = require('../middleware/optionalAuth');
@@ -96,6 +98,73 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 }
 
 const streamControllers = new Map();
+
+// ── Provider resilience (retry + circuit breaker) ────────────────────────
+// Same per-(provider, model) breaker registry ai-service.js uses for chat
+// streaming, so a provider that is failing for the Word Connector also
+// short-circuits fast instead of hanging every document request.
+
+const DOC_RETRY_MAX_RETRIES = Number.parseInt(process.env.DOC_GEN_MAX_RETRIES, 10) || 2;
+const DOC_RETRY_BASE_DELAY_MS = Number.parseInt(process.env.DOC_GEN_BASE_DELAY_MS, 10) || 400;
+
+function isTransientProviderStatus(status) {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
+function classifyProviderError(error) {
+  // Client disconnect / request abort — retrying an abandoned generation
+  // only burns provider quota for nobody.
+  if (error?.name === 'AbortError') {
+    return { retryable: false, reason: 'aborted' };
+  }
+  const status = error?.status ?? error?.response?.status;
+  if (typeof status === 'number' && !isTransientProviderStatus(status)) {
+    return { retryable: false, reason: `http_${status}` };
+  }
+  if (typeof status === 'number') {
+    return { retryable: true, reason: `http_${status}` };
+  }
+  const code = error?.code || '';
+  // 4xx from the provider itself means our request is bad — retrying the
+  // identical payload would just burn latency and quota.
+  if (code === 400 || code === 401 || code === 403 || code === 404 || code === 422) {
+    return { retryable: false, reason: `api_${code}` };
+  }
+  return { retryable: true, reason: code ? String(code) : 'network_error' };
+}
+
+function createDocumentGenerationCall({ provider, model }, { baseDelayMs = DOC_RETRY_BASE_DELAY_MS } = {}) {
+  let callCount = 0;
+  return {
+    getCallCount() { return callCount; },
+    breakerName: `${String(provider).toLowerCase()}:${model}`,
+    run(createStream) {
+      const breaker = getBreaker(this.breakerName, { failureThreshold: 5, resetTimeoutMs: 60_000 });
+      return breaker.execute(() => withRetry(() => {
+        callCount += 1;
+        return createStream();
+      }, {
+        maxRetries: DOC_RETRY_MAX_RETRIES,
+        baseDelayMs,
+        maxDelayMs: 8_000,
+        classifyError: classifyProviderError,
+      }));
+    },
+  };
+}
+
+function mapRouteErrorToSsePayload(error) {
+  if (error instanceof CircuitBreakerError) {
+    return {
+      status: 503,
+      payload: {
+        code: 'provider_unavailable',
+        error: 'El proveedor del modelo no está disponible temporalmente. Intenta de nuevo en unos momentos.',
+      },
+    };
+  }
+  return null;
+}
 
 
 // ✅ Generate Word Document Content - Specialized endpoint for Word Connector
@@ -290,12 +359,15 @@ ${prompt}
 
             let fullResponseContent = '';
 
-            // Generate stream
-            const stream = await openai.chat.completions.create({
+            const generationCall = createDocumentGenerationCall({ provider, model });
+
+            // Generate stream — retried on transient provider errors and
+            // guarded by the shared per-(provider, model) circuit breaker.
+            const stream = await generationCall.run(() => openai.chat.completions.create({
                 model: model,
                 messages: messages,
                 stream: true,
-            }, { signal });
+            }, { signal }));
 
             // Stream response
             for await (const chunk of stream) {
@@ -326,6 +398,20 @@ ${prompt}
 
         } catch (error) {
             console.error('❌ Word Document generation error:', error);
+
+            const breakerMapped = mapRouteErrorToSsePayload(error);
+            if (breakerMapped) {
+                if (!res.headersSent) {
+                    res.status(breakerMapped.status).json(breakerMapped.payload);
+                } else {
+                    try {
+                        res.write(`data: ${JSON.stringify({ error: breakerMapped.payload.error, code: breakerMapped.payload.code })}\n\n`);
+                    } catch (writeError) {
+                        console.error('Failed to write error to stream:', writeError);
+                    }
+                }
+                return;
+            }
 
             const sanitizedError = typeof aiService.modelSupportsVision === 'function'
                 ? (function() {
@@ -361,3 +447,4 @@ ${prompt}
 );
 
 module.exports = router;
+module.exports.INTERNAL = { createDocumentGenerationCall, classifyProviderError, isTransientProviderStatus, mapRouteErrorToSsePayload };

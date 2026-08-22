@@ -1,5 +1,6 @@
 const axios = require('axios');
 const prisma = require('../config/database');
+const { withRetry } = require('../utils/retry-with-backoff');
 const {
   getProviderCatalogDiagnostics,
   listManifestModels,
@@ -47,6 +48,25 @@ function roundFloats(value) {
     return out;
   }
   return value;
+}
+
+// The fal.ai catalog endpoints are a background model-sync nicety, not a
+// user-facing request: transient 429/5xx/network failures are worth one
+// jittered-backoff retry, but the sync must still degrade to the static
+// manifest when the provider stays down.
+function isTransientFalSyncError(error) {
+  const status = error?.response?.status;
+  if (status) return status === 429 || status >= 500;
+  return !error?.response;
+}
+
+async function axiosGetWithRetry(url, config = {}, { baseDelayMs = 500 } = {}) {
+  return withRetry(() => axios.get(url, config), {
+    maxRetries: (Number.parseInt(process.env.FAL_CATALOG_SYNC_ATTEMPTS, 10) || 3) - 1,
+    baseDelayMs,
+    maxDelayMs: 8_000,
+    classifyError: (error) => ({ retryable: isTransientFalSyncError(error), reason: 'fal_catalog_sync' }),
+  });
 }
 
 class ModelSyncService {
@@ -140,7 +160,7 @@ class ModelSyncService {
           let page = 1;
           let pages = 1;
           do {
-            const response = await axios.get('https://fal.ai/api/explore/models', {
+            const response = await axiosGetWithRetry('https://fal.ai/api/explore/models', {
               params: { categories: category, page },
               headers: { 'Content-Type': 'application/json' },
               timeout: 10000,
@@ -1320,3 +1340,4 @@ const modelSyncService = new ModelSyncService();
 
 module.exports = modelSyncService;
 module.exports.ModelSyncService = ModelSyncService;
+module.exports.__resilience = { isTransientFalSyncError, axiosGetWithRetry };
