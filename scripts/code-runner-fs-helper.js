@@ -250,7 +250,14 @@ function safeReadBinaryFile(root, rawRel, maxBytes = 6_000_000) {
 }
 
 function shouldIgnoreExport(rel) {
-  return rel.split('/').some((segment) => IGNORED_EXPORT_DIRS.has(segment));
+  // Excluir tanto directorios ignorados como archivos de entorno (.env, .env.local…)
+  // que pueden contener secretos reales del proyecto generado.
+  const segments = rel.split('/');
+  for (const segment of segments) {
+    if (IGNORED_EXPORT_DIRS.has(segment)) return true;
+  }
+  const leaf = segments[segments.length - 1];
+  return leaf === '.env' || /^\.env\.[A-Za-z0-9_-]+$/.test(leaf);
 }
 
 function collectExportFiles(root, { maxFiles = 5000, maxTotalBytes = 20_000_000 } = {}) {
