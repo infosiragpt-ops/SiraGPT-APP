@@ -56,7 +56,7 @@ test('admin queue dashboard is disabled cleanly without REDIS_URL', async () => 
   assert.equal(status.status, 'disabled');
   assert.equal(status.redisUrlConfigured, false);
   assert.equal(status.queue, 'custom-agent-tasks');
-  assert.equal(status.queues.length, 5);
+  assert.equal(status.queues.length, DEFAULT_PHYSICAL_QUEUE_NAMES.length);
 });
 
 test('admin queue dashboard reports queue health when Redis is configured', async () => {
@@ -102,7 +102,7 @@ test('admin queue dashboard degrades when queue health throws', async () => {
 
 // ── Shared queue registry — /api/admin/queues/health snapshot ────────
 
-test('queues health snapshot lists all five queues as skipped without REDIS_URL', async () => {
+test('queues health snapshot lists all registered queues as skipped without REDIS_URL', async () => {
   const snap = await adminQueues.INTERNAL.buildQueuesHealthSnapshot({
     env: {},
     registry: createDefaultQueueRegistry({ env: {} }),
@@ -240,7 +240,7 @@ test('admin /health returns 503 only for unhealthy and retains super-admin detai
   }
 });
 
-test('Bull Board builds adapters for all five physical producer queues', () => {
+test('Bull Board builds adapters for all physical producer queues', () => {
   const producerQueues = DEFAULT_PHYSICAL_QUEUE_NAMES.map((name) => ({ name }));
   let getterCalls = 0;
   const registry = createQueueRegistry({
@@ -274,8 +274,8 @@ test('Bull Board builds adapters for all five physical producer queues', () => {
     ExpressAdapterClass: FakeExpressAdapter,
   });
 
-  assert.equal(getterCalls, 5);
-  assert.equal(boardConfig.queues.length, 5);
+  assert.equal(getterCalls, DEFAULT_PHYSICAL_QUEUE_NAMES.length);
+  assert.equal(boardConfig.queues.length, DEFAULT_PHYSICAL_QUEUE_NAMES.length);
   assert.deepEqual(
     boardConfig.queues.map((adapter) => adapter.queue.name),
     DEFAULT_PHYSICAL_QUEUE_NAMES,

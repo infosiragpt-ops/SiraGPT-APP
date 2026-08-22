@@ -60,7 +60,11 @@ jobs:
         run: npm ci --prefer-offline --no-audit --no-fund
 
       - name: Backend doc-engine tests
+        env:
+          NODE_ENV: test
         run: npm --prefix backend run test:doc-engine
 
       - name: Vitest doc-engine tests
+        env:
+          NODE_ENV: test
         run: npm run test:unit -- tests/lib/doc-engine --pool=threads
