@@ -910,8 +910,8 @@ module.exports.runDockerBuffer = runDockerBuffer;
 
 // Sandbox helper scripts live as plain, gitleaks-auditable files under
 // backend/deploy/webtop/ and are piped into the webtop container at runtime.
-const DESKCTL_SCRIPT_PATH = path.join(__dirname, '..', '..', '..', 'deploy', 'webtop', 'sira-deskctl.py');
-const GROK_LAYOUT_SCRIPT_PATH = path.join(__dirname, '..', '..', '..', 'deploy', 'webtop', 'sira-grok-layout.sh');
+const DESKCTL_SCRIPT_PATH = path.join(__dirname, '..', '..', '..', 'deploy', 'webtop', 'deskctl.py');
+const GROK_LAYOUT_SCRIPT_PATH = path.join(__dirname, '..', '..', '..', 'deploy', 'webtop', 'grok-layout.sh');
 
 function readScriptB64(filePath) {
   return fs.readFileSync(filePath).toString('base64');
