@@ -9,6 +9,12 @@ const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 const isReplitDeployment = process.env.REPLIT_DEPLOYMENT === '1'
 const replitBackendBase = 'http://127.0.0.1:5050'
 const projectRoot = dirname(fileURLToPath(import.meta.url))
+const clientBuildId = [
+  process.env.NEXT_PUBLIC_BUILD_ID,
+  process.env.GIT_COMMIT,
+  process.env.SOURCE_COMMIT,
+  process.env.COMMIT_SHA,
+].map((value) => String(value || '').trim()).find((value) => value && value !== 'unknown') || ''
 
 function resolveBackendInternalUrl() {
   const configured = process.env.BACKEND_INTERNAL_URL
@@ -24,6 +30,16 @@ const nextConfig = {
   // its own lockfile one directory up, and Next 15 otherwise guesses the
   // parent workspace as the root and prints a startup warning.
   outputFileTracingRoot: projectRoot,
+
+  // Version-skew recovery for /code: a stable deployment id lets Next
+  // bust client navigations after a FE publish, and generateBuildId
+  // keeps HTML/chunk URLs aligned with GIT_COMMIT / NEXT_PUBLIC_BUILD_ID.
+  ...(clientBuildId
+    ? {
+        deploymentId: clientBuildId,
+        generateBuildId: async () => clientBuildId,
+      }
+    : {}),
 
   // Standalone output produces a self-contained build at .next/standalone/
   // with only the runtime files needed. Ideal for Docker multi-stage builds
@@ -101,6 +117,24 @@ const nextConfig = {
           {
             key: 'Referrer-Policy',
             value: 'strict-origin-when-cross-origin',
+          },
+        ],
+      },
+      {
+        source: '/code',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'private, no-cache, must-revalidate',
+          },
+        ],
+      },
+      {
+        source: '/code/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'private, no-cache, must-revalidate',
           },
         ],
       },

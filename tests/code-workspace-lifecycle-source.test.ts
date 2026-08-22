@@ -26,6 +26,12 @@ describe("code workspace lifecycle contracts", () => {
     assert.doesNotMatch(gate, /if \(!user\) \{[\s\S]*?router\.replace/)
   })
 
+  it("bootstraps /code through the classified ensure controller", () => {
+    assert.match(pageSource, /CodeWorkspaceBootstrap/)
+    assert.match(pageSource, /classifyWorkspaceError/)
+    assert.match(pageSource, /from "@\/components\/code\/code-workspace-bootstrap"/)
+  })
+
   it("clears delayed tool and agent dispatches on effect cleanup", () => {
     assert.match(pageSource, /const timer = window\.setTimeout\([\s\S]*?return \(\) => window\.clearTimeout\(timer\)/)
     assert.match(pageSource, /const primaryTimer = window\.setTimeout\(openAgent, 220\)/)
