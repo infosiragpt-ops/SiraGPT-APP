@@ -337,9 +337,30 @@ async function run({
         response_format: { type: 'json_object' },
         messages,
       });
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model,
+          provider: null,
+          outcome: 'ok',
+          durationMs: Date.now() - llmStart,
+          tokensIn: resp?.usage?.prompt_tokens,
+          tokensOut: resp?.usage?.completion_tokens,
+          agent: role,
+        });
+      } catch { /* optional */ }
       raw = resp.choices?.[0]?.message?.content || '';
       stats.approxCompletionTokens += approxTokens(raw);
     } catch (err) {
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model,
+          provider: null,
+          outcome: 'error',
+          error: err,
+          durationMs: Date.now() - llmStart,
+          agent: role,
+        });
+      } catch { /* optional */ }
       const step = trace.append({ error: `LLM call failed: ${err.message || err}`, durationMs: Date.now() - llmStart });
       safeOnStep(onStep, step);
       terminatedBy = 'error';
