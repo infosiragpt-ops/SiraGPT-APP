@@ -27,3 +27,17 @@ export function extractPlanLabel(content: string): PlanLabelResult {
   if (!isPlan) return { label: null, body: text }
   return { label: firstLine.replace(/[\s:：.]+$/, ""), body: rest }
 }
+
+
+/** OLA200_WAVE_G FE-083 — F4 labels aligned with live-activity (chips stay put). */
+const F4_PLAN_LABELS: Record<string, string> = {
+  planning: "Planificando", plan_start: "Planificando", orchestrator_start: "Planificando",
+  planReady: "Plan listo", plan_ready: "Plan listo", delegating: "Delegando a sub-agente",
+  replanning: "Replanificando", str_replace: "Editando el archivo", add_slide: "Agregando una diapositiva",
+  document_edit: "Editando el documento", create_docx: "Creando el archivo Word",
+}
+export function planLabelFromActivity(event?: { type?: string; tool?: string; stage?: string; step?: string } | null): string | null {
+  if (!event) return null
+  const key = String(event.stage || event.step || event.tool || event.type || "").trim()
+  return F4_PLAN_LABELS[key] || null
+}

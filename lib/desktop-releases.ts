@@ -146,17 +146,29 @@ async function fetchDesktopReleases(): Promise<GitHubDesktopRelease[]> {
   return Array.isArray(payload) ? payload : []
 }
 
+export function findPublicDesktopRelease(
+  releases: GitHubDesktopRelease[],
+  platform: DesktopReleasePlatform,
+  channel: DesktopReleaseChannel,
+): DesktopReleaseAsset | null {
+  const exact = findDesktopRelease(releases, platform, channel)
+  if (exact) return exact
+  // Public downloads: if no signed/stable build exists, offer the newest beta (unsigned).
+  if (channel === "stable") return findDesktopRelease(releases, platform, "beta")
+  return null
+}
+
 export async function resolveDesktopRelease(
   platform: DesktopReleasePlatform,
   channel: DesktopReleaseChannel,
 ): Promise<DesktopReleaseAsset | null> {
   try {
-    const release = findDesktopRelease(await fetchDesktopReleases(), platform, channel)
+    const release = findPublicDesktopRelease(await fetchDesktopReleases(), platform, channel)
     if (release) return release
   } catch {
     // The public beta fallback keeps downloads available during GitHub API outages.
   }
-  return channel === "beta" ? FALLBACK_BETA_ASSETS[platform] || null : null
+  return FALLBACK_BETA_ASSETS[platform] || null
 }
 
 export async function resolveDesktopReleaseCatalog(channel: DesktopReleaseChannel) {

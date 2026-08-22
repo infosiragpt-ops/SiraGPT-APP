@@ -152,9 +152,12 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
   },
   {
     file: "components/fal/fal-model-gallery.tsx",
-    reason: "Public cached FAL model manifest GET.",
+    reason: "Public cached FAL model manifest GET plus the optional-auth VIDEO admin catalog GET used to filter hidden video models.",
     accepts: (text) =>
-      text === 'fetch("/api/ai/fal-models")'
+      (
+        text === 'fetch("/api/ai/fal-models", { headers: { "Cache-Control": "no-cache" } })'
+        || text === 'fetch("/api/ai/models?type=VIDEO", { headers: { "Cache-Control": "no-cache" } })'
+      )
       && isCredentialFreePublicFetch(text),
     required: true,
   },
@@ -211,6 +214,11 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "lib/attachments/link-preview.ts",
     reason: "Public same-origin link-preview GET with an injectable fetch seam.",
     accepts: (text) => text === "fetch(...args)",
+  },
+  {
+    file: "lib/attachment-url.ts",
+    reason: "Presigned external/blob asset download with a 403 re-presign retry; the presign refresh itself uses authenticatedFetch.",
+    accepts: (text) => text === "fetch(url, init)" || text === "fetch(next, init)",
   },
   {
     file: "lib/code-agent/observability.ts",

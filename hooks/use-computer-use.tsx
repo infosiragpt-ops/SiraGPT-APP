@@ -58,6 +58,7 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 
   const wsRef = useRef<WebSocket | null>(null)
   const actionSeqRef = useRef(0)
+  const consumedFrameIdsRef = useRef<Set<string>>(new Set())
 
   // Generate unique session ID
   const generateSessionId = useCallback(() => {
@@ -356,6 +357,8 @@ export const useComputerUse = (): ComputerUseHookReturn => {
   }, [])
 
   const sendUserAction = useCallback((action: Record<string, unknown>) => {
+    const frameId = (action as { frameId?: unknown }).frameId
+    if (frameId && !consumeFrameId(consumedFrameIdsRef.current, frameId)) return
     const socket = wsRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN) return
     socket.send(JSON.stringify({ type: 'user-action', action }))
@@ -380,3 +383,18 @@ export const useComputerUse = (): ComputerUseHookReturn => {
 }
 
 export default useComputerUse
+
+
+/** OLA200_WAVE_G FE-092 — replay protection by frameId. */
+export function isFrameIdConsumed(consumed: Set<string>, frameId: unknown): boolean {
+  const id = String(frameId || "").trim()
+  if (!id) return false
+  return consumed.has(id)
+}
+export function consumeFrameId(consumed: Set<string>, frameId: unknown): boolean {
+  const id = String(frameId || "").trim()
+  if (!id) return true
+  if (consumed.has(id)) return false
+  consumed.add(id)
+  return true
+}

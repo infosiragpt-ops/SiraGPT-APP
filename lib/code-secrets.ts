@@ -180,3 +180,15 @@ export function buildRuntimeEnv(folderId: string | null | undefined, _files: Cod
   }
   return env
 }
+
+const SECRET_VALUE_RE = /(?:sk|pk|rk|ghp|xox[baprs])-[A-Za-z0-9._-]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]+/gi
+
+export function redactSecretsForLogs(value: unknown): string {
+  return String(value == null ? "" : value)
+    .replace(SECRET_VALUE_RE, "[REDACTED]")
+    .replace(/(["']?(?:API[_-]?KEY|SECRET|TOKEN|PASSWORD)["']?\s*[:=]\s*)(["']?)[^\s"']+/gi, "$1$2[REDACTED]")
+}
+
+export function secretsSafeForAnalytics(entries: CodeSecretEntry[]): Array<{ key: string; hasValue: boolean; scope: string }> {
+  return (entries || []).map((s) => ({ key: s.key, hasValue: Boolean(s.value), scope: s.scope }))
+}

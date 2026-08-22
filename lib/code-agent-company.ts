@@ -11,6 +11,7 @@ export type AgentDepartmentDefinition = {
   desiredAgents?: number
   custom?: boolean
   enabled?: boolean
+  computerRunId?: string | null
 }
 
 export type AgentCompanySessionStatus = {
@@ -179,17 +180,8 @@ export const AGENT_COMPANY_DEPARTMENTS: readonly AgentDepartmentDefinition[] = [
 const ACTIVE_PHASES: ReadonlySet<AgentPhase> = new Set(["intake", "generating", "debugging"])
 
 export function agentCompanyDisplayName(rawName?: string | null): string {
-  const raw = String(rawName || "").trim()
-  if (!raw || /^(nueva app|new app|nuevo proyecto|untitled|workspace)(\b|\s)/i.test(raw)) {
-    return "SiraGPT.COM"
-  }
-  if (/sira\s*gpt/i.test(raw)) return "SiraGPT.COM"
-  if (/tesis\s*20/i.test(raw)) return "TESIS20.COM"
-  if (/\.[a-z]{2,}$/i.test(raw)) return raw.toUpperCase()
-
-  const clean = raw.replace(/\s+/g, " ").trim()
-  if (/^[a-z0-9_-]{2,24}$/i.test(clean)) return `${clean.toUpperCase()}.COM`
-  return clean
+  // Show the stored name exactly as written. Never append .com or force DOMAIN.COM.
+  return String(rawName || "").replace(/\s+/g, " ").trim()
 }
 
 export function codeSessionIsActive(session: CodeChatSession): boolean {
@@ -326,6 +318,14 @@ export function departmentIdForSession(
   departments: readonly AgentDepartmentDefinition[] = AGENT_COMPANY_DEPARTMENTS,
 ): string {
   if (session.id === rootSessionId) return "ceo-office"
+  const normalizedTitle = session.title.trim().toLowerCase()
+  for (const department of departments) {
+    const name = department.name.trim().toLowerCase()
+    if (!name) continue
+    if (normalizedTitle === name || normalizedTitle.startsWith(`${name} ·`) || normalizedTitle.startsWith(`${name} -`)) {
+      return department.id
+    }
+  }
   const haystack = sessionSearchText(session)
   let bestMatch: { id: string; score: number } | null = null
   for (const department of departments) {
@@ -365,4 +365,16 @@ export function buildAgentCompanySnapshot(
     resourceCount: countWorkspaceResources(files),
     latestActivityAt: latestActivityAt.length > 0 ? Math.max(...latestActivityAt) : null,
   }
+}
+
+
+/** OLA200_WAVE_F FE-079 — exponential backoff when /code dept returns 429. */
+export function companyRefetchBackoffMs(attempt: number, status?: number): number {
+  const n = Math.max(0, Number(attempt) || 0)
+  if (status === 429) return Math.min(30_000, 1000 * (2 ** Math.min(n, 5)))
+  return Math.min(15_000, 400 * (2 ** Math.min(n, 4)))
+}
+
+export function shouldStopCompanyRefetch(status?: number): boolean {
+  return status === 401 || status === 403 || status === 410
 }

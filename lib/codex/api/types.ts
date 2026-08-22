@@ -376,6 +376,7 @@ export interface CodexCompanyDepartment {
   desiredAgents: number
   custom: boolean
   enabled: boolean
+  computerRunId?: string | null
 }
 export interface CodexDepartmentPool {
   id: string

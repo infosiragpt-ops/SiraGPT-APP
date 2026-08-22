@@ -4,6 +4,7 @@ import * as React from "react"
 import Image from "next/image"
 import {
   Activity,
+  Loader2,
   AlertTriangle,
   Ban,
   CheckCircle2,
@@ -337,9 +338,9 @@ function artifactDisplayName(artifact: AgentArtifact): string {
 }
 
 function artifactValidationPassed(artifact: AgentArtifact): boolean {
-  const explicitPassed = artifact.validation?.passed
-  if (typeof explicitPassed === "boolean") return explicitPassed
-  return artifact.validation?.ok === true
+  // Only an explicit passed===true is honest. `ok` is a weaker/generic
+  // flag some pipelines set without running quality gates.
+  return artifact.validation?.passed === true
 }
 
 function artifactFormat(artifact: AgentArtifact): string {
@@ -787,20 +788,11 @@ function ArtifactCard({
   return (
     <>
     <div
-      className="my-2 w-full max-w-xl cursor-pointer overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm transition-colors hover:bg-muted/30 active:bg-muted/45 sm:p-4"
+      className="my-2 w-full max-w-xl overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm sm:p-4"
       data-testid="agent-artifact-card"
       data-artifact-id={artifact.id}
-      data-preview-openable="true"
-      role="button"
-      tabIndex={0}
+      role="group"
       aria-label={`Archivo: ${displayName}`}
-      onClick={preview}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault()
-          preview()
-        }
-      }}
     >
       <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
         <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -826,10 +818,7 @@ function ArtifactCard({
             </div>
           </div>
         </div>
-        <div
-          className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0"
-          onClick={(event) => event.stopPropagation()}
-        >
+        <div className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0">
           {artifact.sourceFileId && (
             <button
               type="button"
@@ -1068,76 +1057,32 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   }
 
   if (isLiveActivity) {
-    // Claude-style live activity (mirrors ThinkingTrace): a single
-    // shimmering line with the current step + a live elapsed counter +
-    // chevron, and a dimmed step trace behind a left rail. No box, no
-    // headers, no counters — the line IS the status.
-    const visibleSteps = timelineSteps.slice(-5)
-    const headerLabel = runningTimelineStep?.label || summary.label
+    // Claude-style live activity: ONE gray italic line that CHANGES as
+    // the agent works, plus a small spinner. No fake rotating copy, no
+    // step chain. The composer Stop button stays visible while running.
+    const headerLabel = (
+      state.currentActivity
+      || runningTimelineStep?.label
+      || summary.label
+      || "Pensando…"
+    )
     return (
       <div
         role="status"
         aria-live="polite"
         aria-label="Agente trabajando"
         className={cn("my-2.5 w-full max-w-2xl", className)}
+        data-live-activity="true"
       >
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setLiveExpanded((v) => !v)}
-            aria-expanded={liveExpanded}
-            aria-label="Ver actividad del agente"
-            className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
-          >
-            <ThinkingIndicator size="sm" label="Trabajando" />
-            <span className="thinking-shimmer-text min-w-0 truncate text-[13px] font-medium tracking-tight">
-              {headerLabel}
-            </span>
-            {elapsedLabel && (
-              <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground/55">{elapsedLabel}</span>
-            )}
-            {liveExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-            )}
-          </button>
-          {canCancel && (
-            <button
-              type="button"
-              onClick={cancelTask}
-              disabled={cancelling}
-              title="Cancelar tarea"
-              aria-label="Cancelar tarea"
-              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-60"
-            >
-              {cancelling ? <ThinkingIndicator size="xs" /> : <Ban className="h-3.5 w-3.5" />}
-            </button>
+          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+          <span className="thinking-shimmer-text min-w-0 truncate text-[13.5px] italic tracking-tight text-muted-foreground">
+            {headerLabel}
+          </span>
+          {elapsedLabel && (
+            <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground/55">{elapsedLabel}</span>
           )}
         </div>
-
-        {liveExpanded && (
-          <div className="mt-1 border-l border-border/50 pl-3">
-            {visibleSteps.map((step) => (
-              <div key={step.id} className="py-1">
-                <div
-                  className={cn(
-                    "text-[12.5px] leading-5",
-                    step.status === "running" ? "font-medium text-foreground/75" : "text-muted-foreground/80",
-                    step.status === "error" && "text-red-600 dark:text-red-400",
-                  )}
-                >
-                  {step.label}
-                  {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
-                </div>
-                {step.detail && (
-                  <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
-                )}
-                <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     )
   }

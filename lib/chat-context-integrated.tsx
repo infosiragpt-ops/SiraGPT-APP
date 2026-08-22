@@ -11,9 +11,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
-import { buildDocumentChatRequest } from "./document-chat-request"
-import { collectMessageFileIds } from "./chat/composer-files"
-import { resolveCatalogModel } from "./chat/catalog-model"
+import { buildDocumentChatRequest, pickLastArtifactId } from "./document-chat-request"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
@@ -33,6 +31,7 @@ import {
 import { devLog } from "./dev-log"
 import { createStreamBuffer, type StreamBuffer } from "./stream-buffer"
 import { safeUUID } from "./safe-uuid"
+import { resolveCatalogModel } from "./chat/catalog-model"
 import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
@@ -429,7 +428,11 @@ function createAgentTraceHandlers(opts: {
             args: event.args,
             status: 'planned',
           })
-          patchMessage({ agentSteps: orderedSteps(), agentRun: { status: 'running', ...coworkRun, checklist: coworkChecklist } })
+          patchMessage({
+            agentSteps: orderedSteps(),
+            agentRun: { status: 'running', ...coworkRun, checklist: coworkChecklist },
+            progressStage: event.humanDescription || event.name || 'Trabajando…',
+          })
           break
         }
         case 'tool_executing': {
@@ -564,13 +567,15 @@ function getRegenerationAttempt(message?: Message | null): number {
 type VideoGenerationTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'timeout' | 'error'
 
 type VideoGenerationOptions = {
-  resolution?: '480p' | '720p'
+  resolution?: '480p' | '720p' | '1080p'
   aspectRatio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9'
-  duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+  duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30
   audio?: boolean
   model?: string
   sourceImageUrls?: string[]
   sourceImageFiles?: any[]
+  sourceVideoUrls?: string[]
+  sourceAudioUrls?: string[]
   // Optional cancel signal so the composer can abort the kickoff request,
   // mirroring the dedicated AbortController image generation already uses.
   signal?: AbortSignal
@@ -1003,16 +1008,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatType, hasInitialized]);
 
-  // Pick up admin model changes when the user tabs back to the app.
+  // Pick up admin model changes when the user tabs back, and every 20s
+  // while the tab is visible, so an admin activate/deactivate shows for
+  // every user without a reload.
   useEffect(() => {
     if (!hasInitialized) return;
     const onFocus = () => { void refreshModels(); };
     const onVisible = () => { if (document.visibilityState === 'visible') void refreshModels(); };
     window.addEventListener('focus', onFocus);
     document.addEventListener('visibilitychange', onVisible);
+    const tick = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshModels();
+    }, 20_000);
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(tick);
     };
   }, [refreshModels, hasInitialized]);
 
@@ -1200,12 +1211,6 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Generate/persist the backend turn identity BEFORE the first attempt.
       // Offline/reload retries pass reusePending=true and reuse this exact key
       // instead of replacing the durable draft with a fresh stream identity.
-      const catalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
-      if (catalogModel.replaced) {
-        setSelectedModel(catalogModel.name);
-        if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
-      }
-
       const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
         ? options.idempotencyKey.trim()
         : '';
@@ -1215,11 +1220,24 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const requestedStreamId = typeof options?.streamId === 'string' && options.streamId.trim()
         ? options.streamId.trim()
         : safeUUID();
+      const catalogLock = resolveCatalogModel(selectedModel, availableModels, selectProvider);
       const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
-        ? { ...options.requestEnvelope }
+        ? {
+            ...options.requestEnvelope,
+            provider: resolveCatalogModel(
+              options.requestEnvelope.model || selectedModel,
+              availableModels,
+              options.requestEnvelope.provider || selectProvider,
+            ).provider,
+            model: resolveCatalogModel(
+              options.requestEnvelope.model || selectedModel,
+              availableModels,
+              options.requestEnvelope.provider || selectProvider,
+            ).name,
+          }
         : {
-            provider: catalogModel.provider,
-            model: catalogModel.name,
+            provider: catalogLock.provider,
+            model: catalogLock.name,
             reasoningEffort: selectedEffort,
           };
       const pendingMessage = options?.reusePending
@@ -1426,11 +1444,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generateArtifactStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
-                if (ev.type === 'stage') {
-                  lastStage = ev.label || lastStage;
+                if (ev.type === 'stage' || ev.type === 'activity') {
+                  lastStage = ev.text || ev.label || lastStage;
                   lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
                   renderProgress();
                 } else if (ev.type === 'final') {
@@ -1503,16 +1521,17 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             const docRequest = buildDocumentChatRequest({
               prompt: content,
               chatId: activeChat.id,
-              model: catalogModel.name,
+              model: selectedModel,
               fileIds: requestFileIds,
+              lastArtifactId: pickLastArtifactId(activeChat?.messages),
             });
             throwIfTurnCancelled();
             await apiClient.generateDocStream(
               docRequest,
               (ev: any) => {
                 if (controller.signal.aborted) return;
-                if (ev.type === 'stage') {
-                  lastStage = ev.label || lastStage;
+                if (ev.type === 'stage' || ev.type === 'activity') {
+                  lastStage = ev.text || ev.label || lastStage;
                   lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
                   renderProgress();
                 } else if (ev.type === 'final') {
@@ -1593,11 +1612,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generateVizStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
-                if (ev.type === 'stage') {
-                  lastStage = ev.label || lastStage;
+                if (ev.type === 'stage' || ev.type === 'activity') {
+                  lastStage = ev.text || ev.label || lastStage;
                   lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
                   renderProgress();
                 } else if (ev.type === 'final') {
@@ -1673,11 +1692,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.solveMathStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
-                if (ev.type === 'stage') {
-                  lastStage = ev.label || lastStage;
+                if (ev.type === 'stage' || ev.type === 'activity') {
+                  lastStage = ev.text || ev.label || lastStage;
                   lastPct = typeof ev.pct === 'number' ? ev.pct : lastPct;
                   renderProgress();
                 } else if (ev.type === 'final') {
@@ -1762,7 +1781,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           try {
             throwIfTurnCancelled();
             await apiClient.generatePlanStream(
-              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: catalogModel.name },
+              { prompt: professionalPrompt, displayPrompt: content, chatId: activeChat.id, model: selectedModel },
               (ev: any) => {
                 if (controller.signal.aborted) return;
                 if (ev.type === 'stage') {
@@ -2063,6 +2082,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
               }),
+              onActivity: (text: string) => {
+                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) return;
+                setCurrentChat((prevChat) => {
+                  if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                  return {
+                    ...prevChat,
+                    messages: prevChat.messages.map((msg) =>
+                      msg.id === aiMessagePlaceholder.id
+                        ? { ...msg, progressStage: text }
+                        : msg
+                    ),
+                  };
+                });
+              },
               onReplace: (replacement) => {
                 if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
                   return;
@@ -2245,7 +2278,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, uploadedFiles, markChatStreaming, markChatIdle]
   );
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage): Promise<PendingRetryResult> => {
@@ -2864,24 +2897,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
     try {
       // Call the streaming function with the original user message
-      const regenCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
-      if (regenCatalogModel.replaced) {
-        setSelectedModel(regenCatalogModel.name);
-        if (regenCatalogModel.provider) setSelectedProivder(regenCatalogModel.provider);
-      }
       throwIfRegenerationCancelled();
       await apiClient.generateAIStream(
         {
-          provider: regenCatalogModel.provider,
-          model: regenCatalogModel.name,
+          provider: selectProvider,
+          model: selectedModel,
           reasoningEffort: selectedEffort,
           prompt: originalUserMessage.content,
           chatId: currentChat.id,
-          files: (() => {
-            const attached = collectMessageFileIds(originalUserMessage.files);
-            if (attached.length > 0) return attached;
-            return collectRecentDocumentContextIds(messagesBeforeRegeneration);
-          })(),
+          files: (originalUserMessage.files?.map((f: any) => f.id) as string[]) || [],
           streamId: streamId,
           regenerate: true,
           regenerationAttempt: nextRegenerationAttempt,
@@ -3147,7 +3171,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // el gate de aclaración ("¿qué formato quieres?") y la instrucción de
       // edición se perdería — exactamente el bug de "reenviar" reportado.
       const editFilesArr: any[] = Array.isArray(parsedFiles) ? parsedFiles : [];
-      const editFileIds = collectMessageFileIds(parsedFiles);
+      const editFileIds = editFilesArr.map((f: any) => String(f?.id || f?.fileId || '')).filter(Boolean);
       const editHasDocAttachment = editFilesArr.some((f: any) => {
         const name = String(f?.name || f?.originalName || f?.filename || '');
         const mime = String(f?.mimeType || f?.type || '');
@@ -3179,8 +3203,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             { prompt: newContent, chatId: currentChat.id, files: editFileIds },
             (ev: any) => {
               if (controller.signal.aborted) return;
-              if (ev.type === 'stage') {
-                docStage = ev.label || docStage;
+              if (ev.type === 'stage' || ev.type === 'activity') {
+                docStage = ev.text || ev.label || docStage;
                 docPct = typeof ev.pct === 'number' ? ev.pct : docPct;
                 renderDocProgress();
               } else if (ev.type === 'final') {
@@ -3257,24 +3281,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       streamBuffersRef.current.set(currentChat.id, editBuffer);
 
       // Now, generate the new response
-      const editCatalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
-      if (editCatalogModel.replaced) {
-        setSelectedModel(editCatalogModel.name);
-        if (editCatalogModel.provider) setSelectedProivder(editCatalogModel.provider);
-      }
       throwIfEditRegenerationCancelled();
       await apiClient.generateAIStream(
         {
-          provider: editCatalogModel.provider,
-          model: editCatalogModel.name,
+          provider: selectProvider,
+          model: selectedModel,
           reasoningEffort: selectedEffort,
           prompt: newContent,
           chatId: currentChat.id,
-          files: (() => {
-            const attached = collectMessageFileIds(parsedFiles);
-            if (attached.length > 0) return attached;
-            return collectRecentDocumentContextIds(messagesUpToEdit);
-          })(),
+          files: Array.isArray(parsedFiles) ? parsedFiles : [], // Pass file IDs
           streamId: streamId,
           regenerate: true,
         },
@@ -3455,7 +3470,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // latest closure is captured at call time, so listing it would
     // re-create the callback on every keystroke that flips the flag.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentChat, isLoading, selectProvider, selectedModel, availableModels, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
+  }, [currentChat, isLoading, selectProvider, selectedModel, selectChat, setCurrentChat, setIsLoading, setIsStreaming, setCurrentStreamId, markChatStreaming, markChatIdle]);
 
   const pollVideoStatus = useCallback((
     operationId: string,
@@ -3624,41 +3639,49 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
       const backendBaseUrl = baseUrl.replace('/api', '');
       const imageUrls: string[] = [];
-      const addImageUrl = (rawUrl?: string | null) => {
+      const videoUrls: string[] = [];
+      const audioUrls: string[] = [];
+      const addMediaUrl = (list: string[], rawUrl?: string | null) => {
         const raw = String(rawUrl || '').trim();
         if (!raw) return;
         const url = raw.startsWith('http') ? raw : `${backendBaseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`;
-        if (!imageUrls.includes(url)) imageUrls.push(url);
+        if (!list.includes(url)) list.push(url);
       };
+      const addImageUrl = (rawUrl?: string | null) => addMediaUrl(imageUrls, rawUrl);
+      const addVideoUrl = (rawUrl?: string | null) => addMediaUrl(videoUrls, rawUrl);
+      const addAudioUrl = (rawUrl?: string | null) => addMediaUrl(audioUrls, rawUrl);
 
       (options?.sourceImageUrls || []).forEach(addImageUrl);
+      (options?.sourceVideoUrls || []).forEach(addVideoUrl);
+      (options?.sourceAudioUrls || []).forEach(addAudioUrl);
 
       const sourceFiles = [
         ...(Array.isArray(options?.sourceImageFiles) ? options.sourceImageFiles : []),
         ...(Array.isArray(uploadedFiles) ? uploadedFiles : []),
       ];
-      sourceFiles
-        .filter(f => f?.type?.startsWith('image/') || f?.mimeType?.startsWith('image/'))
-        .forEach((imageFile) => {
-          addImageUrl(imageFile.url || imageFile.thumbnailUrl);
-          if (!imageFile.url && imageFile.filename && imageFile.userId) {
-            addImageUrl(`/uploads/${imageFile.userId}/${imageFile.filename}`);
-          }
-        });
+      sourceFiles.forEach((mediaFile) => {
+        const mime = String(mediaFile?.type || mediaFile?.mimeType || '');
+        const addUrl = mime.startsWith('video/') ? addVideoUrl : mime.startsWith('audio/') ? addAudioUrl : mime.startsWith('image/') ? addImageUrl : null;
+        if (!addUrl) return;
+        addUrl(mediaFile.url || mediaFile.thumbnailUrl);
+        if (!mediaFile.url && mediaFile.filename && mediaFile.userId) {
+          addUrl(`/uploads/${mediaFile.userId}/${mediaFile.filename}`);
+        }
+      });
 
-      // Fallback/enrichment from the API so every selected image id is included.
+      // Fallback/enrichment from the API so every selected media id is included.
       if (fileIds && fileIds.length > 0) {
         try {
           for (const fileId of fileIds) {
             const fileResponse = await apiClient.getFile(fileId);
             const file = (fileResponse as any)?.file || fileResponse;
-
-            if (file && file.mimeType?.startsWith('image/')) {
-              if (file.url) {
-                addImageUrl(file.url);
-              } else if (file.filename && file.userId) {
-                addImageUrl(`/uploads/${file.userId}/${file.filename}`);
-              }
+            const mime = String(file?.mimeType || '');
+            const addUrl = mime.startsWith('video/') ? addVideoUrl : mime.startsWith('audio/') ? addAudioUrl : mime.startsWith('image/') ? addImageUrl : null;
+            if (!file || !addUrl) continue;
+            if (file.url) {
+              addUrl(file.url);
+            } else if (file.filename && file.userId) {
+              addUrl(`/uploads/${file.userId}/${file.filename}`);
             }
           }
         } catch (err) {
@@ -3684,10 +3707,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         chatId: activeChat.id,
         files: fileIds,
         image_url: imageUrl,
-        image_urls: imageUrls
+        image_urls: imageUrls,
+        video_urls: videoUrls,
+        audio_urls: audioUrls,
       });
 
-      // 2) Kick off video generation with files and image URL
+      // 2) Kick off video generation with files and media URLs
       const videoResponse = await apiClient.generateVideo({
         prompt,
         aspect_ratio: aspectRatio,
@@ -3698,6 +3723,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         files: fileIds,
         ...(imageUrl && { image_url: imageUrl }),
         ...(imageUrls.length > 0 && { image_urls: imageUrls }),
+        ...(videoUrls.length > 0 && { video_urls: videoUrls, video_url: videoUrls[0] }),
+        ...(audioUrls.length > 0 && { audio_urls: audioUrls, audio_url: audioUrls[0] }),
         model
       }, { signal: options?.signal });
 

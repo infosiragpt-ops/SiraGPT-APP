@@ -1,5 +1,5 @@
 // Frontend API client for backend integration
-import { streamSseJson } from "./sse-client"
+import { fetchResumeHeaders, streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import {
   authenticatedFetch,
@@ -7,6 +7,7 @@ import {
 } from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
+import { resolveCatalogModel } from "./chat/catalog-model"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -85,6 +86,7 @@ export type ChatRunSummary = {
 }
 export type AgentTaskPointer = {
   taskId: string
+  chatId?: string | null
   status: "queued" | "running" | "completed" | "cancelled" | "error" | string
   displayGoal?: string | null
   updatedAt?: string | null
@@ -114,6 +116,12 @@ export function isTerminalAgentTaskRecoveryHttpStatus(statusCode: unknown): bool
 export function shouldDetachAgentTaskRecovery(failedPolls: number): boolean {
   return Number.isFinite(failedPolls) && failedPolls >= MAX_AGENT_TASK_RECOVERY_FAILURES
 }
+
+/** OLA200_WAVE_G FE-089 — stop ChatPendingStream recovery after 8 failures. */
+export function shouldStopPendingStreamRecovery(failedPolls: number): boolean {
+  return shouldDetachAgentTaskRecovery(failedPolls)
+}
+
 
 /**
  * Selects the durable task that /chat should reconnect. `latestTask` alone is
@@ -573,6 +581,8 @@ type AIStreamOptions = {
   onToolCall?: (payload: { index: number; name?: string; argsDelta?: string }) => void
   // Agent harness: typed tool-call / permission / done frames (AgentTrace).
   onAgentEvent?: (event: AgentStreamEvent) => void
+  // Claude-style live activity (tool / thinking beat). One Spanish line.
+  onActivity?: (text: string, event?: { type?: string; tool?: string; label?: string }) => void
   // Real token usage (+ optional USD cost) emitted once at stream end, so a
   // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
   // provider list price; costAppliedUsd is after the plan policy (struck-through
@@ -1122,6 +1132,14 @@ class ApiClient {
       if (includeBearer && this.token) {
         headers.set('Authorization', `Bearer ${this.token}`);
       }
+      try {
+        if (typeof window !== 'undefined') {
+          const family = window.localStorage.getItem('siragpt:refresh-family');
+          const version = window.localStorage.getItem('siragpt:refresh-version');
+          if (family) headers.set('x-refresh-family', family);
+          if (version) headers.set('x-refresh-version', version);
+        }
+      } catch { /* private mode */ }
 
       try {
         const res = await authenticatedFetch(`${this.baseURL}/auth/refresh`, {
@@ -1286,6 +1304,10 @@ class ApiClient {
 
   async getActiveChatRuns(): Promise<{ runs: ChatRunSummary[] }> {
     return (await this.request('/chats/active-runs')) as { runs: ChatRunSummary[] };
+  }
+
+  async getActiveAgentTasks(): Promise<{ ok: boolean; tasks: AgentTaskPointer[] }> {
+    return (await this.request('/chats/active-tasks')) as { ok: boolean; tasks: AgentTaskPointer[] };
   }
 
   /** Forget a single recalled memory by id (powers the "Olvidar" action). */
@@ -1540,31 +1562,6 @@ class ApiClient {
     })) as { sourceVersion: number; version: FileVersionRecord };
   }
 
-  // Persist a manual edit from the /chat document editor as a new FileVersion.
-  // Returns `{ fileId, version }` mirroring the backend edit route. Available
-  // on the backend via POST /files/:id/edit (files.js).
-  async saveDocumentEdit(
-    fileId: string,
-    data: { content: string; chatId?: string; summary?: string },
-  ): Promise<{ fileId: string; version: FileVersionRecord }> {
-    return (await this.request(`/files/${encodeURIComponent(fileId)}/edit`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    })) as { fileId: string; version: FileVersionRecord };
-  }
-
-  // Read the edited Markdown of a specific FileVersion (rehydrates the /chat
-  // document editor after a reload). GET /files/:id/versions/:versionId/content.
-  async getFileVersionContent(
-    fileId: string,
-    versionId: string,
-  ): Promise<{ fileId: string; version: { id: string; version: number; filename: string; content: string } }> {
-    return (await this.request(`/files/${encodeURIComponent(fileId)}/versions/${encodeURIComponent(versionId)}/content`, {})) as {
-      fileId: string;
-      version: { id: string; version: number; filename: string; content: string };
-    };
-  }
-
   // AI endpoints
   // async generateAI(data: { model: string; prompt: string; chatId?: string; files?: string[] }) {
   //   return this.request('/ai/generate', {
@@ -1648,6 +1645,16 @@ class ApiClient {
     signal?: AbortSignal,
     options: AIStreamOptions = {}
   ) {
+    const locked = resolveCatalogModel(data.model, [], data.provider);
+    const turnKey = typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()
+      ? data.idempotencyKey.trim()
+      : safeUUID();
+    data = {
+      ...data,
+      provider: locked.provider,
+      model: locked.name,
+      idempotencyKey: turnKey,
+    };
     const url = `${this.baseURL}/ai/generate`;
     const baseConfig: RequestInit = {
       method: 'POST',
@@ -1676,6 +1683,11 @@ class ApiClient {
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
     let lastEventId: string | null = null;
+    try {
+      if (typeof sessionStorage !== "undefined" && data.chatId) {
+        lastEventId = sessionStorage.getItem(`siragpt:lastEventId:${data.chatId}`) || null;
+      }
+    } catch { /* private mode */ }
     let terminalErrorDelivered = false;
     let streamFinished = false;
 
@@ -1700,7 +1712,9 @@ class ApiClient {
 
       try {
         const requestHeaders = new Headers(baseConfig.headers);
-        if (lastEventId) requestHeaders.set('Last-Event-ID', lastEventId);
+        // Leftover: fresh POST must not send Last-Event-ID (would resume a prior turn).
+        const extraHeaders = attempt === 1 ? freshGenerateHeaders() : fetchResumeHeaders(lastEventId);
+        for (const [key, value] of Object.entries(extraHeaders)) requestHeaders.set(key, value);
         const response = await this.authenticatedFetch(url, {
           ...baseConfig,
           headers: requestHeaders,
@@ -1849,7 +1863,14 @@ class ApiClient {
                 dataLine = eventLine.substring(6);
               }
             }
-            if (eventId) lastEventId = eventId;
+            if (eventId) {
+              lastEventId = eventId;
+              try {
+                if (typeof sessionStorage !== "undefined" && data.chatId) {
+                  sessionStorage.setItem(`siragpt:lastEventId:${data.chatId}`, eventId);
+                }
+              } catch { /* quota / private mode */ }
+            }
             if (dataLine == null) continue;
             const payload = dataLine;
             // Sentinel the backend emits at the very end of every stream,
@@ -1906,6 +1927,11 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+              } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
+                if (options.onActivity) {
+                  options.onActivity(String(jsonData.text || jsonData.label), jsonData);
+                }
+                lastProcessTime = Date.now();
               } else if (jsonData.type === 'reasoning_delta' && typeof jsonData.reasoning === 'string') {
                 // Chain-of-thought delta (ThinkingTrace). Deliberately keyed
                 // `reasoning` (not `content`) so legacy parsers ignore it.
@@ -2207,7 +2233,8 @@ class ApiClient {
   async generateGmailResponse(data: { prompt: string; chatId?: string; model: string; type: string }) {
     const response = await this.request('/ai/generate-gmail', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model }),
     });
 
     return response;
@@ -2226,8 +2253,8 @@ class ApiClient {
     try {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -2335,8 +2362,8 @@ class ApiClient {
     try {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -2850,6 +2877,30 @@ class ApiClient {
     return response.text();
   }
 
+  async getAdminSoftwareErrors(params?: {
+    page?: number
+    limit?: number
+    severity?: string
+    service?: string
+    status?: string
+    from?: string
+    to?: string
+    q?: string
+  }) {
+    const query = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+      ) as Record<string, string>,
+    ).toString();
+    return this.request(`/admin/software-errors${query ? `?${query}` : ''}`);
+  }
+
+  async retryAdminSoftwareError(id: string) {
+    return this.request(`/admin/software-errors/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+    });
+  }
+
   // Admin invoices
   async getAdminStripeInvoices(params?: { limit?: number; starting_after?: string }) {
     const query = new URLSearchParams(params as any).toString();
@@ -3069,6 +3120,7 @@ class ApiClient {
   }> {
     return this.request('/ai/generate-speech', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
       signal: options.signal,
       // Long narrations can legitimately take longer than the generic 30s
@@ -3102,6 +3154,7 @@ class ApiClient {
   }> {
     return this.request('/ai/generate-music', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
       signal: options.signal,
       // Music generation runs synchronously inside the request and can take a
@@ -3237,7 +3290,7 @@ class ApiClient {
         throw new Error('No response body');
       }
 
-      for await (const jsonData of streamSseJson<any>(response.body)) {
+      for await (const jsonData of streamSseJson<any>(response.body, { stopOnDoneMessage: true })) {
         onData(jsonData);
       }
     } catch (error: any) {
@@ -3251,14 +3304,18 @@ class ApiClient {
   async generateVideo(data: {
     prompt: string;
     aspect_ratio?: 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4' | '21:9';
-    resolution?: '480p' | '720p';
-    duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+    resolution?: '480p' | '720p' | '1080p';
+    duration?: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30;
     audio?: boolean;
     negative_prompt?: string;
     chatId?: string;
     files?: string[];
     image_url?: string;
     image_urls?: string[];
+    video_url?: string;
+    video_urls?: string[];
+    audio_url?: string;
+    audio_urls?: string[];
     model?: string;
   }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {
@@ -3488,6 +3545,7 @@ class ApiClient {
   ) {
     return this.request('/ai/generate-chart', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
       signal: options.signal,
     });
@@ -3498,6 +3556,7 @@ class ApiClient {
     options: { signal?: AbortSignal } = {},
   ) {
     return this.request('/figma/generate_flowchart', {
+      headers: { ...freshGenerateHeaders() },
       method: 'POST',
       body: JSON.stringify(data),
       signal: options.signal,
@@ -3507,7 +3566,8 @@ class ApiClient {
   async generatePlan(data: { prompt: string; chatId?: string; model?: string }) {
     return this.request('/plan/generate', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3540,6 +3600,7 @@ class ApiClient {
       template?: string;
       complexity?: 'simple' | 'standard' | 'high' | 'stress';
       files?: string[];
+      lastArtifactId?: string;
       outline?: string[];
       researchSources?: Array<{
         title?: string | null;
@@ -3603,8 +3664,13 @@ class ApiClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...freshGenerateHeaders(),
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          model: clampDeepSeekModel(data?.model) || data?.model,
+          provider: data?.provider ? 'DeepSeek' : data?.provider,
+        }),
         signal: opts.signal,
       });
       res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
@@ -3663,8 +3729,8 @@ class ApiClient {
     const url = `${this.baseURL}/ai/generate-webdev`;
     const config = await this.prepareMutatingFetch({
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
 
     try {
@@ -3712,7 +3778,8 @@ class ApiClient {
   }) {
     return this.request('/ai/generate-vector-ppt', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3726,7 +3793,8 @@ class ApiClient {
   }) {
     return this.request('/ai/generate-ppt', {
       method: 'POST',
-      body: JSON.stringify(data),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
     });
   }
 
@@ -3857,7 +3925,8 @@ class ApiClient {
 
     return this.request('/ai/generate-google-services', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      headers: { ...freshGenerateHeaders() },
+      body: JSON.stringify({ ...payload, model: clampDeepSeekModel(payload.model) || payload.model }),
     });
   }
 
@@ -3900,6 +3969,7 @@ class ApiClient {
   async generateThesis(data: { topics: string[]; chatId?: string }) {
     return this.request('/thesis/generate', {
       method: 'POST',
+      headers: { ...freshGenerateHeaders() },
       body: JSON.stringify(data),
     });
   }

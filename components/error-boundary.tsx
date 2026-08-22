@@ -52,7 +52,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       name: error.name,
       message: (error.message || "").slice(0, 500),
     })
-    reportErrorBoundary(label, error)
+    const digest = (error as Error & { digest?: string }).digest
+    const requestId = (typeof crypto !== "undefined" && "randomUUID" in crypto)
+      ? crypto.randomUUID()
+      : `eb-${Date.now().toString(36)}`
+    reportErrorBoundary(label, error, { digest, requestId })
     this.props.onError?.(error, info)
   }
 

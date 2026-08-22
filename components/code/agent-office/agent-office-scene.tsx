@@ -21,6 +21,14 @@ import { cn } from "@/lib/utils"
 
 import { addEdgeDistrict } from "./agent-office-city"
 import {
+  OFFICE_PRO_MARKER,
+  applyOfficeLook,
+  createOfficeWalkBounds,
+  officeNavShouldHandleKey,
+  stepOfficeLocomotion,
+  type AgentOfficeNavMode,
+} from "./agent-office-navigation"
+import {
   agentOfficeWorkerStationVisualState,
   applyAgentOfficeWorkerStationVisualState,
 } from "./agent-office-visual-state"
@@ -32,7 +40,7 @@ import {
 } from "./agent-office-layout"
 
 export type AgentOfficeCameraCommand = {
-  type: "reset" | "zoom-in" | "zoom-out"
+  type: "reset" | "zoom-in" | "zoom-out" | "fly" | "walk" | "orbit"
   nonce: number
 }
 
@@ -40,13 +48,16 @@ type AgentOfficeSceneProps = {
   model: AgentOfficeModel
   variant?: "full" | "thumbnail"
   paused?: boolean
+  closeUp?: boolean
   timeOfDay?: OfficeTimeOfDay
   timePhase?: OfficeTimePhase
   selectedWorkerId?: string | null
   cameraCommand?: AgentOfficeCameraCommand | null
+  navMode?: AgentOfficeNavMode
   className?: string
   onSelectWorker?: (workerId: string) => void
   onSelectDepartment?: (departmentId: string) => void
+  onNavModeChange?: (mode: AgentOfficeNavMode) => void
   onReady?: () => void
 }
 
@@ -102,6 +113,7 @@ type AgentOfficeCameraControls = {
   reset: () => void
   zoomIn: () => void
   zoomOut: () => void
+  setMode: (mode: AgentOfficeNavMode) => void
 }
 
 type StandbyCapacityMarker = {
@@ -550,6 +562,41 @@ function createDepartmentLabel(
   return sprite
 }
 
+function addDepartmentIslandFlag(
+  group: THREE.Group,
+  color: number,
+  isCeo: boolean,
+  zoneWidth: number,
+  zoneDepth: number,
+) {
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.035, 0.045, 2.35, 8),
+    material(0x94a3b8, 0.35, 0.55),
+  )
+  pole.position.set(zoneWidth / 2 - 0.42, 1.18, -zoneDepth / 2 + 0.38)
+  group.add(pole)
+
+  const cloth = new THREE.Mesh(
+    new THREE.PlaneGeometry(isCeo ? 0.92 : 0.78, isCeo ? 0.52 : 0.44),
+    new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.55,
+      metalness: 0.08,
+      side: THREE.DoubleSide,
+    }),
+  )
+  cloth.position.set(zoneWidth / 2 - 0.05, 2.08, -zoneDepth / 2 + 0.38)
+  cloth.rotation.y = -0.18
+  group.add(cloth)
+
+  const finial = new THREE.Mesh(
+    new THREE.SphereGeometry(isCeo ? 0.07 : 0.055, 10, 8),
+    new THREE.MeshBasicMaterial({ color: isCeo ? 0xfbbf24 : 0xe2e8f0 }),
+  )
+  finial.position.set(zoneWidth / 2 - 0.42, 2.38, -zoneDepth / 2 + 0.38)
+  group.add(finial)
+}
+
 function addCeoCommandNexus(
   group: THREE.Group,
   zoneDepth: number,
@@ -954,8 +1001,20 @@ function runCameraCommand(
   controls: AgentOfficeCameraControls,
   command: AgentOfficeCameraCommand,
 ) {
-  if (command.type === "reset") controls.reset()
-  else if (command.type === "zoom-in") controls.zoomIn()
+  if (command.type === "reset" || command.type === "orbit") {
+    controls.setMode("orbit")
+    controls.reset()
+    return
+  }
+  if (command.type === "fly") {
+    controls.setMode("fly")
+    return
+  }
+  if (command.type === "walk") {
+    controls.setMode("walk")
+    return
+  }
+  if (command.type === "zoom-in") controls.zoomIn()
   else controls.zoomOut()
 }
 
@@ -963,21 +1022,28 @@ export function AgentOfficeScene({
   model,
   variant = "full",
   paused = false,
+  closeUp = false,
   timeOfDay,
   timePhase,
   selectedWorkerId = null,
   cameraCommand = null,
+  navMode = "orbit",
   className,
   onSelectWorker,
   onSelectDepartment,
+  onNavModeChange,
   onReady,
 }: AgentOfficeSceneProps) {
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const pausedRef = React.useRef(paused)
+  const closeUpRef = React.useRef(closeUp)
+  closeUpRef.current = closeUp
   const selectedWorkerRef = React.useRef(selectedWorkerId)
   const selectWorkerRef = React.useRef(onSelectWorker)
   const selectDepartmentRef = React.useRef(onSelectDepartment)
+  const onNavModeChangeRef = React.useRef(onNavModeChange)
   const onReadyRef = React.useRef(onReady)
+  const navModeRef = React.useRef<AgentOfficeNavMode>(navMode)
   const cameraControlsRef = React.useRef<AgentOfficeCameraControls | null>(null)
   const invalidateSceneRef = React.useRef<(() => void) | null>(null)
   const liveSceneUpdateRef = React.useRef<((nextModel: AgentOfficeModel) => void) | null>(null)
@@ -1029,8 +1095,15 @@ export function AgentOfficeScene({
   React.useEffect(() => {
     selectWorkerRef.current = onSelectWorker
     selectDepartmentRef.current = onSelectDepartment
+    onNavModeChangeRef.current = onNavModeChange
     onReadyRef.current = onReady
-  }, [onReady, onSelectDepartment, onSelectWorker])
+  }, [onNavModeChange, onReady, onSelectDepartment, onSelectWorker])
+
+  React.useEffect(() => {
+    navModeRef.current = navMode
+    cameraControlsRef.current?.setMode(navMode)
+    invalidateSceneRef.current?.()
+  }, [navMode])
 
   React.useEffect(() => {
     const controls = cameraControlsRef.current
@@ -1080,15 +1153,25 @@ export function AgentOfficeScene({
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
     renderer.domElement.dataset.officeCanvas = variant
+    renderer.domElement.dataset.officePro = OFFICE_PRO_MARKER
+    renderer.domElement.dataset.officeNav = navModeRef.current
+    host.dataset.officePro = OFFICE_PRO_MARKER
     host.appendChild(renderer.domElement)
 
     const scene = new THREE.Scene()
 
-    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 280)
+    const camera = new THREE.PerspectiveCamera(36, 1, 0.1, 420)
     const target = new THREE.Vector3(0, 0, 0)
     let yaw = -0.72
     let pitch = 0.72
     let distance = 42
+    let navModeLocal: AgentOfficeNavMode = navModeRef.current
+    const locoPosition = new THREE.Vector3(0, 1.64, 8)
+    const locoYawPitch = { yaw: Math.PI, pitch: -0.06 }
+    const desiredCamera = new THREE.Vector3()
+    const walkBounds = createOfficeWalkBounds(1, 1)
+    const pressedKeys = new Set<string>()
+    let lastFrameTime = window.performance.now()
 
     const sceneModel = modelRef.current
     // Full mode is operational truth: never hide an empty department and never
@@ -1127,6 +1210,7 @@ export function AgentOfficeScene({
       totalWidth,
       totalDepth,
     } = layout
+    Object.assign(walkBounds, createOfficeWalkBounds(totalWidth, totalDepth))
 
     host.dataset.officeDepartmentCount = String(sceneModel.departments.length)
     host.dataset.officeRenderedDepartmentCount = String(layout.departmentCount)
@@ -1152,11 +1236,9 @@ export function AgentOfficeScene({
       variant,
     })
     camera.far = Math.max(
-      280,
+      380,
       edgeDistrict.framing.portraitDistance * 3,
-      edgeDistrict.framing.maxDistance * 2.4,
-      Math.abs(edgeDistrict.framing.groundY) * 2.8,
-      edgeDistrict.counts.tallestBuildingHeight * 2.2,
+      edgeDistrict.framing.districtWidth * 2.2,
       totalWidth * 3,
       totalDepth * 3,
     )
@@ -1172,11 +1254,10 @@ export function AgentOfficeScene({
     renderer.domElement.dataset.cityMoverCount = String(edgeDistrict.counts.vehicles)
     renderer.domElement.dataset.cityLightCount = String(edgeDistrict.counts.lightFixtures)
     renderer.domElement.dataset.hqStackedFloors = String(edgeDistrict.counts.hqStackedFloors)
-    renderer.domElement.dataset.hqFloorHeight = String(edgeDistrict.counts.hqFloorHeight)
+    renderer.domElement.dataset.hqFloorHeight = edgeDistrict.counts.hqFloorHeight.toFixed(2)
     renderer.domElement.dataset.rooftopOffice = "true"
     host.dataset.cityBuildingCount = String(edgeDistrict.counts.buildings)
     host.dataset.hqStackedFloors = String(edgeDistrict.counts.hqStackedFloors)
-    host.dataset.hqFloorHeight = String(edgeDistrict.counts.hqFloorHeight)
 
     let needsRender = true
     let animationFrame = 0
@@ -1195,20 +1276,55 @@ export function AgentOfficeScene({
       edgeDistrict.framing.portraitDistance * 1.18,
     )
 
-    const updateCamera = () => {
+    const syncOrbitDesired = () => {
       const horizontal = Math.cos(pitch) * distance
-      camera.position.set(
+      desiredCamera.set(
         target.x + Math.sin(yaw) * horizontal,
         target.y + Math.sin(pitch) * distance,
         target.z + Math.cos(yaw) * horizontal,
       )
-      camera.lookAt(target)
+    }
+
+    const updateCamera = () => {
+      if (navModeLocal === "orbit") syncOrbitDesired()
+      invalidate()
+    }
+
+    const enterLocomotion = (mode: AgentOfficeNavMode) => {
+      navModeLocal = mode
+      navModeRef.current = mode
+      renderer.domElement.dataset.officeNav = mode
+      host.dataset.officeNav = mode
+      if (mode === "walk") {
+        locoPosition.set(0, walkBounds.eyeHeight, Math.min(walkBounds.maxZ - 0.8, totalDepth / 2 + 3.4))
+        locoYawPitch.yaw = Math.PI
+        locoYawPitch.pitch = -0.04
+        camera.fov = 62
+      } else if (mode === "fly") {
+        locoPosition.copy(camera.position)
+        locoYawPitch.yaw = yaw
+        locoYawPitch.pitch = THREE.MathUtils.clamp(pitch - 0.35, -1.15, 1.15)
+        camera.fov = 58
+      } else {
+        camera.fov = 36
+      }
+      camera.updateProjectionMatrix()
       invalidate()
     }
 
     const resetCamera = () => {
       const aspect = Math.max(0.35, host.clientWidth / Math.max(1, host.clientHeight))
       const portraitMix = 1 - THREE.MathUtils.smoothstep(aspect, 0.62, 1.12)
+      if (closeUpRef.current) {
+        camera.fov = 42
+        camera.updateProjectionMatrix()
+        yaw = -0.18
+        pitch = 0.42
+        distance = 8.4
+        target.set(0, 0.95, 0.15)
+        updateCamera()
+        return
+      }
       camera.fov = THREE.MathUtils.lerp(36, variant === "thumbnail" ? 48 : 54, portraitMix)
       camera.updateProjectionMatrix()
       yaw = edgeDistrict.framing.yaw
@@ -1235,12 +1351,27 @@ export function AgentOfficeScene({
       updateCamera()
     }
     cameraControlsRef.current = {
-      reset: resetCamera,
+      reset: () => {
+        enterLocomotion("orbit")
+        resetCamera()
+        camera.position.copy(desiredCamera)
+      },
       zoomIn: () => zoomCamera(0.82),
       zoomOut: () => zoomCamera(1.22),
+      setMode: (mode) => {
+        if (mode === "orbit") {
+          enterLocomotion("orbit")
+          resetCamera()
+          return
+        }
+        enterLocomotion(mode)
+        onNavModeChangeRef.current?.(mode)
+      },
     }
     cameraControlsGenerationRef.current += 1
     resetCamera()
+    camera.position.copy(desiredCamera)
+    camera.lookAt(target)
     const pendingCameraCommand = latestCameraCommandRef.current
     const controlsGeneration = cameraControlsGenerationRef.current
     const lastAppliedCameraCommand = lastAppliedCameraCommandRef.current
@@ -1301,11 +1432,11 @@ export function AgentOfficeScene({
     const floor = new THREE.Mesh(
       new THREE.PlaneGeometry(totalWidth + 10, totalDepth + 10),
       new THREE.MeshPhysicalMaterial({
-        color: light.floor,
-        roughness: 0.72,
-        metalness: 0.08,
-        clearcoat: 0.16,
-        clearcoatRoughness: 0.58,
+        color: night ? 0x6a4e38 : 0xc4a074,
+        roughness: 0.78,
+        metalness: 0.04,
+        clearcoat: 0.08,
+        clearcoatRoughness: 0.72,
       }),
     )
     floor.rotation.x = -Math.PI / 2
@@ -1420,6 +1551,9 @@ export function AgentOfficeScene({
 
       if (isCeo && variant === "full") {
         addCeoCommandNexus(departmentGroup, zoneDepth, working)
+      }
+      if (variant === "full") {
+        addDepartmentIslandFlag(departmentGroup, stripeColor, isCeo, zoneWidth, zoneDepth)
       }
 
       const visibleWorkers = variant === "thumbnail"
@@ -1815,13 +1949,22 @@ export function AgentOfficeScene({
       if (dragging) {
         const dx = event.clientX - lastPointer.x
         const dy = event.clientY - lastPointer.y
-        yaw -= dx * 0.006
-        pitch = THREE.MathUtils.clamp(pitch + dy * 0.004, 0.28, 1.22)
+        if (navModeLocal === "orbit") {
+          yaw -= dx * 0.006
+          pitch = THREE.MathUtils.clamp(pitch + dy * 0.004, 0.28, 1.22)
+        } else {
+          locoYawPitch.yaw -= dx * 0.0048
+          locoYawPitch.pitch = THREE.MathUtils.clamp(
+            locoYawPitch.pitch - dy * 0.0036,
+            -1.2,
+            1.15,
+          )
+        }
         lastPointer = { x: event.clientX, y: event.clientY }
         updateCamera()
         return
       }
-      renderer.domElement.style.cursor = hitFromEvent(event) ? "pointer" : "grab"
+      renderer.domElement.style.cursor = hitFromEvent(event) ? "pointer" : navModeLocal === "orbit" ? "grab" : "crosshair"
     }
     const onPointerUp = (event: PointerEvent) => {
       if (variant === "thumbnail") return
@@ -1840,6 +1983,7 @@ export function AgentOfficeScene({
     const onWheel = (event: WheelEvent) => {
       if (variant === "thumbnail") return
       event.preventDefault()
+      if (navModeLocal !== "orbit") return
       distance = THREE.MathUtils.clamp(
         distance + event.deltaY * 0.018,
         edgeDistrict.framing.minDistance,
@@ -1848,10 +1992,30 @@ export function AgentOfficeScene({
       updateCamera()
     }
 
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (variant === "thumbnail" || !officeNavShouldHandleKey(event)) return
+      if (event.code === "KeyF" && navModeLocal !== "orbit") {
+        event.preventDefault()
+        enterLocomotion("orbit")
+        resetCamera()
+        onNavModeChangeRef.current?.("orbit")
+        return
+      }
+      if (navModeLocal === "orbit") return
+      pressedKeys.add(event.code)
+      event.preventDefault()
+      invalidate()
+    }
+    const onKeyUp = (event: KeyboardEvent) => {
+      pressedKeys.delete(event.code)
+    }
+
     renderer.domElement.addEventListener("pointerdown", onPointerDown)
     renderer.domElement.addEventListener("pointermove", onPointerMove)
     renderer.domElement.addEventListener("pointerup", onPointerUp)
     renderer.domElement.addEventListener("wheel", onWheel, { passive: false })
+    window.addEventListener("keydown", onKeyDown)
+    window.addEventListener("keyup", onKeyUp)
 
     const resize = () => {
       const width = Math.max(1, host.clientWidth)
@@ -2035,6 +2199,39 @@ export function AgentOfficeScene({
         beacon.scale.setScalar(pulse)
       }
 
+      const now = timestamp
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrameTime) / 1000))
+      lastFrameTime = now
+
+      if (closeUpRef.current && canAnimate && navModeLocal === "orbit") {
+        const driftYaw = -0.18 + Math.sin(elapsed * 0.16) * 0.045
+        const driftPitch = 0.42 + Math.sin(elapsed * 0.12) * 0.015
+        const driftDist = 8.4 + Math.sin(elapsed * 0.1) * 0.25
+        const horizontal = Math.cos(driftPitch) * driftDist
+        camera.position.set(
+          target.x + Math.sin(driftYaw) * horizontal,
+          target.y + Math.sin(driftPitch) * driftDist,
+          target.z + Math.cos(driftYaw) * horizontal,
+        )
+        camera.lookAt(target)
+      } else if (navModeLocal === "fly" || navModeLocal === "walk") {
+        stepOfficeLocomotion(
+          navModeLocal,
+          locoPosition,
+          locoYawPitch.yaw,
+          locoYawPitch.pitch,
+          pressedKeys,
+          dt,
+          walkBounds,
+        )
+        applyOfficeLook(camera, locoPosition, locoYawPitch.yaw, locoYawPitch.pitch)
+        if (pressedKeys.size > 0) needsRender = true
+      } else {
+        syncOrbitDesired()
+        const blend = 1 - Math.exp(-dt * 14)
+        camera.position.lerp(desiredCamera, blend)
+        camera.lookAt(target)
+      }
       renderer.render(scene, camera)
       needsRender = false
       frameCount += 1
@@ -2115,7 +2312,7 @@ export function AgentOfficeScene({
         hostRef.current?.setAttribute("data-office-ready", "true")
         onReadyRef.current?.()
       }
-      if (canAnimate || !readyReported) scheduleFrame()
+      if (canAnimate || !readyReported || navModeLocal !== "orbit") scheduleFrame()
     }
     scheduleFrame()
 
@@ -2128,6 +2325,8 @@ export function AgentOfficeScene({
       renderer.domElement.removeEventListener("pointermove", onPointerMove)
       renderer.domElement.removeEventListener("pointerup", onPointerUp)
       renderer.domElement.removeEventListener("wheel", onWheel)
+      window.removeEventListener("keydown", onKeyDown)
+      window.removeEventListener("keyup", onKeyUp)
       cameraControlsRef.current = null
       invalidateSceneRef.current = null
       if (liveSceneUpdateRef.current === updateLiveScene) {
@@ -2152,7 +2351,7 @@ export function AgentOfficeScene({
       delete host.dataset.officeDrawCalls
       delete host.dataset.officeTriangles
     }
-  }, [timeOfDay, timePhase, topologySignature, variant])
+  }, [closeUp, timeOfDay, timePhase, topologySignature, variant])
 
   return (
     <div
@@ -2164,8 +2363,11 @@ export function AgentOfficeScene({
       )}
       data-testid={variant === "thumbnail" ? "agent-office-thumbnail" : "agent-office-scene"}
       data-office-ready="false"
+      data-office-close-up={closeUp ? "true" : "false"}
       data-office-paused={paused ? "true" : "false"}
       data-rooftop-office="true"
+      data-office-pro={OFFICE_PRO_MARKER}
+      data-office-nav={navMode}
       data-office-department-count={officePopulation.departmentCount}
       data-office-logical-agent-count={officePopulation.logicalAgentCount}
       data-office-interactive-worker-count={officePopulation.interactiveWorkerCount}

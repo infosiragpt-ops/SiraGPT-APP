@@ -5,7 +5,7 @@ let activeSubagents = 0
 const DEFAULT_MAX_PARALLEL = 6
 const DEFAULT_MAX_DEPTH = 1
 const DEFAULT_MODEL =
-  process.env.SIRAGPT_SUBAGENT_MODEL || "claude-sonnet-4-20250514"
+  process.env.SIRAGPT_SUBAGENT_MODEL || "deepseek-v4-flash"
 const SIRA_API_ROOT = `${process.env.SIRAGPT_API_BASE || "http://backend:5000"}/api`
 const subagentFetch = createAuthenticatedFetch({ apiBaseUrl: SIRA_API_ROOT })
 
@@ -61,7 +61,9 @@ export async function spawnSubagent(
   }
 
   const requestedModel = req.model || DEFAULT_MODEL
-  const model = isSlowModel(requestedModel) ? DEFAULT_MODEL : requestedModel
+  const bare = String(requestedModel).toLowerCase()
+  const locked = /deepseek-v4-pro|v4-pro/.test(bare) ? "deepseek-v4-pro" : "deepseek-v4-flash"
+  const model = isSlowModel(locked) ? DEFAULT_MODEL : locked
 
   activeSubagents++
   try {

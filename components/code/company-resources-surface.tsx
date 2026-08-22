@@ -63,6 +63,30 @@ const RESOURCE_META: Record<string, {
   domain: string
   localIcon?: string
 }> = {
+  facebook: {
+    category: "social",
+    domain: "facebook.com",
+  },
+  instagram: {
+    category: "social",
+    domain: "instagram.com",
+  },
+  youtube: {
+    category: "social",
+    domain: "youtube.com",
+  },
+  whatsapp: {
+    category: "social",
+    domain: "whatsapp.com",
+  },
+  linkedin: {
+    category: "social",
+    domain: "linkedin.com",
+  },
+  x: {
+    category: "social",
+    domain: "x.com",
+  },
   gmail: {
     category: "email",
     domain: "gmail.com",
@@ -351,7 +375,7 @@ function buildResourceItems(
       connected,
       assignable: Boolean(grantKey),
       pinnedToAgent: pinnedKeys.has(key),
-      canConnect: provider.configured || connected,
+      canConnect: true,
       localIcon: meta?.localIcon,
       platform: provider.platform,
       provider,
@@ -865,7 +889,7 @@ export function CompanyResourcesSurface({
       return
     }
     if (item.kind === "social" && item.platform) {
-      if (item.canConnect) onConnectSocial(item.platform)
+      onConnectSocial(item.platform)
       return
     }
     if (item.kind === "connector" && item.connector) {
@@ -886,7 +910,7 @@ export function CompanyResourcesSurface({
   ])
 
   return (
-    <div className="mx-auto w-full max-w-[1100px] px-4 pb-10 pt-6 sm:px-6 lg:px-8" data-testid="company-resources-surface">
+    <div className="mx-auto w-full max-w-[1100px] px-4 pb-10 pt-6 sm:px-6 lg:px-8" data-testid="company-resources-surface" data-integrations-ig-yt-wa>
       {connectorsLoadError ? (
         <div
           className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-950 dark:border-rose-900/50 dark:bg-rose-950/30 dark:text-rose-100"
@@ -1008,7 +1032,7 @@ export function CompanyResourcesSurface({
               ))}
               {workspaceItems.length === 0 && connectedItems.length === 0 ? (
                 <div className="col-span-full rounded-2xl border border-dashed border-zinc-200 px-4 py-8 text-center text-sm text-zinc-500 dark:border-white/10">
-                  Conecta Gmail, LinkedIn, X u otra app para que Marketing y el resto de departamentos la gestionen.
+                  Conecta Instagram, YouTube, WhatsApp, Gmail u otra app para que Marketing y el resto de departamentos la gestionen.
                 </div>
               ) : null}
             </div>
@@ -1115,6 +1139,11 @@ function ResourceCard({
                     ? "Requiere atención"
                     : item.description}
               </p>
+              {item.id === "gmail" && !item.connected ? (
+                <p className="mt-1 text-[11px] leading-relaxed text-zinc-500" data-testid="gmail-unverified-app-hint">
+                  Si Google dice que no verificó esta app, es normal. Pulsa «Configuración avanzada» y continúa.
+                </p>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-0.5">
               {assignedToCompany ? (

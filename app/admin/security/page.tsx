@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { Shield, Key, XCircle, Eye, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Badge } from "@/components/ui/badge"
@@ -108,17 +109,18 @@ export default function SecurityPage() {
   const score = overview.securityScore ?? null
 
   return (
-    <div className="flex-1 space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Seguridad</h1>
-          <p className="text-muted-foreground">Postura real del sistema, eventos y políticas</p>
-        </div>
-        <Button variant="outline" onClick={() => void load()} disabled={loading}>
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refrescar
-        </Button>
-      </div>
+    <>
+      <AdminPageHeader
+        title="Seguridad"
+        description="Postura real del sistema, eventos y políticas"
+        actions={
+          <Button variant="outline" size="sm" className="h-8 text-[13px]" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Refrescar
+          </Button>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div>
@@ -296,6 +298,7 @@ export default function SecurityPage() {
           )}
         </CardContent>
       </Card>
-    </div>
+      </AdminPageBody>
+    </>
   )
 }

@@ -96,3 +96,9 @@ export function normalizeChatInput(raw: unknown): NormalizedChatInput {
 export function shouldWarnUser(normalized: NormalizedChatInput): boolean {
   return normalized.truncated;
 }
+
+
+/** OLA200_WAVE_G FE-065 — normalize only the outbound payload; never mutate the visible draft. */
+export function normalizeChatInputPayload(draft: unknown): NormalizedChatInput {
+  return normalizeChatInput(typeof draft === "string" ? String(draft) : draft)
+}

@@ -102,7 +102,7 @@ export interface IngestValidation {
   /** Localized, user-facing reason if !ok. */
   reason?: string
   /** Programmatic error code for telemetry. */
-  code?: "type_not_allowed" | "size_exceeded" | "empty_file" | "count_exceeded" | "office_temp_lock_file"
+  code?: "type_not_allowed" | "size_exceeded" | "empty_file" | "count_exceeded" | "office_temp_lock_file" | "mime_mismatch" | "hash_failed"
 }
 
 export interface IngestResult {
@@ -138,6 +138,57 @@ function isOfficeTemporaryLockFile(file: File): boolean {
  * Per-file allowlist + size validation. Pure function — caller decides
  * what to do with rejections (toast, persistent banner, etc.).
  */
+const MAGIC_MIME: Array<{ mime: string; test: (b: Uint8Array) => boolean }> = [
+  { mime: "image/png", test: (b) => b.length >= 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
+  { mime: "image/jpeg", test: (b) => b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },
+  { mime: "image/gif", test: (b) => b.length >= 4 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38 },
+  { mime: "application/pdf", test: (b) => b.length >= 5 && b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46 },
+  { mime: "application/zip", test: (b) => b.length >= 4 && b[0] === 0x50 && b[1] === 0x4b && (b[2] === 0x03 || b[2] === 0x05 || b[2] === 0x07) && (b[3] === 0x04 || b[3] === 0x06 || b[3] === 0x08) },
+  { mime: "image/webp", test: (b) => b.length >= 12 && b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50 },
+]
+
+export function sniffMagicMime(bytes: ArrayBuffer | Uint8Array): string | null {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  for (const row of MAGIC_MIME) {
+    if (row.test(b)) return row.mime
+  }
+  return null
+}
+
+export async function hashFileSha256(file: Blob): Promise<string> {
+  const buf = await file.arrayBuffer()
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", buf)
+    return Array.from(new Uint8Array(digest)).map((x) => x.toString(16).padStart(2, "0")).join("")
+  }
+  throw new Error("hash_failed")
+}
+
+export async function validateFileContents(
+  file: File,
+  opts: { maxBytes?: number } = {},
+): Promise<IngestValidation & { hash?: string; sniffedMime?: string | null }> {
+  const base = validateFile(file, opts)
+  if (!base.ok) return base
+  let hash: string | undefined
+  try {
+    hash = await hashFileSha256(file)
+  } catch {
+    return { ok: false, reason: "No se pudo calcular el hash del archivo", code: "hash_failed" }
+  }
+  const head = new Uint8Array(await file.slice(0, 32).arrayBuffer())
+  const sniffed = sniffMagicMime(head)
+  const declared = (file.type || "").toLowerCase()
+  if (sniffed && declared && declared !== "application/octet-stream") {
+    const zipFamily = sniffed === "application/zip" && /officedocument|opendocument|epub|zip/.test(declared)
+    const jpegFamily = sniffed === "image/jpeg" && (declared === "image/jpeg" || declared === "image/jpg")
+    if (!zipFamily && !jpegFamily && sniffed !== declared) {
+      return { ok: false, reason: `El tipo real (${sniffed}) no coincide con ${declared}`, code: "mime_mismatch", hash, sniffedMime: sniffed }
+    }
+  }
+  return { ...base, hash, sniffedMime: sniffed }
+}
+
 export function validateFile(
   file: File,
   opts: { maxBytes?: number } = {}

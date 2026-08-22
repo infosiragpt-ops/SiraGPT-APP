@@ -24,3 +24,10 @@ export function safeUUID(): string {
     return value.toString(16)
   })
 }
+
+
+/** 3H-FE-007 — idempotency key for remaining generate/code retries (no double charge). */
+export function generateIdempotencyKey(prefix = "gen"): string {
+  // 3H2-FE-003 leftover: WebViews without randomUUID must still mint a unique key.
+  return `${prefix}_${safeUUID()}`
+}

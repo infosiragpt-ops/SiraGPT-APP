@@ -584,3 +584,174 @@ export function buildCompanyAgentFileArtifacts({
 
   return { agents, artifacts, groups }
 }
+
+export type CompanyDeptFolder = {
+  id: string
+  name: string
+  artifactCount: number
+  reportCount: number
+  fileCount: number
+  updatedAt: number
+}
+
+export type CompanyExplorerFolder = {
+  kind: "folder"
+  id: string
+  name: string
+  count: number
+  updatedAt: number
+}
+
+export type CompanyExplorerFile = {
+  kind: "file"
+  artifact: CompanyAgentFileArtifact
+}
+
+export type CompanyExplorerEntry = CompanyExplorerFolder | CompanyExplorerFile
+
+function compareDeptFolder(a: { id: string; name: string }, b: { id: string; name: string }): number {
+  if (a.id === "ceo-office" && b.id !== "ceo-office") return -1
+  if (b.id === "ceo-office" && a.id !== "ceo-office") return 1
+  return a.name.localeCompare(b.name, "es")
+}
+
+export function buildCompanyDepartmentFolders(
+  departments: readonly AgentDepartmentDefinition[],
+  artifacts: readonly CompanyAgentFileArtifact[],
+  options?: { includeEmpty?: boolean },
+): CompanyDeptFolder[] {
+  const map = new Map<string, CompanyDeptFolder>()
+  for (const department of departments) {
+    if (department.enabled === false) continue
+    map.set(department.id, {
+      id: department.id,
+      name: department.name,
+      artifactCount: 0,
+      reportCount: 0,
+      fileCount: 0,
+      updatedAt: 0,
+    })
+  }
+  for (const artifact of artifacts) {
+    const existing = map.get(artifact.departmentId) || {
+      id: artifact.departmentId,
+      name: artifact.departmentName || "Departamento",
+      artifactCount: 0,
+      reportCount: 0,
+      fileCount: 0,
+      updatedAt: 0,
+    }
+    existing.artifactCount += 1
+    if (artifact.kind === "report") existing.reportCount += 1
+    else existing.fileCount += 1
+    if (artifact.updatedAt > existing.updatedAt) existing.updatedAt = artifact.updatedAt
+    if (!existing.name && artifact.departmentName) existing.name = artifact.departmentName
+    map.set(artifact.departmentId, existing)
+  }
+  const folders = [...map.values()].sort(compareDeptFolder)
+  if (options?.includeEmpty === false) {
+    return folders.filter((folder) => folder.artifactCount > 0)
+  }
+  return folders
+}
+
+export function companyArtifactExplorerPath(artifact: CompanyAgentFileArtifact): string {
+  if (artifact.source === "workspace") {
+    const stripped = String(artifact.path || "")
+      .replace(/^departments\/[^/]+\//, "")
+      .replace(/^\/+/, "")
+    return stripped || artifact.name
+  }
+  if (artifact.source === "agent-report" || artifact.source === "activity-report") {
+    return `Reportes/${artifact.name}`
+  }
+  if (artifact.source === "session") {
+    return `Memorias/${artifact.name}`
+  }
+  if (artifact.source === "mission") {
+    return `Misiones/${artifact.name}`
+  }
+  return artifact.name
+}
+
+export function listCompanyExplorerEntries({
+  departments,
+  artifacts,
+  departmentId,
+  subpath = [],
+  includeEmptyDepartments = true,
+}: {
+  departments: readonly AgentDepartmentDefinition[]
+  artifacts: readonly CompanyAgentFileArtifact[]
+  departmentId: string | null
+  subpath?: readonly string[]
+  includeEmptyDepartments?: boolean
+}): CompanyExplorerEntry[] {
+  if (!departmentId) {
+    return buildCompanyDepartmentFolders(departments, artifacts, {
+      includeEmpty: includeEmptyDepartments,
+    }).map((folder) => ({
+      kind: "folder" as const,
+      id: folder.id,
+      name: folder.name,
+      count: folder.artifactCount,
+      updatedAt: folder.updatedAt,
+    }))
+  }
+
+  const prefix = subpath.filter(Boolean).join("/")
+  const folders = new Map<string, { name: string; count: number; updatedAt: number }>()
+  const files: CompanyAgentFileArtifact[] = []
+
+  for (const artifact of artifacts) {
+    if (artifact.departmentId !== departmentId) continue
+    const relative = companyArtifactExplorerPath(artifact)
+    let remainder: string | null
+    if (!prefix) {
+      remainder = relative
+    } else if (relative === prefix) {
+      remainder = ""
+    } else if (relative.startsWith(`${prefix}/`)) {
+      remainder = relative.slice(prefix.length + 1)
+    } else {
+      remainder = null
+    }
+    if (remainder === null) continue
+    if (!remainder) {
+      files.push(artifact)
+      continue
+    }
+    const slash = remainder.indexOf("/")
+    if (slash === -1) {
+      files.push(artifact)
+      continue
+    }
+    const folderName = remainder.slice(0, slash)
+    const current = folders.get(folderName) || { name: folderName, count: 0, updatedAt: 0 }
+    current.count += 1
+    if (artifact.updatedAt > current.updatedAt) current.updatedAt = artifact.updatedAt
+    folders.set(folderName, current)
+  }
+
+  const folderEntries: CompanyExplorerEntry[] = [...folders.values()]
+    .sort((a, b) => a.name.localeCompare(b.name, "es"))
+    .map((folder) => ({
+      kind: "folder" as const,
+      id: `${departmentId}:${prefix ? `${prefix}/` : ""}${folder.name}`,
+      name: folder.name,
+      count: folder.count,
+      updatedAt: folder.updatedAt,
+    }))
+
+  const fileEntries: CompanyExplorerEntry[] = [...files]
+    .sort((a, b) => {
+      if (a.source === "agent-report" && b.source !== "agent-report") return -1
+      if (b.source === "agent-report" && a.source !== "agent-report") return 1
+      const byName = a.name.localeCompare(b.name, "es")
+      if (byName !== 0) return byName
+      return b.updatedAt - a.updatedAt
+    })
+    .map((artifact) => ({ kind: "file" as const, artifact }))
+
+  return [...folderEntries, ...fileEntries]
+}

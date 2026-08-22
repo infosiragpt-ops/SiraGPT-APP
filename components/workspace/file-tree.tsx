@@ -55,6 +55,9 @@ function Row({
   return (
     <div>
       <div
+        role="treeitem"
+        aria-expanded={isDir ? open : undefined}
+        aria-label={isDir ? `Carpeta ${node.name}` : `Archivo ${node.name}`}
         className={cn(
           "group flex cursor-pointer items-center gap-1 rounded px-1.5 py-1 text-sm hover:bg-foreground/5",
           active && "bg-foreground/10 text-foreground",
@@ -80,22 +83,26 @@ function Row({
         <span className="flex-1 truncate">{node.name}</span>
         <span className="hidden shrink-0 items-center gap-0.5 group-hover:flex">
           <button
+            type="button"
             className="rounded p-0.5 text-muted-foreground hover:text-foreground"
             onClick={(e) => {
               e.stopPropagation()
               onRename(node.path)
             }}
             title="Renombrar"
+            aria-label={`Renombrar ${node.name}`}
           >
             <Pencil className="h-3 w-3" />
           </button>
           <button
+            type="button"
             className="rounded p-0.5 text-muted-foreground hover:text-red-500"
             onClick={(e) => {
               e.stopPropagation()
               onDelete(node.path)
             }}
             title="Eliminar"
+            aria-label={`Eliminar ${node.name}`}
           >
             <Trash2 className="h-3 w-3" />
           </button>
@@ -131,28 +138,34 @@ export function FileTree({
   onRefresh,
 }: Props) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col" role="tree" aria-label="Árbol de archivos">
       <div className="flex items-center justify-between border-b border-border px-2 py-1.5">
         <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Archivos</span>
         <div className="flex items-center gap-0.5">
           <button
+            type="button"
             className="rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
             onClick={() => onNewFile("")}
             title="Nuevo archivo"
+            aria-label="Nuevo archivo"
           >
             <FilePlus2 className="h-3.5 w-3.5" />
           </button>
           <button
+            type="button"
             className="rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
             onClick={() => onNewFolder("")}
             title="Nueva carpeta"
+            aria-label="Nueva carpeta"
           >
             <FolderPlus className="h-3.5 w-3.5" />
           </button>
           <button
+            type="button"
             className="rounded p-1 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
             onClick={onRefresh}
             title="Refrescar"
+            aria-label="Refrescar árbol de archivos"
           >
             <RefreshCw className="h-3.5 w-3.5" />
           </button>

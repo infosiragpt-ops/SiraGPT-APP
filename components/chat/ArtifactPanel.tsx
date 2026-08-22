@@ -19,6 +19,7 @@ import {
 } from "lucide-react"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
+import { fetchWithPresignRetry, isExpiredPresignUrl } from "@/lib/attachment-url"
 import dynamic from "next/dynamic"
 const ShikiCodeView = dynamic(
   () => import("@/components/ui/shiki-code-view").then(m => ({ default: m.ShikiCodeView })),
@@ -162,6 +163,21 @@ function ArtifactPanelMounted({
   const onReset = () => setGeneration((g) => g + 1)
 
   const onDownload = async () => {
+    if (/^https?:\/\//i.test(code) && (isExpiredPresignUrl(code) || code.includes("X-Amz-"))) {
+      const res = await fetchWithPresignRetry(code)
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement("a")
+        a.href = url
+        a.download = fileName
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        setTimeout(() => URL.revokeObjectURL(url), 1500)
+        return
+      }
+    }
     let blob: Blob
     if (isMermaid) {
       const svg = await renderMermaidSvg(code)

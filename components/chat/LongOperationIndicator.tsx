@@ -5,10 +5,20 @@ import { X } from "lucide-react"
 
 import { AccessibleIconButton } from "@/components/ui/accessible-icon-button"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { activityTextFromEvent } from "@/lib/live-activity"
 
 export interface LongOperationIndicatorProps {
   active: boolean
   label?: string
+  event?: {
+    type?: string
+    text?: string
+    label?: string
+    tool?: string
+    name?: string
+    step?: string
+    stage?: string
+  } | null
   slowThresholdMs?: number
   onCancel?: () => void
 }
@@ -16,9 +26,12 @@ export interface LongOperationIndicatorProps {
 export function LongOperationIndicator({
   active,
   label = "Generando…",
+  event,
   slowThresholdMs = 30_000,
   onCancel,
 }: LongOperationIndicatorProps) {
+  // OLA200_WAVE_F FE-038: F4/tool label without moving the indicator.
+  const resolvedLabel = event ? activityTextFromEvent(event) : label
   const [elapsedMs, setElapsedMs] = React.useState(0)
 
   React.useEffect(() => {
@@ -47,7 +60,7 @@ export function LongOperationIndicator({
     >
       <ThinkingIndicator size="sm" className="text-primary" />
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate font-medium text-foreground">{label}</span>
+        <span className="truncate font-medium text-foreground">{resolvedLabel}</span>
         <span className={slow ? "text-amber-600" : "text-muted-foreground"}>
           {seconds}s
           {slow && " · está tardando más de lo habitual"}

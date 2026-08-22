@@ -6,8 +6,11 @@ import type {
 const SOCIAL_RESOURCE_V2_PREFIX = "social:v2:"
 const SOCIAL_PLATFORMS: readonly CompanySocialPlatform[] = [
   "facebook",
+  "instagram",
   "linkedin",
+  "whatsapp",
   "x",
+  "youtube",
 ]
 
 export function companySocialResourceKey(
@@ -89,5 +92,5 @@ export function assignedCompanySocialPlatforms(
 }
 
 export function isLegacyCompanySocialResourceKey(resourceKey: string): boolean {
-  return /^social:(facebook|linkedin|x)$/.test(resourceKey)
+  return /^social:(facebook|instagram|linkedin|whatsapp|x|youtube)$/.test(resourceKey)
 }
