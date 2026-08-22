@@ -1150,6 +1150,16 @@ export function AgentOfficeScene({
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, pixelRatioCap))
     renderer.shadowMap.enabled = variant === "full"
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    // The office geometry is static per build (phase/topology changes rebuild
+    // this whole effect with a fresh shadow map), so re-rendering the 2048²
+    // PCFSoft pass over ~900 casters every frame — roughly half the animated
+    // frame cost — buys nothing. Freeze autoUpdate and refresh the map on a low
+    // cadence from the animate loop; only walking worker rigs move, and their
+    // shadows stay visually correct at a fraction of a second of lag.
+    if (variant === "full") {
+      renderer.shadowMap.autoUpdate = false
+      renderer.shadowMap.needsUpdate = true
+    }
     renderer.domElement.className = "block h-full w-full touch-none"
     renderer.domElement.setAttribute("aria-label", "Oficina 3D de agentes y departamentos")
     renderer.domElement.dataset.officeCanvas = variant
@@ -2047,6 +2057,11 @@ export function AgentOfficeScene({
     const projectedWorker = new THREE.Vector3()
     let frameCount = 0
     let readyReported = false
+    // Shadow map refresh cadence (seconds) for the frozen autoUpdate above:
+    // only worker rigs move between rebuilds, and a sub-second lag on their
+    // shadows is imperceptible next to the per-frame pass it replaces.
+    const shadowRefreshInterval = variant === "full" ? 0.25 : Number.POSITIVE_INFINITY
+    let lastShadowRefreshAt = Number.NEGATIVE_INFINITY
 
     /**
      * Pose a worker for its stance. The office used to walk everyone around
@@ -2231,6 +2246,13 @@ export function AgentOfficeScene({
         const blend = 1 - Math.exp(-dt * 14)
         camera.position.lerp(desiredCamera, blend)
         camera.lookAt(target)
+      }
+      // Flag the next shadow pass on the frozen shadow map. Deliberately not
+      // gated on canAnimate: poseWorker(motion=false) also moves rigs when
+      // animation pauses, and flagging without a following render is free.
+      if (elapsed - lastShadowRefreshAt >= shadowRefreshInterval) {
+        lastShadowRefreshAt = elapsed
+        renderer.shadowMap.needsUpdate = true
       }
       renderer.render(scene, camera)
       needsRender = false
