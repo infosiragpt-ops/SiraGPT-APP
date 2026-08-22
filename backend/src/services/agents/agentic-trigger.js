@@ -197,6 +197,9 @@ function isDocumentEditRequest(text) {
   if (isDocumentCorrectionEditRequest(t)) return true;
   if (isDocumentStyleEditRequest(t)) return true;
   if (STRONG_EDIT_VERBS.test(t)) return true;
+  // FEATURE_DOC_ENGINE: "pasalo a UPN" / "formato plantilla" must enter the
+  // SSE pre-loop. 2+ docx is enforced in tryGenerate / isTemplateTransformRequest.
+  if (/\b(formato|plantilla|template|upn|pasalo|pasala)\b/i.test(t)) return true;
   return WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
 }
 

@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- `FEATURE_DOC_ENGINE` (default off) OOXML document engine: transplant
+  source `w:p`/`w:tbl` into a template without touching `sectPr`, headers,
+  footers or numbering. `/chat` hook is after
+  `selectSourcePreservingDocumentSet` (which always picks `currentDocx[0]`)
+  and uses `classifyTemplateVsContent` + in-process PizZip
+  `transformToTemplate`. New routes `POST /api/documents/transform`,
+  `GET /api/documents/:jobId/stream`, `GET /api/documents/:jobId/artifact`.
+  Vision verify uses DeepSeek V4 Flash / Pro only. Paragraph-edit path
+  stays when the flag is off.
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

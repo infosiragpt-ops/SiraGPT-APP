@@ -169,6 +169,10 @@ tmp-smoke-tel/
 # Package manager conflict
 pnpm-lock.yaml
 
+# Python bytecode from doc-skills scripts
+**/__pycache__/
+*.pyc
+
 # TypeScript build info
 tsconfig.tsbuildinfo
 

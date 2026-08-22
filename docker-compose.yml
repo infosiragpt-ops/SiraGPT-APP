@@ -269,6 +269,17 @@ services:
       # Host-visible base dir the runner's /export bind-mount maps to (display
       # only; shown to the user so they can find the mirrored project on disk).
       CODEX_EXPORT_HOST_DIR: "${CODEX_EXPORT_HOST_DIR:-.codex-workspaces}"
+      # OOXML document engine (default off). Chat keeps the paragraph-edit path
+      # unless FEATURE_DOC_ENGINE=1. No new public ports.
+      FEATURE_DOC_ENGINE: "${FEATURE_DOC_ENGINE:-0}"
+      DOC_ENGINE_IMAGE: "${DOC_ENGINE_IMAGE:-siragpt-sandbox:doc-engine}"
+      DOC_ENGINE_QUEUE_NAME: "${DOC_ENGINE_QUEUE_NAME:-doc-jobs}"
+      DOC_ENGINE_CONCURRENCY: "${DOC_ENGINE_CONCURRENCY:-2}"
+      DOC_ENGINE_TIMEOUT_MS: "${DOC_ENGINE_TIMEOUT_MS:-180000}"
+      DOC_ENGINE_WORKSPACE_SIZE: "${DOC_ENGINE_WORKSPACE_SIZE:-512m}"
+      DOC_ENGINE_SIGNING_SECRET: "${DOC_ENGINE_SIGNING_SECRET:-}"
+      DOC_ENGINE_DEEPSEEK_FLASH_MODEL: "${DOC_ENGINE_DEEPSEEK_FLASH_MODEL:-deepseek-v4-flash}"
+      DOC_ENGINE_DEEPSEEK_PRO_MODEL: "${DOC_ENGINE_DEEPSEEK_PRO_MODEL:-deepseek-v4-pro}"
     volumes:
       - uploads_data:/app/uploads
     depends_on:
@@ -392,6 +403,49 @@ services:
       - "5173:5173"   # dev server → preview iframe
     expose:
       - "4097"        # control API (backend → runner)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Doc engine sandbox image (optional profile) ──
+  # Build/tag only. Jobs use ephemeral `docker run --rm` from the backend.
+  # Enable with: docker compose --profile doc-engine build
+  # No public / host ports. Alias tag: iliagpt-sandbox:doc-engine
+  # Healthz for the feature is GET https://siragpt.com/api/documents/healthz
+  # via Caddy → backend (no new published ports).
+  doc-engine:
+    profiles: ["doc-engine"]
+    build:
+      context: .
+      dockerfile: services/doc-engine/Dockerfile
+    image: siragpt-sandbox:doc-engine
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs:
+      - /workspace:rw,nosuid,nodev,noexec,size=536870912
+      - /tmp:rw,nosuid,nodev,size=67108864
+    environment:
+      FEATURE_DOC_ENGINE: "${FEATURE_DOC_ENGINE:-0}"
+      HOME: /workspace
+    # EXPOSE only — no host port mapping
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     logging:
       driver: "json-file"
       options:

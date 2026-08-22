@@ -481,6 +481,7 @@ const computeRoutes = require('./src/routes/compute');
 const mathRoutes = require('./src/routes/math');
 const vizRoutes = require('./src/routes/viz');
 const docRoutes = require('./src/routes/doc');
+const documentsRoutes = require('./src/routes/documents');
 const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
@@ -527,6 +528,7 @@ const {
     closeSwarmRuntime,
 } = require('./src/services/codex/swarm-runner');
 const { startDocumentCollectionWorker, closeDocumentCollectionWorker, closeDocumentCollectionQueue } = require('./src/services/document-collection-queue');
+const { startDocEngineWorker, closeDocEngineWorker, closeDocEngineQueue } = require('./src/services/doc-engine/queue');
 const { recoverCodexRunsAfterBoot } = require('./src/services/codex/boot-recovery');
 const { logCodexConfig } = require('./src/services/codex/config-validator');
 const { validate: validateAttributionConfig } = require('./src/services/attribution-config-validator');
@@ -741,6 +743,7 @@ app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/doc', expensiveLimiter);
 app.use('/api/doc-agent', expensiveLimiter);
+app.use('/api/documents', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
 // scientific-search fan-out (10-16 external APIs in parallel per call) are
@@ -1309,6 +1312,9 @@ app.use('/api/compute', computeRoutes);
 app.use('/api/math', mathRoutes);
 app.use('/api/viz', vizRoutes);
 app.use('/api/doc', docRoutes);
+// FEATURE_DOC_ENGINE (default off): no router registration when the flag
+// is false → Express 404 on /api/documents/*. Does not shadow /chat or /code.
+documentsRoutes.registerDocumentsRoutes(app);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
@@ -1584,6 +1590,9 @@ async function startServer() {
       .then((result) => logger.info(result, 'codex_swarm_recovery_complete'))
       .catch((err) => logger.warn({ err: err.message }, 'codex_swarm_recovery_failed'));
     startDocumentCollectionWorker();
+    try { startDocEngineWorker(); } catch (err) {
+        logger.warn({ err: err && err.message }, 'doc_engine_worker_not_started');
+    }
     // Modo PROACTIVO del panel de compañía de agentes: ticker acotado que solo
     // actúa sobre proyectos con brief.proactive.enabled (default-on solo en
     // producción; CODEX_PROACTIVE_ENABLED=0/1 fuerza). unref'd — nunca retiene
@@ -1806,6 +1815,8 @@ async function startServer() {
             closeProactiveScheduler(),
             closeDocumentCollectionWorker(),
             closeDocumentCollectionQueue(),
+            closeDocEngineWorker(),
+            closeDocEngineQueue(),
         ]);
     }, 5000);
 

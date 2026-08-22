@@ -1,0 +1,25 @@
+# Pinned runtime deps for siragpt-sandbox:doc-engine (Python 3.11 / debian:bookworm)
+# Install (MUST use --require-hashes):
+#   pip install --no-cache-dir --require-hashes -r requirements.lock
+#
+# Wheels: cp311 manylinux_2_28_x86_64 + py3-none-any.
+# Transitives: typing_extensions, et-xmlfile, XlsxWriter.
+#
+lxml==5.3.1 \
+    --hash=sha256:1b6f92e35e2658a5ed51c6634ceb5ddae32053182851d8cad2a5bc102a359b33
+python-docx==1.1.2 \
+    --hash=sha256:08c20d6058916fb19853fcf080f7f42b6270d89eac9fa5f8c15f691c0017fabe
+openpyxl==3.1.5 \
+    --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2
+python-pptx==1.0.2 \
+    --hash=sha256:160838e0b8565a8b1f67947675886e9fea18aa5e795db7ae531606d68e785cba
+pypdf==5.4.0 \
+    --hash=sha256:db994ab47cadc81057ea1591b90e5b543e2b7ef2d0e31ef41a9bfe763c119dab
+Pillow==11.1.0 \
+    --hash=sha256:837060a8599b8f5d402e97197d4924f05a2e0d68756998345c829c33186217b1
+typing_extensions==4.12.2 \
+    --hash=sha256:04e5ca0351e0f3f85c6853954072df659d0d13fac324d0072316b67d7794700d
+et-xmlfile==2.0.0 \
+    --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa
+XlsxWriter==3.2.2 \
+    --hash=sha256:272ce861e7fa5e82a4a6ebc24511f2cb952fde3461f6c6e1a1e81d3272db1471
