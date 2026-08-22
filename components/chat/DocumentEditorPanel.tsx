@@ -17,7 +17,8 @@
  */
 
 import * as React from "react"
-import { Loader2, Save, Download, X, FileText } from "lucide-react"
+import { useTranslations } from "next-intl"
+import { Loader2, Save, Download, X, FileText, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -43,6 +44,17 @@ import {
   type DocExportFormat,
   type EditorSaveResult,
 } from "@/lib/chat/document-editor"
+import {
+  DocBridgeError,
+  docFileNameForImport,
+  sendDocumentToCode,
+} from "@/lib/code-doc-bridge"
+import {
+  CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  getActiveCodexProject,
+  useOptionalCodeWorkspace,
+} from "@/lib/code-workspace-context"
+import { codexApi, type CodexProject } from "@/lib/codex/codex-api"
 import { downloadFile } from "@/lib/download-utils"
 
 export type DocumentEditorPanelProps = {
@@ -112,6 +124,7 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   const { open, file, fileId, fileName, format, initialContent, onClose, onSaved, chatId, summary } = props
   const loadContent = props.loadContent
   const apiClient = props.apiClient
+  const tBridge = useTranslations("documents.docBridge")
 
   const resolvedFileId = resolveFileId(file, fileId)
   const resolvedFileName = resolveFileName(file, fileName)
@@ -175,7 +188,6 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   // ---- Editor state ------------------------------------------------------
   const [markdown, setMarkdown] = React.useState<string>("")
   const [saving, setSaving] = React.useState(false)
-  const [exporting, setExporting] = React.useState(false)
 
   const handleEditorChange = React.useCallback((next: string) => {
     setMarkdown(next)
@@ -184,7 +196,96 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   // Keep the editor's initial value in sync with the loaded content.
   const editorInitial = contentLoaded ? content : ""
 
-  // ---- Actions -----------------------------------------------------------
+  // ---- Export / send-to-code actions -------------------------------------
+  const [exporting, setExporting] = React.useState(false)
+  const [sending, setSending] = React.useState(false)
+  // Optional picker: when the user is not inside an active Codex project we
+  // lazily list their projects so they can choose the target.
+  const workspace = useOptionalCodeWorkspace()
+  const [projectPicker, setProjectPicker] = React.useState<CodexProject[] | null>(null)
+
+  const resolveActiveProjectId = React.useCallback((): string | null => {
+    const singleton = getActiveCodexProject()
+    if (singleton) return singleton
+    if (typeof window === "undefined") return null
+    try {
+      const raw = window.localStorage.getItem("siragpt:active-codex-project")
+      return raw && raw.trim() ? raw.trim() : null
+    } catch {
+      return null
+    }
+  }, [])
+
+  const handleSendToCode = React.useCallback(
+    async (projectId?: string) => {
+      const markdownText = markdown || editorInitial
+      if (sending) return
+      if (!markdownText.trim()) {
+        toast.error(tBridge("openInEditorEmpty"))
+        return
+      }
+      setSending(true)
+      try {
+        const resolvedProjectId = projectId ?? resolveActiveProjectId()
+        if (!resolvedProjectId) {
+          // No active project — offer the user's project list once.
+          let options = projectPicker
+          if (!options) {
+            options = await codexApi.listProjects().catch(() => [])
+            setProjectPicker(options)
+          }
+          if (!options || options.length === 0) {
+            toast.error(tBridge("sendToCodeNoProject"))
+            return
+          }
+          const label = options.map((p, i) => `${i + 1}) ${p.name}`).join("   ")
+          const answer = typeof window !== "undefined" ? window.prompt(`${tBridge("sentToCode", { name: "" })}\n${label}`) : null
+          const index = answer ? Number.parseInt(answer, 10) - 1 : Number.NaN
+          const chosen = options[Number.isInteger(index) ? index : -1]
+          if (!chosen) return
+          await sendDocumentToCode({
+            projectId: chosen.id,
+            fileName: resolvedFileName,
+            markdown: markdownText,
+            importFiles: codexApi.importFiles,
+          })
+        } else {
+          await sendDocumentToCode({
+            projectId: resolvedProjectId,
+            fileName: resolvedFileName,
+            markdown: markdownText,
+            importFiles: codexApi.importFiles,
+          })
+        }
+        toast.success(tBridge("sentToCode", { name: docFileNameForImport(resolvedFileName) }))
+      } catch (err) {
+        if (err instanceof DocBridgeError && err.code === "no_project") {
+          toast.error(tBridge("sendToCodeNoProject"))
+        } else {
+          console.error("[document-editor] send-to-code failed:", err)
+          toast.error(`${tBridge("sendToCodeFailed")}: ${err instanceof Error ? err.message : ""}`.trim())
+        }
+      } finally {
+        setSending(false)
+      }
+    },
+    [sending, markdown, editorInitial, resolveActiveProjectId, projectPicker, resolvedFileName, tBridge],
+  )
+
+  // Keep the send action enabled when an active project appears while open.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onActiveCodexProject = () => setProjectPicker(null)
+    window.addEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
+    return () => window.removeEventListener(CODE_ACTIVE_CODEX_PROJECT_EVENT, onActiveCodexProject)
+  }, [])
+
+  // Workspace context (when mounted under it) also exposes the active folder.
+  React.useEffect(() => {
+    if (workspace?.activeFolder?.id) setProjectPicker(null)
+  }, [workspace?.activeFolder?.id])
+
+
   const handleClose = React.useCallback(() => {
     if (saving) return
     setMarkdown("")
@@ -264,6 +365,17 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
               >
                 <X className="h-4 w-4" />
                 Cancelar
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={sending || !contentLoaded}
+                className="h-8 gap-1.5"
+                onClick={() => void handleSendToCode()}
+                title={tBridge("sendToCodeTitle")}
+              >
+                {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {tBridge("sendToCode")}
               </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
