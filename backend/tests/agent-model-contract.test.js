@@ -10,11 +10,14 @@
 //   - provider-specific clients are selected per-request (Gemini /
 //     OpenRouter / DeepSeek / OpenAI), so a single-provider lock assertion
 //     would be wrong on purpose;
-//   - the batch route normalizes task.model with a plain default instead of
-//     resolving through a locked tier function.
+//   - the batch route keeps the validation layer provider-agnostic
+//     (`tasks.*.model` is a free optional string). Tiering of task models is
+//     owned by #308's `resolveBatchModel`, which lives on production-main
+//     and survives any merge of this branch (this branch never touched
+//     routes/agent-batch.js); asserting its internals here would re-couple
+//     this contract test to a decision that belongs to #308.
 //
-// These assertions pin the CURRENT contract so the lock cannot silently come
-// back. They run in CI (not quarantined).
+// These assertions pin the CURRENT contract. They run in CI (not quarantined).
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -51,10 +54,12 @@ describe('BE-050/056/057 model contract (post-#308 reconciliation)', () => {
     assert.match(src, /executorModel: req\.body\.model \|\| 'gpt-4o'/);
   });
 
-  it('BE-057 agent-batch normalizes each task model without a provider lock', () => {
+  it('BE-057 agent-batch keeps task models provider-agnostic at validation', () => {
     const src = read('routes/agent-batch.js');
-    // Per-task optional string model with a plain default.
+    // Per-task model stays a free optional string at the validation layer —
+    // the batch route is not provider-locked on input. Tiering of accepted
+    // values is #308's resolveBatchModel (asserted in
+    // tests/agent-batch-model-tiering.test.js), not this contract's concern.
     assert.match(src, /body\('tasks\.\*\.model'\)\.optional\(\)\.isString\(\)/);
-    assert.match(src, /model: task\.model \|\| 'gpt-4o'/);
   });
 });
