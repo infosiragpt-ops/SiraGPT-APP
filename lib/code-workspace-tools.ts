@@ -38,6 +38,8 @@ import {
 
 export type ToolStatus = "ready"
 export type ToolBehavior = "screen" | "action"
+/** Honest catalog badge. `status` stays "ready" for the existing type. */
+export type ToolReadiness = "live" | "pronto"
 
 export type WorkspaceToolId =
   | "agent"
@@ -72,14 +74,20 @@ export type WorkspaceTool = {
   keywords: string
   icon: LucideIcon
   status: ToolStatus
+  /** Omitted = live. Use "pronto" for stub tools in the catalog. */
+  readiness?: ToolReadiness
   behavior: ToolBehavior
+}
+
+export function toolReadiness(tool: Pick<WorkspaceTool, "readiness">): ToolReadiness {
+  return tool.readiness ?? "live"
 }
 
 export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   agent: {
     id: "agent",
     label: "Agent",
-    description: "Chat de construccion y edicion del workspace",
+    description: "Chat de construcción y edición del workspace",
     keywords: "agent chat builder assistant construccion edicion workspace",
     icon: Bot,
     status: "ready",
@@ -106,7 +114,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   console: {
     id: "console",
     label: "Console",
-    description: "Salida de terminal tras ejecutar código",
+    description: "Salida de logs al ejecutar código",
     keywords: "console logs output salida runtime workflow run",
     icon: SquareTerminal,
     status: "ready",
@@ -124,7 +132,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   "new-file": {
     id: "new-file",
     label: "New file",
-    description: "Crear un archivo nuevo",
+    description: "Crea un archivo nuevo",
     keywords: "new file nuevo archivo crear",
     icon: FilePlus2,
     status: "ready",
@@ -133,7 +141,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   "code-search": {
     id: "code-search",
     label: "Code Search",
-    description: "Buscar en el contenido de los archivos del workspace",
+    description: "Busca en el contenido de los archivos",
     keywords: "code search buscar codigo archivos contenido grep",
     icon: Search,
     status: "ready",
@@ -169,7 +177,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   storage: {
     id: "storage",
     label: "App Storage",
-    description: "Sube y guarda imágenes, vídeos y documentos",
+    description: "Imágenes, vídeos y documentos de la app",
     keywords: "app storage object files uploads imagenes videos documentos",
     icon: HardDrive,
     status: "ready",
@@ -178,7 +186,7 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
   auth: {
     id: "auth",
     label: "Auth",
-    description: "Inicio de sesión con página de login preconstruida",
+    description: "Inicio de sesión con página de login lista",
     keywords: "auth authentication login users oauth sesion",
     icon: ShieldCheck,
     status: "ready",
@@ -281,12 +289,13 @@ export const WORKSPACE_TOOLS: Record<WorkspaceToolId, WorkspaceTool> = {
     keywords: "vnc remote desktop pantalla remota viewer",
     icon: MonitorSmartphone,
     status: "ready",
+    readiness: "pronto",
     behavior: "screen",
   },
   workflows: {
     id: "workflows",
     label: "Workflows",
-    description: "Comandos reutilizables y boton Run del workspace",
+    description: "Comandos reutilizables y botón Run del workspace",
     keywords: "workflows run button comandos reusable scripts paralelo secuencial",
     icon: Workflow,
     status: "ready",
@@ -317,6 +326,12 @@ export const TOOL_SECTIONS: ToolSection[] = [
       "database",
       "secrets",
       "workflows",
+    ],
+  },
+  {
+    id: "advanced",
+    label: "Avanzado",
+    toolIds: [
       "integrations",
       "storage",
       "auth",
@@ -326,15 +341,7 @@ export const TOOL_SECTIONS: ToolSection[] = [
       "automations",
       "canvas",
       "settings",
-    ],
-  },
-  {
-    id: "advanced",
-    label: "Avanzado",
-    toolIds: [
-      "settings",
       "validation",
-      "code-search",
       "developer",
       "git",
       "vnc",
@@ -348,3 +355,25 @@ export const TOOL_SECTIONS: ToolSection[] = [
 ]
 
 export const ALL_TOOLS: WorkspaceTool[] = Object.values(WORKSPACE_TOOLS)
+
+
+/** OLA200_WAVE_F FE-053 — timeout + abort so a hung tool cannot freeze the composer. */
+export async function invokeWorkspaceToolWithTimeout<T>(
+  invoke: (signal: AbortSignal) => Promise<T>,
+  timeoutMs = 20_000,
+  external?: AbortSignal | null,
+): Promise<T> {
+  const ac = new AbortController()
+  const onAbort = () => ac.abort()
+  if (external) {
+    if (external.aborted) ac.abort()
+    else external.addEventListener("abort", onAbort, { once: true })
+  }
+  const timer = setTimeout(() => ac.abort(), Math.max(250, timeoutMs))
+  try {
+    return await invoke(ac.signal)
+  } finally {
+    clearTimeout(timer)
+    if (external) external.removeEventListener("abort", onAbort)
+  }
+}

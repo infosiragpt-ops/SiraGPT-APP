@@ -46,11 +46,11 @@ const SOUND_PREFERENCE_KEY = "siragpt:office-sound-enabled"
 const DEFAULT_VOLUME = 0.28
 const AMBIENT_MIX_PROFILES: Record<OfficeAmbientSoundId, AmbientMixProfile> = {
   "coast-day": {
-    ambienceGain: 0.7,
-    fadeSeconds: 2.6,
+    ambienceGain: 0.86,
+    fadeSeconds: 3.2,
   },
   "coast-night": {
-    ambienceGain: 0.64,
+    ambienceGain: 0.72,
     fadeSeconds: 3.2,
   },
 }
@@ -183,7 +183,22 @@ function replaceAmbience(
   gain.gain.setValueAtTime(0.0001, now)
   gain.gain.linearRampToValueAtTime(1, now + profile.fadeSeconds)
   source.connect(gain)
-  gain.connect(engine.ambienceBus)
+  if (soundId === "coast-day") {
+    const body = context.createBiquadFilter()
+    body.type = "lowshelf"
+    body.frequency.value = 220
+    body.gain.value = 3.2
+    const presence = context.createBiquadFilter()
+    presence.type = "peaking"
+    presence.frequency.value = 1400
+    presence.Q.value = 0.85
+    presence.gain.value = 1.8
+    gain.connect(body)
+    body.connect(presence)
+    presence.connect(engine.ambienceBus)
+  } else {
+    gain.connect(engine.ambienceBus)
+  }
   source.start()
 
   const previous = engine.ambience

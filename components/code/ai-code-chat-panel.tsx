@@ -23,7 +23,6 @@
 import * as React from "react"
 import {
   AlertTriangle,
-  ArrowLeft,
   ArrowUp,
   BookOpen,
   BrainCircuit,
@@ -35,11 +34,12 @@ import {
   ExternalLink,
   FileText,
   FileCode2,
-  History,
   Image as ImageIcon,
   LayoutGrid,
   ListChecks,
   Loader2,
+  Maximize2,
+  Minimize2,
   PackagePlus,
   Paperclip,
   Plus,
@@ -52,26 +52,23 @@ import {
   StopCircle,
   X,
 } from "lucide-react"
+import { BrowserVoicePlayer } from "@/components/code/browser-voice-player"
+import {
+  CODE_NEW_DEPT_CONVERSATION_EVENT,
+  CODE_OPEN_DEPT_DRAWER_EVENT,
+  DeptChatDrawer,
+  DeptChatFab,
+  setDeptChatChrome,
+  type DeptChatBardNav,
+} from "@/components/code/dept-chat-bard"
 import { tierForModelChoice } from "@/lib/codex/model-tiers"
 import { expandCodexSlashCommand } from "@/lib/codex/slash-commands"
 import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import { buildSpokenSummary } from "@/lib/code-agent/spoken-summary"
-import { recordRun } from "@/lib/code-agent/observability"
 import { CodeChatErrorBoundary } from "@/components/code/code-chat-error-boundary"
 import { toast } from "sonner"
 
 import { ComposerSendArrow } from "@/components/chat/ChatComposerSurface"
-// El reproductor por voz tira de @huggingface/transformers (~700 KB gz), que
-// entraba al chunk crítico del /code con un import estático. Solo se monta
-// cuando un turno lleva `voice` (saludos/resúmenes bajo demanda), así que se
-// carga en lazy: el split saca transformers del payload inicial y el chunk
-// llega en paralelo a la primera interacción.
-const BrowserVoicePlayer = React.lazy(() =>
-  import("@/components/code/browser-voice-player").then((mod) => ({
-    default: mod.BrowserVoicePlayer,
-  })),
-)
-
 import { DictationButton } from "@/components/codex/dictation-button"
 import { Button } from "@/components/ui/button"
 import {
@@ -89,6 +86,9 @@ import {
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
+import { shouldShowComposerExpandControl } from "@/lib/composer-layout"
+import { IconProvider } from "@/components/icon-provider"
+import { resolveModelIconName } from "@/lib/model-icons"
 import { apiClient } from "@/lib/api"
 import {
   extractFilesFromDataTransfer,
@@ -106,10 +106,8 @@ import {
 } from "@/lib/code-agent-company"
 import {
   CODE_AGENT_REQUEST_EVENT,
-  CODE_AUTONOMOUS_STARTERS,
   claimCodeAgentRequest,
   claimPendingCodeAgentInstruction,
-  requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
 import {
   buildProactiveCompanySystemBlock,
@@ -179,6 +177,7 @@ import {
 } from "@/lib/code-agent/autonomy"
 import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
 import { runQualityGate } from "@/lib/code-agent/quality-gate"
+import { sanitizePersistedCodeModel, writePersistedCodeModel } from "@/lib/codex-conversation-prefs"
 import {
   engineTransportInstructions,
   landingSystemPrompt,
@@ -193,13 +192,6 @@ import {
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
 import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
-import {
-  ModelCircuitBreakerRegistry,
-  computeBackoffMs,
-  isRetryableFailure,
-  retryWithBackoff,
-  shouldRetryOpenRouter,
-} from "@/lib/code-agent/resilience"
 import { opencodeService } from "@/lib/opencode/opencode-service"
 import { useOpencodeEngine } from "@/lib/opencode/use-opencode-engine"
 import { codexApi, codexErrorCode, codexIdentityIssue } from "@/lib/codex/codex-api"
@@ -270,11 +262,6 @@ import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
 const CODE_RUN_PREVIEW_EVENT = "siragpt:code-run-preview"
-
-// Per-model circuit breakers for the application-layer stream retry. Module-
-// level so breaker state survives component remounts (a sick model stays
-// "open" between turns instead of tripping fresh every render).
-const modelBreakers = new ModelCircuitBreakerRegistry()
 
 type CodeDispatchOptions = {
   forceDeterministic?: boolean
@@ -822,9 +809,10 @@ export type AICodeChatPanelProps = {
   title?: string
   onBack?: () => void
   proactive?: boolean
+  bardNav?: DeptChatBardNav
 }
 
-export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
+export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -846,6 +834,25 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     patchAgentState,
   } = useCodeWorkspace()
 
+  const [deptDrawerOpen, setDeptDrawerOpen] = React.useState(false)
+  const hasBardNav = Boolean(bardNav)
+  React.useEffect(() => {
+    setDeptChatChrome(hasBardNav)
+    return () => setDeptChatChrome(false)
+  }, [hasBardNav])
+  React.useEffect(() => {
+    const onOpenDrawer = () => setDeptDrawerOpen(true)
+    const onNewConversation = () => {
+      if (bardNav) bardNav.onNewConversation()
+      else createCodeChatSession()
+    }
+    window.addEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+    window.addEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    return () => {
+      window.removeEventListener(CODE_OPEN_DEPT_DRAWER_EVENT, onOpenDrawer)
+      window.removeEventListener(CODE_NEW_DEPT_CONVERSATION_EVENT, onNewConversation)
+    }
+  }, [bardNav, createCodeChatSession])
   const sessionId = activeCodeChatSessionId
   const turns = React.useMemo(
     () => activeCodeChatSession?.turns ?? [],
@@ -883,6 +890,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     agentPhase === "debugging"
   const [includeContext, setIncludeContext] = React.useState(true)
   const [composerMode, setComposerMode] = React.useState<ComposerMode>("app")
+  const [composerExpanded, setComposerExpanded] = React.useState(false)
+  const [composerTextOverflows, setComposerTextOverflows] = React.useState(false)
+  const codeShowExpand = composerExpanded || composerTextOverflows
   const composerModeRef = React.useRef<ComposerMode>(composerMode)
   composerModeRef.current = composerMode
   const [selectingTarget, setSelectingTarget] = React.useState(false)
@@ -952,8 +962,10 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     try {
       const raw = typeof window !== "undefined" ? window.localStorage.getItem("code-workspace:model") : null
       if (raw) {
-        const parsed = JSON.parse(raw)
-        if (parsed?.name && availableModels.some((m) => m.name === parsed.name)) restored = parsed
+        const parsed = sanitizePersistedCodeModel(JSON.parse(raw))
+        if (parsed?.name && availableModels.some((m) => m.name === parsed.name)) {
+          restored = { name: parsed.name, provider: parsed.provider }
+        }
       }
     } catch {
       /* ignore corrupt value */
@@ -965,7 +977,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   const chooseCodeModel = React.useCallback((m: { name: string; provider?: string }) => {
     setCodeModel(m)
     try {
-      window.localStorage.setItem("code-workspace:model", JSON.stringify(m))
+      writePersistedCodeModel(m)
     } catch {
       /* quota / private mode */
     }
@@ -1234,6 +1246,12 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
     inputRef.current?.blur()
     toast("Selecciona en el preview la parte que quieres modificar.")
   }, [selectingTarget])
+
+  React.useEffect(() => {
+    const onToggleInspector = () => toggleTargetSelection()
+    window.addEventListener("siragpt:code-toggle-ui-inspector", onToggleInspector)
+    return () => window.removeEventListener("siragpt:code-toggle-ui-inspector", onToggleInspector)
+  }, [toggleTargetSelection])
 
   React.useEffect(() => {
     codeAttachmentsRef.current = codeAttachments
@@ -1582,10 +1600,21 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   React.useEffect(() => {
     const el = inputRef.current
-    if (!el) return
+    if (!el) {
+      setComposerTextOverflows(false)
+      return
+    }
     el.style.height = "0px"
-    el.style.height = `${Math.min(Math.max(el.scrollHeight, 28), 140)}px`
-  }, [input])
+    const unconstrained = el.scrollHeight
+    el.style.height = `${Math.min(Math.max(unconstrained, 28), 140)}px`
+    const nextOverflow = shouldShowComposerExpandControl({
+      scrollHeight: unconstrained,
+      clientHeight: el.clientHeight,
+      minHeight: 28,
+      value: el.value,
+    })
+    setComposerTextOverflows((prev) => (prev === nextOverflow ? prev : nextOverflow))
+  }, [input, composerExpanded])
 
   const finalizeCodexCancellation = React.useCallback(
     (candidate: CodexCancellationAttempt): boolean => {
@@ -1915,10 +1944,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       let rejectedStream: { issue?: string; retryInstruction?: string } | null = null
       let cancelled = false
       const startedAt = Date.now()
-      const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      // First-stream-chunk timestamp: TTFT for the observability run.
-      let firstChunkAt: number | undefined
-      let streamChunks = 0
       // Real token usage (+ optional USD cost) from the stream's `usage` frame,
       // delivered just before onClose so it's available when we build metrics.
       let usage: { tokensIn: number; tokensOut: number; costOriginalUsd?: number; costAppliedUsd?: number } | null = null
@@ -1934,325 +1959,273 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             }),
           })
         }
-        await retryWithBackoff(
-          async () => {
-            let streamError: Error | null = null
-            let streamSettled = false
-            await new Promise<void>((resolve) => {
-              apiClient.generateAIStream(
-                {
-                  provider: activeProvider,
-                  model: activeModelName,
-                  prompt: finalPrompt,
-                  streamId: id,
-                  files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
-                  // /code stays on the reliable plain stream. For an explicit public
-                  // web turn the backend performs a deterministic, read-only fetch /
-                  // search first and injects the result as untrusted evidence. We do
-                  // NOT enable the general agent toolset here: a malicious page must
-                  // never gain access to code, shell, files or private connectors.
-                  disableAgentic: true,
-                  enableWebGrounding: webGroundedConversation,
-                  webGroundingQuery: webGroundingQuery || undefined,
-                  reasoningEffort: selectedEffort,
-                },
-                (chunk) => {
-                  if (firstChunkAt == null) firstChunkAt = Date.now()
-                  streamChunks += 1
-                  assistantText += chunk
-                  setTurns((prev) =>
-                    prev.map((t) => {
-                      if (t.id !== assistantId) return t
-                      const nextContent = t.content + chunk
-                      // The first completed line = the planning line is done → stamp the
-                      // REAL planning duration once (turn start → first line emitted).
-                      const planPatch =
-                        t.planMs == null && nextContent.includes("\n")
-                          ? { planMs: Date.now() - startedAt }
-                          : {}
-                      return { ...t, content: nextContent, ...planPatch }
-                    }),
+        await apiClient.generateAIStream(
+          {
+            provider: activeProvider,
+            model: activeModelName,
+            prompt: finalPrompt,
+            streamId: id,
+            files: !webGroundedConversation && override?.files && override.files.length > 0 ? override.files : undefined,
+            // /code stays on the reliable plain stream. For an explicit public
+            // web turn the backend performs a deterministic, read-only fetch /
+            // search first and injects the result as untrusted evidence. We do
+            // NOT enable the general agent toolset here: a malicious page must
+            // never gain access to code, shell, files or private connectors.
+            disableAgentic: true,
+            enableWebGrounding: webGroundedConversation,
+            webGroundingQuery: webGroundingQuery || undefined,
+            reasoningEffort: selectedEffort,
+          },
+          (chunk) => {
+            assistantText += chunk
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                const nextContent = t.content + chunk
+                // The first completed line = the planning line is done → stamp the
+                // REAL planning duration once (turn start → first line emitted).
+                const planPatch =
+                  t.planMs == null && nextContent.includes("\n")
+                    ? { planMs: Date.now() - startedAt }
+                    : {}
+                return { ...t, content: nextContent, ...planPatch }
+              }),
+            )
+          },
+          () => {
+            if (controller.signal.aborted || abortRef.current !== controller) {
+              cancelled = true
+              return
+            }
+            // Agentic write modes (app/build, plus debug/patch via explicit
+            // override) = Replit-style "presented output": the agent applies the
+            // generated files itself and opens the live preview, with NO manual
+            // "Aplicar" button (the user asked the agentic system to do the
+            // writing). Read-only modes (ask/plan/image) pass autoApply:false and
+            // never apply. `applied` feeds the Worked-Summary/action-log metrics
+            // on the turn (real numbers).
+            if (!conversational) {
+              patchAssistant({
+                agentLabel: "Aplicando cambios al workspace",
+                agentPhases: buildCodeAgentPhases("apply", {
+                  context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                  generate: { status: "done", detail: "Stream completado" },
+                }),
+              })
+            }
+            // Blocklist, not allowlist: any mode that is not explicitly
+            // read-only (ask/plan/image) applies the files the model wrote.
+            // The old app|build allowlist left deps/debug — and any build
+            // misrouted through another mode — streaming file cards into
+            // chat while the workspace and preview stayed empty.
+            if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
+              try {
+                const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
+                if (blocks.length > 0) {
+                  // Mejora 3 (stream validator): when the streamed content fails
+                  // the deterministic structural checks, do NOT ship a broken
+                  // file to the preview. The work_task loop retries with the
+                  // returned instruction. Debug spoken turns still apply so a
+                  // targeted SRE patch is not blocked by a leftover fence.
+                  const streamCheck = validateStreamedFiles(
+                    blocks.map((b) => ({ path: b.path as string, content: b.content })),
                   )
-                },
-                () => {
-                  if (streamSettled) return
-                  if (controller.signal.aborted || abortRef.current !== controller) {
-                    cancelled = true
-                    return
-                  }
-                  streamSettled = true
-                  // Agentic write modes (app/build, plus debug/patch via explicit
-                  // override) = Replit-style "presented output": the agent applies the
-                  // generated files itself and opens the live preview, with NO manual
-                  // "Aplicar" button (the user asked the agentic system to do the
-                  // writing). Read-only modes (ask/plan/image) pass autoApply:false and
-                  // never apply. `applied` feeds the Worked-Summary/action-log metrics
-                  // on the turn (real numbers).
-                  let applied: Array<{ path: string; content: string }> = []
-                  if (!conversational) {
+                  if (!streamCheck.valid && override?.spokenKind !== "debug") {
+                    rejectedStream = streamCheck
+                    toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
                     patchAssistant({
-                      agentLabel: "Aplicando cambios al workspace",
+                      agentLabel: "Validación bloqueó la aplicación",
                       agentPhases: buildCodeAgentPhases("apply", {
                         context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
                         generate: { status: "done", detail: "Stream completado" },
+                        apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
                       }),
                     })
-                  }
-                  // Blocklist, not allowlist: any mode that is not explicitly
-                  // read-only (ask/plan/image) applies the files the model wrote.
-                  // The old app|build allowlist left deps/debug — and any build
-                  // misrouted through another mode — streaming file cards into
-                  // chat while the workspace and preview stayed empty.
-                  if (override?.autoApply ?? (promptMode !== "ask" && promptMode !== "plan" && promptMode !== "image")) {
-                    try {
-                      const blocks = parseCodeBlocks(assistantText).filter((b) => b.path)
-                      if (blocks.length > 0) {
-                        // Mejora 3 (stream validator): when the streamed content fails
-                        // the deterministic structural checks, do NOT ship a broken
-                        // file to the preview. The work_task loop retries with the
-                        // returned instruction. Debug spoken turns still apply so a
-                        // targeted SRE patch is not blocked by a leftover fence.
-                        const streamCheck = validateStreamedFiles(
-                          blocks.map((b) => ({ path: b.path as string, content: b.content })),
-                        )
-                        if (!streamCheck.valid && override?.spokenKind !== "debug") {
-                          rejectedStream = streamCheck
-                          toast.error(`Validación de stream detectó: ${streamCheck.issue}`)
-                          patchAssistant({
-                            agentLabel: "Validación bloqueó la aplicación",
-                            agentPhases: buildCodeAgentPhases("apply", {
-                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                              generate: { status: "done", detail: "Stream completado" },
-                              apply: { status: "error", detail: streamCheck.issue || "Archivo inválido" },
-                            }),
-                          })
-                        } else {
-                          for (const b of blocks) {
-                            if (b.path) applyBlock(b.path, b.content)
-                          }
-                          applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
-                          lastAppliedFilesRef.current = applied
-                          const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
-                          const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
-                          toast.success(
-                            hasPkg
-                              ? "Proyecto generado — levantando el dev server…"
-                              : hasHtml
-                                ? "App generada — revisa el preview en vivo →"
-                                : `Generados ${blocks.length} archivo(s) — abriendo preview`,
-                          )
-                          openPreviewAndMaybeRun(applied)
-                        }
-                      }
-                    } catch {
-                      // Auto-apply failed (parse/write error). There is no manual
-                      // "Aplicar" button anymore, so surface the failure explicitly and
-                      // tell the user they can still copy the code as a fallback.
-                      toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
-                      void recordRun({
-                        id: runId,
-                        conversational,
-                        startedAt,
-                        finishedAt: Date.now(),
-                        totalMs: Date.now() - startedAt,
-                        streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-                        outcome: "error",
-                        phases: [
-                          { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                          { name: "generate", ms: Date.now() - startedAt },
-                          { name: "apply", ms: 0, detail: "Fallo al aplicar — copia manual disponible" },
-                        ],
-                      })
-                      patchAssistant({
-                        agentLabel: "No se pudieron aplicar los cambios",
-                        agentPhases: buildCodeAgentPhases("apply", {
-                          context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                          generate: { status: "done", detail: "Stream completado" },
-                          apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
-                        }),
-                      })
+                  } else {
+                    for (const b of blocks) {
+                      if (b.path) applyBlock(b.path, b.content)
                     }
-                  }
-                  const verifyDetail = applied.length > 0
-                    ? `${applied.length} archivo(s) aplicado(s)`
-                    : "Respuesta sin escritura de archivos"
-                  if (applied.length > 0) markVoiced(assistantId)
-                  setTurns((prev) =>
-                    prev.map((t) => {
-                      if (t.id !== assistantId) return t
-                      // Conversational close: the turn ends quietly (no rail, no
-                      // "Turno completado" banner) — like any chat answer. The token
-                      // usage still attaches below so costs stay visible.
-                      const base = conversational
-                        ? { ...t, streaming: false, agentLabel: undefined }
-                        : {
-                            ...t,
-                            streaming: false,
-                            agentLabel: "Turno completado",
-                            agentPhases: buildCodeAgentPhases("verify", {
-                              context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
-                              generate: { status: "done", detail: "Respuesta generada" },
-                              apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
-                              verify: { status: "done", detail: verifyDetail },
-                            }),
-                          }
-                      // Attach the Worked Summary when the turn did file work OR the
-                      // stream reported real token usage (the Agent Usage figure).
-                      if (applied.length > 0 || usage) {
-                        const { actions, metrics } = buildWriteMetrics(applied, {
-                          startedAt,
-                          now: Date.now(),
-                          getPrevContent: (p) => files[p]?.content ?? "",
-                        })
-                        // Even a no-file text answer shows an action row (the model
-                        // reasoned + produced the reply).
-                        const effectiveActions =
-                          actions.length > 0
-                            ? actions
-                            : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
-                        const withUsage = usage
-                          ? {
-                              ...metrics,
-                              tokensIn: usage.tokensIn,
-                              tokensOut: usage.tokensOut,
-                              ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
-                              ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
-                            }
-                          : metrics
-                        return {
-                          ...base,
-                          actions: effectiveActions,
-                          metrics: withUsage,
-                          // Claude Code-style spoken completion digest — only when the
-                          // turn did real multi-step file work (never for plain answers).
-                          ...(applied.length > 0
-                            ? {
-                                voice: buildSpokenSummary({
-                                  kind: override?.spokenKind ?? "patch",
-                                  filesChanged: withUsage.filesChanged,
-                                  durationMs: withUsage.timeWorkedMs,
-                                }),
-                              }
-                            : {}),
-                        }
-                      }
-                      return base
-                    }),
-                  )
-                  // Observability: the turn is closed and the run is fully known
-                  // (outcome, applied files, token usage). The `success` branch above
-                  // already recorded apply failures; this covers the common path.
-                  void recordRun({
-                    id: runId,
-                    conversational,
-                    startedAt,
-                    finishedAt: Date.now(),
-                    totalMs: Date.now() - startedAt,
-                    streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-                    outcome: "success",
-                    phases: [
-                      { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-                      { name: "generate", ms: Date.now() - startedAt },
-                      ...(applied.length > 0
-                        ? [{ name: "apply" as const, ms: 0, detail: `${applied.length} archivo(s)` }]
-                        : []),
-                      { name: "verify", ms: 0, detail: applied.length > 0 ? "Cambios escritos" : "Respuesta sin escritura" },
-                    ],
-                    files: applied.length > 0 ? applied.map((f) => f.path) : undefined,
-                    usage: usage ?? undefined,
-                  })
-                  resolve()
-                },
-                (err) => {
-                  // The transport (lib/api.ts) has already retried 5 times with
-                  // cursor resume. This is the application-layer verdict: hold the
-                  // error until the outer retryWithBackoff decides, so a retriable
-                  // failure never flashes a red "Error en el turno" mid-recovery.
-                  if (streamSettled) return
-                  streamSettled = true
-                  streamError = err || new Error("Error en el chat de código")
-                  resolve()
-                },
-                controller.signal,
-                {
-                  // The backend may replace already-streamed text after its final
-                  // safety scrub. Keep both the UI turn and the local accumulator in
-                  // sync; appending the replacement would duplicate the answer and
-                  // could reintroduce text the scrub intentionally removed.
-                  onReplace: (content) => {
-                    assistantText = content
-                    setTurns((prev) =>
-                      prev.map((t) =>
-                        t.id === assistantId
-                          ? {
-                              ...t,
-                              content,
-                              ...(t.planMs == null && content.includes("\n")
-                                ? { planMs: Date.now() - startedAt }
-                                : {}),
-                            }
-                          : t,
-                      ),
+                    applied = blocks.map((b) => ({ path: b.path as string, content: b.content }))
+                    lastAppliedFilesRef.current = applied
+                    const hasPkg = blocks.some((b) => /(^|\/)package\.json$/i.test(b.path || ""))
+                    const hasHtml = blocks.some((b) => /\.html?$/i.test(b.path || ""))
+                    toast.success(
+                      hasPkg
+                        ? "Proyecto generado — levantando el dev server…"
+                        : hasHtml
+                          ? "App generada — revisa el preview en vivo →"
+                          : `Generados ${blocks.length} archivo(s) — abriendo preview`,
                     )
-                  },
-                  onUsage: (u) => { usage = u },
-                },
-              )
-            })
-            if (streamError) throw streamError
-          },
-          {
-            // Application-layer retry ON TOP of the transport's 5 attempts.
-            // Only retried before any content reached the UI (re-sending after
-            // content would duplicate the turn / break the e2e contract), and
-            // only while the autonomous-iteration budget still allows it.
-            shouldRetry: (err: unknown, attempt: number): boolean => {
-              if (assistantText.trim()) return false
-              const budget = activeCodeChatSession?.agent?.budget
-              const budgetExhausted = budget ? budget.count >= budget.max : false
-              const breaker = modelBreakers.get(activeProvider, activeModelName)
-              if (!breaker.allowRequest()) {
-                toast.error("El modelo está temporalmente degradado. Intenta de nuevo en un momento.")
-                return false
+                    openPreviewAndMaybeRun(applied)
+                  }
+                }
+              } catch {
+                // Auto-apply failed (parse/write error). There is no manual
+                // "Aplicar" button anymore, so surface the failure explicitly and
+                // tell the user they can still copy the code as a fallback.
+                toast.error("No se pudieron aplicar los cambios automáticamente. Usa el botón Copiar de cada bloque.")
+                patchAssistant({
+                  agentLabel: "No se pudieron aplicar los cambios",
+                  agentPhases: buildCodeAgentPhases("apply", {
+                    context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                    generate: { status: "done", detail: "Stream completado" },
+                    apply: { status: "error", detail: "Fallo al aplicar — copia manual disponible" },
+                  }),
+                })
               }
-              const verdict = shouldRetryOpenRouter(err as any, attempt, { budgetExhausted })
-              if (verdict) breaker.recordFailure()
-              else breaker.recordSuccess()
-              return verdict
-            },
-            delayMs: (attempt) => computeBackoffMs(attempt),
-            onRetry: (attempt, delayMs) => {
-              toast.info(
-                `El stream se interrumpió — reintentando (${attempt}/2, en ${Math.round(delayMs / 1000)}s)…`,
-                { duration: 4000 },
+            }
+            const verifyDetail = applied.length > 0
+              ? `${applied.length} archivo(s) aplicado(s)`
+              : "Respuesta sin escritura de archivos"
+            if (applied.length > 0) markVoiced(assistantId)
+            setTurns((prev) =>
+              prev.map((t) => {
+                if (t.id !== assistantId) return t
+                // Conversational close: the turn ends quietly (no rail, no
+                // "Turno completado" banner) — like any chat answer. The token
+                // usage still attaches below so costs stay visible.
+                const base = conversational
+                  ? { ...t, streaming: false, agentLabel: undefined }
+                  : {
+                      ...t,
+                      streaming: false,
+                      agentLabel: "Turno completado",
+                      agentPhases: buildCodeAgentPhases("verify", {
+                        context: { status: "done", detail: includeContext ? "Contexto usado" : "Sin contexto" },
+                        generate: { status: "done", detail: "Respuesta generada" },
+                        apply: { status: "done", detail: applied.length > 0 ? "Cambios escritos" : "Nada que aplicar" },
+                        verify: { status: "done", detail: verifyDetail },
+                      }),
+                    }
+                // Attach the Worked Summary when the turn did file work OR the
+                // stream reported real token usage (the Agent Usage figure).
+                if (applied.length > 0 || usage) {
+                  const { actions, metrics } = buildWriteMetrics(applied, {
+                    startedAt,
+                    now: Date.now(),
+                    getPrevContent: (p) => files[p]?.content ?? "",
+                  })
+                  // Even a no-file text answer shows an action row (the model
+                  // reasoned + produced the reply).
+                  const effectiveActions =
+                    actions.length > 0
+                      ? actions
+                      : [{ kind: "reasoning" as const, label: conversational ? "Respondo tu mensaje" : "Genero la respuesta" }]
+                  const withUsage = usage
+                    ? {
+                        ...metrics,
+                        tokensIn: usage.tokensIn,
+                        tokensOut: usage.tokensOut,
+                        ...(usage.costOriginalUsd != null ? { costOriginalUsd: usage.costOriginalUsd } : {}),
+                        ...(usage.costAppliedUsd != null ? { costAppliedUsd: usage.costAppliedUsd } : {}),
+                      }
+                    : metrics
+                  return {
+                    ...base,
+                    actions: effectiveActions,
+                    metrics: withUsage,
+                    // Claude Code-style spoken completion digest — only when the
+                    // turn did real multi-step file work (never for plain answers).
+                    ...(applied.length > 0
+                      ? {
+                          voice: buildSpokenSummary({
+                            kind: override?.spokenKind ?? "patch",
+                            filesChanged: withUsage.filesChanged,
+                            durationMs: withUsage.timeWorkedMs,
+                          }),
+                        }
+                      : {}),
+                  }
+                }
+                return base
+              }),
+            )
+            // Only release the latch if this turn is still the active one — a
+            // newer turn may have replaced abortRef, and clearing it here would
+            // cancel that turn's busy state (mirrors runEngine/runCodexEngine).
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+          },
+          (err) => {
+            // A cancelled/aborted stream (user started a new turn, navigated
+            // away, or the SSE socket was cut) is NOT a failure — surface it as
+            // a soft "stopped" state that keeps whatever partial content arrived,
+            // instead of a scary red "Fetch is aborted" error turn.
+            const aborted =
+              err?.name === "AbortError" ||
+              /\babort|cancel|operation was aborted/i.test(err?.message || "")
+            const msg = err?.message || "Error en el chat de código"
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.id === assistantId
+                  ? aborted
+                    ? {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Generación detenida",
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "done", detail: "Detenida" },
+                              }),
+                            }),
+                        content: t.content
+                          ? `${t.content}\n\n_Generación detenida._`
+                          : "_Generación detenida — vuelve a enviar para reintentar._",
+                      }
+                    : {
+                        ...t,
+                        streaming: false,
+                        agentLabel: "Error en el turno",
+                        ...(conversational
+                          ? {}
+                          : {
+                              agentPhases: buildCodeAgentPhases("generate", {
+                                generate: { status: "error", detail: msg },
+                              }),
+                            }),
+                        content: t.content ? `${t.content}\n\n_${msg}_` : `_${msg}_`,
+                      }
+                  : t,
+              ),
+            )
+            if (abortRef.current === controller) {
+              abortRef.current = null
+              setBusy(false)
+            }
+          },
+          controller.signal,
+          {
+            // The backend may replace already-streamed text after its final
+            // safety scrub. Keep both the UI turn and the local accumulator in
+            // sync; appending the replacement would duplicate the answer and
+            // could reintroduce text the scrub intentionally removed.
+            onReplace: (content) => {
+              assistantText = content
+              setTurns((prev) =>
+                prev.map((t) =>
+                  t.id === assistantId
+                    ? {
+                        ...t,
+                        content,
+                        ...(t.planMs == null && content.includes("\n")
+                          ? { planMs: Date.now() - startedAt }
+                          : {}),
+                      }
+                    : t,
+                ),
               )
-              patchAssistant({
-                agentLabel: "Reconectando con el modelo",
-                agentPhases: buildCodeAgentPhases("generate", {
-                  context: { status: "done", detail: includeContext ? "Contexto inyectado" : "Omitido por usuario" },
-                  generate: { status: "running", detail: `Reintento ${attempt}/2 tras interrupción` },
-                }),
-              })
             },
+            onUsage: (u) => { usage = u },
           },
         )
       } catch (err: any) {
         const aborted =
           err?.name === "AbortError" ||
           /\babort|cancel|operation was aborted/i.test(err?.message || "")
-        void recordRun({
-          id: runId,
-          conversational,
-          startedAt,
-          finishedAt: Date.now(),
-          totalMs: Date.now() - startedAt,
-          streamLatencyMs: firstChunkAt != null ? firstChunkAt - startedAt : undefined,
-          outcome: aborted ? "aborted" : "error",
-          phases: [
-            { name: "stream", ms: firstChunkAt != null ? Date.now() - firstChunkAt : 0, detail: `${streamChunks} chunk(s)` },
-            { name: "generate", ms: Date.now() - startedAt, detail: err?.message || "Error en el chat de código" },
-          ],
-        })
         if (aborted) {
           cancelled = true
           patchAssistant({
@@ -2338,7 +2311,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
       setTurns,
       turns,
       user,
-      activeCodeChatSession?.agent?.budget,
     ],
   )
 
@@ -2705,13 +2677,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   // quality gate over the files the agent just wrote, and returns a retry
   // instruction when something would break the preview. Pure — no writes.
   const validateGeneratedFiles = React.useCallback(
-    (files: Array<{ path: string; content: string }>): { ok: boolean; retryInstruction?: string } => {
+    (files: Array<{ path: string; content: string }>, aborted = false): { ok: boolean; retryInstruction?: string } => {
+      if (aborted) return { ok: false }
       if (files.length === 0) return { ok: true }
       const stream = validateStreamedFiles(files)
       if (!stream.valid) {
         return { ok: false, retryInstruction: stream.retryInstruction }
       }
-      const gate = runQualityGate(files)
+      const gate = runQualityGate(files, { aborted })
       if (!gate.passed) {
         return { ok: false, retryInstruction: gate.retryInstruction }
       }
@@ -4823,10 +4796,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
   )
 
   const activeFileLabel = activePath ? activePath.split("/").pop() || activePath : null
-  const activeSessionTitle =
-    codeChatSessions.find((session) => session.id === activeCodeChatSessionId)?.title?.trim() ||
-    "Nuevo chat"
-  const visibleSessionTitle = title?.trim() || activeSessionTitle
 
   // Replit-style "Plan" pill: flips the composer into plan mode and back to
   // whatever mode was active before (defaults to "app").
@@ -4843,90 +4812,27 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
   return (
     <div
-      className="relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950"
+      className={cn(
+        "relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950",
+        bardNav && "dept-chat-bard",
+      )}
       data-embedded={embedded ? "true" : undefined}
+      data-testid={bardNav ? "dept-chat-bard" : undefined}
+      data-drop-dup-header="20260815"
     >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
           Suelta archivos para adjuntarlos al agente de APPS
         </div>
       ) : null}
-      {/* Replit-style panel header: current thread title + history / new-chat
-          actions (the session tabs collapsed into the history dropdown). */}
-      <div className="flex h-11 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-3">
-        {onBack ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className="-ml-1 h-8 w-8 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-            aria-label="Volver a la empresa"
-            title="Volver a la empresa"
-            onClick={onBack}
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-        ) : null}
-        <span
-          className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground"
-          title={visibleSessionTitle}
-        >
-          {visibleSessionTitle}
-        </span>
-        {activeFileLabel ? (
-          <span
-            className="min-w-0 shrink truncate rounded-md border border-border/50 bg-muted/30 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-            title={activePath ?? undefined}
-          >
-            {activeFileLabel}
-          </span>
-        ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-              aria-label="Historial de chats"
-              title="Historial de chats"
-            >
-              <History className="h-3.5 w-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60 rounded-lg border-border/70 p-1.5">
-            <DropdownMenuLabel className="px-2 py-1 text-[11px] font-normal text-muted-foreground">
-              Chats del proyecto
-            </DropdownMenuLabel>
-            {codeChatSessions.map((session) => (
-              <DropdownMenuItem
-                key={session.id}
-                className={cn(
-                  "gap-2 rounded-md text-[13px]",
-                  session.id === activeCodeChatSessionId && "bg-muted/70 font-medium",
-                )}
-                onClick={() => setActiveCodeChatSession(session.id)}
-              >
-                <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                {session.id === activeCodeChatSessionId ? (
-                  <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : null}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-          aria-label="Nuevo agente"
-          title="Nuevo chat en paralelo"
-          onClick={() => createCodeChatSession()}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+      {bardNav ? (
+        <DeptChatDrawer
+          open={deptDrawerOpen}
+          nav={bardNav}
+          onClose={() => setDeptDrawerOpen(false)}
+        />
+      ) : null}
+      {/* Duplicate CEO Office | history | + bar removed (data-drop-dup-header). */}
 
       {identityIssue ? (
         <div
@@ -4955,7 +4861,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+          <EmptyChat />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -4970,7 +4876,13 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
         )}
       </div>
 
-      <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
+      {bardNav ? (
+        <div className="dept-chat-fab-wrap pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3">
+          <DeptChatFab onNewConversation={bardNav.onNewConversation} />
+        </div>
+      ) : null}
+
+      <form onSubmit={onSubmit} className={cn("code-composer composer-pro shrink-0", composerExpanded && "is-expanded")} data-testid="code-composer" data-composer-pro="1" data-composer-expanded={composerExpanded ? "1" : "0"}>
         <div
           data-testid="code-composer-surface"
           className={cn("code-composer__surface", codeDraggingFiles && "is-drop-target")}
@@ -5019,21 +4931,42 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               </div>
             </div>
           ) : null}
-          <Textarea
-            aria-label="Mensaje para el chat de código"
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={onKeyDown}
-            onPaste={handleCodeTextareaPaste}
-            placeholder={
-              selectedPreviewTarget
-                ? "Describe el cambio para este elemento…"
-                : COMPOSER_PLACEHOLDER[composerMode]
-            }
-            rows={1}
-            className="code-composer__input max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[13px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
-          />
+          <div className={cn("code-composer__input-shell", codeShowExpand && "has-expand-control")}>
+            {codeShowExpand ? (
+              <button
+                type="button"
+                onClick={() => setComposerExpanded((open) => !open)}
+                aria-pressed={composerExpanded}
+                aria-label={composerExpanded ? "Contraer el chat" : "Ampliar el chat"}
+                title={composerExpanded ? "Contraer" : "Ampliar"}
+                data-testid="code-composer-expand"
+                className="composer-expand-button"
+              >
+                {composerExpanded ? (
+                  <Minimize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+                )}
+              </button>
+            ) : null}
+            <Textarea
+              aria-label="Mensaje para el chat de código"
+              ref={inputRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={onKeyDown}
+              onPaste={handleCodeTextareaPaste}
+              placeholder={
+                selectedPreviewTarget
+                  ? "Describe el cambio para este elemento…"
+                  : composerMode === "app"
+                    ? "Escribe un mensaje…"
+                    : COMPOSER_PLACEHOLDER[composerMode]
+              }
+              rows={1}
+              className="code-composer__input max-h-[140px] min-h-[36px] w-full resize-none border-0 bg-transparent px-1.5 py-1.5 text-[14px] leading-[1.5] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
+            />
+          </div>
           <div className="code-composer__footer">
             <div className="code-composer__leading">
               <ComposerPlusMenu
@@ -5065,27 +4998,6 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
               >
                 <Paperclip className="h-[16px] w-[16px]" />
               </Button>
-              <button
-                type="button"
-                onClick={toggleTargetSelection}
-                aria-pressed={selectingTarget}
-                aria-label={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
-                title={selectingTarget ? "Cancelar inspector visual" : "Seleccionar elemento de la interfaz"}
-                data-testid="code-target-selector"
-                className={cn(
-                  "code-target-select-button shrink-0 rounded-md",
-                  selectingTarget && "code-target-select-button--active",
-                )}
-              >
-                {selectingTarget ? (
-                  <X className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <ScanSearch className="code-target-select-button__icon h-4 w-4" aria-hidden="true" />
-                )}
-                <span className="code-target-select-button__label">
-                  {selectingTarget ? "Cancelar" : "Seleccionar UI"}
-                </span>
-              </button>
             </div>
             <div className="code-composer__trailing">
               <ModelPickerInline
@@ -5117,6 +5029,7 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                 </span>
                 <span className="code-composer__plan-label">Plan</span>
               </button>
+              <span className="code-composer__mic">
               <DictationButton
                 variant="light"
                 locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
@@ -5127,13 +5040,14 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   inputRef.current?.focus()
                 }}
               />
+              </span>
               {busy ? (
                 <>
                   {canSubmitCodePrompt ? (
                     <Button
                       type="submit"
                       size="icon"
-                      className="code-composer__send"
+                      className="code-composer__send is-streaming"
                       aria-label="Enviar al terminar"
                       title="Enviar al terminar"
                     >
@@ -5292,79 +5206,15 @@ function CodeAttachmentTray({
   )
 }
 
-function EmptyChat({
-  active,
-  proactive = false,
-  durable = false,
-}: {
-  active: boolean
-  proactive?: boolean
-  durable?: boolean
-}) {
+function EmptyChat() {
+  // Marketing launch empty-state removed. Quiet chat surface + composer.
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
-      <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-        <span
-          className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
-          aria-hidden="true"
-        />
-        {durable ? "Agente cloud disponible · hasta 4 h" : "Builder local disponible"}
-      </span>
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-        <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
-      </span>
-      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
-      </h2>
-      <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
-        {proactive
-          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
-      </p>
-      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
-        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
-          <button
-            key={starter.id}
-            type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
-            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
-            data-testid={`code-agent-starter-${starter.id}`}
-          >
-            <span className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
-                {starter.id === "ai-platform" ? (
-                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-                ) : starter.id === "business-os" ? (
-                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Rocket className="h-4 w-4" aria-hidden="true" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] font-semibold text-foreground">{starter.title}</span>
-                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
-                </span>
-                <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
-                  {starter.description}
-                </span>
-                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-                  {starter.meta}
-                </span>
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
-        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
-          <React.Fragment key={step}>
-            {index > 0 ? <span aria-hidden="true">→</span> : null}
-            <span>{step}</span>
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
+    <div
+      className="min-h-0"
+      data-drop-launch-empty="20260815"
+      data-testid="code-chat-empty"
+      aria-hidden="true"
+    />
   )
 }
 
@@ -5430,9 +5280,7 @@ function ChatBubble({
       {turn.voice ? (
         <div className="mb-2 space-y-2">
           {turn.actions && turn.actions.length > 0 ? <ChatActionLog actions={turn.actions} /> : null}
-          <React.Suspense fallback={null}>
-            <BrowserVoicePlayer text={turn.voice} />
-          </React.Suspense>
+          <BrowserVoicePlayer text={turn.voice} />
         </div>
       ) : null}
       {/* An out-of-credits / quota error surfaces as a high-visibility panel
@@ -5750,6 +5598,16 @@ function ComposerPlusMenu({
           <LayoutGrid className={iconClass} />
           <span>Todas las herramientas</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          className={itemClass}
+          onClick={() => {
+            if (typeof window === "undefined") return
+            window.dispatchEvent(new CustomEvent("siragpt:code-toggle-ui-inspector"))
+          }}
+        >
+          <ScanSearch className={iconClass} />
+          <span>Seleccionar UI</span>
+        </DropdownMenuItem>
         <DropdownMenuSeparator className="my-2" />
         <DropdownMenuItem
           className={cn(itemClass, mode === "app" && "bg-muted/70 font-medium text-foreground")}
@@ -5855,6 +5713,35 @@ function ComposerPlusMenu({
 }
 
 type ModelOption = { name: string; provider?: string; displayName?: string }
+
+function shortModelLabel(
+  model: { name?: string; displayName?: string } | null | undefined,
+  fallback = "Modelo",
+) {
+  const raw = String(model?.displayName || model?.name || fallback).trim() || fallback
+  const leaf = raw.includes("/") ? raw.split("/").pop() || raw : raw
+  if (leaf.length <= 18) return leaf
+  return `${leaf.slice(0, 16)}…`
+}
+
+function ModelBrandMark({
+  model,
+  size = 18,
+}: {
+  model: { name?: string; displayName?: string; provider?: string } | null | undefined
+  size?: number
+}) {
+  const iconName = resolveModelIconName(model)
+  return (
+    <span
+      className="code-composer__model-logo"
+      data-model-logo={iconName}
+      aria-hidden="true"
+    >
+      <IconProvider name={iconName} size={size} />
+    </span>
+  )
+}
 
 // Values match backend aliases in reasoning-orchestrator.computeForEffort.
 const COMPOSER_EFFORT_LEVELS = [
@@ -5966,10 +5853,11 @@ function ModelPickerInline({
               : `${label} — modelo de razonamiento; puede ser más lento en preview`
           }
         >
+          <ModelBrandMark model={active ?? { name: selectedModel, provider: undefined }} size={18} />
           {!fast ? (
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500/80" aria-hidden />
           ) : null}
-          <span className="truncate">{label}</span>
+          <span className="min-w-0 truncate">{shortModelLabel(active, label)}</span>
           <ChevronDown className="h-3 w-3 shrink-0 opacity-45" />
         </button>
       </DropdownMenuTrigger>
@@ -6020,10 +5908,11 @@ function ModelPickerInline({
                         setOpen(false)
                       }}
                       className={cn(
-                        "cursor-pointer rounded-lg px-2 py-1.5 text-[13px] font-normal",
+                        "flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-normal",
                         selected && "bg-muted/70 text-foreground",
                       )}
                     >
+                      <ModelBrandMark model={m} size={20} />
                       <span className="min-w-0 flex-1 truncate">{itemLabel}</span>
                       {itemFast ? (
                         <span className="ml-2 shrink-0 text-[10px] text-muted-foreground/70">Rápido</span>

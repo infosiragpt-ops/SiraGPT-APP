@@ -97,3 +97,15 @@ export function buildAutomationAgentPrompt(label: string): string {
     "Revisa el proyecto, realiza las acciones que correspondan y termina con un resumen corto de lo que hiciste y lo que encontraste.",
   ].join(" ")
 }
+
+
+/** OLA200_WAVE_G FE-074 — 401 from host-runner forces reauth; never loop tools. */
+export function isHostRunnerUnauthorized(status: unknown, body?: { code?: string; error?: string } | null): boolean {
+  if (Number(status) === 401) return true
+  const code = String(body?.code || body?.error || "")
+  return /unauthorized|reauth|auth_required|host_runner_auth/i.test(code)
+}
+export function shouldForceHostRunnerReauth(status: unknown, inflightToolLoops = 0): boolean {
+  if (isHostRunnerUnauthorized(status)) return true
+  return Number(inflightToolLoops) >= 3 && Number(status) === 403
+}

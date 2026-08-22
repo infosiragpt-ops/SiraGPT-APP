@@ -25,7 +25,10 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import { coworkApi } from "@/lib/cowork-api"
 import { cn } from "@/lib/utils"
 
-const POLL_INTERVAL_MS = 90_000
+const POLL_INTERVAL_MS = 10_000
+
+/** Survives remounts so a parent re-render cannot restart a ~200ms fetch loop. */
+let lastBackgroundPollAt = 0
 
 function formatTimeAgo(dateString: string) {
   const date = new Date(dateString)
@@ -89,8 +92,15 @@ export default function NotificationCenter() {
   const [pendingApprovalIds, setPendingApprovalIds] = useState<Set<string>>(new Set())
   const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null)
 
+  const userId = user?.id
+
   const fetchNotifications = useCallback(async (showLoading = false) => {
-    if (!user) return
+    if (!userId) return
+    if (!showLoading) {
+      const now = Date.now()
+      if (now - lastBackgroundPollAt < POLL_INTERVAL_MS) return
+      lastBackgroundPollAt = now
+    }
     try {
       if (showLoading) setLoading(true)
       const [data, approvalsResult] = await Promise.all([
@@ -107,16 +117,24 @@ export default function NotificationCenter() {
     } finally {
       if (showLoading) setLoading(false)
     }
-  }, [user])
+  }, [userId])
 
   useEffect(() => {
-    if (!user) return
+    if (!userId) return
     void fetchNotifications(false)
     const interval = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return
       void fetchNotifications(false)
     }, POLL_INTERVAL_MS)
-    return () => window.clearInterval(interval)
-  }, [fetchNotifications, user])
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void fetchNotifications(false)
+    }
+    document.addEventListener("visibilitychange", onVisibility)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", onVisibility)
+    }
+  }, [fetchNotifications, userId])
 
   useEffect(() => {
     if (open) void fetchNotifications(true)

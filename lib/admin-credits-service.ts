@@ -67,10 +67,12 @@ export async function grantCredits(input: TopUpInput): Promise<{
   })
   const data = await res.json().catch(() => ({}))
   if (!res.ok) {
+    const code = res.status === 402 ? "credits_exhausted" : (data?.code || data?.error)
     const err = new Error(
-      data?.error || `grantCredits failed (${res.status})`,
-    ) as Error & { status?: number; missingPermission?: string }
+      code === "credits_exhausted" ? "credits_exhausted" : (data?.error || `grantCredits failed (${res.status})`),
+    ) as Error & { status?: number; missingPermission?: string; code?: string }
     err.status = res.status
+    err.code = code
     err.missingPermission = data?.missingPermission
     throw err
   }

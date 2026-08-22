@@ -1,6 +1,7 @@
 "use client"
 
 import { authenticatedFetch } from "../authenticated-fetch"
+import { fetchResumeHeaders, persistLastEventId, readLastEventId } from "../sse-client"
 
 /**
  * Frontend client for /api/opencode — siraGPT's bridge to the OpenCode engine
@@ -188,9 +189,11 @@ export const opencodeService = {
     onEvent: (event: OpencodeEvent) => void,
     signal?: AbortSignal,
   ): Promise<void> {
+    const storageKey = "siragpt:lastEventId:opencode"
+    const lastId = readLastEventId(storageKey)
     const res = await authenticatedFetch(`${baseUrl}/events`, {
       credentials: "include",
-      headers: { ...authHeaders(), Accept: "text/event-stream" },
+      headers: { ...authHeaders(), Accept: "text/event-stream", ...fetchResumeHeaders(lastId) },
       signal,
     })
     if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
@@ -220,10 +223,13 @@ export const opencodeService = {
 function parseFrame(frame: string): OpencodeEvent | null {
   let type = "message"
   const dataLines: string[] = []
+  let id = ""
   for (const line of frame.split("\n")) {
     if (line.startsWith("event:")) type = line.slice(6).trim()
     else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim())
+    else if (line.startsWith("id:")) id = line.slice(3).trim()
   }
+  if (id) persistLastEventId("siragpt:lastEventId:opencode", id)
   if (dataLines.length === 0) return null
   const raw = dataLines.join("\n")
   if (raw === "[DONE]") return { type: "done", data: null }

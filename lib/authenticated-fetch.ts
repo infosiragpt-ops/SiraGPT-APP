@@ -219,6 +219,53 @@ function defaultFetch(): typeof fetch {
     globalThis.fetch(input, init)) as typeof fetch
 }
 
+let refreshFlight: Promise<boolean> | null = null
+
+function isAuthRefreshPath(input: RequestInfo | URL, apiBaseUrl: string): boolean {
+  const url = toUrl(input, runtimeBaseUrl(apiBaseUrl))
+  if (!url) return false
+  return /\/auth\/refresh\/?$/.test(url.pathname)
+}
+
+async function singleFlightRefresh(
+  apiBaseUrl: string,
+  fetchImpl: typeof fetch,
+): Promise<boolean> {
+  if (refreshFlight) return refreshFlight
+  refreshFlight = (async () => {
+    try {
+      const headers = new Headers({ Accept: "application/json", "Content-Type": "application/json" })
+      try {
+        if (typeof window !== "undefined") {
+          const family = window.localStorage.getItem("siragpt:refresh-family")
+          const version = window.localStorage.getItem("siragpt:refresh-version")
+          if (family) headers.set("x-refresh-family", family)
+          if (version) headers.set("x-refresh-version", version)
+        }
+      } catch { /* private mode */ }
+      const res = await fetchImpl(`${apiBaseUrl.replace(/\/+$/, "")}/auth/refresh`, {
+        method: "POST",
+        credentials: "include",
+        headers,
+      })
+      if (!res.ok) return false
+      const data = await res.json().catch(() => null) as { token?: unknown } | null
+      const token = typeof data?.token === "string" && data.token.trim() ? data.token.trim() : null
+      if (token && typeof window !== "undefined") {
+        try { window.localStorage.setItem("auth-token", token) } catch { /* ignore */ }
+      }
+      return Boolean(token) || res.ok
+    } catch {
+      return false
+    }
+  })()
+  try {
+    return await refreshFlight
+  } finally {
+    refreshFlight = null
+  }
+}
+
 export function createAuthenticatedFetch(
   options: AuthenticatedFetchFactoryOptions = {},
 ): AuthenticatedFetch {
@@ -278,8 +325,26 @@ export function createAuthenticatedFetch(
     requestOptions: AuthenticatedRequestOptions = {},
   ): Promise<Response> => {
     const prepared = await prepare(input, init, requestOptions)
-    const response = await fetchImpl(input, prepared)
+    let response = await fetchImpl(input, prepared)
     const method = resolveMethod(input, prepared)
+    if (
+      method === "GET"
+      && isTrustedSiraApiUrl(input, apiBaseUrl)
+      && (response.status === 502 || response.status === 503 || response.status === 504)
+    ) {
+      try { await new Promise((r) => setTimeout(r, 250)) } catch { /* ignore */ }
+      response = await fetchImpl(input, prepared)
+    }
+    if (
+      method === "GET"
+      && isTrustedSiraApiUrl(input, apiBaseUrl)
+      && response.status === 429
+    ) {
+      const ra = Number(response.headers.get("Retry-After") || 0)
+      const waitMs = Number.isFinite(ra) && ra > 0 ? Math.min(2000, ra * 1000) : 400
+      try { await new Promise((r) => setTimeout(r, waitMs)) } catch { /* ignore */ }
+      response = await fetchImpl(input, prepared)
+    }
     const usedBearer = new Headers(prepared.headers).has("Authorization")
 
     if (
@@ -294,6 +359,18 @@ export function createAuthenticatedFetch(
       const retryHeaders = new Headers(prepared.headers)
       retryHeaders.set("X-CSRF-Token", fresh)
       return fetchImpl(input, { ...prepared, headers: retryHeaders })
+    }
+
+    if (
+      response.status === 401
+      && isTrustedSiraApiUrl(input, apiBaseUrl)
+      && !isAuthRefreshPath(input, apiBaseUrl)
+    ) {
+      const refreshed = await singleFlightRefresh(apiBaseUrl, fetchImpl)
+      if (refreshed) {
+        const retried = await prepare(input, init, requestOptions)
+        return fetchImpl(input, retried)
+      }
     }
 
     return response

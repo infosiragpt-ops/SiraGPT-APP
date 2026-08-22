@@ -97,6 +97,19 @@ function checkTruncation(content: string): string | null {
  * Validate a streamed file's content. Returns { valid: true } when the content
  * passes all checks, or a retry instruction when an issue is found.
  */
+export function rejectForbiddenProvider(chunk: { provider?: string; model?: string } | null | undefined): StreamValidationResult | null {
+  const provider = String(chunk?.provider || "").toLowerCase()
+  const model = String(chunk?.model || "").toLowerCase()
+  if (provider.includes("openrouter") || model.includes("openrouter") || provider.includes("openai") || provider.includes("gemini")) {
+    return {
+      valid: false,
+      issue: "provider_forbidden",
+      retryInstruction: "El stream declaró un provider no permitido. Solo DeepSeek V4 Flash/Pro.",
+    }
+  }
+  return null
+}
+
 export function validateStreamedFile(filePath: string, content: string): StreamValidationResult {
   if (!content || content.trim().length === 0) {
     return {

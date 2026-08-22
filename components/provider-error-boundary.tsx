@@ -3,6 +3,7 @@
 import { Component, ErrorInfo, ReactNode } from "react"
 import { AlertTriangle, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { reportErrorBoundary, redactBoundaryMessage } from "@/lib/client-logs"
 
 interface ProviderErrorBoundaryProps {
   children: ReactNode
@@ -30,7 +31,9 @@ export class ProviderErrorBoundary extends Component<
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    console.error(`[ProviderErrorBoundary:${this.props.name}]`, error, info.componentStack)
+    const digest = (error as Error & { digest?: string }).digest
+    reportErrorBoundary(`ProviderErrorBoundary:${this.props.name}`, error, { digest })
+    console.error(`[ProviderErrorBoundary:${this.props.name}] digest=${digest || "none"}`)
   }
 
   reset = (): void => {
@@ -53,7 +56,7 @@ export class ProviderErrorBoundary extends Component<
           Un componente interno falló. La aplicación puede funcionar con funcionalidad limitada.
         </p>
         <div className="text-xs text-muted-foreground/60 mb-4 font-mono max-w-lg break-words">
-          {error.message || "Error desconocido"}
+          {redactBoundaryMessage(error.message)}
         </div>
         <Button
           type="button"

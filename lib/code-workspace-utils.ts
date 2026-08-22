@@ -41,6 +41,22 @@ const EXT_LANG: Record<string, string> = {
   txt: "plaintext",
 }
 
+export function joinWorkspacePath(...parts: string[]): string {
+  const joined = parts.map((p) => String(p || "").replace(/\\/g, "/")).filter(Boolean).join("/")
+  const normalized = joined.replace(/\/+/g, "/")
+  if (!normalized) return ""
+  if (normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) {
+    throw new Error("workspace_path_absolute")
+  }
+  const segs: string[] = []
+  for (const seg of normalized.split("/")) {
+    if (!seg || seg === ".") continue
+    if (seg === "..") throw new Error("workspace_path_escape")
+    segs.push(seg)
+  }
+  return segs.join("/")
+}
+
 export function languageForPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? ""
   return EXT_LANG[ext] || "plaintext"

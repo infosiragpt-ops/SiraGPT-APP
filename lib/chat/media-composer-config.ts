@@ -1,9 +1,9 @@
 export type ImageAspectRatio = "1:1" | "2:3" | "3:2" | "3:4" | "9:16" | "4:3" | "16:9"
 export type ImageGenerationCount = 1 | 2 | 3 | 4 | 5
 export type ImageQuality = "512px" | "1K" | "2K" | "4K"
-export type VideoResolution = "480p" | "720p"
+export type VideoResolution = "480p" | "720p" | "1080p"
 export type VideoAspectRatio = "auto" | "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9"
-export type VideoDuration = 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15
+export type VideoDuration = number
 export type VoiceModel = "Gemini 2.5 Flash TTS" | "ElevenLabs"
 export type VoiceLanguage = "English" | "Spanish" | "German" | "French" | "Portuguese" | "Afrikaans" | "Arabic" | "Armenian" | "Assamese" | "Azerbaijani" | "Belarusian" | "Bengali"
 export type VoiceAccent = "Neutral" | "Latino" | "US" | "British" | "Spanish" | "Mexican"
@@ -33,7 +33,7 @@ export const IMAGE_ASPECT_RATIO_OPTIONS: ReadonlyArray<MediaAspectRatioOption<Im
 
 export const IMAGE_QUALITY_OPTIONS: readonly ImageQuality[] = ["512px", "1K", "2K", "4K"]
 export const IMAGE_COUNT_OPTIONS: readonly ImageGenerationCount[] = [1, 2, 3, 4, 5]
-export const VIDEO_RESOLUTION_OPTIONS: readonly VideoResolution[] = ["480p", "720p"]
+export const VIDEO_RESOLUTION_OPTIONS: readonly VideoResolution[] = ["480p", "720p", "1080p"]
 export const VIDEO_ASPECT_RATIO_OPTIONS: ReadonlyArray<MediaAspectRatioOption<VideoAspectRatio>> = [
   { value: "auto", label: "Auto", ratio: "Auto", className: "h-6 w-6", visibleByDefault: true },
   { value: "16:9", label: "Wide", ratio: "16:9", className: "h-[16px] w-8", visibleByDefault: true },
@@ -43,7 +43,8 @@ export const VIDEO_ASPECT_RATIO_OPTIONS: ReadonlyArray<MediaAspectRatioOption<Vi
   { value: "3:4", label: "Portrait", ratio: "3:4", className: "h-8 w-6" },
   { value: "21:9", label: "Cinema", ratio: "21:9", className: "h-[14px] w-9" },
 ]
-export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+export const VIDEO_DURATION_OPTIONS: readonly VideoDuration[] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+export const VIDEO_DURATION_PINNED_OPTIONS: readonly VideoDuration[] = [8, 15, 30]
 export const VOICE_MODEL_OPTIONS: readonly VoiceModel[] = ["Gemini 2.5 Flash TTS", "ElevenLabs"]
 export const VOICE_LANGUAGE_OPTIONS: readonly VoiceLanguage[] = ["English", "Spanish", "German", "French", "Portuguese", "Afrikaans", "Arabic", "Armenian", "Assamese", "Azerbaijani", "Belarusian", "Bengali"]
 export const VOICE_ACCENT_OPTIONS: readonly VoiceAccent[] = ["Neutral", "Latino", "US", "British", "Spanish", "Mexican"]
@@ -77,12 +78,16 @@ type MediaModelEntry = {
   name?: unknown
   displayName?: unknown
   provider?: unknown
+  isActive?: unknown
+  virtual?: unknown
+  id?: unknown
 }
 
 export function providerForMediaModel(modelName: string, fallback = DEFAULT_IMAGE_PROVIDER): string {
   const value = String(modelName || "").toLowerCase()
-  if (value.includes("/")) return "OpenRouter"
-  if (value.includes("openrouter") || value.includes("seedream")) return "OpenRouter"
+  if (value.includes("deepseek")) return "DeepSeek"
+  if (value.includes("openrouter")) return "DeepSeek"
+  if (value.includes("seedream")) return "OpenAI"
   if (value.includes("google") || value.includes("imagen") || value.includes("gemini") || value.includes("veo")) return "Google"
   if (value.includes("kling")) return "Kling"
   if (value.includes("openai") || value.includes("dall") || value.includes("gpt-image")) return "OpenAI"
@@ -99,4 +104,52 @@ export function isVideoModelEntry(model: MediaModelEntry | null | undefined): bo
   const type = String(model?.type || model?.kind || "").toLowerCase()
   const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`
   return type === "video" || type === "videos" || type.includes("video") || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label)
+}
+
+/**
+ * Admin-catalog visibility for the /chat Video picker.
+ * Same flags as Admin > AI Models: type=VIDEO and isActive=true.
+ * A model missing from the admin catalog (no VIDEO type) is treated as hidden.
+ */
+export function isAdminVisibleVideoModel(model: MediaModelEntry | null | undefined): boolean {
+  if (!model) return false
+  const name = String(model.name || "").trim()
+  if (!name) return false
+  const type = String(model.type || model.kind || "").trim().toUpperCase()
+  if (type !== "VIDEO") return false
+  if (model.isActive === false) return false
+  if (model.virtual === true) return false
+  const id = String(model.id || "").trim()
+  if (id.startsWith("__virtual_")) return false
+  return true
+}
+
+export function filterAdminVisibleVideoModels<T extends MediaModelEntry>(
+  models: T[] | null | undefined,
+): T[] {
+  return (Array.isArray(models) ? models : []).filter(isAdminVisibleVideoModel)
+}
+
+/** FE-068: image/video generate must never fall through to OpenRouter text models. */
+export function isForbiddenMediaTextModel(name?: string, provider?: string): boolean {
+  const s = `${name || ""} ${provider || ""}`.toLowerCase()
+  if (!s.trim()) return false
+  const isMedia = /image|video|imagen|veo|kling|dall|seedream|sora|flux|midjourney|ideogram|gpt-image/.test(s)
+  if (/openrouter/.test(s) && !isMedia) return true
+  if (/(^|\s)(gpt-4|gpt-3|claude|gemini-2\.5-pro|deepseek-v4-flash|deepseek-v4-pro)(\s|$)/.test(s) && !isMedia) return true
+  return false
+}
+
+export function assertMediaGenerateModel(name?: string, provider?: string): void {
+  if (isForbiddenMediaTextModel(name, provider)) {
+    const err = new Error("openrouter_text_model_forbidden")
+    err.name = "ModelForbiddenError"
+    throw err
+  }
+}
+
+export function filterMediaModels<T extends { name?: string; provider?: string; type?: string; kind?: string }>(
+  models: T[] | null | undefined,
+): T[] {
+  return (Array.isArray(models) ? models : []).filter((model) => !isForbiddenMediaTextModel(model?.name, model?.provider))
 }

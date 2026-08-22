@@ -28,6 +28,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
+import { AdminPageHeader, AdminPageBody } from "@/components/admin/admin-chrome"
 
 const KNOWN_URLS = [
   "https://api.fal.ai/v1",
@@ -271,41 +272,34 @@ export default function AdminConnectionsPage() {
   }
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-semibold flex items-center gap-2">
-            <Plug className="h-6 w-6" /> Conexiones
-          </h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            API keys de proveedores. Las conexiones activas sincronizan modelos en AI Models como inactivos; publícalos desde AI Models.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
+    <>
+      <AdminPageHeader
+        title="Conexiones"
+        description="API keys de proveedores. Las activas importan modelos inactivos; publícalos en Modelos IA."
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
           {disabledConnections.length > 0 && (
-            <Button variant="outline" onClick={removeAllDisabled} className="text-red-600 hover:text-red-700">
-              <Trash2 className="h-4 w-4 mr-2" />
+            <Button variant="outline" size="sm" onClick={removeAllDisabled} className="h-8 text-[13px] text-red-600 hover:text-red-700">
+              <Trash2 className="h-3.5 w-3.5 mr-1.5" />
               Eliminar desactivadas ({disabledConnections.length})
             </Button>
           )}
-          <Button variant="outline" onClick={healthCheckAll}>
-            <RefreshCw className="h-4 w-4 mr-2" />
-            Probar todas
+          <Button variant="outline" size="sm" onClick={healthCheckAll} className="h-8 text-[13px]">
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
+            Probar
           </Button>
-          <Button variant="outline" onClick={load} disabled={loading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+          <Button variant="outline" size="sm" onClick={load} disabled={loading} className="h-8 text-[13px]">
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${loading ? "animate-spin" : ""}`} />
             Refrescar
           </Button>
-          <Button variant="outline" onClick={() => openAdd("fal")}>
-            <Plus className="h-4 w-4 mr-2" />
-            Agregar fal.ai
+          <Button size="sm" onClick={() => openAdd("openai")} className="h-8 text-[13px]">
+            <Plus className="h-3.5 w-3.5 mr-1.5" />
+            Agregar
           </Button>
-          <Button onClick={() => openAdd("openai")}>
-            <Plus className="h-4 w-4 mr-2" />
-            Agregar conexión
-          </Button>
-        </div>
-      </div>
+          </div>
+        }
+      />
+      <AdminPageBody className="space-y-3">
 
       {loading && groups.length === 0 ? (
         <div className="text-sm text-muted-foreground">Cargando conexiones…</div>
@@ -421,7 +415,8 @@ export default function AdminConnectionsPage() {
         defaultProvider={presetProvider}
         onSaved={load}
       />
-    </div>
+      </AdminPageBody>
+    </>
   )
 }
 
@@ -553,7 +548,7 @@ function ConnectionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Editar conexión" : "Add Connection"}</DialogTitle>
+          <DialogTitle>{isEdit ? "Editar conexión" : "Agregar conexión"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="flex items-center justify-between text-sm">
@@ -787,7 +782,7 @@ function ConnectionDialog({
 
           <div className="flex justify-end pt-2">
             <Button onClick={submit} disabled={saving}>
-              {saving ? "Guardando…" : "Save"}
+              {saving ? "Guardando…" : "Guardar"}
             </Button>
           </div>
         </div>

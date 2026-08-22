@@ -10,19 +10,16 @@ export interface AgentTaskUiMessage {
 }
 
 export async function loadVercelAiSdkBridge() {
-  const [ai, langchain, openai, react] = await Promise.all([
-    import("ai"),
-    import("@ai-sdk/langchain"),
-    import("@ai-sdk/openai"),
-    import("@ai-sdk/react"),
-  ])
+  // Do not instantiate OpenAI/OpenRouter clients in the browser.
+  // Agent-task generate goes through SiraGPT's own /api/agent/task (DeepSeek).
   return {
-    ready: true,
+    ready: false,
+    reason: "native_deepseek_only",
     exports: {
-      ai: Object.keys(ai).sort(),
-      langchain: Object.keys(langchain).sort(),
-      openai: Object.keys(openai).sort(),
-      react: Object.keys(react).sort(),
+      ai: [] as string[],
+      langchain: [] as string[],
+      openai: [] as string[],
+      react: [] as string[],
     },
   }
 }

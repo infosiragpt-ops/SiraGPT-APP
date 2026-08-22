@@ -44,12 +44,13 @@ import {
   Flag,
   Settings,
   PenSquare,
-  Pencil,
   MessageSquare,
   Star,
   Disc3,
   Menu as MenuIcon,
   BriefcaseBusiness,
+  Maximize2,
+  Minimize2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
@@ -99,12 +100,6 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .catch(() => null)
 }
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
-// Rich-text editor panel for uploaded documents — lazy so the Tiptap bundle
-// stays out of the eager chat route. TiptapEditor is not SSR-safe, hence ssr:false.
-const DocumentEditorPanel = dynamic(
-  () => import("@/components/chat/DocumentEditorPanel").then((m) => m.DocumentEditorPanel),
-  { ssr: false, loading: () => null },
-)
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
   ImageAspectRatioMark,
@@ -115,8 +110,10 @@ import {
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
 import {
+  COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
   COMPOSER_TEXTAREA_MIN_PX,
   measureComposerTextarea,
+  shouldShowComposerExpandControl,
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
@@ -137,6 +134,7 @@ import {
 } from "@/lib/api"
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
@@ -208,6 +206,7 @@ import {
 } from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { safeUUID } from "@/lib/safe-uuid"
@@ -230,7 +229,6 @@ import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
 import { SourcesPanel } from "@/components/sources-panel"
 import { GrokVoicePanel } from "@/components/chat/grok-voice-panel"
 import { DocumentPreview, type DocumentPreviewTarget } from "./document-preview"
-import { useDocumentPreviewOverlay } from "@/hooks/use-mobile"
 import { CodePreview } from "./code-preview"
 import SpotifyResults from "./spotify-results"
 // Panel "Computer Use": solo aparece cuando el usuario activa esa
@@ -322,13 +320,14 @@ import {
   MUSIC_STYLE_OPTIONS,
   MUSIC_STYLE_PROFILES,
   VIDEO_ASPECT_RATIO_OPTIONS,
-  VIDEO_DURATION_OPTIONS,
   VIDEO_RESOLUTION_OPTIONS,
   VOICE_ACCENT_OPTIONS,
   VOICE_COMPOSER_PLACEHOLDER,
   VOICE_EFFECT_OPTIONS,
   VOICE_LANGUAGE_OPTIONS,
   VOICE_MODEL_OPTIONS,
+  filterAdminVisibleVideoModels,
+  isAdminVisibleVideoModel,
   isImageModelEntry,
   isVideoModelEntry,
   providerForMediaModel,
@@ -347,6 +346,7 @@ import {
   type VoiceLanguage,
   type VoiceModel,
 } from "@/lib/chat/media-composer-config"
+import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from "@/lib/chat/video-duration"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
 // contexts (preview iframes, denied permission, insecure origin) and, when not
@@ -1525,7 +1525,7 @@ const ActionsDropdown = ({
             type="file"
             multiple
             className="hidden"
-            accept="image/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg"
+            accept="image/*,audio/*,video/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg,.mp3,.wav,.m4a,.aac,.ogg,.mp4,.mov,.webm,.mpeg"
             onChange={handleFilesSelected}
           />
           {/* Web Search */}
@@ -1848,7 +1848,6 @@ type ActiveOptionsDisplayProps = {
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
   onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
   moveFile?: (index: number, delta: -1 | 1) => void;
-  onEditDocument?: (file: any, result?: unknown) => void;
 }
 
 function areActiveOptionsDisplayPropsEqual(
@@ -1863,8 +1862,7 @@ function areActiveOptionsDisplayPropsEqual(
     prev.restoreLongPasteToInput === next.restoreLongPasteToInput &&
     prev.onPreviewAttachment === next.onPreviewAttachment &&
     prev.onFileProcessingStatusChange === next.onFileProcessingStatusChange &&
-    prev.moveFile === next.moveFile &&
-    prev.onEditDocument === next.onEditDocument
+    prev.moveFile === next.moveFile
   )
 }
 
@@ -1878,13 +1876,9 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
   onPreviewAttachment,
   onFileProcessingStatusChange,
   moveFile,
-  onEditDocument,
 }: ActiveOptionsDisplayProps) {
   // Screen-reader announcement for keyboard reordering (aria-live).
   const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
-  // Document editor state — pick the file being edited / saved.
-  const [editingFile, setEditingFile] = React.useState<any | null>(null);
-  const [editingFileId, setEditingFileId] = React.useState<string | null>(null);
   // Inline expanded preview for "PEGADO" text-snippet chips.
   const [expandedSnippetId, setExpandedSnippetId] = React.useState<string | null>(null);
   // Viewer state — same reusable viewer used by sent-message chips, so
@@ -1959,23 +1953,6 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
             } else {
               setViewingIndex(index);
             }
-          };
-
-          // Rich-text edit: available once the upload has a real id (i.e. is
-          // not still uploading / failed) and the chip has a document-ish name.
-          const docEditId = resolveUploadFileId(file);
-          const docEditLabel = String(file.originalName || file.name || file.filename || "");
-          const canEditDocument = Boolean(
-            docEditId
-            && !isFailed
-            && /\.(md|markdown|txt|docx?|pdf|rtf|odt|ods|odp|pptx?|xlsx?|csv)$/i.test(docEditLabel)
-            && typeof onEditDocument === "function"
-          );
-          const openDocEditor = () => {
-            if (!canEditDocument) return;
-            setEditingFile(file);
-            setEditingFileId(String(docEditId));
-            onEditDocument?.(file);
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
@@ -2207,18 +2184,6 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                         <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
                     )}
-                    {canEditDocument && !longPasteMeta && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full text-muted-foreground"
-                        onClick={(e) => { e.stopPropagation(); openDocEditor(); }}
-                        title="Editar documento"
-                        aria-label={`Editar documento ${file.name || ""}`}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -2246,14 +2211,6 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const newIdx = viewerSiblings.findIndex(s => s === next);
           if (newIdx >= 0) setViewingIndex(newIdx);
         }}
-      />
-      <DocumentEditorPanel
-        open={editingFile !== null}
-        file={editingFile}
-        fileId={editingFileId || undefined}
-        apiClient={apiClient}
-        onClose={() => { setEditingFile(null); setEditingFileId(null); }}
-        onSaved={(result) => onEditDocument?.(editingFile, result)}
       />
     </div>
   );
@@ -2444,7 +2401,6 @@ const ActiveToolsDisplay = ({
 }) => {
   const [showAllImageRatios, setShowAllImageRatios] = React.useState(false);
   const [showAllVideoRatios, setShowAllVideoRatios] = React.useState(false);
-  const [showAllVideoDurations, setShowAllVideoDurations] = React.useState(false);
   const activeComputerUseMode = computerUseAppMode || "computer";
   const computerUseAppMeta: Record<ComputerUseAppMode, { label: string; icon: JSX.Element }> = {
     browser: { label: "Navegador", icon: <AppWindow className="h-4 w-4" /> },
@@ -2575,7 +2531,8 @@ const ActiveToolsDisplay = ({
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
     const pickByKind = (kind: "image" | "video") => {
-      const predicate = kind === "image" ? isImageModelEntry : isVideoModelEntry;
+      // Video: admin catalog only (type=VIDEO + isActive). Hidden/unknown = omit.
+      const predicate = kind === "image" ? isImageModelEntry : isAdminVisibleVideoModel;
       return models.filter(predicate);
     };
     const normalize = (model: any) => ({
@@ -2632,6 +2589,13 @@ const ActiveToolsDisplay = ({
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
 
+  React.useEffect(() => {
+    const fal = (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal
+    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, fal)
+    const next = clampVideoDuration(selectedVideoDuration, durationSpec, undefined, selectedVideoResolution)
+    if (next != null && next !== selectedVideoDuration) setSelectedVideoDuration(next)
+  }, [availableModels, selectedVideoModel, selectedVideoDuration, setSelectedVideoDuration]);
+
   // Activate a model chosen from the floating fal.ai model gallery (mounted at
   // the page level, decoupled from this composer). Image/video map onto the
   // string-based pickers; audio/3d selections only surface the launcher toast.
@@ -2640,11 +2604,17 @@ const ActiveToolsDisplay = ({
       const model = (e as CustomEvent).detail as { id?: string; group?: string } | undefined;
       if (!model || !model.id) return;
       if (model.group === "image") setSelectedImageModel(model.id);
-      else if (model.group === "video") setSelectedVideoModel(model.id);
+      else if (model.group === "video") {
+        // Hidden/disabled admin VIDEO rows must not become selectable via the gallery.
+        const allowed = (Array.isArray(availableModels) ? availableModels : []).some(
+          (entry: any) => isAdminVisibleVideoModel(entry) && String(entry?.name || "") === model.id,
+        );
+        if (allowed) setSelectedVideoModel(model.id);
+      }
     };
     window.addEventListener("siragpt:fal-model-selected", handler as EventListener);
     return () => window.removeEventListener("siragpt:fal-model-selected", handler as EventListener);
-  }, [setSelectedImageModel, setSelectedVideoModel]);
+  }, [availableModels, setSelectedImageModel, setSelectedVideoModel]);
 
   const renderMediaModelPicker = (
     tool: "image" | "voice" | "music" | "video",
@@ -3481,35 +3451,68 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <section className="video-settings-section">
-                  <h3 className="video-settings-label">Duración</h3>
-                  <div className="mt-2 flex flex-wrap items-center gap-1" role="radiogroup" aria-label="Duración de video">
-                    {VIDEO_DURATION_OPTIONS.filter(option => showAllVideoDurations || option <= DEFAULT_VIDEO_DURATION).map(option => {
-                      const selected = option === selectedVideoDuration;
+                  {(() => {
+                    const durationSpec = resolveVideoDurationSpec(selectedVideoModel, (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal)
+                    const maxLabel = durationSpec.max != null ? `${durationSpec.max}s` : ""
+                    if (durationSpec.audioDriven) {
                       return (
-                        <button
-                          key={option}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => setSelectedVideoDuration(option)}
-                          className={cn(
-                            "video-setting-pill min-w-8",
-                            selected && "is-selected"
-                          )}
-                        >
-                          {option}s
-                        </button>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Según audio</span>
+                        </div>
                       )
-                    })}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAllVideoDurations(value => !value)}
-                    className="video-settings-more"
-                    aria-expanded={showAllVideoDurations}
-                  >
-                    {showAllVideoDurations ? "Menos" : "Más"} <ChevronDown className={cn("h-3 w-3 transition-transform", showAllVideoDurations && "rotate-180")} />
-                  </button>
+                    }
+                    if (!durationSpec.supportsDuration) {
+                      return (
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] text-zinc-500 dark:text-white/70">Auto</span>
+                        </div>
+                      )
+                    }
+                    const step = durationSpec.step || 1
+                    return (
+                      <>
+                        <div className="flex items-center justify-between gap-3">
+                          <h3 className="video-settings-label">Duración</h3>
+                          <span className="text-[11px] tabular-nums text-zinc-500 dark:text-white/70">{selectedVideoDuration}s · {maxLabel} máx.</span>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            aria-label="Reducir duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, -1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >−</button>
+                          <input
+                            type="range"
+                            min={durationSpec.min ?? 4}
+                            max={durationSpec.max ?? 8}
+                            step={step}
+                            value={selectedVideoDuration}
+                            aria-label="Duración de video"
+                            className="h-1 w-full cursor-pointer accent-zinc-900 dark:accent-white"
+                            onChange={(event) => {
+                              const next = clampVideoDuration(event.target.value, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          />
+                          <button
+                            type="button"
+                            aria-label="Aumentar duración"
+                            className="video-setting-pill min-w-7 px-0"
+                            onClick={() => {
+                              const next = stepVideoDuration(selectedVideoDuration, 1, durationSpec, undefined, selectedVideoResolution)
+                              if (next != null) setSelectedVideoDuration(next)
+                            }}
+                          >+</button>
+                        </div>
+                      </>
+                    )
+                  })()}
                 </section>
 
                 <section className="video-settings-section">
@@ -3523,7 +3526,7 @@ const ActiveToolsDisplay = ({
                 </section>
 
                 <div className="video-settings-summary">
-                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {selectedVideoDuration}s / Audio {selectedVideoAudio ? "On" : "Off"}
+                  {selectedVideoAspectRatio === "auto" ? "Auto" : selectedVideoAspectRatio} / {selectedVideoResolution} / {resolveVideoDurationSpec(selectedVideoModel).audioDriven ? "Según audio" : `${selectedVideoDuration}s`} / Audio {selectedVideoAudio ? "On" : "Off"}
                 </div>
               </div>
             </DropdownMenuContent>
@@ -4094,11 +4097,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
   // If this is a video chat type, show video model
   if (chatTypes === "video") {
-    const videoModels = (Array.isArray(availableModels) ? availableModels : [])
-      .filter((model: any) => {
-        const label = `${model?.name || ""} ${model?.displayName || ""} ${model?.provider || ""}`;
-        return String(model?.type || "").toUpperCase() === "VIDEO" || /video|veo|kling|runway|pika|hailuo|luma/i.test(label);
-      });
+    const videoModels = filterAdminVisibleVideoModels(
+      Array.isArray(availableModels) ? availableModels : [],
+    );
     selectedVideoModelData = videoModels.find((m: any) => m.name === selectedModel) || videoModels[0];
 
     // Filter video models based on search
@@ -5164,7 +5165,7 @@ function ChatInterfaceContent() {
   const [selectedMusicInfluence, setSelectedMusicInfluence] = React.useState(0.3)
   const [selectedMusicEffect, setSelectedMusicEffect] = React.useState<MusicEffect>("Studio Master")
   const [selectedVideoResolution, setSelectedVideoResolution] = React.useState<VideoResolution>("720p")
-  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("auto")
+  const [selectedVideoAspectRatio, setSelectedVideoAspectRatio] = React.useState<VideoAspectRatio>("9:16")
   const [selectedVideoDuration, setSelectedVideoDuration] = React.useState<VideoDuration>(DEFAULT_VIDEO_DURATION)
   const [selectedVideoAudio, setSelectedVideoAudio] = React.useState(true)
   const [selectedVideoModel, setSelectedVideoModel] = React.useState(DEFAULT_VIDEO_MODEL)
@@ -5178,6 +5179,8 @@ function ChatInterfaceContent() {
   const isGeneratingImageRef = React.useRef(false)
   const isGeneratingVoiceRef = React.useRef(false)
   const isGeneratingMusicRef = React.useRef(false)
+  const isGeneratingVideoRef = React.useRef(false)
+  const isVideoGenerationActiveRef = React.useRef(false)
   const [isGeneratingVideo, setIsGeneratingVideo] = React.useState(false)
   const [isGeneratingPPT, setIsGeneratingPPT] = React.useState(false)
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
@@ -5193,9 +5196,9 @@ function ChatInterfaceContent() {
   }, []);
   const refreshVideoModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('VIDEO');
-    const models = Array.isArray(modelsResponse?.models)
-      ? modelsResponse.models.filter(isVideoModelEntry)
-      : [];
+    const models = filterAdminVisibleVideoModels(
+      Array.isArray(modelsResponse?.models) ? modelsResponse.models : [],
+    );
     setVideoCatalogModels(models);
     return models;
   }, []);
@@ -5204,9 +5207,10 @@ function ChatInterfaceContent() {
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
   }, [availableModels, imageCatalogModels]);
   const videoModelsForComposer = React.useMemo(() => {
-    const source = videoCatalogModels.length ? videoCatalogModels : availableModels;
-    return (Array.isArray(source) ? source : []).filter(isVideoModelEntry);
-  }, [availableModels, videoCatalogModels]);
+    // Dedicated VIDEO catalog first; never fall back to a heuristic list.
+    const source = videoCatalogModels.length ? videoCatalogModels : [];
+    return filterAdminVisibleVideoModels(source);
+  }, [videoCatalogModels]);
   const composerAvailableModels = React.useMemo(() => {
     const byName = new Map<string, any>();
     for (const model of Array.isArray(availableModels) ? availableModels : []) {
@@ -5879,8 +5883,8 @@ function ChatInterfaceContent() {
     };
   }, [agentTaskRecoveryHydrationNonce, currentChatId, markLocalJobBusy, markLocalJobIdle, setCurrentChat]);
 
-  // Recovery polls intentionally survive chat navigation, so component
-  // teardown owns the final abort for every background controller.
+  // Recovery polls are browser-only. Teardown may stop the poll, but it
+  // must NEVER cancel the server job (Word/doc outlives the SSE socket).
   React.useEffect(() => {
     const recoveryControllers = agentTaskRecoveryControllersRef.current;
     return () => {
@@ -6010,12 +6014,15 @@ function ChatInterfaceContent() {
    * Closes all tools and connectors - used when activating a new tool/connector
    * This ensures only one tool/connector is active at a time
    */
-  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean } = {}) => {
+  const closeAllToolsAndConnectors = React.useCallback((options: { preserveWebSearch?: boolean; preserveVideo?: boolean } = {}) => {
     if (!options.preserveWebSearch) setIsWebSearchActive(false);
     setIsImageGenerationActive(false);
     setIsVoiceGenerationActive(false);
     setIsMusicGenerationActive(false);
-    setIsVideoGenerationActive(false);
+    if (!options.preserveVideo) {
+      isVideoGenerationActiveRef.current = false;
+      setIsVideoGenerationActive(false);
+    }
     setIsGmailActive(false);
     setIsGoogleCalendarActive(false);
     setIsGoogleDriveActive(false);
@@ -6031,6 +6038,13 @@ function ChatInterfaceContent() {
    */
   const resetAllToolsAndConnectors = React.useCallback(() => {
     // Close all tools and connectors
+    isGeneratingVideoRef.current = false;
+    isVideoGenerationActiveRef.current = false;
+    try {
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+      }
+    } catch {}
     closeAllToolsAndConnectors();
 
     // Reset chat type
@@ -6177,8 +6191,12 @@ function ChatInterfaceContent() {
       });
     }
     if (ownsVideoGeneration) {
+      isGeneratingVideoRef.current = false;
       setIsGeneratingVideo(false);
       setIsGeneratingPPT(false);
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     }
     if (!targetChatId || activeStreamingChatIds.includes(targetChatId)) {
       stopStreaming();
@@ -6475,6 +6493,38 @@ But first, you need to connect your Spotify account securely using the button be
     }
   }
   const [isVideoGenerationActive, setIsVideoGenerationActive] = React.useState(false);
+  const prevVideoGenerationActiveRef = React.useRef(false);
+  React.useEffect(() => {
+    // Restore after mount only (avoid SSR/session hydration mismatch).
+    try {
+      if (typeof window === "undefined") return;
+      const parsed = JSON.parse(window.sessionStorage.getItem("siragpt.composer.videoMode") || "null");
+      if (!parsed?.active) return;
+      isVideoGenerationActiveRef.current = true;
+      prevVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType("video");
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  React.useEffect(() => {
+    isVideoGenerationActiveRef.current = isVideoGenerationActive;
+    try {
+      if (typeof window === "undefined") return;
+      if (isVideoGenerationActive) {
+        window.sessionStorage.setItem(
+          "siragpt.composer.videoMode",
+          JSON.stringify({ active: true, chatId: currentChatId }),
+        );
+        prevVideoGenerationActiveRef.current = true;
+        return;
+      }
+      if (prevVideoGenerationActiveRef.current) {
+        window.sessionStorage.removeItem("siragpt.composer.videoMode");
+        prevVideoGenerationActiveRef.current = false;
+      }
+    } catch {}
+  }, [isVideoGenerationActive, currentChatId]);
   React.useEffect(() => {
     if (!isVideoGenerationActive && chatType !== 'video') return;
     let cancelled = false;
@@ -6485,17 +6535,18 @@ But first, you need to connect your Spotify account securely using the button be
           setSelectedVideoModel('');
           return;
         }
-        setSelectedVideoModel((current) => (
-          current && models.some((model: any) => model?.name === current)
-            ? current
-            : models[0].name
-        ));
+        const current = videoCatalogModels.length ? selectedVideoModel : '';
+        if (current && models.some((model: any) => model?.name === current)) {
+          setSelectedVideoModel(current);
+        } else {
+          setSelectedVideoModel(String(models[0]?.name ?? ''));
+        }
       })
       .catch((error) => {
         console.warn('No se pudo refrescar el catalogo de modelos de video:', error?.message || error);
       });
     return () => { cancelled = true; };
-  }, [chatType, isVideoGenerationActive, refreshVideoModels]);
+  }, [chatType, isVideoGenerationActive, refreshVideoModels, selectedVideoModel, videoCatalogModels]);
   const [subscribeOpen, setSubscribeOpen] = React.useState(false);
   const [isSubscribing, setIsSubscribing] = React.useState(false);
   const [currentUserInfo, setCurrentUserInfo] = React.useState<any>(null);
@@ -6530,14 +6581,18 @@ But first, you need to connect your Spotify account securely using the button be
     if (wantsVideo && !hasOtherActiveTool) {
       if (!isVideoGenerationActive && !autoVideoActivationRef.current) {
         closeAllToolsAndConnectors();
+        isVideoGenerationActiveRef.current = true;
         setIsVideoGenerationActive(true);
         setChatType('video');
         autoVideoActivationRef.current = true;
       }
 
       const requestedDuration = extractRequestedVideoDurationSeconds(input);
-      if (requestedDuration && selectedVideoDuration !== requestedDuration) {
-        setSelectedVideoDuration(requestedDuration as VideoDuration);
+      if (requestedDuration) {
+        const next = clampVideoDuration(requestedDuration, resolveVideoDurationSpec(selectedVideoModel))
+        if (next != null && selectedVideoDuration !== next) {
+          setSelectedVideoDuration(next as VideoDuration);
+        }
       }
       const requestedAspectRatio = extractRequestedVideoAspectRatio(input);
       if (requestedAspectRatio && selectedVideoAspectRatio !== requestedAspectRatio) {
@@ -6750,6 +6805,29 @@ But first, you need to connect your Spotify account securely using the button be
   const chatHeaderRef = React.useRef<HTMLDivElement>(null);
   const chatComposerDockRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+  const [composerExpanded, setComposerExpanded] = React.useState(false)
+  const expandComposer = React.useCallback(() => {
+    setComposerExpanded((open) => {
+      const next = !open
+      try {
+        window.sessionStorage.setItem("siragpt.composer.expanded", next ? "1" : "0")
+      } catch {
+        /* quota / private mode */
+      }
+      return next
+    })
+  }, [])
+  React.useEffect(() => {
+    try {
+      if (window.sessionStorage.getItem("siragpt.composer.expanded") === "1") {
+        setComposerExpanded(true)
+      }
+    } catch {
+      /* private mode */
+    }
+  }, [])
+  const [composerTextOverflows, setComposerTextOverflows] = React.useState(false)
+  const composerShowExpand = composerExpanded || composerTextOverflows
   const chatLayoutVarsRef = React.useRef<Record<string, number>>({});
   const composerResizeFrameRef = React.useRef<number | null>(null);
   const textareaLayoutRef = React.useRef<{ height: number; overflowY: string }>({ height: 0, overflowY: "" });
@@ -6827,28 +6905,28 @@ But first, you need to connect your Spotify account securely using the button be
   ) => {
     const measured = measureComposerTextarea({
       scrollHeight,
-      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      minHeight: composerExpanded ? COMPOSER_TEXTAREA_EXPANDED_MIN_PX : COMPOSER_TEXTAREA_MIN_PX,
       maxHeight,
       hasExplicitNewline: textarea.value.includes("\n"),
       charCount: textarea.value.length,
-      currentlyStacked,
+      currentlyStacked: currentlyStacked || composerExpanded,
     });
     const shell = textarea.closest(".composer-textarea-shell") as HTMLElement | null;
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
 
-    textarea.style.height = `${measured.height}px`;
-    textarea.style.overflowY = measured.overflowY;
+    textarea.style.setProperty("height", `${measured.height}px`, "important");
+    textarea.style.setProperty("overflow-y", measured.overflowY, "important");
     if (shell) {
       shell.style.height = `${measured.height}px`;
     }
     if (surface) {
-      const stackedValue = measured.stacked ? "true" : "false";
+      const stackedValue = (composerExpanded || measured.stacked) ? "true" : "false";
       if (surface.dataset.composerStacked !== stackedValue) {
         surface.dataset.composerStacked = stackedValue;
       }
     }
-    return measured;
-  }, []);
+    return composerExpanded ? { ...measured, stacked: true } : measured;
+  }, [composerExpanded]);
 
   const resizeComposerTextarea = React.useCallback(() => {
     const textarea = textareaRef.current;
@@ -6867,10 +6945,11 @@ But first, you need to connect your Spotify account securely using the button be
 
     const surface = textarea.closest("[data-testid='chat-composer-surface']") as HTMLElement | null;
     const currentlyStacked = surface?.dataset.composerStacked === "true";
-    textarea.style.height = "0px";
+    textarea.style.setProperty("height", "0px", "important");
+    let contentScrollHeight = textarea.scrollHeight;
     let measured = applyComposerTextareaMetrics(
       textarea,
-      textarea.scrollHeight,
+      contentScrollHeight,
       maxHeight,
       currentlyStacked,
     );
@@ -6879,10 +6958,11 @@ But first, you need to connect your Spotify account securely using the button be
     // height after the footer layout is applied. Keep the stacked decision
     // from the first pass so a wider line cannot collapse the toolbar.
     if (measured.stacked) {
-      textarea.style.height = "0px";
+      textarea.style.setProperty("height", "0px", "important");
+      contentScrollHeight = textarea.scrollHeight;
       const restacked = applyComposerTextareaMetrics(
         textarea,
-        textarea.scrollHeight,
+        contentScrollHeight,
         maxHeight,
         true,
       );
@@ -6899,6 +6979,14 @@ But first, you need to connect your Spotify account securely using the button be
     if (measured.overflowY === "auto" && document.activeElement === textarea) {
       textarea.scrollTop = textarea.scrollHeight;
     }
+
+    const nextOverflow = shouldShowComposerExpandControl({
+      scrollHeight: contentScrollHeight,
+      clientHeight: textarea.clientHeight,
+      minHeight: COMPOSER_TEXTAREA_MIN_PX,
+      value: textarea.value,
+    });
+    setComposerTextOverflows((prev) => (prev === nextOverflow ? prev : nextOverflow));
 
     syncChatLayoutVars();
   }, [applyComposerTextareaMetrics, syncChatLayoutVars]);
@@ -6919,6 +7007,10 @@ But first, you need to connect your Spotify account securely using the button be
       }
     };
   }, []);
+
+  React.useEffect(() => {
+    scheduleComposerTextareaResize();
+  }, [composerExpanded, scheduleComposerTextareaResize]);
 
   // Handle textarea input change with smooth scrolling
   const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -7577,6 +7669,8 @@ But first, you need to connect your Spotify account securely using the button be
 
   const renderChatComposer = () => (
     <ChatComposerSurface
+      layout={shouldInlineActiveTools || composerExpanded ? "stacked" : "row"}
+      expanded={composerExpanded}
       overlayVisible={pasteCapture.overlayVisible}
       overlay={pasteCapture.Overlay}
       slashMenu={
@@ -7609,7 +7703,6 @@ But first, you need to connect your Spotify account securely using the button be
             moveFile={moveFile}
             onPreviewAttachment={handleComposerAttachmentPreview}
             onFileProcessingStatusChange={handleFileProcessingStatusChange}
-            onEditDocument={handleDocumentEditorSaved}
           />
           <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
         </>
@@ -7625,7 +7718,24 @@ But first, you need to connect your Spotify account securely using the button be
         </>
       }
       textarea={
-        <div className="composer-textarea-shell min-w-0 flex-1">
+        <div className={cn("composer-textarea-shell min-w-0 flex-1", composerShowExpand && "has-expand-control")}>
+          {composerShowExpand ? (
+            <button
+              type="button"
+              onClick={expandComposer}
+              aria-pressed={composerExpanded}
+              aria-label={composerExpanded ? "Contraer" : "Ampliar"}
+              title={composerExpanded ? "Contraer" : "Ampliar"}
+              data-testid="chat-composer-expand"
+              className="composer-expand-button"
+            >
+              {composerExpanded ? (
+                <Minimize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              ) : (
+                <Maximize2 className="h-[14px] w-[14px]" aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
           {hasDetectedLinks && input ? (
             <div
               ref={composerHighlightOverlayRef}
@@ -7684,8 +7794,8 @@ But first, you need to connect your Spotify account securely using the button be
               "rounded-none transition-colors duration-200",
             )}
             style={{
-              minHeight: "26px",
-              maxHeight: "min(12.5rem, 42vh)",
+              minHeight: composerExpanded ? "8.5rem" : "26px",
+              maxHeight: composerExpanded ? "min(18rem, 52vh)" : "min(12.5rem, 42vh)",
               overflowY: "hidden",
               overflowX: "hidden",
               wordWrap: "break-word",
@@ -7768,6 +7878,11 @@ But first, you need to connect your Spotify account securely using the button be
       } else if (isGeneratingMusicRef.current) {
         setIsMusicGenerationActive(true);
         setChatType('text');
+      } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
       } else {
         closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
         setChatType('text'); // Always default to text when switching chats
@@ -7797,6 +7912,11 @@ But first, you need to connect your Spotify account securely using the button be
     } else if (isGeneratingMusicRef.current) {
       setIsMusicGenerationActive(true);
       setChatType('text');
+    } else if (isGeneratingVideoRef.current || isVideoGenerationActiveRef.current) {
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+      closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current, preserveVideo: true });
     } else {
       closeAllToolsAndConnectors({ preserveWebSearch: isWebSearchActiveRef.current });
     }
@@ -8888,34 +9008,6 @@ But first, you need to connect your Spotify account securely using the button be
     openComposerDocumentPreview(index);
   }, [openComposerDocumentPreview]);
 
-  // Persisted chat-turn association for the rich-text document editor. When
-  // the user saves an edit of an uploaded document, we record a USER
-  // message referencing the file (id-only) so the edited doc is recoverable
-  // from chat history — same shape the composer uses for attached files.
-  const handleDocumentEditorSaved = React.useCallback(async (
-    file: any,
-    _result?: unknown,
-  ) => {
-    const targetChatId = currentChatIdRef.current;
-    const fileIds = collectUploadFileIds(file ? [file] : []);
-    if (!targetChatId || fileIds.length === 0) return;
-    const displayName = String(file?.originalName || file?.name || file?.filename || "documento editado");
-    try {
-      await apiClient.addMessage(targetChatId, {
-        role: "USER",
-        content: `Edité el documento "${displayName}" desde el editor de documentos.`,
-        files: fileIds,
-        metadata: {
-          source: "document-editor",
-          editedAt: new Date().toISOString(),
-        },
-        idempotencyKey: `doc-edit-${fileIds[0]}-${Date.now()}`,
-      });
-    } catch (err) {
-      console.warn("[document-editor] chat-turn attach failed (non-fatal):", err);
-    }
-  }, []);
-
   React.useEffect(() => {
     if (composerPreviewIndex === null) return;
     if (composerPreviewIndex >= uploadedFiles.length) {
@@ -8995,7 +9087,7 @@ But first, you need to connect your Spotify account securely using the button be
         const url = apiBase.replace(/\/$/, "") + endpoint.replace(/^\/api/, "");
 
         if (!isStream) {
-          const researchModel = currentChatRef.current?.model || selectedModelRef.current
+          const researchModel = clampDeepSeekModel(currentChatRef.current?.model || selectedModelRef.current)
           if (!researchModel) throw new Error("Selecciona un modelo antes de iniciar la investigación")
           const researchChat = await ensureResearchCommandChat({
             currentChat: currentChatRef.current,
@@ -9654,6 +9746,13 @@ REWRITTEN TEXT:`;
       }
     }
 
+    if (isVideoGenerationActive || chatType === 'video') {
+      isGeneratingVideoRef.current = true;
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
+    }
+
     if (isVoiceGenerationActive) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
@@ -9721,7 +9820,7 @@ REWRITTEN TEXT:`;
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
       || (deterministicAgenticIntent
-        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt'].includes(deterministicAgenticIntent)
+        && ['web_search', 'agent_task', 'math', 'viz', 'chart', 'ppt', 'doc'].includes(deterministicAgenticIntent)
         && !imageOnlyTurn
         // Same gate as the semantic switch below: no-file analytical turns
         // (web lookups, formulas, charts) belong on the RELIABLE inline
@@ -9820,8 +9919,18 @@ REWRITTEN TEXT:`;
         }
       }
       if (isVideoGenerationActive || chatType === 'video') {
-        await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
-        markQueuedSendSucceeded();
+        isGeneratingVideoRef.current = true;
+        isVideoGenerationActiveRef.current = true;
+        setIsVideoGenerationActive(true);
+        setChatType('video');
+        try {
+          await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
+        }
         return;
       }
       if (chatType === 'thesis' && !isNewChat) {
@@ -9998,7 +10107,14 @@ REWRITTEN TEXT:`;
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
         case 'video':
+          isGeneratingVideoRef.current = true;
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           await handleVideoGeneration(msg, collectUploadFileIds(filesToSend), filesToSend);
+          isVideoGenerationActiveRef.current = true;
+          setIsVideoGenerationActive(true);
+          setChatType('video');
           break;
         case 'ppt':
           await runClassifiedAgentTask();
@@ -10029,7 +10145,7 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'doc':
-          await runContextPipeline(intent);
+          await runClassifiedAgentTask();
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
@@ -10660,11 +10776,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
       markLocalJobIdle(activeChatId, videoController);
       if (shouldClearVisibleState) {
+        isGeneratingVideoRef.current = false;
         setIsGeneratingVideo(false);
       }
+      isVideoGenerationActiveRef.current = true;
+      setIsVideoGenerationActive(true);
+      setChatType('video');
     };
 
+    isGeneratingVideoRef.current = true;
+    isVideoGenerationActiveRef.current = true;
     setIsGeneratingVideo(true)
+    setIsVideoGenerationActive(true);
+    setChatType('video');
     videoAbortControllerRef.current = videoController;
     if (activeChatId) markLocalJobBusy(activeChatId, videoController);
     const promptAspectRatio = extractRequestedVideoAspectRatio(prompt);
@@ -10676,7 +10800,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const videoOptions = {
       resolution: promptResolution || selectedVideoResolution,
       aspectRatio: promptAspectRatio || selectedVideoAspectRatio,
-      duration: selectedVideoDuration,
+      duration: clampVideoDuration(selectedVideoDuration, resolveVideoDurationSpec(activeVideoModel || selectedVideoModel, (availableModels || []).find((model: any) => model?.name === (activeVideoModel || selectedVideoModel))?.apiData?.fal)) ?? selectedVideoDuration,
       audio: promptAudio ?? selectedVideoAudio,
       model: activeVideoModel,
       signal: videoController.signal,
@@ -11212,7 +11336,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isMusicGenerationActive ||
     chatType === 'image' ||
     chatType === 'video';
-  const isSendingForCurrentChat = isSending && sendingChatId === currentChatId;
+  const isSendingForCurrentChat = Boolean(
+    isSending && sendingChatId && currentChatId && sendingChatId === currentChatId
+  );
   // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
   // Stop button must only take over the composer in the chat that OWNS the
   // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
@@ -11221,7 +11347,15 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isCurrentChatMediaBusy =
     isCurrentChatLocalJobBusy &&
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
-  const isStopButtonVisible = isCurrentChatLoading || isCurrentChatStreaming || (pendingStop && isCurrentChatStreaming) || isSendingForCurrentChat || isCurrentChatLocalJobBusy || isCurrentChatMediaBusy;
+  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT;
+  const isStopButtonVisible = !isIdlePlaceholderComposer && (
+    isCurrentChatLoading ||
+    isCurrentChatStreaming ||
+    (pendingStop && isCurrentChatStreaming) ||
+    isSendingForCurrentChat ||
+    isCurrentChatLocalJobBusy ||
+    isCurrentChatMediaBusy
+  );
   const shouldPrioritizeStopButton = isCurrentChatMediaBusy;
   // Shared props bundle for <ActiveToolsDisplay /> — the component is
   // now rendered in a different spot (below the input instead of above)
@@ -11279,18 +11413,14 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   };
 
 
-  const previewUsesOverlay = useDocumentPreviewOverlay();
-  const documentPreviewOpen = Boolean(
-    documentPreviewUrl ||
-    composerPreviewAttachment ||
-    sidePreviewAttachment
-  );
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
     showAudioPanel ||
     searchActivityPanelOpen ||
-    (documentPreviewOpen && !previewUsesOverlay) ||
+    documentPreviewUrl ||
     sourcesPanelData ||
+    composerPreviewAttachment ||
+    sidePreviewAttachment ||
     isWordConnectorActive ||
     isExcelConnectorActive ||
     activeArtifact
@@ -12437,6 +12567,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: fileIds,
           fileMetadata,
           chatId: activeChat.id,
+          lastArtifactId: pickLastArtifactId(currentChat?.messages || activeChat?.messages),
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
@@ -13162,13 +13293,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   onSave={saveSearchActivityToLibrary}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && documentPreviewUrl && (
                 <DocumentPreview
                   url={documentPreviewUrl}
                   onClose={() => setDocumentPreviewUrl(null)}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && composerPreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13182,7 +13313,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   }}
                 />
               )}
-              {!previewUsesOverlay && !coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
+              {!coworkPanelOpen && !showAudioPanel && !activeSearchActivity && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
                 <UnifiedDocumentViewer
                   variant="panel"
                   className="h-full"
@@ -13237,43 +13368,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           </>
         )}
       </div>
-      {previewUsesOverlay && documentPreviewUrl && (
-        <DocumentPreview
-          url={documentPreviewUrl}
-          onClose={() => setDocumentPreviewUrl(null)}
-        />
-      )}
-      {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
-        <UnifiedDocumentViewer
-          variant="panel"
-          className="h-full"
-          open={true}
-          onClose={() => setComposerPreviewIndex(null)}
-          attachment={composerPreviewAttachment}
-          siblings={composerPreviewSiblings}
-          onNavigate={(next) => {
-            const idx = composerPreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
-            if (idx >= 0) setComposerPreviewIndex(idx);
-          }}
-        />
-      )}
-      {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
-        <UnifiedDocumentViewer
-          variant="panel"
-          className="h-full"
-          open={true}
-          onClose={() => {
-            setSidePreviewAttachment(null);
-            setSidePreviewSiblings([]);
-          }}
-          attachment={sidePreviewAttachment}
-          siblings={sidePreviewSiblings}
-          onNavigate={(next) => {
-            const idx = sidePreviewSiblings.findIndex(s => s === next || (next.id && s.id === next.id));
-            if (idx >= 0) setSidePreviewAttachment(sidePreviewSiblings[idx]);
-          }}
-        />
-      )}
     </div >
   )
 }

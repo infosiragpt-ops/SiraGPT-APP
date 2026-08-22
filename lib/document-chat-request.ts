@@ -6,6 +6,7 @@ export interface DocumentChatRequestInput {
   chatId?: string
   model?: string
   fileIds?: string[]
+  lastArtifactId?: string
 }
 
 export interface DocumentChatRequest {
@@ -17,6 +18,7 @@ export interface DocumentChatRequest {
   template: string
   complexity: DocumentChatComplexity
   files?: string[]
+  lastArtifactId?: string
 }
 
 const normalize = (value: string) =>
@@ -78,10 +80,59 @@ export function detectDocumentChatComplexity(prompt: string, fileIds: string[] =
   return 'standard'
 }
 
+function artifactIdFromUnknown(value: unknown): string | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const rec = value as Record<string, unknown>
+  const id = String(rec.artifactId || rec.id || '').trim()
+  return id || undefined
+}
+
+/**
+ * WAVE3: pin color/append follow-ups to the last generated Word/PPT in the
+ * thread. Looks at message.artifacts, message.files[].artifactId, and the
+ * agent-task-state fence. Returns undefined when nothing is pinned so the
+ * backend keeps using latest-by-chatId.
+ */
+export function pickLastArtifactId(messages: unknown[] = []): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as Record<string, unknown> | null
+    if (!message || typeof message !== 'object') continue
+
+    const artifacts = Array.isArray(message.artifacts) ? message.artifacts : []
+    for (let j = artifacts.length - 1; j >= 0; j -= 1) {
+      const id = artifactIdFromUnknown(artifacts[j])
+      if (id) return id
+    }
+
+    const files = Array.isArray(message.files) ? message.files : []
+    for (let j = files.length - 1; j >= 0; j -= 1) {
+      const file = files[j] as Record<string, unknown> | null
+      const id = String(file?.artifactId || '').trim()
+      if (id) return id
+    }
+
+    const content = String(message.content || '')
+    const fence = content.match(/```agent-task-state\n([\s\S]*?)\n```/)
+    if (!fence) continue
+    try {
+      const parsed = JSON.parse(fence[1])
+      const list = Array.isArray(parsed?.artifacts) ? parsed.artifacts : []
+      for (let j = list.length - 1; j >= 0; j -= 1) {
+        const id = artifactIdFromUnknown(list[j])
+        if (id) return id
+      }
+    } catch {
+      /* ignore malformed fence */
+    }
+  }
+  return undefined
+}
+
 export function buildDocumentChatRequest(input: DocumentChatRequestInput): DocumentChatRequest {
   const prompt = String(input.prompt || '').trim()
   const fileIds = Array.from(new Set((input.fileIds || []).filter(Boolean)))
   const executionPrompt = withDocumentEditingPolicy(prompt, fileIds)
+  const lastArtifactId = String(input.lastArtifactId || '').trim()
   const request: DocumentChatRequest = {
     prompt: executionPrompt,
     displayPrompt: prompt,
@@ -92,5 +143,6 @@ export function buildDocumentChatRequest(input: DocumentChatRequestInput): Docum
     complexity: detectDocumentChatComplexity(prompt, fileIds),
   }
   if (fileIds.length > 0) request.files = fileIds
+  if (lastArtifactId) request.lastArtifactId = lastArtifactId
   return request
 }

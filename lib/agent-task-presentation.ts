@@ -137,3 +137,15 @@ export function summarizeAgentActivity(state: AgentTaskState): AgentActivitySumm
     validationTotal,
   }
 }
+
+
+/** OLA200_WAVE_G FE-059 — carry lastArtifactId so a PPT follow-up edits the deck. */
+export function followUpPresentationPayload(state: { lastArtifactId?: string | null; artifactId?: string | null } | null | undefined, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const last = (state && (state.lastArtifactId || state.artifactId)) || null
+  const id = typeof last === "string" && last.trim() ? last.trim() : null
+  if (!id) return { ...extra }
+  return { ...extra, lastArtifactId: id, followUp: true }
+}
+export function shouldRecreatePresentationDeck(payload: { lastArtifactId?: unknown } | null | undefined): boolean {
+  return !payload || typeof payload.lastArtifactId !== "string" || !payload.lastArtifactId.trim()
+}

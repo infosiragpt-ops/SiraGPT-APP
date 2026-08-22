@@ -13,7 +13,7 @@ export const COMPOSER_MODE_LABEL: Readonly<Record<ComposerMode, string>> = {
 }
 
 export const COMPOSER_PLACEHOLDER: Readonly<Record<ComposerMode, string>> = {
-  app: "Crea, prueba, itera…",
+  app: "Escribe un mensaje…",
   build: "Pide un cambio, pega código o / para comandos",
   deps: "Instala paquetes y úsalos en el código…",
   plan: "Objetivo o plan antes de editar archivos…",

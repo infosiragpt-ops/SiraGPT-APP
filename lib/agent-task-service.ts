@@ -1,7 +1,8 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson } from "./sse-client"
+import { streamSseJson, agentTaskResumeHeaders } from "./sse-client"
+import { resolveCatalogModel } from "./chat/catalog-model"
 
 /**
  * agent-task-service — SSE adapter for POST /api/agent/task.
@@ -87,6 +88,7 @@ export type AgentTaskEvent =
   | { type: "cycle_init"; taskId?: string; stages?: Array<{ id: string; label: string }>; documentType?: string | null; field?: string | null; citationStyle?: string | null; code?: string | null; ts?: string; seq?: number }
   | { type: "cycle_stage"; taskId?: string; stage: string; status: "start" | "done" | string; label?: string; note?: string; ts?: string; seq?: number }
   | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  | { type: "activity"; text: string; tool?: string; ts?: string; seq?: number }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
@@ -138,6 +140,7 @@ export interface AgentTaskRunArgs {
   documentType?: string
   field?: string
   citationStyle?: string
+  lastArtifactId?: string
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
@@ -311,6 +314,8 @@ async function* recoverClosedStreamEvents(
 
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
   const { signal, idleTimeoutMs, closedStreamRecoveryMs, endpoint, ...body } = args
+  const locked = resolveCatalogModel(body.model || "deepseek-v4-flash")
+  body.model = locked.name
   const postPath = endpoint && endpoint.trim() ? endpoint.trim() : "/agent/task"
   const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
     ? idleTimeoutMs
@@ -436,6 +441,7 @@ export interface AgentTaskState {
   qualityGates: Array<{ id: string; label: string; passed: boolean; score?: number | null; summary?: string; payload?: Record<string, unknown> | null; ts?: string }>
   repairs: Array<{ attempt: number; status: string; message: string; ts?: string }>
   finalText: string
+  currentActivity?: string | null
   done: boolean
   stoppedReason?: string
   error?: string
@@ -562,9 +568,12 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
           tools: evt.tools,
         },
       }
+    case "activity":
+      return { ...state, currentActivity: evt.text || state.currentActivity || null }
     case "step_start":
       return {
         ...state,
+        currentActivity: evt.label || state.currentActivity || null,
         steps: [...state.steps, {
           id: evt.id,
           label: evt.label,
@@ -682,9 +691,9 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
     case "final_text":
       return { ...state, finalText: evt.markdown }
     case "done":
-      return { ...state, done: true, stoppedReason: evt.stoppedReason }
+      return { ...state, done: true, stoppedReason: evt.stoppedReason, currentActivity: null }
     case "error":
-      return { ...state, done: true, error: evt.message }
+      return { ...state, done: true, error: evt.message, currentActivity: null }
     default:
       return state
   }
@@ -799,7 +808,7 @@ export async function getTaskEvents(
   const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
     credentials: "include",
-    headers: { ...authHeader() },
+    headers: { ...authHeader(), ...agentTaskResumeHeaders(after ? String(after) : null) },
     signal: options.signal,
   })
   let payload: any = null

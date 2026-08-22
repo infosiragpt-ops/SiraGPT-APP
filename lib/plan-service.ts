@@ -1,6 +1,7 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
+import { freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
 
 const API_ROOT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 
@@ -19,8 +20,8 @@ export const planService = {
     const res = await authenticatedFetch(`${API_ROOT}/plan/generate`, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json", ...authHeader() },
-      body: JSON.stringify({ brief, model: opts.model }),
+      headers: { "Content-Type": "application/json", ...freshGenerateHeaders(), ...authHeader() },
+      body: JSON.stringify({ brief, model: clampDeepSeekModel(opts.model) }),
       signal: opts.signal,
     })
     if (!res.ok) {
