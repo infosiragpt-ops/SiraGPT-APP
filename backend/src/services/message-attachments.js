@@ -740,12 +740,23 @@ async function serializeMessageAttachments(prisma, { userId, fileIds = [], clien
   });
 }
 
+function shouldSkipRetrieveEvidenceForQuery(query, env = process.env) {
+  try {
+    const { shouldSkipRetrieveEvidence } = require('./sdie/request-spec');
+    return shouldSkipRetrieveEvidence(query, env);
+  } catch (_) {
+    return false;
+  }
+}
+
 async function buildUploadedFileContext(prisma, {
   userId,
   fileIds = [],
   query = '',
   maxChars = 36000,
   evidenceLimit = 18,
+  env = process.env,
+  retrieveEvidenceFn,
 } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
@@ -765,6 +776,13 @@ async function buildUploadedFileContext(prisma, {
   const bulkBatch = withText.length >= BULK_CONTEXT_THRESHOLD;
   const bibliographyRequest = isBibliographyRequest(query);
   const deepQuestion = isDeepDocumentQuestion(query) || bibliographyRequest;
+  // Live screenshot bug: isDeepDocumentQuestion matches «resumen» and then
+  // retrieveEvidence (topK 3–8, evidenceLimit 16–18) returns title/editorial
+  // fragments. summarize_full RequestSpecs walk the full extract instead.
+  const skipTopKEvidence = shouldSkipRetrieveEvidenceForQuery(query, env);
+  const fetchEvidence = typeof retrieveEvidenceFn === 'function'
+    ? retrieveEvidenceFn
+    : retrieveRelevantEvidence;
   const blocks = await mapWithLimit(withText, async (row, index) => {
     const analysis = row.documentAnalysis || null;
     const chunks = Array.isArray(analysis?.chunks) ? analysis.chunks : [];
@@ -774,8 +792,8 @@ async function buildUploadedFileContext(prisma, {
     const effectiveDocumentText = synthesisRequest
       ? prepareDocumentTextForProfessionalSynthesis(row.documentText)
       : row.documentText;
-    const evidence = deepQuestion && !genericOverview
-      ? await retrieveRelevantEvidence(prisma, {
+    const evidence = deepQuestion && !genericOverview && !skipTopKEvidence
+      ? await fetchEvidence(prisma, {
         userId,
         row,
         query,
@@ -814,7 +832,7 @@ async function buildUploadedFileContext(prisma, {
       : effectiveDocumentText.length > selectedText.length
         ? '\n[Extracto balanceado; si necesitas precision adicional usa docintel_retrieve con la pregunta del usuario.]'
         : '';
-    const firstChunks = (!deepQuestion || !effectiveEvidence.length) && chunks.length
+    const firstChunks = !skipTopKEvidence && (!deepQuestion || !effectiveEvidence.length) && chunks.length
       ? [
         '',
         'Primeras referencias estructuradas disponibles:',
@@ -841,8 +859,8 @@ async function buildUploadedFileContext(prisma, {
       `id: ${row.id}`,
       `tipo: ${row.mimeType || 'desconocido'}`,
       analysis?.id ? `analysisId: ${analysis.id}` : null,
-      analysis?.summary ? `resumen tecnico: ${analysis.summary}` : null,
-      analysis?.chunkCount ? `fragmentos analizados: ${analysis.chunkCount}` : null,
+      analysis?.summary && !skipTopKEvidence ? `resumen tecnico: ${analysis.summary}` : null,
+      analysis?.chunkCount && !skipTopKEvidence ? `fragmentos analizados: ${analysis.chunkCount}` : null,
       query && !bulkBatch ? `pregunta del usuario: ${query}` : null,
       '',
       selectedText + clipped + firstChunks + tableSummary,
@@ -920,5 +938,6 @@ module.exports = {
   resolveStoredFilePath,
   resolveTranscriptionFileIds,
   serializeMessageAttachments,
+  shouldSkipRetrieveEvidenceForQuery,
   wantsSingleParagraphSynthesis,
 };

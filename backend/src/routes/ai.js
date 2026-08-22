@@ -126,6 +126,7 @@ const _hashUserIdForSpan = (_otelSpans && _otelSpans.hashUserId)
   ? _otelSpans.hashUserId
   : (() => null);
 const operationalRag = require('../services/rag/operational-runtime');
+const sdie = require('../services/sdie');
 const chatLatencyPolicy = require('../services/chat-latency-policy');
 const documentProfessionalAnalyzer = require('../services/document-professional-analyzer');
 const documentResponseFidelity = require('../services/document-response-fidelity');
@@ -3068,6 +3069,12 @@ router.post(
       // of normal chat, not only isolated /api/rag endpoints. Long
       // attached/project files are indexed once per chat/project and the
       // prompt receives compact, cited evidence snippets.
+      //
+      // SDIE v2 insert is AFTER this block + enrichment, BEFORE the
+      // agentic gate / generateStream. The screenshot bug is
+      // message-attachments → retrieveEvidence (topK 3–8), which
+      // summarize_full already bypasses. Do not skip operational RAG
+      // just to "own" the turn.
       let operationalRagContext = null;
       if (userId && !__publicWebReadonly) {
         try {
@@ -6138,6 +6145,46 @@ router.post(
             // client; if we then fall back to the plain stream we must wipe
             // that sentinel first (aiService.generateStream only appends).
             let __agenticDidStream = false;
+
+            // SDIE v2 Phase 1 — AFTER file context + RAG + enrichment,
+            // BEFORE agentic gate / generateStream. /chat and /code both
+            // hit this route; /code sets disableAgentic:true so the
+            // agentic-chat-stream OOXML slot never runs for summaries.
+            // Never claims FEATURE_DOC_ENGINE transform / source-preserving
+            // edit turns (those stay on the document-edit preloop).
+            try {
+              const referer = String(req.headers?.referer || req.get?.('referer') || '');
+              const surface = req.body?.surface
+                || req.body?.source
+                || (/\b\/code(?:\/|$|\?)/i.test(referer) ? 'code' : 'chat');
+              if (sdie.isSdieV2Enabled() && processedFiles.length > 0) {
+                const sdieResult = await sdie.runSdieTurn({
+                  prompt,
+                  files: processedFiles,
+                  surface,
+                  signal,
+                });
+                if (sdieResult.handled && sdieResult.answer) {
+                  try { res.write(`data: ${JSON.stringify({ content: sdieResult.answer })}\n\n`); } catch { /* socket gone */ }
+                  try {
+                    res.write(`data: ${JSON.stringify({
+                      type: 'sdie',
+                      engine: 'sdie-v2',
+                      strategy: sdieResult.spec?.strategy || null,
+                      surface,
+                      repairs: sdieResult.repairs || 0,
+                    })}\n\n`);
+                  } catch { /* socket gone */ }
+                  console.log(`[sdie] approved ${sdieResult.spec?.strategy} surface=${surface} repairs=${sdieResult.repairs || 0} chars=${sdieResult.answer.length}`);
+                  return sdieResult.answer;
+                }
+                if (sdieResult.reason && sdieResult.reason !== 'not_sdie_turn' && sdieResult.reason !== 'flag_off') {
+                  console.log(`[sdie] declined (${sdieResult.reason}); falling back to generic path`);
+                }
+              }
+            } catch (sdieErr) {
+              console.warn('[sdie] generate short-circuit failed (generic path continues):', sdieErr?.message || sdieErr);
+            }
             // ─── Agentic chat path (feature-flagged) ─────────────────
             // When AGENTIC_TOOLS_IN_CHAT=1 AND the selected model can
             // do OpenAI-style tool calls AND there are no images
@@ -6318,6 +6365,8 @@ router.post(
                   openai: agenticClient,
                   model: actualModel,
                   provider: actualProvider,
+                  processedFiles,
+                  surface: req.body?.surface || req.body?.source || 'chat',
                   attachedDocuments: agenticAttachedDocuments,
                   customGptPersona: agenticCustomGptPersona,
                   customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
