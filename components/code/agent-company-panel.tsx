@@ -58,7 +58,6 @@ import {
   UsersRound,
   Workflow,
   X,
-  Monitor,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -155,14 +154,10 @@ import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
-  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
-  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   notifyCompanyAssociationChanged,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
   setActiveCodexProject,
-  setActiveDepartmentComputer,
-  setActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import {
@@ -708,7 +703,6 @@ export function AgentCompanyPanel() {
   const [view, setView] = React.useState<CompanyView>("home")
   const [previewView, setPreviewView] = React.useState<CompanyPreviewView | null>(null)
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState("ceo-office")
-  const [computerStatus, setComputerStatus] = React.useState<{ loading: boolean; error: string | null }>({ loading: false, error: null })
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null)
   const [officeOpen, setOfficeOpen] = React.useState(false)
   const [companyMenuOpen, setCompanyMenuOpen] = React.useState(false)
@@ -1327,19 +1321,6 @@ export function AgentCompanyPanel() {
   )
 
   const openCeoOffice = React.useCallback(() => {
-    const computerRunId = "dept-ceo-office"
-    setSelectedDepartmentId("ceo-office")
-    setActiveDepartmentComputer(computerRunId)
-    const projectId = associatedCodexProjectId || companyProjectId || getActiveCodexProject()
-    if (projectId) setActiveCodexProject(projectId)
-    setActiveDepartmentSelection({ id: "ceo-office", name: "CEO Office", projectId: projectId || null })
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
-          detail: { runId: computerRunId, departmentId: "ceo-office", projectId },
-        }),
-      )
-    }
     let rootSessionId = codeChatSessions.find(
       (session) => session.title.trim().toLowerCase() === "ceo office",
     )?.id
@@ -1352,91 +1333,13 @@ export function AgentCompanyPanel() {
     }
     setView("chat")
   }, [
-    associatedCodexProjectId,
-    companyProjectId,
-
     chatLivesInWorkspaceColumn,
     createCodeChatSession,
     codeChatSessions,
     setActiveCodeChatSession,
   ])
 
-
-  const openDepartmentComputer = React.useCallback((departmentId: string) => {
-    const department = allDepartments.find((entry) => entry.id === departmentId)
-    if (!department) return
-    setSelectedDepartmentId(departmentId)
-    const computerRunId = (department as { computerRunId?: string }).computerRunId || `dept-${departmentId}`
-    setActiveDepartmentComputer(computerRunId)
-    setComputerStatus({ loading: false, error: null })
-    const projectId = associatedCodexProjectId
-      || (activeFolder?.id ? codexProjectIdFromWorkspaceId(activeFolder.id, { assumeProject: true }) : null)
-      || companyProjectId
-      || getActiveCodexProject()
-    if (projectId) setActiveCodexProject(projectId)
-    setActiveDepartmentSelection({
-      id: department.id,
-      name: department.name,
-      projectId: projectId || null,
-    })
-    if (!projectId) {
-      void ensureCompanyRuntime({ silent: true }).then((id) => {
-        if (!id) return
-        setActiveCodexProject(id)
-        setActiveDepartmentSelection({
-          id: department.id,
-          name: department.name,
-          projectId: id,
-        })
-      }).catch(() => {})
-    }
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, {
-          detail: { runId: computerRunId, departmentId, projectId },
-        }),
-      )
-    }
-  }, [
-    activeFolder?.id,
-    allDepartments,
-    associatedCodexProjectId,
-    companyProjectId,
-    ensureCompanyRuntime,
-  ])
-
-  React.useEffect(() => {
-    const projectId = associatedCodexProjectId || companyProjectId || getActiveCodexProject()
-    const dept = selectedDepartment?.department
-      ? {
-          id: selectedDepartment.department.id,
-          name: selectedDepartment.department.name,
-          projectId: projectId || null,
-        }
-      : { id: "ceo-office", name: "CEO Office", projectId: projectId || null }
-    setActiveDepartmentSelection(dept)
-    if (projectId) setActiveCodexProject(projectId)
-  }, [associatedCodexProjectId, companyProjectId, selectedDepartment])
-
-  React.useEffect(() => {
-    return () => {
-      setActiveDepartmentSelection(null)
-      setActiveDepartmentComputer(null)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    const onRequestCurrent = () => {
-      const id = selectedDepartmentId || "ceo-office"
-      openDepartmentComputer(id)
-    }
-    window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent as EventListener)
-    return () => window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent as EventListener)
-  }, [openDepartmentComputer, selectedDepartmentId])
-
   const openDepartmentChat = React.useCallback((departmentId: string) => {
-    // Keep the CEO Office / department desktop dock alive alongside chat.
-    openDepartmentComputer(departmentId)
     if (departmentId === "ceo-office") {
       openCeoOffice()
       return
@@ -1462,7 +1365,6 @@ export function AgentCompanyPanel() {
     codeChatSessions,
     createCodeChatSession,
     openCeoOffice,
-    openDepartmentComputer,
     setActiveCodeChatSession,
   ])
 
@@ -3342,8 +3244,6 @@ function CompanyHome({
                 ? codeSessionStatus(latest)
                 : { label: "Disponible", tone: "idle" as const }
             const isPinned = pinnedSet.has(department.id)
-            const canDelete = department.id !== "ceo-office"
-            const menuOpen = openDepartmentMenuId === department.id
             return (
               <div
                 key={department.id}
@@ -3352,7 +3252,6 @@ function CompanyHome({
                   hideFooter && "min-h-[46px] gap-1 rounded-md px-1.5 py-1.5",
                   department.id === "ceo-office" && "bg-muted/50",
                   isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
-                  menuOpen && "bg-muted/55",
                 )}
                 data-testid={`agent-company-department-${department.id}`}
               >
@@ -3416,70 +3315,10 @@ function CompanyHome({
                   </span>
                 </button>
 
-                <DropdownMenu
-                  open={menuOpen}
-                  onOpenChange={(open) => setOpenDepartmentMenuId(open ? department.id : null)}
-                >
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      type="button"
-                      className={cn(
-                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-background/90 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        hideFooter && "h-7 w-7",
-                        menuOpen
-                          ? "bg-background/90 text-foreground opacity-100"
-                          : "opacity-100 sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
-                      )}
-                      aria-label={`Opciones de ${department.name}`}
-                      data-testid={`agent-company-department-menu-${department.id}`}
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      <MoreHorizontal className={cn("h-4 w-4", hideFooter && "h-3.5 w-3.5")} />
-                    </button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent
-                    align="end"
-                    sideOffset={6}
-                    className="w-48 rounded-lg p-1.5"
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <DropdownMenuItem
-                      className="gap-2 rounded-md"
-                      data-testid={`agent-company-department-pin-${department.id}`}
-                      onSelect={() => onToggleDepartmentPin(department.id)}
-                    >
-                      {isPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
-                      {isPinned ? "Desfijar" : "Fijar"}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      className="gap-2 rounded-md"
-                      data-testid={`agent-company-department-edit-${department.id}`}
-                      onSelect={() => onEditDepartment(department)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                      Editar
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="gap-2 rounded-md text-destructive focus:bg-destructive/10 focus:text-destructive"
-                      disabled={!canDelete}
-                      data-testid={`agent-company-department-delete-${department.id}`}
-                      onSelect={() => {
-                        if (canDelete) onDeleteDepartment(department)
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Eliminar
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
                 <ChevronRight
                   className={cn(
-                    "hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-opacity sm:block",
-                    menuOpen || isPinned
-                      ? "sm:hidden"
-                      : "sm:group-hover/dept:hidden sm:group-focus-within/dept:hidden",
+                    "hidden h-4 w-4 shrink-0 text-muted-foreground/45 sm:block",
+                    hideFooter && "h-3.5 w-3.5",
                   )}
                 />
               </div>
