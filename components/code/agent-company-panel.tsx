@@ -190,6 +190,7 @@ import { cn } from "@/lib/utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CompanyResourcesSurface } from "./company-resources-surface"
+import { SkeletonPulse } from "@/components/skeleton/skeleton-pulse"
 import {
   EnterpriseCommandCenter,
   type EnterpriseDepartment,
@@ -3486,8 +3487,53 @@ function CompanyNavRow({
   )
 }
 
-function ViewBody({ children }: { children: React.ReactNode }) {
-  return <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">{children}</div>
+function ViewBody({ children, ...rest }: { children: React.ReactNode } & React.HTMLAttributes<HTMLDivElement>) {
+  return <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4" {...rest}>{children}</div>
+}
+
+// Honest loading skeleton for ResourcesView: mirrors the real layout that
+// replaces it — "Canales de la empresa" header + provider rows (mark,
+// label, action button), then the "Operación autónoma" toggle section.
+// Replaces a bare centered spinner that gave no sense of what was coming.
+function ResourcesViewSkeleton() {
+  return (
+    <ViewBody aria-busy="true" aria-label="Cargando recursos">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 space-y-2">
+          <SkeletonPulse className="h-4 w-44 max-w-full" />
+          <SkeletonPulse className="h-3 w-56 max-w-full" />
+        </div>
+        <SkeletonPulse className="h-8 w-8 shrink-0 rounded-md" />
+      </div>
+
+      <div className="mt-4 divide-y divide-border/50 border-y border-border/50">
+        {[0, 1, 2].map((row) => (
+          <div key={row} className="flex min-h-[72px] items-center gap-3 py-3">
+            <SkeletonPulse className="h-9 w-9 shrink-0 rounded-md" />
+            <span className="min-w-0 flex-1 space-y-1.5">
+              <SkeletonPulse className="block h-3.5 w-32 max-w-full" style={{ animationDelay: `${row * 90}ms` }} />
+              <SkeletonPulse className="block h-2.5 w-40 max-w-full" style={{ animationDelay: `${row * 90 + 60}ms` }} />
+            </span>
+            <SkeletonPulse className="h-8 w-20 shrink-0 rounded-md border border-border/60 bg-muted/40" />
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 flex items-center gap-2">
+        <SkeletonPulse className="h-4 w-4 rounded-full" />
+        <SkeletonPulse className="h-4 w-36" />
+      </div>
+      <div className="mt-3 space-y-3">
+        <div className="flex items-center justify-between border-b border-border/45 py-3">
+          <span className="space-y-1.5">
+            <SkeletonPulse className="block h-3 w-36" />
+            <SkeletonPulse className="block h-2.5 w-44" />
+          </span>
+          <SkeletonPulse className="h-5 w-9 rounded-full" />
+        </div>
+      </div>
+    </ViewBody>
+  )
 }
 
 const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; className: string }> = {
@@ -4144,13 +4190,7 @@ function ResourcesView({
   }, [caption, delivery, draft, load, marketingPublishingPlatforms, postBusy, scheduledAt, selectedPlatforms])
 
   if (loading && !operations) {
-    return (
-      <ViewBody>
-        <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-          <Loader2 className="h-5 w-5 animate-spin" aria-label="Cargando recursos" />
-        </div>
-      </ViewBody>
-    )
+    return <ResourcesViewSkeleton />
   }
 
   if (!operations || !draft) {

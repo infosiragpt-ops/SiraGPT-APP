@@ -110,7 +110,11 @@ export function FileUploadProgress({
     pct = 50 + (stageProgressPercent(status.stage) / 100) * 50
   }
 
-  const label = uploading ? "Subiendo" : describeStage(status.stage, status.error).label
+  // Honest copy: the upload phase is the network transfer; after it, the
+  // backend still has to extract/index the document before it is usable.
+  const label = uploading
+    ? "Subiendo archivo…"
+    : `${describeStage(status.stage, status.error).label} — preparando tu documento`
 
   return (
     <span

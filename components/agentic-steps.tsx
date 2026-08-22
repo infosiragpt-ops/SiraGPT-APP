@@ -565,6 +565,14 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
         </div>
 
         {/* Thin progress seekbar — precise draggable scrubber */}
+        {isLoadingAudio && (
+          // Honest long-wait line: the audio is being fetched and decoded
+          // from storage on first play, which can take several seconds —
+          // say so instead of a bare spinner in the play button.
+          <p className="text-[11px] leading-4 text-muted-foreground" aria-live="polite">
+            Descargando y preparando el {generatedMediaLabel}, puede tardar unos segundos…
+          </p>
+        )}
         <div
           ref={seekContainerRef}
           role="slider"
@@ -651,8 +659,8 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             onClick={togglePlayback}
             disabled={isLoadingAudio}
             className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-blue-500 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
-            aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
-            title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
+            aria-label={isLoadingAudio ? `Descargando y preparando el ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
+            title={isLoadingAudio ? "Descargando y preparando…" : isPlaying ? "Pausar" : "Reproducir"}
           >
             {isLoadingAudio ? (
               <ThinkingIndicator size="sm" />

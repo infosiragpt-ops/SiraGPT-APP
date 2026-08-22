@@ -88,7 +88,10 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { useOnlineStatus } from "@/hooks/use-online-status"
 import { cn } from "@/lib/utils"
+
+const OFFLINE_SEND_HINT_CODE = "Sin conexión — revisa tu red para poder enviar"
 import { apiClient } from "@/lib/api"
 import {
   extractFilesFromDataTransfer,
@@ -825,6 +828,10 @@ export type AICodeChatPanelProps = {
 }
 
 export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: AICodeChatPanelProps = {}) {
+  // Offline degrades the /code composer honestly: the agent dispatch is a
+  // network round-trip, so the send button disables with an explanatory
+  // label instead of failing with a generic stream error.
+  const online = useOnlineStatus()
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -5175,8 +5182,9 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
                   type="submit"
                   size="icon"
                   className="code-composer__send"
-                  disabled={!canSubmitCodePrompt}
-                  aria-label="Enviar"
+                  disabled={!canSubmitCodePrompt || !online}
+                  aria-label={online ? "Enviar" : OFFLINE_SEND_HINT_CODE}
+                  title={online ? "Enviar" : OFFLINE_SEND_HINT_CODE}
                 >
                   <ComposerSendArrow className="h-4 w-4" />
                 </Button>

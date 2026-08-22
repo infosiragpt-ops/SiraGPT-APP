@@ -39,6 +39,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { SkeletonPulse } from "@/components/skeleton/skeleton-pulse"
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
@@ -1578,11 +1579,21 @@ export function PreviewPane() {
             </div>
           </div>
         ) : liveRun.phase === "starting" ? (
-          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
-            <ThinkingIndicator size="sm" />
+          // Honest long-wait state: the cloud runner is installing the
+          // project's dependencies and booting its dev server — say so, and
+          // set expectations (first build can take ~1–2 min) instead of a
+          // generic "Compilando…" spinner.
+          <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center" aria-live="polite">
+            {/* Layout skeleton mirroring what will appear: device frame with
+                the running app inside. */}
+            <div className="w-full max-w-md space-y-2" aria-hidden="true">
+              <SkeletonPulse className="mx-auto aspect-[9/16] w-full max-w-[240px] rounded-xl border border-border/50 bg-muted/30 sm:aspect-video sm:max-w-md" />
+              <SkeletonPulse className="mx-auto h-3 w-40 max-w-full rounded-full bg-muted/60" />
+            </div>
             <div>
-              <p className="text-sm font-medium text-foreground">Compilando tu app…</p>
+              <p className="text-sm font-medium text-foreground">Instalando dependencias y compilando tu app…</p>
               <p className="mx-auto mt-1 max-w-md font-mono text-[11px] leading-relaxed text-muted-foreground">{liveRun.note}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground/80">La primera compilación puede tardar 1–2 minutos. Te muestro la app en cuanto el servidor responde.</p>
             </div>
           </div>
         ) : liveRun.phase === "error" ? (

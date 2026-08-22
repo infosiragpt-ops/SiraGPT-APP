@@ -13,7 +13,10 @@ import * as React from "react"
 import { Button } from "@/components/ui/button"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { useOnlineStatus } from "@/hooks/use-online-status"
 import { cn } from "@/lib/utils"
+
+const OFFLINE_SEND_HINT = "Sin conexión — revisa tu red para poder enviar"
 
 /** White stroke send arrow — one professional line, not a filled glyph. */
 export function ComposerSendArrow({ className }: { className?: string }) {
@@ -109,14 +112,20 @@ export function ChatComposerPrimaryAction({
 }) {
   const hasText = input.trim().length > 0
   const needsPrompt = requiresPromptBeforePrimarySend && !hasText
-  const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
+  // Offline degrades the composer honestly: sending is impossible without a
+  // network, so the button disables with an explanatory tooltip instead of
+  // letting the send fail with a generic error.
+  const online = useOnlineStatus()
+  const canSend = (requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)) && online
 
   if (!isStopButtonVisible) {
-    const label = canSend
-      ? "Enviar (⏎)"
-      : needsPrompt
-        ? "Describe lo que quieres crear"
-        : "Escribe un mensaje para enviar"
+    const label = !online
+      ? OFFLINE_SEND_HINT
+      : canSend
+        ? "Enviar (⏎)"
+        : needsPrompt
+          ? "Describe lo que quieres crear"
+          : "Escribe un mensaje para enviar"
     return (
       <Tooltip>
         <TooltipTrigger asChild>
@@ -152,16 +161,20 @@ export function ChatComposerPrimaryAction({
           <Button
             onClick={onSend}
             size="icon"
-            aria-label="Enviar a la cola · se procesa en orden"
+            disabled={!online}
+            aria-label={online ? "Enviar a la cola · se procesa en orden" : OFFLINE_SEND_HINT}
             className={cn(
               "composer-send-button h-9 w-9 rounded-full p-0 transition-all duration-200",
               "active:scale-[0.96]",
+              "disabled:cursor-not-allowed",
             )}
           >
             <ComposerSendArrow className="h-[16px] w-[16px]" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent side="top"><p>Enviar a la cola · se procesa en orden</p></TooltipContent>
+        <TooltipContent side="top">
+          <p>{online ? "Enviar a la cola · se procesa en orden" : OFFLINE_SEND_HINT}</p>
+        </TooltipContent>
       </Tooltip>
     )
   }
