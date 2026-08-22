@@ -13,6 +13,7 @@
  */
 
 import type { AgentAction, AgentState, AgentTask } from "./types"
+import { pickResumableTask } from "./task-retry"
 import {
   MAX_STREAM_RETRIES,
   type StreamValidationResult,
@@ -112,7 +113,11 @@ export function nextWorkTaskAction(
   state: AgentState,
   now = Date.now(),
 ): AgentAction {
-  const nextTask = nextPendingTask(state.tasks)
+  // Structured per-task retries: a requeued task sits in "pending" with a
+  // notBefore backoff gate — skip it (and the plan keeps moving) until its
+  // cooldown elapses, so a transient failure retries with backoff instead of
+  // hammering immediately or abandoning the whole plan.
+  const nextTask = pickResumableTask(state.tasks, now)
   if (!nextTask) {
     return { type: "passthrough" }
   }
