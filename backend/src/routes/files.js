@@ -1125,6 +1125,91 @@ router.post('/:id/edit', authenticateToken, async (req, res) => {
   }
 });
 
+// Create an editable document WITHOUT a binary upload (code → doc bridge).
+// The /code workspace pushes a generated file here so it appears in the
+// /chat documents surface as a first-class File with an editable FileVersion
+// (version 1, content = the markdown). Mirrors POST /:id/edit budgets and
+// ownership semantics; there is no original binary to keep immutable, so the
+// version row IS the content. Auth + scope like every other files route.
+router.post('/documents', authenticateToken, requireScope('files:write'), async (req, res) => {
+  try {
+    const name = typeof req.body?.name === 'string' && req.body.name.trim()
+      ? req.body.name.trim().slice(0, 255)
+      : 'documento.md';
+    const content = typeof req.body?.content === 'string' ? req.body.content : '';
+    if (!content.trim()) return res.status(400).json({ error: 'El contenido del documento no puede estar vacío' });
+    if (content.length > 2_000_000) {
+      return res.status(400).json({ error: 'El contenido excede el tamaño máximo permitido' });
+    }
+    const summary = typeof req.body?.summary === 'string' && req.body.summary.trim()
+      ? req.body.summary.trim().slice(0, 500)
+      : 'Documento creado desde el workspace de código';
+    const sourcePath = typeof req.body?.sourcePath === 'string' ? req.body.sourcePath.slice(0, 500) : null;
+
+    // Text-only document: mimeType text/markdown, no binary path. The empty
+    // `path` keeps the row valid without pointing at a file on disk/R2.
+    const file = await prisma.file.create({
+      data: {
+        userId: req.user.id,
+        filename: `${Date.now()}-${name.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120)}`,
+        originalName: name,
+        mimeType: 'text/markdown',
+        size: Buffer.byteLength(content, 'utf8'),
+        path: '',
+        extractedText: null,
+        openaiFileId: null,
+        processingStage: 'ready',
+        processingStageAt: new Date(),
+      },
+    });
+
+    try {
+      const { recordFileVersion } = require('../services/document-editing/versioning');
+      const version = await recordFileVersion(prisma, {
+        fileId: file.id,
+        userId: req.user.id,
+        artifactId: null,
+        filename: name,
+        summary,
+        validationPassed: true,
+        createdByChatId: typeof req.body?.chatId === 'string' ? req.body.chatId : null,
+        editPlan: { type: 'manual_edit', source: 'code-doc-bridge', ...(sourcePath ? { sourcePath } : {}) },
+        content,
+      });
+      if (!version) {
+        await prisma.file.delete({ where: { id: file.id } }).catch(() => null);
+        return res.status(500).json({ error: 'No se pudo registrar la versión del documento' });
+      }
+      return res.status(201).json({
+        file: {
+          id: file.id,
+          filename: file.filename,
+          originalName: file.originalName,
+          mimeType: file.mimeType,
+          size: file.size,
+          createdAt: file.createdAt,
+        },
+        version: {
+          id: version.id,
+          version: version.version,
+          filename: version.filename,
+          summary: version.summary,
+          validationPassed: version.validationPassed,
+          createdAt: version.createdAt,
+          downloadUrl: null,
+        },
+      });
+    } catch (versionError) {
+      console.error('Document create version error:', versionError);
+      await prisma.file.delete({ where: { id: file.id } }).catch(() => null);
+      return res.status(500).json({ error: 'No se pudo registrar la versión del documento' });
+    }
+  } catch (error) {
+    console.error('Document create error:', error);
+    return res.status(500).json({ error: 'No se pudo crear el documento' });
+  }
+});
+
 // Read the Markdown content of a specific FileVersion — used to rehydrate the
 // /chat document editor ("recargar conserva el estado"). Returns 404 when the
 // row exists but predates the `content` column (e.g. versions recorded by the
