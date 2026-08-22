@@ -42,6 +42,19 @@ function setAgentComputerCookie(req, res) {
 }
 
 function acceptForwardAuthCookie(req, _res, next) {
+  // Ignore WS Upgrade noise on the auth subrequest. Caddy should already strip
+  // these via header_up, but if they leak through Node may treat the socket as
+  // an upgrade and never fire Express — keep headers clean as defense in depth.
+  try {
+    if (req.headers) {
+      delete req.headers.upgrade;
+      delete req.headers.connection;
+      delete req.headers['sec-websocket-key'];
+      delete req.headers['sec-websocket-version'];
+      delete req.headers['sec-websocket-extensions'];
+      delete req.headers['sec-websocket-protocol'];
+    }
+  } catch (_) { /* ignore */ }
   if (!(req.cookies && req.cookies.token) && req.cookies && req.cookies.sira_ac) {
     req.cookies.token = req.cookies.sira_ac;
   }

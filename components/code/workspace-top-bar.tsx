@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 import { ProjectChip } from "./project-chip"
+import { DesktopMonitorGlyph } from "./department-computer-pane"
 
 export type WorkspacePanelId = "preview" | "terminal" | "git" | "validation"
 
@@ -64,6 +65,10 @@ export type WorkspaceTopBarProps = {
   onOpenPublishing: () => void
   publishingOpen?: boolean
   onToggleChat: () => void
+  /** Department computer toggle — lives top-right (Monitor glyph). */
+  departmentComputer?: { id: string; name: string } | null
+  onOpenDepartmentComputer?: () => void
+  computerOpen?: boolean
 }
 
 /**
@@ -92,6 +97,9 @@ export function WorkspaceTopBar({
   onOpenPublishing,
   publishingOpen,
   onToggleChat,
+  departmentComputer,
+  onOpenDepartmentComputer,
+  computerOpen = false,
 }: WorkspaceTopBarProps) {
   const { user } = useAuth()
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
@@ -264,6 +272,32 @@ export function WorkspaceTopBar({
         <Globe className="h-3 w-3" />
         <span className="hidden md:inline">Publicar</span>
       </button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label={
+          departmentComputer
+            ? `Computadora de ${departmentComputer.name}`
+            : "Computadora del departamento"
+        }
+        title={
+          departmentComputer
+            ? `Computadora de ${departmentComputer.name}`
+            : "Computadora del departamento"
+        }
+        aria-pressed={computerOpen}
+        data-testid="workspace-header-department-computer"
+        data-dept-computer-header="1"
+        data-dept-real-computer="1"
+        onClick={onOpenDepartmentComputer}
+        className={cn(
+          "h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground",
+          computerOpen && "bg-muted/70 text-foreground",
+        )}
+      >
+        <DesktopMonitorGlyph className="h-3.5 w-3.5" />
+      </Button>
       <Button
         type="button"
         variant="ghost"
