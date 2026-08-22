@@ -217,6 +217,28 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         return { ok: false, code: 'sandbox_cap_add', message: 'sandbox cap-add is not allowed' };
       }
     }
+    if (_ad && typeof _ad.refuseSandboxIfPidHostTrue === 'function') {
+      const pidCheck = _ad.refuseSandboxIfPidHostTrue({ pid: args.pid, pidMode: args.pidMode, hostPid: args.hostPid });
+      if (pidCheck && pidCheck.ok === false) {
+        return { ok: false, code: 'sandbox_pid_host', message: 'sandbox pid=host is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfIpcHostTrue === 'function') {
+      const ipcCheck = _ad.refuseSandboxIfIpcHostTrue({ ipc: args.ipc, ipcMode: args.ipcMode, hostIpc: args.hostIpc });
+      if (ipcCheck && ipcCheck.ok === false) {
+        return { ok: false, code: 'sandbox_ipc_host', message: 'sandbox ipc=host is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfUserNsHost === 'function') {
+      const nsCheck = _ad.refuseSandboxIfUserNsHost({ userns: args.userns, userNs: args.userNs, userNamespace: args.userNamespace });
+      if (nsCheck && nsCheck.ok === false) {
+        return { ok: false, code: 'sandbox_userns_host', message: 'sandbox userns=host is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.capSandboxWorkdirChars256 === 'function' && args.cwd) {
+      const wcap = _ad.capSandboxWorkdirChars256(args.cwd);
+      if (wcap && wcap.cwd != null) args.cwd = wcap.cwd;
+    }
   } catch (_) {}
 
   const timeoutMs = clampInt(args.timeoutMs, cfg.defaultTimeoutMs, MIN_TIMEOUT_MS, HARD_MAX_TIMEOUT_MS);

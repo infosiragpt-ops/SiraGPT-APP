@@ -263,7 +263,7 @@ test('3H49-AF-001 cap checkpoint payload 64KiB', () => {
 
 test('3H49-AG-001 snapshot keeps 3H48 flags and wave 3H49 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.equal(s.wave, '3H49');
+  assert.ok(s.wave === '3H49' || s.wave === '3H50');
   assert.equal(s.rejectPrototypePollutionKeys, true);
   assert.equal(s.rejectToolNameEndingWithDot, true);
   assert.equal(s.rejectToolNameWithSlash, true);
@@ -323,7 +323,7 @@ test('3H49-AK-001 compose binds 3H49 tests and wave is 3H49 DeepSeek only', () =
   assert.ok(String(__filename || '').includes('ola-3h49-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H49') >= 0);
-  assert.equal(ad.adapterSnapshot().wave, '3H49');
+  assert.ok(ad.adapterSnapshot().wave === '3H49' || ad.adapterSnapshot().wave === '3H50');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
   const composeCandidates = [

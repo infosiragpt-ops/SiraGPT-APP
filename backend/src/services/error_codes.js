@@ -469,6 +469,38 @@ const CODES = Object.freeze({
   SANDBOX_PRIVILEGED: 'sandbox_privileged',
   SANDBOX_CAP_ADD: 'sandbox_cap_add',
   CKPT_PAYLOAD_CAP: 'ckpt_payload_cap',
+  TOOL_NAME_AT: 'tool_name_at',
+  TOOL_ARG_KEY_CAP: 'tool_arg_key_cap',
+  TOOL_INDEX_TYPE: 'tool_index_type',
+  PLAN_PRIORITY_UNKNOWN: 'plan_priority_unknown',
+  PLAN_STEP_ID_CAP: 'plan_step_id_cap',
+  PLAN_STEP_OWNER_UNKNOWN: 'plan_step_owner_unknown',
+  PLAN_ETA_NEG: 'plan_eta_neg',
+  MEMORY_SOURCE_UNKNOWN: 'memory_source_unknown',
+  MEMORY_VALUE_CAP: 'memory_value_cap',
+  MEMORY_TTL_NEG: 'memory_ttl_neg',
+  CKPT_REV_NEG: 'ckpt_rev_neg',
+  LOCK_SESSION_MISMATCH: 'lock_session_mismatch',
+  GLOB_LOCKFILE: 'glob_lockfile',
+  PATH_SYS: 'path_sys',
+  GLOB_MIN_JS: 'glob_min_js',
+  SSE_DONE_DROP: 'sse_done_drop',
+  SSE_RETRY_CAP: 'sse_retry_cap',
+  USAGE_IGNORE_NEG_AUDIO: 'usage_ignore_neg_audio',
+  CREDIT_MODEL_UNAVAILABLE: 'credit_model_unavailable',
+  CONFLICT: 'conflict',
+  EAFNOSUPPORT: 'eafnosupport',
+  MONGO_NOT_PRIMARY: 'mongo_not_primary',
+  PARALLEL_SUBAGENTS_CAP: 'parallel_subagents_cap',
+  IDEMPOTENCY_KEY_DASH: 'idempotency_key_dash',
+  USER_MSG_PARAGRAPHS: 'user_msg_paragraphs',
+  GITHUB_PAT_REDACT: 'github_pat_redact',
+  SUBAGENT_OWNER_BLANK: 'subagent_owner_blank',
+  SANDBOX_WORKDIR_CAP: 'sandbox_workdir_cap',
+  SANDBOX_PID_HOST: 'sandbox_pid_host',
+  SANDBOX_IPC_HOST: 'sandbox_ipc_host',
+  SANDBOX_USERNS_HOST: 'sandbox_userns_host',
+  CKPT_META_CAP: 'ckpt_meta_cap',
 });
 
 function isRetryable(code) {
@@ -534,7 +566,9 @@ function isRetryable(code) {
     || c === 'enobufs'
     || c === 'sqlite_busy'
     || c === 'enetreset'
-    || c === 'redis_loading';
+    || c === 'redis_loading'
+    || c === 'eafnosupport'
+    || c === 'mongo_not_primary';
 }
 
 function publicError(code, extra) {
@@ -559,6 +593,7 @@ function httpStatusFor(code) {
   if (c === 'request_timeout' || c === CODES.REQUEST_TIMEOUT) return 408;
   if (c === 'unauthorized' || c === CODES.UNAUTHORIZED) return 401;
   if (c === 'forbidden' || c === CODES.FORBIDDEN) return 403;
+  if (c === 'conflict' || c === CODES.CONFLICT) return 409;
   return 400;
 }
 

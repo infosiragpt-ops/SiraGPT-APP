@@ -7,33 +7,42 @@ const {
   rejectToolNameWithSlash,
   refuseToolIfNameNotString,
   rejectToolNameWithColon,
+  rejectToolNameWithAt,
   refuseToolIfCallIdBlank,
+  refuseToolIfIndexNotInteger,
   capToolArgString4096,
   capToolArgArrayLength64,
   capToolArgNestingDepth8,
+  capToolArgKeyChars48,
   refuseWriteToVarLogRun,
   refuseWriteToOpt,
   refuseWriteToEtc,
+  refuseWriteToSys,
   redactAwsAccessKeysInResults,
   redactGcpServiceAccountInResults,
   redactStripeSecretKeysInResults,
+  redactGithubPatInResults,
   neverRetry408Timeout,
   neverRetry401Unauthorized,
   neverRetry403Forbidden,
+  neverRetry409Conflict,
   classifyEtimedoutAsTimeout,
   classifyEconnrefusedAsUnavailable,
   classifyEprotoAsUnavailable,
   classifyEnobufsAsUnavailable,
   classifyEnetresetAsUnavailable,
+  classifyEafnosupportAsUnavailable,
   capUserMessage32KiB,
   capUserMessageLines400,
   capUserMessageWords8000,
+  capUserMessageParagraphs80,
   abortIfIdleOver30sMidTool,
   abortIfToolWallOver60s,
   abortIfParallelToolsOver8,
   refuseSubagentIfNameEmpty,
   refuseSubagentIfNameHasSlash,
   refuseSubagentIfParentMissing,
+  refuseSubagentIfOwnerBlank,
 } = require('./engine-adapter');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
 const {
@@ -364,11 +373,13 @@ async function runAgentLoop({
       try { neverRetry408Timeout(err); } catch (_) {}
       try { neverRetry401Unauthorized(err); } catch (_) {}
       try { neverRetry403Forbidden(err); } catch (_) {}
+      try { neverRetry409Conflict(err); } catch (_) {}
       try { classifyEtimedoutAsTimeout(err); } catch (_) {}
       try { classifyEconnrefusedAsUnavailable(err); } catch (_) {}
       try { classifyEprotoAsUnavailable(err); } catch (_) {}
       try { classifyEnobufsAsUnavailable(err); } catch (_) {}
       try { classifyEnetresetAsUnavailable(err); } catch (_) {}
+      try { classifyEafnosupportAsUnavailable(err); } catch (_) {}
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -502,6 +513,18 @@ async function runAgentLoop({
         }
       } catch (_) {}
       try {
+        const atN = rejectToolNameWithAt(name);
+        if (atN && atN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_at', message: 'El nombre de la herramienta no puede contener arroba.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
+        const idxN = refuseToolIfIndexNotInteger(call);
+        if (idxN && idxN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_index_type', message: 'El indice de la herramienta debe ser un entero.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
         const cid = refuseToolIfCallIdBlank(call);
         if (cid && cid.ok === false) {
           onEvent({ type: 'error', code: 'tool_call_id_blank', message: 'La herramienta requiere un id de llamada.', retryable: false, iteration, name });
@@ -527,14 +550,20 @@ async function runAgentLoop({
         if (nestA && nestA.args && typeof nestA.args === 'object') args = nestA.args;
       } catch (_) {}
       try {
+        const keyA = capToolArgKeyChars48(args);
+        if (keyA && keyA.args && typeof keyA.args === 'object') args = keyA.args;
+      } catch (_) {}
+      try {
         const pth = args && (args.path || args.file || args.filename || args.cwd);
         if (pth) refuseWriteToVarLogRun(pth);
         if (pth) refuseWriteToOpt(pth);
         if (pth) refuseWriteToEtc(pth);
+        if (pth) refuseWriteToSys(pth);
       } catch (_) {}
       try { refuseSubagentIfNameEmpty({ name: mapped }); } catch (_) {}
       try { refuseSubagentIfNameHasSlash({ name: mapped }); } catch (_) {}
       try { refuseSubagentIfParentMissing({ parentId: call && (call.parentId || call.parent_id) }); } catch (_) {}
+      try { refuseSubagentIfOwnerBlank({ owner: call && (call.owner || call.ownerId || call.userId) }); } catch (_) {}
       try { abortIfParallelToolsOver8({ count: Array.isArray(toolCalls) ? toolCalls.length : 0 }); } catch (_) {}
       try { abortIfIdleOver30sMidTool({ lastEventAt: Date.now(), now: Date.now() }); } catch (_) {}
       try { abortIfToolWallOver60s({ startedAt: Date.now(), now: Date.now() }); } catch (_) {}
@@ -594,6 +623,10 @@ async function runAgentLoop({
         if (redStripe && redStripe.text != null) result = redStripe.text;
       } catch (_) {}
       try {
+        const redGh = redactGithubPatInResults(result);
+        if (redGh && redGh.text != null) result = redGh.text;
+      } catch (_) {}
+      try {
         const capU = capUserMessage32KiB(typeof result === 'string' ? result : String(result || ''));
         if (capU && capU.truncated && capU.text != null && typeof result === 'string') result = capU.text;
       } catch (_) {}
@@ -604,6 +637,10 @@ async function runAgentLoop({
       try {
         const capW = capUserMessageWords8000(typeof result === 'string' ? result : String(result || ''));
         if (capW && capW.truncated && capW.text != null && typeof result === 'string') result = capW.text;
+      } catch (_) {}
+      try {
+        const capP = capUserMessageParagraphs80(typeof result === 'string' ? result : String(result || ''));
+        if (capP && capP.truncated && capP.text != null && typeof result === 'string') result = capP.text;
       } catch (_) {}
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });

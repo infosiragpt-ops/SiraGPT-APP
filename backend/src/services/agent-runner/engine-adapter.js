@@ -4881,7 +4881,39 @@ function adapterSnapshot() {
     refuseSandboxIfPrivilegedTrue: true,
     refuseSandboxIfCapAddPresent: true,
     capCheckpointPayload64KiB: true,
-    wave: '3H49',
+    rejectToolNameWithAt: true,
+    capToolArgKeyChars48: true,
+    refuseToolIfIndexNotInteger: true,
+    refusePlanIfPriorityUnknown: true,
+    capPlanStepIdChars32: true,
+    dropPlanStepsWithUnknownOwner: true,
+    refusePlanIfEtaNegative: true,
+    skipMemoryIfSourceUnknown: true,
+    capMemoryValueChars2048: true,
+    refuseMemoryUpsertIfTtlNegative: true,
+    refuseCheckpointIfRevNegative: true,
+    sessionLockRefuseIfSessionMismatch: true,
+    skipLockfileGlobFiles: true,
+    refuseWriteToSys: true,
+    skipMinifiedJsGlobFiles: true,
+    dropSseDoneFramesFromReplay: true,
+    capSseRetryMs30000: true,
+    ignoreNegativeAudioTokens: true,
+    neverChargeIfModelUnavailable: true,
+    neverRetry409Conflict: true,
+    classifyEafnosupportAsUnavailable: true,
+    mapMongoNotPrimaryRetryable: true,
+    abortIfParallelSubagentsOver4: true,
+    rejectIdempotencyKeyIfStartsWithDash: true,
+    capUserMessageParagraphs80: true,
+    redactGithubPatInResults: true,
+    refuseSubagentIfOwnerBlank: true,
+    capSandboxWorkdirChars256: true,
+    refuseSandboxIfPidHostTrue: true,
+    refuseSandboxIfIpcHostTrue: true,
+    refuseSandboxIfUserNsHost: true,
+    capCheckpointMetaChars512: true,
+    wave: '3H50',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -8386,6 +8418,338 @@ function capCheckpointPayload64KiB(payload, opts) {
   return { ok: false, bytes: bytes, truncated: true, code: "ckpt_payload_cap" };
 }
 
+// ---------------------------------------------------------------------------
+// 3H50 remaining holes vs Claude Code/Cowork after 3H49
+// ---------------------------------------------------------------------------
+
+const TOOL_ARG_KEY_MAX = 48;
+const PLAN_STEP_ID_MAX = 32;
+const MEMORY_VALUE_MAX = 2048;
+const SSE_RETRY_MS_MAX = 30000;
+const USER_MSG_PARAS_MAX = 80;
+const PARALLEL_SUBAGENTS_MAX = 4;
+const SANDBOX_WORKDIR_MAX = 256;
+const CKPT_META_MAX = 512;
+
+function rejectToolNameWithAt(name) {
+  const n = String(name == null ? "" : name);
+  if (n.indexOf("@") >= 0) return { ok: false, name: n, code: "tool_name_at" };
+  return { ok: true, name: n, code: null };
+}
+
+function capToolArgKeyChars48(args, opts) {
+  const max = (opts && opts.max != null) ? opts.max : TOOL_ARG_KEY_MAX;
+  const cap = Math.max(1, Number(max) || TOOL_ARG_KEY_MAX);
+  if (args == null || typeof args !== "object" || Array.isArray(args)) {
+    return { args: args, truncated: false, code: null };
+  }
+  const out = {};
+  let truncated = false;
+  for (const k of Object.keys(args)) {
+    const nk = k.length > cap ? k.slice(0, cap) : k;
+    if (nk !== k) truncated = true;
+    if (Object.prototype.hasOwnProperty.call(out, nk)) continue;
+    out[nk] = args[k];
+  }
+  return { args: out, truncated: truncated, code: truncated ? "tool_arg_key_cap" : null };
+}
+
+function refuseToolIfIndexNotInteger(call) {
+  const c = call && typeof call === "object" ? call : {};
+  if (c.index == null && c.idx == null && c.toolIndex == null) return { ok: true, code: null };
+  const raw = c.index != null ? c.index : (c.idx != null ? c.idx : c.toolIndex);
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return { ok: false, code: "tool_index_type" };
+  return { ok: true, index: n, code: null };
+}
+
+function refusePlanIfPriorityUnknown(plan) {
+  const p = plan && typeof plan === "object" ? plan : {};
+  const pr = p.priority != null ? p.priority : p.prio;
+  if (pr == null || pr === "") return { ok: true, priority: pr, code: null };
+  const known = { low: 1, normal: 1, medium: 1, high: 1, urgent: 1, critical: 1, p0: 1, p1: 1, p2: 1, p3: 1 };
+  const key = String(pr).toLowerCase();
+  if (known[key]) return { ok: true, priority: key, code: null };
+  return { ok: false, priority: key, code: "plan_priority_unknown" };
+}
+
+function capPlanStepIdChars32(steps, opts) {
+  const list = Array.isArray(steps) ? steps : [];
+  const max = (opts && opts.max != null) ? opts.max : PLAN_STEP_ID_MAX;
+  const cap = Math.max(1, Number(max) || PLAN_STEP_ID_MAX);
+  const out = [];
+  let truncated = false;
+  for (const st of list) {
+    if (st && typeof st === "object") {
+      const id = st.id != null ? st.id : (st.stepId != null ? st.stepId : st.key);
+      if (typeof id === "string" && id.length > cap) {
+        const copy = Object.assign({}, st);
+        if (st.id != null) copy.id = id.slice(0, cap);
+        else if (st.stepId != null) copy.stepId = id.slice(0, cap);
+        else copy.key = id.slice(0, cap);
+        out.push(copy); truncated = true;
+      } else { out.push(st); }
+    } else { out.push(st); }
+  }
+  return { steps: out, truncated: truncated, code: truncated ? "plan_step_id_cap" : null };
+}
+
+function dropPlanStepsWithUnknownOwner(steps) {
+  const list = Array.isArray(steps) ? steps : [];
+  const known = { user: 1, assistant: 1, system: 1, agent: 1, subagent: 1, tool: 1, human: 1, bot: 1 };
+  const kept = []; let dropped = 0;
+  for (const st of list) {
+    const owner = st && (st.owner != null ? st.owner : (st.assignee != null ? st.assignee : st.actor));
+    if (owner == null || String(owner).trim() === "") { kept.push(st); continue; }
+    const key = String(owner).toLowerCase();
+    if (!known[key]) { dropped += 1; continue; }
+    kept.push(st);
+  }
+  return { steps: kept, dropped: dropped, code: dropped ? "plan_step_owner_unknown" : null };
+}
+
+function refusePlanIfEtaNegative(plan) {
+  const p = plan && typeof plan === "object" ? plan : {};
+  if (p.eta == null && p.etaMs == null && p.etaSeconds == null) return { ok: true, code: null };
+  const n = Number(p.eta != null ? p.eta : (p.etaMs != null ? p.etaMs : p.etaSeconds));
+  if (!Number.isFinite(n) || n < 0) return { ok: false, code: "plan_eta_neg" };
+  return { ok: true, eta: n, code: null };
+}
+
+function skipMemoryIfSourceUnknown(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const known = { user: 1, assistant: 1, system: 1, tool: 1, retrieve: 1, pin: 1, import: 1, web: 1, file: 1, chat: 1 };
+  const kept = []; let skipped = 0;
+  for (const h of list) {
+    const src = h && (h.source != null ? h.source : (h.origin != null ? h.origin : h.from));
+    if (src == null || String(src).trim() === "") { kept.push(h); continue; }
+    const key = String(src).toLowerCase();
+    if (!known[key]) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "memory_source_unknown" : null };
+}
+
+function capMemoryValueChars2048(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const max = (opts && opts.max != null) ? opts.max : MEMORY_VALUE_MAX;
+  const cap = Math.max(1, Number(max) || MEMORY_VALUE_MAX);
+  const out = []; let truncated = false;
+  for (const h of list) {
+    if (h && typeof h === "object") {
+      const val = h.value != null ? h.value : (h.text != null ? h.text : h.content);
+      if (typeof val === "string" && val.length > cap) {
+        const copy = Object.assign({}, h);
+        if (h.value != null) copy.value = val.slice(0, cap);
+        else if (h.text != null) copy.text = val.slice(0, cap);
+        else copy.content = val.slice(0, cap);
+        out.push(copy); truncated = true;
+      } else { out.push(h); }
+    } else { out.push(h); }
+  }
+  return { hits: out, truncated: truncated, code: truncated ? "memory_value_cap" : null };
+}
+
+function refuseMemoryUpsertIfTtlNegative(row) {
+  const r = row && typeof row === "object" ? row : {};
+  if (r.ttl == null && r.ttlMs == null && r.expiresIn == null) return { ok: true, code: null };
+  const n = Number(r.ttl != null ? r.ttl : (r.ttlMs != null ? r.ttlMs : r.expiresIn));
+  if (!Number.isFinite(n) || n < 0) return { ok: false, code: "memory_ttl_neg" };
+  return { ok: true, ttl: n, code: null };
+}
+
+function refuseCheckpointIfRevNegative(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  if (p.rev == null && p.revision == null && p.version == null) return { ok: true, code: null };
+  const n = Number(p.rev != null ? p.rev : (p.revision != null ? p.revision : p.version));
+  if (!Number.isFinite(n) || n < 0) return { ok: false, code: "ckpt_rev_neg" };
+  return { ok: true, rev: n, code: null };
+}
+
+function sessionLockRefuseIfSessionMismatch(opts) {
+  opts = opts || {};
+  const lockSid = opts.lockSessionId != null ? opts.lockSessionId : (opts.lock && opts.lock.sessionId);
+  const sid = opts.sessionId != null ? opts.sessionId : opts.sid;
+  if (lockSid == null || lockSid === "" || sid == null || sid === "") return { ok: true, code: null };
+  if (String(lockSid) !== String(sid)) return { ok: false, code: "lock_session_mismatch" };
+  return { ok: true, code: null };
+}
+
+function skipLockfileGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = []; let skipped = 0;
+  for (const h of list) {
+    const pth = typeof h === "string" ? h : String((h && (h.path || h.name || h.file)) || "");
+    const base = pth.split("/").pop() || "";
+    if (base.indexOf(".lock") >= 0) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_lockfile" : null };
+}
+
+function refuseWriteToSys(filePath) {
+  const p = String(filePath == null ? "" : filePath);
+  const n = p.charAt(0) === "/" ? p : ("/" + p);
+  if (n === "/sys" || n.indexOf("/sys/") === 0) return { ok: false, path: p, code: "path_sys" };
+  return { ok: true, path: p, code: null };
+}
+
+function skipMinifiedJsGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = []; let skipped = 0;
+  for (const h of list) {
+    const p = typeof h === "string" ? h : String((h && h.path) || "");
+    const base = p.split("/").pop() || "";
+    if (base.indexOf(".min.js") >= 0 || base.indexOf(".min.css") >= 0) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_min_js" : null };
+}
+
+function dropSseDoneFramesFromReplay(events) {
+  const list = Array.isArray(events) ? events : [];
+  const kept = []; let dropped = 0;
+  for (const e of list) {
+    const ev = e && (e.event != null ? e.event : e.type);
+    const key = String(ev == null ? "" : ev).toLowerCase();
+    if (key === "done" || key === "end" || key === "complete") { dropped += 1; continue; }
+    kept.push(e);
+  }
+  return { events: kept, dropped: dropped, code: dropped ? "sse_done_drop" : null };
+}
+
+function capSseRetryMs30000(ms, opts) {
+  const cap = Math.max(1, Number((opts && opts.max) != null ? opts.max : SSE_RETRY_MS_MAX) || SSE_RETRY_MS_MAX);
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n < 0) return { retry: 0, truncated: true, code: "sse_retry_cap" };
+  if (n <= cap) return { retry: n, truncated: false, code: null };
+  return { retry: cap, truncated: true, code: "sse_retry_cap" };
+}
+
+function ignoreNegativeAudioTokens(opts) {
+  opts = opts || {};
+  const cRaw = Number(opts.audioTokens != null ? opts.audioTokens : opts.audio_tokens);
+  const ignored = Number.isFinite(cRaw) && cRaw < 0;
+  const tokens = ignored ? 0 : (Number.isFinite(cRaw) && cRaw >= 0 ? cRaw : 0);
+  return { audioTokens: tokens, ignored: ignored, code: ignored ? "usage_ignore_neg_audio" : null };
+}
+
+function neverChargeIfModelUnavailable(opts) {
+  opts = opts || {};
+  const status = Number(opts.status != null ? opts.status : opts.statusCode);
+  const code = String(opts.code || opts.errorCode || "").toLowerCase();
+  const msg = String(opts.message || opts.error || "");
+  const blocked = status === 503 || code === "model_unavailable" || code === "overloaded" || msg.indexOf("unavailable") >= 0;
+  if (blocked) return { charge: false, code: "credit_model_unavailable" };
+  return { charge: true, code: null };
+}
+
+function neverRetry409Conflict(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || "");
+  const is409 = status === 409 || code === "409" || code === "conflict";
+  if (is409) return { retry: false, status: 409, code: "conflict" };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function classifyEafnosupportAsUnavailable(err) {
+  if (err == null) return { unavailable: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("EAFNOSUPPORT") >= 0) return { unavailable: true, retryable: true, code: "eafnosupport" };
+  return { unavailable: false, retryable: false, code: null };
+}
+
+function mapMongoNotPrimaryRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.codeName || err.name)) || "");
+  const msg = String((err && err.message) || "");
+  const blob = (code + " " + msg).toUpperCase();
+  if (blob.indexOf("NOTMASTER") >= 0 || blob.indexOf("NOT PRIMARY") >= 0 || blob.indexOf("NOTPRIMARY") >= 0) return { retryable: true, code: "mongo_not_primary" };
+  return { retryable: false, code: null };
+}
+
+function abortIfParallelSubagentsOver4(opts) {
+  opts = opts || {};
+  const max = Math.max(1, Number(opts.max) || PARALLEL_SUBAGENTS_MAX);
+  let n = Number(opts.count != null ? opts.count : opts.parallel);
+  if (!Number.isFinite(n) && Array.isArray(opts.subagents)) n = opts.subagents.length;
+  if (!Number.isFinite(n)) n = 0;
+  if (n > max) return { abort: true, count: n, code: "parallel_subagents_cap" };
+  return { abort: false, count: n, code: null };
+}
+
+function rejectIdempotencyKeyIfStartsWithDash(key) {
+  const s = String(key == null ? "" : key);
+  if (!s) return { ok: true, key: s, code: null };
+  if (s.charAt(0) === "-" || s.charAt(0) === "_") return { ok: false, key: s, code: "idempotency_key_dash" };
+  return { ok: true, key: s, code: null };
+}
+
+function capUserMessageParagraphs80(text, opts) {
+  const s = text == null ? "" : String(text);
+  const cap = Math.max(1, Number((opts && opts.max) != null ? opts.max : USER_MSG_PARAS_MAX) || USER_MSG_PARAS_MAX);
+  const paras = s.split(/\n\n+/);
+  if (paras.length <= cap) return { text: s, truncated: false, paragraphs: paras.length, code: null };
+  const cut = paras.slice(0, cap).join("\n\n") + "\n\n[truncated_paragraphs]";
+  return { text: cut, truncated: true, paragraphs: paras.length, code: "user_msg_paragraphs" };
+}
+
+function redactGithubPatInResults(text) {
+  if (text == null) return { text: text, redacted: false, code: null };
+  const s = String(text);
+  let out = s.replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB]");
+  out = out.replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_GITHUB]");
+  return { text: out, redacted: out !== s, code: out !== s ? "github_pat_redact" : null };
+}
+
+function refuseSubagentIfOwnerBlank(opts) {
+  opts = opts || {};
+  const owner = opts.owner != null ? opts.owner : (opts.ownerId != null ? opts.ownerId : opts.userId);
+  if (owner == null || String(owner).trim() === "") return { ok: false, refuse: true, code: "subagent_owner_blank" };
+  return { ok: true, refuse: false, code: null };
+}
+
+function capSandboxWorkdirChars256(cwd, opts) {
+  const cap = Math.max(1, Number((opts && opts.max) != null ? opts.max : SANDBOX_WORKDIR_MAX) || SANDBOX_WORKDIR_MAX);
+  const s = String(cwd == null ? "" : cwd);
+  if (s.length <= cap) return { cwd: s, truncated: false, code: null };
+  return { cwd: s.slice(0, cap), truncated: true, code: "sandbox_workdir_cap" };
+}
+
+function refuseSandboxIfPidHostTrue(opts) {
+  opts = opts || {};
+  const v = opts.pid != null ? opts.pid : (opts.pidMode != null ? opts.pidMode : opts.hostPid);
+  if (v === true || v === "true" || v === "host") return { ok: false, code: "sandbox_pid_host" };
+  return { ok: true, code: null };
+}
+
+function refuseSandboxIfIpcHostTrue(opts) {
+  opts = opts || {};
+  const v = opts.ipc != null ? opts.ipc : (opts.ipcMode != null ? opts.ipcMode : opts.hostIpc);
+  if (v === true || v === "true" || v === "host") return { ok: false, code: "sandbox_ipc_host" };
+  return { ok: true, code: null };
+}
+
+function refuseSandboxIfUserNsHost(opts) {
+  opts = opts || {};
+  const v = opts.userns != null ? opts.userns : (opts.userNs != null ? opts.userNs : opts.userNamespace);
+  if (v === true || v === "true" || v === "host") return { ok: false, code: "sandbox_userns_host" };
+  return { ok: true, code: null };
+}
+
+function capCheckpointMetaChars512(payload, opts) {
+  const cap = Math.max(1, Number((opts && opts.max) != null ? opts.max : CKPT_META_MAX) || CKPT_META_MAX);
+  const p = payload && typeof payload === "object" ? payload : {};
+  const meta = p.meta != null ? p.meta : p.metadata;
+  if (meta == null) return { payload: p, truncated: false, code: null };
+  const raw = typeof meta === "string" ? meta : JSON.stringify(meta);
+  if (raw.length <= cap) return { payload: p, truncated: false, code: null };
+  const copy = Object.assign({}, p);
+  if (p.meta != null) copy.meta = raw.slice(0, cap); else copy.metadata = raw.slice(0, cap);
+  return { payload: copy, truncated: true, code: "ckpt_meta_cap" };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -8900,6 +9264,38 @@ module.exports = {
   refuseSandboxIfPrivilegedTrue,
   refuseSandboxIfCapAddPresent,
   capCheckpointPayload64KiB,
+  rejectToolNameWithAt,
+  capToolArgKeyChars48,
+  refuseToolIfIndexNotInteger,
+  refusePlanIfPriorityUnknown,
+  capPlanStepIdChars32,
+  dropPlanStepsWithUnknownOwner,
+  refusePlanIfEtaNegative,
+  skipMemoryIfSourceUnknown,
+  capMemoryValueChars2048,
+  refuseMemoryUpsertIfTtlNegative,
+  refuseCheckpointIfRevNegative,
+  sessionLockRefuseIfSessionMismatch,
+  skipLockfileGlobFiles,
+  refuseWriteToSys,
+  skipMinifiedJsGlobFiles,
+  dropSseDoneFramesFromReplay,
+  capSseRetryMs30000,
+  ignoreNegativeAudioTokens,
+  neverChargeIfModelUnavailable,
+  neverRetry409Conflict,
+  classifyEafnosupportAsUnavailable,
+  mapMongoNotPrimaryRetryable,
+  abortIfParallelSubagentsOver4,
+  rejectIdempotencyKeyIfStartsWithDash,
+  capUserMessageParagraphs80,
+  redactGithubPatInResults,
+  refuseSubagentIfOwnerBlank,
+  capSandboxWorkdirChars256,
+  refuseSandboxIfPidHostTrue,
+  refuseSandboxIfIpcHostTrue,
+  refuseSandboxIfUserNsHost,
+  capCheckpointMetaChars512,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

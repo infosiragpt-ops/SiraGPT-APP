@@ -881,6 +881,27 @@ async function governThen(input, run) {
         if (typeof ad.ignoreNegativeReasoningTokens === 'function' && input && (input.reasoningTokens != null || input.reasoning_tokens != null)) {
           ad.ignoreNegativeReasoningTokens({ reasoningTokens: input.reasoningTokens, reasoning_tokens: input.reasoning_tokens });
         }
+        if (typeof ad.ignoreNegativeAudioTokens === 'function' && input && (input.audioTokens != null || input.audio_tokens != null)) {
+          ad.ignoreNegativeAudioTokens({ audioTokens: input.audioTokens, audio_tokens: input.audio_tokens });
+        }
+        if (typeof ad.neverChargeIfModelUnavailable === 'function' && input) {
+          ad.neverChargeIfModelUnavailable({ status: input.status, statusCode: input.statusCode, code: input.code, errorCode: input.errorCode, message: input.message, error: input.error });
+        }
+        if (typeof ad.mapMongoNotPrimaryRetryable === 'function' && input && input.error) {
+          ad.mapMongoNotPrimaryRetryable(input.error);
+        }
+        if (typeof ad.sessionLockRefuseIfSessionMismatch === 'function' && input && input.lock) {
+          ad.sessionLockRefuseIfSessionMismatch({ lockSessionId: input.lock.sessionId, sessionId: input.sessionId, lock: input.lock });
+        }
+        if (typeof ad.refuseCheckpointIfRevNegative === 'function' && input && input.checkpoint) {
+          ad.refuseCheckpointIfRevNegative(input.checkpoint);
+        }
+        if (typeof ad.capCheckpointMetaChars512 === 'function' && input && input.checkpoint) {
+          ad.capCheckpointMetaChars512(input.checkpoint);
+        }
+        if (typeof ad.abortIfParallelSubagentsOver4 === 'function' && input && input.subagents) {
+          ad.abortIfParallelSubagentsOver4({ subagents: input.subagents, count: input.subagentCount });
+        }
         if (typeof ad.neverChargeIfSafetyBlocked === 'function' && input) {
           ad.neverChargeIfSafetyBlocked({ safetyBlocked: input.safetyBlocked, contentFilter: input.contentFilter, moderation: input.moderation, finishReason: input.finishReason, policy: input.policy, blocked: input.blocked });
         }

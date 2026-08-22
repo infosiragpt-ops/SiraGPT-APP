@@ -63,6 +63,11 @@ const RULES = [
   { code: 'tool_name_colon', message: 'El nombre de la herramienta no puede contener dos puntos.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_colon' },
   { code: 'sandbox_gid_zero', message: 'El sandbox no puede ejecutarse como gid 0.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_gid_zero' },
   { code: 'sandbox_privileged', message: 'El sandbox no puede ejecutarse en modo privilegiado.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_privileged' },
+  { code: 'path_sys', message: 'No escribo en /sys.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_sys' },
+  { code: 'conflict', message: 'Conflicto (409). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'conflict' || Number(error && error.status) === 409 },
+  { code: 'tool_name_at', message: 'El nombre de la herramienta no puede contener arroba.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_at' },
+  { code: 'sandbox_pid_host', message: 'El sandbox no puede usar pid=host.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_pid_host' },
+  { code: 'sandbox_userns_host', message: 'El sandbox no puede usar userns=host.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_userns_host' },
   { code: 'credits_exhausted', retryable: false, matches: (error, text) => Number(error && error.status) === 402 || /llm_402|credits?_exhausted|insufficient (credits|balance)|quota_exhausted|credit_no_usage|credit_ceiling/i.test(String(text || '')) || ['llm_402', 'credit_no_usage', 'credit_ceiling', 'credits_exhausted'].includes(String(error && error.code || '').toLowerCase()), message: 'No quedan creditos suficientes para esta operacion. No cobre el fallo.' },
 ];
 

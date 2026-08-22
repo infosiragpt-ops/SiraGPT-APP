@@ -266,7 +266,7 @@ test('3H48-AF-001 sort plan steps by depends then order', () => {
 
 test('3H48-AG-001 snapshot keeps 3H47 flags and wave 3H48 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H48' || s.wave === '3H49');
+  assert.ok(s.wave === '3H48' || s.wave === '3H49' || s.wave === '3H50');
   assert.equal(s.rejectPrototypePollutionKeys, true);
   assert.equal(s.rejectToolNameEndingWithDot, true);
   assert.equal(s.capSandboxArgv24, true);
@@ -325,7 +325,7 @@ test('3H48-AK-001 compose binds 3H48 tests and wave is 3H48 DeepSeek only', () =
   assert.ok(String(__filename || '').includes('ola-3h48-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H48') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H48' || ad.adapterSnapshot().wave === '3H49');
+  assert.ok(ad.adapterSnapshot().wave === '3H48' || ad.adapterSnapshot().wave === '3H49' || ad.adapterSnapshot().wave === '3H50');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
   const composeCandidates = [

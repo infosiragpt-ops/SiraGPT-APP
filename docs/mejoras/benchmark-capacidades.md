@@ -1,14 +1,14 @@
 # Rubrica de capacidades del motor — SiraGPT vs Claude Code / Cowork
 
-Version: **3H49** (2026-08-22 06:57 America/Lima, 2026-08-22T11:57Z). Superpone 3H48 + tool name colon / arg nesting 8 / call id required / plan status known / step count 48 / drop blank titles / skip unknown memory kind / key 64 / refuse NaN score / ckpt session required / lock token required / skip .env glob / refuse /etc / skip dist glob / drop SSE empty data / SSE id 64 / ignore neg reasoning tokens / no charge if safety blocked / never retry 403 / ENETRESET unavailable / Redis LOADING / parallel tools 8 / idempotency alnum-dash / user 8000 words / Stripe key redact / refuse subagent parent missing / sandbox stderr 500 / gid 0 refuse / env value 256 / refuse privileged / refuse cap-add / ckpt payload 64KiB.
+Version: **3H50** (2026-08-22 09:57 America/Lima, 2026-08-22T14:57Z). Superpone 3H49 + tool name at / arg key 48 / tool index int / plan priority known / step id 32 / drop unknown owner / refuse neg eta / skip unknown memory source / value 2048 / refuse neg ttl / ckpt rev non-neg / lock session match / skip lockfiles / refuse /sys / skip min.js / drop SSE done / SSE retry 30s / ignore neg audio / no charge if model unavailable / never retry 409 / EAFNOSUPPORT / mongo not primary / parallel subagents 4 / idempotency no leading dash / user 80 paragraphs / GitHub PAT redact / refuse subagent owner blank / sandbox workdir 256 / refuse pid-ipc-userns host / ckpt meta 512. Superpone 3H48 + tool name colon / arg nesting 8 / call id required / plan status known / step count 48 / drop blank titles / skip unknown memory kind / key 64 / refuse NaN score / ckpt session required / lock token required / skip .env glob / refuse /etc / skip dist glob / drop SSE empty data / SSE id 64 / ignore neg reasoning tokens / no charge if safety blocked / never retry 403 / ENETRESET unavailable / Redis LOADING / parallel tools 8 / idempotency alnum-dash / user 8000 words / Stripe key redact / refuse subagent parent missing / sandbox stderr 500 / gid 0 refuse / env value 256 / refuse privileged / refuse cap-add / ckpt payload 64KiB.
 Superficie: motor backend `/chat` + `/code`. **UI no forma parte de esta rubrica.**
 Generate path: DeepSeek V4 Flash / Pro only (`openrouter: false`).
 
 **TTFB live Flash: unmeasured** (no se llamo DeepSeek en smoke largo). No se inventaron metricas p50/p95.
 
-Como se mide: invariantes `tests/ola-3h49-invariants.test.js` + `tests/ola-3h48-invariants.test.js` (wave 3H48|3H49). `/health` live (sin cobro DeepSeek en smoke largo).
+Como se mide: invariantes `tests/ola-3h50-invariants.test.js` + `tests/ola-3h49-invariants.test.js` (wave 3H49|3H50). `/health` live (sin cobro DeepSeek en smoke largo).
 
-| # | Capacidad | Metrica | Antes (3H48) | Despues (3H49) | Target |
+| # | Capacidad | Metrica | Antes (3H49) | Despues (3H50) | Target |
 |---|---|---|---|---|---|
 | 1 | Bucle agentico multi-paso sin humano | tool-chain >=3 + subagent + stopWhen + wall clock | refuse subagent name slash + tool wall 60s | **refuse subagent parent missing** + **parallel tools 8** | subagent_parent_missing; parallel_tools_cap |
 | 2 | Tool-call reliability | repair + schema + alias + isolate + result cap | slash name + arg array 64 + name must be string | **colon name** + **arg nest 8** + **call id required** | tool_name_colon; tool_arg_nest; tool_call_id_blank |
@@ -25,7 +25,7 @@ Como se mide: invariantes `tests/ola-3h49-invariants.test.js` + `tests/ola-3h48-
 
 ## Como se mueve un numero
 
-Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H49 mueve caps 1-12 (32 helpers nuevos). TTFB live Flash unmeasured (no smoke LLM largo).
+Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H50 mueve caps 1-12 (32 helpers nuevos). TTFB live Flash unmeasured (no smoke LLM largo).
 
 ## Leftovers (no son esta oleada)
 
@@ -37,7 +37,11 @@ Ninguna oleada cierra sin una celda **Despues** distinta de **Antes**. 3H49 muev
 - Sandbox interpreter sigue `local` (gVisor `runsc` es el agent-runner). Este path declara `usesRunsc: false`.
 - `create_file` / `delete_file` / `move_file` / `notebook_edit` no existen live (allowlist no los inventa).
 - Live Flash TTFB no se midio con DeepSeek (no quemar creditos).
-- Helpers 3H45/3H46/3H47/3H48 no se rehicieron.
+- Helpers 3H45/3H46/3H47/3H48/3H49 no se rehicieron.
+
+## 3H50 live (22-ago 09:57 Lima)
+
+Codigo 3H50 shipped. Tests: `ola-3h50-invariants.test.js`. TTFB live unmeasured. Hotfix chat 02:56Z se conserva (`persistentComputerTools`, computerOnly gated, CDP 8KiB, MAX_CONTROL_STEPS=25). PAGE WIDTH Word fix bind-mounts (doc-engine/ai.js) no tocados. FEATURE_DOC_ENGINE=1. 402 ES restaurado en public-stream-error. Frontend no recreate (restore-code job in parallel).
 
 ## 3H49 live (22-ago 06:57 Lima)
 
