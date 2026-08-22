@@ -58,6 +58,11 @@ const RULES = [
   { code: 'unauthorized', message: 'No autorizado (401). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'unauthorized' || Number(error && error.status) === 401 },
   { code: 'tool_name_slash', message: 'El nombre de la herramienta no puede contener una barra.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_slash' },
   { code: 'sandbox_uid_zero', message: 'El sandbox no puede ejecutarse como uid 0.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_uid_zero' },
+  { code: 'path_etc', message: 'No escribo en /etc.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_etc' },
+  { code: 'forbidden', message: 'Prohibido (403). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'forbidden' || Number(error && error.status) === 403 },
+  { code: 'tool_name_colon', message: 'El nombre de la herramienta no puede contener dos puntos.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_colon' },
+  { code: 'sandbox_gid_zero', message: 'El sandbox no puede ejecutarse como gid 0.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_gid_zero' },
+  { code: 'sandbox_privileged', message: 'El sandbox no puede ejecutarse en modo privilegiado.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'sandbox_privileged' },
   { code: 'credits_exhausted', retryable: false, matches: (error, text) => Number(error && error.status) === 402 || /llm_402|credits?_exhausted|insufficient (credits|balance)|quota_exhausted|credit_no_usage|credit_ceiling/i.test(String(text || '')) || ['llm_402', 'credit_no_usage', 'credit_ceiling', 'credits_exhausted'].includes(String(error && error.code || '').toLowerCase()), message: 'No quedan creditos suficientes para esta operacion. No cobre el fallo.' },
 ];
 

@@ -6,24 +6,34 @@ const {
   rejectToolCallIfNameIsObject,
   rejectToolNameWithSlash,
   refuseToolIfNameNotString,
+  rejectToolNameWithColon,
+  refuseToolIfCallIdBlank,
   capToolArgString4096,
   capToolArgArrayLength64,
+  capToolArgNestingDepth8,
   refuseWriteToVarLogRun,
   refuseWriteToOpt,
+  refuseWriteToEtc,
   redactAwsAccessKeysInResults,
   redactGcpServiceAccountInResults,
+  redactStripeSecretKeysInResults,
   neverRetry408Timeout,
   neverRetry401Unauthorized,
+  neverRetry403Forbidden,
   classifyEtimedoutAsTimeout,
   classifyEconnrefusedAsUnavailable,
   classifyEprotoAsUnavailable,
   classifyEnobufsAsUnavailable,
+  classifyEnetresetAsUnavailable,
   capUserMessage32KiB,
   capUserMessageLines400,
+  capUserMessageWords8000,
   abortIfIdleOver30sMidTool,
   abortIfToolWallOver60s,
+  abortIfParallelToolsOver8,
   refuseSubagentIfNameEmpty,
   refuseSubagentIfNameHasSlash,
+  refuseSubagentIfParentMissing,
 } = require('./engine-adapter');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
 const {
@@ -353,10 +363,12 @@ async function runAgentLoop({
       onEvent({ type: 'error', message: err?.message || String(err) });
       try { neverRetry408Timeout(err); } catch (_) {}
       try { neverRetry401Unauthorized(err); } catch (_) {}
+      try { neverRetry403Forbidden(err); } catch (_) {}
       try { classifyEtimedoutAsTimeout(err); } catch (_) {}
       try { classifyEconnrefusedAsUnavailable(err); } catch (_) {}
       try { classifyEprotoAsUnavailable(err); } catch (_) {}
       try { classifyEnobufsAsUnavailable(err); } catch (_) {}
+      try { classifyEnetresetAsUnavailable(err); } catch (_) {}
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -484,6 +496,18 @@ async function runAgentLoop({
         }
       } catch (_) {}
       try {
+        const colonN = rejectToolNameWithColon(name);
+        if (colonN && colonN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_colon', message: 'El nombre de la herramienta no puede contener dos puntos.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
+        const cid = refuseToolIfCallIdBlank(call);
+        if (cid && cid.ok === false) {
+          onEvent({ type: 'error', code: 'tool_call_id_blank', message: 'La herramienta requiere un id de llamada.', retryable: false, iteration, name });
+        }
+      } catch (_) {}
+      try {
         const dotN = rejectToolNameEndingWithDot(name);
         if (dotN && dotN.ok === false) {
           onEvent({ type: 'error', code: 'tool_name_dot', message: 'El nombre de la herramienta no puede terminar con un punto.', retryable: false, iteration, name });
@@ -499,12 +523,19 @@ async function runAgentLoop({
         if (capArr && capArr.args && typeof capArr.args === 'object') args = capArr.args;
       } catch (_) {}
       try {
+        const nestA = capToolArgNestingDepth8(args);
+        if (nestA && nestA.args && typeof nestA.args === 'object') args = nestA.args;
+      } catch (_) {}
+      try {
         const pth = args && (args.path || args.file || args.filename || args.cwd);
         if (pth) refuseWriteToVarLogRun(pth);
         if (pth) refuseWriteToOpt(pth);
+        if (pth) refuseWriteToEtc(pth);
       } catch (_) {}
       try { refuseSubagentIfNameEmpty({ name: mapped }); } catch (_) {}
       try { refuseSubagentIfNameHasSlash({ name: mapped }); } catch (_) {}
+      try { refuseSubagentIfParentMissing({ parentId: call && (call.parentId || call.parent_id) }); } catch (_) {}
+      try { abortIfParallelToolsOver8({ count: Array.isArray(toolCalls) ? toolCalls.length : 0 }); } catch (_) {}
       try { abortIfIdleOver30sMidTool({ lastEventAt: Date.now(), now: Date.now() }); } catch (_) {}
       try { abortIfToolWallOver60s({ startedAt: Date.now(), now: Date.now() }); } catch (_) {}
       onEvent({
@@ -559,12 +590,20 @@ async function runAgentLoop({
         if (redGcp && redGcp.text != null) result = redGcp.text;
       } catch (_) {}
       try {
+        const redStripe = redactStripeSecretKeysInResults(result);
+        if (redStripe && redStripe.text != null) result = redStripe.text;
+      } catch (_) {}
+      try {
         const capU = capUserMessage32KiB(typeof result === 'string' ? result : String(result || ''));
         if (capU && capU.truncated && capU.text != null && typeof result === 'string') result = capU.text;
       } catch (_) {}
       try {
         const capL = capUserMessageLines400(typeof result === 'string' ? result : String(result || ''));
         if (capL && capL.truncated && capL.text != null && typeof result === 'string') result = capL.text;
+      } catch (_) {}
+      try {
+        const capW = capUserMessageWords8000(typeof result === 'string' ? result : String(result || ''));
+        if (capW && capW.truncated && capW.text != null && typeof result === 'string') result = capW.text;
       } catch (_) {}
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });

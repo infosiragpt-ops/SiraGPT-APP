@@ -875,6 +875,30 @@ async function governThen(input, run) {
         if (typeof ad.mapSqliteBusyRetryable === 'function' && input && input.error) {
           ad.mapSqliteBusyRetryable(input.error);
         }
+        if (typeof ad.sessionLockRefuseIfTokenEmpty === 'function' && input && input.lock) {
+          ad.sessionLockRefuseIfTokenEmpty({ token: input.lock.token || input.lock.lockToken || input.lock.fence });
+        }
+        if (typeof ad.ignoreNegativeReasoningTokens === 'function' && input && (input.reasoningTokens != null || input.reasoning_tokens != null)) {
+          ad.ignoreNegativeReasoningTokens({ reasoningTokens: input.reasoningTokens, reasoning_tokens: input.reasoning_tokens });
+        }
+        if (typeof ad.neverChargeIfSafetyBlocked === 'function' && input) {
+          ad.neverChargeIfSafetyBlocked({ safetyBlocked: input.safetyBlocked, contentFilter: input.contentFilter, moderation: input.moderation, finishReason: input.finishReason, policy: input.policy, blocked: input.blocked });
+        }
+        if (typeof ad.neverRetry403Forbidden === 'function' && input && (input.status === 403 || input.code === '403' || input.code === 'forbidden')) {
+          ad.neverRetry403Forbidden(input);
+        }
+        if (typeof ad.classifyEnetresetAsUnavailable === 'function' && input && input.error) {
+          ad.classifyEnetresetAsUnavailable(input.error);
+        }
+        if (typeof ad.mapRedisLoadingRetryable === 'function' && input && input.error) {
+          ad.mapRedisLoadingRetryable(input.error);
+        }
+        if (typeof ad.refuseCheckpointIfSessionMissing === 'function' && input && input.checkpoint) {
+          ad.refuseCheckpointIfSessionMissing(input.checkpoint);
+        }
+        if (typeof ad.capCheckpointPayload64KiB === 'function' && input && input.checkpoint) {
+          ad.capCheckpointPayload64KiB(input.checkpoint);
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

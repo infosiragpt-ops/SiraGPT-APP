@@ -140,6 +140,10 @@ function createSSEWriter(res, options = {}) {
           const nm = _ad.capSseEventName32Chars(body.event);
           if (nm && nm.truncated) body = Object.assign({}, body, { event: nm.name });
         }
+        if (_ad && typeof _ad.capSseIdChars64 === 'function' && body && typeof body === 'object' && body.id) {
+          const sid = _ad.capSseIdChars64(body.id);
+          if (sid && sid.truncated) body = Object.assign({}, body, { id: sid.id });
+        }
         if (_ad && typeof _ad.capSseDataBytes32KiB === 'function') {
           const capd = _ad.capSseDataBytes32KiB(body);
           if (capd && capd.truncated && capd.data != null) {
@@ -151,6 +155,9 @@ function createSSEWriter(res, options = {}) {
         }
         if (_ad && typeof _ad.dropSsePingFramesFromReplay === 'function' && options && options.replayFrames) {
           _ad.dropSsePingFramesFromReplay(options.replayFrames);
+        }
+        if (_ad && typeof _ad.dropSseEmptyDataFramesFromReplay === 'function' && options && options.replayFrames) {
+          _ad.dropSseEmptyDataFramesFromReplay(options.replayFrames);
         }
       } catch (_) {}
       return writeWithBackpressure(formatEvent(body));

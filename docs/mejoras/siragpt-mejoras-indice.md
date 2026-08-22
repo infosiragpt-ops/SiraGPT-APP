@@ -1,7 +1,8 @@
 # Indice vivo (oleadas)
 
-- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H48 live, 2026-08-22 03:57 Lima).
-- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0357.md` (3H48, tool name slash + arg array 64 + name must be string + plan depends array + desc 256 + drop empty step ids + memory ns blank + ns 32 + upsert id required + ckpt seq required + lock owner required + skip .git glob + refuse /opt + skip coverage glob + drop SSE ping frames + SSE event name 32 + ignore neg cached tokens + no charge if prompt filtered + never retry 401 + EPROTO unavailable + sqlite busy + tool wall 60s + idempotency key whitespace + user msg 400 lines + GCP SA redact + ENOBUFS unavailable + refuse subagent name slash + sandbox env keys 16 + refuse sandbox net + stdout 500 lines + refuse uid 0 + sort plan by depends then order, frontend untouched)
+- Rubrica motor: `/opt/siragpt/docs/mejoras/benchmark-capacidades.md` (v3H49 live, 2026-08-22 06:57 Lima).
+- Ultima ola live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0657.md` (3H49, tool name colon + arg nest 8 + call id required + plan status known + step count 48 + drop blank titles + skip unknown memory kind + key 64 + refuse NaN score + ckpt session required + lock token required + skip .env glob + refuse /etc + skip dist glob + drop SSE empty data + SSE id 64 + ignore neg reasoning tokens + no charge if safety blocked + never retry 403 + ENETRESET unavailable + redis LOADING + parallel tools 8 + idempotency alnum-dash + user msg 8000 words + Stripe key redact + refuse subagent parent missing + sandbox stderr 500 + refuse gid 0 + env value 256 + refuse privileged + refuse cap-add + ckpt payload 64KiB, frontend untouched)
+- Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0357.md` (3H48)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260822-0057.md` (3H47)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-2157.md` (3H46)
 - Anterior live: `/opt/siragpt/docs/mejoras/ola-3h-20260821-1557.md` (3H45)

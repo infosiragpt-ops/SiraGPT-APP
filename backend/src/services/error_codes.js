@@ -438,6 +438,37 @@ const CODES = Object.freeze({
   SANDBOX_STDOUT_LINES: 'sandbox_stdout_lines',
   SANDBOX_UID_ZERO: 'sandbox_uid_zero',
   PLAN_STEP_DEPENDS_SORT: 'plan_step_depends_sort',
+  TOOL_NAME_COLON: 'tool_name_colon',
+  TOOL_ARG_NEST: 'tool_arg_nest',
+  TOOL_CALL_ID_BLANK: 'tool_call_id_blank',
+  PLAN_STATUS_UNKNOWN: 'plan_status_unknown',
+  PLAN_STEP_COUNT: 'plan_step_count',
+  PLAN_STEP_BLANK_TITLE: 'plan_step_blank_title',
+  MEMORY_KIND_UNKNOWN: 'memory_kind_unknown',
+  MEMORY_KEY_CAP: 'memory_key_cap',
+  MEMORY_SCORE_NAN: 'memory_score_nan',
+  CKPT_SESSION_MISSING: 'ckpt_session_missing',
+  LOCK_TOKEN_EMPTY: 'lock_token_empty',
+  GLOB_DOT_ENV: 'glob_dot_env',
+  PATH_ETC: 'path_etc',
+  GLOB_DIST: 'glob_dist',
+  SSE_EMPTY_DATA: 'sse_empty_data',
+  SSE_ID_CAP: 'sse_id_cap',
+  USAGE_IGNORE_NEG_REASONING: 'usage_ignore_neg_reasoning',
+  CREDIT_SAFETY_BLOCKED: 'credit_safety_blocked',
+  ENETRESET: 'enetreset',
+  REDIS_LOADING: 'redis_loading',
+  PARALLEL_TOOLS_CAP: 'parallel_tools_cap',
+  IDEMPOTENCY_KEY_ALNUM: 'idempotency_key_alnum',
+  USER_MSG_WORDS: 'user_msg_words',
+  STRIPE_KEY_REDACT: 'stripe_key_redact',
+  SUBAGENT_PARENT_MISSING: 'subagent_parent_missing',
+  SANDBOX_STDERR_LINES: 'sandbox_stderr_lines',
+  SANDBOX_GID_ZERO: 'sandbox_gid_zero',
+  SANDBOX_ENV_VALUE: 'sandbox_env_value',
+  SANDBOX_PRIVILEGED: 'sandbox_privileged',
+  SANDBOX_CAP_ADD: 'sandbox_cap_add',
+  CKPT_PAYLOAD_CAP: 'ckpt_payload_cap',
 });
 
 function isRetryable(code) {
@@ -501,7 +532,9 @@ function isRetryable(code) {
     || c === 'net_unavailable'
     || c === 'eproto'
     || c === 'enobufs'
-    || c === 'sqlite_busy';
+    || c === 'sqlite_busy'
+    || c === 'enetreset'
+    || c === 'redis_loading';
 }
 
 function publicError(code, extra) {
@@ -525,6 +558,7 @@ function httpStatusFor(code) {
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
   if (c === 'request_timeout' || c === CODES.REQUEST_TIMEOUT) return 408;
   if (c === 'unauthorized' || c === CODES.UNAUTHORIZED) return 401;
+  if (c === 'forbidden' || c === CODES.FORBIDDEN) return 403;
   return 400;
 }
 

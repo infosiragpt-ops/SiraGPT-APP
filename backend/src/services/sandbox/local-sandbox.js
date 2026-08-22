@@ -199,6 +199,24 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         return { ok: false, code: 'sandbox_uid_zero', message: 'sandbox uid 0 is not allowed' };
       }
     }
+    if (_ad && typeof _ad.refuseSandboxIfGidIsZero === 'function') {
+      const gidCheck = _ad.refuseSandboxIfGidIsZero({ gid: args.gid });
+      if (gidCheck && gidCheck.ok === false) {
+        return { ok: false, code: 'sandbox_gid_zero', message: 'sandbox gid 0 is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfPrivilegedTrue === 'function') {
+      const privCheck = _ad.refuseSandboxIfPrivilegedTrue({ privileged: args.privileged });
+      if (privCheck && privCheck.ok === false) {
+        return { ok: false, code: 'sandbox_privileged', message: 'sandbox privileged mode is not allowed' };
+      }
+    }
+    if (_ad && typeof _ad.refuseSandboxIfCapAddPresent === 'function') {
+      const capCheck = _ad.refuseSandboxIfCapAddPresent({ capAdd: args.capAdd != null ? args.capAdd : args.cap_add });
+      if (capCheck && capCheck.ok === false) {
+        return { ok: false, code: 'sandbox_cap_add', message: 'sandbox cap-add is not allowed' };
+      }
+    }
   } catch (_) {}
 
   const timeoutMs = clampInt(args.timeoutMs, cfg.defaultTimeoutMs, MIN_TIMEOUT_MS, HARD_MAX_TIMEOUT_MS);
@@ -217,6 +235,10 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     if (_ad && typeof _ad.capSandboxEnvKeys16 === 'function' && args.env) {
       const ecap = _ad.capSandboxEnvKeys16(args.env);
       if (ecap && ecap.env) args.env = ecap.env;
+    }
+    if (_ad && typeof _ad.capSandboxEnvValueChars256 === 'function' && args.env) {
+      const vcap = _ad.capSandboxEnvValueChars256(args.env);
+      if (vcap && vcap.env) args.env = vcap.env;
     }
   } catch (_) {}
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;
@@ -323,8 +345,18 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
       let durationMs = elapsedMs();
-      const stdout = stdoutBuf.toString('utf8');
-      const stderr = stderrBuf.toString('utf8');
+      let stdout = stdoutBuf.toString('utf8');
+      let stderr = stderrBuf.toString('utf8');
+      try {
+        if (_ad && typeof _ad.capSandboxStdoutLines500 === 'function') {
+          const sc = _ad.capSandboxStdoutLines500(stdout);
+          if (sc && sc.truncated && sc.text != null) { stdout = sc.text; stdoutTruncated = true; }
+        }
+        if (_ad && typeof _ad.capSandboxStderrLines500 === 'function') {
+          const se = _ad.capSandboxStderrLines500(stderr);
+          if (se && se.truncated && se.text != null) { stderr = se.text; stderrTruncated = true; }
+        }
+      } catch (_) {}
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);

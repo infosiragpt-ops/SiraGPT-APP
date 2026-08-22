@@ -186,6 +186,15 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.rejectIdempotencyKeyIfNotAlnumDash === 'function') {
+          const alnumKey = adWait.rejectIdempotencyKeyIfNotAlnumDash(opts && opts.idempotencyKey);
+          if (alnumKey && alnumKey.ok === false) {
+            const err = new Error('idempotency_key_alnum');
+            err.code = 'idempotency_key_alnum';
+            err.status = 400;
+            return Promise.reject(err);
+          }
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);
