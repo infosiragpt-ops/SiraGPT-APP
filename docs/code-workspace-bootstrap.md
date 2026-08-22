@@ -22,12 +22,14 @@ Temporal, Kubernetes runtimes, or a second workspace store.
 5. **Progress, not a scare modal** while the request is expected to be
    pending. The generic modal appears only after recovery is exhausted,
    with `traceId` and Reintentar / Ir a /code / Volver al chat.
-6. **`app/code/error.tsx`** — reports `buildId` + digest. ChunkLoad /
-   version-skew uses the shared `lib/client-bundle-recovery.ts` helper
-   (same sessionStorage guard as root `app/error.tsx`). Other crashes
-   get one `reset()` after 750 ms keyed by digest. First paint is
-   «Reconectando tu espacio…»; the generic modal appears only after
-   that recovery is exhausted.
+6. **`app/code/error.tsx`** — live P0. Calls the same
+   `maybeReloadStaleClientBundle(error)` as root `app/error.tsx`
+   (guard keyed by `__NEXT_DATA__.buildId`, e.g. live
+   `9NdPlPdIifS4deZzUFUr1`). `reset()` is never used for ChunkLoad —
+   that remounts deleted `dynamic(code-workspace)` chunks. Other
+   crashes get one `reset()` after 750 ms. First paint is
+   «Reconectando tu espacio…»; the generic modal + Reintentar
+   (reload, not reset, on skew) appears only after recovery is exhausted.
 7. **Version skew** — `NEXT_PUBLIC_BUILD_ID` / `GIT_COMMIT` exposed as
    the client build id, sent as `X-Client-Build`. Next.js
    `generateBuildId` + `deploymentId` when those env vars are set.

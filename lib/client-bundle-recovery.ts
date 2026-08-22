@@ -44,9 +44,24 @@ export function staleClientBundleSignature(error: unknown): string {
     .replace(/[^a-zA-Z0-9_.:-]+/g, "_")
 }
 
+/**
+ * Live Next documents key the stale-reload guard by `__NEXT_DATA__.buildId`
+ * (e.g. `9NdPlPdIifS4deZzUFUr1` on siragpt.com). Prefer that so /code and
+ * the root boundary share the same sessionStorage slot as production.
+ */
+export function readStaleReloadBuildId(): string {
+  if (typeof window !== "undefined") {
+    const nextId = (window as unknown as { __NEXT_DATA__?: { buildId?: string } })
+      .__NEXT_DATA__?.buildId
+    const trimmed = String(nextId || "").trim()
+    if (trimmed && trimmed !== "unknown") return trimmed
+  }
+  return readBrowserClientBuildId()
+}
+
 export function staleClientBundleReloadKey(
   error: unknown,
-  buildId = readBrowserClientBuildId(),
+  buildId = readStaleReloadBuildId(),
 ): string {
   return `${STALE_CLIENT_BUNDLE_RELOAD_PREFIX}:${buildId || "unknown"}:${staleClientBundleSignature(error)}`
 }
@@ -91,8 +106,9 @@ export function maybeReloadStaleClientBundle(
   const storage = options.storage ?? (
     typeof sessionStorage !== "undefined" ? sessionStorage : null
   )
-  if (!shouldHardReloadStaleClientBundle(error, storage, options.buildId)) return false
-  markStaleClientBundleReload(error, storage, options.buildId, options.now)
+  const buildId = options.buildId || readStaleReloadBuildId()
+  if (!shouldHardReloadStaleClientBundle(error, storage, buildId)) return false
+  markStaleClientBundleReload(error, storage, buildId, options.now)
   const reload = options.reload ?? (() => {
     if (typeof window !== "undefined") window.location.reload()
   })

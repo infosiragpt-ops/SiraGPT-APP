@@ -1,14 +1,19 @@
 "use client"
 
 /**
- * /code error boundary — reconnect first, scare never.
+ * /code error boundary — live P0: ChunkLoad must hard-reload, not reset().
  *
- * After a FE deploy this route often throws ChunkLoadError on the
- * `dynamic(code-workspace)` import. `reset()` remounts the same stale
- * chunks, so version-skew uses the shared root hard-reload helper.
- * Other render crashes get one `reset()` after 750ms. The generic
- * «No se pudo cargar el espacio de código» modal appears only after
- * that automatic recovery is exhausted.
+ * Production modal at /opt/siragpt/app/code/error.tsx currently shows
+ * «No se pudo cargar el espacio de código» and Reintentar only calls
+ * reset(). After FE recreates, stale tabs throw ChunkLoadError on
+ * dynamic(code-workspace, { ssr: false }); reset() remounts deleted
+ * chunks and the modal sticks.
+ *
+ * Root app/error.tsx already recovers via maybeReloadStaleClientBundle.
+ * This file uses that same helper (same __NEXT_DATA__.buildId guard).
+ * First paint is «Reconectando tu espacio…». The generic modal appears
+ * only after that one automatic recovery is exhausted. Reintentar on a
+ * bundle error reloads the document — it never reset()s stale chunks.
  */
 
 import { useEffect, useState } from "react"
@@ -16,16 +21,25 @@ import { useRouter } from "next/navigation"
 import { reportClientLog } from "@/lib/client-logs"
 import { readBrowserClientBuildId } from "@/lib/client-build-id"
 import { track } from "@/lib/analytics"
-import { isRecoverableClientBundleError } from "@/lib/client-bundle-recovery"
+import {
+  isRecoverableClientBundleError,
+  maybeReloadStaleClientBundle,
+} from "@/lib/client-bundle-recovery"
 import { isChunkLoadOrBuildSkewError } from "@/lib/code-workspace-errors"
 import {
   CODE_ERROR_RESET_DELAY_MS,
-  markBuildSkewReload,
   markCodeWorkspaceErrorReset,
   resolveCodeWorkspaceErrorPhase,
   shouldAutoResetCodeWorkspaceError,
-  shouldReloadForBuildSkew,
 } from "@/lib/code-workspace-error-boundary"
+
+function retryCodeWorkspace(error: Error, reset: () => void) {
+  if (isRecoverableClientBundleError(error) || isChunkLoadOrBuildSkewError(error)) {
+    window.location.reload()
+    return
+  }
+  reset()
+}
 
 export default function CodeWorkspaceError({
   error,
@@ -46,10 +60,7 @@ export default function CodeWorkspaceError({
       message: (error.message || "").slice(0, 500),
       url: "/code",
     })
-    const willAutoRecover = resolveCodeWorkspaceErrorPhase(error, storage, buildId) === "recovering"
-    if (willAutoRecover && (isRecoverableClientBundleError(error) || isChunkLoadOrBuildSkewError(error))) {
-      return
-    }
+    if (isRecoverableClientBundleError(error)) return
     reportClientLog({
       source: "render",
       severity: "error",
@@ -61,21 +72,15 @@ export default function CodeWorkspaceError({
         digest: error.digest || null,
         buildId,
         traceId: error.digest || null,
-        phase,
+        phase: resolveCodeWorkspaceErrorPhase(error, storage, buildId),
       },
     })
-  }, [error, buildId, storage, phase])
+  }, [error, buildId, storage])
 
   useEffect(() => {
     if (typeof window === "undefined") return
-    if (
-      (isRecoverableClientBundleError(error) || isChunkLoadOrBuildSkewError(error))
-      && shouldReloadForBuildSkew(error, sessionStorage, buildId)
-    ) {
-      markBuildSkewReload(error, sessionStorage, buildId)
-      window.location.reload()
-      return
-    }
+    // Same one-shot hard reload as root app/error.tsx. Do not reset().
+    if (maybeReloadStaleClientBundle(error)) return
     if (isRecoverableClientBundleError(error) || isChunkLoadOrBuildSkewError(error)) {
       setPhase("exhausted")
       return
@@ -89,7 +94,7 @@ export default function CodeWorkspaceError({
       reset()
     }, CODE_ERROR_RESET_DELAY_MS)
     return () => window.clearTimeout(timer)
-  }, [error, reset, buildId])
+  }, [error, reset])
 
   if (phase === "exhausted") {
     return (
@@ -116,13 +121,7 @@ export default function CodeWorkspaceError({
             <button
               type="button"
               className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
-              onClick={() => {
-                if (isRecoverableClientBundleError(error) || isChunkLoadOrBuildSkewError(error)) {
-                  window.location.reload()
-                  return
-                }
-                reset()
-              }}
+              onClick={() => retryCodeWorkspace(error, reset)}
             >
               Reintentar
             </button>
