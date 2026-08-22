@@ -17,6 +17,9 @@ export type CodeChatTurn = {
   /** Live Codex-style execution phases for the /code agent turn. */
   agentPhases?: CodeAgentPhase[]
   agentLabel?: string
+  /** Frente 4: actionable error (qué falló + qué puede hacer) for a turn whose
+   *  task genuinely failed after its bounded retries. */
+  actionableError?: import("./code-agent/actionable-error").ActionableError
   /** Durable stop lifecycle. A turn is terminal only after `cancelled`. */
   cancellationState?: CodexTurnCancellationState
   /** Real action log + Worked-Summary metrics for a turn that did file work. */
@@ -130,6 +133,25 @@ function sanitizeTurn(raw: unknown): CodeChatTurn | null {
   if (typeof t.streaming === "boolean") turn.streaming = t.streaming
   if (typeof t.codexRunId === "string" && t.codexRunId) turn.codexRunId = t.codexRunId
   if (typeof t.agentLabel === "string") turn.agentLabel = t.agentLabel
+  if (
+    t.actionableError &&
+    typeof t.actionableError === "object" &&
+    typeof (t.actionableError as Record<string, unknown>).title === "string" &&
+    typeof (t.actionableError as Record<string, unknown>).whatFailed === "string" &&
+    Array.isArray((t.actionableError as Record<string, unknown>).userActions)
+  ) {
+    // Rebuild from validated fields so a corrupt localStorage entry can't feed
+    // the renderer malformed shapes.
+    const e = t.actionableError as Record<string, unknown>
+    turn.actionableError = {
+      title: e.title as string,
+      whatFailed: e.whatFailed as string,
+      userActions: (e.userActions as unknown[]).filter(
+        (a): a is string => typeof a === "string",
+      ),
+      canRetryFromStep: true,
+    }
+  }
   if (t.cancellationState === "cancelling" || t.cancellationState === "failed" || t.cancellationState === "cancelled") {
     turn.cancellationState = t.cancellationState
   }

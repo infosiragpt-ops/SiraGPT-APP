@@ -177,6 +177,12 @@ import {
   nextWorkTaskAction,
   stepIterationBudget,
 } from "@/lib/code-agent/autonomy"
+import {
+  buildActionableError,
+  findFirstBrokenTask,
+  resetTasksFrom,
+} from "@/lib/code-agent/actionable-error"
+import type { ActionableErrorContext } from "@/lib/code-agent/actionable-error"
 import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
 import { runQualityGate } from "@/lib/code-agent/quality-gate"
 import {
@@ -4456,14 +4462,47 @@ export function AICodeChatPanel({ embedded = false, title, onBack, proactive }: 
             toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${lastVerdict.retryInstruction?.slice(0, 90)}…`)
           }
           const doneAgent = activeCodeChatSession?.agent
+          const failedTask = cancelledWork || !lastVerdict.ok
           const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
-            status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
+            // Frente 4: a task that exhausted its bounded retries is marked
+            // "error" — the resume point for "reintentar desde el paso roto".
+            // Cancellation is NOT an error: the step was simply abandoned.
+            status: !cancelledWork && !lastVerdict.ok ? "error" : cancelledWork ? "blocked" : "completed",
           })
+          // Frente 4: build the actionable message (qué falló + qué puede hacer)
+          // from the REAL verdict of the last attempt. A stream-validator or
+          // quality-gate rejection maps to the "validation" category; anything
+          // else falls back honestly inside buildActionableError.
+          let actionableError: import("@/lib/code-agent/actionable-error").ActionableError | undefined
+          if (!cancelledWork && !lastVerdict.ok) {
+            const broken = (doneAgent?.tasks || []).find((t) => t.id === action.taskId) || null
+            const errCtx: ActionableErrorContext =
+              lastVerdict.retryInstruction != null
+                ? { category: "validation", error: null }
+                : { error: null }
+            actionableError = buildActionableError(
+              {
+                title: broken?.title || "",
+                detail: broken?.detail,
+                files: broken?.files,
+              },
+              errCtx,
+            )
+          }
           patchAgentState(sid, (s) => ({
             ...s,
             phase: cancelledWork ? "idle" : lastVerdict.ok ? "preview" : "debugging",
             tasks: patchedTasks,
           }))
+          if (actionableError) {
+            setTurns((prev) =>
+              prev.map((t) =>
+                t.role === "assistant" && !t.streaming
+                  ? { ...t, actionableError }
+                  : t,
+              ),
+            )
+          }
           return
         }
         case "patch": {
@@ -5422,6 +5461,30 @@ function ChatBubble({
           Verificar). Populated from REAL turn state by the build/app/engine
           paths; renders nothing for turns that never set agentPhases. */}
       <CodeAgentProgress phases={turn.agentPhases} />
+      {/* Frente 4 — actionable error: when a task genuinely failed after its
+          bounded retries, say WHAT failed and WHAT the user can do. Data-only
+          block: renders nothing unless the turn carries actionableError. */}
+      {turn.actionableError ? (
+        <div
+          className="mb-2 rounded-lg border border-red-500/30 bg-red-500/[0.06] px-3 py-2"
+          role="alert"
+        >
+          <p className="flex items-center gap-1.5 text-[13px] font-semibold text-red-600 dark:text-red-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            {turn.actionableError.title}
+          </p>
+          <p className="mt-0.5 text-[12px] leading-relaxed text-foreground/80">
+            {turn.actionableError.whatFailed}
+          </p>
+          {turn.actionableError.userActions.length > 0 ? (
+            <ul className="mt-1 ml-4 list-disc space-y-0.5 text-[12px] leading-relaxed text-muted-foreground">
+              {turn.actionableError.userActions.map((action, i) => (
+                <li key={i}>{action}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
       {/* Voiced turn (e.g. the greeting): action rows + inline voice player
           ABOVE the text, so the reply reads actions → audio → text. The player
           generates ElevenLabs audio (voz femenina multilingüe) SOLO cuando el
