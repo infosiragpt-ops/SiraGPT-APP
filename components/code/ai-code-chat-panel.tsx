@@ -185,6 +185,7 @@ import {
   nextWorkTaskAction,
   stepIterationBudget,
 } from "@/lib/code-agent/autonomy"
+import { markTaskFailure } from "@/lib/code-agent/task-retry"
 import { validateStreamedFiles, MAX_STREAM_RETRIES } from "@/lib/code-agent/stream-validator"
 import { runQualityGate } from "@/lib/code-agent/quality-gate"
 import {
@@ -4485,9 +4486,24 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
             toast.error(`Validación falló (intento ${retryAttempt}/${MAX_STREAM_RETRIES}): ${lastVerdict.retryInstruction?.slice(0, 90)}…`)
           }
           const doneAgent = activeCodeChatSession?.agent
-          const patchedTasks = updateAgentTask(doneAgent?.tasks || [], action.taskId, {
-            status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
-          })
+          // Structured per-task retry: a validation failure (not a user
+          // cancellation) requeues the SAME task with backoff via
+          // markTaskFailure (which also blocks once MAX_TASK_RETRIES is spent)
+          // — nextWorkTaskAction picks it up again once notBefore elapses,
+          // instead of stranding the plan as blocked forever.
+          const failedTask = (doneAgent?.tasks || []).find((t) => t.id === action.taskId)
+          const patchedTasks = (() => {
+            if (!failedTask) {
+              return updateAgentTask(doneAgent?.tasks || [], action.taskId, {
+                status: cancelledWork || !lastVerdict.ok ? "blocked" : "completed",
+              })
+            }
+            if (lastVerdict.ok) return updateAgentTask(doneAgent?.tasks || [], action.taskId, { status: "completed" })
+            const stamped = markTaskFailure(failedTask, cancelledWork
+              ? { transient: false, reason: "Cancelado por el usuario" }
+              : { transient: true, reason: lastVerdict.retryInstruction || "La verificación del paso falló" })
+            return (doneAgent?.tasks || []).map((t) => (t.id === stamped.id ? stamped : t))
+          })()
           patchAgentState(sid, (s) => ({
             ...s,
             phase: cancelledWork ? "idle" : lastVerdict.ok ? "preview" : "debugging",
