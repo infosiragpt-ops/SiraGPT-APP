@@ -29,6 +29,7 @@
     "../lib/file-processing-vocab.ts",
     "../lib/download-utils.ts",
     "../lib/xlsx-client.ts",
+    "../lib/chat/document-editor.ts",
     "../lib/sse-client.ts",
     "../lib/sentry-config.ts",
     "../lib/retry-after-fetch.ts",

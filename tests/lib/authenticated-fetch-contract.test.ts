@@ -164,6 +164,14 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(imageUrl)",
   },
   {
+    file: "components/chat/DocumentEditorPanel.tsx",
+    reason: "Same-origin original-upload bytes GET for the editor's format matrix; best-effort with an extracted-text fallback, and the panel has no auth token in scope.",
+    accepts: (text) =>
+      text.startsWith("fetch(url,")
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+  },
+  {
     file: "components/message-component.tsx",
     reason: "Public or external chart-image download; authenticated document downloads use the shared transport.",
     accepts: (text) => text === "fetch(imageUrl)",

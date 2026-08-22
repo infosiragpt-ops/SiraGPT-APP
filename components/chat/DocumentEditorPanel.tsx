@@ -37,6 +37,7 @@ import { toast } from "sonner"
 import { TiptapEditor } from "@/components/editor/tiptap-editor"
 import {
   contentToMarkdown,
+  importedFileToMarkdown,
   buildExportBlob,
   saveEditedDocument,
   isEditorContentWithinLimits,
@@ -108,6 +109,27 @@ export const exportFormatLabel: Record<DocExportFormat, string> = {
   docx: ".docx",
 }
 
+/**
+ * Formats whose raw bytes the editor can convert to structured Markdown
+ * client-side (RTF/ODF/CSV/HTML/DOCX import matrix). For these we try the
+ * original upload first and only fall back to the backend's extracted text.
+ */
+const STRUCTURED_IMPORT_RE = /^(?:docx?|html?|rtf|odt|ods|odp|csv|tsv)$/i
+
+async function loadRawFileBytes(fileId: string, fileName: string): Promise<Uint8Array | null> {
+  if (!STRUCTURED_IMPORT_RE.test(fileName)) return null
+  const url = `/api/files/${encodeURIComponent(fileId)}/raw`
+  let response: Response
+  try {
+    response = await fetch(url, { credentials: "same-origin" })
+  } catch {
+    // Offline / network blip → fall back to extracted text below.
+    return null
+  }
+  if (!response.ok) return null
+  return new Uint8Array(await response.arrayBuffer())
+}
+
 export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
   const { open, file, fileId, fileName, format, initialContent, onClose, onSaved, chatId, summary } = props
   const loadContent = props.loadContent
@@ -141,12 +163,30 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
       }
       setLoadingContent(true)
       try {
+        // Structured import matrix: try raw bytes → format converter first so
+        // RTF/ODF/CSV/HTML/DOCX keep headings, lists and tables in Tiptap.
+        let bytes: Uint8Array | null = null
+        if (!loadContent && STRUCTURED_IMPORT_RE.test(resolvedFormat)) {
+          bytes = await loadRawFileBytes(resolvedFileId, resolvedFileName)
+        }
         const text = loadContent
           ? await loadContent(resolvedFileId)
           : null
         if (cancelled) return
+        if (bytes) {
+          const converted = await importedFileToMarkdown({ bytes }, resolvedFormat)
+          if (cancelled) return
+          setContent(converted)
+          return
+        }
         if (typeof text === "string" && text) {
-          setContent(contentToMarkdown(text))
+          if (STRUCTURED_IMPORT_RE.test(resolvedFormat)) {
+            const converted = await importedFileToMarkdown({ extractedText: text }, resolvedFormat)
+            if (cancelled) return
+            setContent(converted)
+          } else {
+            setContent(contentToMarkdown(text))
+          }
         } else {
           // Default loader: extracted content endpoint via the injected client.
           let fetched = ""
@@ -155,7 +195,13 @@ export function DocumentEditorPanel(props: DocumentEditorPanelProps) {
             fetched = await client.getFileContent(resolvedFileId).catch(() => "")
           }
           if (cancelled) return
-          setContent(contentToMarkdown(fetched))
+          if (STRUCTURED_IMPORT_RE.test(resolvedFormat) && fetched) {
+            const converted = await importedFileToMarkdown({ extractedText: fetched }, resolvedFormat)
+            if (cancelled) return
+            setContent(converted)
+          } else {
+            setContent(contentToMarkdown(fetched))
+          }
         }
       } catch {
         if (!cancelled) setContent("")

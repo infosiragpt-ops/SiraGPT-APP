@@ -1399,9 +1399,45 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete file
-router.delete('/:id', authenticateToken, async (req, res) => {
+/**
+ * GET /api/files/:id/raw — stream the ORIGINAL uploaded bytes for the
+ * document editor's client-side format matrix (RTF/ODF/CSV/HTML import).
+ *
+ * The /:id/content route returns the backend's extracted TEXT, which loses
+ * the structure (headings, lists, tables) the editor can recover from the
+ * real file bytes. This route hands back exactly what the user uploaded,
+ * same ownership rules as every other file route. The panel only requests
+ * it for the structured-import extensions, so PDFs/images never hit it.
+ */
+router.get('/:id/raw', authenticateToken, async (req, res) => {
   try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    if (!(await objectStorage.exists(file.path))) {
+      return res.status(404).json({ error: 'Original upload no longer available' });
+    }
+
+    const filename = path.basename(String(file.originalName || 'documento'));
+    res.setHeader('Content-Type', file.mimeType || 'application/octet-stream');
+    // Inline, not attachment: this is consumed by fetch().arrayBuffer(), and
+    // a browser that does navigate it should preview, not download.
+    res.setHeader('Content-Disposition', contentDispositionHeader('inline', filename));
+    res.setHeader('Cache-Control', 'private, max-age=300');
+
+    const { stream } = await objectStorage.readStream(file.path);
+    res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
+    return pipeStreamToResponse(stream, res, 'raw-file');
+  } catch (error) {
+    console.error('[files] raw route error:', error);
+    res.status(500).json({ error: 'Failed to read original file' });
+  }
+});
+
+// Delete file
+router.delete('/:id', authenticateToken, async (req, res) => {  try {
     const file = await prisma.file.findFirst({
       where: {
         id: req.params.id,
