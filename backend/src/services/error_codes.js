@@ -346,6 +346,34 @@ const CODES = Object.freeze({
   SSE_DONE: 'sse_done',
   TOOL_SORT: 'tool_sort',
   CREDIT_OBSERVE: 'credit_observe',
+  PROTO_POLLUTION: 'proto_pollution',
+  TOOL_ID_DUP: 'tool_id_dup',
+  TOOL_NAME_HYPHEN: 'tool_name_hyphen',
+  TOOL_ARG_KEYS: 'tool_arg_keys',
+  PLAN_TITLE_CAP: 'plan_title_cap',
+  PLAN_STEP_DUP: 'plan_step_dup',
+  COMPACT_KEEP_SYSTEM: 'compact_keep_system',
+  MEMORY_TTL: 'memory_ttl',
+  MEMORY_HITS_CAP: 'memory_hits_cap',
+  CKPT_CRC_STAMP: 'ckpt_crc_stamp',
+  LOCK_STALE_STEAL: 'lock_stale_steal',
+  PATH_ROOT_MNT: 'path_root_mnt',
+  GLOB_VENDOR: 'glob_vendor',
+  SSE_COMMENT_DROP: 'sse_comment_drop',
+  SSE_REPLAY_CAP: 'sse_replay_cap',
+  SSE_ABORT: 'sse_abort',
+  USAGE_IGNORE_NEG_PROMPT: 'usage_ignore_neg_prompt',
+  CREDIT_CANCEL_PRE_TOKEN: 'credit_cancel_pre_token',
+  RESOURCE_GONE: 'resource_gone',
+  PG_DISCONNECT: 'pg_disconnect',
+  TTFB_ABORT: 'ttfb_abort',
+  IDEMPOTENCY_STALE: 'idempotency_stale',
+  ASSISTANT_CAP: 'assistant_cap',
+  PEM_REDACT: 'pem_redact',
+  NET_CANCELLED: 'net_cancelled',
+  SUBAGENT_SAME_TOOL: 'subagent_same_tool',
+  MEMORY_SORT: 'memory_sort',
+  TOOL_ARGS_ARRAY: 'tool_args_array',
 });
 
 function isRetryable(code) {
@@ -402,7 +430,8 @@ function isRetryable(code) {
     || c === 'queue_fair_share'
     || c === 'client_gone'
     || c === 'queue_generate_cap'
-    || c === 'net_timeout';
+    || c === 'net_timeout'
+    || c === 'pg_disconnect';
 }
 
 function publicError(code, extra) {
@@ -423,6 +452,7 @@ function httpStatusFor(code) {
   if (c === CODES.RETRY_UNAVAILABLE) return 409;
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
+  if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
   return 400;
 }
 

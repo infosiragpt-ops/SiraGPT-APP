@@ -4756,7 +4756,36 @@ function adapterSnapshot() {
     endSseWithEventDone: true,
     sortToolsByNameForCache: true,
     observeOnlyNoCharge: true,
-    wave: '3H45',
+    rejectPrototypePollutionKeys: true,
+    dropDuplicateToolCallIds: true,
+    rejectToolNameStartingWithHyphen: true,
+    capToolArgKeys32: true,
+    capPlanTitle128Chars: true,
+    refuseDuplicatePlanStepIds: true,
+    compactNeverDropSystemPrompt: true,
+    skipMemoryIfTtlExpired: true,
+    capMemoryHitsReturned8: true,
+    crc32StampOnCheckpointSave: true,
+    sessionLockStealIfHeartbeatStale: true,
+    refuseWriteToRootMnt: true,
+    skipVendorDirGlobFiles: true,
+    dropSseCommentFramesFromReplay: true,
+    capReplayFrames64: true,
+    endSseWithErrorEventOnAbort: true,
+    ignoreNegativePromptTokens: true,
+    neverChargeIfCancelledBeforeFirstToken: true,
+    neverRetry410Gone: true,
+    classifyEhostunreachAsTimeout: true,
+    mapPostgresEconnresetRetryable: true,
+    abortIfFirstByteOver45s: true,
+    rejectStaleIdempotencyKeyOver1h: true,
+    capAssistantMessage64KiB: true,
+    redactPemPrivateKeysInResults: true,
+    classifyEconnabortedAsCancelled: true,
+    refuseSubagentIfSameToolAsParent: true,
+    sortMemoryHitsByScoreDesc: true,
+    rejectToolCallIfArgsIsArray: true,
+    wave: '3H46',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -6800,6 +6829,356 @@ function observeOnlyNoCharge({ tools, names, observeOnly } = {}) {
   return { charge: true, observeOnly: false, code: null };
 }
 
+
+// ---------------------------------------------------------------------------
+// 3H46 remaining holes vs Claude Code/Cowork after 3H45
+// ---------------------------------------------------------------------------
+
+// 3H46 helpers
+const TOOL_ARG_KEYS_MAX = 32;
+const PLAN_TITLE_MAX = 128;
+const MEMORY_HITS_MAX = 8;
+const LOCK_STALE_MS = 40_000;
+const REPLAY_FRAMES_MAX = 64;
+const ASSISTANT_MSG_MAX = 64 * 1024;
+const TTFB_ABORT_MS = 45_000;
+const IDEMPOTENCY_STALE_MS = 60 * 60 * 1000;
+
+function rejectPrototypePollutionKeys(value) {
+  const bad = [];
+  function walk(v, path) {
+    if (!v || typeof v !== "object") return;
+    if (Array.isArray(v)) { v.forEach((item, i) => walk(item, path + "[" + i + "]")); return; }
+    for (const k of Object.keys(v)) {
+      if (k === "__proto__" || k === "prototype" || k === "constructor") bad.push(path ? path + "." + k : k);
+      else walk(v[k], path ? path + "." + k : k);
+    }
+  }
+  walk(value, "");
+  if (bad.length) return { ok: false, keys: bad, code: "proto_pollution" };
+  return { ok: true, keys: [], code: null };
+}
+
+function dropDuplicateToolCallIds(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const seen = new Set();
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    const id = c && (c.id || c.toolCallId || c.tool_call_id);
+    if (id == null || id === "") { kept.push(c); continue; }
+    const key = String(id);
+    if (seen.has(key)) { dropped += 1; continue; }
+    seen.add(key);
+    kept.push(c);
+  }
+  return { calls: kept, dropped, code: dropped ? "tool_id_dup" : null };
+}
+
+function rejectToolNameStartingWithHyphen(name) {
+  const n = String(name == null ? "" : name);
+  if (n.charAt(0) === "-") return { ok: false, name: n, code: "tool_name_hyphen" };
+  return { ok: true, name: n, code: null };
+}
+
+function capToolArgKeys32(args, opts) {
+  const max = (opts && opts.max != null) ? opts.max : TOOL_ARG_KEYS_MAX;
+  const cap = Math.max(1, Number(max) || TOOL_ARG_KEYS_MAX);
+  if (args == null || typeof args !== "object" || Array.isArray(args)) {
+    return { ok: true, args: args, truncated: false, keys: 0, code: null };
+  }
+  const keys = Object.keys(args);
+  if (keys.length <= cap) return { ok: true, args: args, truncated: false, keys: keys.length, code: null };
+  const out = {};
+  for (const k of keys.slice(0, cap)) out[k] = args[k];
+  return { ok: true, args: out, truncated: true, keys: keys.length, code: "tool_arg_keys" };
+}
+
+function capPlanTitle128Chars(title, opts) {
+  const max = (opts && opts.max != null) ? opts.max : PLAN_TITLE_MAX;
+  const cap = Math.max(1, Number(max) || PLAN_TITLE_MAX);
+  const s = String(title == null ? "" : title);
+  if (s.length <= cap) return { title: s, truncated: false, code: null };
+  return { title: s.slice(0, cap), truncated: true, code: "plan_title_cap" };
+}
+
+function refuseDuplicatePlanStepIds(steps) {
+  const list = Array.isArray(steps) ? steps : [];
+  const seen = new Set();
+  const kept = [];
+  let dropped = 0;
+  for (const st of list) {
+    const id = st && (st.id || st.stepId || st.key);
+    if (id == null || id === "") { kept.push(st); continue; }
+    const key = String(id);
+    if (seen.has(key)) { dropped += 1; continue; }
+    seen.add(key);
+    kept.push(st);
+  }
+  return { steps: kept, dropped, code: dropped ? "plan_step_dup" : null };
+}
+
+function compactNeverDropSystemPrompt(original, compacted) {
+  const src = Array.isArray(original) ? original : [];
+  const out = Array.isArray(compacted) ? compacted.slice() : (Array.isArray(original) ? original.slice() : []);
+  let firstSys = null;
+  for (const m of src) { if (m && m.role === "system") { firstSys = m; break; } }
+  if (!firstSys) return { messages: out, restored: false, code: null };
+  const has = out.some(function(m) { return m && m.role === "system"; });
+  if (has) return { messages: out, restored: false, code: null };
+  out.unshift(firstSys);
+  return { messages: out, restored: true, code: "compact_keep_system" };
+}
+
+function skipMemoryIfTtlExpired(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const t = Number(opts && opts.now) || Date.now();
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const exp = h && (h.expiresAt != null ? h.expiresAt : (h.ttlAt != null ? h.ttlAt : h.expireAt));
+    if (exp == null) { kept.push(h); continue; }
+    const n = Number(exp);
+    if (!Number.isFinite(n)) { kept.push(h); continue; }
+    const ms = (n > 0 && n < 1e11) ? n * 1000 : n;
+    if (ms < t) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "memory_ttl" : null };
+}
+
+function capMemoryHitsReturned8(hits, opts) {
+  const list = Array.isArray(hits) ? hits : [];
+  const max = (opts && opts.max != null) ? opts.max : MEMORY_HITS_MAX;
+  const cap = Math.max(1, Number(max) || MEMORY_HITS_MAX);
+  if (list.length <= cap) return { hits: list, truncated: false, code: null };
+  return { hits: list.slice(0, cap), truncated: true, code: "memory_hits_cap" };
+}
+
+function crc32StampOnCheckpointSave(payload) {
+  let raw;
+  if (Buffer.isBuffer(payload)) raw = payload;
+  else if (typeof payload === "string") raw = Buffer.from(payload, "utf8");
+  else {
+    try { raw = Buffer.from(JSON.stringify(payload == null ? {} : payload), "utf8"); }
+    catch (e) { raw = Buffer.from(String(payload), "utf8"); }
+  }
+  const crc = (typeof crc32OfBuffer === "function") ? crc32OfBuffer(raw) : 0;
+  return { crc32: crc, bytes: raw.length, code: "ckpt_crc_stamp" };
+}
+
+function sessionLockStealIfHeartbeatStale(opts) {
+  opts = opts || {};
+  const last = Number(opts.lastBeatAt);
+  const t = Number(opts.now) || Date.now();
+  const lim = Math.max(1000, Number(opts.staleMs) || LOCK_STALE_MS);
+  if (!Number.isFinite(last)) return { steal: true, stale: true, code: "lock_stale_steal" };
+  const elapsed = t - last;
+  if (elapsed >= lim) return { steal: true, stale: true, elapsedMs: elapsed, code: "lock_stale_steal" };
+  return { steal: false, stale: false, elapsedMs: elapsed, remainingMs: lim - elapsed, code: null };
+}
+
+function refuseWriteToRootMnt(filePath) {
+  const p = String(filePath == null ? "" : filePath).split("\\").join("/");
+  const n = p.charAt(0) === "/" ? p : ("/" + p);
+  function hits(base) { return n === base || n.indexOf(base + "/") === 0 || p === base || p.indexOf(base + "/") === 0; }
+  if (hits("/root") || hits("/mnt") || hits("/media")) return { ok: false, path: p, code: "path_root_mnt" };
+  return { ok: true, path: p, code: null };
+}
+
+function skipVendorDirGlobFiles(hits) {
+  const list = Array.isArray(hits) ? hits : [];
+  const kept = [];
+  let skipped = 0;
+  for (const h of list) {
+    const p = typeof h === "string" ? h : (h && (h.path || h.name || h.file)) || "";
+    const norm = String(p).split("\\").join("/");
+    if (norm.indexOf("/vendor/") >= 0 || norm.indexOf("/third_party/") >= 0) { skipped += 1; continue; }
+    kept.push(h);
+  }
+  return { hits: kept, skipped: skipped, code: skipped ? "glob_vendor" : null };
+}
+
+function dropSseCommentFramesFromReplay(events) {
+  const list = Array.isArray(events) ? events : [];
+  const kept = [];
+  let dropped = 0;
+  for (const e of list) {
+    if (e == null) { kept.push(e); continue; }
+    const typ = String((e.event || e.type || e.kind || "")).toLowerCase();
+    const frame = typeof e === "string" ? e : String(e.frame || "");
+    if (typ === "comment" || e.comment === true || frame.charAt(0) === ":") { dropped += 1; continue; }
+    kept.push(e);
+  }
+  return { events: kept, dropped: dropped, code: dropped ? "sse_comment_drop" : null };
+}
+
+function capReplayFrames64(events, opts) {
+  const list = Array.isArray(events) ? events : [];
+  const max = (opts && opts.max != null) ? opts.max : REPLAY_FRAMES_MAX;
+  const cap = Math.max(1, Number(max) || REPLAY_FRAMES_MAX);
+  if (list.length <= cap) return { events: list, truncated: false, code: null };
+  return { events: list.slice(-cap), truncated: true, dropped: list.length - cap, code: "sse_replay_cap" };
+}
+
+function endSseWithErrorEventOnAbort(opts) {
+  opts = opts || {};
+  if (opts.closed || opts.aborted !== true) return { write: false, frame: null, code: null };
+  const msg = String(opts.reason || "aborted");
+  const payload = JSON.stringify({ error: msg, code: "sse_abort" });
+  return { write: true, frame: "event: error\ndata: " + payload + "\n\n", event: "error", code: "sse_abort" };
+}
+
+function ignoreNegativePromptTokens(opts) {
+  opts = opts || {};
+  const pRaw = Number(opts.promptTokens);
+  const cRaw = Number(opts.completionTokens);
+  const tRaw = Number(opts.totalTokens);
+  const ignored = Number.isFinite(pRaw) && pRaw < 0;
+  const prompt = ignored ? 0 : (Number.isFinite(pRaw) ? pRaw : 0);
+  const completion = Number.isFinite(cRaw) && cRaw >= 0 ? cRaw : 0;
+  const tokens = Number.isFinite(tRaw) && tRaw >= 0 ? tRaw : prompt + completion;
+  return { promptTokens: prompt, completionTokens: completion, tokens: tokens, ignored: ignored, code: ignored ? "usage_ignore_neg_prompt" : null };
+}
+
+function neverChargeIfCancelledBeforeFirstToken(opts) {
+  opts = opts || {};
+  const tok = Number(opts.tokens);
+  const noToken = opts.firstToken !== true && opts.firstByteAt == null && !(Number.isFinite(tok) && tok > 0);
+  if (opts.cancelled === true && noToken) return { charge: false, code: "credit_cancel_pre_token" };
+  return { charge: true, code: null };
+}
+
+function neverRetry410Gone(error) {
+  const err = error || {};
+  const status = Number(err.status || err.statusCode || (err.response && err.response.status));
+  const code = String(err.code || "");
+  const msg = String(err.message || "");
+  const isGone = status === 410 || code === "410" || msg.indexOf("410") >= 0 || msg.toLowerCase().indexOf("gone") >= 0;
+  if (isGone) return { retry: false, status: 410, code: "resource_gone" };
+  return { retry: null, status: Number.isFinite(status) ? status : null, code: null };
+}
+
+function classifyEhostunreachAsTimeout(err) {
+  if (err == null) return { timeout: false, retryable: false, code: null };
+  const blob = String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "");
+  if (blob.toUpperCase().indexOf("EHOSTUNREACH") >= 0) return { timeout: true, retryable: true, code: "net_timeout" };
+  return { timeout: false, retryable: false, code: null };
+}
+
+function mapPostgresEconnresetRetryable(err) {
+  if (err == null) return { retryable: false, code: null };
+  const code = String((err && (err.code || err.errno || err.name)) || "");
+  const msg = String((err && err.message) || "");
+  const client = String((err && (err.client || err.driver || err.source)) || "");
+  const blob = (code + " " + msg + " " + client).toLowerCase();
+  const isPg = blob.indexOf("postgres") >= 0 || blob.indexOf("pg-pool") >= 0 || client === "pg" || client === "postgres" || code === "57P01" || code === "57P02" || code === "57P03";
+  const isReset = code === "ECONNRESET" || blob.indexOf("econnreset") >= 0 || code === "57P01" || code === "57P02" || code === "57P03";
+  if (isPg && isReset) return { retryable: true, code: "pg_disconnect" };
+  return { retryable: false, code: null };
+}
+
+function abortIfFirstByteOver45s(opts) {
+  opts = opts || {};
+  const lim = Math.max(1000, Number(opts.limitMs) || TTFB_ABORT_MS);
+  let elapsed = Number(opts.elapsedMs);
+  if (!Number.isFinite(elapsed)) {
+    if (opts.firstByteAt != null) return { abort: false, elapsedMs: 0, code: null };
+    const t0 = Number(opts.startedAt);
+    const t1 = Number(opts.now) || Date.now();
+    elapsed = Number.isFinite(t0) ? (t1 - t0) : 0;
+  }
+  if (opts.firstByteAt != null) return { abort: false, elapsedMs: elapsed, code: null };
+  if (elapsed >= lim) return { abort: true, elapsedMs: elapsed, code: "ttfb_abort" };
+  return { abort: false, elapsedMs: elapsed, remainingMs: lim - elapsed, code: null };
+}
+
+function rejectStaleIdempotencyKeyOver1h(opts) {
+  opts = opts || {};
+  const t0 = Number(opts.createdAt);
+  const t1 = Number(opts.now) || Date.now();
+  const lim = Math.max(1000, Number(opts.maxAgeMs) || IDEMPOTENCY_STALE_MS);
+  if (!Number.isFinite(t0)) return { ok: true, stale: false, code: null };
+  const age = t1 - t0;
+  if (age > lim) return { ok: false, stale: true, ageMs: age, code: "idempotency_stale" };
+  return { ok: true, stale: false, ageMs: age, code: null };
+}
+
+function capAssistantMessage64KiB(text, opts) {
+  const s = text == null ? "" : (Buffer.isBuffer(text) ? text.toString("utf8") : String(text));
+  const maxBytes = (opts && opts.maxBytes != null) ? opts.maxBytes : ASSISTANT_MSG_MAX;
+  const cap = Math.max(256, Number(maxBytes) || ASSISTANT_MSG_MAX);
+  const bytes = Buffer.byteLength(s, "utf8");
+  if (bytes <= cap) return { text: s, truncated: false, bytes: bytes, code: null };
+  const marker = "\n[truncated_assistant]";
+  const keep = Math.max(0, cap - Buffer.byteLength(marker, "utf8"));
+  const cut = Buffer.from(s, "utf8").subarray(0, keep).toString("utf8");
+  return { text: cut + marker, truncated: true, bytes: bytes, code: "assistant_cap" };
+}
+
+function redactPemPrivateKeysInResults(text) {
+  if (text == null) return { text: text, redacted: false, code: null };
+  const s = String(text);
+  const begin = "-----BEGIN";
+  const endMark = "-----END";
+  let out = s;
+  let guard = 0;
+  while (guard < 8) {
+    const a = out.indexOf(begin);
+    if (a < 0) break;
+    const b = out.indexOf(endMark, a + begin.length);
+    if (b < 0) break;
+    const c = out.indexOf("-----", b + endMark.length);
+    const end = c >= 0 ? c + 5 : b + endMark.length;
+    out = out.slice(0, a) + "[REDACTED_PEM]" + out.slice(end);
+    guard += 1;
+  }
+  return { text: out, redacted: out !== s, code: out !== s ? "pem_redact" : null };
+}
+
+function classifyEconnabortedAsCancelled(err) {
+  if (err == null) return { cancelled: false, retryable: false, code: null };
+  const blob = (String((err && (err.code || err.errno || err.name)) || "") + " " + String((err && err.message) || "")).toUpperCase();
+  if (blob.indexOf("ECONNABORTED") >= 0) return { cancelled: true, retryable: false, code: "net_cancelled" };
+  return { cancelled: false, retryable: false, code: null };
+}
+
+function refuseSubagentIfSameToolAsParent(opts) {
+  opts = opts || {};
+  const p = String(opts.parentTool != null ? opts.parentTool : (opts.parentName || "")).trim().toLowerCase();
+  const c = String(opts.childTool != null ? opts.childTool : (opts.toolName || "")).trim().toLowerCase();
+  if (p && c && p === c) return { ok: false, refuse: true, code: "subagent_same_tool" };
+  return { ok: true, refuse: false, code: null };
+}
+
+function sortMemoryHitsByScoreDesc(hits) {
+  const list = Array.isArray(hits) ? hits.slice() : [];
+  function scoreOf(h) {
+    const n = Number(h && (h.score != null ? h.score : (h.similarity != null ? h.similarity : h.rank)));
+    return Number.isFinite(n) ? n : -Infinity;
+  }
+  const before = list.map(scoreOf).join("\0");
+  list.sort(function(a, b) { return scoreOf(b) - scoreOf(a); });
+  const after = list.map(scoreOf).join("\0");
+  return { hits: list, sorted: before !== after, code: before !== after ? "memory_sort" : null };
+}
+
+function rejectToolCallIfArgsIsArray(calls) {
+  const list = Array.isArray(calls) ? calls : [];
+  const kept = [];
+  let dropped = 0;
+  for (const c of list) {
+    let args = c && (c.arguments != null ? c.arguments : (c.args != null ? c.args : (c.function && c.function.arguments)));
+    let parsed = args;
+    if (typeof args === "string") {
+      try { parsed = JSON.parse(args); } catch (e) { parsed = args; }
+    }
+    if (Array.isArray(parsed)) { dropped += 1; continue; }
+    kept.push(c);
+  }
+  return { calls: kept, dropped: dropped, ok: dropped === 0, code: dropped ? "tool_args_array" : null };
+}
+
 module.exports = {
   COMMENT_HEARTBEAT_MS,
   CLAIM_TTL_MS,
@@ -7189,6 +7568,35 @@ module.exports = {
   endSseWithEventDone,
   sortToolsByNameForCache,
   observeOnlyNoCharge,
+  rejectPrototypePollutionKeys,
+  dropDuplicateToolCallIds,
+  rejectToolNameStartingWithHyphen,
+  capToolArgKeys32,
+  capPlanTitle128Chars,
+  refuseDuplicatePlanStepIds,
+  compactNeverDropSystemPrompt,
+  skipMemoryIfTtlExpired,
+  capMemoryHitsReturned8,
+  crc32StampOnCheckpointSave,
+  sessionLockStealIfHeartbeatStale,
+  refuseWriteToRootMnt,
+  skipVendorDirGlobFiles,
+  dropSseCommentFramesFromReplay,
+  capReplayFrames64,
+  endSseWithErrorEventOnAbort,
+  ignoreNegativePromptTokens,
+  neverChargeIfCancelledBeforeFirstToken,
+  neverRetry410Gone,
+  classifyEhostunreachAsTimeout,
+  mapPostgresEconnresetRetryable,
+  abortIfFirstByteOver45s,
+  rejectStaleIdempotencyKeyOver1h,
+  capAssistantMessage64KiB,
+  redactPemPrivateKeysInResults,
+  classifyEconnabortedAsCancelled,
+  refuseSubagentIfSameToolAsParent,
+  sortMemoryHitsByScoreDesc,
+  rejectToolCallIfArgsIsArray,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

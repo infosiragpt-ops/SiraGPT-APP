@@ -320,7 +320,7 @@ test('3H44-AD-001 screenshot-only no-charge', () => {
 
 test('3H44-AE-001 snapshot keeps 3H43 flags and wave 3H44 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H44' || s.wave === '3H45');
+  assert.ok(s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46');
   assert.equal(s.capToolArgBytes32KiB, true);
   assert.equal(s.neverRetry402, true);
   assert.equal(s.closeSseThenSettleCredits, true);
@@ -384,7 +384,7 @@ test('3H44-AI-001 compose binds 3H44 tests and wave is 3H44', () => {
   assert.ok(String(__filename || '').includes('ola-3h44-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H44') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45');
+  assert.ok(ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
 });

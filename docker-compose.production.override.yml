@@ -76,6 +76,7 @@ services:
       SIRAGPT_DOC_AGENT_MODEL: "${SIRAGPT_DOC_AGENT_MODEL:-deepseek-v4-flash}"
       SIRAGPT_AGENT_RUNNER_MAX_TOKENS: "${SIRAGPT_AGENT_RUNNER_MAX_TOKENS:-1500}"
       SIRAGPT_AGENT_SKILLS: "${SIRAGPT_AGENT_SKILLS:-1}"
+      SIRAGPT_AGENT_SKILLS_DIRS: "${SIRAGPT_AGENT_SKILLS_DIRS:-/app/src/skills}"
       SIRAGPT_AGENT_MEMORY: "${SIRAGPT_AGENT_MEMORY:-1}"
       SIRAGPT_AGENT_COMPUTER: "${SIRAGPT_AGENT_COMPUTER:-1}"
       NEXT_PUBLIC_AGENT_COMPUTER: "${NEXT_PUBLIC_AGENT_COMPUTER:-1}"
@@ -93,6 +94,7 @@ services:
       R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
       R2_BUCKET_NAME: "${R2_BUCKET_NAME:-}"
       R2_ENDPOINT: "${R2_ENDPOINT:-}"
+      FEATURE_DOC_ENGINE: "1"
     volumes:
       - scheduler_data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
@@ -410,8 +412,17 @@ services:
       - ./backend/tests/ola-3h43-invariants.test.js:/app/tests/ola-3h43-invariants.test.js:ro
       - ./backend/tests/ola-3h44-invariants.test.js:/app/tests/ola-3h44-invariants.test.js:ro
       - ./backend/tests/ola-3h45-invariants.test.js:/app/tests/ola-3h45-invariants.test.js:ro
+      - ./backend/tests/ola-3h46-invariants.test.js:/app/tests/ola-3h46-invariants.test.js:ro
       - ./backend/src/services/agent-runner/engine-gateway.js:/app/src/services/agent-runner/engine-gateway.js:ro
       - ./agents:/app/agents:ro
+      # FEATURE_DOC_ENGINE PR 301 — /chat two-docx UPN transform (PizZip)
+      - ./backend/src/services/doc-engine:/app/src/services/doc-engine:ro
+      - ./backend/src/services/agents/agentic-trigger.js:/app/src/services/agents/agentic-trigger.js:ro
+      - ./packages/doc-skills/scripts:/app/packages/doc-skills/scripts:ro
+      - ./backend/src/services/source-preserving-document-edit.js:/app/src/services/source-preserving-document-edit.js:ro
+      - ./backend/src/routes/documents.js:/app/src/routes/documents.js:ro
+      - ./backend/src/middleware/csrf-route-policy.js:/app/src/middleware/csrf-route-policy.js:ro
+      - ./backend/tests/doc-engine.test.js:/app/tests/doc-engine.test.js:ro
 
   frontend:
     build:

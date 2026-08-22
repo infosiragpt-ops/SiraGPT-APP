@@ -815,6 +815,27 @@ async function governThen(input, run) {
         if (typeof ad.observeOnlyNoCharge === 'function' && input && (input.tools || input.observeOnly)) {
           ad.observeOnlyNoCharge({ tools: input.tools, observeOnly: input.observeOnly });
         }
+        if (typeof ad.neverRetry410Gone === 'function' && input && (input.status === 410 || input.code === '410')) {
+          ad.neverRetry410Gone(input);
+        }
+        if (typeof ad.ignoreNegativePromptTokens === 'function' && input && input.promptTokens != null) {
+          ad.ignoreNegativePromptTokens({ promptTokens: input.promptTokens, completionTokens: input.completionTokens, totalTokens: input.totalTokens });
+        }
+        if (typeof ad.classifyEhostunreachAsTimeout === 'function' && input && input.error) {
+          ad.classifyEhostunreachAsTimeout(input.error);
+        }
+        if (typeof ad.mapPostgresEconnresetRetryable === 'function' && input && input.error) {
+          ad.mapPostgresEconnresetRetryable(input.error);
+        }
+        if (typeof ad.sessionLockStealIfHeartbeatStale === 'function' && input && input.lock) {
+          ad.sessionLockStealIfHeartbeatStale({ lastBeatAt: input.lock.heartbeatAt || input.lock.lastBeatAt, now: Date.now() });
+        }
+        if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
+          ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
+        }
+        if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
+          ad.classifyEconnabortedAsCancelled(input.error);
+        }
         if (typeof ad.neverChargeToolOnlyObservationLoop === 'function' && input && (input.toolOnly || input.observationLoop)) {
           ad.neverChargeToolOnlyObservationLoop({ toolOnly: input.toolOnly, observationLoop: input.observationLoop, usage: input.usage, charged: input.charged });
         }

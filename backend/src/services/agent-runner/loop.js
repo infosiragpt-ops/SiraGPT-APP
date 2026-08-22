@@ -416,6 +416,25 @@ const {
   neverRetry451,
   perToolRemainingWallClock,
   sortToolsByNameForCache,
+  rejectPrototypePollutionKeys,
+  dropDuplicateToolCallIds,
+  rejectToolNameStartingWithHyphen,
+  capToolArgKeys32,
+  capPlanTitle128Chars,
+  refuseDuplicatePlanStepIds,
+  compactNeverDropSystemPrompt,
+  skipMemoryIfTtlExpired,
+  capMemoryHitsReturned8,
+  crc32StampOnCheckpointSave,
+  refuseWriteToRootMnt,
+  skipVendorDirGlobFiles,
+  neverRetry410Gone,
+  abortIfFirstByteOver45s,
+  capAssistantMessage64KiB,
+  redactPemPrivateKeysInResults,
+  refuseSubagentIfSameToolAsParent,
+  sortMemoryHitsByScoreDesc,
+  rejectToolCallIfArgsIsArray,
 } = require('./engine-adapter');
 
 const MAX_ITERATIONS_DEFAULT = 25;
@@ -824,6 +843,9 @@ async function runAgentLoop({
              rejectLastEventIdGoingBackwards({ lastEventId: snap && (snap.lastEventId || snap.sseSeq), stored: snap && snap.sseSeq });
              crc32CheckOnCheckpointLoad(snap || {}, { expectedCrc: snap && (snap.crc32 || snap.crc) });
              refuseEmptyPlanTitle((snap && (snap.planTitle || snap.title)) || '');
+             try { crc32StampOnCheckpointSave(snap || {}); } catch (_) {}
+             try { capPlanTitle128Chars((snap && (snap.planTitle || snap.title)) || ''); } catch (_) {}
+             try { refuseDuplicatePlanStepIds((snap && (snap.planSteps || snap.steps)) || []); } catch (_) {}
            } catch (_) {}
           if (restored.ok) {
             resumedFrom = resumeFrom;
@@ -1373,14 +1395,22 @@ async function runAgentLoop({
           try { capGlobMatchFileSize1MiB([], { maxBytes: 1024 * 1024 }); } catch (_) {}
           try { capGlobMatchesReturned32([], { max: 32 }); } catch (_) {}
           try { skipHiddenGlobFiles([]); } catch (_) {}
+          try { skipVendorDirGlobFiles([]); } catch (_) {}
           const pins3 = compactKeepPinnedFactsAndLast3UserTurns((compact && compact.messages) || messages, { pins: pinList, lastN: 3 });
           if (pins3 && pins3.messages) compact = { ...(compact || {}), messages: pins3.messages };
           try { capCompactSummary2KiB(JSON.stringify((compact && compact.messages) || []).slice(0, 4000), { maxBytes: 2048 }); } catch (_) {}
           try { skipMemoryIfScoreNaN((compact && compact.facts) || []); } catch (_) {}
           try { skipMemoryIfVectorAllZeros((compact && compact.facts) || []); } catch (_) {}
+          try { skipMemoryIfTtlExpired((compact && compact.facts) || []); } catch (_) {}
+          try { sortMemoryHitsByScoreDesc((compact && compact.facts) || []); } catch (_) {}
+          try { capMemoryHitsReturned8((compact && compact.facts) || []); } catch (_) {}
           try {
             const keepTc = compactNeverDropLastAssistantToolCalls(messages, (compact && compact.messages) || []);
             if (keepTc && keepTc.messages) compact = { ...(compact || {}), messages: keepTc.messages };
+          } catch (_) {}
+          try {
+            const keepSys = compactNeverDropSystemPrompt(messages, (compact && compact.messages) || []);
+            if (keepSys && keepSys.messages) compact = { ...(compact || {}), messages: keepSys.messages };
           } catch (_) {}
         } catch (_) {}
         if (staleImg && staleImg.messages) compact = { ...(compact || {}), messages: staleImg.messages };
@@ -1507,6 +1537,8 @@ async function runAgentLoop({
           try { const n402 = neverRetry402({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n402 && n402.retry === false) { onEvent({ type: 'error', code: 'quota_exhausted', message: 'Créditos insuficientes en el proveedor.', retryable: false, iteration }); } } catch (_) {}
           try { const n413 = neverRetry413({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n413 && n413.retry === false) { onEvent({ type: 'error', code: 'payload_too_large', message: 'El proveedor rechazó el cuerpo por tamaño (413).', retryable: false, iteration }); } } catch (_) {}
           try { const n451 = neverRetry451({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n451 && n451.retry === false) { onEvent({ type: 'error', code: 'legal_unavailable', message: 'El proveedor rechazó la petición por razones legales (451).', retryable: false, iteration }); } } catch (_) {}
+          try { const n410 = neverRetry410Gone({ status: (lastGenerateErr && lastGenerateErr.status), message: (lastGenerateErr && lastGenerateErr.message) }); if (n410 && n410.retry === false) { onEvent({ type: 'error', code: 'resource_gone', message: 'El recurso ya no existe (410).', retryable: false, iteration }); } } catch (_) {}
+          try { abortIfFirstByteOver45s({ elapsedMs: (opts && opts.ttfbMs) || 0, firstByteAt: opts && opts.firstByteAt }); } catch (_) {}
           const wall = enforceTotalTurnWall120s({ startedAt, now: Date.now(), wallMs: 120000 });
           if (wall && wall.halt) {
             onEvent({ type: 'error', code: 'turn_wall', message: 'Este turno superó el tiempo máximo de 120 segundos.', retryable: false, iteration });
@@ -1697,6 +1729,11 @@ async function runAgentLoop({
           onEvent({ type: 'error', code: 'tool_name_digit', message: 'El nombre de la herramienta no puede empezar con un dígito.', retryable: false, iteration, name: n });
           return false;
         }
+        const hyN = rejectToolNameStartingWithHyphen(n);
+        if (hyN && hyN.ok === false) {
+          onEvent({ type: 'error', code: 'tool_name_hyphen', message: 'El nombre de la herramienta no puede empezar con un guion.', retryable: false, iteration, name: n });
+          return false;
+        }
         const sesN = refuseComputerToolsIfSessionMissing({ toolName: n, sessionId: (opts && (opts.sessionId || opts.threadId)) || threadId || streamId });
         if (sesN && sesN.ok === false) {
           onEvent({ type: 'error', code: 'computer_no_session', message: 'No ejecuto computer_* sin una sesión activa.', retryable: false, iteration, name: n });
@@ -1724,6 +1761,10 @@ async function runAgentLoop({
         if (trail && Array.isArray(trail.calls)) toolCalls = trail.calls;
         const idsReq = requireToolCallId(toolCalls);
         if (idsReq && Array.isArray(idsReq.calls)) toolCalls = idsReq.calls;
+        const dupsId = dropDuplicateToolCallIds(toolCalls);
+        if (dupsId && Array.isArray(dupsId.calls)) toolCalls = dupsId.calls;
+        const arrArgs = rejectToolCallIfArgsIsArray(toolCalls);
+        if (arrArgs && Array.isArray(arrArgs.calls)) toolCalls = arrArgs.calls;
         const uniqTurn = maxUniqueToolsPerTurn16(toolCalls, { max: 16 });
         if (uniqTurn && Array.isArray(uniqTurn.calls)) toolCalls = uniqTurn.calls;
         try { sortToolsByNameForCache(toolCalls); } catch (_) {}
@@ -2168,6 +2209,14 @@ async function runAgentLoop({
                       if (nz && nz.ok === false) result = `ERROR: negative_zero`;
                     } catch (_) {}
                     try {
+                      const proto = rejectPrototypePollutionKeys(typeof runArgs === 'object' ? runArgs : runArgs);
+                      if (proto && proto.ok === false) result = `ERROR: proto_pollution`;
+                    } catch (_) {}
+                    try {
+                      const keysCap = capToolArgKeys32(typeof runArgs === 'object' ? runArgs : {});
+                      if (keysCap && keysCap.truncated && keysCap.args) runArgs = keysCap.args;
+                    } catch (_) {}
+                    try {
                       const bidi = stripBidiOverrideChars(typeof runArgs === 'string' ? runArgs : JSON.stringify(runArgs || {}));
                       if (bidi && bidi.stripped && typeof runArgs === 'string') runArgs = bidi.text;
                     } catch (_) {}
@@ -2241,6 +2290,8 @@ async function runAgentLoop({
                       if (sysP && sysP.ok === false) result = `ERROR: path_system`;
                       const devP = refuseWriteToDevBoot(pth);
                       if (devP && devP.ok === false) result = `ERROR: path_dev_boot`;
+                      const rootP = refuseWriteToRootMnt(pth);
+                      if (rootP && rootP.ok === false) result = `ERROR: path_root_mnt`;
                     } catch (_) {}
                     if (unq && unq.ok && unq.value && typeof runArgs === 'string') runArgs = unq.value;
                     else if (unq && unq.ok === false) result = `ERROR: json_parse`;
@@ -2867,6 +2918,7 @@ async function runAgentLoop({
           try { subagentInheritRemainingStepBudget({ parentRemaining: maxToolSteps - iteration, childRequested: kid && kid.maxSteps, max: MAX_ITERATIONS_DEFAULT }); } catch (_) {}
           try { minRemainingSubagentBudget1({ remaining: maxToolSteps - iteration }); } catch (_) {}
           try { refuseSubagentIfParentCancelled({ parentCancelled: !!(opts && (opts.parentCancelled || opts.cancelled)), signal: opts && opts.signal }); } catch (_) {}
+          try { refuseSubagentIfSameToolAsParent({ parentTool: opts && opts.parentTool, childTool: opts && opts.childTool }); } catch (_) {}
         }
       } catch (_) {}
       if (conc && Array.isArray(conc.run)) stormCalls = conc.run;

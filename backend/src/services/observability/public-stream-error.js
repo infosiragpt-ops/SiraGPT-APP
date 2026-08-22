@@ -304,6 +304,13 @@ const ENGINE_CODE_RULES = [
   { code: 'tool_name_digit', message: 'El nombre de la herramienta no puede empezar con un dígito.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_digit' },
   { code: 'plan_title_empty', message: 'El plan no tiene título. Lo rechacé.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'plan_title_empty' },
   { code: 'subagent_parent_cancelled', message: 'El padre se canceló. No lanzo el subagente.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_parent_cancelled' },
+  { code: 'path_root_mnt', message: 'No escribo en /root, /mnt ni /media.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'path_root_mnt' },
+  { code: 'resource_gone', message: 'El recurso ya no existe (410). No reintento.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'resource_gone' },
+  { code: 'proto_pollution', message: 'Los argumentos contienen claves peligrosas. Los rechace.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'proto_pollution' },
+  { code: 'tool_name_hyphen', message: 'El nombre de la herramienta no puede empezar con un guion.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'tool_name_hyphen' },
+  { code: 'plan_title_cap', message: 'El titulo del plan es demasiado largo. Lo recorte.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'plan_title_cap' },
+  { code: 'subagent_same_tool', message: 'El subagente no puede repetir la misma herramienta del padre.', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'subagent_same_tool' },
+  { code: 'idempotency_stale', message: 'La clave de idempotencia caduco (mas de 1 hora).', matches: (error, text) => String(error && error.code || '').toLowerCase() === 'idempotency_stale' },
 ];
 
 function classifyPublicStreamError(error) {

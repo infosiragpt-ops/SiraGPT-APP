@@ -115,6 +115,14 @@ function createSSEWriter(res, options = {}) {
         const dups = adapter.dropDuplicateSseEventIds(options.replayFrames || ring || []);
         if (dups && Array.isArray(dups.events)) options.replayFrames = dups.events;
       }
+      if (adapter && typeof adapter.dropSseCommentFramesFromReplay === 'function') {
+        const cm = adapter.dropSseCommentFramesFromReplay(options.replayFrames || ring || []);
+        if (cm && Array.isArray(cm.events)) options.replayFrames = cm.events;
+      }
+      if (adapter && typeof adapter.capReplayFrames64 === 'function') {
+        const capR = adapter.capReplayFrames64(options.replayFrames || ring || [], { max: 64 });
+        if (capR && Array.isArray(capR.events)) options.replayFrames = capR.events;
+      }
       if (adapter && typeof adapter.rejectLastEventIdGoingBackwards === 'function') {
         adapter.rejectLastEventIdGoingBackwards({ lastEventId: options.lastEventId || options.lastEventID, currentSeq: sseSeq });
       }
@@ -455,6 +463,12 @@ function createSSEWriter(res, options = {}) {
           const doneEv = adapter.endSseWithEventDone({ closed: false });
           if (doneEv && doneEv.write && doneEv.frame) {
             try { if (!res.writableEnded && !res.destroyed) res.write(doneEv.frame); } catch (_) {}
+          }
+        }
+        if (adapter && typeof adapter.endSseWithErrorEventOnAbort === 'function') {
+          const ab = adapter.endSseWithErrorEventOnAbort({ aborted: !!(options && options.aborted), closed: false });
+          if (ab && ab.write && ab.frame) {
+            try { if (!res.writableEnded && !res.destroyed) res.write(ab.frame); } catch (_) {}
           }
         }
       } catch (_) {}
