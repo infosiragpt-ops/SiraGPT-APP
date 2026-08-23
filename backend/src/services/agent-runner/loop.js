@@ -25,6 +25,10 @@ function loadEngine3h59() {
   try { return require('./engine-3h59'); } catch (_) { return null; }
 }
 
+function loadEngine3h60() {
+  try { return require('./engine-3h60'); } catch (_) { return null; }
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 
 // Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
@@ -262,6 +266,23 @@ async function runAgentLoop({
         w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted });
       }
     } catch (_) { /* 3H59 fail-open */ }
+    try {
+      const w60 = loadEngine3h60();
+      if (w60 && typeof w60.neverChargeBeforeFirstToken === 'function') {
+        w60.neverChargeBeforeFirstToken({
+          firstToken: Boolean(finalText),
+          cancelled: true,
+          tokens: 0,
+        });
+      }
+      if (w60 && typeof w60.settleCreditsOnError === 'function') {
+        w60.settleCreditsOnError({
+          errored: false,
+          alreadySettled: cancelledEmitted,
+          usage: { streamedChars: String(finalText || '').length },
+        });
+      }
+    } catch (_) { /* 3H60 fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
@@ -273,6 +294,29 @@ async function runAgentLoop({
     bail(iteration);
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
     void touchFence();
+    try {
+      const w60 = loadEngine3h60();
+      if (w60 && Array.isArray(messages) && messages.length > 24) {
+        const lastUser = [...messages].reverse().find((m) => m && m.role === 'user');
+        let next = messages;
+        if (typeof w60.pruneMessagesByQueryOverlap === 'function') {
+          const pruned = w60.pruneMessagesByQueryOverlap(next, lastUser && lastUser.content, { keepLast: 4 });
+          if (pruned && Array.isArray(pruned.messages)) next = pruned.messages;
+        }
+        if (typeof w60.compactFaithfulDroppedSummary === 'function') {
+          const summed = w60.compactFaithfulDroppedSummary(messages, next);
+          if (summed && Array.isArray(summed.messages)) next = summed.messages;
+        }
+        if (typeof w60.neverDropLastUserOnCompact === 'function') {
+          const kept = w60.neverDropLastUserOnCompact(messages, next);
+          if (kept && Array.isArray(kept.messages)) next = kept.messages;
+        }
+        if (Array.isArray(next) && next.length) {
+          messages.length = 0;
+          for (const m of next) messages.push(m);
+        }
+      }
+    } catch (_) { /* 3H60 fail-open */ }
 
     // Stall guard: no progress (no token, no tool result) within the budget
     // cuts the turn with loop_stall instead of hanging until the outer
@@ -414,6 +458,66 @@ async function runAgentLoop({
         }
       }
     } catch (_) { /* 3H59 fail-open */ }
+    try {
+      const w60 = loadEngine3h60();
+      if (w60 && toolCalls.length) {
+        const next60 = [];
+        for (const raw of toolCalls) {
+          let call = raw;
+          if (typeof w60.unwrapFencedToolArgs === 'function') {
+            const rawArgs = call && (call.function && call.function.arguments);
+            const unwrapped = w60.unwrapFencedToolArgs(rawArgs);
+            if (unwrapped && unwrapped.unwrapped && unwrapped.parsed) {
+              call = {
+                ...call,
+                arguments: unwrapped.value,
+                args: unwrapped.value,
+                function: call.function
+                  ? { ...call.function, arguments: JSON.stringify(unwrapped.value) }
+                  : call.function,
+              };
+            }
+          }
+          if (typeof w60.coerceToolArgTypes === 'function') {
+            const coerced = w60.coerceToolArgTypes(call);
+            if (coerced && coerced.call) call = coerced.call;
+          }
+          if (typeof w60.refuseNamelessToolAfterRepair === 'function') {
+            const named = w60.refuseNamelessToolAfterRepair(call);
+            if (named && named.refused) continue;
+          }
+          next60.push(call);
+        }
+        toolCalls = next60;
+        if (typeof w60.cutOscillatingToolPair === 'function') {
+          const osc = w60.cutOscillatingToolPair(loopFingerprints);
+          if (osc && osc.cut) {
+            const classified = typeof w60.classifyEngine3h60Error === 'function'
+              ? w60.classifyEngine3h60Error({ code: osc.code })
+              : classifyLoopError({ code: osc.code });
+            onEvent({
+              type: 'error',
+              code: classified.code,
+              message: classified.message,
+              retryable: classified.retryable,
+              iteration,
+            });
+            stoppedReason = osc.code || 'loop_oscillation_cut';
+            return {
+              finalText: finalText || '',
+              iterations: iteration,
+              steps,
+              stoppedReason,
+              verificationAttempts,
+              errorCode: osc.code,
+            };
+          }
+        }
+        if (typeof w60.observeScriptedLatencySample === 'function' && modelTtfbMs != null) {
+          w60.observeScriptedLatencySample('first_token', modelTtfbMs);
+        }
+      }
+    } catch (_) { /* 3H60 fail-open */ }
 
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
@@ -526,7 +630,31 @@ async function runAgentLoop({
           result = await executor(args, { signal });
         } catch (err) {
           if (signal?.aborted) bail(iteration);
-          result = `ERROR: ${err?.message || String(err)}`;
+          let retried = false;
+          try {
+            const w60 = loadEngine3h60();
+            if (w60 && typeof w60.retryTransientToolError === 'function') {
+              const retry = w60.retryTransientToolError({
+                attempt: 0,
+                status: err && (err.status || err.statusCode),
+                code: err && err.code,
+              });
+              if (retry && retry.retry && typeof executor === 'function') {
+                result = await executor(args, { signal });
+                retried = true;
+              }
+            }
+          } catch (_) { /* retry failed — fall through */ }
+          if (!retried) result = `ERROR: ${err?.message || String(err)}`;
+          try {
+            const w60 = loadEngine3h60();
+            if (!retried && w60 && typeof w60.settleCreditsOnError === 'function') {
+              w60.settleCreditsOnError({
+                errored: true,
+                usage: { streamedChars: String(finalText || '').length },
+              });
+            }
+          } catch (_) { /* 3H60 fail-open */ }
         }
         lastProgressAt = Date.now();
       }

@@ -310,6 +310,19 @@ function createSessionQueue() {
       }
     } catch (_) { /* 3H59 fail-open */ }
     try {
+      const w60 = require('../agent-runner/engine-3h60');
+      if (typeof w60.sessionSingleWriterLock === 'function') {
+        const writer = w60.sessionSingleWriterLock({
+          held: list.some((j) => j && j.running),
+          sessionKey: key,
+        });
+        if (writer && writer.busy) job.writerBusy = true;
+      }
+      if (typeof w60.sessionQueueDetectGap === 'function') {
+        w60.sessionQueueDetectGap(list);
+      }
+    } catch (_) { /* 3H60 fail-open */ }
+    try {
       const adFair = loadAdapter();
       if (adFair && typeof adFair.fairQueueStarvationBound === 'function') {
         const fairQ = adFair.fairQueueStarvationBound(list, {
