@@ -19,6 +19,7 @@ const PizZip = require('pizzip');
 const PptxGenJS = require('pptxgenjs');
 const PDFDocument = require('pdfkit');
 const ExcelJS = require('exceljs');
+const { registerUnicodeFont } = require('./pdf-fonts');
 const { renderPreview } = require('../doc-preview');
 const { generateSectionContent, fallbackBlock, generateSpreadsheetContent } = require('./content');
 const { runRenderCritique } = require('./render-critique-loop');
@@ -2878,6 +2879,9 @@ function buildPptxHtmlPreview(plan, filename, validation = {}) {
 async function buildPdf(plan, outputPath) {
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument({ size: 'A4', margin: 54, info: { Title: plan.title, Author: 'siraGPT Document Pipeline' }, bufferPages: true, compress: false });
+    // Helvetica is WinAnsi-only and corrupts non-Latin-1 text; register an
+    // embedded Unicode TTF so user content stays correct and selectable.
+    registerUnicodeFont(doc);
     const stream = fs.createWriteStream(outputPath);
     doc.pipe(stream);
     doc.fontSize(10).fillColor('#2563eb').text('siraGPT DOCUMENT PIPELINE', { align: 'right' });
