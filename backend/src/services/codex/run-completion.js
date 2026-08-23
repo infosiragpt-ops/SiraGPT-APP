@@ -51,6 +51,9 @@ function completionPayload(run, status, error = null) {
     mode: run?.mode || null,
     model: run?.model || null,
     tier: run?.tier || null,
+    // Inbox/push copy (flota/chat-pwa-notificaciones): the user closing the
+    // tab sees only this payload, so carry a short prompt excerpt with it.
+    prompt: String(run?.prompt || '').slice(0, 120) || null,
     error: status === 'error' ? redactError(error || run?.error) || null : null,
   };
 }
