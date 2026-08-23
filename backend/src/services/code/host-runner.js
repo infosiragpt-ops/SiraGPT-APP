@@ -4,7 +4,8 @@
  * host-runner — a no-Docker, in-process dev-server runner for the /code module.
  *
  * Runs a generated project (Vite/Next/Node) as a REAL dev server on a free
- * localhost port by spawning `npm install` + `vite`/`next dev` as child
+ * localhost port by spawning a cached, lockfile-driven install (`npm ci`,
+ * pinning the tree first when no lockfile exists) + `vite`/`next dev` as child
  * processes on the host. The /code preview then iframes `http://localhost:<port>`
  * directly, so HMR works natively (the dev server's websocket is same-origin
  * with the iframe — no proxy needed). This is the "Replit-like" path for
@@ -327,18 +328,49 @@ async function writeFiles(dir, files) {
   }
 }
 
-function installDeps(dir, run) {
+// ── Dependency installation ─────────────────────────────────────────
+// Installs are CACHED + DETERMINISTIC. Every install goes through a
+// lockfile: an existing package-lock.json runs `npm ci`; a missing one is
+// pinned first with `npm install --package-lock-only` (resolution only,
+// no download) and then installed with `npm ci`. Plain `npm install`
+// remains only as a one-shot fallback that heals a lock/package mismatch.
+// Tarballs land in a dedicated npm cache shared by ALL runs (instead of
+// the API user's home cache), so repeated/sibling projects install fast
+// without touching host state outside the runner root.
+const BASE_INSTALL_ARGS = Object.freeze(['--no-audit', '--no-fund', '--include=dev', '--loglevel=error']);
+
+function npmCacheDir() {
+  const configured = String(process.env.NPM_CONFIG_CACHE || process.env.npm_config_cache || '').trim();
+  return configured || path.join(ROOT, '.npm-cache');
+}
+
+function buildInstallPlan(hasLockfile) {
+  if (hasLockfile) {
+    return [{ args: ['ci', ...BASE_INSTALL_ARGS], log: '$ npm ci (lockfile — instalación determinista)' }];
+  }
+  return [
+    { args: ['install', '--package-lock-only', ...BASE_INSTALL_ARGS], log: '$ npm install --package-lock-only (fijando árbol de dependencias)' },
+    { args: ['ci', ...BASE_INSTALL_ARGS], log: '$ npm ci (instalación determinista desde lockfile)' },
+  ];
+}
+
+function spawnNpm(args, dir, run) {
   return new Promise((resolve, reject) => {
-    pushLog(run, '$ npm install');
-    const child = spawn('npm', ['install', '--no-audit', '--no-fund', '--include=dev', '--loglevel=error'], {
+    const extra = {};
+    if (!process.env.NPM_CONFIG_CACHE && !process.env.npm_config_cache) {
+      extra.npm_config_cache = npmCacheDir();
+    }
+    try { fs.mkdirSync(npmCacheDir(), { recursive: true }); } catch { /* best effort */ }
+    pushLog(run, `$ npm ${args.join(' ')}`);
+    const child = spawn('npm', args, {
       cwd: dir,
       detached: true,
-      env: envFor(),
+      env: envFor(extra),
     });
     run.installChild = child;
     const to = setTimeout(() => {
       killGroup(child);
-      reject(new Error('npm install excedió el tiempo límite'));
+      reject(new Error('npm excedió el tiempo límite'));
     }, INSTALL_TIMEOUT_MS);
     child.stdout.on('data', (d) => pushLog(run, d));
     child.stderr.on('data', (d) => pushLog(run, d));
@@ -346,15 +378,26 @@ function installDeps(dir, run) {
     child.on('close', (code) => {
       clearTimeout(to);
       run.installChild = null;
-      if (run.stopped) return resolve();
-      if (code === 0) {
-        try { fs.writeFileSync(path.join(dir, '.sira-pkg-hash'), pkgHash(dir)); } catch { /* best effort */ }
-        resolve();
-      } else {
-        reject(new Error(`npm install falló (código ${code})`));
-      }
+      resolve(code);
     });
   });
+}
+
+async function installDeps(dir, run) {
+  const plan = buildInstallPlan(fs.existsSync(path.join(dir, 'package-lock.json')));
+  for (const step of plan) {
+    pushLog(run, step.log);
+    const code = await spawnNpm(step.args, dir, run);
+    if (run.stopped) return;
+    if (code === 0) continue;
+    // Lock/package mismatch (or resolver hiccup): heal once with a plain
+    // `npm install`, which reconciles package.json + lockfile together.
+    pushLog(run, `npm ${step.args[0]} terminó con código ${code} — reintento con npm install`);
+    const healed = await spawnNpm(['install', ...BASE_INSTALL_ARGS], dir, run);
+    if (healed !== 0) throw new Error(`npm install falló (código ${healed})`);
+    break; // the healed install covers the rest of the plan
+  }
+  try { fs.writeFileSync(path.join(dir, '.sira-pkg-hash'), pkgHash(dir)); } catch { /* best effort */ }
 }
 
 function startDev(dir, fw, port, run) {
@@ -925,6 +968,8 @@ module.exports = {
   // Test-only hooks: seed/clear the in-memory run registry WITHOUT spawning a
   // child process, so the ownership / phase-gate logic can be unit-tested.
   // No behavioural impact on the production paths.
+  _buildInstallPlanForTest: buildInstallPlan,
+  _npmCacheDirForTest: npmCacheDir,
   _seedRunForTest: (run) => { runs.set(safeId(run.runId), { port: null, phase: 'ready', previewToken: null, ...run, runId: safeId(run.runId) }); },
   _peekRunForTest: (runId) => runs.get(safeId(runId)) || null,
   _resetRunsForTest: () => { runs.clear(); },
