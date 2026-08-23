@@ -131,6 +131,7 @@ const documentProfessionalAnalyzer = require('../services/document-professional-
 const documentResponseFidelity = require('../services/document-response-fidelity');
 const documentBlockBudget = require('../services/document-block-budget');
 const documentAnalysisQuality = require('../services/document-analysis-quality');
+const instructionEchoGuard = require('../services/instruction-echo-guard');
 const directAnswerNormalizer = require('../services/direct-answer-normalizer');
 const feedbackLedger = require('../services/agents/feedback-ledger');
 const modelRouter = require('../services/ai-product-os/model-router');
@@ -5655,6 +5656,7 @@ router.post(
             '- Never start the final answer with "Indice de contenidos", "Índice de contenidos", raw markdown links, or filename metadata.',
             ...documentAnalysisQuality.buildGuardLines(prompt, { files: processedFiles, language: 'en' }),
             ...messageAttachments.buildFormatDirectiveLines(prompt, { lang: 'en' }),
+            ...instructionEchoGuard.buildAntiEchoLines(prompt, { lang: 'en' }),
             '- Do not answer from prior images, weather cards, generated visuals, or unrelated chat history unless the user explicitly asks for that older context.',
             '- Preserve file identity: refer to each attachment by filename and never reinterpret a document as an image.'
           ].filter(Boolean).join('\n')
@@ -6427,6 +6429,7 @@ router.post(
               language: langResolution.language,
               userPrompt: prompt,
               qualityGuard: true,
+              documentSourceText: currentTurnHasNonImageFiles ? (fileContext || '') : '',
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
               maxOutputTokens: actualMaxOutputTokens,

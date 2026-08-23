@@ -12,6 +12,7 @@ const PptxGenJS = require('pptxgenjs');
 const vectorPPTService = require('./vector-ppt-service');
 const { fitMessagesToContext, getCompletionLimit } = require('./context-window');
 const { evaluateResponse, buildCorrectivePrompt } = require('./quality-guard');
+const instructionEchoGuard = require('./instruction-echo-guard');
 const { getBreaker, CircuitBreakerError } = require('./circuit-breaker');
 const {
     buildProviderChatPayload,
@@ -481,7 +482,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, documentSourceText = '' }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -854,7 +855,18 @@ class AIService {
                         // version as the final assistant message.
                         if (qualityGuard) {
                             const verdict = evaluateResponse({ response: fullResponseContent, userPrompt });
-                            if (verdict.weak) {
+                            // Instruction-echo check: when this turn carried a
+                            // raw document, the answer must not BE that
+                            // document's internal instructions (rubrics,
+                            // similarity thresholds, author prompts).
+                            let echoVerdict = { echo: false, reason: null };
+                            if (documentSourceText) {
+                                echoVerdict = instructionEchoGuard.detectInstructionEcho({ response: fullResponseContent, sourceText: documentSourceText });
+                                if (echoVerdict.echo) {
+                                    console.warn(`🪞 instruction-echo-guard flagged: ${echoVerdict.reason} — running anti-echo corrective pass`);
+                                }
+                            }
+                            if (verdict.weak || echoVerdict.echo) {
                                 console.warn(`🧪 quality-guard flagged: ${verdict.reason} — running corrective pass`);
                                 const corrected = await this._runCorrectivePass({
                                     provider: currentProvider,
@@ -864,11 +876,19 @@ class AIService {
                                     language,
                                     signal,
                                     temperature: normalizedTemperature,
+                                    ...(echoVerdict.echo ? { extraPreamble: instructionEchoGuard.buildEchoCorrectivePreamble(language) } : {}),
                                 });
                                 const cleanCorrected = (corrected || '').trim();
                                 const correctedVerdict = evaluateResponse({ response: cleanCorrected, userPrompt });
+                                const correctedEchoVerdict = documentSourceText
+                                  ? instructionEchoGuard.detectInstructionEcho({ response: cleanCorrected, sourceText: documentSourceText })
+                                  : { echo: false };
                                 const longEnoughToReplace = cleanCorrected.length >= Math.max(40, Math.floor(fullResponseContent.trim().length * 0.8));
-                                if (cleanCorrected && !correctedVerdict.weak && longEnoughToReplace) {
+                                if (cleanCorrected && !correctedVerdict.weak && !correctedEchoVerdict.echo && longEnoughToReplace) {
+                                    res.write(`data: ${JSON.stringify({ replace: true, content: cleanCorrected })}\n\n`);
+                                    fullResponseContent = cleanCorrected;
+                                } else if (cleanCorrected && verdict.weak && !correctedEchoVerdict.echo && longEnoughToReplace) {
+                                    // Weak-but-not-echo path keeps legacy behavior.
                                     res.write(`data: ${JSON.stringify({ replace: true, content: cleanCorrected })}\n\n`);
                                     fullResponseContent = cleanCorrected;
                                 }
@@ -965,7 +985,7 @@ class AIService {
      * committing it back to the user's chat stream. This is NOT streamed
      * to the UI — the caller streams the returned string itself.
      */
-    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55 }) {
+    async _runCorrectivePass({ provider, model, baseMessages, userPrompt, language, signal, temperature = 0.55, extraPreamble = null }) {
         // The corrective pass runs AFTER the user-visible stream finished, on
         // the same SSE connection — the client only gets [DONE] (and
         // un-pins the stop button) when this returns. Without a hard ceiling,
@@ -984,7 +1004,10 @@ class AIService {
         }
         try {
             const client = this.getClient(provider);
-            const correctivePrompt = buildCorrectivePrompt(userPrompt || '', language);
+            const baseCorrective = buildCorrectivePrompt(userPrompt || '', language);
+            const correctivePrompt = extraPreamble
+                ? `${extraPreamble}\n\n${baseCorrective}`
+                : baseCorrective;
             const messages = [
                 ...baseMessages.slice(0, -1),
                 { role: 'user', content: correctivePrompt },
