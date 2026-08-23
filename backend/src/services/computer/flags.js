@@ -19,12 +19,18 @@ function parseSwitch(raw) {
   return null;
 }
 
-function agentComputerEnabled(env = process.env) {
+// Override runtime (SystemSettings vía services/flags/runtime-overrides)
+// gana sobre el env: kill-switch sin redeploy.
+const { wrapIsEnabled } = require('../flags/runtime-overrides');
+
+function agentComputerEnabledBase(env = process.env) {
   const next = parseSwitch(env.NEXT_PUBLIC_AGENT_COMPUTER);
   if (next !== null) return next;
   const server = parseSwitch(env.SIRAGPT_AGENT_COMPUTER);
   return server === true;
 }
+
+const agentComputerEnabled = wrapIsEnabled('NEXT_PUBLIC_AGENT_COMPUTER', agentComputerEnabledBase);
 
 const PUBLIC_HOST = 'computer.siragpt.com';
 const DEEPSEEK_FLASH = 'deepseek-v4-flash';
@@ -74,6 +80,7 @@ function resolveObservationMode({ cdpMode, model, env = process.env } = {}) {
 module.exports = {
   parseSwitch,
   agentComputerEnabled,
+  agentComputerEnabledBase,
   publicComputerHost,
   resolveComputerModel,
   modelAcceptsImages,
