@@ -7,142 +7,90 @@ exports[`LongOperationIndicator (snapshot) > renders at ~5s elapsed (not slow) 1
   role="status"
 >
   <div
-    aria-label="Procesando"
-    aria-live="polite"
-    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle opacity-75 text-primary"
-    role="status"
-    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: #FF0000; color: rgb(255, 0, 0);"
+    aria-label="Pensando…"
+    class="thinking-status-loader inline-flex min-w-0 items-center gap-0"
+    data-loader-chip="/loaders/pensando.svg"
+    data-loader-src="/loaders/pensando.svg"
+    data-pensando-bars="1"
+    data-thinking-loader="pensando"
+    style="color: var(--sira-celeste, #38BDF8);"
   >
-    <div
-      class="dmx-grid"
-      style="gap: 1px;"
+    <span
+      aria-hidden="true"
+      class="flex shrink-0 items-center justify-center"
+      style="width: 20px; height: 20px;"
     >
-      <span
+      <svg
         aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -6px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -6px; --dmx-angle: -2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 0; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -6px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -6px; --dmx-angle: -1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -6px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -3px; --dmx-angle: -2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -3px; --dmx-angle: -2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -3px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.34; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -3px; --dmx-angle: -0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -3px; --dmx-angle: -0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 0; --dmx-row: 2; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 3px; --dmx-angle: 2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 3px; --dmx-angle: 2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 3; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 3px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.34; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 3px; --dmx-angle: 0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 3px; --dmx-angle: 0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 6px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 6px; --dmx-angle: 2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 4; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 6px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 6px; --dmx-angle: 1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 6px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-    </div>
+        class="pointer-events-none select-none"
+        data-loader-src="/loaders/pensando.svg"
+        data-pensando-bars="1"
+        enable-background="new 0 0 0 0"
+        focusable="false"
+        height="20"
+        id="L9"
+        version="1.1"
+        viewBox="10 40 45 50"
+        width="20"
+        x="0px"
+        xml:space="preserve"
+        xmlns="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink"
+        y="0px"
+      >
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="20"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="30"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0.2s"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="40"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0.4s"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+      </svg>
+    </span>
   </div>
   <div
     class="flex min-w-0 flex-1 flex-col gap-0.5"
@@ -169,142 +117,90 @@ exports[`LongOperationIndicator (snapshot) > renders at ~35s elapsed (slow state
   role="status"
 >
   <div
-    aria-label="Procesando"
-    aria-live="polite"
-    class="dmx-root dmx-dot-shape-circle inline-flex shrink-0 align-middle opacity-75 text-primary"
-    role="status"
-    style="width: 16px; height: 16px; --dmx-speed: 0.6060606060606061; --dmx-dot-size: 2px; --dmx-halo-level: 0; --dmx-dot-fill: #FF0000; color: rgb(255, 0, 0);"
+    aria-label="Pensando…"
+    class="thinking-status-loader inline-flex min-w-0 items-center gap-0"
+    data-loader-chip="/loaders/pensando.svg"
+    data-loader-src="/loaders/pensando.svg"
+    data-pensando-bars="1"
+    data-thinking-loader="pensando"
+    style="color: var(--sira-celeste, #38BDF8);"
   >
-    <div
-      class="dmx-grid"
-      style="gap: 1px;"
+    <span
+      aria-hidden="true"
+      class="flex shrink-0 items-center justify-center"
+      style="width: 20px; height: 20px;"
     >
-      <span
+      <svg
         aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -6px; --dmx-angle: -2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -6px; --dmx-angle: -2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 0; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -6px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 0; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -6px; --dmx-angle: -1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 0; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -6px; --dmx-angle: -0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 0; --dmx-x: -6px; --dmx-y: -3px; --dmx-angle: -2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 1; --dmx-x: -3px; --dmx-y: -3px; --dmx-angle: -2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 1; --dmx-col: 2; --dmx-x: 0px; --dmx-y: -3px; --dmx-angle: -1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 1; --dmx-col: 3; --dmx-x: 3px; --dmx-y: -3px; --dmx-angle: -0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 1; --dmx-col: 4; --dmx-x: 6px; --dmx-y: -3px; --dmx-angle: -0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 0px; --dmx-angle: 3.141592653589793; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 0; --dmx-row: 2; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0; --dmx-manhattan: 0; opacity: 0.34; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 2; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 2; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 0px; --dmx-angle: 0; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 3px; --dmx-angle: 2.677945044588987; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 3px; --dmx-angle: 2.356194490192345; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1; --dmx-row: 3; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 3px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.35355339059327373; --dmx-manhattan: 1; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 1.4142135623730951; --dmx-row: 3; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 3px; --dmx-angle: 0.7853981633974483; --dmx-radius: 0.5; --dmx-manhattan: 2; opacity: 0.95; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 3; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 3px; --dmx-angle: 0.4636476090008061; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 0; --dmx-x: -6px; --dmx-y: 6px; --dmx-angle: 2.356194490192345; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 1; --dmx-x: -3px; --dmx-y: 6px; --dmx-angle: 2.0344439357957027; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2; --dmx-row: 4; --dmx-col: 2; --dmx-x: 0px; --dmx-y: 6px; --dmx-angle: 1.5707963267948966; --dmx-radius: 0.7071067811865475; --dmx-manhattan: 2; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot"
-        style="width: 2px; height: 2px; --dmx-distance: 2.23606797749979; --dmx-row: 4; --dmx-col: 3; --dmx-x: 3px; --dmx-y: 6px; --dmx-angle: 1.1071487177940904; --dmx-radius: 0.7905694150420948; --dmx-manhattan: 3; opacity: 0.07; --dmx-bloom-level: 0;"
-      />
-      <span
-        aria-hidden="true"
-        class="dmx-dot dmx-inactive"
-        style="width: 2px; height: 2px; --dmx-distance: 2.8284271247461903; --dmx-row: 4; --dmx-col: 4; --dmx-x: 6px; --dmx-y: 6px; --dmx-angle: 0.7853981633974483; --dmx-radius: 1; --dmx-manhattan: 4;"
-      />
-    </div>
+        class="pointer-events-none select-none"
+        data-loader-src="/loaders/pensando.svg"
+        data-pensando-bars="1"
+        enable-background="new 0 0 0 0"
+        focusable="false"
+        height="20"
+        id="L9"
+        version="1.1"
+        viewBox="10 40 45 50"
+        width="20"
+        x="0px"
+        xml:space="preserve"
+        xmlns="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink"
+        y="0px"
+      >
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="20"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="30"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0.2s"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+        <rect
+          fill="#38BDF8"
+          height="10"
+          width="4"
+          x="40"
+          y="50"
+        >
+          <animatetransform
+            attributeName="transform"
+            attributeType="xml"
+            begin="0.4s"
+            dur="0.6s"
+            repeatCount="indefinite"
+            type="translate"
+            values="0 0; 0 20; 0 0"
+          />
+        </rect>
+      </svg>
+    </span>
   </div>
   <div
     class="flex min-w-0 flex-1 flex-col gap-0.5"

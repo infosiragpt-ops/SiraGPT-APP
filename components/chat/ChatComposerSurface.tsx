@@ -135,6 +135,7 @@ export function ChatComposerPrimaryAction({
             className={cn(
               "composer-send-button h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
               "active:scale-[0.94] active:translate-y-0",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
               "disabled:cursor-not-allowed disabled:active:scale-100 disabled:translate-y-0",
             )}
           >

@@ -21,11 +21,43 @@
  */
 
 const { spawn } = require('child_process');
+const os = require('os');
+const path = require('path');
 const { performance } = require('perf_hooks');
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const HARD_MAX_TIMEOUT_MS = 5 * 60_000;
 const MIN_TIMEOUT_MS = 100;
+
+// ---------------------------------------------------------------------------
+// Child env allowlist. The backend process env carries credentials
+// (DATABASE_URL, R2/API tokens, CODE_RUNNER_CONTROL_TOKEN, …); handing the
+// whole thing to untrusted user code turns sandbox_bash into an exfiltration
+// primitive. Only a minimal allowlist crosses the boundary; anything that
+// smells like a secret is dropped even if allowlisted.
+// ---------------------------------------------------------------------------
+const ENV_ALLOWLIST = [
+  'PATH', 'LANG', 'LANGUAGE', 'LC_ALL', 'LC_CTYPE', 'TZ',
+  'SSL_CERT_FILE', 'SSL_CERT_DIR',
+  'PYTHONPATH', 'PYTHONUSERBASE', 'PYTHONHOME', 'VIRTUAL_ENV',
+  'NODE_PATH',
+];
+
+const SENSITIVE_ENV_RE = /KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|COOKIE|SESSION|DATABASE_URL|REDIS|SMTP/i;
+
+function buildChildEnv(env) {
+  const source = env || process.env;
+  const childEnv = {};
+  for (const key of ENV_ALLOWLIST) {
+    const value = source[key];
+    if (typeof value === 'string' && value.length > 0 && !SENSITIVE_ENV_RE.test(key)) {
+      childEnv[key] = value;
+    }
+  }
+  childEnv.HOME = path.join(os.tmpdir(), 'sira-home');
+  childEnv.NODE_OPTIONS = '';
+  return childEnv;
+}
 
 // ---------------------------------------------------------------------------
 // Concurrency semaphore — prevents >N simultaneous child processes
@@ -201,7 +233,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     child = spawnImpl(bin, argv, {
       stdio: ['ignore', 'pipe', 'pipe'],
       // No `shell: true` — the code is one argv element, the shell never sees it.
-      env: { ...env, NODE_OPTIONS: '' },
+      env: buildChildEnv(env),
       // Pin child cwd to the session workdir when provided so scripts can
       // open('./file.docx') without absolute paths.
       // Accepts both args.cwd (standard) and args.workdir (sandbox-doc-tools alias).
@@ -327,6 +359,7 @@ module.exports = {
   executeLocal,
   isLocalSandboxAvailable,
   resolveLocalConfig,
+  buildChildEnv,
   ALLOWED_LANGUAGES,
   DEFAULT_TIMEOUT_MS,
   HARD_MAX_TIMEOUT_MS,

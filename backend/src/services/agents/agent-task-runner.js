@@ -3196,7 +3196,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const isChatOnlyWithAttachment = hasAttachedFiles
       && documentPolicy?.mode === 'chat_only';
     const effectiveMaxSteps = isChatOnlyWithAttachment
-      ? Math.min(maxSteps, 20)
+      ? Math.min(maxSteps, 12)
       : maxSteps;
 
     // Professional document cycle: announce the ordered stages up-front so
@@ -3820,6 +3820,20 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     if (lockHeartbeatTimer) {
       clearInterval(lockHeartbeatTimer);
       lockHeartbeatTimer = null;
+    }
+    const terminal = String(task.status || '').toLowerCase();
+    if (!['completed', 'cancelled', 'canceled', 'error', 'done', 'failed'].includes(terminal)) {
+      try {
+        const message = controller?.signal?.aborted
+          ? 'Tarea detenida por el usuario.'
+          : 'La tarea terminó sin evento terminal.';
+        task.status = controller?.signal?.aborted ? 'cancelled' : 'error';
+        emit({ type: 'error', message });
+        taskStore.markTaskStatus(task, task.status, {
+          streamState,
+          stats: { durationMs: Date.now() - startedAt, error: message },
+        });
+      } catch { /* already tearing down */ }
     }
   }
 }
