@@ -2,19 +2,20 @@
 
 import * as React from "react"
 import { cn } from "@/lib/utils"
-import { usePrefersReducedMotion } from "@/lib/dotmatrix-hooks"
+import { PensandoBars } from "@/components/pensando-bars"
 import {
   type LoaderState,
   LOADER_LABELS,
   SIRA_CELESTE,
   isTerminalLoaderState,
   loaderChipSrc,
-  loaderIconSrc,
   loaderLabel,
   loaderSrc,
 } from "@/lib/thinking-loaders"
 
 export const COMPLETADO_FLASH_MS = 1200
+
+export type ThinkingStatusLoaderDensity = "chip" | "glyph"
 
 export type ThinkingStatusLoaderProps = {
   state: LoaderState
@@ -22,6 +23,8 @@ export type ThinkingStatusLoaderProps = {
   label?: string | null
   elapsedSec?: number | null
   compact?: boolean
+  /** `glyph` is the 20px rail dot; `chip` is the header/status size. */
+  density?: ThinkingStatusLoaderDensity
   hideLabel?: boolean
   /** Set false when nested inside another role=status region. */
   announce?: boolean
@@ -37,26 +40,34 @@ function formatElapsed(sec: number): string {
 
 /**
  * Status chip for Pensando / AgenticSteps / RunTrace header.
- * Renders the kit SVG from public/loaders/ so bounce geometry matches Luis's
- * snippet exactly. The step list (not this chip) keeps semantic colors —
- * running is --step-running blue, never brand-red.
+ * In-progress always uses PensandoBars (Luis geometry, fill #38BDF8).
+ * Terminal states keep the static check / X. The step list (not this chip)
+ * keeps semantic colors — running is --step-running blue, never brand-red.
  */
+const DENSITY_PX: Record<ThinkingStatusLoaderDensity, number> = {
+  chip: 32,
+  glyph: 20,
+}
+
 export function ThinkingStatusLoader({
   state,
   label,
   elapsedSec,
   compact = false,
+  density,
   hideLabel = false,
   announce = true,
   className,
   onSettled,
 }: ThinkingStatusLoaderProps) {
-  const reduced = usePrefersReducedMotion()
   const text = loaderLabel(state, label)
   const terminal = isTerminalLoaderState(state)
+  const resolvedDensity: ThinkingStatusLoaderDensity = density || "chip"
+  const glyph = resolvedDensity === "glyph"
+  const px = glyph ? DENSITY_PX.glyph : compact ? 28 : DENSITY_PX.chip
   const elapsed =
     !terminal && typeof elapsedSec === "number" && elapsedSec >= 0 ? formatElapsed(elapsedSec) : null
-  const src = reduced ? loaderIconSrc(state) : loaderChipSrc(state)
+  const chip = loaderChipSrc(state)
 
   React.useEffect(() => {
     if (!onSettled || (state !== "completado" && state !== "error")) return
@@ -72,35 +83,36 @@ export function ThinkingStatusLoader({
       aria-live={announce ? "polite" : undefined}
       aria-label={text}
       data-thinking-loader={state}
-      data-loader-src={loaderSrc(state)}
-      data-loader-chip={src}
+      data-loader-src={terminal ? loaderSrc(state) : chip}
+      data-loader-chip={chip}
+      data-pensando-bars={terminal ? undefined : "1"}
       className={cn(
         "thinking-status-loader inline-flex min-w-0 items-center",
-        compact ? "gap-2" : "gap-2.5",
+        glyph ? "gap-0" : compact ? "gap-2" : "gap-2.5",
         className,
       )}
       style={{ color: `var(--sira-celeste, ${SIRA_CELESTE})` }}
     >
       <span
-        className={cn(
-          "flex shrink-0 items-center justify-center",
-          compact ? "h-7 w-7" : "h-8 w-8",
-        )}
+        className="flex shrink-0 items-center justify-center"
+        style={{ width: px, height: px }}
         aria-hidden="true"
       >
-        {/* Kit SVG from /public — next/image adds nothing for 1KB SMIL swaps. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={src}
-          alt=""
-          width={compact ? 28 : 32}
-          height={compact ? 28 : 32}
-          className={cn(
-            "pointer-events-none select-none object-contain",
-            compact ? "h-7 w-7" : "h-8 w-8",
-          )}
-          draggable={false}
-        />
+        {terminal ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={chip}
+            alt=""
+            width={px}
+            height={px}
+            className="pointer-events-none select-none object-contain"
+            style={{ width: px, height: px }}
+            draggable={false}
+            data-thinking-loader-img={chip}
+          />
+        ) : (
+          <PensandoBars size={px} className="pointer-events-none select-none" />
+        )}
       </span>
       {hideLabel ? null : (
         <span

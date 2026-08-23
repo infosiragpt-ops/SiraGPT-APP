@@ -1,5 +1,5 @@
 import type { AgentTaskState } from "./agent-task-service"
-import { humanToolLabel, normalizeToolKey } from "./run-trace"
+import { humanToolLabel, humanizeToolDetail, normalizeToolKey } from "./run-trace"
 
 export type AgentActivityStatus =
   | "queued"
@@ -46,6 +46,8 @@ const TOOL_LABELS: Record<string, string> = {
   document_pipeline: "Construyendo archivo",
   spreadsheet: "Preparando hoja de cálculo",
   presentation: "Preparando presentación",
+  create_presentation: "Creando presentación",
+  render_preview: "Renderizando vista previa",
   pdf: "Preparando PDF",
 }
 
@@ -60,6 +62,8 @@ export function toolToProfessionalLabel(tool?: string | null): string {
   if (!tool) return "Procesando tarea"
   const mapped = humanToolLabel(tool, "")
   if (mapped) return mapped
+  const humanized = humanizeToolDetail(tool)
+  if (humanized) return humanized
   const normalized = String(tool).trim()
   return lookupToolLabel(normalized) || sanitizeAgentText(normalized.replace(/[_-]+/g, " "), "Procesando tarea")
 }

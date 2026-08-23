@@ -6,10 +6,10 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { formatThinkingDuration } from "@/components/thinking-trace"
-import { ClaudeThinkingTimeline, inferClaudeKind, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
+import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
 import type { AgentStepClient, AgentRunClient, AgentPermissionClient } from "@/lib/chat-context-integrated"
-import { collapseSuccessLabel, humanToolLabel } from "@/lib/run-trace"
+import { collapseSuccessLabel, humanToolLabel, humanizeToolDetail } from "@/lib/run-trace"
 
 export type AgentTraceProps = {
   reasoning?: string
@@ -31,7 +31,7 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
   const running = step.status === "planned" || step.status === "executing"
   const failed = step.status === "error" || step.status === "denied" || Boolean(step.isError)
   const status = failed ? "error" : running ? "active" : "done"
-  const label = step.humanDescription || humanToolLabel(step.name)
+  const label = humanizeToolDetail(step.humanDescription) || humanToolLabel(step.name)
   const details = prettyJsonOrRaw(step.args) || prettyJsonOrRaw(step.preview)
   return {
     id: step.id,
@@ -39,6 +39,7 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
     tool: step.name,
     status,
     kind: inferClaudeKind({ tool: step.name, label, status }),
+    loaderState: inferLoaderState({ tool: step.name, label, status }),
     elapsedSec: status === "active" ? elapsedSec : null,
     expandable: Boolean(details),
     details: details || undefined,
@@ -97,7 +98,16 @@ export default function AgentTrace({ reasoning = "", reasoningStreaming = false,
   const rows = useMemo(() => {
     const out: ClaudeTimelineStep[] = []
     if ((reasoning || "").trim() || reasoningStreaming) {
-      out.push({ id: "agent-think", label: reasoningStreaming ? "Pensando…" : "Pensando", status: reasoningStreaming && steps.length === 0 ? "active" : "done", kind: reasoningStreaming && steps.length === 0 ? "sunburst" : "dot", elapsedSec: reasoningStreaming && steps.length === 0 ? elapsedSec : null, expandable: Boolean((reasoning || "").trim()), details: (reasoning || "").trim() || undefined })
+      out.push({
+        id: "agent-think",
+        label: reasoningStreaming ? "Pensando…" : "Pensando",
+        status: reasoningStreaming && steps.length === 0 ? "active" : "done",
+        kind: reasoningStreaming && steps.length === 0 ? "loader" : "dot",
+        loaderState: reasoningStreaming && steps.length === 0 ? "pensando" : undefined,
+        elapsedSec: reasoningStreaming && steps.length === 0 ? elapsedSec : null,
+        expandable: Boolean((reasoning || "").trim()),
+        details: (reasoning || "").trim() || undefined,
+      })
     }
     steps.forEach((s) => out.push(stepToRow(s, elapsedSec)))
     return out

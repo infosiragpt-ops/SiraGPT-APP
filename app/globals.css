@@ -8004,6 +8004,28 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
 .run-trace-step--failed { color: var(--step-failed); }
 .run-trace-step--cancelled { color: var(--step-pending); }
 
+/* Empresas leftovers: names wrap at default + 1280; noVNC fills its panel. */
+@media (min-width: 1280px) {
+  [data-dept-name-wrap="1"] {
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}
+
+[data-novnc-fit="cover"] {
+  background: #1b1b1d;
+}
+[data-novnc-fit="cover"] iframe {
+  background: #1b1b1d;
+  border: 0;
+  height: 100% !important;
+  inset: 0;
+  position: absolute;
+  width: 100% !important;
+}
+
 .thinking-shimmer-text {
   background-image: linear-gradient(
     100deg,

@@ -40,6 +40,7 @@ import {
 } from "@/lib/agent-task-presentation"
 import {
   descriptionsDiffer,
+  humanizeToolDetail,
   isStaleRun,
   projectStepRow,
   resolveRunStatus,
@@ -52,7 +53,7 @@ import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
-import { mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
+import { loaderLabel, mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -180,7 +181,8 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
       retryCount: (step as { retryCount?: number }).retryCount,
       toolCalls: step.toolCalls,
     })
-    const detailSource = row.description || (tools.length ? tools.filter((tool) => descriptionsDiffer(row.label, tool)).join(" · ") : "")
+    const rawDetail = row.description || (tools.length ? tools.filter((tool) => descriptionsDiffer(row.label, tool)).join(" · ") : "")
+    const detailSource = humanizeToolDetail(rawDetail) || ""
     const item: TimelineStepProjection = {
       id: row.id,
       label: row.label,
@@ -1181,6 +1183,10 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     // headers, no counters — the line IS the status.
     const visibleSteps = timelineSteps.slice(-5)
     const headerLabel = runningTimelineStep?.label || summary.label
+    const headerState =
+      runningTimelineStep?.loaderState ||
+      mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })
+    const headerKitLabel = loaderLabel(headerState)
     return (
       <div
         role="status"
@@ -1197,8 +1203,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
           >
             <ThinkingStatusLoader
-              state={runningTimelineStep?.loaderState || mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })}
-              label={headerLabel}
+              state={headerState}
               elapsedSec={elapsedSec >= 3 ? elapsedSec : null}
               announce={false}
             />
@@ -1233,7 +1238,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
                     step.status === "running" && "font-medium",
                   )}
                 >
-                  {step.label}
+                  {step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? null : step.label}
                   {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
                 </div>
                 {step.detail && descriptionsDiffer(step.label, step.detail) && (
