@@ -11,11 +11,14 @@ const routines = readFileSync("components/code/company-routines-panel.tsx", "utf
 const computer = readFileSync("components/code/department-computer-pane.tsx", "utf8")
 const viewer = readFileSync("components/code/ComputerViewer.tsx", "utf8")
 const workspace = readFileSync("components/code/code-workspace.tsx", "utf8")
+const preview = readFileSync("components/code/preview-pane.tsx", "utf8")
 
 describe("Empresas polish lock", () => {
-  it("removes the green Ejecutar / Arrancando play button from the top bar DOM", () => {
+  it("removes the green Ejecutar / Arrancando play button from Empresas chrome DOM", () => {
     assert.doesNotMatch(topBar, /workspace-header-run-stop/)
     assert.doesNotMatch(topBar, /bg-emerald-600/)
+    assert.doesNotMatch(preview, /bg-emerald-600/)
+    assert.doesNotMatch(preview, /Ejecutar repo/)
     assert.match(topBar, /workspace-header-overflow/)
     assert.match(topBar, /workspace-header-run-overflow/)
     assert.match(topBar, /data-empresas-no-run-button="1"/)
@@ -37,21 +40,30 @@ describe("Empresas polish lock", () => {
     )
   })
 
-  it("wraps department names and shows an actionable empty state", () => {
+  it("wraps department names and keeps useful launch starters", () => {
     assert.match(company, /data-dept-name-wrap="1"/)
     assert.match(company, /whitespace-normal break-words/)
+    assert.match(company, /overflow-wrap:anywhere/)
+    assert.match(company, /min-w-0 flex-1 whitespace-normal/)
     assert.match(chat, /code-chat-empty-state/)
     assert.match(chat, /code-chat-empty-department/)
+    assert.match(chat, /code-chat-empty-launch/)
+    assert.match(chat, /¿Qué quieres lanzar\?/)
     assert.match(chat, /departmentEmptySuggestions/)
+    assert.match(chat, /CODE_AUTONOMOUS_STARTERS\.map/)
+    assert.doesNotMatch(chat, /CODE_AUTONOMOUS_STARTERS\.slice/)
   })
 
-  it("fits noVNC to the panel and keeps the three-column computer/routines stack", () => {
+  it("fits noVNC to the panel and defaults the right column to Computadora + Rutinas", () => {
     assert.match(computer, /resize=remote/)
     assert.match(computer, /data-novnc-fit="cover"/)
     assert.match(viewer, /data-novnc-fit="cover"/)
     assert.doesNotMatch(viewer, /Idle/)
     assert.match(workspace, /empresas-computer-routines/)
+    assert.match(workspace, /data-empresas-right-column/)
+    assert.match(workspace, /empresas-preview-underlay/)
     assert.match(workspace, /CompanyRoutinesPanel/)
     assert.match(workspace, /DepartmentComputerPane/)
+    assert.match(workspace, /const \[computerOpen, setComputerOpen\] = React\.useState\(true\)/)
   })
 })

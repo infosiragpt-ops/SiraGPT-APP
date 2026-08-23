@@ -12,12 +12,18 @@ reintroduce a green play / Ejecutar / Arrancando button in the top bar.
   overflow **⋯** menu as a text item (`data-testid="workspace-header-overflow"`).
 - Never restore `data-testid="workspace-header-run-stop"` or an
   `bg-emerald-600` play control in that header.
+- The Canvas toolbar in `components/code/preview-pane.tsx` must also stay
+  free of a green **Ejecutar** / **Arrancando…** play button
+  (`bg-emerald-600`). Auto-run remains; manual run lives in the ⋯ overflow.
 
 ## Must stay
 
 - Desktop/monitor icon at the far right of the top bar
   (`data-testid="workspace-header-department-computer"`).
-- Right column: remote desktop (Chrome + Terminal dock) + **Rutinas**.
+- Right column default: **Computadora** (noVNC Chrome + taskbar) + **Rutinas**.
+  Canvas / "Tu preview en vivo" is not the Empresas landing view
+  (`data-empresas-right-column="computer-routines"`). Preview stays mounted
+  underneath for company surfaces (Panel / Controlar / Archivos / Recursos).
 - Left department list + center chat + right Computadora/Rutinas.
 - Left nav **Panel / Controlar / Archivos / Recursos** stays unless a later
   brief explicitly removes them. Do not reintroduce Arrancando/Ejecutar.
@@ -32,9 +38,11 @@ reintroduce a green play / Ejecutar / Arrancando button in the top bar.
 3. Department **names** wrap at the default sidebar width — no ellipsis
    truncation on the name (`data-dept-name-wrap="1"`).
 4. Center empty state shows the active department name plus actionable
-   suggestions (`data-testid="code-chat-empty-state"`).
+   suggestions (`data-testid="code-chat-empty-state"`) and keeps the useful
+   **¿Qué quieres lanzar?** starter cards (`data-testid="code-chat-empty-launch"`).
 5. noVNC fills its panel (`data-novnc-fit="cover"`, `resize=remote`) so grey
-   letterboxing is not the default.
+   letterboxing is not the default. Canvas letterboxing stays hidden while
+   Computadora is the right-column default.
 6. Clickables in this chrome have hover, active, focus-visible, and disabled.
 
 ## Re-apply

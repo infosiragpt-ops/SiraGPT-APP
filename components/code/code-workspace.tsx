@@ -44,6 +44,7 @@ import {
   focusCeoChatColumn,
 } from "@/lib/code-agent-company-proactive"
 
+import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { AgentCompanyPanel } from "./agent-company-panel"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
@@ -518,10 +519,15 @@ export function CodeWorkspace() {
     )
   }, [commands, paletteQuery])
 
+  const registerVisibleCompanySlot = React.useCallback((element: HTMLDivElement | null) => {
+    registerAgentCompanyPreviewSlot(element)
+  }, [])
+
   const computerRoutines = computerOpen ? (
     <div
-      className="absolute inset-0 z-20 flex min-h-0 flex-col bg-[#1b1b1d]"
+      className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-[#1b1b1d]"
       data-testid="empresas-computer-routines"
+      data-empresas-right-column="computer-routines"
     >
       <div className="relative min-h-0 flex-1">
         <DepartmentComputerPane
@@ -653,6 +659,27 @@ export function CodeWorkspace() {
             </>
           )
 
+          const rightColumn = (
+            <div
+              className="relative h-full min-h-0 min-w-0"
+              data-empresas-right-column={computerOpen ? "computer-routines" : "preview"}
+            >
+              <div
+                className={cn("absolute inset-0", computerOpen && "invisible pointer-events-none")}
+                aria-hidden={computerOpen || undefined}
+                data-testid="empresas-preview-underlay"
+              >
+                {mainArea}
+              </div>
+              {computerRoutines}
+              <div
+                ref={registerVisibleCompanySlot}
+                className="pointer-events-none absolute inset-0 z-40 [&>*]:pointer-events-auto"
+                data-testid="empresas-company-preview-slot"
+              />
+            </div>
+          )
+
           // Wait for the first width measurement so a phone never mounts the
           // desktop split (that would start Preview and then unmount it).
           if (isMobile === null) {
@@ -671,8 +698,7 @@ export function CodeWorkspace() {
                     <MemoAgentCompanyPanel />
                   </div>
                   <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
-                    {mainArea}
-                    {computerRoutines}
+                    {rightColumn}
                   </div>
                 </div>
                 <div className="flex shrink-0 border-t border-border/60 bg-background">
@@ -738,8 +764,7 @@ export function CodeWorkspace() {
                   minSize={32}
                   className="relative min-w-0"
                 >
-                  {mainArea}
-                  {computerRoutines}
+                  {rightColumn}
                 </ResizablePanel>
               </ResizablePanelGroup>
             </>

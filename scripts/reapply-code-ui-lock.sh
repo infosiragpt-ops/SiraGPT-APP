@@ -9,7 +9,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TOP_BAR="$PROJECT_ROOT/components/code/workspace-top-bar.tsx"
+PREVIEW="$PROJECT_ROOT/components/code/preview-pane.tsx"
 ROUTINES="$PROJECT_ROOT/components/code/company-routines-panel.tsx"
+WORKSPACE="$PROJECT_ROOT/components/code/code-workspace.tsx"
 
 fail() {
   echo "❌ code UI lock: $*" >&2
@@ -38,6 +40,14 @@ if ! grep -q 'data-empresas-no-run-button="1"' "$TOP_BAR"; then
   fail "top bar lost data-empresas-no-run-button lock marker."
 fi
 
-echo "✅ Empresas code UI lock: Ejecutar stays out of the top-bar DOM."
+if [[ -f "$PREVIEW" ]] && grep -q 'bg-emerald-600' "$PREVIEW"; then
+  fail "green Ejecutar play control returned to the Canvas/preview toolbar."
+fi
+
+if [[ -f "$WORKSPACE" ]] && ! grep -q 'empresas-computer-routines' "$WORKSPACE"; then
+  fail "Computadora + Rutinas stack missing from the Empresas right column."
+fi
+
+echo "✅ Empresas code UI lock: Ejecutar stays out of the Empresas chrome DOM."
 bash "$SCRIPT_DIR/update-ui-lock.sh"
 echo "✅ Re-applied docs/UI_LOCK_HASHES.txt"

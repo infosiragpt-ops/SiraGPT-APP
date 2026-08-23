@@ -5338,7 +5338,7 @@ function EmptyChat({
           ? "Modo PROACTIVO activo. Elige una acción o escribe el objetivo de este departamento."
           : "Elige una acción o escribe qué debe hacer este departamento."}
       </p>
-      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
+      <div className="mt-5 grid w-full max-w-[28rem] gap-2 text-left">
         {resolved.suggestions.map((suggestion) => (
           <button
             key={suggestion.id}
@@ -5362,7 +5362,15 @@ function EmptyChat({
             </span>
           </button>
         ))}
-        {CODE_AUTONOMOUS_STARTERS.slice(0, 1).map((starter) => (
+      </div>
+      <h3 className="mt-7 text-[13px] font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-launch">
+        ¿Qué quieres lanzar?
+      </h3>
+      <p className="mt-1 max-w-[22rem] text-[12px] leading-relaxed text-muted-foreground">
+        Elige un producto completo para que el agente planifique, construya y verifique.
+      </p>
+      <div className="mt-3 grid w-full max-w-[28rem] gap-2 text-left">
+        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
           <button
             key={starter.id}
             type="button"
@@ -5383,6 +5391,9 @@ function EmptyChat({
                 </span>
                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                   {starter.description}
+                </span>
+                <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
+                  {starter.meta}
                 </span>
               </span>
             </span>
