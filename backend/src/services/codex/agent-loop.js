@@ -29,6 +29,7 @@ const proactiveSwarm = require('./proactive-swarm');
 const toolScheduler = require('./tool-scheduler');
 const projectHooks = require('./project-hooks');
 const { classifyText, toActionRequired, benignAnnotation } = require('./error-patterns');
+const { classifyTaskError } = require('../../utils/task-error-classifier');
 const { createSandboxClient } = require('./sandbox-provider');
 const { localCliCommand } = require('./local-cli');
 const { scanBuffer } = require('../security/secret-scanner');
@@ -36,6 +37,12 @@ const { redactString } = require('../../utils/secret-redactor');
 
 const DEFAULT_MAX_STEPS = 24;
 const DEFAULT_MAX_TOOLS_PER_TURN = 4;
+// Transient model-step failures (502/503/504/timeout/ECONNRESET — a gateway
+// blip, not a dead run) get a bounded retry with backoff before the step is
+// allowed to fail the whole build. 402/auth/validation stay non-retryable: the
+// user must act on those.
+const MAX_LLM_STEP_RETRIES = 3;
+const LLM_STEP_RETRY_BASE_MS = 2_000;
 const DEFAULT_CONTEXT_MAX_CHARS = 60_000;
 const DEFAULT_MAX_VERIFY_ROUNDS = 2;
 // Optional runtime verification (flag-gated OFF by default): after a clean tsc
@@ -2030,24 +2037,53 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }, { prisma }).catch(() => {});
     };
     try {
-      turn = await llmTurn({
-        messages,
-        tools: registry,
-        signal,
-        env,
-        tier: run?.tier || null,
-        model: run?.model || null,
-        effort: effortForStage({
-          tier: run?.tier || null,
-          reasoningEffort: run?.reasoningEffort || null,
-          verifyRounds,
-          env,
-        }),
-        ...(streamingEnabled ? {
-          onTextDelta: (text) => narrativeStream.push(text),
-          onReasoningDelta,
-        } : {}),
-      });
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          turn = await llmTurn({
+            messages,
+            tools: registry,
+            signal,
+            env,
+            tier: run?.tier || null,
+            model: run?.model || null,
+            effort: effortForStage({
+              tier: run?.tier || null,
+              reasoningEffort: run?.reasoningEffort || null,
+              verifyRounds,
+              env,
+            }),
+            ...(streamingEnabled ? {
+              onTextDelta: (text) => narrativeStream.push(text),
+              onReasoningDelta,
+            } : {}),
+          });
+          break;
+        } catch (err) {
+          // Cancellation is not a transient failure — never retry it.
+          if (signal?.aborted) throw err;
+          const msg = String(err?.message || err);
+          // A blocking pattern (402, missing key, quota) is the user's problem:
+          // surface the action_required card and end the run (feature 09).
+          if (classifyText(msg)?.severity === 'blocking') throw err;
+          // A provider that already streamed visible deltas must not be retried
+          // — the retry would splice two different answers into one transcript.
+          if (err?.partialResponse) throw err;
+          // Only transient transport failures (502/503/504/timeout/ECONNRESET)
+          // are worth another attempt; 401/402/413/validation fail immediately.
+          if (!classifyTaskError(err).retryable) throw err;
+          if (attempt >= MAX_LLM_STEP_RETRIES || step >= maxSteps - 1) {
+            err.message = `${msg} (agotados ${MAX_LLM_STEP_RETRIES} reintentos transitorios del paso de modelo)`;
+            throw err;
+          }
+          const backoffMs = LLM_STEP_RETRY_BASE_MS * 2 ** attempt + Math.floor(Math.random() * 250);
+          await eventStore.appendEvent(run.id, 'narrative_delta', {
+            text: `⚠️ Fallo transitorio del proveedor de modelo (${msg.slice(0, 160)}). Reintento ${attempt + 1}/${MAX_LLM_STEP_RETRIES} en ${(backoffMs / 1000).toFixed(1)}s…`,
+          }, { prisma }).catch(() => {});
+          await new Promise((r) => setTimeout(r, backoffMs));
+          if (signal?.aborted) { aborted = true; break; }
+          if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
+        }
+      }
     } catch (err) {
       // Transport error → run error. Feature 09: a blocking pattern (402, missing
       // key, quota) surfaces an action_required card before the run ends.
@@ -2058,6 +2094,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
       return { status: 'error', error: msg };
     }
+    if (aborted) break;
     recordLlmUsageOnce(metrics, turn?.usage);
 
     // Reasoning block (native or prompted).
