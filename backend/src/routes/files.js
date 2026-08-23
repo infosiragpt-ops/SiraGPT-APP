@@ -8,6 +8,7 @@ const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
+const { isPersistedPreviewSource } = require('../services/document-pipeline/preview-object-ready');
 const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
 const documentSummarizer = require('../services/document-summarizer');
@@ -1331,11 +1332,22 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     });
     if (!file) return res.status(404).json({ error: 'File not found' });
 
+    const objectExists = await objectStorage.exists(file.path);
+    if (!isPersistedPreviewSource({
+      id: file.id,
+      path: file.path,
+      sizeBytes: file.size,
+      objectExists,
+    })) {
+      res.setHeader('Retry-After', '1');
+      return res.status(409).json({
+        error: 'File object not ready for preview',
+        code: 'PREVIEW_OBJECT_NOT_READY',
+      });
+    }
+
     const isPdf = file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.originalName || '');
     if (isPdf) {
-      if (!(await objectStorage.exists(file.path))) {
-        return res.status(404).json({ error: 'File not found' });
-      }
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
       res.setHeader('Cache-Control', 'private, max-age=86400');

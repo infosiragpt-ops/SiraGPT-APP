@@ -12,12 +12,15 @@
  *   • single point for format detection + telemetry
  *
  * Source strategies, in priority order:
- *   1. `file` (in-memory File blob)      — used while an attachment is
- *      still in the composer BEFORE upload completes.
- *   2. `url` (server-backed URL)         — used after upload; hits
- *      /uploads/<user>/<filename> which the backend serves directly.
- *   3. `documentId` (RagDocument)        — reserved for future RAG
- *      preview endpoint; currently unused in main.
+ *   1. Gate: do not paint final pages until the HTTP upload is complete
+ *      AND the server has persisted the full object (stable id /uploads
+ *      URL). While uploading/converting, show the professional loading
+ *      skeleton + composer-synced %.
+ *   2. Server LibreOffice/Gotenberg PDF (`/api/files/:id/render`) for
+ *      DOCX/DOC/PPTX/XLSX — page size and margins preserved via
+ *      writer/impress/calc PDF export filters. Native PDFs pass through.
+ *   3. `url` (server-backed /uploads/…) then `file` as fallback only
+ *      after the object is ready and conversion is unavailable.
  *
  * Renderers (all client-side except where noted):
  *   image   → <img> with wheel-zoom and click-drag pan
@@ -117,6 +120,12 @@ import JSZip from "jszip"
 import DOMPurify from "dompurify"
 import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import {
+  PREVIEW_LOADING_LABEL,
+  isRetryablePreviewError,
+  isRetryablePreviewHttpStatus,
+  resolvePreviewGate,
+} from "@/lib/document-preview-gate"
 import "react-pdf/dist/Page/TextLayer.css"
 import "react-pdf/dist/Page/AnnotationLayer.css"
 
@@ -208,6 +217,10 @@ export interface AttachmentLike {
   url?: string | null
   /** Pre-extracted plain text — used as a fallback for exotic formats. */
   extractedText?: string | null
+  /** Composer upload status (`uploading` / `ready` / `processing` / `failed`). */
+  status?: string | null
+  /** 0..100 HTTP upload progress — keep the pane in sync with the chip. */
+  uploadProgress?: number | null
 }
 
 interface UnifiedDocumentViewerProps {
@@ -564,11 +577,20 @@ export default function UnifiedDocumentViewer({
 function RendererDispatch({
   kind, attachment, isDark,
 }: { kind: Kind; attachment: AttachmentLike; isDark: boolean }) {
+  const gate = resolvePreviewGate(attachment)
+  if (!gate.ready) {
+    return <LoadingState label={gate.label || PREVIEW_LOADING_LABEL} progress={gate.progress} />
+  }
   switch (kind) {
     case "image":    return <ImageRenderer a={attachment} />
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
-    case "xlsx":     return <XlsxRenderer a={attachment} />
+    case "xlsx":     return (
+      <ServerConvertedPdfRenderer
+        a={attachment}
+        fallback={<XlsxRenderer a={attachment} />}
+      />
+    )
     // PPTX (and legacy .ppt): try server-rendered PDF first for layout
     // fidelity; if unavailable, fall back to the JSZip text+image
     // extraction we already have for OOXML .pptx.
@@ -660,7 +682,9 @@ async function fetchServerConvertedPdfAttachment(a: AttachmentLike): Promise<Att
     const url = `${base}/api/files/${encodeURIComponent(String(a.id))}/render?target=pdf`
     const res = await fetchAssetBytes(url)
     if (!res.ok) {
-      throw new Error(`http-${res.status}`)
+      const err = new Error(`http-${res.status}`) as Error & { retryable?: boolean }
+      if (isRetryablePreviewHttpStatus(res.status)) err.retryable = true
+      throw err
     }
 
     const buf = await res.arrayBuffer()
@@ -702,23 +726,43 @@ function ServerConvertedPdfRenderer({
 
     let cancelled = false
     ;(async () => {
-      try {
-        const pdfAtt = await fetchServerConvertedPdfAttachment(a)
-        if (cancelled) return
-        setPdfAttachment(pdfAtt)
-        setState("ok")
-      } catch (e: any) {
-        if (!cancelled) {
-          setUnavailableReason(e?.message || "fetch-failed")
-          setState("unavailable")
+      const maxAttempts = 8
+      for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
+        try {
+          const pdfAtt = await fetchServerConvertedPdfAttachment(a)
+          if (cancelled) return
+          setPdfAttachment(pdfAtt)
+          setState("ok")
+          return
+        } catch (e: any) {
+          const retryable = isRetryablePreviewError(e)
+          if (retryable && attempt < maxAttempts - 1) {
+            const waitMs = Math.min(400 * (attempt + 1), 2000)
+            await new Promise((resolve) => setTimeout(resolve, waitMs))
+            continue
+          }
+          if (!cancelled) {
+            setUnavailableReason(e?.message || "fetch-failed")
+            setState("unavailable")
+          }
+          return
         }
       }
     })()
     return () => { cancelled = true }
   }, [a])
 
-  if (state === "probing" && hasClientPreviewSource(a)) return <>{fallback}</>
-  if (state === "probing") return <LoadingState label="Generando vista de alta fidelidad…" />
+  // Never paint client-side office pages while the server object is
+  // still uploading or LibreOffice is converting. A local File exists
+  // the moment the user picks the document — that is what used to show
+  // a finished 1/N thesis page at 80% upload.
+  if (state === "probing") {
+    const canWaitForServer = canUseServerPdfConversion(a) || !hasClientPreviewSource(a)
+    if (canWaitForServer) {
+      return <LoadingState label={PREVIEW_LOADING_LABEL} progress={a.uploadProgress ?? 100} />
+    }
+    return <>{fallback}</>
+  }
   if (state === "unavailable" || !pdfAttachment) {
     if (process.env.NODE_ENV !== "production" && unavailableReason) {
       // eslint-disable-next-line no-console
@@ -1083,19 +1127,40 @@ function SkeletonImage() {
   )
 }
 
-function LoadingState({ label }: { label?: string }) {
+function LoadingState({ label, progress }: { label?: string; progress?: number }) {
   const ctx = React.useContext(RendererCtx)
   const kind = ctx?.kind
+  const caption = label || PREVIEW_LOADING_LABEL
+  const showPct = typeof progress === "number" && Number.isFinite(progress) && progress > 0
+  const pct = showPct ? Math.max(1, Math.min(100, Math.round(progress))) : null
+  let skeleton: React.ReactNode
   switch (kind) {
     case "pdf":
-    case "doc":  return <SkeletonPdf />
+    case "doc":  skeleton = <SkeletonPdf />; break
     case "xlsx":
-    case "csv":  return <SkeletonXlsx />
-    case "pptx": return <SkeletonPptx />
-    case "docx": return <SkeletonDocx />
-    case "image": return <SkeletonImage />
-    default:     return <SkeletonGeneric label={label} />
+    case "csv":  skeleton = <SkeletonXlsx />; break
+    case "pptx": skeleton = <SkeletonPptx />; break
+    case "docx": skeleton = <SkeletonDocx />; break
+    case "image": skeleton = <SkeletonImage />; break
+    default:     skeleton = <SkeletonGeneric label={caption} />
   }
+  if (kind === undefined || (kind !== "pdf" && kind !== "doc" && kind !== "xlsx" && kind !== "csv" && kind !== "pptx" && kind !== "docx" && kind !== "image")) {
+    return <>{skeleton}</>
+  }
+  return (
+    <div className="relative h-full w-full" role="status" aria-live="polite" aria-label={caption}>
+      {skeleton}
+      <div className="pointer-events-none absolute inset-x-0 bottom-6 flex justify-center px-4">
+        <div className="flex max-w-full items-center gap-2 rounded-full border border-white/60 bg-white/80 px-3 py-1.5 text-[12px] font-medium text-zinc-700 shadow-[0_10px_24px_rgba(15,23,42,0.10)] backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/70 dark:text-zinc-100">
+          <ThinkingIndicator size="sm" />
+          <span className="truncate">{caption}</span>
+          {pct != null && (
+            <span className="tabular-nums text-zinc-500 dark:text-zinc-300">{pct}%</span>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // Typed error state. Pulls attachment/kind/onRetry from RendererCtx so

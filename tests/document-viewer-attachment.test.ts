@@ -5,6 +5,7 @@ import {
   getAttachmentLocalFile,
   isFileLike,
   toDocumentViewerAttachment,
+  toDocumentViewerAttachmentWithProgress,
 } from "../lib/document-viewer-attachment"
 
 function fakeFile(name: string, type: string, size = 12): File {
@@ -96,6 +97,21 @@ test("document viewer attachments accept generated artifact preview aliases", ()
   assert.equal(attachment.mimeType, "application/pdf")
   assert.equal(attachment.size, 4096)
   assert.equal(attachment.url, "/api/artifacts/artifact_pdf/preview")
+})
+
+test("document viewer attachments carry composer upload status and progress", () => {
+  const file = fakeFile("tesis.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 307000)
+  const attachment = toDocumentViewerAttachmentWithProgress({
+    tempId: "temp-1",
+    name: "tesis.docx",
+    type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    status: "uploading",
+    file,
+  }, { "temp-1": 87 })
+
+  assert.equal(attachment.status, "uploading")
+  assert.equal(attachment.uploadProgress, 87)
+  assert.equal(attachment.file, file)
 })
 
 test("file-like detection works without relying on browser File globals", () => {

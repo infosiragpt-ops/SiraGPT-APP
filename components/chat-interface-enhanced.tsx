@@ -99,7 +99,7 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .then(mod => mod.prewarmUnifiedDocumentPreview(a))
     .catch(() => null)
 }
-import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
   ImageAspectRatioMark,
@@ -1889,11 +1889,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
     if (viewingIndex === null) return null;
     const f = uploadedFiles[viewingIndex];
     if (!f) return null;
-    return toDocumentViewerAttachment(f);
-  }, [viewingIndex, uploadedFiles]);
+    return toDocumentViewerAttachmentWithProgress(f, uploadProgress);
+  }, [viewingIndex, uploadedFiles, uploadProgress]);
   const viewerSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles]
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress]
   );
 
   React.useEffect(() => {
@@ -8980,8 +8980,8 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
 
   const composerPreviewSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles],
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress],
   );
   const composerPreviewAttachment = React.useMemo<AttachmentLike | null>(() => {
     if (composerPreviewIndex === null) return null;
