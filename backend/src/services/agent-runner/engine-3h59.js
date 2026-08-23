@@ -4,7 +4,9 @@
  * 3H59 — fail-open agent-loop robustness (engine only, no UI).
  *
  * Measurable Claude-Code-like helpers that are NOT in 3H32–3H46
- * (and would not collide with 3H55–3H58 if those modules appear later):
+ * (and do not collide with 3H55–3H58). Live VPS contract is 40 helpers
+ * (same FLAGS + snapshotFlags shape as 3H55–3H58) so a recreate from
+ * git does not drop the hot-patched wave:
  *   tool-call schema validation / repair / backoff
  *   partial / malformed tool-call tolerance
  *   subtask token budget + infinite-loop fingerprint cutoff
@@ -15,6 +17,12 @@
  *   session-queue event order
  *   token accounting on cancel
  *   classified ES error messages (never raw stacks)
+ *   finish-hold / backtick JSON / HTTP URL / 499 backoff
+ *   subagent cancel inherit + per-turn tool cap
+ *   pgvector all-zero / anchor-tag pin / wave-mismatch rollback
+ *   sidecar SHA-256 / empty-allowlist net / tmp-file cap
+ *   cancelled SSE replay / lost session fence / partial-hold refund
+ *   EAI_AGAIN → unavailable
  *
  * Original SiraGPT rewrite. No vendor copy. No OpenRouter.
  * DeepSeek Flash/Pro only. Interpreter stays `local`.
@@ -47,6 +55,8 @@ const SUBTASK_TOKEN_FLOOR = 64;
 const SUBTASK_TOKEN_CAP = 2_048;
 const SANDBOX_ORPHAN_MS = 10 * 60 * 1000;
 const CHARS_PER_TOKEN = 4;
+const SUBAGENT_TOOLS_PER_TURN = 8;
+const SANDBOX_TMP_FILE_CAP = 32;
 
 const ERROR_TABLE = Object.freeze({
   tool_schema_repair: { retryable: false, message: 'Reparé argumentos incompletos de la herramienta y seguí.' },
@@ -72,6 +82,23 @@ const ERROR_TABLE = Object.freeze({
   credit_cancel_partial: { retryable: false, message: 'Contabilicé tokens parciales del turno cancelado. No cobré de más.' },
   credit_cancel_dedupe: { retryable: false, message: 'Ese usage de cancelación ya estaba registrado. No lo duplicé.' },
   openrouter_denied: { retryable: false, message: 'Generate solo usa DeepSeek Flash/Pro. OpenRouter está prohibido.' },
+  held_tool_calls_open: { retryable: false, message: 'Hay llamados a herramienta en hold. No cierro el turno.' },
+  json_backtick_wrap: { retryable: false, message: 'Quité el envoltorio de backticks del JSON de la herramienta.' },
+  tool_http_url: { retryable: false, message: 'La URL de la herramienta no es http(s) válida.' },
+  http_499_retry: { retryable: true, message: '499: el cliente cerró. Reintento con espera.' },
+  http_499: { retryable: false, message: '499: el cliente cerró. No reintento más.' },
+  subagent_cancel_inherit: { retryable: false, message: 'El subagente heredó la cancelación del padre.' },
+  subagent_tools_cap: { retryable: false, message: 'El subagente superó 8 llamados a herramienta en el turno.' },
+  pgvector_sparse_zero: { retryable: false, message: 'El vector es todo ceros. Lo rechacé.' },
+  fact_anchor_tag: { retryable: false, message: 'Piné hechos que traían etiqueta de ancla.' },
+  ckpt_wave_mismatch: { retryable: false, message: 'El checkpoint es de otra ola. No revertí.' },
+  sidecar_sha256: { retryable: false, message: 'El SHA-256 del sidecar no coincide tras el write.' },
+  sandbox_net_allowlist: { retryable: false, message: 'Red del sandbox pedida con allowlist vacía. Fail-closed.' },
+  sandbox_tmp_count: { retryable: false, message: 'El sandbox superó 32 archivos temporales.' },
+  sse_replay_cancelled: { retryable: false, message: 'El run está cancelado. No reenvio el replay SSE.' },
+  queue_fence_lost: { retryable: false, message: 'La sesión perdió el fence. No encolo.' },
+  credit_cancel_hold: { retryable: false, message: 'Cancelado tras hold parcial. Devuelvo el remanente.' },
+  net_eai_again: { retryable: true, message: 'EAI_AGAIN: DNS temporal. Trato como no disponible.' },
 });
 
 function stableJson(value) {
@@ -585,35 +612,228 @@ function refuseOpenRouterInWave3h59(env = process.env) {
   return { ok: true, openrouter: false, code: null };
 }
 
+function refuseFinishIfHeldToolCallsOpen({ held, count } = {}) {
+  const list = Array.isArray(held) ? held : [];
+  const n = Number(count);
+  const open = Number.isFinite(n) && n > 0 ? n : list.length;
+  if (open > 0) return { ok: false, open, code: 'held_tool_calls_open' };
+  return { ok: true, open: 0, code: null };
+}
+
+function repairJsonBacktickWrappedOnce(raw) {
+  if (raw == null) return { ok: true, value: {}, repaired: false, code: null };
+  if (typeof raw === 'object') return { ok: true, value: raw, repaired: false, code: null };
+  const s = String(raw).trim();
+  try {
+    return { ok: true, value: JSON.parse(s), repaired: false, code: null };
+  } catch (_) { /* unwrap fences */ }
+  const m = s.match(/^`+(?:json|javascript|js)?\s*([\s\S]*?)`+$/i);
+  if (m) {
+    try {
+      const value = JSON.parse(m[1].trim());
+      return { ok: true, value, repaired: true, code: 'json_backtick_wrap' };
+    } catch (e) {
+      return { ok: false, value: null, repaired: false, error: e.message, code: 'json_backtick_wrap' };
+    }
+  }
+  return { ok: false, value: null, repaired: false, code: 'json_backtick_wrap' };
+}
+
+function coerceHttpUrlOrRefuse(value) {
+  if (value == null || value === '') return { ok: false, value, code: 'tool_http_url' };
+  const s = String(value).trim();
+  try {
+    const u = new URL(s);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return { ok: false, value: s, code: 'tool_http_url' };
+    }
+    if (!u.hostname) return { ok: false, value: s, code: 'tool_http_url' };
+    const next = u.toString();
+    return { ok: true, value: next, coerced: next !== s, code: next !== s ? 'tool_http_url' : null };
+  } catch (_) {
+    return { ok: false, value: s, code: 'tool_http_url' };
+  }
+}
+
+function backoffOn499ClientClosedRequest(err, { attempt = 0 } = {}) {
+  const status = Number((err && (err.status || err.statusCode)) || (err && err.response && err.response.status));
+  const msg = String((err && err.message) || '');
+  const is499 = status === 499 || /\b499\b|client closed request/i.test(msg);
+  if (!is499) return { retry: false, delayMs: 0, code: null };
+  const n = Math.max(0, Math.floor(Number(attempt) || 0));
+  if (n >= BACKOFF_MAX_ATTEMPTS) {
+    return { retry: false, delayMs: 0, status: 499, attempt: n, code: 'http_499' };
+  }
+  const delayMs = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * (2 ** n));
+  return { retry: true, delayMs, status: 499, attempt: n, code: 'http_499_retry' };
+}
+
+function inheritSubagentCancelSignal({ parentSignal, childSignal } = {}) {
+  const parentAborted = Boolean(parentSignal && (parentSignal.aborted === true || parentSignal.cancelled === true));
+  if (parentAborted) {
+    return { abort: true, inherited: true, code: 'subagent_cancel_inherit' };
+  }
+  const childAborted = Boolean(childSignal && (childSignal.aborted === true || childSignal.cancelled === true));
+  if (childAborted) return { abort: true, inherited: false, code: 'subagent_cancel_inherit' };
+  return { abort: false, inherited: false, code: null };
+}
+
+function capSubagentToolCallsPerTurn8({ count, max = SUBAGENT_TOOLS_PER_TURN } = {}) {
+  const n = Number(count);
+  const cap = Math.max(1, Number(max) || SUBAGENT_TOOLS_PER_TURN);
+  if (Number.isFinite(n) && n > cap) return { ok: false, count: n, max: cap, code: 'subagent_tools_cap' };
+  return { ok: true, count: Number.isFinite(n) ? n : 0, max: cap, code: null };
+}
+
+function rejectPgvectorSparseAllZeros(vector) {
+  if (!Array.isArray(vector) || !vector.length) return { ok: false, nonzero: 0, code: 'pgvector_sparse_zero' };
+  let nonzero = 0;
+  for (const n of vector) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return { ok: false, nonzero, code: 'pgvector_sparse_zero' };
+    if (v !== 0) nonzero += 1;
+  }
+  if (nonzero === 0) return { ok: false, nonzero: 0, code: 'pgvector_sparse_zero' };
+  return { ok: true, nonzero, code: null };
+}
+
+function pinFactsWhenAnchorTagPresent(facts) {
+  const list = Array.isArray(facts) ? facts : [];
+  let pinned = 0;
+  const out = list.map((f) => {
+    if (!f || typeof f !== 'object') return f;
+    const text = String(f.content || f.text || f.fact || '');
+    if (f.anchor === true || ANCHOR_RE.test(text) || /<anchor\b/i.test(text)) {
+      pinned += 1;
+      return { ...f, pin: true };
+    }
+    return f;
+  });
+  return { facts: out, pinned, code: pinned ? 'fact_anchor_tag' : null };
+}
+
+function refuseRollbackIfWaveMismatch({ expectedWave, actualWave } = {}) {
+  const a = String(expectedWave == null ? '' : expectedWave);
+  const b = String(actualWave == null ? '' : actualWave);
+  if (!a || !b) return { ok: true, skipped: true, code: null };
+  if (a !== b) return { ok: false, expectedWave: a, actualWave: b, code: 'ckpt_wave_mismatch' };
+  return { ok: true, code: null };
+}
+
+function verifySidecarSha256AfterWrite({ expected, actual, sidecar } = {}) {
+  const exp = String(expected == null ? (sidecar && sidecar.sha256) || '' : expected);
+  const act = String(actual == null ? '' : actual);
+  if (!exp && !act) return { ok: true, skipped: true, code: null };
+  const a = /^[a-f0-9]{64}$/i.test(exp) ? exp.toLowerCase() : sha256Hex(exp);
+  const b = /^[a-f0-9]{64}$/i.test(act) ? act.toLowerCase() : sha256Hex(act);
+  if (a !== b) return { ok: false, expected: a, actual: b, code: 'sidecar_sha256' };
+  return { ok: true, sha256: a, code: null };
+}
+
+function refuseSandboxNetIfAllowlistEmpty({ allowlist, netEnabled } = {}) {
+  if (netEnabled !== true) return { ok: true, skipped: true, code: null };
+  const list = Array.isArray(allowlist) ? allowlist.filter((x) => String(x || '').trim()) : [];
+  if (!list.length) return { ok: false, code: 'sandbox_net_allowlist' };
+  return { ok: true, allowlist: list, code: null };
+}
+
+function capSandboxTmpFileCount32({ count, max = SANDBOX_TMP_FILE_CAP } = {}) {
+  const n = Number(count);
+  const cap = Math.max(1, Number(max) || SANDBOX_TMP_FILE_CAP);
+  if (Number.isFinite(n) && n > cap) return { ok: false, count: n, max: cap, code: 'sandbox_tmp_count' };
+  return { ok: true, count: Number.isFinite(n) ? n : 0, max: cap, code: null };
+}
+
+function dropSseReplayIfRunCancelled({ cancelled, events } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  if (cancelled === true) {
+    return { events: [], dropped: list.length, code: 'sse_replay_cancelled' };
+  }
+  return { events: list, dropped: 0, code: null };
+}
+
+function rejectEnqueueIfSessionFenceLost({ fence, expectedFence, sessionLocked } = {}) {
+  if (sessionLocked === true) return { ok: false, code: 'queue_fence_lost' };
+  const a = fence == null ? '' : String(fence);
+  const b = expectedFence == null ? '' : String(expectedFence);
+  if (!a && !b) return { ok: true, skipped: true, code: null };
+  if (a && b && a !== b) return { ok: false, fence: a, expectedFence: b, code: 'queue_fence_lost' };
+  if (expectedFence != null && expectedFence !== '' && !a) {
+    return { ok: false, code: 'queue_fence_lost' };
+  }
+  return { ok: true, code: null };
+}
+
+function refundIfCancelledAfterPartialHold({ cancelled, heldTokens, settledTokens } = {}) {
+  if (cancelled !== true) return { refund: false, tokens: 0, code: null };
+  const held = Math.max(0, Number(heldTokens) || 0);
+  const settled = Math.max(0, Number(settledTokens) || 0);
+  const tokens = Math.max(0, held - settled);
+  if (tokens > 0) return { refund: true, tokens, code: 'credit_cancel_hold' };
+  return { refund: false, tokens: 0, code: null };
+}
+
+function classifyEaiAgainAsUnavailable(err) {
+  const blob = `${String((err && (err.code || err.errno || err.name)) || '')} ${String((err && err.message) || '')}`.toUpperCase();
+  if (blob.includes('EAI_AGAIN') || blob.includes('EAIAGAIN')) {
+    return { unavailable: true, retryable: true, code: 'net_eai_again' };
+  }
+  return { unavailable: false, retryable: false, code: null };
+}
+
+const FLAGS = Object.freeze({
+  repairPartialToolCallSchema: true,
+  backoffMalformedToolCall: true,
+  tolerateIncompleteStreamedToolCall: true,
+  stripUnknownToolCallProperties: true,
+  inferToolNameFromCallId: true,
+  sliceSubtaskTokenBudget: true,
+  cutInfiniteLoopByFingerprint: true,
+  cutSubtaskIfNoProgress: true,
+  anchorCriticalFacts: true,
+  compactPreserveFactAnchors: true,
+  checkpointHookBeforeMutatingTool: true,
+  rollbackHookOnTimedOutWrite: true,
+  skipCheckpointIfUnchanged: true,
+  sandboxTimeoutThenCleanup: true,
+  sandboxReapOrphanWorkdirs: true,
+  sseResumeDropsPriorListeners: true,
+  sseCancelClearsHeartbeat: true,
+  sseResumeRejectsSeqPastHead: true,
+  sessionQueueOrderBySeq: true,
+  sessionQueueDropLateOutOfOrder: true,
+  accountPartialTokensOnCancel: true,
+  neverDoubleCountCancelUsage: true,
+  classifyEngine3h59Error: true,
+  refuseOpenRouterInWave3h59: true,
+  refuseFinishIfHeldToolCallsOpen: true,
+  repairJsonBacktickWrappedOnce: true,
+  coerceHttpUrlOrRefuse: true,
+  backoffOn499ClientClosedRequest: true,
+  inheritSubagentCancelSignal: true,
+  capSubagentToolCallsPerTurn8: true,
+  rejectPgvectorSparseAllZeros: true,
+  pinFactsWhenAnchorTagPresent: true,
+  refuseRollbackIfWaveMismatch: true,
+  verifySidecarSha256AfterWrite: true,
+  refuseSandboxNetIfAllowlistEmpty: true,
+  capSandboxTmpFileCount32: true,
+  dropSseReplayIfRunCancelled: true,
+  rejectEnqueueIfSessionFenceLost: true,
+  refundIfCancelledAfterPartialHold: true,
+  classifyEaiAgainAsUnavailable: true,
+  wave: WAVE,
+  openrouterGenerate: false,
+  interpreter: 'local',
+});
+
+function snapshotFlags() {
+  return { ...FLAGS };
+}
+
 function waveSnapshot() {
   return {
-    wave: WAVE,
-    repairPartialToolCallSchema: true,
-    backoffMalformedToolCall: true,
-    tolerateIncompleteStreamedToolCall: true,
-    stripUnknownToolCallProperties: true,
-    inferToolNameFromCallId: true,
-    sliceSubtaskTokenBudget: true,
-    cutInfiniteLoopByFingerprint: true,
-    cutSubtaskIfNoProgress: true,
-    anchorCriticalFacts: true,
-    compactPreserveFactAnchors: true,
-    checkpointHookBeforeMutatingTool: true,
-    rollbackHookOnTimedOutWrite: true,
-    skipCheckpointIfUnchanged: true,
-    sandboxTimeoutThenCleanup: true,
-    sandboxReapOrphanWorkdirs: true,
-    sseResumeDropsPriorListeners: true,
-    sseCancelClearsHeartbeat: true,
-    sseResumeRejectsSeqPastHead: true,
-    sessionQueueOrderBySeq: true,
-    sessionQueueDropLateOutOfOrder: true,
-    accountPartialTokensOnCancel: true,
-    neverDoubleCountCancelUsage: true,
-    classifyEngine3h59Error: true,
-    refuseOpenRouterInWave3h59: true,
-    interpreter: 'local',
-    openrouterGenerate: false,
+    ...snapshotFlags(),
     sandboxUsesRunsc: false,
   };
 }
@@ -643,13 +863,32 @@ const HELPERS = Object.freeze([
   'neverDoubleCountCancelUsage',
   'classifyEngine3h59Error',
   'refuseOpenRouterInWave3h59',
+  'refuseFinishIfHeldToolCallsOpen',
+  'repairJsonBacktickWrappedOnce',
+  'coerceHttpUrlOrRefuse',
+  'backoffOn499ClientClosedRequest',
+  'inheritSubagentCancelSignal',
+  'capSubagentToolCallsPerTurn8',
+  'rejectPgvectorSparseAllZeros',
+  'pinFactsWhenAnchorTagPresent',
+  'refuseRollbackIfWaveMismatch',
+  'verifySidecarSha256AfterWrite',
+  'refuseSandboxNetIfAllowlistEmpty',
+  'capSandboxTmpFileCount32',
+  'dropSseReplayIfRunCancelled',
+  'rejectEnqueueIfSessionFenceLost',
+  'refundIfCancelledAfterPartialHold',
+  'classifyEaiAgainAsUnavailable',
 ]);
 
 module.exports = {
   WAVE,
+  FLAGS,
   HELPERS,
   ERROR_TABLE,
   MUTATING_TOOLS,
+  snapshotFlags,
+  waveSnapshot,
   repairPartialToolCallSchema,
   backoffMalformedToolCall,
   tolerateIncompleteStreamedToolCall,
@@ -674,5 +913,20 @@ module.exports = {
   neverDoubleCountCancelUsage,
   classifyEngine3h59Error,
   refuseOpenRouterInWave3h59,
-  waveSnapshot,
+  refuseFinishIfHeldToolCallsOpen,
+  repairJsonBacktickWrappedOnce,
+  coerceHttpUrlOrRefuse,
+  backoffOn499ClientClosedRequest,
+  inheritSubagentCancelSignal,
+  capSubagentToolCallsPerTurn8,
+  rejectPgvectorSparseAllZeros,
+  pinFactsWhenAnchorTagPresent,
+  refuseRollbackIfWaveMismatch,
+  verifySidecarSha256AfterWrite,
+  refuseSandboxNetIfAllowlistEmpty,
+  capSandboxTmpFileCount32,
+  dropSseReplayIfRunCancelled,
+  rejectEnqueueIfSessionFenceLost,
+  refundIfCancelledAfterPartialHold,
+  classifyEaiAgainAsUnavailable,
 };

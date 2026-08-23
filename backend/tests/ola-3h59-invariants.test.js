@@ -248,6 +248,8 @@ test('3H59-P-001 adapter fail-open wires 3H59 helpers and wave', () => {
   assert.equal(typeof ad.repairPartialToolCallSchema, 'function');
   assert.equal(typeof ad.cutInfiniteLoopByFingerprint, 'function');
   assert.equal(typeof ad.accountPartialTokensOnCancel, 'function');
+  assert.equal(s.refuseFinishIfHeldToolCallsOpen, true);
+  assert.equal(s.classifyEaiAgainAsUnavailable, true);
   assert.equal(ad.loadOptionalEngineWave('engine-3h54'), null);
   assert.equal(ad.loadOptionalEngineWave('engine-3h59').WAVE, '3H59');
   assert.equal(ad.loadOptionalEngineWave('engine-3h55'), null);
@@ -295,6 +297,70 @@ test('3H59-R-001 error codes and public stream map 3H59 taxonomy without traces'
 test('3H59-S-001 compose binds 3H59 tests and DeepSeek lock holds', () => {
   assert.ok(String(__filename || '').includes('ola-3h59-invariants.test.js'));
   assert.equal(w.WAVE, '3H59');
-  assert.equal(w.HELPERS.length >= 15 && w.HELPERS.length <= 30, true);
+  assert.equal(w.HELPERS.length, 40);
+  const flagHelpers = Object.keys(w.FLAGS).filter((k) => !['wave', 'openrouterGenerate', 'interpreter'].includes(k));
+  assert.equal(flagHelpers.length, 40);
+  assert.deepEqual(flagHelpers, w.HELPERS.slice());
+  for (const name of w.HELPERS) {
+    assert.equal(typeof w[name], 'function', name);
+    assert.equal(w.FLAGS[name], true, name);
+  }
+  const snap = w.snapshotFlags();
+  assert.equal(snap.wave, '3H59');
+  assert.equal(snap.openrouterGenerate, false);
+  assert.equal(snap.interpreter, 'local');
+  assert.equal(ad.adapterSnapshot().wave, '3H59');
+  assert.equal(ad.adapterSnapshot().refuseFinishIfHeldToolCallsOpen, true);
+  assert.equal(typeof ad.refuseFinishIfHeldToolCallsOpen, 'function');
+  assert.equal(typeof ad.classifyEaiAgainAsUnavailable, 'function');
+});
+
+test('3H59-T-001 live-align helpers cover hold/url/499/subagent/vector/ckpt/sse/queue', () => {
+  assert.equal(w.refuseFinishIfHeldToolCallsOpen({ held: [{ id: 'c1' }] }).ok, false);
+  assert.equal(w.refuseFinishIfHeldToolCallsOpen({ held: [] }).ok, true);
+  const repaired = w.repairJsonBacktickWrappedOnce('```json\n{"path":"/tmp/a"}\n```');
+  assert.equal(repaired.ok, true);
+  assert.equal(repaired.repaired, true);
+  assert.equal(repaired.value.path, '/tmp/a');
+  assert.equal(w.coerceHttpUrlOrRefuse('https://example.com/x').ok, true);
+  assert.equal(w.coerceHttpUrlOrRefuse('javascript:alert(1)').ok, false);
+  const retry = w.backoffOn499ClientClosedRequest({ status: 499 }, { attempt: 0 });
+  assert.equal(retry.retry, true);
+  assert.equal(retry.code, 'http_499_retry');
+  const stop = w.backoffOn499ClientClosedRequest({ status: 499 }, { attempt: 4 });
+  assert.equal(stop.retry, false);
+  assert.equal(w.inheritSubagentCancelSignal({ parentSignal: { aborted: true } }).inherited, true);
+  assert.equal(w.capSubagentToolCallsPerTurn8({ count: 9 }).ok, false);
+  assert.equal(w.capSubagentToolCallsPerTurn8({ count: 8 }).ok, true);
+  assert.equal(w.rejectPgvectorSparseAllZeros([0, 0, 0]).ok, false);
+  assert.equal(w.rejectPgvectorSparseAllZeros([0, 0.1, 0]).ok, true);
+  const pinned = w.pinFactsWhenAnchorTagPresent([
+    { content: 'MUST: keep hex' },
+    { content: 'plain' },
+  ]);
+  assert.equal(pinned.pinned, 1);
+  assert.equal(w.refuseRollbackIfWaveMismatch({ expectedWave: '3H59', actualWave: '3H46' }).ok, false);
+  assert.equal(w.refuseRollbackIfWaveMismatch({ expectedWave: '3H59', actualWave: '3H59' }).ok, true);
+  const body = 'hello';
+  const hex = require('crypto').createHash('sha256').update(body, 'utf8').digest('hex');
+  assert.equal(w.verifySidecarSha256AfterWrite({ expected: hex, actual: body }).ok, true);
+  assert.equal(w.verifySidecarSha256AfterWrite({ expected: hex, actual: 'nope' }).ok, false);
+  assert.equal(w.refuseSandboxNetIfAllowlistEmpty({ netEnabled: true, allowlist: [] }).ok, false);
+  assert.equal(w.refuseSandboxNetIfAllowlistEmpty({ netEnabled: true, allowlist: ['api.deepseek.com'] }).ok, true);
+  assert.equal(w.capSandboxTmpFileCount32({ count: 33 }).ok, false);
+  const replay = w.dropSseReplayIfRunCancelled({ cancelled: true, events: [{ seq: 1 }] });
+  assert.equal(replay.dropped, 1);
+  assert.equal(replay.events.length, 0);
+  assert.equal(w.rejectEnqueueIfSessionFenceLost({ fence: 'a', expectedFence: 'b' }).ok, false);
+  const refund = w.refundIfCancelledAfterPartialHold({ cancelled: true, heldTokens: 100, settledTokens: 40 });
+  assert.equal(refund.refund, true);
+  assert.equal(refund.tokens, 60);
+  const dns = w.classifyEaiAgainAsUnavailable({ code: 'EAI_AGAIN' });
+  assert.equal(dns.unavailable, true);
+  assert.equal(dns.retryable, true);
+  const classified = w.classifyEngine3h59Error({ code: 'net_eai_again' });
+  assert.equal(classified.retryable, true);
+  assert.equal(classified.leaked, false);
+  assert.ok(w.HELPERS.length >= 15, w.HELPERS.length);
   assert.ok(ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60');
 });
