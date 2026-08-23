@@ -652,5 +652,15 @@
     "sendHint": "Invia",
     "stopHint": "Interrompi",
     "dropFiles": "Rilascia i file per caricarli"
+  },
+  "chatSearch": {
+    "placeholder": "Cerca nelle tue chat…",
+    "noResults": "Nessun risultato",
+    "noResultsFor": "Nessuna chat trovata per «{query}»",
+    "serverFallback": "Ricerca sul server non riuscita; mostriamo le corrispondenze dei titoli locali.",
+    "emptyHistory": "Non hai ancora chat",
+    "emptyHistoryHint": "Inizia una conversazione per vederla qui",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chat"
   }
 }
