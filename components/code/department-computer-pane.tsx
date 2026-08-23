@@ -52,7 +52,7 @@ function embedFrom(session: AgentSession): string {
   if (session.embedUrl) return session.embedUrl
   const id = session.sessionId
   if (!id) return ""
-  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&path=agent-computer/sessions/${id}/novnc/websockify`
+  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=remote&scale_cursor=true&path=agent-computer/sessions/${id}/novnc/websockify`
 }
 
 async function ensureMemberDesktop(): Promise<AgentSession> {
@@ -166,7 +166,7 @@ export function DepartmentComputerPane({
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md text-zinc-400 hover:bg-white/10 hover:text-zinc-50"
+          className="h-7 w-7 shrink-0 rounded-md text-zinc-400 transition-colors hover:bg-white/10 hover:text-zinc-50 active:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40 disabled:pointer-events-none disabled:opacity-40"
           aria-label="Cerrar computadora"
           title="Cerrar computadora"
           data-testid="department-computer-close"
@@ -176,9 +176,9 @@ export function DepartmentComputerPane({
         </Button>
       </header>
 
-      <div className="relative min-h-0 flex-1 bg-[#0c0c0d] text-zinc-50">
+      <div className="relative min-h-0 flex-1 bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
         {embedUrl ? (
-          <ComputerViewer url={embedUrl} className="absolute inset-0" />
+          <ComputerViewer url={embedUrl} className="absolute inset-0 h-full w-full" />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div>
@@ -224,10 +224,16 @@ function DockButton({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium",
-        active ? "bg-white/15 text-white" : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100",
+        "flex h-9 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40",
+        "disabled:pointer-events-none disabled:opacity-40",
+        active
+          ? "bg-white/15 text-white active:bg-white/25"
+          : "text-zinc-400 hover:bg-white/10 hover:text-zinc-100 active:bg-white/20",
       )}
       aria-pressed={active}
+      aria-label={label}
+      title={label}
     >
       <Icon className="h-3.5 w-3.5" />
       <span>{label}</span>

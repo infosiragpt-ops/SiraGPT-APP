@@ -23,9 +23,7 @@ import { WorkspaceTopBar, type WorkspaceTopBarProps } from "@/components/code/wo
 
 const baseProps: WorkspaceTopBarProps = {
   openPanels: new Set(["preview"]),
-  activePanel: "preview",
   onTogglePanel: vi.fn(),
-  onClosePanel: vi.fn(),
   onOpenSearch: vi.fn(),
   onOpenInvite: vi.fn(),
   onOpenCode: vi.fn(),
@@ -76,4 +74,18 @@ describe("WorkspaceTopBar upgrade flow", () => {
       expect(screen.queryByRole("dialog", { name: "Planes de SiraGPT" })).not.toBeInTheDocument()
     },
   )
+
+  it("keeps Ejecutar out of the top-bar DOM and exposes it only in the overflow menu", () => {
+    useAuthMock.mockReturnValue({ user: userWithPlan("PRO") })
+    render(<WorkspaceTopBar {...baseProps} />)
+
+    expect(screen.queryByTestId("workspace-header-run-stop")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Ejecutar la app" })).not.toBeInTheDocument()
+    expect(screen.getByTestId("workspace-header-overflow")).toBeInTheDocument()
+    expect(screen.getByTestId("workspace-header-department-computer")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Invitar al equipo" })).toHaveAttribute("title", "Invitar al equipo")
+    expect(screen.getByRole("button", { name: "Buscar" })).toHaveAttribute("title", "Buscar")
+    expect(screen.getByRole("button", { name: "Más acciones" })).toHaveAttribute("title", "Más acciones")
+    expect(screen.getByRole("button", { name: "Publicar el proyecto" })).toHaveAttribute("title", "Publicar el proyecto")
+  })
 })
