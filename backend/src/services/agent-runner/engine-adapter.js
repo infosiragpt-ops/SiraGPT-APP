@@ -7639,7 +7639,7 @@ function bindOptionalEngineWaves(target) {
     const mod = loadOptionalEngineWave(name);
     if (!mod || typeof mod !== 'object') continue;
     for (const [k, v] of Object.entries(mod)) {
-      if (k === 'WAVE' || k === 'waveSnapshot' || k === 'HELPERS' || k === 'ERROR_TABLE' || k === 'MUTATING_TOOLS') continue;
+      if (k === 'WAVE' || k === 'FLAGS' || k === 'waveSnapshot' || k === 'snapshotFlags' || k === 'HELPERS' || k === 'ERROR_TABLE' || k === 'MUTATING_TOOLS') continue;
       if (typeof v === 'function' && typeof target[k] !== 'function') target[k] = v;
     }
   }
