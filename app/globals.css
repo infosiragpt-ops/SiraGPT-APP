@@ -7969,6 +7969,28 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  * Thinking-trace text shimmer — same sweep as .premium-shimmer but clipped
  * to the glyphs, for the "Pensando…" header of the extended-thinking panel.
  */
+/*
+ * RunTrace semantic colors — independent of brand red. In-progress
+ * steps must never render as --primary / brand red (that reads as failure).
+ */
+:root {
+  --step-pending: #8A8580;
+  --step-running: #2563eb;
+  --step-done: #059669;
+  --step-failed: #dc2626;
+}
+.dark {
+  --step-pending: #9ca3af;
+  --step-running: #60a5fa;
+  --step-done: #34d399;
+  --step-failed: #f87171;
+}
+.run-trace-step--pending { color: var(--step-pending); }
+.run-trace-step--running { color: var(--step-running); }
+.run-trace-step--done { color: var(--step-done); }
+.run-trace-step--failed { color: var(--step-failed); }
+.run-trace-step--cancelled { color: var(--step-pending); }
+
 .thinking-shimmer-text {
   background-image: linear-gradient(
     100deg,

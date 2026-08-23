@@ -5579,6 +5579,24 @@ function ChatInterfaceContent() {
     syncActiveLocalJobs();
   }, [syncActiveLocalJobs]);
 
+  React.useEffect(() => {
+    const onCancel = (event: Event) => {
+      const taskId = String((event as CustomEvent<{ taskId?: string }>).detail?.taskId || "")
+      if (!taskId) return
+      const matchesCurrent = currentAgentTaskIdRef.current === taskId
+      let matchesChat = false
+      agentTaskIdsByChatRef.current.forEach((id) => {
+        if (id === taskId) matchesChat = true
+      })
+      if (!matchesCurrent && !matchesChat) return
+      const scoped = currentChatId ? localJobControllersRef.current.get(currentChatId) : null
+      const controller = searchAbortControllerRef.current || scoped
+      controller?.abort()
+    }
+    window.addEventListener("agent-task-cancel", onCancel)
+    return () => window.removeEventListener("agent-task-cancel", onCancel)
+  }, [currentChatId])
+
   const markLocalJobIdle = React.useCallback((chatId?: string | null, controller?: AbortController) => {
     if (!chatId) return;
     const tracked = localJobControllersRef.current.get(chatId);
@@ -9951,7 +9969,7 @@ REWRITTEN TEXT:`;
     } else {
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
         return { ...prevChat, messages: updatedMessages };
       });
     }
@@ -10163,8 +10181,8 @@ REWRITTEN TEXT:`;
       };
 
       const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
-        userMessageAlreadyAdded: !isNewChat,
-        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+        userMessageAlreadyAdded: true,
+        assistantMessageId: assistantPlaceholder.id,
       });
 
       switch (intent) {
@@ -12570,14 +12588,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
 
       const clientBootstrapStepId = 'client-agent-bootstrap';
+      const resolvedAssistantMessageId = assistantMessageId || `msg-ai-${Date.now() + 1}`;
       const makeInitialTaskState = (): AgentTaskState => ({
         ...initialAgentState,
+        meta: {
+          ...(initialAgentState.meta || {}),
+          assistantMessageId: resolvedAssistantMessageId,
+        },
         steps: [{
           id: clientBootstrapStepId,
           label: 'Analizando solicitud',
           icon: 'thought',
           reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
         }],
         artifacts: [],
@@ -12598,7 +12622,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
+        id: resolvedAssistantMessageId,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
         content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',

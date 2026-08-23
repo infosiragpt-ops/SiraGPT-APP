@@ -33,12 +33,20 @@ import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/ag
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
   formatQualityScore,
-  professionalStepLabel,
   sanitizeAgentText,
   summarizeAgentActivity,
   toolToProfessionalLabel,
   type AgentActivityStatus,
 } from "@/lib/agent-task-presentation"
+import {
+  descriptionsDiffer,
+  isStaleRun,
+  projectStepRow,
+  resolveRunStatus,
+  shouldRenderRunTrace,
+  collapseSuccessLabel,
+  STEP_STATUS_CLASS,
+} from "@/lib/run-trace"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-dialog"
 
@@ -54,6 +62,9 @@ interface Props {
    * sees two timelines for one turn.
    */
   hideSteps?: boolean
+  /** Host message role — RunTrace only mounts on assistant bubbles. */
+  role?: string
+  messageId?: string
 }
 
 interface ProjectedSearchCall {
@@ -137,7 +148,6 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
 
   for (const step of source) {
     const tools = Array.from(new Set((step.toolCalls || []).map((call) => toolToProfessionalLabel(call.tool)))).slice(0, 2)
-    const label = professionalStepLabel(step)
     // Prefer the model's own reasoning narration (Claude-style transparency)
     // as the secondary line; fall back to the tool names when absent.
     const reasoning = typeof step.reasoning === "string" ? step.reasoning.trim() : ""
@@ -157,12 +167,21 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
         if (target && !fetchTargets.includes(target)) fetchTargets.push(target)
       }
     }
-    const item: TimelineStepProjection = {
+    const row = projectStepRow({
       id: step.id,
-      label,
-      detail: reasoning || (tools.length ? tools.join(" · ") : undefined),
-      status: step.status === "running" ? "running" : step.status === "error" ? "error" : "done",
-      phase: phaseFromStep(step, label),
+      label: step.label,
+      status: step.status,
+      reasoning,
+      retryCount: (step as { retryCount?: number }).retryCount,
+      toolCalls: step.toolCalls,
+    })
+    const detailSource = row.description || (tools.length ? tools.filter((tool) => descriptionsDiffer(row.label, tool)).join(" · ") : "")
+    const item: TimelineStepProjection = {
+      id: row.id,
+      label: row.label,
+      detail: detailSource || undefined,
+      status: row.status === "failed" ? "error" : row.status === "running" ? "running" : "done",
+      phase: phaseFromStep(step, row.label),
       count: 1,
       searchCalls,
       fetchTargets,
@@ -933,7 +952,7 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
   )
 }
 
-export function AgenticStepsRenderer({ state, className, onDocumentPreview, hideSteps = false }: Props) {
+export function AgenticStepsRenderer({ state, className, onDocumentPreview, hideSteps = false, role, messageId }: Props) {
   const [retrying, setRetrying] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
   // Claude-style live trace: expanded by default while the agent runs;
@@ -989,12 +1008,15 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   React.useEffect(() => {
     setStale(false)
     if (state.done || state.error) return
-    // Re-armed by lastEventAt: SSE heartbeats arrive every ~15 s, so a
-    // long quiet model call no longer trips the banner — only a stream
-    // that is truly dead for 90 s does.
-    const id = window.setTimeout(() => setStale(true), 90_000)
+    // Stale only after 3 missed heartbeats (~45 s), never because the
+    // model is quiet between business events. lastEventAt is refreshed
+    // by heartbeat frames as well as step events.
+    const id = window.setTimeout(() => {
+      const stamp = state.lastEventAt || state.heartbeatAt
+      if (!stamp || isStaleRun(stamp)) setStale(true)
+    }, 45_000)
     return () => window.clearTimeout(id)
-  }, [state.done, state.error, state.steps.length, state.lastEventAt])
+  }, [state.done, state.error, state.lastEventAt, state.heartbeatAt])
 
   const isLiveActivity = Boolean(!state.done && !state.error && !stale)
   const isCompletedActivity = Boolean(state.done && !state.error)
@@ -1026,14 +1048,61 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     }
   }, [retrying, taskId])
 
+  const runStatus = resolveRunStatus({
+    done: state.done,
+    error: state.error,
+    queueStatus: state.queue?.status,
+  })
+  const assistantOk = shouldRenderRunTrace({
+    role,
+    messageId,
+    assistantMessageId: state.meta?.assistantMessageId,
+  })
+  if (role && !assistantOk) return null
+
   if (isCompletedActivity || hideSteps) {
-    // Once the task is finished we want a clean answer surface — no
-    // "Completado · N pasos · M herramientas" header and no "Ver
-    // actividad" disclosure. The agent's deliverables still render
-    // when present so the user can keep the file/preview, but if the
-    // run produced no artifacts we render nothing here and let the
-    // message body speak for itself. `hideSteps` reuses the same
-    // artifacts-only surface while AgentTrace owns the live timeline.
+    // Succeeded runs collapse to one expandable line. Artifacts stay
+    // visible so the user can keep the file/preview. `hideSteps` reuses
+    // the artifacts-only surface while AgentTrace owns the live timeline.
+    if (hideSteps) {
+      if (!hasDeliverable) return null
+      return (
+        <div className={cn("my-2 max-w-2xl space-y-1", className)}>
+          <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
+        </div>
+      )
+    }
+    if (runStatus === "succeeded") {
+      const elapsed = liveStartRef.current
+        ? Math.max(1, Math.round((Date.now() - liveStartRef.current) / 1000))
+        : Math.max(1, elapsedSec || 1)
+      return (
+        <div className={cn("my-2 max-w-2xl space-y-1", className)}>
+          <button
+            type="button"
+            onClick={() => setTraceExpanded((v) => !v)}
+            aria-expanded={traceExpanded}
+            className="group flex items-center gap-2 rounded-lg px-1 py-0.5 text-left"
+          >
+            <span className={cn("text-[13px] font-medium", STEP_STATUS_CLASS.done)}>{collapseSuccessLabel(elapsed)}</span>
+            {traceExpanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70" />}
+          </button>
+          {traceExpanded && (
+            <div className="mt-1 border-l border-border/50 pl-3">
+              {timelineSteps.map((step) => (
+                <div key={step.id} className={cn("py-1 text-[12.5px] leading-5", STEP_STATUS_CLASS[step.status === "error" ? "failed" : "done"])}>
+                  {step.label}
+                  {step.detail && descriptionsDiffer(step.label, step.detail) ? (
+                    <div className="mt-0.5 text-[12px] text-muted-foreground/65">{step.detail}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasDeliverable ? <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} /> : null}
+        </div>
+      )
+    }
     if (!hasDeliverable) return null
     return (
       <div className={cn("my-2 max-w-2xl space-y-1", className)}>
@@ -1123,14 +1192,14 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
                 <div
                   className={cn(
                     "text-[12.5px] leading-5",
-                    step.status === "running" ? "font-medium text-foreground/75" : "text-muted-foreground/80",
-                    step.status === "error" && "text-red-600 dark:text-red-400",
+                    STEP_STATUS_CLASS[step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"],
+                    step.status === "running" && "font-medium",
                   )}
                 >
                   {step.label}
                   {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
                 </div>
-                {step.detail && (
+                {step.detail && descriptionsDiffer(step.label, step.detail) && (
                   <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
                 )}
                 <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />
