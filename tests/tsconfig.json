@@ -27,6 +27,8 @@
     "../lib/attachment-ingest.ts",
     "../lib/search-brain-ui.ts",
     "../lib/file-processing-vocab.ts",
+    "../lib/document-preview-gate.ts",
+    "../lib/document-viewer-attachment.ts",
     "../lib/download-utils.ts",
     "../lib/xlsx-client.ts",
     "../lib/sse-client.ts",
