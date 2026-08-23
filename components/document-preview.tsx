@@ -23,6 +23,7 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { CONVERSION_LOADING_LABEL, PREVIEW_LOADING_LABEL, resolvePreviewGate } from "@/lib/document-preview-gate"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 // Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
@@ -66,6 +67,12 @@ export type DocumentPreviewTarget =
       // Excel) before any client-side fallback. Used for message-attached
       // generated documents whose bytes live at a /uploads path (no artifact id).
       previewPdfUrl?: string
+      // Composer/upload gate. When false (or status is still `uploading`),
+      // the pane stays on the professional loading state and does not
+      // paint final pages from a local/partial object.
+      ready?: boolean
+      status?: string
+      uploadProgress?: number
     }
 
 interface DocumentPreviewProps {
@@ -419,6 +426,19 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     const raw = typeof url === "string" ? null : (url.previewPdfUrl || null)
     return raw ? normalizeBackendAssetUrl(raw, process.env.NEXT_PUBLIC_IMAGE_URL) : null
   }, [url])
+  const previewGate = React.useMemo(() => {
+    if (typeof url === "string") {
+      return { ready: true, phase: "ready" as const, progress: 100, label: "" }
+    }
+    if (url.ready === false || url.status === "uploading") {
+      return resolvePreviewGate({
+        id: "temp-pending",
+        status: url.status || "uploading",
+        uploadProgress: url.uploadProgress,
+      })
+    }
+    return { ready: true, phase: "ready" as const, progress: 100, label: "" }
+  }, [url])
   const format = React.useMemo(() => {
     const fromUrl = inferFormat(previewUrl)
     // Prefer the real document type for Word files: the chat sometimes hands
@@ -716,6 +736,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
 
   React.useEffect(() => {
     if (!previewUrl) return
+    if (!previewGate.ready) {
+      setState({ kind: "loading", message: previewGate.label || PREVIEW_LOADING_LABEL })
+      return
+    }
 
     if (format === "pdf") {
       setState({ kind: "pdf" })
@@ -774,7 +798,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         // the inferred agent-artifact endpoint.
         const pdfEndpoint = explicitPdfUrl || derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
         if (pdfEndpoint) {
-          setState({ kind: "loading", message: "Generando vista previa…" })
+          setState({ kind: "loading", message: CONVERSION_LOADING_LABEL })
           try {
             const pdfResp = await fetchPreviewAsset(pdfEndpoint)
             if (pdfResp.ok && (pdfResp.headers.get("content-type") || "").includes("pdf")) {
@@ -856,7 +880,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       cancelled = true
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
-  }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl])
+  }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl, previewGate.ready, previewGate.label])
 
   const header = isOverlay ? (
     <div
@@ -960,9 +984,21 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         )}
       >
         {state.kind === "loading" && (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-            <ThinkingIndicator size="sm" />
-            {state.message || "Cargando vista previa…"}
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground" role="status" aria-live="polite">
+            <div className="mx-auto w-full max-w-[28rem] space-y-3 rounded-sm bg-card/80 p-10 shadow-md ring-1 ring-border/30">
+              <div className="h-5 w-1/2 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-full animate-pulse rounded bg-muted" />
+              <div className="h-3 w-[92%] animate-pulse rounded bg-muted" />
+              <div className="h-3 w-[88%] animate-pulse rounded bg-muted" />
+              <div className="h-3 w-2/5 animate-pulse rounded bg-muted" />
+            </div>
+            <div className="flex items-center gap-2">
+              <ThinkingIndicator size="sm" />
+              <span>{state.message || PREVIEW_LOADING_LABEL}</span>
+              {!previewGate.ready && previewGate.progress > 0 && (
+                <span className="tabular-nums">{Math.round(previewGate.progress)}%</span>
+              )}
+            </div>
           </div>
         )}
 

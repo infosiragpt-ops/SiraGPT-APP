@@ -137,6 +137,26 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --composer-bg: 0 0% 100%;          /* light composer surface */
     --composer-border: 240 6% 90%;     /* light composer outline */
 
+    /* Chat UX tokens — brand, surfaces, WCAG code contrast.
+       Keep shadcn --accent (HSL components) intact; --brand is the
+       chat accent used by the send disc and focus rings. */
+    color-scheme: light;
+    --brand: #5b4dff;
+    --chat-accent: var(--brand);
+    --surface-1: #ffffff;
+    --surface-2: #f4f6f8;
+    --surface-3: #e8ebf0;
+    --code-bg: #1a2332;
+    --code-fg: #e8eef7;
+    --content-max: 46rem;
+
+    /* RunTrace / Pensando stepper — running is brand celeste, never red. */
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #059669;
+    --step-failed: #B45353;
+
     /*
      * Motion tokens — Claude-grade snappy easing. The "smooth" curve
      * is fastest at the start (perceived snappiness) and decays to
@@ -220,6 +240,22 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --sidebar-accent-foreground: 240 4.8% 95%;  /* #f1f1f6 — high-contrast text on accent bg */
     --sidebar-border: 215 21% 11%;     /* #161B22 */
     --sidebar-ring: 253 100% 68%;
+
+    color-scheme: dark;
+    --brand: #7c5cff;
+    --chat-accent: var(--brand);
+    --surface-1: #0b0d12;
+    --surface-2: #141820;
+    --surface-3: #1c222c;
+    --code-bg: #121826;
+    --code-fg: #e8eef7;
+    --content-max: 46rem;
+
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #34D399;
+    --step-failed: #F87171;
   }
 
   /*
@@ -268,6 +304,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    color-scheme: light dark;
   }
 
   * {
@@ -360,7 +397,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
       ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
       "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
       "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
-    font-size: 15px;
+    font-size: clamp(15px, 0.28vw + 14.4px, 16px);
     line-height: 1.6;
     /* Geist is already tightly tracked by design — a small negative
        adjustment keeps paragraphs looking calm without drifting into
@@ -412,7 +449,7 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
      the mobile composer behind the iOS keyboard. */
   width: 100vw;
   width: var(--app-layout-viewport-width, 100vw);
-  height: 100vh;
+  height: 100dvh;
   height: var(--app-viewport-height, 100dvh);
   min-height: 0;
   overflow: hidden;
@@ -434,11 +471,11 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   --chat-textarea-max-height: 200px;
   --chat-mobile-gutter: 1rem;
   /* Single source of truth for the readable conversation rail and composer.
-     Keeping this token on the chat viewport makes it survive sidebar, split
-     panel and mobile layout changes without letting both widths drift apart. */
-  --chat-content-max-width: 51.75rem;
+     --content-max (46rem) keeps messages + composer at ~65–75ch. */
+  --content-max: 46rem;
+  --chat-content-max-width: var(--content-max);
   width: 100%;
-  height: 100vh;
+  height: 100dvh;
   height: var(--chat-viewport-height);
   min-height: 0;
 }
@@ -747,6 +784,20 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 .chat-message-scroll {
   margin-bottom: 0;
   padding-bottom: 0;
+  overflow-anchor: auto;
+}
+
+.chat-message-scroll [data-radix-scroll-area-viewport] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-anchor: auto;
+}
+
+.chat-message-scroll [data-radix-scroll-area-viewport] > div {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .chat-message-scroll-content {
@@ -755,10 +806,118 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   /* Conversación anclada a la línea superior del composer: cuando el
      contenido es corto, baja hasta tocar la barra en lugar de flotar arriba
      con un hueco vacío. Con contenido largo el scroll se comporta igual. */
+  flex: 1 1 auto;
   min-height: 100%;
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
+  overflow-anchor: auto;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-log-end {
+  height: 0;
+  width: 0;
+  overflow: hidden;
+}
+
+.msg--user {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.msg--user .msg-user-stack {
+  align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: min(100%, var(--content-max, 46rem));
+}
+
+.msg-user-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  max-width: min(100%, var(--content-max, 46rem));
+}
+
+.chat-user-image {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: min(100%, var(--img-natural-width, 100%));
+  object-fit: contain;
+  image-rendering: auto;
+}
+
+.chat-image-zoom {
+  image-rendering: pixelated;
+}
+
+.chat-code-block,
+.chat-code-block pre,
+.chat-code-block code {
+  background: var(--code-bg);
+  color: var(--code-fg);
+}
+
+.chat-code-block .shiki,
+.chat-code-block .shiki span {
+  background: transparent !important;
+}
+
+.chat-code-block a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-assistant-message :is(p, li, td, blockquote) {
+  line-height: 1.6;
+}
+
+.chat-history-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 0 32px;
+}
+
+.claude-think-row details > summary,
+.think-disclosure > summary {
+  list-style: none;
+}
+.claude-think-row details > summary::-webkit-details-marker,
+.think-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.think-chevron {
+  display: inline-block;
+  transform-origin: center;
+  transition: transform 180ms var(--ease-out-soft, cubic-bezier(0.16, 1, 0.3, 1));
+}
+
+details[open] > summary .think-chevron,
+.think-row[aria-expanded="true"] .think-chevron {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .think-chevron,
+  .claude-think-sunburst {
+    transition: none !important;
+    animation: none !important;
+  }
 }
 
 .chat-composer-dock {
@@ -5875,11 +6034,16 @@ footer {
 /* Solid black send disc + white stroke arrow. The shared toolbar color
    above would otherwise paint the glyph gray on top of the black fill. */
 .composer-input-row .composer-toolbar-actions > button.composer-send-button {
-  background-color: #0a0a0a !important;
+  background-color: var(--brand, #5b4dff) !important;
   color: #ffffff !important;
   box-shadow:
     0 1px 2px rgba(0, 0, 0, 0.14),
-    0 6px 14px -6px rgba(0, 0, 0, 0.32);
+    0 6px 14px -6px rgba(91, 77, 255, 0.42);
+}
+
+.composer-input-row .composer-toolbar-actions > button.composer-send-button:focus-visible {
+  outline: 2px solid var(--brand, #5b4dff);
+  outline-offset: 2px;
 }
 
 .composer-input-row .composer-toolbar-actions > button.composer-send-button svg {
@@ -5888,7 +6052,7 @@ footer {
 }
 
 .composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
-  background-color: #171717 !important;
+  background-color: color-mix(in srgb, var(--brand, #5b4dff) 86%, #000) !important;
 }
 
 .composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
@@ -5903,12 +6067,12 @@ footer {
 }
 
 .dark .composer-input-row .composer-toolbar-actions > button.composer-send-button {
-  background-color: #0a0a0a !important;
+  background-color: var(--brand, #7c5cff) !important;
   color: #ffffff !important;
 }
 
 .dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:hover:not(:disabled) {
-  background-color: #1a1a1a !important;
+  background-color: color-mix(in srgb, var(--brand, #7c5cff) 86%, #fff) !important;
 }
 
 .dark .composer-input-row .composer-toolbar-actions > button.composer-send-button:disabled {
@@ -7818,6 +7982,50 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
  * Thinking-trace text shimmer — same sweep as .premium-shimmer but clipped
  * to the glyphs, for the "Pensando…" header of the extended-thinking panel.
  */
+/*
+ * RunTrace semantic colors — independent of brand red. In-progress
+ * steps must never render as --primary / brand red (that reads as failure).
+ */
+:root {
+  --step-pending: #8A8580;
+  --step-running: #2563eb;
+  --step-done: #059669;
+  --step-failed: #dc2626;
+}
+.dark {
+  --step-pending: #9ca3af;
+  --step-running: #60a5fa;
+  --step-done: #34d399;
+  --step-failed: #f87171;
+}
+.run-trace-step--pending { color: var(--step-pending); }
+.run-trace-step--running { color: var(--step-running); }
+.run-trace-step--done { color: var(--step-done); }
+.run-trace-step--failed { color: var(--step-failed); }
+.run-trace-step--cancelled { color: var(--step-pending); }
+
+/* Empresas leftovers: names wrap at default + 1280; noVNC fills its panel. */
+@media (min-width: 1280px) {
+  [data-dept-name-wrap="1"] {
+    overflow: visible !important;
+    overflow-wrap: anywhere;
+    text-overflow: clip !important;
+    white-space: normal !important;
+  }
+}
+
+[data-novnc-fit="cover"] {
+  background: #1b1b1d;
+}
+[data-novnc-fit="cover"] iframe {
+  background: #1b1b1d;
+  border: 0;
+  height: 100% !important;
+  inset: 0;
+  position: absolute;
+  width: 100% !important;
+}
+
 .thinking-shimmer-text {
   background-image: linear-gradient(
     100deg,
@@ -7837,6 +8045,9 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     animation: none;
     background-image: none;
     color: hsl(var(--muted-foreground));
+  }
+  .celeste-bounce-bars animateTransform {
+    display: none;
   }
 }
 

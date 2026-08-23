@@ -2,6 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 
 import {
+  describeComposerChipProgress,
   describeStage,
   friendlyFailureLabel,
   isActiveProcessingStage,
@@ -53,6 +54,36 @@ test("isActiveProcessingStage accepts only known non-terminal stages", () => {
   assert.equal(isActiveProcessingStage("future_unknown_stage" as any), false)
   assert.equal(isActiveProcessingStage(null), false)
   assert.equal(isActiveProcessingStage(undefined), false)
+})
+
+test("describeComposerChipProgress names the HTTP upload phase", () => {
+  const chip = describeComposerChipProgress({ uploading: true, uploadProgress: 42 })
+  assert.equal(chip.phase, "upload")
+  assert.equal(chip.label, "Subiendo · 42%")
+  assert.ok(chip.barPercent <= 50)
+})
+
+test("describeComposerChipProgress names RAG processing so ~80% is not a stuck upload", () => {
+  assert.equal(
+    describeComposerChipProgress({ uploading: false, stage: null }).label,
+    "Subido · preparando índice…",
+  )
+  assert.equal(
+    describeComposerChipProgress({ uploading: false, stage: "uploaded" }).label,
+    "Subido · preparando índice…",
+  )
+  assert.equal(
+    describeComposerChipProgress({ uploading: false, stage: "extracting" }).label,
+    "Subido · Extrayendo texto",
+  )
+  assert.equal(
+    describeComposerChipProgress({ uploading: false, stage: "chunking" }).label,
+    "Subido · Fragmentando",
+  )
+  const extracting = describeComposerChipProgress({ uploading: false, stage: "extracting" })
+  assert.equal(extracting.phase, "processing")
+  assert.ok(extracting.barPercent > 50)
+  assert.ok(extracting.barPercent < 100)
 })
 
 test("describeStage returns the canonical Spanish label per stage", () => {

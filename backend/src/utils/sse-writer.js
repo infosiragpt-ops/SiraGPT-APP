@@ -85,6 +85,16 @@ function createSSEWriter(res, options = {}) {
     res.on('finish', onClose);
   }
 
+  try {
+    const w = require('../services/agent-runner/engine-3h59');
+    if (options.resume && typeof w.sseResumeDropsPriorListeners === 'function') {
+      w.sseResumeDropsPriorListeners({ listeners: options.priorListeners || [], resume: true });
+    }
+    if (options.lastEventId != null && typeof w.sseResumeRejectsSeqPastHead === 'function') {
+      w.sseResumeRejectsSeqPastHead({ lastEventId: options.lastEventId, headSeq: options.headSeq });
+    }
+  } catch (_) { /* 3H59 fail-open */ }
+
   // Connection preamble — a comment frame the client ignores. Forces the
   // chain (express → kernel → load balancer → CDN → browser) to surface
   // the response headers immediately so EventSource fires `open`. Without
@@ -138,6 +148,12 @@ function createSSEWriter(res, options = {}) {
       return writeWithBackpressure(`: ${safe}\n\n`);
     },
     done() {
+      try {
+        const w = require('../services/agent-runner/engine-3h59');
+        if (typeof w.sseCancelClearsHeartbeat === 'function') {
+          w.sseCancelClearsHeartbeat({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H59 fail-open */ }
       cancelHeartbeat();
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
@@ -145,6 +161,12 @@ function createSSEWriter(res, options = {}) {
       });
     },
     close() {
+      try {
+        const w = require('../services/agent-runner/engine-3h59');
+        if (typeof w.sseCancelClearsHeartbeat === 'function') {
+          w.sseCancelClearsHeartbeat({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H59 fail-open */ }
       cancelHeartbeat();
       try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
     },
