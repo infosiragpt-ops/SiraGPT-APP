@@ -266,7 +266,7 @@ test('3H40-W-001 first token watchdog 8000ms scripted no DeepSeek', () => {
 
 test('3H40-X-001 snapshot keeps 3H39 flags true and wave 3H40 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H40' || s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46');
+  assert.ok(s.wave === '3H40' || s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
   assert.equal(s.joinParallelToolResultsStableOrder, true);
   assert.equal(s.cancelInflightToolsOnStop, true);
   assert.equal(s.jsonRepairTrailingComma, true);
@@ -391,5 +391,5 @@ test('3H40-AC-001 compose binds 3H40 tests and wave is 3H40', () => {
   assert.ok(String(__filename || '').includes('ola-3h40-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H40') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H40' || ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46');
+  assert.ok(ad.adapterSnapshot().wave === '3H40' || ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60');
 });

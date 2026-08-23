@@ -6,10 +6,14 @@
  * Vive DESPUÉS de selectSourcePreservingDocumentSet y ANTES de
  * generateSourcePreservingDocumentEdit. In-process PizZip: no cola, no
  * contenedor nuevo. OpenRouter está prohibido en este motor.
+ *
+ * FEATURE_DOC_ENGINE solo activa BullMQ / sandbox / /api/documents.
+ * El transplant in-process de /chat corre SIEMPRE (salvo
+ * SIRAGPT_CHAT_TEMPLATE_TRANSFORM=0) para no devolver la plantilla vacía.
  */
 
 const path = require('path');
-const { isDocEngineEnabled } = require('./flags');
+const { isChatTemplateTransformEnabled, isTemplateTransformRequest } = require('./flags');
 const {
   classifyTemplateVsContent,
   transformToTemplate,
@@ -106,7 +110,7 @@ async function tryDocEngineAfterSelection({
   env = process.env,
   readBuffer,
 } = {}) {
-  if (!isDocEngineEnabled(env)) return null;
+  if (!isChatTemplateTransformEnabled(env)) return null;
   const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
   if (docs.length < 2) return null;
 
@@ -137,6 +141,11 @@ async function tryDocEngineAfterSelection({
       try {
         console.warn(`[doc-engine] validation failed transplanted=${transformed.transplantedBlocks || 0} sectOk=${validation.checks && validation.checks.template_sectpr_preserved} placeholders=${validation.checks && !validation.checks.no_leftover_placeholders}`);
       } catch { /* noop */ }
+      if (isTemplateTransformRequest(displayPrompt || prompt, files) && pair.template && pair.content) {
+        const err = new Error('No se pudo transplantar el documento a la plantilla. El resultado no será la plantilla vacía.');
+        err.code = 'DOC_ENGINE_TRANSFORM_FAILED';
+        throw err;
+      }
       return null;
     }
 

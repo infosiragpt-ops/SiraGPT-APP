@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import {
+  Columns2,
   FolderGit2,
   Globe,
   Menu,
-  Monitor,
+  MoreHorizontal,
   Play,
   Plus,
   Search,
@@ -13,8 +14,15 @@ import {
   UserPlus,
 } from "lucide-react"
 
+import NotificationCenter from "@/components/notification-center"
 import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { cn } from "@/lib/utils"
 import {
@@ -41,14 +49,18 @@ export type WorkspaceTopBarProps = {
   onOpenPublishing: () => void
   publishingOpen?: boolean
   onToggleChat: () => void
+  chatOpen?: boolean
   departmentComputer?: { id: string; name: string } | null
   onOpenDepartmentComputer?: () => void
   computerOpen?: boolean
 }
 
+const TOOLBAR_ICON =
+  "inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground active:bg-muted active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+
 /**
- * Slim professional workspace header: Preview reopen + Run/Stop + utilities.
- * Company/department labels live in the left sidebar — not duplicated here.
+ * Slim professional workspace header. The green Ejecutar / Arrancando play
+ * button is intentionally absent from the DOM — run lives in the overflow ⋯.
  */
 export function WorkspaceTopBar({
   openPanels,
@@ -60,7 +72,8 @@ export function WorkspaceTopBar({
   codeOpen,
   onOpenPublishing,
   publishingOpen,
-  onToggleChat: _onToggleChat,
+  onToggleChat,
+  chatOpen = true,
   departmentComputer,
   onOpenDepartmentComputer,
   computerOpen = false,
@@ -92,6 +105,8 @@ export function WorkspaceTopBar({
   }, [])
 
   const running = previewPhase === "starting" || previewPhase === "ready" || Boolean(hostRunId)
+  const runLabel =
+    previewPhase === "starting" ? "Arrancando…" : running ? "Detener la app" : "Ejecutar la app"
 
   const handleRunStop = React.useCallback(() => {
     if (running) {
@@ -115,26 +130,27 @@ export function WorkspaceTopBar({
       data-testid="workspace-top-bar"
       data-header-clean="20260815"
       data-drop-dup-header="20260815"
+      data-empresas-no-run-button="1"
     >
       {deptChatChrome ? (
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 shrink-0 rounded-md md:hidden"
+          className={TOOLBAR_ICON}
           aria-label="Abrir menú de departamentos"
           title="Departamentos"
           data-testid="dept-chat-hamburger"
           onClick={() => window.dispatchEvent(new CustomEvent(CODE_OPEN_DEPT_DRAWER_EVENT))}
         >
-          <Menu className="h-4 w-4" />
+          <Menu className="h-3.5 w-3.5" />
         </Button>
       ) : null}
 
       {showUpgrade ? (
         <button
           type="button"
-          className="flex h-6 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+          className="flex h-7 shrink-0 items-center gap-0.5 rounded-md bg-[#0f87ff] px-2 text-[11px] font-semibold text-white transition-colors hover:bg-[#0c74dd] active:bg-[#0a68c6] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
           title="Ver planes y precios"
           aria-label="Ver planes y precios"
           aria-haspopup="dialog"
@@ -147,105 +163,132 @@ export function WorkspaceTopBar({
 
       <span className="min-w-0 flex-1" />
 
-      <button
-        type="button"
-        onClick={handleRunStop}
-        aria-label={running ? "Detener la app" : "Ejecutar la app"}
-        title={running ? "Detener" : "Ejecutar"}
-        data-testid="workspace-header-run-stop"
-        className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-semibold text-white transition-colors",
-          running ? "bg-red-600/90 hover:bg-red-600" : "bg-emerald-600 hover:bg-emerald-500",
-        )}
-      >
-        {running ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-        <span>{previewPhase === "starting" ? "Arrancando…" : running ? "Detener" : "Ejecutar"}</span>
-      </button>
-
       {!openPanels.has("preview") && !computerOpen ? (
-        <Button
+        <button
           type="button"
-          variant="ghost"
-          size="sm"
-          className="h-7 shrink-0 rounded-md px-2 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+          className="flex h-7 shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground active:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
           aria-label="Abrir Preview"
           title="Abrir Preview"
           data-canvas-toggle="open"
           data-testid="workspace-header-canvas-open"
           onClick={() => onTogglePanel("preview")}
         >
-          <Monitor className="mr-1 h-3.5 w-3.5" />
+          <DesktopMonitorGlyph className="h-3.5 w-3.5" />
           Preview
-        </Button>
+        </button>
       ) : null}
-      {toolsMenu ?? null}
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-        aria-label="Invitar al equipo"
-        title="Invitar al equipo"
-        onClick={onOpenInvite}
+
+      <nav
+        className="flex shrink-0 items-center gap-1"
+        aria-label="Herramientas de la barra"
+        data-testid="workspace-header-icon-cluster"
+        data-empresas-topbar-icons="6"
       >
-        <UserPlus className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-        aria-label="Buscar"
-        onClick={onOpenSearch}
-      >
-        <Search className="h-3.5 w-3.5" />
-      </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label="Código del proyecto"
-        title="Código del proyecto"
-        aria-pressed={codeOpen}
-        onClick={onOpenCode}
-        className={cn(
-          "h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground",
-          codeOpen && "bg-muted/70 text-foreground",
+        <span data-testid="workspace-header-notifications" className="inline-flex">
+          <NotificationCenter />
+        </span>
+        <button
+          type="button"
+          className={cn(TOOLBAR_ICON, chatOpen && "bg-muted/70 text-foreground")}
+          aria-label={chatOpen ? "Ocultar el panel de chat" : "Mostrar el panel de chat"}
+          title={chatOpen ? "Ocultar el panel de chat" : "Mostrar el panel de chat"}
+          aria-pressed={chatOpen}
+          data-testid="workspace-header-split"
+          onClick={onToggleChat}
+        >
+          <Columns2 className="h-3.5 w-3.5" />
+        </button>
+        {toolsMenu ?? (
+          <button
+            type="button"
+            className={TOOLBAR_ICON}
+            aria-label="Nueva pestaña"
+            title="Nueva pestaña"
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </button>
         )}
-      >
-        <FolderGit2 className="h-3.5 w-3.5" />
-      </Button>
-      <button
-        type="button"
-        aria-label="Publicar el proyecto"
-        aria-pressed={publishingOpen}
-        onClick={onOpenPublishing}
-        className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold transition-colors",
-          "bg-zinc-900 text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white",
-        )}
-      >
-        <Globe className="h-3 w-3" />
-        Publicar
-      </button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        aria-label={computerLabel}
-        title={computerLabel}
-        aria-pressed={computerOpen}
-        data-testid="workspace-header-department-computer"
-        data-dept-computer-header="1"
-        data-dept-real-computer="1"
-        onClick={onOpenDepartmentComputer}
-        className={cn(
-          "h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground",
-          computerOpen && "bg-muted/70 text-foreground",
-        )}
-      >
-        <DesktopMonitorGlyph className="h-3.5 w-3.5" />
-      </Button>
+        <button
+          type="button"
+          className={TOOLBAR_ICON}
+          aria-label="Invitar al equipo"
+          title="Invitar al equipo"
+          onClick={onOpenInvite}
+        >
+          <UserPlus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className={TOOLBAR_ICON}
+          aria-label="Buscar"
+          title="Buscar"
+          onClick={onOpenSearch}
+        >
+          <Search className="h-3.5 w-3.5" />
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className={TOOLBAR_ICON}
+              aria-label="Más acciones"
+              title="Más acciones"
+              data-testid="workspace-header-overflow"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuItem
+              className="gap-2"
+              disabled={previewPhase === "starting"}
+              onSelect={() => handleRunStop()}
+              data-testid="workspace-header-run-overflow"
+            >
+              {running ? <Square className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {runLabel}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="gap-2"
+              onSelect={() => onOpenCode()}
+              data-testid="workspace-header-code-overflow"
+            >
+              <FolderGit2 className="h-3.5 w-3.5" />
+              {codeOpen ? "Cerrar código" : "Código del proyecto"}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+        <button
+          type="button"
+          aria-label="Publicar el proyecto"
+          title="Publicar el proyecto"
+          aria-pressed={publishingOpen}
+          onClick={onOpenPublishing}
+          className={cn(
+            "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-3 text-[11px] font-semibold transition-colors",
+            "bg-zinc-900 text-white hover:bg-zinc-700 active:bg-zinc-800",
+            "dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white dark:active:bg-zinc-200",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            "disabled:pointer-events-none disabled:opacity-40",
+          )}
+        >
+          <Globe className="h-3.5 w-3.5" />
+          Publicar
+        </button>
+        <button
+          type="button"
+          aria-label={computerLabel}
+          title={computerLabel}
+          aria-pressed={computerOpen}
+          data-testid="workspace-header-department-computer"
+          data-dept-computer-header="1"
+          data-dept-real-computer="1"
+          onClick={onOpenDepartmentComputer}
+          className={cn(TOOLBAR_ICON, computerOpen && "bg-muted/70 text-foreground")}
+        >
+          <DesktopMonitorGlyph className="h-3.5 w-3.5" />
+        </button>
+      </nav>
       {showUpgrade ? (
         <UpgradeModal
           open={upgradeOpen}

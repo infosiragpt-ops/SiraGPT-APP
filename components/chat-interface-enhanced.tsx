@@ -100,7 +100,8 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .then(mod => mod.prewarmUnifiedDocumentPreview(a))
     .catch(() => null)
 }
-import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
+import { canOpenComposerPreview, INDEXING_STATUS_LABEL } from "@/lib/document-preview-gate"
 // Rich-text editor panel for uploaded documents — lazy so the Tiptap bundle
 // stays out of the eager chat route. TiptapEditor is not SSR-safe, hence ssr:false.
 const DocumentEditorPanel = dynamic(
@@ -360,6 +361,14 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
+import {
+  enrichImageFilesWithClientOcr,
+  isWeakOcrText,
+  looksLikeTranscriptionRequest,
+  recognizeImageWithRetry,
+} from "@/lib/chat/ocr-preprocess"
+import { CreditsBadge } from "@/components/CreditsBadge"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -1902,11 +1911,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
     if (viewingIndex === null) return null;
     const f = uploadedFiles[viewingIndex];
     if (!f) return null;
-    return toDocumentViewerAttachment(f);
-  }, [viewingIndex, uploadedFiles]);
+    return toDocumentViewerAttachmentWithProgress(f, uploadProgress);
+  }, [viewingIndex, uploadedFiles, uploadProgress]);
   const viewerSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles]
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress]
   );
 
   React.useEffect(() => {
@@ -1959,7 +1968,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-[4.5rem] w-[4.5rem]' : 'h-20 w-20';
           const attachment = viewerSiblings[index];
-          const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
+          const canPreview = !isFailed
+            && !isUploading
+            && canOpenComposerPreview({ id: resolveUploadFileId(file), status: file.status })
+            && attachmentHasPreviewSource(attachment);
           const openPreview = () => {
             if (!canPreview || !attachment) return;
             if (onPreviewAttachment) {
@@ -2017,7 +2029,13 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
+              title={isFailed
+                ? `Subida fallida: ${file.uploadError || 'error'}`
+                : isUploading
+                  ? 'Subiendo…'
+                  : canPreview
+                    ? (file.status === 'processing' ? `Ver documento · ${INDEXING_STATUS_LABEL}` : 'Ver documento')
+                    : 'Preparando documento'}
               onClick={openPreview}
               role="listitem"
               aria-label={chipLabel}
@@ -2674,7 +2692,9 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
+    const label = selected
+      ? brandModelLabel(selected)
+      : (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
     const disabled = options.length === 0;
 
     return (
@@ -2721,7 +2741,7 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={option.displayName}>{option.displayName}</span>
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={brandModelLabel(option)}>{brandModelLabel(option)}</span>
                       <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
@@ -3637,13 +3657,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
 const getModelDisplayLabel = (model: any) => {
-  const provider = resolveModelProviderName(model)
-  const label = String(model?.displayName || model?.name || "Modelo").trim()
-  if (!label || provider === "Otros") return label || "Modelo"
-  return label
-    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
-    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
-    .trim() || label
+  return brandModelLabel(model)
 }
 
 const getNavbarModelSelectorChatSignature = (chat: any) => [
@@ -3876,7 +3890,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: nextModel.name });
-      toast.success(`Modelo actualizado: ${nextModel.displayName || nextModel.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
     } catch (error) {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3950,7 +3964,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -4085,7 +4099,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo de la empresa actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo de la empresa");
     }
@@ -4139,7 +4153,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     return (
       <div className="model-provider-heading">
         <ModelLogo model={sample} compact />
-        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="min-w-0 flex-1 truncate">{brandProviderLabel(provider)}</span>
         <span className="model-provider-count">{models.length}</span>
       </div>
     );
@@ -4165,7 +4179,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       }}>
         <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
-          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData ? brandModelLabel(selectedVideoModelData) : 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
             <ChevronDown className="h-4 w-4 opacity-70" />
@@ -4206,7 +4220,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                   >
                     <Video className="h-5 w-5 flex-shrink-0" />
                     <div className="flex flex-col flex-1">
-                      <span className="text-sm">{model.displayName}</span>
+                      <span className="text-sm">{brandModelLabel(model)}</span>
                     </div>
                   </DropdownMenuItem>
                 ))
@@ -4225,7 +4239,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
 
   if ((currentChat?.projectId || currentChat?.project) && !(currentChat?.customGptId || currentChat?.customGpt)) {
-    const activeModelLabel = selectedProjectModel?.displayName || activeProjectModelName || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedProjectModel || activeProjectModelName || "Modelo");
 
     return (
       <>
@@ -4283,7 +4297,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeProjectModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4405,7 +4419,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
     });
     const customGptTextIcon = String(customGptIcon || "").trim();
-    const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedGptModel || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo");
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
@@ -4479,7 +4493,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4808,7 +4822,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
     const label = getModelDisplayLabel(model);
-    const attribution = resolveModelAttributionName(model);
+    const attribution = brandProviderLabel(resolveModelAttributionName(model));
     return (
       <DropdownMenuItem
         aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
@@ -4863,7 +4877,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : brandModelLabel(selectedModel)}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -5317,6 +5331,8 @@ function ChatInterfaceContent() {
     return selected?.provider || providerForMediaModel(modelName, selectProvider);
   }, [imageModelsForComposer, selectProvider]);
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const chatLogEndRef = React.useRef<HTMLDivElement>(null)
+  const wasStreamingRef = React.useRef(false)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
   const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
@@ -5586,6 +5602,15 @@ function ChatInterfaceContent() {
     scrollToBottom();
   }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
 
+  React.useEffect(() => {
+    if (wasStreamingRef.current && !isCurrentChatStreaming) {
+      try {
+        chatLogEndRef.current?.focus({ preventScroll: true })
+      } catch { /* ignore */ }
+    }
+    wasStreamingRef.current = isCurrentChatStreaming
+  }, [isCurrentChatStreaming]);
+
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
   const [uploadProgress, setUploadProgress] = React.useState<{ [key: string]: number }>({});
@@ -5628,6 +5653,24 @@ function ChatInterfaceContent() {
     }
     syncActiveLocalJobs();
   }, [syncActiveLocalJobs]);
+
+  React.useEffect(() => {
+    const onCancel = (event: Event) => {
+      const taskId = String((event as CustomEvent<{ taskId?: string }>).detail?.taskId || "")
+      if (!taskId) return
+      const matchesCurrent = currentAgentTaskIdRef.current === taskId
+      let matchesChat = false
+      agentTaskIdsByChatRef.current.forEach((id) => {
+        if (id === taskId) matchesChat = true
+      })
+      if (!matchesCurrent && !matchesChat) return
+      const scoped = currentChatId ? localJobControllersRef.current.get(currentChatId) : null
+      const controller = searchAbortControllerRef.current || scoped
+      controller?.abort()
+    }
+    window.addEventListener("agent-task-cancel", onCancel)
+    return () => window.removeEventListener("agent-task-cancel", onCancel)
+  }, [currentChatId])
 
   const markLocalJobIdle = React.useCallback((chatId?: string | null, controller?: AbortController) => {
     if (!chatId) return;
@@ -8387,6 +8430,32 @@ But first, you need to connect your Spotify account securely using the button be
             uploadedFilesRef.current = next;
             return next;
           });
+          chunkTemps.forEach((tf, idx) => {
+            const mergedFile = merged[idx];
+            if (!mergedFile || !(tf.file instanceof File) || !String(tf.type || "").startsWith("image/")) return;
+            void recognizeImageWithRetry(tf.file).then((ocr) => {
+              if (!ocr.text) return;
+              setUploadedFiles((cur: any[]) => {
+                const next = cur.map((f: any) =>
+                  f.tempId === tf.tempId
+                    ? {
+                        ...f,
+                        extractedText: ocr.text,
+                        ocr: {
+                          ...(f.ocr || {}),
+                          confidence: ocr.confidence,
+                          provider: "tesseract.js",
+                          clientPreprocess: true,
+                          retries: ocr.retries,
+                        },
+                      }
+                    : f
+                );
+                uploadedFilesRef.current = next;
+                return next;
+              });
+            }).catch(() => {});
+          });
 
           setTimeout(() => {
             setUploadProgress(prev => {
@@ -9056,8 +9125,8 @@ But first, you need to connect your Spotify account securely using the button be
   React.useEffect(() => { splitRatioRef.current = splitRatio; }, [splitRatio]);
 
   const composerPreviewSiblings: AttachmentLike[] = React.useMemo(
-    () => uploadedFiles.map((f: any) => toDocumentViewerAttachment(f)),
-    [uploadedFiles],
+    () => uploadedFiles.map((f: any) => toDocumentViewerAttachmentWithProgress(f, uploadProgress)),
+    [uploadedFiles, uploadProgress],
   );
   const composerPreviewAttachment = React.useMemo<AttachmentLike | null>(() => {
     if (composerPreviewIndex === null) return null;
@@ -9065,7 +9134,12 @@ But first, you need to connect your Spotify account securely using the button be
   }, [composerPreviewIndex, composerPreviewSiblings]);
 
   const openComposerDocumentPreview = React.useCallback((index: number) => {
-    if (!uploadedFiles[index]) return;
+    const file = uploadedFiles[index];
+    if (!file) return;
+    if (file.status === "uploading" || !canOpenComposerPreview({
+      id: resolveUploadFileId(file),
+      status: file.status,
+    })) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setSidePreviewAttachment(null);
@@ -9420,7 +9494,7 @@ But first, you need to connect your Spotify account securely using the button be
       imageModelForSendOverride = String(activeImageModel.name).trim();
       if (imageModelForSendOverride !== selectedImageModelForSend) {
         setSelectedImageModel(imageModelForSendOverride);
-        toast.info(`El modelo seleccionado ya no esta activo. Usare ${activeImageModel.displayName || activeImageModel.name}.`);
+        toast.info(`El modelo seleccionado ya no esta activo. Usare ${brandModelLabel(activeImageModel)}.`);
       }
     }
 
@@ -9557,7 +9631,24 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    const filesToSend = [...composerFiles];
+    let filesToSend = [...composerFiles];
+    const imageAttachments = filesToSend.filter((file: any) =>
+      String(file?.type || file?.mimeType || "").startsWith("image/"),
+    );
+    if (imageAttachments.length > 0) {
+      const wantsTranscription = looksLikeTranscriptionRequest(msg);
+      const weakOcr = imageAttachments.some((file: any) =>
+        isWeakOcrText(file?.extractedText, file?.ocr?.confidence),
+      );
+      if (wantsTranscription || weakOcr) {
+        try {
+          filesToSend = await enrichImageFilesWithClientOcr(filesToSend, {
+            prompt: msg,
+            force: wantsTranscription,
+          });
+        } catch { /* client OCR is best-effort before the model answers */ }
+      }
+    }
     const buildImageEditPrompt = (rawPrompt: string) => {
       const editFile = filesToSend.find((file: any) => file?.editRegion);
       if (!editFile?.editRegion) return rawPrompt;
@@ -9954,7 +10045,7 @@ REWRITTEN TEXT:`;
     } else {
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
-        const updatedMessages = [...(prevChat.messages || []), userMessage];
+        const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
         return { ...prevChat, messages: updatedMessages };
       });
     }
@@ -10166,8 +10257,8 @@ REWRITTEN TEXT:`;
       };
 
       const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {
-        userMessageAlreadyAdded: !isNewChat,
-        assistantMessageId: !isNewChat ? assistantPlaceholder.id : undefined,
+        userMessageAlreadyAdded: true,
+        assistantMessageId: assistantPlaceholder.id,
       });
 
       switch (intent) {
@@ -10746,7 +10837,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
         }
         const inactiveMessage = fallbackModel?.name
-          ? `El modelo seleccionado ya no esta activo. Cambie a ${fallbackModel.displayName || fallbackModel.name}; vuelve a enviar la imagen.`
+          ? `El modelo seleccionado ya no esta activo. Cambie a ${brandModelLabel(fallbackModel)}; vuelve a enviar la imagen.`
           : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
         if (fallbackModel?.name) {
           setSelectedImageModel(fallbackModel.name);
@@ -12573,14 +12664,20 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       }
 
       const clientBootstrapStepId = 'client-agent-bootstrap';
+      const resolvedAssistantMessageId = assistantMessageId || `msg-ai-${Date.now() + 1}`;
       const makeInitialTaskState = (): AgentTaskState => ({
         ...initialAgentState,
+        meta: {
+          ...(initialAgentState.meta || {}),
+          assistantMessageId: resolvedAssistantMessageId,
+        },
         steps: [{
           id: clientBootstrapStepId,
           label: 'Analizando solicitud',
           icon: 'thought',
           reasoning: 'Preparando el plan, las fuentes y las herramientas antes de ejecutar la tarea.',
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
         }],
         artifacts: [],
@@ -12601,7 +12698,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
 
       const initialTaskState = makeInitialTaskState();
       const aiMessage = {
-        id: assistantMessageId || `msg-ai-${Date.now() + 1}`,
+        id: resolvedAssistantMessageId,
         chatId: activeChat.id,
         role: 'ASSISTANT' as const,
         content: '```agent-task-state\n' + JSON.stringify(initialTaskState) + '\n```',
@@ -12798,18 +12895,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className="shrink-0 md:hidden">
+                <div className={cn("shrink-0", sidebarOpen && "md:hidden")}>
                   <SidebarTrigger
                     className={cn(
                       "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
                       "hover:bg-transparent focus-visible:bg-transparent"
                     )}
-                    aria-label="Abrir el menú lateral"
-                    title="Abrir el menú lateral"
+                    aria-label={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
+                    title={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
                   >
                     <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
+                <CreditsBadge />
                 {/* Model selector moved to the composer (next to the mic),
                     Claude-style. See renderComposerModelControls(). */}
               </div>
@@ -13094,7 +13192,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
+                    <div
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                      className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
+                    >
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         isStreaming={isCurrentChatStreaming}
@@ -13107,6 +13210,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onDocumentPreview={handleDocumentPreview}
                         onAttachmentPreview={handleAttachmentPreview}
                         onOpenSources={handleOpenSources}
+                      />
+                      <div
+                        ref={chatLogEndRef}
+                        className="chat-log-end sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
                       />
                     </div>
                   </ScrollArea>
