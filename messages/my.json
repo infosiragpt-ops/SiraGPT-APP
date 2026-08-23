@@ -681,5 +681,15 @@
     "sendHint": "ပို့ရန်",
     "stopHint": "ရပ်ရန်",
     "dropFiles": "တင်ရန် ဖိုင်များကို ဤနေရာတွင် ထားပါ"
+  },
+  "chatSearch": {
+    "placeholder": "Search your chats…",
+    "noResults": "No results",
+    "noResultsFor": "We couldn't find chats matching “{query}”",
+    "serverFallback": "Couldn't reach server search; showing local title matches.",
+    "emptyHistory": "You have no chats yet",
+    "emptyHistoryHint": "Start a conversation and it will show up here",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }
