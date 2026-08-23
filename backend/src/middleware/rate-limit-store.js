@@ -661,6 +661,7 @@ function _fallbackSize() {
 
 module.exports = {
   createRateLimitStore,
+  createRedisClient,
   shouldUseRedis,
   consume,
   consumeMany,
