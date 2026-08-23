@@ -21,6 +21,8 @@
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
+    "test:visual": "playwright test e2e/visual-regression.spec.ts",
+    "test:visual:update": "playwright test e2e/visual-regression.spec.ts --update-snapshots",
     "test:all": "npm test && vitest run",
     "eval:mythos": "node scripts/run-mythos-preview-evals.js",
     "eval:mythos:json": "node scripts/run-mythos-preview-evals.js --json",
