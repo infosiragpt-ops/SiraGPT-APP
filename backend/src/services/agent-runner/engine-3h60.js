@@ -729,7 +729,7 @@ function snapshotLatency(kind, store) {
   const ring = Array.isArray(store) ? store : latencyStores[kind === 'ttfb' || kind === 'first_token' ? 'first_token' : 'turn_end'];
   if (!ring.length) return { p50: null, p95: null, count: 0, source: 'scripted' };
   const sorted = ring.slice().sort((a, b) => a - b);
-  const at = (q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)))];
+  const at = (q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * q)))];
   return { p50: at(0.5), p95: at(0.95), count: sorted.length, source: 'scripted' };
 }
 
