@@ -383,7 +383,9 @@ async function runOrchestrator({
         } else {
           nodeResult = {
             status: 'failed',
-            reason: run.stoppedReason === 'max_iterations' ? 'budget_exceeded' : 'no_output',
+            // 3H32 stop reasons (max_iterations / loop_cut / budget_exceeded)
+            // are all honest budget stops; anything else is a plain no-output.
+            reason: ['max_iterations', 'loop_cut', 'budget_exceeded'].includes(run.stoppedReason) ? 'budget_exceeded' : 'no_output',
             error: run.errorMessage || null,
           };
         }
@@ -421,7 +423,9 @@ async function runOrchestrator({
 
       // The verifier is a critic pass: an unhappy/failed critic never
       // destroys a delivered result — its outcome is reported in the summary.
-      if (node.role === 'verifier') {
+      // Exception: running out of run-level budget mid-verification is NOT a
+      // critique opinion — it is an honest global stop, never persisted as ok.
+      if (node.role === 'verifier' && nodeResult.reason !== 'budget_exceeded') {
         blackboard.write(node.id, {
           role: node.role,
           goal: node.goal,

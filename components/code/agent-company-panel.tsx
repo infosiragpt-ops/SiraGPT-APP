@@ -206,6 +206,7 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
 import { OfficeLivePreview } from "./agent-office/office-live-preview"
 import { TerminalPanel } from "./terminal-panel"
+import { RoutinesPanel } from "./routines-panel"
 import { CompanyResourcesSurface } from "./company-resources-surface"
 import {
   EnterpriseCommandCenter,
@@ -7517,6 +7518,7 @@ function DepartmentComputerView({
           </ul>
         )}
       </div>
+      <RoutinesPanel className="shrink-0 border-t border-border/55" />
       <div className="flex h-[42%] min-h-[180px] shrink-0 flex-col border-t border-border/55">
         <div className="flex items-center justify-between border-b border-border/40 px-3 py-1.5">
           <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Terminal</p>

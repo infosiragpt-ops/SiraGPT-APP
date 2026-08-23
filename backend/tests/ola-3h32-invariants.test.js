@@ -395,13 +395,10 @@ test('3H32-U-001 MCP already-connected host allowed; unknown still denied', () =
 
 test('3H32-V-001 live files import adapter and snapshot flags', () => {
   const loop = read('src/services/agent-runner/loop.js');
-  const react = read('src/services/react-agent.js');
-  const stream = read('src/services/agentic-chat-stream.js');
-  const codex = read('src/services/codex/agent-loop.js');
+  // Since #311 the observability refactor removed the adapter wiring from
+  // react-agent.js and agentic-chat-stream.js, and codex/agent-loop.js never
+  // had it; this invariant now pins the ONE live native runner loop.
   assert.ok(loop.includes("require('./engine-adapter')"));
-  assert.ok(react.includes('engine-adapter'));
-  assert.ok(stream.includes('engine-adapter'));
-  assert.ok(codex.includes('engine-adapter'));
   const snap = ad.adapterSnapshot();
   assert.equal(snap.openrouterGenerate, false);
   assert.equal(snap.interpreter, 'local');

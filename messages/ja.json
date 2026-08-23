@@ -652,5 +652,36 @@
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "code": {
+    "routines": {
+      "title": "ルーティン",
+      "refresh": "Refresh",
+      "new": "新規",
+      "empty": "予約済みのルーティンはありません。作成するとエージェントが定期的に作業します。",
+      "next": "次回",
+      "pause": "ルーティンを一時停止",
+      "resume": "ルーティンを再開",
+      "delete": "ルーティンを削除",
+      "stale": "Could not refresh just now; showing the last known list.",
+      "status": {
+        "idle": "予定",
+        "running": "実行中",
+        "ok": "完了",
+        "error": "error",
+        "disabled": "一時停止中",
+        "skipped": "スキップ"
+      },
+      "create": {
+        "title": "新しいルーティン",
+        "name": "名前",
+        "namePlaceholder": "Constant chat & code improvement",
+        "cron": "スケジュール（cron）",
+        "prompt": "エージェントへの指示",
+        "promptPlaceholder": "Review and improve chat and /code…",
+        "submit": "作成",
+        "failed": "Could not create the routine: {error}"
+      }
+    }
   }
 }

@@ -14,6 +14,11 @@ const {
   sleep,
   callModelWithRetry,
 } = require('./native-llm');
+// 3H32 adapter: consecutive identical tool+args repeat cut and per-session
+// step budget. Wired into the tool loop below so a model that keeps calling
+// the same tool with the same arguments gets cut with `loop_cut` instead of
+// burning the whole iteration budget (the PPTX loop incident).
+const adapter = require('./engine-adapter');
 
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
@@ -115,6 +120,18 @@ function classifyLoopError({ code } = {}) {
         code,
         retryable: false,
         message: 'El bucle se quedó sin tokens ni resultados de herramientas. Lo detuve.',
+      };
+    case 'loop_cut':
+      return {
+        code,
+        retryable: false,
+        message: 'El agente repitió el mismo paso demasiadas veces. Detuve el bucle.',
+      };
+    case 'budget_exceeded':
+      return {
+        code,
+        retryable: false,
+        message: 'Se agotó el presupuesto de pasos de esta sesión.',
       };
     case 'fence_conflict':
       return {
@@ -288,6 +305,50 @@ async function runAgentLoop({
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
     }
     throwIfAborted(signal);
+  };
+
+  // 3H32 guards: cut consecutive identical tool+args repeats and enforce the
+  // per-session step budget before each tool executes. Both are best-effort:
+  // adapter failures never break the loop.
+  const repeatCut = adapter.createConsecutiveRepeatCut();
+  const sessionKey = threadId || null;
+
+  const loopCut = (iteration, toolName, args) => {
+    try {
+      const verdict = repeatCut.see(toolName, args);
+      if (verdict.cut) {
+        const classified = classifyLoopError({ code: 'loop_cut' });
+        onEvent({
+          type: 'error',
+          code: classified.code,
+          message: classified.message,
+          retryable: false,
+          iteration,
+        });
+        stoppedReason = 'loop_cut';
+        return { stop: true, message: classified.message };
+      }
+    } catch (_) { /* fail-open */ }
+    if (sessionKey) {
+      try {
+        // consume:1 makes the budget real — without it the counter never
+        // advances and budget_exceeded could never fire.
+        const budget = adapter.sessionRemainingSteps(sessionKey, { consume: 1 });
+        if (!budget.ok) {
+          const classified = classifyLoopError({ code: 'budget_exceeded' });
+          onEvent({
+            type: 'error',
+            code: 'budget_exceeded',
+            message: classified.message,
+            retryable: false,
+            iteration,
+          });
+          stoppedReason = 'budget_exceeded';
+          return { stop: true, message: classified.message };
+        }
+      } catch (_) { /* fail-open */ }
+    }
+    return { stop: false };
   };
 
   for (let iteration = 1; iteration <= cap; iteration += 1) {
@@ -606,6 +667,15 @@ async function runAgentLoop({
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
       const args = safeParseArgs(call?.function?.arguments);
+      const cut = loopCut(iteration, mapped, args);
+      if (cut.stop) {
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id || `call_${iteration}_${mapped}`,
+          content: `ERROR: ${cut.message}`,
+        });
+        return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: stoppedReason };
+      }
       onEvent({
         type: 'tool_call',
         iteration,
@@ -699,6 +769,20 @@ async function runAgentLoop({
   }
 
   bail(cap);
+  // Budget exhausted without a deliverable is NOT a "Listo": emit an honest
+  // error event so the SSE stream shows the real stop reason instead of a
+  // green final with empty text (the incomplete-deck incident).
+  if (!String(finalText).trim()) {
+    const classified = classifyLoopError({ code: 'budget_exceeded' });
+    onEvent({
+      type: 'error',
+      code: 'budget_exceeded',
+      message: 'El agente agotó sus pasos sin terminar el trabajo.',
+      retryable: true,
+      iteration: cap,
+    });
+    return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts, errorCode: 'budget_exceeded', errorMessage: classified.message };
+  }
   onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
 }

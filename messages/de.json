@@ -652,5 +652,36 @@
     "titleDefault": "SiraGPT — Multimodale KI-Plattform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM-Plattform mit Text-, Bild-, Audio- und Videogenerierung. GPT-4, Claude, Gemini und mehr an einem Ort."
+  },
+  "code": {
+    "routines": {
+      "title": "Routinen",
+      "refresh": "Refresh",
+      "new": "Neu",
+      "empty": "Keine geplanten Routinen. Erstelle eine, damit der Agent wiederkehrend arbeitet.",
+      "next": "nächste",
+      "pause": "Routine pausieren",
+      "resume": "Routine fortsetzen",
+      "delete": "Routine löschen",
+      "stale": "Could not refresh just now; showing the last known list.",
+      "status": {
+        "idle": "geplant",
+        "running": "läuft",
+        "ok": "abgeschlossen",
+        "error": "error",
+        "disabled": "pausiert",
+        "skipped": "übersprungen"
+      },
+      "create": {
+        "title": "Neue Routine",
+        "name": "Name",
+        "namePlaceholder": "Constant chat & code improvement",
+        "cron": "Zeitplan (cron)",
+        "prompt": "Anweisung für den Agenten",
+        "promptPlaceholder": "Review and improve chat and /code…",
+        "submit": "Routine erstellen",
+        "failed": "Could not create the routine: {error}"
+      }
+    }
   }
 }

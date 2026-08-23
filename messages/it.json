@@ -652,5 +652,36 @@
     "sendHint": "Invia",
     "stopHint": "Interrompi",
     "dropFiles": "Rilascia i file per caricarli"
+  },
+  "code": {
+    "routines": {
+      "title": "Routine",
+      "refresh": "Refresh",
+      "new": "Nuova",
+      "empty": "Nessuna routine programmata. Creane una perché l’agente lavori in modo ricorrente.",
+      "next": "prossima",
+      "pause": "Metti in pausa la routine",
+      "resume": "Riprendi la routine",
+      "delete": "Elimina routine",
+      "stale": "Could not refresh just now; showing the last known list.",
+      "status": {
+        "idle": "programmata",
+        "running": "in esecuzione",
+        "ok": "completata",
+        "error": "error",
+        "disabled": "in pausa",
+        "skipped": "saltata"
+      },
+      "create": {
+        "title": "Nuova routine",
+        "name": "Nome",
+        "namePlaceholder": "Constant chat & code improvement",
+        "cron": "Pianificazione (cron)",
+        "prompt": "Istruzione per l’agente",
+        "promptPlaceholder": "Review and improve chat and /code…",
+        "submit": "Crea routine",
+        "failed": "Could not create the routine: {error}"
+      }
+    }
   }
 }

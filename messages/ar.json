@@ -655,5 +655,36 @@
     "sendHint": "إرسال",
     "stopHint": "إيقاف",
     "dropFiles": "أفلت الملفات لرفعها"
+  },
+  "code": {
+    "routines": {
+      "title": "Routines",
+      "refresh": "Refresh",
+      "new": "New",
+      "empty": "No scheduled routines yet. Create one so the agent works on a recurring basis.",
+      "next": "next",
+      "pause": "Pause routine",
+      "resume": "Resume routine",
+      "delete": "Delete routine",
+      "stale": "Could not refresh just now; showing the last known list.",
+      "status": {
+        "idle": "scheduled",
+        "running": "running",
+        "ok": "completed",
+        "error": "error",
+        "disabled": "paused",
+        "skipped": "skipped"
+      },
+      "create": {
+        "title": "New routine",
+        "name": "Name",
+        "namePlaceholder": "Constant chat & code improvement",
+        "cron": "Schedule (cron)",
+        "prompt": "Instruction for the agent",
+        "promptPlaceholder": "Review and improve chat and /code…",
+        "submit": "Create routine",
+        "failed": "Could not create the routine: {error}"
+      }
+    }
   }
 }
