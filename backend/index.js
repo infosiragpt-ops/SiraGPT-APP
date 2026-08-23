@@ -445,6 +445,7 @@ const accountingRoutes = require('./src/routes/accounting');
 const linkPreviewRoutes = require('./src/routes/link-preview');
 const adminSecurityRoutes = require('./src/routes/admin/security');
 const adminSettingsRoutes = require('./src/routes/admin/settings');
+const adminRuntimeFlagsRoutes = require('./src/routes/admin/runtime-flags');
 const adminReportsRoutes = require('./src/routes/admin/reports');
 const docAgentRoutes = require('./src/routes/doc-agent');
 const opencodeRoutes = require('./src/routes/opencode');
@@ -967,6 +968,17 @@ const maintenanceMode = require('./src/middleware/maintenance-mode');
 maintenanceMode.setPrisma(prisma);
 app.use(maintenanceMode.maintenanceMiddleware({ prisma }));
 
+// ── Runtime feature-flag overrides (kill-switch sin redeploy) ───
+// Precarga SystemSettings.runtime_flag_overrides al arranque para que los
+// checks env-wrappeados (codex/deployments/doc-engine/computer) respeten
+// overrides desde la primera petición. TTL 5s; escritura por API invalida.
+const runtimeOverrides = require('./src/services/flags/runtime-overrides');
+runtimeOverrides.setPrisma(prisma);
+if (process.env.FLAG_RUNTIME_TTL_MS) {
+    runtimeOverrides.setTtlMs(process.env.FLAG_RUNTIME_TTL_MS);
+}
+runtimeOverrides.readOverrides().catch(() => {});
+
 if (process.env.NODE_ENV !== 'production') {
     morgan.token('safe-url', (req) => redactPreviewUrl(req.originalUrl || req.url));
     app.use(morgan(':method :safe-url :status :res[content-length] - :response-time ms'));
@@ -1228,6 +1240,8 @@ app.use('/api/images', imagesRoutes);
 app.use('/api/video/provider', videoProviderStatusRoutes);
 app.use('/api/admin/security', adminSecurityRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
+// Runtime feature-flag overrides (kill-switch sin redeploy, super-admin).
+app.use('/api/admin/flags', adminRuntimeFlagsRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/users', userRoutes);

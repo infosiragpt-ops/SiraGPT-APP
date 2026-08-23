@@ -4,15 +4,22 @@
  * FEATURE_DOC_ENGINE — default false.
  * Solo 1/true/yes/on activan el motor OOXML. Cualquier otro valor (incluido
  * ausente) deja el chat en el path de edición por párrafos existente.
+ *
+ * Override runtime (SystemSettings vía services/flags/runtime-overrides) gana
+ * sobre el env: kill-switch sin redeploy.
  */
+
+const { wrapIsEnabled } = require('../flags/runtime-overrides');
 
 function isTruthyEnv(value) {
   return /^(1|true|yes|on)$/i.test(String(value == null ? '' : value).trim());
 }
 
-function isDocEngineEnabled(env = process.env) {
+function isDocEngineEnabledBase(env = process.env) {
   return isTruthyEnv(env.FEATURE_DOC_ENGINE);
 }
+
+const isDocEngineEnabled = wrapIsEnabled('FEATURE_DOC_ENGINE', isDocEngineEnabledBase);
 
 function getDocEngineConfig(env = process.env) {
   const n = (raw, fallback, min, max) => {
@@ -64,6 +71,7 @@ function isTemplateTransformRequest(prompt = '', files = []) {
 module.exports = {
   isTruthyEnv,
   isDocEngineEnabled,
+  isDocEngineEnabledBase,
   getDocEngineConfig,
   isTemplateTransformRequest,
 };
