@@ -5,12 +5,15 @@ const cookieParser = require('cookie-parser');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { Readable } = require('node:stream');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 const {
   createUploadMediaTokenHandler,
   createUploadStaticAccessGuard,
+  createUploadR2Fallback,
+  contentTypeForUploadPath,
   normaliseUploadPath,
   classifyUploadPath,
   mintUploadMediaToken,
@@ -245,5 +248,177 @@ describe('static upload access guard', () => {
 
     assert.equal(res.status, 404);
     assert.equal(res.body.error, 'File not found');
+  });
+});
+
+describe('upload R2 fallback streams same-origin bytes', () => {
+  let uploadDir;
+  let auth;
+
+  beforeEach(() => {
+    uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-r2-uploads-'));
+    auth = installAuthSessionMock({ id: 'user-a' });
+    fs.mkdirSync(path.join(uploadDir, 'user-a'), { recursive: true });
+  });
+
+  afterEach(() => {
+    auth.restore();
+    fs.rmSync(uploadDir, { recursive: true, force: true });
+  });
+
+  function fakeStorage({
+    enabled = true,
+    objects = new Map(),
+    contentType = 'application/pdf',
+  } = {}) {
+    const calls = { signedUrl: 0, readStream: 0 };
+    return {
+      calls,
+      enabled: () => enabled,
+      refFromKey: (key) => `r2:${key}`,
+      exists: async (ref) => objects.has(ref),
+      signedUrl: async () => {
+        calls.signedUrl += 1;
+        throw new Error('signedUrl must not be used for /uploads preview');
+      },
+      readStream: async (ref, { range } = {}) => {
+        calls.readStream += 1;
+        const buf = objects.get(ref);
+        if (!buf) throw new Error('missing');
+        let slice = buf;
+        let contentRange;
+        let contentLength = buf.length;
+        if (range && String(range).startsWith('bytes=')) {
+          const [startRaw, endRaw] = String(range).slice(6).split('-');
+          const start = Number(startRaw);
+          const end = endRaw === '' ? buf.length - 1 : Number(endRaw);
+          slice = buf.subarray(start, end + 1);
+          contentRange = `bytes ${start}-${start + slice.length - 1}/${buf.length}`;
+          contentLength = slice.length;
+        }
+        return {
+          stream: Readable.from(slice),
+          contentLength,
+          contentType,
+          contentRange,
+        };
+      },
+    };
+  }
+
+  function buildApp(storage) {
+    const app = express();
+    app.use(cookieParser());
+    app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir: uploadDir, prisma }));
+    app.use('/uploads', express.static(uploadDir));
+    app.use('/uploads', createUploadR2Fallback({ objectStorage: storage }));
+    app.use('/uploads', (_req, res) => res.status(404).json({ error: 'File not found' }));
+    return app;
+  }
+
+  function getBinary(app, url, headers = {}) {
+    const req = request(app).get(url).buffer(true).parse((incoming, cb) => {
+      const chunks = [];
+      incoming.on('data', (chunk) => chunks.push(chunk));
+      incoming.on('end', () => cb(null, Buffer.concat(chunks)));
+    });
+    for (const [name, value] of Object.entries(headers)) req.set(name, value);
+    return req;
+  }
+
+  test('infers PDF/DOCX types when R2 only stored octet-stream', () => {
+    assert.equal(
+      contentTypeForUploadPath('user-a/contrato.pdf', 'application/octet-stream'),
+      'application/pdf',
+    );
+    assert.equal(
+      contentTypeForUploadPath('user-a/Resumen.docx', 'application/octet-stream'),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+  });
+
+  test('streams an offloaded PDF without redirecting to a signed R2 URL', async () => {
+    const bytes = Buffer.from('%PDF-1.4 streamed-preview');
+    const storage = fakeStorage({
+      objects: new Map([['r2:uploads/user-a/contrato.pdf', bytes]]),
+    });
+    const res = await getBinary(buildApp(storage), '/uploads/user-a/contrato.pdf', {
+      Authorization: auth.authHeader,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['content-type'], 'application/pdf');
+    assert.equal(res.headers['x-upload-source'], 'r2-stream');
+    assert.equal(res.headers.location, undefined);
+    assert.equal(Buffer.from(res.body).toString('utf8'), bytes.toString('utf8'));
+    assert.equal(storage.calls.signedUrl, 0);
+    assert.equal(storage.calls.readStream, 1);
+  });
+
+  test('streams an offloaded DOCX for the same chat preview path', async () => {
+    const bytes = Buffer.from('PK docx-bytes');
+    const storage = fakeStorage({
+      objects: new Map([['r2:uploads/user-a/Resumen.docx', bytes]]),
+      contentType: 'application/octet-stream',
+    });
+    const res = await getBinary(buildApp(storage), '/uploads/user-a/Resumen.docx', {
+      Cookie: `token=${auth.token}`,
+    });
+
+    assert.equal(res.status, 200);
+    assert.match(res.headers['content-type'], /wordprocessingml\.document/);
+    assert.equal(res.headers.location, undefined);
+    assert.equal(Buffer.from(res.body).toString('utf8'), 'PK docx-bytes');
+    assert.equal(storage.calls.signedUrl, 0);
+  });
+
+  test('honours byte-range so PDF.js can page-load offloaded files', async () => {
+    const bytes = Buffer.from('0123456789abcdef');
+    const storage = fakeStorage({
+      objects: new Map([['r2:uploads/user-a/contrato.pdf', bytes]]),
+    });
+    const res = await getBinary(buildApp(storage), '/uploads/user-a/contrato.pdf', {
+      Authorization: auth.authHeader,
+      Range: 'bytes=0-3',
+    });
+
+    assert.equal(res.status, 206);
+    assert.equal(res.headers['content-range'], 'bytes 0-3/16');
+    assert.equal(res.body.toString('utf8'), '0123');
+    assert.equal(res.headers.location, undefined);
+  });
+
+  test('does not call signedUrl — source contract against the old 302', () => {
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../src/middleware/upload-static-access.js'),
+      'utf8',
+    );
+    assert.doesNotMatch(source, /res\.redirect\(\s*302/);
+    assert.match(source, /X-Upload-Source['"]\s*,\s*['"]r2-stream['"]/);
+    assert.match(source, /pipeStreamToResponse/);
+  });
+
+  test('falls through when the object is not in R2', async () => {
+    const storage = fakeStorage({ objects: new Map() });
+    const res = await request(buildApp(storage))
+      .get('/uploads/user-a/missing.pdf')
+      .set('Authorization', auth.authHeader);
+
+    assert.equal(res.status, 404);
+    assert.equal(storage.calls.readStream, 0);
+  });
+
+  test('still prefers a local file over the R2 stream', async () => {
+    fs.writeFileSync(path.join(uploadDir, 'user-a', 'local.pdf'), 'local-disk-pdf');
+    const storage = fakeStorage({
+      objects: new Map([['r2:uploads/user-a/local.pdf', Buffer.from('r2-should-not-win')]]),
+    });
+    const res = await getBinary(buildApp(storage), '/uploads/user-a/local.pdf', {
+      Authorization: auth.authHeader,
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(Buffer.from(res.body).toString('utf8'), 'local-disk-pdf');
+    assert.equal(storage.calls.readStream, 0);
   });
 });

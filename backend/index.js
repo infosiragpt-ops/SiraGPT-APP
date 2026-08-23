@@ -1005,9 +1005,9 @@ app.use('/uploads', express.static(uploadsDir, {
         }
     }
 }));
-// When the binary is not on local disk (R2-backed / scaled deploys), redirect
-// to a short-lived signed R2 URL. Runs only for authorized requests (the
-// access guard above already enforced ownership).
+// When the binary is not on local disk (R2-backed / scaled deploys), stream
+// the object through this origin. A 302 to a signed R2 URL breaks chat
+// preview (CORS / Failed to fetch). Auth already enforced by the guard above.
 app.use('/uploads', createUploadR2Fallback());
 
 
