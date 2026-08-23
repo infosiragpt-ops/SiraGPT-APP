@@ -3675,6 +3675,37 @@ class ApiClient {
       });
       res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
 
+      // A gateway 502/503/504 before the SSE stream starts means the
+      // backend was restarting (deploy window); nothing has been
+      // generated or persisted yet, so a short retry is safe.
+      if ((res.status === 502 || res.status === 503 || res.status === 504) && !opts.signal?.aborted) {
+        let retried = false;
+        for (let attempt = 0; attempt < 3 && !retried; attempt++) {
+          await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+          if (opts.signal?.aborted) break;
+          try {
+            const retryConfig = await this.prepareMutatingFetch({
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...freshGenerateHeaders(),
+              },
+              body: JSON.stringify({
+                ...data,
+                model: clampDeepSeekModel(data?.model) || data?.model,
+                provider: data?.provider ? 'DeepSeek' : data?.provider,
+              }),
+              signal: opts.signal,
+            });
+            const retryRes = await this.authenticatedFetch(`${this.baseURL}${path}`, retryConfig);
+            if (retryRes.ok || (retryRes.status !== 502 && retryRes.status !== 503 && retryRes.status !== 504)) {
+              res = retryRes;
+              retried = true;
+            }
+          } catch {}
+        }
+      }
+
       if (res.ok) break;
 
       if (res.status === 401 && !retriedAfterRefresh && !isCredentialHandshake(path, 'POST')) {
