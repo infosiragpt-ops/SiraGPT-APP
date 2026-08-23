@@ -387,6 +387,20 @@ const CODES = Object.freeze({
   SSE_RESUME_AHEAD: 'sse_resume_ahead',
   SESSION_QUEUE_REORDER: 'session_queue_reorder',
   CREDIT_CANCEL_PARTIAL: 'credit_cancel_partial',
+  LOOP_OSCILLATION_CUT: 'loop_oscillation_cut',
+  TOOL_TRANSIENT_RETRY: 'tool_transient_retry',
+  TOOL_NAMELESS: 'tool_nameless',
+  COMPACT_FAITHFUL: 'compact_faithful',
+  MEMORY_PIN_RECOVER: 'memory_pin_recover',
+  WRITE_HASH_MISMATCH: 'write_hash_mismatch',
+  DIFF_MARKERS: 'diff_markers',
+  SANDBOX_ABORT_CLEANUP: 'sandbox_abort_cleanup',
+  SSE_REPLAY_RESUME: 'sse_replay_resume',
+  SSE_DISCONNECT_ABORT: 'sse_disconnect_abort',
+  SESSION_WRITER_BUSY: 'session_writer_busy',
+  SESSION_QUEUE_GAP: 'session_queue_gap',
+  CREDIT_ERROR_SETTLE: 'credit_error_settle',
+  CREDIT_PRE_TOKEN: 'credit_pre_token',
 });
 
 function isRetryable(code) {
@@ -449,7 +463,13 @@ function isRetryable(code) {
     || c === 'tool_call_incomplete'
     || c === 'ckpt_rollback_timeout'
     || c === 'sandbox_timeout_cleanup'
-    || c === 'sse_resume_ahead';
+    || c === 'sse_resume_ahead'
+    || c === 'tool_transient_retry'
+    || c === 'write_hash_mismatch'
+    || c === 'sse_replay_resume'
+    || c === 'session_writer_busy'
+    || c === 'session_queue_gap'
+    || c === 'ckpt_bytes_rollback';
 }
 
 function publicError(code, extra) {
