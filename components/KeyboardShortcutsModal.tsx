@@ -1,17 +1,12 @@
 "use client"
 
 /**
- * KeyboardShortcutsModal — small help overlay listing the global keyboard
- * shortcuts available in the chat interface. Opened via Cmd/Ctrl + / from
- * anywhere in the chat surface (the global listener is wired in
- * chat-interface-enhanced.tsx).
- *
- * The modal itself relies on the shadcn Dialog primitive which already
- * provides:
- *   - role="dialog" + aria-modal
- *   - focus trap + focus restoration
- *   - Escape-to-close
- * so this component just renders the descriptive content.
+ * KeyboardShortcutsModal — small help overlay listing the keyboard
+ * shortcuts available in the chat interface. Opened via Cmd/Ctrl + /
+ * from anywhere in the chat surface (the global listener is wired in
+ * chat-interface-enhanced.tsx). The app-wide shortcuts (theme toggle,
+ * palette, navigation) are documented by the KeyboardShortcutsProvider
+ * modal, opened with "?".
  */
 
 import * as React from "react"
@@ -32,14 +27,14 @@ export interface ShortcutDescriptor {
 
 export const CHAT_KEYBOARD_SHORTCUTS: ShortcutDescriptor[] = [
   { keys: ["Enter"], description: "Enviar mensaje" },
-  { keys: ["⌘/Ctrl", "Enter"], description: "Enviar mensaje (alternativo)" },
   { keys: ["Shift", "Enter"], description: "Nueva línea en el mensaje" },
-  { keys: ["⌘/Ctrl", "K"], description: "Enfocar búsqueda" },
-  { keys: ["/"], description: "Abrir menú de comandos" },
-  { keys: ["↑"], description: "Editar último mensaje (composer vacío)" },
+  { keys: ["⌘/Ctrl", "K"], description: "Paleta de comandos" },
+  { keys: ["⌘/Ctrl", "N"], description: "Nuevo chat" },
+  { keys: ["⌘/Ctrl", "B"], description: "Mostrar u ocultar la barra lateral" },
+  { keys: ["/"], description: "Abrir menú de comandos slash (composer)" },
   { keys: ["Esc"], description: "Cerrar herramientas / cancelar / desenfocar" },
   { keys: ["⌘/Ctrl", "/"], description: "Mostrar esta ayuda" },
-  { keys: ["?"], description: "Mostrar esta ayuda (alternativo)" },
+  { keys: ["?"], description: "Mostrar atajos globales (fuera del editor)" },
 ]
 
 interface Props {

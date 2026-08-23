@@ -201,3 +201,14 @@ export async function ensureResearchCommandChat(options: {
 export function buildScientificPapersMessage(payload: unknown) {
   return `\`\`\`scientific-papers\n${JSON.stringify(payload)}\n\`\`\``
 }
+
+export function buildConversationInsightsMessage(markdown: string, turnCount: number | null) {
+  const turns = typeof turnCount === "number" ? ` (${turnCount} turnos analizados)` : ""
+  return [
+    `## 📊 Insights de la conversación${turns}`,
+    "",
+    "Resumen estructural generado por el motor de insights (sin consumo de LLM):",
+    "",
+    markdown,
+  ].join("\n")
+}
