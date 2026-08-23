@@ -94,7 +94,7 @@ import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
-import { useIsMobile } from "@/hooks/use-mobile"
+import { useResolvedMobile } from "@/hooks/use-mobile"
 import {
   CODE_NAV_FULLSCREEN_EVENT,
   subscribeAgentCompanyCenterSlot,
@@ -704,7 +704,7 @@ function PolsiaCompanyStartActions({
 
 export function AgentCompanyPanel() {
   const { user } = useAuth()
-  const isMobile = useIsMobile()
+  const isMobile = useResolvedMobile() === true
   const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(null)
   const [centerSlot, setCenterSlot] = React.useState<HTMLElement | null>(null)
@@ -2363,17 +2363,29 @@ export function AgentCompanyPanel() {
   const associationOptions = associationState?.association
     ? [associationState.association.codexProject]
     : associationState?.candidates || []
+  const phoneChatFill = isMobile && view === "chat" && !chatLivesInWorkspaceColumn
   const panel = (
     <div
       className={cn(
-        "relative h-full min-h-0 overflow-hidden bg-background text-foreground",
+        "relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground",
         !dockedInAppsRail && "border-r border-border/50",
       )}
       data-agent-company-dock={dockedInAppsRail ? "apps" : "workspace"}
       data-proactive={proactiveOn ? "on" : "off"}
+      data-phone-chat-fill={phoneChatFill ? "1" : undefined}
     >
       {!chatLivesInWorkspaceColumn ? (
-        <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
+        <div
+          className={cn(
+            phoneChatFill
+              ? "relative flex min-h-0 flex-1 flex-col overflow-hidden"
+              : cn(
+                  "absolute inset-0 min-h-0 flex-col",
+                  view === "chat" ? "flex" : "invisible pointer-events-none",
+                ),
+          )}
+        >
+          <div className="flex h-full min-h-0 flex-1 flex-col">
           <AICodeChatPanel
             embedded
             title={chatDepartment?.name}
@@ -2403,13 +2415,15 @@ export function AgentCompanyPanel() {
                 : undefined
             }
           />
+          </div>
         </div>
       ) : null}
 
       <div
         className={cn(
           "flex h-full min-h-0 flex-col",
-          !chatLivesInWorkspaceColumn && view === "chat" && "invisible pointer-events-none",
+          phoneChatFill && "hidden",
+          !chatLivesInWorkspaceColumn && view === "chat" && !phoneChatFill && "invisible pointer-events-none",
         )}
       >
         {showCompaniesEmpty ? (

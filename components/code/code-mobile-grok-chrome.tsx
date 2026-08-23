@@ -14,6 +14,27 @@ import { getSpeechRecognition } from "@/components/codex/dictation-button"
 import { cn } from "@/lib/utils"
 import { agentInitials } from "@/lib/code-mobile-grok"
 
+/** In-flow column that receives the transcript + composer so they fill the phone canvas. */
+export function CodeMobileGrokShell({
+  children,
+  className,
+}: {
+  children: React.ReactNode
+  className?: string
+}) {
+  return (
+    <div
+      data-testid="code-mobile-grok-fill"
+      className={cn(
+        "flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  )
+}
+
 export function CodeMobileCircleButton({
   children,
   className,

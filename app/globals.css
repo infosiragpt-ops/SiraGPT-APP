@@ -8592,6 +8592,36 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   color: #18181b;
 }
 
+/* Fill the app-shell visual viewport (not raw 100vh) so the composer is not
+   clipped under iOS chrome, and flex children can grow between header + bar. */
+[data-testid="code-mobile-grok-shell"] {
+  display: flex;
+  flex-direction: column;
+  height: var(--app-viewport-height, 100dvh);
+  max-height: var(--app-viewport-height, 100dvh);
+  min-height: 0;
+}
+
+[data-testid="code-mobile-grok-layout"],
+[data-testid="code-mobile-grok-fill"],
+[data-testid="code-mobile-grok-transcript"] {
+  min-height: 0;
+}
+
+[data-testid="code-mobile-grok-layout"],
+[data-testid="code-mobile-grok-fill"] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  height: 100%;
+}
+
+[data-testid="code-mobile-grok-transcript"] {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .code-mobile-grok-header {
   min-height: 56px;
   padding-bottom: 8px;
@@ -8613,6 +8643,10 @@ button.code-mobile-grok-circle,
 
 .code-mobile-grok-composer {
   --code-composer-stack: 5.5rem;
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  flex-shrink: 0;
   padding: 0 12px calc(12px + env(safe-area-inset-bottom, 0px));
   background: #fff;
 }

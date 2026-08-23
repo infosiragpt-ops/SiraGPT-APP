@@ -514,8 +514,8 @@ export function CodeWorkspace() {
   return (
     <div
       className={cn(
-        "flex h-screen min-w-0 flex-col overflow-hidden text-foreground",
-        isMobile ? "bg-white" : "bg-background",
+        "flex min-w-0 flex-col overflow-hidden text-foreground",
+        isMobile ? "h-full min-h-0 bg-white" : "h-screen bg-background",
       )}
       data-code-mobile-grok={isMobile ? "1" : undefined}
       data-testid={isMobile ? "code-mobile-grok-shell" : "code-workspace-desktop"}
@@ -564,7 +564,7 @@ export function CodeWorkspace() {
       />
       )}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {(() => {
           // Shared right-hand area: the preview + optional terminal (plus the
           // code-hub / tool / launcher overlays). The panel tabs live in the
@@ -643,12 +643,18 @@ export function CodeWorkspace() {
           // Computer opens as an overlay; Preview stays mounted but hidden.
           if (isMobile) {
             return (
-              <div className="relative flex h-full min-h-0 flex-col bg-white" data-testid="code-mobile-grok-layout">
-                <div className="relative min-h-0 flex-1 overflow-hidden bg-white">
-                  <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
+              <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white" data-testid="code-mobile-grok-layout">
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
+                  <div className={cn(
+                    "absolute inset-0 min-h-0 flex-col",
+                    mobileView === "chat" ? "flex" : "hidden",
+                  )}>
                     <MemoAgentCompanyPanel />
                   </div>
-                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
+                  <div className={cn(
+                    "absolute inset-0 min-h-0 flex-col",
+                    mobileView === "preview" ? "flex" : "hidden",
+                  )}>
                     {mainArea}
                   </div>
                   {mobileComputer ? (

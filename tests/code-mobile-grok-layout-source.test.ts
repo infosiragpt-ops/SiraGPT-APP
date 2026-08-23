@@ -35,6 +35,17 @@ describe("phone /code Grok chrome", () => {
   })
 
   it("renders the Grok header, capsule composer, and computer overlay on the phone path", () => {
+    assert.match(chrome, /data-testid="code-mobile-grok-fill"/)
+    assert.match(chrome, /flex h-full min-h-0 flex-1 flex-col/)
+    assert.match(chat, /<CodeMobileGrokShell>/)
+    assert.match(chat, /data-testid=\{isMobileGrok \? "code-mobile-grok-transcript"/)
+    assert.match(chat, /className="min-h-0 flex-1 overflow-y-auto p-4"/)
+    assert.match(company, /phoneChatFill/)
+    assert.match(company, /relative flex min-h-0 flex-1 flex-col overflow-hidden/)
+    assert.match(workspace, /h-full min-h-0 bg-white/)
+    assert.match(workspace, /h-screen bg-background/)
+    assert.match(styles, /--app-viewport-height/)
+    assert.match(styles, /\.code-mobile-grok-composer[\s\S]*position:\s*sticky/)
     assert.match(chrome, /data-testid="code-mobile-grok-header"/)
     assert.match(chrome, /data-testid="code-mobile-grok-back"/)
     assert.match(chrome, /data-testid="code-mobile-grok-agent-pill"/)

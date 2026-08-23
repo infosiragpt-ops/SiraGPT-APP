@@ -84,6 +84,7 @@ import { DictationButton } from "@/components/codex/dictation-button"
 import {
   CodeMobileGrokHeader,
   CodeMobileGrokMic,
+  CodeMobileGrokShell,
 } from "@/components/code/code-mobile-grok-chrome"
 import { useResolvedMobile } from "@/hooks/use-mobile"
 import { askAgentPlaceholder } from "@/lib/code-mobile-grok"
@@ -4919,6 +4920,7 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack, proac
           onClose={() => setDeptDrawerOpen(false)}
         />
       ) : null}
+      {wrapCodeMobileGrokFill(isMobileGrok, <>
       {isMobileGrok ? (
         <CodeMobileGrokHeader
           agentName={grokAgentName}
@@ -4960,7 +4962,11 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack, proac
         </div>
       ) : null}
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div
+        ref={scrollerRef}
+        className="min-h-0 flex-1 overflow-y-auto p-4"
+        data-testid={isMobileGrok ? "code-mobile-grok-transcript" : undefined}
+      >
         {turns.length === 0 ? (
           <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
         ) : (
@@ -5316,8 +5322,13 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack, proac
         </div>
       </form>
       )}
+      </>)}
     </div>
   )
+}
+
+function wrapCodeMobileGrokFill(enabled: boolean, children: React.ReactNode) {
+  return enabled ? <CodeMobileGrokShell>{children}</CodeMobileGrokShell> : children
 }
 
 function CodeAttachmentTray({
