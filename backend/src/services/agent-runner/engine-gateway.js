@@ -833,6 +833,24 @@ async function governThen(input, run) {
         if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
           ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
         }
+        if (typeof ad.accountPartialTokensOnCancel === 'function' && input && input.cancelled) {
+          ad.accountPartialTokensOnCancel({
+            cancelled: true,
+            streamedChars: input.streamedChars,
+            usage: { promptTokens: input.promptTokens, completionTokens: input.completionTokens },
+          });
+        }
+        if (typeof ad.classifyEngine3h59Error === 'function' && input && input.error) {
+          ad.classifyEngine3h59Error(input.error);
+        }
+        if (typeof ad.refuseOpenRouterInWave3h59 === 'function' && input && input.env) {
+          const or = ad.refuseOpenRouterInWave3h59(input.env);
+          if (or && or.ok === false) {
+            const err = new Error('openrouter_denied');
+            err.code = 'openrouter_denied';
+            throw err;
+          }
+        }
         if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
           ad.classifyEconnabortedAsCancelled(input.error);
         }
