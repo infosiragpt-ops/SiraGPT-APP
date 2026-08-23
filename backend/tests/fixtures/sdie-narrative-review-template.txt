@@ -1,0 +1,17 @@
+Formato para el artículo de revisión narrativa
+
+Incluir la imagen del reporte de similitud con el porcentaje de coincidencia.
+
+1. Introducción
+La revisión narrativa permite sintetizar la evidencia disponible sobre un fenómeno clínico y orientar la práctica profesional a partir de estudios ya publicados.
+
+Matriz de sistematización de los treinta estudios incluidos.
+
+2. Métodos
+Se identificaron treinta estudios primarios publicados entre 2014 y 2024 que evaluaron intervenciones psicoeducativas en adolescentes con ansiedad.
+
+3. Resultados
+Los estudios coinciden en que la intervención reduce la sintomatología ansiosa, mejora la adherencia al tratamiento y favorece el seguimiento ambulatorio.
+
+4. Conclusión
+En conjunto, la evidencia respalda el uso de programas estructurados como complemento de la atención habitual cuando se implementan con supervisión clínica.

@@ -1,39 +1,16 @@
+import {
+  DEEPSEEK_FLASH,
+  DEEPSEEK_PRO,
+  isAllowedGenerationModel,
+  isAllowedGenerateProvider,
+  normalizeGenerationModel,
+  safeGenerateProvider,
+  type LockedGenerateModel,
+} from "../generation-model-lock"
+
 export type CatalogModelLike = {
   name?: string
   provider?: string
-}
-
-const FLASH = "deepseek-v4-flash"
-const PRO = "deepseek-v4-pro"
-
-function bareModelName(name?: string): string {
-  const raw = String(name || "").trim().toLowerCase()
-  return raw.includes("/") ? raw.split("/").pop() || raw : raw
-}
-
-function isAllowedProvider(provider?: string): boolean {
-  const p = String(provider || "").trim().toLowerCase()
-  if (!p) return true
-  if (/openrouter|openai|gemini|anthropic|cerebras|groq/.test(p)) return false
-  return p === "deepseek"
-}
-
-function isAllowedGenerationModel(name?: string, provider?: string): boolean {
-  const bare = bareModelName(name)
-  if (!(bare === FLASH || bare === PRO)) return false
-  return isAllowedProvider(provider)
-}
-
-function normalizeGenerationModel(name?: string): string {
-  return bareModelName(name) === PRO ? PRO : FLASH
-}
-
-function safeProvider(provider?: string, fallback = "DeepSeek"): string {
-  const raw = String(provider || "").trim()
-  if (raw && isAllowedProvider(raw)) return raw
-  const fb = String(fallback || "").trim()
-  if (fb && isAllowedProvider(fb)) return fb
-  return "DeepSeek"
 }
 
 export function resolveCatalogModel(
@@ -50,27 +27,29 @@ export function resolveCatalogModel(
     const wanted = normalizeGenerationModel(selectedModel)
     const match = allowed.find((model) => normalizeGenerationModel(model.name) === wanted)
     if (match?.name) {
-      return { name: wanted, provider: safeProvider(match.provider, fallbackProvider), replaced: false }
+      return { name: wanted, provider: safeGenerateProvider(match.provider, fallbackProvider), replaced: false }
     }
-    return { name: wanted, provider: safeProvider(fallbackProvider), replaced: false }
+    return { name: wanted, provider: safeGenerateProvider(fallbackProvider), replaced: false }
   }
 
-  const flash = allowed.find((model) => normalizeGenerationModel(model.name) === FLASH)
-  const pro = allowed.find((model) => normalizeGenerationModel(model.name) === PRO)
+  const flash = allowed.find((model) => normalizeGenerationModel(model.name) === DEEPSEEK_FLASH)
+  const pro = allowed.find((model) => normalizeGenerationModel(model.name) === DEEPSEEK_PRO)
   const fallback = flash || pro
   if (fallback?.name) {
     return {
       name: normalizeGenerationModel(fallback.name),
-      provider: safeProvider(fallback.provider, fallbackProvider),
+      provider: safeGenerateProvider(fallback.provider, fallbackProvider),
       replaced: true,
     }
   }
 
-  return { name: FLASH, provider: safeProvider(fallbackProvider), replaced: true }
+  return { name: DEEPSEEK_FLASH, provider: safeGenerateProvider(fallbackProvider), replaced: true }
 }
 
-export type GenerateRequestModel = "deepseek-v4-flash" | "deepseek-v4-pro"
+export type GenerateRequestModel = LockedGenerateModel
 
 export function assertGenerateRequestModel(model?: string): GenerateRequestModel {
-  return bareModelName(model) === PRO ? PRO : FLASH
+  return normalizeGenerationModel(model)
 }
+
+export { isAllowedGenerateProvider, isAllowedGenerationModel }

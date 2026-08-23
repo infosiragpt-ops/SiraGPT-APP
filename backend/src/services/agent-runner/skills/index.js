@@ -26,6 +26,7 @@ const fs = require('fs');
 const path = require('path');
 
 const BUILTIN_DIR = path.join(__dirname, 'builtin');
+const { openspecSkillsRoot } = require('../../../skills/openspec-catalog');
 const SKILL_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_SKILL_CHARS = 16_000;
 const MAX_CATALOG_DESCRIPTION_CHARS = 160;
@@ -38,7 +39,7 @@ function skillsEnabled(env = process.env) {
 }
 
 function skillRoots(env = process.env) {
-  const roots = [BUILTIN_DIR];
+  const roots = [BUILTIN_DIR, openspecSkillsRoot()];
   const extra = String(env.SIRAGPT_AGENT_SKILLS_DIRS || '').trim();
   if (extra) {
     for (const dir of extra.split(path.delimiter)) {

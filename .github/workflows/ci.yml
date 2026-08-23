@@ -561,6 +561,25 @@ jobs:
             echo "✓ informational Playwright smoke passed"
           fi
 
+  continuity-guards:
+    name: Continuity guards · lost-feature anchors
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Assert recurring-feature anchors
+        run: node scripts/assert-continuity-guards.js
+
+      - name: Verify /code UI lock contract
+        run: bash scripts/reapply-code-ui-lock.sh --check
+
   ui-lock-verify:
     name: UI lock · verify zero visual-surface changes
     runs-on: ubuntu-latest
@@ -775,7 +794,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, licenses, security-audit, continuity-guards, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -795,6 +814,10 @@ jobs:
           fi
           if [[ "${{ needs.security-audit.result }}" != "success" ]]; then
             echo "✗ security-audit: ${{ needs.security-audit.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.continuity-guards.result }}" != "success" ]]; then
+            echo "✗ continuity-guards: ${{ needs.continuity-guards.result }}"
             exit 1
           fi
           if [[ "${{ needs.ui-lock-verify.result }}" != "success" ]]; then
@@ -834,7 +857,7 @@ jobs:
   # block merges. Runs only when an upstream job failed.
   notify-on-failure:
     name: Notify · Slack on failure
-    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
+    needs: [frontend, backend, licenses, security-audit, continuity-guards, ui-lock-verify, secret-scan, visual-regression-check, dependency-audit, drizzle-migrations-dry-run, e2e]
     runs-on: ubuntu-latest
     if: failure()
     timeout-minutes: 3
@@ -854,6 +877,7 @@ jobs:
             echo "backend:         ${{ needs.backend.result }}"
             echo "licenses:        ${{ needs.licenses.result }}"
             echo "security-audit:  ${{ needs.security-audit.result }}"
+            echo "continuity-guards: ${{ needs.continuity-guards.result }}"
             echo "ui-lock-verify:  ${{ needs.ui-lock-verify.result }}"
             echo "secret-scan:     ${{ needs.secret-scan.result }}"
             echo "e2e:             ${{ needs.e2e.result }}"

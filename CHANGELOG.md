@@ -8,6 +8,24 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Continuity guards so recurring production features stop disappearing after
+  frontend image recreates and engine-only waves: `docs/continuity-guards.md`,
+  `scripts/assert-continuity-guards.js` (CI job), `/code` chrome lock SSOT
+  (`lib/code-chrome-lock.ts`), DeepSeek generate lock (`lib/generation-model-lock.ts`),
+  Activos quick-off contract (`lib/admin-activos-lock.ts`), and OpenSpec catalog
+  (`backend/src/skills/openspec-catalog.js` wired into the agent-runner).
+  Restored from orphaned PRs on `production-main`:
+  **#313** ACS/noVNC Computadora + Caddy,
+  **#316** SDIE v2 Phase 1 (`FEATURE_SDIE_V2` + `runSdieTurn`),
+  **#319** /code workspace bootstrap / ChunkLoad,
+  **#333** doc-engine UPN hook + LibreOffice/R2 `preview-path`,
+  **#334** /code mobile Grok chrome + EmptyChat null,
+  **#340** responsive phone overlays. **#380** git-anchors all of the above
+  so engine-only waves cannot wipe them. Frontend `--force-recreate` is a
+  **HARD BAN**, not an optional recipe.
+
+### Added
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

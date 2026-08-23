@@ -36,6 +36,7 @@ import { codexApi } from "@/lib/codex/codex-api"
 import { persistWorkspaceCodexProject } from "@/lib/codex/codex-project-link"
 import { projectsService } from "@/lib/projects-service"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { CodeWorkspaceBootstrap } from "@/components/code/code-workspace-bootstrap"
 
 const CodeWorkspace = dynamic(
   () => import("@/components/code/code-workspace").then((mod) => mod.CodeWorkspace),
@@ -51,8 +52,10 @@ export default function CodeWorkspacePage() {
       <CodeWorkspaceProvider>
         <React.Suspense fallback={null}>
           <ActiveFolderHydrator />
+          <CodeWorkspaceBootstrap>
+            <CodeWorkspace />
+          </CodeWorkspaceBootstrap>
         </React.Suspense>
-        <CodeWorkspace />
       </CodeWorkspaceProvider>
     </CodeWorkspaceGate>
   )

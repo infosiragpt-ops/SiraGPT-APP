@@ -3,6 +3,8 @@
  * WAVE1 + ola-200 fail-closed: generation recommend is DeepSeek V4 Flash / Pro only.
  */
 
+import { DEEPSEEK_FLASH, DEEPSEEK_PRO, isAllowedGenerationModel } from "../generation-model-lock"
+
 export interface ModelLike {
   name: string
   provider?: string
@@ -22,23 +24,20 @@ const SLOW_PATTERNS: RegExp[] = [
 ]
 
 const FAST_PRIORITY: RegExp[] = [
-  /deepseek-v4-flash/i,
-  /deepseek-v4-pro/i,
+  new RegExp(DEEPSEEK_FLASH, "i"),
+  new RegExp(DEEPSEEK_PRO, "i"),
 ]
-
-function isAllowedGenerationModel(id: string, provider?: string): boolean {
-  if (!(/deepseek-v4-flash/i.test(id) || /deepseek-v4-pro/i.test(id))) return false
-  const p = String(provider || "").trim().toLowerCase()
-  if (!p) return true
-  if (/openrouter|openai|gemini|anthropic|cerebras|groq/.test(p)) return false
-  return p === "deepseek"
-}
 
 export function isSlowModel(id: string | null | undefined): boolean {
   const s = String(id || "")
   if (!s) return false
   if (/deepseek-v4/i.test(s) && !/deepseek-r/i.test(s)) return false
   return SLOW_PATTERNS.some((re) => re.test(s))
+}
+
+export function listDeepSeekGenerationModels<T extends ModelLike>(models: T[]): T[] {
+  if (!Array.isArray(models) || models.length === 0) return []
+  return models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
 }
 
 export function recommendFastModel<T extends ModelLike>(models: T[]): T | null {

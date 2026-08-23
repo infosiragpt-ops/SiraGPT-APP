@@ -27,6 +27,7 @@ import {
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { CODE_OPEN_DEPT_DRAWER_EVENT, useDeptChatChrome } from "./dept-chat-bard"
 import { DesktopMonitorGlyph } from "./department-computer-pane"
+import { CODE_CHROME_LOCK } from "@/lib/code-chrome-lock"
 
 export type WorkspacePanelId = "preview" | "terminal" | "git" | "validation"
 
@@ -147,6 +148,7 @@ export function WorkspaceTopBar({
 
       <span className="min-w-0 flex-1" />
 
+      {CODE_CHROME_LOCK.showRunPublishButtons ? (
       <button
         type="button"
         onClick={handleRunStop}
@@ -161,6 +163,7 @@ export function WorkspaceTopBar({
         {running ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
         <span>{previewPhase === "starting" ? "Arrancando…" : running ? "Detener" : "Ejecutar"}</span>
       </button>
+      ) : null}
 
       {!openPanels.has("preview") && !computerOpen ? (
         <Button
@@ -215,6 +218,7 @@ export function WorkspaceTopBar({
       >
         <FolderGit2 className="h-3.5 w-3.5" />
       </Button>
+      {CODE_CHROME_LOCK.showRunPublishButtons ? (
       <button
         type="button"
         aria-label="Publicar el proyecto"
@@ -228,6 +232,7 @@ export function WorkspaceTopBar({
         <Globe className="h-3 w-3" />
         Publicar
       </button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"

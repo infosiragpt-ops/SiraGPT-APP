@@ -201,7 +201,12 @@ import {
   COMPOSER_MODE_LABEL,
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
-import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { isSlowModel, listDeepSeekGenerationModels, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { useResolvedMobile } from "@/hooks/use-mobile"
+import {
+  CodeMobileGrokHeader,
+} from "@/components/code/code-mobile-grok-chrome"
+import { CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT } from "@/lib/code-workspace-context"
 import {
   ModelCircuitBreakerRegistry,
   computeBackoffMs,
@@ -857,6 +862,8 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   } = useCodeWorkspace()
 
   const hasBardNav = Boolean(bardNav)
+  const isMobileGrok = useResolvedMobile() === true
+  const grokAgentName = bardNav?.departmentName || _title || "CEO Office"
   const [deptDrawerOpen, setDeptDrawerOpen] = React.useState(false)
   React.useEffect(() => {
     setDeptChatChrome(hasBardNav)
@@ -1027,18 +1034,18 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   // What the model picker shows: the real catalog when present, else the single
   // policy fallback so the user sees "Gema4" rather than an endless spinner.
   const pickerModels = React.useMemo<ModelOption[]>(() => {
-    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
-    if (fallbackModel) {
-      return [
-        {
-          name: fallbackModel.name,
-          displayName: fallbackModel.displayName,
-          provider: fallbackModel.provider,
-        } as ModelOption,
-      ]
-    }
-    return []
-  }, [availableModels, fallbackModel])
+    const catalog = (availableModels && availableModels.length > 0
+      ? availableModels
+      : fallbackModel
+        ? [{
+            name: fallbackModel.name,
+            displayName: fallbackModel.displayName,
+            provider: fallbackModel.provider,
+          }]
+        : []) as ModelOption[]
+    if (isMobileGrok) return listDeepSeekGenerationModels(catalog)
+    return catalog
+  }, [availableModels, fallbackModel, isMobileGrok])
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -4888,11 +4895,13 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   return (
     <div
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950",
+        "relative flex h-full min-h-0 min-w-0 flex-col text-foreground",
+        isMobileGrok ? "bg-white" : "bg-zinc-50/70 dark:bg-zinc-950",
         bardNav && "dept-chat-bard",
       )}
       data-embedded={embedded ? "true" : undefined}
       data-testid={bardNav ? "dept-chat-bard" : undefined}
+      data-code-mobile-grok={isMobileGrok ? "1" : undefined}
     >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
@@ -4905,6 +4914,19 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
           open={deptDrawerOpen}
           nav={bardNav}
           onClose={() => setDeptDrawerOpen(false)}
+        />
+      ) : null}
+      {isMobileGrok ? (
+        <CodeMobileGrokHeader
+          agentName={grokAgentName}
+          online
+          onBack={() => {
+            if (bardNav) bardNav.onBackToCompany()
+          }}
+          onOpenComputer={() => {
+            window.dispatchEvent(new CustomEvent(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT))
+            window.dispatchEvent(new CustomEvent("siragpt:open-department-computer"))
+          }}
         />
       ) : null}
       {/* Duplicate CEO Office | history | + bar removed (data-drop-dup-header). */}
@@ -4936,7 +4958,9 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
+          isMobileGrok ? null : (
           <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+          )
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (

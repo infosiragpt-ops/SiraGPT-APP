@@ -61,6 +61,7 @@ import {
   X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { CODE_CHROME_LOCK } from "@/lib/code-chrome-lock"
 
 import {
   AlertDialog,
@@ -3552,6 +3553,7 @@ function CompanyHome({
           </div>
         ) : null}
 
+        {CODE_CHROME_LOCK.showForbiddenCompanyNav ? (
         <nav
           aria-label="Herramientas de la empresa"
           className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
@@ -3561,6 +3563,15 @@ function CompanyHome({
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "files"} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "resources"} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
         </nav>
+        ) : (
+        <nav
+          aria-label="Routines"
+          data-testid="code-routines-slot"
+          className={cn("px-2", hideFooter ? "mt-2" : "mt-3")}
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Routines</p>
+        </nav>
+        )}
 
         <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
           <div className="min-w-0">

@@ -424,6 +424,9 @@ const {
     initializeWebSocketServer,
     closeComputerUseWebSocketServer,
 } = require('./src/routes/computer-use');
+const agentComputerRoutes = require('./src/routes/agent-computer');
+const { createCodeWorkspacesRouter } = require('./src/routes/code-workspaces');
+const documentsRoutes = require('./src/routes/documents');
 const { initRealtimeServer, closeRealtimeServer } = require('./src/services/realtime/socket-server');
 const {
     closeUserSessionRevocationBus,
@@ -740,6 +743,7 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/doc', expensiveLimiter);
+app.use('/api/documents', expensiveLimiter);
 app.use('/api/doc-agent', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
@@ -1254,6 +1258,8 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
+app.use('/api/departments', require('./src/routes/dept-computer'));
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
@@ -1270,6 +1276,7 @@ app.use('/api/link-preview', linkPreviewRoutes);
 app.use('/api/doc-agent', docAgentRoutes);
 app.use('/api/opencode', opencodeRoutes);
 app.use('/api/code-runner', codeRunnerRoutes);
+app.use('/api/code', createCodeWorkspacesRouter());
 app.use('/api/research-agent', researchAgentRoutes);
 app.use('/api/goals', goalsRoutes);
 app.use('/api/sandbox', sandboxRoutes);
@@ -1309,6 +1316,7 @@ app.use('/api/compute', computeRoutes);
 app.use('/api/math', mathRoutes);
 app.use('/api/viz', vizRoutes);
 app.use('/api/doc', docRoutes);
+app.use('/api/documents', documentsRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
