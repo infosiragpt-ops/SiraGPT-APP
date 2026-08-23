@@ -41,13 +41,21 @@ Manus-like research agents.
 
 ## Quick start
 
+Prerequisites: Node.js ≥20, Docker, Git.
+
 ```bash
-git clone https://github.com/SiraGPT-ORg/siraGPT && cd siraGPT
+git clone https://github.com/infosiragpt-ops/SiraGPT-APP && cd SiraGPT-APP
 npm install && cd backend && npm install && cd ..
-cp .env.example .env.local   # edit API keys
-./scripts/dev-up.sh          # boots Postgres + Redis + frontend + backend
-# open http://localhost:3000
+./scripts/dev-up.sh          # first run generates .env.local with dev secrets,
+                             # boots Postgres+Redis, migrates, then starts both apps
+# open http://localhost:3000  (backend API proxied same-origin via /api)
 ```
+
+`dev-up.sh` creates a working `.env.local` automatically (DB on localhost, random
+JWT/SESSION secrets). Add real model keys (`OPENAI_API_KEY`, …) to `.env.local`
+when you need live model calls. Custom backend port: `BACKEND_PORT=5050 ./scripts/dev-up.sh`.
+
+More detail: [SETUP.md](SETUP.md) · deploy architecture: [docs/deployment.md](docs/deployment.md).
 
 ## Documentation
 

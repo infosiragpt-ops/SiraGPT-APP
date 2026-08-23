@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url'
 const withNextIntl = createNextIntlPlugin('./lib/i18n/request.ts')
 
 const isReplitDeployment = process.env.REPLIT_DEPLOYMENT === '1'
+// Local default follows the backend's own PORT default (backend/index.js
+// listens on 5000). Replit deployments keep their historical internal 5050.
+const localBackendBase = `http://127.0.0.1:${process.env.BACKEND_PORT || 5000}`
 const replitBackendBase = 'http://127.0.0.1:5050'
 const projectRoot = dirname(fileURLToPath(import.meta.url))
 
@@ -15,7 +18,7 @@ function resolveBackendInternalUrl() {
   if (isReplitDeployment && (!configured || /(?:localhost|127\.0\.0\.1):5000\b/.test(configured))) {
     return replitBackendBase
   }
-  return configured || replitBackendBase
+  return configured || localBackendBase
 }
 
 /** @type {import('next').NextConfig} */
@@ -132,6 +135,8 @@ const nextConfig = {
   // NOTE: Next.js standalone may evaluate rewrites while loading .env.local.
   // Replit deployments must ignore stale localhost:5000 values from that file
   // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
+  // Outside Replit the default follows BACKEND_PORT (5000, matching
+  // backend/index.js), so `scripts/dev-up.sh` works with zero env setup.
   async rewrites() {
     const backendBase = resolveBackendInternalUrl()
     return {
