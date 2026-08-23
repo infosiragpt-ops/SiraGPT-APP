@@ -57,7 +57,11 @@ function isSourcePreservingEditLight(requestText, files) {
   const hay = withCollapsedRepeats(text);
   if (requestWantsMinimalProofreadingLight(text)) return true;
 
-  const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|aplic\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|arregl\w*|ajust\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*|formate\w*|optim\w*)\b/.test(hay);
+  const templateTransform = /\b(formato|format|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text)
+    && /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/.test(text);
+  if (templateTransform) return true;
+
+  const editVerb = /\b(agreg\w*|anad\w*|insert\w*|incorpor\w*|inclu\w*|pon|poner|coloc\w*|aplic\w*|modific\w*|edit\w*|corrig\w*|correg\w*|mejora\w*|mejorar\w*|arregl\w*|ajust\w*|actualiz\w*|reemplaz\w*|quit\w*|elimin\w*|borr\w*|complet\w*|formate\w*|optim\w*|pasa\w*)\b/.test(hay);
   if (!editVerb) return false;
 
   const existingDocRef = /\b(mi|mismo|misma|este|esta|ese|esa|documento|archivo|adjunto|subido|cargado|word|docx|excel|xlsx|pptx|powerpoint|pdf|tesis)\b/.test(text);

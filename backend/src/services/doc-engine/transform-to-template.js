@@ -120,7 +120,11 @@ function looksLikePlaceholderDocx(file = {}, peek = {}) {
   const body = String(peek.visibleText || file.extractedText || extractVisibleText(peek.documentXml || ''));
   const xxxx = (body.match(/X{4,}/gi) || []).length;
   const words = body.trim().split(/\s+/).filter((w) => w && !/^X{4,}$/i.test(w));
-  return xxxx >= 1 && words.length < 2000;
+  if (xxxx < 1) return false;
+  // UPN plantillas are short + XXXX. A thesis with one leftover XXXX cell
+  // must stay content (live: tesis_UPN.docx swapped with the plantilla).
+  if (words.length < 80) return true;
+  return xxxx >= 3 && words.length < 500;
 }
 
 function looksLikeRealProseDocx(file = {}, peek = {}) {
@@ -172,12 +176,29 @@ function classifyTemplateVsContent(files = [], prompt = '') {
       reason: 'need_two_docx',
     };
   }
-  const fromPrompt = pairFromPromptNames(docs, prompt);
-  if (fromPrompt) return fromPrompt;
   const scored = docs.map((file) => {
     const peek = peekDocxXml(file);
     return { file, peek, ...scoreTemplateVsContent(file, peek) };
   });
+  // Hard override: XXXX / empty plantilla vs long prose. Filename "tesis_UPN"
+  // or prompt ## names must not swap the pair (live: empty UPN back to chat).
+  const placeholderHit = scored.find((s) => looksLikePlaceholderDocx(s.file, s.peek));
+  const proseHit = scored.find((s) => (
+    (!placeholderHit || s.file !== placeholderHit.file)
+    && looksLikeRealProseDocx(s.file, s.peek)
+  ));
+  if (placeholderHit && proseHit && placeholderHit.file !== proseHit.file) {
+    return {
+      template: placeholderHit.file,
+      content: proseHit.file,
+      source: proseHit.file,
+      docs,
+      scored,
+      reason: 'placeholder_vs_prose',
+    };
+  }
+  const fromPrompt = pairFromPromptNames(docs, prompt);
+  if (fromPrompt) return fromPrompt;
   const templateHit = [...scored].sort((a, b) => (
     b.template - a.template || a.content - b.content
   ))[0];

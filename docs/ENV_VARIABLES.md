@@ -409,3 +409,16 @@ only normal local boot may skip or use `MIGRATION_NONFATAL=1`.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `SIRAGPT_INPUT_SANITIZER_MODE` | `block` | XSS/prompt injection mode: `block`, `warn`, `off` |
+
+---
+
+## Document engine + artifact editor
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FEATURE_DOC_ENGINE` | off | BullMQ / sandbox / `/api/documents`. El transplant UPN de /chat (PizZip) no depende de este flag |
+| `FEATURE_DOC_ARTIFACT_EDITOR` | off | Microservicio del panel editor (`/api/doc-artifact-editor`). Default false |
+| `DOC_ENGINE_DEEPSEEK_FLASH_MODEL` | `deepseek-v4-flash` | Verify / plan (DeepSeek only) |
+| `DOC_ENGINE_DEEPSEEK_PRO_MODEL` | `deepseek-v4-pro` | Reintento visual / plan |
+| `DOC_ARTIFACT_EDITOR_TIMEOUT_MS` | `120000` | Tope por edición del panel |
+| `DOC_ARTIFACT_EDITOR_TTL_SEC` | `900` | TTL de sesión / download |
