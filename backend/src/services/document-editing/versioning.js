@@ -72,7 +72,8 @@ async function listFileVersions(prisma, { fileId, userId } = {}) {
       orderBy: { version: 'desc' },
       select: {
         id: true, version: true, artifactId: true, filename: true,
-        summary: true, validationPassed: true, createdByChatId: true, createdAt: true, content: true,
+        summary: true, validationPassed: true, createdByChatId: true, createdAt: true,
+        content: false,
       },
     });
   } catch {
@@ -91,23 +92,36 @@ async function getFileVersion(prisma, { versionId, userId } = {}) {
   }
 }
 
+const VERSION_NOT_RESTORABLE = 'VERSION_NOT_RESTORABLE';
+
 // Restore is non-destructive: it creates a new head that points to the exact
-// immutable artifact from an earlier version. The original upload and every
-// intermediate edit remain available in the history.
+// immutable artifact from an earlier version. Text versions (manual /chat
+// edits stored in `content`, artifactId=null) restore as text versions via the
+// same path as POST /files/:id/edit. The original upload and every intermediate
+// edit remain available in the history.
 async function restoreFileVersion(prisma, { fileId, versionId, userId, createdByChatId = null } = {}) {
   if (!prisma?.fileVersion || !fileId || !versionId || !userId) return null;
   const source = await prisma.fileVersion.findFirst({
     where: { id: versionId, fileId, userId, validationPassed: true },
   }).catch(() => null);
-  if (!source?.artifactId || source.validationPassed !== true) return null;
+  if (!source || source.validationPassed !== true) return null;
+  const hasArtifact = typeof source.artifactId === 'string' && source.artifactId.length > 0;
+  const hasContent = typeof source.content === 'string' && source.content.trim().length > 0;
+  if (!hasArtifact && !hasContent) {
+    const err = new Error(VERSION_NOT_RESTORABLE);
+    err.code = VERSION_NOT_RESTORABLE;
+    throw err;
+  }
   const restored = await recordFileVersion(prisma, {
     fileId,
     userId,
-    artifactId: source.artifactId,
+    artifactId: hasArtifact ? source.artifactId : null,
+    content: hasArtifact ? undefined : source.content,
     filename: source.filename,
     summary: `Restaurada desde la versión ${source.version}${source.summary ? `: ${source.summary}` : ''}`,
     editPlan: {
       type: 'restore',
+      restoreKind: hasArtifact ? 'artifact' : 'text',
       sourceVersionId: source.id,
       sourceVersion: source.version,
     },
@@ -118,6 +132,7 @@ async function restoreFileVersion(prisma, { fileId, versionId, userId, createdBy
 }
 
 module.exports = {
+  VERSION_NOT_RESTORABLE,
   getFileVersion,
   listFileVersions,
   recordFileVersion,

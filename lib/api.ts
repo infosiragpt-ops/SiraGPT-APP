@@ -386,6 +386,8 @@ export type FileVersionRecord = {
   validationPassed: boolean
   createdAt: string
   downloadUrl?: string | null
+  /** True for text versions (manual edits / restores): content loads via getFileContent(versionId). */
+  textContent?: boolean
 }
 
 export type ResearchSavedSearchRecord = {
@@ -1537,8 +1539,9 @@ class ApiClient {
     return this.request(`/files/${id}`, { method: 'DELETE' });
   }
 
-  async getFileContent(id: string): Promise<string> {
-    const url = `${this.baseURL}/files/${id}/content`;
+  async getFileContent(id: string, versionId?: string): Promise<string> {
+    const query = versionId ? `?versionId=${encodeURIComponent(versionId)}` : '';
+    const url = `${this.baseURL}/files/${id}/content${query}`;
     const response = await authenticatedFetch(url, {}, {
       bearerToken: this._getAccessTokenSnapshot(),
     });

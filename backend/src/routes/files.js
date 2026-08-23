@@ -1138,6 +1138,8 @@ router.get('/:id/versions', authenticateToken, async (req, res) => {
 
 // Restore an immutable prior artifact as a new version. This never overwrites
 // the uploaded original and keeps a complete audit trail for undo/redo.
+// Text versions (manual edits) restore as text versions: the client rehydrates
+// the editor via GET /:id/versions/:versionId/content.
 router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, res) => {
   try {
     const file = await prisma.file.findFirst({
@@ -1145,7 +1147,7 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
       select: { id: true },
     });
     if (!file) return res.status(404).json({ error: 'File not found' });
-    const { restoreFileVersion } = require('../services/document-editing/versioning');
+    const { restoreFileVersion, VERSION_NOT_RESTORABLE } = require('../services/document-editing/versioning');
     const result = await restoreFileVersion(prisma, {
       fileId: file.id,
       versionId: req.params.versionId,
@@ -1154,6 +1156,7 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
     });
     if (!result) return res.status(404).json({ error: 'Versión restaurable no encontrada' });
     const version = result.restored;
+    const isTextRestore = version.artifactId == null;
     return res.status(201).json({
       sourceVersion: result.source.version,
       version: {
@@ -1163,10 +1166,14 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
         summary: version.summary,
         validationPassed: version.validationPassed,
         createdAt: version.createdAt,
-        downloadUrl: `/api/agent/artifact/${version.artifactId}`,
+        downloadUrl: version.artifactId ? `/api/agent/artifact/${version.artifactId}` : null,
+        textContent: isTextRestore,
       },
     });
   } catch (error) {
+    if (error?.code === 'VERSION_NOT_RESTORABLE') {
+      return res.status(409).json({ error: 'Esta versión no guarda contenido restaurable', code: 'VERSION_NOT_RESTORABLE' });
+    }
     return res.status(500).json({ error: 'No se pudo restaurar la versión' });
   }
 });
@@ -1404,9 +1411,27 @@ router.get('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Get file content
+// Get file content. `?versionId=` serves that version's stored text instead
+// of the extracted original — this is what makes a restored text version the
+// editor's effective head after reload.
 router.get('/:id/content', authenticateToken, async (req, res) => {
   try {
+    if (typeof req.query.versionId === 'string' && req.query.versionId) {
+      const version = await prisma.fileVersion.findFirst({
+        where: {
+          id: req.query.versionId,
+          fileId: req.params.id,
+          userId: req.user.id,
+          validationPassed: true,
+        },
+        select: { id: true, content: true },
+      });
+      if (!version || typeof version.content !== 'string' || !version.content.trim()) {
+        return res.status(404).json({ error: 'Esta versión no guarda texto editable' });
+      }
+      return res.send(version.content);
+    }
+
     const file = await prisma.file.findFirst({
       where: {
         id: req.params.id,
