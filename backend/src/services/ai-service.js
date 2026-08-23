@@ -19,6 +19,7 @@ const {
 } = require('./ai-product-os/litellm-gateway');
 const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
 const { attachConversationSummary } = require('./conversation-summarizer');
+const objectStorage = require('./object-storage');
 
 let __anthropicSummarizerClient = null;
 function getAnthropicSummarizerClient() {
@@ -361,10 +362,18 @@ class AIService {
      * @returns {object} - Formatted image object for vision API
      */
     async prepareImageForVision(imagePath, mimeType) {
+        let tempFile = null;
         try {
-            const fullPath = path.isAbsolute(imagePath)
-                ? imagePath
-                : path.join(__dirname, '../../', imagePath);
+            // R2 refs ("r2:<key>") point to object storage, not the local disk —
+            // materialize a temp copy first or fs.existsSync below always fails.
+            if (objectStorage.isRemote(imagePath)) {
+                tempFile = await objectStorage.toLocalTemp(imagePath);
+            }
+
+            const sourcePath = tempFile ? tempFile.path : imagePath;
+            const fullPath = path.isAbsolute(sourcePath)
+                ? sourcePath
+                : path.join(__dirname, '../../', sourcePath);
 
             if (!fs.existsSync(fullPath)) {
                 console.error(`Image file not found: ${fullPath}`);
@@ -384,6 +393,8 @@ class AIService {
         } catch (error) {
             console.error('Error preparing image for vision:', error);
             return null;
+        } finally {
+            if (tempFile) { try { await tempFile.cleanup(); } catch { /* best-effort */ } }
         }
     }
 
