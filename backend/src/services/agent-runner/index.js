@@ -302,7 +302,42 @@ async function runAgentRunner({
       { role: 'user', content: task },
     ];
 
-    const executors = { ...makeToolExecutors(sandbox), ...f8.executors };
+    // ── Slide-progress: streaming por diapositiva + checkpoints + resume ──
+    // El executor create_presentation emite slide_progress por diapositiva y
+    // guarda un checkpoint KV; si este turn es un retry de una generación
+    // previa (checkpoint fresco <15 min), se inyecta la instrucción de
+    // reanudación para continuar desde la última slide. Todo fail-open.
+    const kv = slideProgressKv();
+    const executors = {
+      ...makeToolExecutors(sandbox, {
+        slideProgress: kv && chatId ? { kv, threadId: chatId } : null,
+      }),
+      ...f8.executors,
+      // Limpieza del checkpoint al entregar el deck (tools.js no la expone
+      // para no acoplar el executor al ciclo de vida del turn).
+      clearCheckpoint: async () => clearSlideCheckpoint(kv, chatId),
+    };
+    if (executors.__setSlideEventSink) {
+      executors.__setSlideEventSink(onEvent);
+    }
+    if (kv && chatId) {
+      try {
+        const cp = await (typeof executors.resumeCheckpoint === 'function'
+          ? executors.resumeCheckpoint()
+          : Promise.resolve(null));
+        if (cp && cp.slidesDone.length) {
+          messages[1] = {
+            role: 'user',
+            content: `${task}\n\n${resumeInstruction(cp, task)}`,
+          };
+          onEvent({
+            type: 'stage',
+            tool: 'agent_runner',
+            label: `Reanudando: ${cp.slidesDone.length} diapositivas ya listas`,
+          });
+        }
+      } catch (_) { /* fail-open: la reanudación nunca bloquea el turn */ }
+    }
 
     // Deterministic fast-paths are allowed ONLY for exact edits on an
     // EXISTING pptx (paint a color, append a thanks slide). Creating a NEW
@@ -471,6 +506,11 @@ async function runAgentRunner({
     }
 
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name), label: 'Listo' });
+    // Deck entregado: el checkpoint ya no hace falta (la próxima petición del
+    // hilo es una generación NUEVA, no un retry). Best-effort.
+    if (kv && chatId && typeof executors.clearCheckpoint === 'function') {
+      try { await executors.clearCheckpoint(); } catch (_) { /* best-effort */ }
+    }
     // ── F8 hook: persist ONE short episodic note (opt-in, size-capped) so a
     // follow-up in a NEW conversation for the same user can recall this turn.
     try {
@@ -825,6 +865,30 @@ async function loadFilesByIds({ prisma, userId, fileIds }) {
 
 const { logDocumentRouting, DOCUMENT_ROUTING_PATHS } = require('./telemetry');
 const { toStageEvent, STAGE_LABELS } = require('./trace');
+const { resumeInstruction, clearSlideCheckpoint } = require('./slide-progress');
+
+/**
+ * Slide-progress KV (fail-open): any ioredis-shaped client from REDIS_URL.
+ * Reuses the rate-limit-store's cached connection when present so we do not
+ * open a second pool; a missing/unreachable Redis just disables checkpoints —
+ * the loop runs exactly as before.
+ */
+function slideProgressKv() {
+  try {
+    const store = require('../middleware/rate-limit-store');
+    const redis = typeof store.createRedisClient === 'function'
+      ? store.createRedisClient(process.env.REDIS_URL)
+      : null;
+    if (redis && typeof redis.get === 'function' && typeof redis.set === 'function') {
+      return {
+        get: (k) => redis.get(k),
+        set: (k, v) => redis.set(k, v),
+        del: (k) => redis.del(k),
+      };
+    }
+  } catch (_) { /* no Redis → checkpoints off */ }
+  return null;
+}
 
 // F4 — orchestrator surface (lazy: ./orchestrator requires this module back).
 function shouldOrchestrate(text, ctx) {

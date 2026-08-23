@@ -316,9 +316,13 @@ test('runAgentLoop reports honestly after 3 failed verification attempts', async
 });
 
 test('runAgentLoop caps at 25 iterations', async () => {
+  // Args ÚNICOS por iteración: con args idénticos el sliding-window repeat
+  // guard (slide-progress) corta antes del tope — probar eso es el test
+  // 'repeat_loop_cut' de agent-runner-slide-progress.test.js.
+  let n = 0;
   const client = scriptedClient(
     Array.from({ length: 30 }, () => ({
-      toolCalls: [{ name: 'list_files', args: { path: '.' } }],
+      toolCalls: [{ name: 'list_files', args: { path: `dir-${n++}` } }],
     })),
   );
   const result = await runAgentLoop({

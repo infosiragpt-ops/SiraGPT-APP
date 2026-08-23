@@ -39,6 +39,8 @@ const STAGE_LABELS = {
   replanning: 'Replanificando',
   budgetExceeded: 'Presupuesto agotado',
   steered: 'Instrucción recibida',
+  // Slide-progress — per-slide streaming while a deck is being built.
+  slideProgress: 'Generando diapositiva',
 };
 
 /** Tools whose whole purpose is verification, not mutation. */
@@ -113,6 +115,9 @@ function toStageEvent(ev) {
       return { ...base, label: ev.label || STAGE_LABELS.budgetExceeded };
     case 'steered':
       return { ...base, label: ev.label || STAGE_LABELS.steered };
+    // Slide-progress — per-slide streaming (label already carries N/M + title).
+    case 'slide_progress':
+      return { ...base, label: ev.label || STAGE_LABELS.slideProgress, index: ev.index };
     case 'error':
       return {
         ...base,

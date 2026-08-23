@@ -24,6 +24,15 @@ const {
   WEB_TOOL_DEFINITIONS,
   makeWebToolExecutors,
 } = require('./browser');
+const {
+  createSlideCheckpointer,
+  markSlideDone,
+  saveSlideCheckpoint,
+  clearSlideCheckpoint,
+  emitSlideEvent,
+  isCheckpointFresh,
+  loadSlideCheckpoint,
+} = require('./slide-progress');
 
 const MAX_TOOL_RESULT_CHARS = 30_000;
 const CMD_TIMEOUT_MS = 120_000;
@@ -363,10 +372,22 @@ for p in files:
 print(json.dumps({"ok": True, "frames": report, "count": len(report)}))
 `.trim();
 
-function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
+/**
+ * makeToolExecutors — bound to ONE sandbox session.
+ *
+ * Slide-progress (opcional, todo fail-open): cuando se pasa
+ * `slideProgress: { kv, threadId }` el executor `create_presentation` emite
+ * un evento `slide_progress { index, total, title }` POR diapositiva y guarda
+ * un checkpoint en KV tras escribir el deck; `resumeCheckpoint()` recupera el
+ * checkpoint fresco de un intento anterior para que un retry continúe desde
+ * la última slide en vez de reiniciar. Sin KV o sin threadId no cambia nada.
+ */
+function makeToolExecutors(sandbox, { setSlideBackgrounds, web, slideProgress } = {}) {
   const doc = makeDocExecutors(sandbox);
   const applyBg = setSlideBackgrounds
     || require('../document-editing/pptx-adapter').setSlideBackgrounds;
+  const slideKv = slideProgress?.kv || null;
+  const slideThreadId = slideProgress?.threadId || null;
 
   const executors = {
     // Executors take an optional per-call context `{ signal }` (F3): the loop
@@ -503,13 +524,29 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
         const plan = outline.length
           ? outline
           : buildSkeletonPlan({ title, topic, slides: args?.slides });
+        const totalSlides = plan.length + 1;
+        // Slide-progress streaming (F10): un stage por diapositiva mientras se
+        // construye el deck — el usuario VE avance real en vez de esperar a ciegas.
+        emitSlideEvent((ev) => onSlideEvent(ev), {
+          index: 1,
+          total: totalSlides,
+          title,
+        });
+        const checkpoint = createSlideCheckpointer({ topic, color: hex, filename });
+        markSlideDone(checkpoint, { title, bullets: [] });
         const titleSlide = pptx.addSlide();
         paint(titleSlide);
         titleSlide.addText(title, {
           x: 0.7, y: 2.6, w: 12, h: 1.3,
           fontSize: 40, bold: true, color: ink, align: 'left',
         });
-        for (const item of plan) {
+        for (let i = 0; i < plan.length; i += 1) {
+          const item = plan[i];
+          emitSlideEvent((ev) => onSlideEvent(ev), {
+            index: i + 2,
+            total: totalSlides,
+            title: item.title,
+          });
           const slide = pptx.addSlide();
           paint(slide);
           slide.addText(item.title, {
@@ -525,10 +562,16 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
               { x: 0.85, y: 1.9, w: 11.2, h: 4.6, fontSize: 18, color: ink },
             );
           }
+          markSlideDone(checkpoint, item);
         }
         const buffer = await pptx.write('nodebuffer');
         const outRel = `outputs/${filename}`;
         await sandbox.writeFile(outRel, buffer);
+        // Checkpoint tras el deck completo en disco; si el turn muere DESPUÉS
+        // (persist, retry de outputs), el retry encuentra las slides ya hechas.
+        if (slideKv && slideThreadId) {
+          await saveSlideCheckpoint(slideKv, slideThreadId, checkpoint);
+        }
         return cap(JSON.stringify({
           ok: true,
           path: `/workspace/${outRel}`,
@@ -537,6 +580,7 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
           slides: plan.length + 1,
           outlineProvided: outline.length > 0,
           filename,
+          checkpointed: Boolean(slideKv && slideThreadId),
         }));
       } catch (err) {
         return `ERROR: ${err.message}`;
@@ -585,6 +629,21 @@ function makeToolExecutors(sandbox, { setSlideBackgrounds, web } = {}) {
     : webToolsEnabled(webOpts.env || process.env);
   if (webEnabled) Object.assign(executors, makeWebToolExecutors(webOpts));
 
+  // Slide-progress: reenvía eventos de diapositiva al canal del turn. El loop
+  // pasa `onEvent` vía ctx; sin él los eventos se descartan silenciosamente.
+  function onSlideEvent(ev) {
+    const cb = onSlideEvent.current;
+    if (typeof cb === 'function') {
+      try { cb(ev); } catch (_) { /* tracing only */ }
+    }
+  }
+  executors.__setSlideEventSink = (fn) => { onSlideEvent.current = fn; };
+  executors.resumeCheckpoint = async () => {
+    if (!slideKv || !slideThreadId) return null;
+    const cp = await loadSlideCheckpoint(slideKv, slideThreadId);
+    return isCheckpointFresh(cp) ? cp : null;
+  };
+
   return executors;
 }
 
@@ -609,9 +668,7 @@ module.exports = {
   NAMED_COLORS,
   DEFAULT_DECK_COLOR,
   CMD_TIMEOUT_MS,
-};
-
-// Live view: `TOOL_DEFINITIONS` reflects the CURRENT env each time it is
+};// Live view: `TOOL_DEFINITIONS` reflects the CURRENT env each time it is
 // read, so `require('./tools').TOOL_DEFINITIONS` includes the web tools
 // exactly when the kill switch is on. (Consumers that destructure at module
 // load — e.g. agent-runner/index.js — capture the boot-time value, which is

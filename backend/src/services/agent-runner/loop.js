@@ -14,6 +14,7 @@ const {
   sleep,
   callModelWithRetry,
 } = require('./native-llm');
+const { createRepeatStepGuard, classifyRepeatLoopCut } = require('./slide-progress');
 
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
@@ -198,10 +199,15 @@ async function runAgentLoop({
   kv = null,
   threadId = null,
   stallMs = STREAM_STALL_MS_DEFAULT,
+  repeatGuard = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
   const cap = Math.max(1, Math.min(50, Number(maxIterations) || MAX_ITERATIONS_DEFAULT));
   const steps = [];
+  // Sliding-window repeat guard (slide-progress): the production loop's only
+  // protection used to be MAX_ITERATIONS (25) — a model stuck in a "improve
+  // the deck" pattern with slightly different args burned the whole budget.
+  const guard = repeatGuard || createRepeatStepGuard();
   let finalText = '';
   let stoppedReason = 'max_iterations';
   let verificationAttempts = 0;
@@ -484,6 +490,28 @@ async function runAgentLoop({
         preview: previewOf(result, 400),
         label: ok ? 'Verificando resultado' : 'Reintentando',
       });
+
+      // ── Sliding-window repeat guard (slide-progress) ────────────────────
+      // Only successful results count as "the same step again" — an ERROR
+      // retry loop is already handled by the model/LLM retry paths. When the
+      // same signature (tool + normalized args) repeats inside the window,
+      // stop NOW with an honest reason, keeping steps and any valid outputs
+      // written so far (a partial deck is preserved, not discarded).
+      if (ok) {
+        const verdict = guard.record(mapped, args);
+        if (verdict.cut) {
+          const cut = classifyRepeatLoopCut(verdict);
+          onEvent({
+            type: 'error',
+            code: cut.code,
+            message: cut.message,
+            retryable: cut.retryable,
+            iteration,
+          });
+          stoppedReason = 'repeat_loop_cut';
+          return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: cut.code };
+        }
+      }
       messages.push({
         role: 'tool',
         tool_call_id: call.id || `call_${iteration}_${mapped}`,
@@ -519,4 +547,5 @@ module.exports = {
   heartbeatFence,
   stealStaleFence,
   classifyLoopError,
+  createRepeatStepGuard,
 };
