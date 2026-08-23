@@ -827,7 +827,27 @@ async function runAgentLoop({
                 result = `ERROR: ${err?.message || String(err)}`;
               }
             } else {
-              result = await executor(execArgs, { signal });
+              try {
+                result = await executor(execArgs, { signal });
+              } catch (execErr) {
+                if (signal?.aborted) bail(iteration);
+                let retried = false;
+                try {
+                  const w60 = loadEngine3h60();
+                  if (w60 && typeof w60.retryTransientToolError === 'function') {
+                    const retry = w60.retryTransientToolError({
+                      attempt: 0,
+                      status: execErr && (execErr.status || execErr.statusCode),
+                      code: execErr && execErr.code,
+                    });
+                    if (retry && retry.retry && typeof executor === 'function') {
+                      result = await executor(execArgs, { signal });
+                      retried = true;
+                    }
+                  }
+                } catch (_) { /* 3H60 fail-open */ }
+                if (!retried) result = `ERROR: ${execErr?.message || String(execErr)}`;
+              }
             }
           } catch (err) {
             if (signal?.aborted) bail(iteration);

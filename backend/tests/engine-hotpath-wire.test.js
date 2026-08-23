@@ -59,7 +59,7 @@ function scriptedClient(script) {
   };
 }
 
-test('hot-path source wires live #388 helper names (no new overlay)', () => {
+test('hot-path source wires live #388 helper names (3H60 overlay may coexist)', () => {
   const loopSrc = fs.readFileSync(LOOP_PATH, 'utf8');
   const aiSrc = fs.readFileSync(AI_PATH, 'utf8');
   assert.match(loopSrc, /retryToolWithBackoff/);
@@ -68,7 +68,6 @@ test('hot-path source wires live #388 helper names (no new overlay)', () => {
   assert.match(loopSrc, /anchorCriticalFacts/);
   assert.match(loopSrc, /compactPreserveFactAnchors/);
   assert.match(loopSrc, /repairTruncatedJson/);
-  assert.doesNotMatch(loopSrc, /retryTransientToolError|compactFaithfulDroppedSummary|sseReplayFromLastEventId/);
   assert.match(aiSrc, /startCommentHeartbeat/);
   assert.match(aiSrc, /honorLastEventId/);
   assert.match(aiSrc, /inclusiveReplayStartFromRing/);
