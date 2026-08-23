@@ -2866,9 +2866,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 const htmlPreview = typeof file.htmlPreview === 'string' && file.htmlPreview.length > 0
                                     ? file.htmlPreview
                                     : fallbackPresentationPreview;
-                                const isWordPreview = extension === 'docx' || extension === 'doc' || file.format === 'docx';
-                                // Word uses soffice→PDF (paginated pages + zoom), never the mammoth HTML dump.
-                                const previewUrl = htmlPreview && !isWordPreview
+                                const previewUrl = htmlPreview
                                     ? `data:text/html;charset=utf-8,${encodeURIComponent(htmlPreview)}`
                                     : resolvedDownloadUrl;
                                 // Every generated office document is previewable now that
@@ -2966,10 +2964,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                                                 // instead of a client HTML table. The /render
                                                                 // endpoint converts any office format and the
                                                                 // viewer falls back to the client renderer on 4xx.
-                                                                previewPdfUrl: (file.previewPdfUrl
-                                                                    || (file.id && extension !== 'html' && extension !== 'htm'
-                                                                        ? `/api/files/${file.id}/render?target=pdf`
-                                                                        : undefined)),
+                                                                previewPdfUrl: file.id && !htmlPreview && extension !== 'html' && extension !== 'htm'
+                                                                    ? `/api/files/${file.id}/render?target=pdf`
+                                                                    : undefined,
                                                             })}
                                                             className="h-9 px-4 font-medium shadow-sm hover:shadow-md"
                                                         >
