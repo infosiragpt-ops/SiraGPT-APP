@@ -1,120 +1,87 @@
-# Setup Instructions
+# Setup — correr SiraGPT localmente
 
-## Prerequisites
+Objetivo: monorepo funcionando en menos de 15 minutos.
 
-Make sure you have the following installed:
-- Node.js 18+ 
-- npm or yarn
+## Prerrequisitos
+
+- Node.js ≥ 20 (`node -v`)
+- Docker Desktop o docker CLI corriendo
 - Git
 
-## Installation Steps
+## Pasos
 
-1. **Download/Clone the project**
-   \`\`\`bash
-   # If you downloaded the zip, extract it
-   # If cloning from git:
-   git clone <your-repo-url>
-   cd openwebui-platform
-   \`\`\`
+```bash
+# 1. Clonar
+git clone https://github.com/infosiragpt-ops/SiraGPT-APP && cd SiraGPT-APP
 
-2. **Install dependencies**
-   \`\`\`bash
-   npm install
-   # or
-   yarn install
-   \`\`\`
+# 2. Dependencias (frontend en la raíz, backend en backend/)
+npm install
+npm install --prefix backend
 
-3. **Create environment file**
-   \`\`\`bash
-   cp .env.local.example .env.local
-   \`\`\`
+# 3. Arrancar todo
+./scripts/dev-up.sh
+```
 
-4. **Edit environment variables** (optional for demo)
-   \`\`\`bash
-   # Open .env.local and add your API keys
-   OPENAI_API_KEY=your_key_here
-   ANTHROPIC_API_KEY=your_key_here
-   # etc...
-   \`\`\`
+`dev-up.sh` hace, en orden:
 
-5. **Start development server**
-   \`\`\`bash
-   npm run dev
-   # or
-   yarn dev
-   \`\`\`
+1. **Primer arranque:** genera `.env.local` con valores de desarrollo válidos
+   (Postgres en `localhost:5432`, Redis en `localhost:6379`, secrets JWT/SESSION
+   aleatorios). dotenv no expande `${VAR}`, así que el archivo usa valores planos.
+2. Levanta Postgres + Redis vía `docker compose up -d db redis`.
+3. Espera a que Postgres esté healthy y corre `prisma migrate dev`.
+4. Seed best-effort.
+5. Arranca en paralelo:
+   - Frontend Next.js → http://localhost:3000
+   - Backend Express → http://localhost:5000
 
-6. **Open in browser**
-   Navigate to http://localhost:3000
+Abre **http://localhost:3000**. Las llamadas `/api/*` del navegador pasan por el
+mismo origen de Next y se proxifican al backend (ver
+`next.config.mjs` → `rewrites`). El puerto del proxy sigue `BACKEND_PORT`
+(default `5000`) o `BACKEND_INTERNAL_URL`.
 
-## Demo Login
+## Puerto personalizado
 
-- **Admin**: admin@example.com / password
-- **User**: Create new account or use any email with "password"
+```bash
+BACKEND_PORT=5050 ./scripts/dev-up.sh
+```
 
-## Common Issues & Solutions
+## API keys de modelos
 
-### Issue: "Module not found" errors
-**Solution**: Run `npm install` again and make sure all dependencies are installed.
+El stack funciona sin keys; las llamadas a modelos fallarán hasta que añadas al
+menos una. Edita `.env.local`:
 
-### Issue: "Cannot find module '@/components/ui/...'"
-**Solution**: Make sure the `tsconfig.json` file has the correct path mapping.
+```bash
+OPENAI_API_KEY=sk-...        # u ANTHROPIC_API_KEY / OPENROUTER_API_KEY / GROQ_API_KEY
+```
 
-### Issue: Styling not working
-**Solution**: Make sure `tailwind.config.js` and `postcss.config.js` are in the root directory.
+Reinicia `dev-up.sh` después de editar.
 
-### Issue: Build errors
-**Solution**: 
-\`\`\`bash
-# Clear Next.js cache
-rm -rf .next
-npm run build
-\`\`\`
+## Alternativa: todo en Docker
 
-### Issue: Port already in use
-**Solution**: 
-\`\`\`bash
-# Use different port
-npm run dev -- -p 3001
-\`\`\`
+```bash
+cp .env.example .env    # edita JWT_SECRET, SESSION_SECRET y POSTGRES_PASSWORD
+docker compose up -d    # frontend :3000, backend :5000, db, redis
+```
 
-## File Structure Check
+## Verificación rápida
 
-Make sure you have these key files:
-\`\`\`
-├── package.json
-├── tailwind.config.js
-├── postcss.config.js
-├── tsconfig.json
-├── next.config.js
-├── app/
-│   ├── globals.css
-│   ├── layout.tsx
-│   └── page.tsx
-├── components/
-│   └── ui/
-├── lib/
-│   └── utils.ts
-└── hooks/
-\`\`\`
+```bash
+curl -s http://localhost:5000/health | head     # backend directo
+curl -s http://localhost:3000/api/health | head # vía proxy de Next (debe responder igual)
+```
 
-## Deployment
+## Problemas comunes
 
-### Vercel (Recommended)
-1. Push code to GitHub
-2. Connect to Vercel
-3. Deploy automatically
+| Síntoma | Causa probable | Solución |
+|---|---|---|
+| La web carga pero todas las llamadas `/api` dan 500 | Backend no está en el puerto que el proxy espera | Revisa que `PORT` de `.env.local` coincida con `BACKEND_PORT`; reinicia `dev-up.sh` |
+| `P1001: can't reach database` | Postgres no levantó o `.env.local` apunta a otro host | `docker compose ps db`; el `.env.local` generado usa `localhost:5432` |
+| `prisma migrate` falla por auth | Password de DB no coincide | Borra `.env.local` y deja que `dev-up.sh` lo regenere |
+| Puerto 3000/5000 ocupado | Otro proceso escucha ahí | `lsof -i :3000 -i :5000` y mata el proceso, o usa `BACKEND_PORT=5050` |
+| `Module not found` tras pull | node_modules desactualizado | `npm ci && npm ci --prefix backend` |
 
-### Manual Build
-\`\`\`bash
-npm run build
-npm start
-\`\`\`
+## Referencias de arquitectura
 
-## Need Help?
-
-If you're still getting errors:
-1. Delete `node_modules` and `package-lock.json`
-2. Run `npm install` again
-3. Make sure you're using Node.js 18+
-4. Check that all files are in the correct locations
+- Mapa completo del sistema: [docs/architecture.md](docs/architecture.md)
+- Diseño del AgentRunner: [ARCHITECTURE.md](ARCHITECTURE.md)
+- Deploy a producción (VPS único, Docker + Caddy, GitHub Actions): [docs/deployment.md](docs/deployment.md)
