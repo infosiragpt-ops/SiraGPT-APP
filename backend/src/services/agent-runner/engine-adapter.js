@@ -43,6 +43,11 @@
  * scrub, drop buffered tokens on cancel, SSE id monotonic, coalesced
  * in-flight call ids, settle credits if client gone, json/abort taxonomy,
  * skip duplicate web_fetch same URL per turn.
+ * 3H59 is a fail-open sibling module (`engine-3h59.js`) loaded like
+ * engine-3h55..3h58 would be: require() errors leave this adapter intact.
+ * 3H60 is the next fail-open sibling (`engine-3h60.js`): unique helpers
+ * after 3H59 (oscillation cut, faithful compact, SSE Last-Event-ID replay,
+ * credit settle on error). A throwing require leaves 3H59 intact.
  * 3H40 extends (does not smash) 3H39: hard cap 32 tools/step, abort nested
  * subagents on parent halt, unquoted-key JSON repair, drop NUL args,
  * integer coerce, empty-model circuit, budget hint every 5 steps,
@@ -586,7 +591,22 @@ function classifyAdapterError(code) {
     rate_limited: { code: 'rate_limited', retryable: true, message: 'DeepSeek 429: espera y reintenta.' },
     credit_ceiling: { code: 'credit_ceiling', retryable: false, message: 'DeepSeek 402: sin credito. No reintente.' },
   };
-  return table[c] || null;
+  if (table[c]) return table[c];
+  try {
+    const w = require('./engine-3h59');
+    if (w && typeof w.classifyEngine3h59Error === 'function') {
+      const extra = w.classifyEngine3h59Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
+    const w60 = require('./engine-3h60');
+    if (w60 && typeof w60.classifyEngine3h60Error === 'function') {
+      const extra = w60.classifyEngine3h60Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -4424,7 +4444,7 @@ function firstTokenWatchdogMs({ elapsedMs, firstTokenAt, startedAt, now = Date.n
 
 
 function adapterSnapshot() {
-  return {
+  const base = {
     retryBackoffJitter: true,
     consecutiveRepeatCut: true,
     sessionRemainingSteps: true,
@@ -4791,6 +4811,30 @@ function adapterSnapshot() {
     sandboxUsesRunsc: false,
     latencyNote: 'scripted p50/p95; never invented Flash',
   };
+  let snap = base;
+  try {
+    const w = require('./engine-3h59');
+    if (w && typeof w.waveSnapshot === 'function') {
+      snap = { ...snap, ...w.waveSnapshot(), wave: w.WAVE || '3H59' };
+    }
+  } catch (_) { /* fail-open: stay on 3H46 if 3H59 is absent */ }
+  try {
+    const w60 = require('./engine-3h60');
+    if (w60 && typeof w60.waveSnapshot === 'function') {
+      snap = { ...snap, ...w60.waveSnapshot(), wave: w60.WAVE || '3H60' };
+    }
+  } catch (_) { /* fail-open: stay on 3H59 if 3H60 is absent */ }
+  return snap;
+}
+
+function loadOptionalEngineWave(name) {
+  const file = String(name || '').trim();
+  if (!/^engine-3h(?:5[5-9]|60)$/.test(file)) return null;
+  try {
+    return require('./' + file);
+  } catch (_) {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -7597,6 +7641,7 @@ module.exports = {
   refuseSubagentIfSameToolAsParent,
   sortMemoryHitsByScoreDesc,
   rejectToolCallIfArgsIsArray,
+  loadOptionalEngineWave,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,
@@ -7605,3 +7650,17 @@ module.exports = {
   DEEPSEEK_GENERATE_MODELS,
   GLOB_IGNORE_DEFAULTS,
 };
+
+function bindOptionalEngineWaves(target) {
+  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60']) {
+    const mod = loadOptionalEngineWave(name);
+    if (!mod || typeof mod !== 'object') continue;
+    for (const [k, v] of Object.entries(mod)) {
+      if (k === 'WAVE' || k === 'waveSnapshot' || k === 'HELPERS' || k === 'ERROR_TABLE' || k === 'MUTATING_TOOLS' || k === 'FLAGS' || k === 'snapshotFlags') continue;
+      if (typeof v === 'function' && typeof target[k] !== 'function') target[k] = v;
+    }
+  }
+  return target;
+}
+
+module.exports = bindOptionalEngineWaves(module.exports);

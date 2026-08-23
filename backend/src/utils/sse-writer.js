@@ -85,6 +85,26 @@ function createSSEWriter(res, options = {}) {
     res.on('finish', onClose);
   }
 
+  try {
+    const w = require('../services/agent-runner/engine-3h59');
+    if (options.resume && typeof w.sseResumeDropsPriorListeners === 'function') {
+      w.sseResumeDropsPriorListeners({ listeners: options.priorListeners || [], resume: true });
+    }
+    if (options.lastEventId != null && typeof w.sseResumeRejectsSeqPastHead === 'function') {
+      w.sseResumeRejectsSeqPastHead({ lastEventId: options.lastEventId, headSeq: options.headSeq });
+    }
+  } catch (_) { /* 3H59 fail-open */ }
+  try {
+    const w60 = require('../services/agent-runner/engine-3h60');
+    if (options.lastEventId != null && Array.isArray(options.replayEvents) && typeof w60.sseReplayFromLastEventId === 'function') {
+      const replayed = w60.sseReplayFromLastEventId(options.replayEvents, options.lastEventId);
+      if (replayed && Array.isArray(replayed.events)) options.replayEvents = replayed.events;
+    }
+    if (options.disconnected === true && typeof w60.sseAbortOnClientDisconnect === 'function') {
+      w60.sseAbortOnClientDisconnect({ disconnected: true, controller: options.abortController });
+    }
+  } catch (_) { /* 3H60 fail-open */ }
+
   // Connection preamble — a comment frame the client ignores. Forces the
   // chain (express → kernel → load balancer → CDN → browser) to surface
   // the response headers immediately so EventSource fires `open`. Without
@@ -134,10 +154,31 @@ function createSSEWriter(res, options = {}) {
     event(payload) { return writeWithBackpressure(formatEvent(payload)); },
     raw(frame) { return writeWithBackpressure(String(frame)); },
     comment(text) {
+      try {
+        const w60 = require('../services/agent-runner/engine-3h60');
+        if (typeof w60.sseHeartbeatCommentNoSeq === 'function') {
+          w60.sseHeartbeatCommentNoSeq({ seq: options.headSeq, kind: 'heartbeat' });
+        }
+      } catch (_) { /* 3H60 fail-open */ }
       const safe = String(text == null ? '' : text).replace(/\r?\n/g, ' ');
       return writeWithBackpressure(`: ${safe}\n\n`);
     },
     done() {
+      try {
+        const w = require('../services/agent-runner/engine-3h59');
+        if (typeof w.sseCancelClearsHeartbeat === 'function') {
+          w.sseCancelClearsHeartbeat({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H59 fail-open */ }
+      try {
+        const w60 = require('../services/agent-runner/engine-3h60');
+        if (typeof w60.dropBufferedTokensOnSseCancel === 'function') {
+          w60.dropBufferedTokensOnSseCancel({ cancelled: true, buffered: options.bufferedTokens });
+        }
+        if (typeof w60.sseAbortOnClientDisconnect === 'function' && options.abortController) {
+          w60.sseAbortOnClientDisconnect({ disconnected: true, controller: options.abortController });
+        }
+      } catch (_) { /* 3H60 fail-open */ }
       cancelHeartbeat();
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
@@ -145,6 +186,21 @@ function createSSEWriter(res, options = {}) {
       });
     },
     close() {
+      try {
+        const w = require('../services/agent-runner/engine-3h59');
+        if (typeof w.sseCancelClearsHeartbeat === 'function') {
+          w.sseCancelClearsHeartbeat({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H59 fail-open */ }
+      try {
+        const w60 = require('../services/agent-runner/engine-3h60');
+        if (typeof w60.dropBufferedTokensOnSseCancel === 'function') {
+          w60.dropBufferedTokensOnSseCancel({ cancelled: true, buffered: options.bufferedTokens });
+        }
+        if (typeof w60.sseAbortOnClientDisconnect === 'function' && options.abortController) {
+          w60.sseAbortOnClientDisconnect({ disconnected: true, controller: options.abortController });
+        }
+      } catch (_) { /* 3H60 fail-open */ }
       cancelHeartbeat();
       try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
     },

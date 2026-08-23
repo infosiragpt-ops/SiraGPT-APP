@@ -487,46 +487,49 @@ router.get('/artifacts', authenticateToken, async (req, res) => {
 // High-fidelity preview: convert the office artifact to PDF with LibreOffice
 // headless (cached by id+mtime) and stream it inline. The frontend renders
 // it in a real PDF viewer instead of hand-rolled HTML tables. Same auth +
-// ownership contract as the download route. 409 → caller falls back to the
-// legacy client-side renderer (e.g. artifact offloaded to R2 or soffice
-// missing) — this endpoint must never break the download path.
+// ownership contract as the download route.
+//
+// Existing artifacts MUST hydrate from R2 when the local binary was
+// offloaded — a missing VM file is not a 409. 409 is reserved for
+// conversion failures (soffice down / format) so the viewer can fall
+// back to the legacy client renderer. Download stays untouched.
 router.get('/artifact/:id/preview.pdf', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
-  if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
 
-  const metadata = readArtifactMetadata(id);
-  let full = null;
-  if (metadata?.storedRelPath) {
-    const root = path.resolve(ARTIFACT_DIR);
-    const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
-    if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
-      full = candidate;
-    }
+  const { materializeArtifactSource } = require('../services/agents/artifact-local-source');
+  const source = await materializeArtifactSource({
+    id,
+    artifactDir: ARTIFACT_DIR,
+    ownerUserId: req.user?.id,
+  });
+  if (!source.ok) {
+    return res.status(source.status || 404).json({
+      error: source.error || 'artifact not found',
+      ...(source.reason ? { reason: source.reason } : {}),
+    });
   }
-  if (!full) {
-    let entry = null;
-    try {
-      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
-    } catch { entry = null; }
-    if (entry) full = path.join(ARTIFACT_DIR, entry);
-  }
-  if (!full || !fs.existsSync(full)) {
-    // Offloaded-to-R2 or missing binary: no local bytes to convert.
-    return res.status(409).json({ error: 'preview unavailable' });
-  }
-  if (!metadata?.ownerUserId) return res.status(403).json({ error: 'artifact ownership metadata missing' });
-  if (String(metadata.ownerUserId) !== String(req.user?.id)) return res.status(403).json({ error: 'artifact not found' });
 
+  let pdfPath = null;
   try {
     const { getOrCreatePdfPreview } = require('../services/document-pipeline/preview-pdf-service');
-    const pdfPath = await getOrCreatePdfPreview({ sourcePath: full, cacheKey: id });
+    pdfPath = await getOrCreatePdfPreview({
+      sourcePath: source.sourcePath,
+      cacheKey: id,
+    });
+    try { await source.cleanup(); } catch { /* temp from R2 — cache holds the PDF */ }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
     res.setHeader('Cache-Control', 'private, max-age=300');
-    return fs.createReadStream(pdfPath).pipe(res);
+    res.setHeader('X-Preview-Source', source.fromR2 ? 'r2' : 'local');
+    res.setHeader('X-Preview-Native-Pdf', source.isPdf ? '1' : '0');
+    const stream = fs.createReadStream(pdfPath);
+    res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
+    return stream.pipe(res);
   } catch (err) {
-    // Not previewable / too large / soffice down → the client falls back.
+    try { await source.cleanup(); } catch { /* best-effort */ }
+    // Conversion failed AFTER we had the bytes. The artifact exists;
+    // the client may fall back to Mammoth / JSZip.
     return res.status(409).json({ error: 'preview unavailable', reason: String(err?.message || '').slice(0, 120) });
   }
 });
@@ -1446,7 +1449,8 @@ router.post(
     // planning / first-LLM-call phase. A bare `: keep-alive` comment is not
     // enough — edge proxies buffer/drop SSE comments — so we also send a real
     // `data:` heartbeat frame (mirrors routes/ai.js). The client reducer
-    // treats unknown `heartbeat` events as a no-op.
+    // refreshes lastEventAt / heartbeatAt so the UI stale banner waits
+    // for missed heartbeats, not quiet business events.
     const inlineHeartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
     heartbeatTimer = setInterval(() => {
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
@@ -3188,17 +3192,21 @@ function reduceAgentState(state, evt) {
         },
       };
     case 'step_start':
+    case 'step.started': {
+      const { upsertMonotonicStep } = require('../services/agents/run-trace');
       return {
         ...state,
-        steps: [...state.steps, {
+        steps: upsertMonotonicStep(state.steps, {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
           ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
-        }],
+        }),
       };
+    }
     case 'tool_call': {
       const stepId = evt.stepId || `tool-${state.steps.length + 1}`;
       const steps = state.steps.some(step => step.id === stepId)
@@ -3250,11 +3258,29 @@ function reduceAgentState(state, evt) {
         }),
       };
     }
+    case 'step.updated': {
+      const updateId = String(evt.id || evt.stepId || '').trim();
+      if (!updateId) return state;
+      return {
+        ...state,
+        steps: state.steps.map((step) =>
+          step.id === updateId
+            ? {
+              ...step,
+              label: evt.label || step.label,
+              reasoning: evt.reasoning || step.reasoning,
+              status: 'running',
+            }
+            : step
+        ),
+      };
+    }
     case 'step_done':
+    case 'step.finished':
       return {
         ...state,
         steps: state.steps.map(step =>
-          step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
+          step.id === evt.id ? { ...step, status: evt.ok === false ? 'error' : 'done' } : step
         ),
       };
     case 'file_artifact': {
@@ -3293,9 +3319,13 @@ function reduceAgentState(state, evt) {
     case 'final_text':
       return { ...state, finalText: evt.markdown };
     case 'done':
+    case 'run.succeeded':
       return { ...state, done: true, stoppedReason: evt.stoppedReason };
     case 'error':
+    case 'run.failed':
       return { ...state, done: true, error: evt.message };
+    case 'heartbeat':
+      return { ...state, lastEventAt: evt.ts || new Date().toISOString(), heartbeatAt: evt.ts || new Date().toISOString() };
     default:
       return state;
   }

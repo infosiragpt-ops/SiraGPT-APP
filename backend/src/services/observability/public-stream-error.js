@@ -46,6 +46,72 @@ const RULES = [
     matches: (error) => /validation/i.test(String(error?.code || '')),
     message: 'La solicitud o el resultado no superó la validación.',
   },
+  {
+    code: 'loop_fingerprint_cut',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'loop_fingerprint_cut',
+    message: 'El agente repitió la misma huella de herramienta. Corté el bucle.',
+  },
+  {
+    code: 'subtask_no_progress',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'subtask_no_progress',
+    message: 'El sub-trabajo no avanzó. Lo detuve para no girar en vacío.',
+  },
+  {
+    code: 'sse_resume_ahead',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sse_resume_ahead',
+    message: 'Last-Event-ID está por delante de la cabeza. Reinicio el replay.',
+  },
+  {
+    code: 'sandbox_timeout_cleanup',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sandbox_timeout_cleanup',
+    message: 'El sandbox expiró. Limpié el directorio de trabajo.',
+  },
+  {
+    code: 'credit_cancel_partial',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_cancel_partial',
+    message: 'Contabilicé tokens parciales del turno cancelado. No cobré de más.',
+  },
+  {
+    code: 'loop_oscillation_cut',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'loop_oscillation_cut',
+    message: 'El agente alternó las mismas dos herramientas. Corté el bucle.',
+  },
+  {
+    code: 'tool_transient_retry',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'tool_transient_retry',
+    message: 'La herramienta falló de forma transitoria. Reintento con espera.',
+  },
+  {
+    code: 'sse_replay_resume',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sse_replay_resume',
+    message: 'Reanudé el SSE desde Last-Event-ID sin reejecutar el turno.',
+  },
+  {
+    code: 'session_queue_gap',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'session_queue_gap',
+    message: 'Falta un seq en la cola de sesión. Espero el hueco.',
+  },
+  {
+    code: 'credit_error_settle',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_error_settle',
+    message: 'Asenté el uso real del turno con error. No cobré de más.',
+  },
+  {
+    code: 'credit_pre_token',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_pre_token',
+    message: 'No cobré: el stream se cortó antes del primer token.',
+  },
 ];
 
 function classifyPublicStreamError(error) {

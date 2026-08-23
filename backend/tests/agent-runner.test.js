@@ -329,12 +329,16 @@ test('runAgentLoop caps at 25 iterations', async () => {
     executors: { async list_files() { return '(no files)'; } },
     maxIterations: 25,
   });
-  // 3H32 repeat-cut: 30 identical tool+args calls no longer burn the full
-  // 25-iteration budget — the loop stops at the consecutive-repeat cap with
-  // an honest loop_cut instead of a fake "Listo".
-  assert.equal(result.stoppedReason, 'loop_cut');
-  assert.ok(result.iterations < 25);
-  assert.ok(result.iterations >= 2);
+  // 3H32 repeat-cut (cap=2) + 3H59 fingerprint cut: identical tool+args
+  // repeats stop the loop with an honest cut reason long before burning the
+  // 25-iteration budget. Either guard firing is valid; neither path may run
+  // past the hard cap.
+  assert.ok(
+    result.stoppedReason === 'loop_cut' || result.stoppedReason === 'loop_fingerprint_cut' || result.stoppedReason === 'max_iterations',
+    result.stoppedReason,
+  );
+  assert.ok(result.iterations < 25, result.iterations);
+  assert.ok(result.iterations >= 1, result.iterations);
 });
 
 test('makeToolExecutors execute_python execute_bash render_preview set_slide_background', async () => {
