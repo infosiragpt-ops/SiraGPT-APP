@@ -4,6 +4,97 @@ const jwt = require('jsonwebtoken');
 const {
   findSessionByPresentedToken,
 } = require('../services/auth/session-token-persistence');
+const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
+const { DEV_FALLBACK, resolveAllowedOrigins } = require('./cors-policy');
+
+const UPLOAD_CONTENT_TYPES = {
+  '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.txt': 'text/plain; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.json': 'application/json',
+};
+
+function contentTypeForUploadPath(relativePath, objectType) {
+  const ext = path.extname(String(relativePath || '')).toLowerCase();
+  const fromExt = UPLOAD_CONTENT_TYPES[ext];
+  const fromObject = String(objectType || '').trim();
+  if (fromObject && fromObject !== 'application/octet-stream') return fromObject;
+  return fromExt || fromObject || 'application/octet-stream';
+}
+
+const UPLOAD_CORS_EXPOSE = [
+  'Content-Disposition',
+  'Content-Length',
+  'Content-Type',
+  'Content-Range',
+  'Accept-Ranges',
+  'X-Upload-Source',
+].join(', ');
+
+/**
+ * Extra chat origins that must keep credentialed CORS on `/uploads` even
+ * when CORS_ORIGINS is a production-only list (CI sets
+ * `https://web.ci.example.test`; local Next still sends localhost:3000).
+ * Scoped to this middleware — global credentialed CORS stays fail-closed.
+ */
+function resolveUploadPreviewOrigins(env = process.env, resolveOrigins = resolveAllowedOrigins) {
+  const extras = [...DEV_FALLBACK];
+  const frontend = String(env?.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\//i.test(frontend)) {
+    try { extras.push(new URL(frontend).origin); } catch { /* ignore */ }
+  }
+  let configured = [];
+  try {
+    const resolved = resolveOrigins(env);
+    if (Array.isArray(resolved)) configured = resolved;
+  } catch {
+    // Misconfigured CORS_ORIGINS must not strip localhost chat preview.
+  }
+  return [...new Set([...extras, ...configured])];
+}
+
+/**
+ * Credentialed CORS for `/uploads` preview fetches. Chat may call the API
+ * host (NEXT_PUBLIC_IMAGE_URL) with Origin: https://siragpt.com. A 302 to
+ * R2 drops these headers; streaming on this origin must echo them so
+ * `fetch(..., { credentials: 'include' })` can read the PDF/DOCX body.
+ *
+ * Always unions DEV_FALLBACK (localhost / 127.0.0.1 :3000/:3001) so the
+ * same-origin stream works for local Next and CI, even when CORS_ORIGINS
+ * is production-only. Foreign origins are still refused.
+ */
+function applyUploadPreviewCors(req, res, {
+  resolveOrigins = resolveAllowedOrigins,
+  env = process.env,
+} = {}) {
+  const origin = String(req.headers?.origin || '').trim();
+  if (!origin) return false;
+  const allowed = resolveUploadPreviewOrigins(env, resolveOrigins);
+  if (!allowed.includes('*') && !allowed.includes(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Expose-Headers', UPLOAD_CORS_EXPOSE);
+  return true;
+}
 
 const UPLOAD_MEDIA_TOKEN_AUDIENCE = 'siragpt-upload-static';
 const UPLOAD_MEDIA_TOKEN_TYPE = 'upload_media';
@@ -271,11 +362,17 @@ function createUploadStaticAccessGuard({ uploadsDir, prisma, jwtSecret = process
  * deployments). Ownership/auth is already enforced by the access guard mounted
  * before express.static, so by the time we get here the request is authorized.
  *
- * The R2 key mirrors the upload-relative path ("uploads/<rel>"), so we can
- * redirect straight to a short-lived signed URL and let the browser pull the
- * bytes directly from R2 (free egress, no VM bandwidth).
+ * Stream the object through this origin. A 302 to a signed R2 URL looks cheap
+ * (free egress) but the chat preview fetches `/uploads/...` with credentials;
+ * the browser then follows the redirect to `*.r2.cloudflarestorage.com` and
+ * dies with TypeError "Failed to fetch" / XHR status 0 (no CORS on the signed
+ * URL). Same-origin bytes keep PDF.js, iframes, and DOCX preview working.
  */
-function createUploadR2Fallback({ objectStorage = require('../services/object-storage') } = {}) {
+function createUploadR2Fallback({
+  objectStorage = require('../services/object-storage'),
+  resolveOrigins,
+  env,
+} = {}) {
   return async function uploadR2Fallback(req, res, next) {
     try {
       if (req.method !== 'GET' && req.method !== 'HEAD') return next();
@@ -284,11 +381,39 @@ function createUploadR2Fallback({ objectStorage = require('../services/object-st
       if (!relativePath) return next();
       const ref = objectStorage.refFromKey(`uploads/${relativePath}`);
       if (!(await objectStorage.exists(ref))) return next();
-      const url = await objectStorage.signedUrl(ref);
-      if (!url) return next();
+
+      const range = typeof req.headers.range === 'string' ? req.headers.range : undefined;
+      const { stream, contentLength, contentType, contentRange } = await objectStorage.readStream(
+        ref,
+        range ? { range } : {},
+      );
+      if (!stream || typeof stream.pipe !== 'function') return next();
+
+      applyUploadPreviewCors(req, res, { resolveOrigins, env });
+      res.setHeader('Content-Type', contentTypeForUploadPath(relativePath, contentType));
       res.setHeader('Cache-Control', 'private, max-age=60');
-      return res.redirect(302, url);
-    } catch (err) {
+      res.setHeader(
+        'Access-Control-Expose-Headers',
+        'Content-Disposition, Content-Length, Content-Type, Content-Range, Accept-Ranges',
+      );
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('X-Upload-Source', 'r2-stream');
+      if (contentLength != null) res.setHeader('Content-Length', String(contentLength));
+      if (contentRange) {
+        res.status(206);
+        res.setHeader('Content-Range', contentRange);
+      }
+
+      if (req.method === 'HEAD') {
+        if (typeof stream.destroy === 'function') stream.destroy();
+        return res.end();
+      }
+
+      res.on('close', () => {
+        if (!res.writableEnded && typeof stream.destroy === 'function') stream.destroy();
+      });
+      return pipeStreamToResponse(stream, res, 'upload-r2');
+    } catch {
       return next();
     }
   };
@@ -301,7 +426,10 @@ module.exports = {
   UPLOAD_MEDIA_TOKEN_DEFAULT_TTL_SECONDS,
   UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS,
   UPLOAD_MEDIA_TOKEN_TYPE,
+  applyUploadPreviewCors,
+  resolveUploadPreviewOrigins,
   classifyUploadPath,
+  contentTypeForUploadPath,
   createUploadMediaTokenHandler,
   createUploadStaticAccessGuard,
   createUploadR2Fallback,

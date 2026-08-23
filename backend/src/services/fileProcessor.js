@@ -19,6 +19,7 @@ const { isLegacyFormat, extractLegacyText } = require('./legacy-format-converter
 const { readTextFile } = require('./text-encoding-detector');
 const { detectDialect, parseCSV, formatCsvBlock } = require('./csv-dialect-detector');
 const { extractFromFile: extractHtmlContent } = require('./html-content-extractor');
+const extractFastpath = require('./document-extract-fastpath');
 
 let _streamingPdf;
 let _streamingPdfTried = false;
@@ -99,10 +100,12 @@ function resolveProcessMimeType(file = {}) {
 }
 
 class FileProcessor {
-  async processFile(file) {
+  async processFile(file, options = {}) {
+    const timer = extractFastpath.createStageTimer('processFile');
     try {
       const { mimetype, path: filePath, originalname, size } = file;
       let effectiveMimeType = resolveProcessMimeType(file);
+      const processOpts = { ...options };
 
       // ── Memory-safe guard for large files ──
       // Files > MEMORY_SAFE_MAX_BYTES could OOM the process. For PDFs,
@@ -115,7 +118,7 @@ class FileProcessor {
       if (isLargeFile && (effectiveMimeType === 'application/pdf')) {
         console.warn(
           `[mem-safe] Large PDF (${(fileSize / 1024 / 1024).toFixed(1)} MB) — ` +
-          `using streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
+          `using pdftotext/streaming extraction. Set SIRAGPT_MEMORY_SAFE_MAX_BYTES to adjust.`
         );
 
         const streaming = await this.processPDFStreaming(filePath, fileSize, { detailed: true }).catch((err) => {
@@ -188,7 +191,7 @@ class FileProcessor {
 
       const _EXT_COOLDOWN_MS = Number.parseInt(process.env.EXTERNAL_PARSER_COOLDOWN_MS || '60000', 10);
 
-      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType)) {
+      if (EXTERNAL_PARSER_TYPES.includes(effectiveMimeType) && extractFastpath.shouldRunExternalParsers()) {
         const now = Date.now();
         if (!FileProcessor._externalParserLastFailed || (now - FileProcessor._externalParserLastFailed) > _EXT_COOLDOWN_MS) {
           try {
@@ -214,6 +217,7 @@ class FileProcessor {
           }
         }
       }
+      timer.mark('external_parser');
 
       // ── Legacy format detection & conversion (.doc, .xls, .ppt via LibreOffice) ──
       const fileExt = path.extname(String(originalname || '')).toLowerCase();
@@ -233,7 +237,7 @@ class FileProcessor {
       switch (effectiveMimeType) {
         case 'application/pdf':
           {
-            const result = await this.processPDF(filePath, { detailed: true });
+            const result = await this.processPDF(filePath, { detailed: true, ...processOpts });
             extractedText = result.extractedText;
             ocr = result.ocr;
           }
@@ -243,12 +247,12 @@ class FileProcessor {
           extractedText = await this.processLegacyDoc(filePath, originalname);
           break;
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-          extractedText = await this.processWord(filePath);
+          extractedText = await this.processWord(filePath, processOpts);
           break;
 
         case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
         case 'application/vnd.ms-excel':
-          extractedText = await this.processExcel(filePath);
+          extractedText = await this.processExcel(filePath, processOpts);
           break;
 
         case 'text/plain':
@@ -310,7 +314,7 @@ class FileProcessor {
 
         case 'application/vnd.ms-powerpoint':
         case 'application/vnd.openxmlformats-officedocument.presentationml.presentation':
-          extractedText = await this.processPowerPoint(filePath);
+          extractedText = await this.processPowerPoint(filePath, processOpts);
           break;
 
         case 'audio/mpeg':
@@ -339,12 +343,23 @@ class FileProcessor {
           extractedText = `File "${originalname}" uploaded successfully. Content type: ${effectiveMimeType || mimetype}`;
       }
 
-      console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted`);
+      timer.mark('extract');
+      const timings = timer.snapshot();
+      extractFastpath.logExtractTiming({
+        file: originalname,
+        mime: effectiveMimeType || mimetype,
+        bytes: fileSize,
+        chars: String(extractedText || '').length,
+        totalMs: timings.totalMs,
+        stages: timings.stages,
+      });
+      console.log(`File processing complete for ${originalname}: ${String(extractedText || '').length} characters extracted in ${timings.totalMs}ms`);
 
       return {
         success: true,
         extractedText,
         ocr,
+        timings,
         fileInfo: {
           name: originalname,
           type: effectiveMimeType || mimetype,
@@ -374,9 +389,63 @@ class FileProcessor {
 
 
   async processPDF(filePath, options = {}) {
-    // Always try streaming first — it's faster, lower memory, and supports
-    // unlimited pages. Only fall back to pdf-parse if streaming module
-    // is unavailable.
+    // pdftotext (poppler) is the fast path for text-layer PDFs. Fall
+    // through to pdf.js streaming / OCR when the binary is missing or
+    // the file is a scan.
+    try {
+      const pdftotext = await extractFastpath.tryPdftotext(filePath, options);
+      if (pdftotext.used && pdftotext.pageCount > 0) {
+        let mergedText = pdftotext.text;
+        let mixedOcr = null;
+        try {
+          if (mixedPdf.mixedOcrEnabled() && mixedPdf.isMixedPdf(pdftotext.pages)) {
+            const lowTextPages = mixedPdf.findLowTextPages(pdftotext.pages);
+            const cap = mixedPdf.mixedOcrMaxPages();
+            console.log(`[fileProcessor] pdftotext mixed PDF: ${lowTextPages.length}/${pdftotext.pages.length} page(s) without text — OCR cap ${cap}`);
+            const subset = await ocrEngine.extractPdfPagesSubset(filePath, lowTextPages, { maxPages: cap });
+            const merged = mixedPdf.mergeMixedPdfText(pdftotext.pages, subset.pages);
+            if (merged.ocrPagesUsed > 0) {
+              mergedText = merged.text;
+              mixedOcr = {
+                scannedPages: lowTextPages.length,
+                ocrPagesProcessed: subset.ocr?.pagesProcessed || 0,
+                ocrPagesWithText: merged.ocrPagesUsed,
+                capped: Boolean(subset.ocr?.capped),
+              };
+            }
+          }
+        } catch (mixedErr) {
+          console.warn(`[fileProcessor] pdftotext mixed-OCR failed (keeping text layer): ${mixedErr.message}`);
+        }
+
+        const coverage = extractFastpath.coverageFromPages(pdftotext.pages);
+        const header = `PDF document — ${pdftotext.pageCount} page(s) extracted, ` +
+          `${pdftotext.totalChars} characters` +
+          (mixedOcr ? ` (+${mixedOcr.ocrPagesWithText} scanned page(s) recovered via OCR)` : '') +
+          `\n---\n`;
+        const extractedText = header + mergedText;
+        const ocr = {
+          status: mixedOcr ? 'mixed_text_and_ocr' : 'skipped',
+          confidence: null,
+          provider: mixedOcr ? 'pdftotext+ocr' : 'pdftotext',
+          reason: 'embedded_text_layer',
+          pages: pdftotext.pageCount,
+          streaming: false,
+          pageCount: pdftotext.pageCount,
+          coverage,
+          ...(mixedOcr ? { mixedOcr } : {}),
+        };
+        return options.detailed ? { extractedText, ocr } : extractedText;
+      }
+      if (pdftotext.reason && pdftotext.reason !== 'disabled') {
+        console.log(`[fileProcessor] pdftotext skipped (${pdftotext.reason}) — falling through`);
+      }
+    } catch (pdfTextErr) {
+      console.warn(`[fileProcessor] pdftotext probe failed: ${pdfTextErr.message}`);
+    }
+
+    // pdf.js streaming — lower memory, unlimited pages. Only used when
+    // pdftotext is unavailable or the PDF has no text layer.
     const streamingMod = getStreamingPdf();
     if (streamingMod) {
       try {
@@ -580,7 +649,7 @@ class FileProcessor {
     };
   }
 
-  async processWord(filePath) {
+  async processWord(filePath, options = {}) {
     try {
       await assertReadableDocxZip(filePath);
       // convertToHtml preserves document structure (headings, lists,
@@ -591,7 +660,7 @@ class FileProcessor {
       const markdown = this._htmlToMarkdown(html);
       console.log(`Word file processed: ${filePath}, html=${html.length} chars, md=${markdown.length} chars`);
       const header = `Word document — ${markdown.length} characters extracted, structure preserved as markdown\n---\n`;
-      return this._withEmbeddedImageText(filePath, header + markdown, 'docx');
+      return this._withEmbeddedImageText(filePath, header + markdown, 'docx', options);
     } catch (error) {
       // Mammoth throws verbose stack traces (jszip/openZip chain) when
       // the .docx is corrupt, truncated, or actually a different format
@@ -671,7 +740,7 @@ class FileProcessor {
     return md;
   }
 
-  async processExcel(filePath) {
+  async processExcel(filePath, options = {}) {
     try {
       const workbook = await readXlsxFile(filePath);
       const MAX_DATA_ROWS_PER_SHEET = 5000; // increased for large spreadsheets
@@ -719,7 +788,7 @@ class FileProcessor {
       }
 
       header += '\n';
-      return this._withEmbeddedImageText(filePath, header + sheetSummaries.join('\n'), 'xlsx');
+      return this._withEmbeddedImageText(filePath, header + sheetSummaries.join('\n'), 'xlsx', options);
     } catch (error) {
       throw new Error(`Excel processing failed: ${error.message}`);
     }
@@ -859,11 +928,13 @@ class FileProcessor {
    * OCR crash, timeout) logs a warning and returns the text unchanged.
    * Disable globally with SIRAGPT_OFFICE_IMAGE_OCR=0.
    */
-  async _withEmbeddedImageText(filePath, baseText, kind) {
+  async _withEmbeddedImageText(filePath, baseText, kind, options = {}) {
+    if (options.deferOfficeImageOcr === true) return baseText;
     try {
-      const appendix = await officeImages.extractImageAppendix(filePath);
+      const allowVision = extractFastpath.shouldAllowOfficeImageVision(baseText, options);
+      const appendix = await officeImages.extractImageAppendix(filePath, { allowVision });
       if (appendix) {
-        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars)`);
+        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars, vision=${allowVision})`);
         return `${baseText}\n\n${appendix}`;
       }
     } catch (error) {
@@ -956,8 +1027,13 @@ class FileProcessor {
       .trim();
   }
 
-  async processPowerPoint(filePath) {
+  async processPowerPoint(filePath, options = {}) {
     try {
+      const native = await extractFastpath.extractPptxSlides(filePath);
+      if (native.ok && native.text && native.slideCount > 0) {
+        console.log(`PowerPoint file processed (per-slide): ${filePath}, slides=${native.slideCount}, length=${native.text.length}`);
+        return this._withEmbeddedImageText(filePath, native.text, 'pptx', options);
+      }
       const officeParser = require('officeparser');
       const parsed = typeof officeParser.parseOfficeAsync === 'function'
         ? await officeParser.parseOfficeAsync(filePath)
@@ -966,7 +1042,7 @@ class FileProcessor {
         ? parsed
         : (typeof parsed?.toText === 'function' ? parsed.toText() : String(parsed || ''));
       console.log(`PowerPoint file processed: ${filePath}, length: ${text.length}`);
-      return this._withEmbeddedImageText(filePath, text, 'pptx');
+      return this._withEmbeddedImageText(filePath, text, 'pptx', options);
     } catch (error) {
       console.error(`PowerPoint file processing error for ${filePath}:`, error);
       throw new Error(`PowerPoint presentation processing failed: ${error.message}`);

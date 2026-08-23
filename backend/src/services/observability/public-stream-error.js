@@ -46,6 +46,36 @@ const RULES = [
     matches: (error) => /validation/i.test(String(error?.code || '')),
     message: 'La solicitud o el resultado no superó la validación.',
   },
+  {
+    code: 'loop_fingerprint_cut',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'loop_fingerprint_cut',
+    message: 'El agente repitió la misma huella de herramienta. Corté el bucle.',
+  },
+  {
+    code: 'subtask_no_progress',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'subtask_no_progress',
+    message: 'El sub-trabajo no avanzó. Lo detuve para no girar en vacío.',
+  },
+  {
+    code: 'sse_resume_ahead',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sse_resume_ahead',
+    message: 'Last-Event-ID está por delante de la cabeza. Reinicio el replay.',
+  },
+  {
+    code: 'sandbox_timeout_cleanup',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sandbox_timeout_cleanup',
+    message: 'El sandbox expiró. Limpié el directorio de trabajo.',
+  },
+  {
+    code: 'credit_cancel_partial',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_cancel_partial',
+    message: 'Contabilicé tokens parciales del turno cancelado. No cobré de más.',
+  },
 ];
 
 function classifyPublicStreamError(error) {

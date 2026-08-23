@@ -132,8 +132,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: #0a0a0a !important;[\s\S]{0,80}color: #ffffff !important;/,
-      "the send disc must stay solid black with a white arrow"
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: var\(--brand, #5b4dff\) !important;[\s\S]{0,80}color: #ffffff !important;/,
+      "the send disc uses the brand token when the composer has text"
     )
   })
 
@@ -206,8 +206,8 @@ describe("professional chat composer surface source contract", () => {
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
-      /\.chat-viewport\s*\{[^}]{0,1600}--chat-content-max-width: 51\.75rem;/,
-      "the chat viewport should own one 828px width token for messages and composer"
+      /\.chat-viewport\s*\{[^}]{0,1600}--content-max: 46rem;[\s\S]{0,80}--chat-content-max-width: var\(--content-max\);/,
+      "the chat viewport should own one 46rem width token for messages and composer"
     )
     assert.match(
       globals,

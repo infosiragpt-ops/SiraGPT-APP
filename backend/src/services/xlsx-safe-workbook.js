@@ -2,7 +2,7 @@ const ExcelJS = require('exceljs');
 const { PassThrough } = require('stream');
 
 const DEFAULT_MAX_ROWS = 80;
-const DEFAULT_MAX_SHEETS = 5;
+const DEFAULT_MAX_SHEETS = 20;
 const DEFAULT_MAX_COLUMNS = 80;
 const MAX_SHEET_CAP = 100;
 
