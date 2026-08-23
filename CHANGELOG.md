@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Agent-loop hot path now calls the live #388 helpers: `retryToolWithBackoff`
+  / `isRetryableToolFailure` on tool errors (timeout, ECONNRESET, 502),
+  `repairTruncatedJson` re-invoke after a schema-repair miss, fail-closed
+  stop after three consecutive repair failures or exhausted transient
+  retries, `compactUntilTokenBudget` + 3H59 fact anchors before each
+  `callModel`, and generate-stream `startCommentHeartbeat` with inclusive
+  `honorLastEventId` replay when a seq ring exists. See
+  `docs/mejoras/benchmark-capacidades.md`.
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

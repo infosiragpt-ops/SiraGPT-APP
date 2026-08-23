@@ -29,7 +29,12 @@ function loadEngine3h60() {
   try { return require('./engine-3h60'); } catch (_) { return null; }
 }
 
+function loadEngineAdapter() {
+  try { return require('./engine-adapter'); } catch (_) { return null; }
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
+const MAX_CONSECUTIVE_REPAIR_FAILS = 3;
 
 // Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
 // with a low credit balance an 8192-token reservation gets rejected with 402
@@ -122,9 +127,95 @@ function classifyLoopError({ code } = {}) {
         retryable: false,
         message: 'Otro proceso está atendiendo esta tarea; no la duplicaré.',
       };
+    case 'tool_retry_exhausted':
+      return {
+        code,
+        retryable: false,
+        message: 'La herramienta falló de forma transitoria demasiadas veces. Detuve el bucle.',
+      };
+    case 'tool_repair_exhausted':
+      return {
+        code,
+        retryable: false,
+        message: 'No pude reparar los argumentos de la herramienta. Detuve el bucle.',
+      };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
   }
+}
+
+/**
+ * Fit `messages` to the adapter token budget before callModel.
+ * Uses live #388 helpers only: compactUntilTokenBudget + 3H59 fact anchors.
+ * Mutates the array in place so callers keep the same reference.
+ */
+function compactMessagesInPlace(messages) {
+  const adapter = loadEngineAdapter();
+  if (!adapter || typeof adapter.compactUntilTokenBudget !== 'function') return false;
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const budget = Math.max(1500, resolveAgentRunnerMaxTokens());
+  if (typeof adapter.estimateCompactTokens === 'function') {
+    const used = adapter.estimateCompactTokens(messages);
+    if (Number.isFinite(used) && used <= budget) return false;
+  }
+  const packed = adapter.compactUntilTokenBudget(messages, { remaining: budget, keep: 6 });
+  if (!packed || !Array.isArray(packed.messages)) return false;
+  let next = packed.messages;
+  try {
+    const w = loadEngine3h59();
+    if (w && typeof w.anchorCriticalFacts === 'function' && typeof w.compactPreserveFactAnchors === 'function') {
+      const { anchors } = w.anchorCriticalFacts(messages);
+      const restored = w.compactPreserveFactAnchors(messages, next, anchors);
+      if (restored && Array.isArray(restored.messages)) next = restored.messages;
+    }
+  } catch (_) { /* 3H59 fail-open */ }
+  if (next === messages) return Boolean(packed.compressed);
+  messages.length = 0;
+  for (const m of next) messages.push(m);
+  return true;
+}
+
+function recoverParsedToolArgs(raw, call) {
+  const adapter = loadEngineAdapter();
+  if (adapter && typeof adapter.repairTruncatedJson === 'function') {
+    const fixed = adapter.repairTruncatedJson(raw);
+    if (fixed && fixed.ok && fixed.value && !fixed.value.__parse_error) {
+      return { ok: true, value: fixed.value, repaired: Boolean(fixed.repaired) };
+    }
+  }
+  try {
+    const w = loadEngine3h59();
+    if (w && typeof w.repairPartialToolCallSchema === 'function') {
+      const repaired = w.repairPartialToolCallSchema({
+        ...(call && typeof call === 'object' ? call : {}),
+        function: {
+          ...((call && call.function) || {}),
+          arguments: raw,
+        },
+      });
+      if (repaired && repaired.partial && repaired.repaired && Array.isArray(repaired.missing) && repaired.missing.length === 0) {
+        return { ok: false, value: null, repaired: false };
+      }
+      const nextArgs = repaired && repaired.call && repaired.call.function
+        ? repaired.call.function.arguments
+        : null;
+      if (nextArgs && typeof nextArgs === 'object' && !nextArgs.__parse_error && !Array.isArray(nextArgs)) {
+        return { ok: true, value: nextArgs, repaired: Boolean(repaired.repaired) };
+      }
+      if (typeof nextArgs === 'string') {
+        const parsed = safeParseArgs(nextArgs);
+        if (!parsed.__parse_error) return { ok: true, value: parsed, repaired: true };
+      }
+    }
+  } catch (_) { /* 3H59 fail-open */ }
+  return { ok: false, value: null, repaired: false };
+}
+
+function retrySleepFn(ms) {
+  if (process.env.NODE_TEST_CONTEXT) return Promise.resolve();
+  const wait = Math.max(0, Number(ms) || 0);
+  if (wait <= 0) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, wait));
 }
 
 /**
@@ -250,6 +341,7 @@ async function runAgentLoop({
   // leave a trace. `bail` emits exactly one 'cancelled' stage event before
   // rethrowing so the SSE stream shows "Cancelado" instead of dying silently.
   let cancelledEmitted = false;
+  let consecutiveRepairFails = 0;
   const loopFingerprints = [];
   const bail = (iteration) => {
     if (!signal?.aborted) return;
@@ -349,6 +441,7 @@ async function runAgentLoop({
     const modelTurnStart = Date.now();
     let modelTtfbMs = null;
     try {
+      compactMessagesInPlace(messages);
       response = await callModel({
         client,
         model,
@@ -426,7 +519,17 @@ async function runAgentLoop({
           }
           if (typeof w.repairPartialToolCallSchema === 'function') {
             const repaired = w.repairPartialToolCallSchema(call);
-            if (repaired && repaired.call) call = repaired.call;
+            // A parse-failed call that only produced `{}` is not a real
+            // schema repair — keep the original so repairTruncatedJson can
+            // re-invoke, then consecutive-fail can stop the loop.
+            const garbageToEmpty = Boolean(
+              repaired
+              && repaired.partial
+              && repaired.repaired
+              && Array.isArray(repaired.missing)
+              && repaired.missing.length === 0,
+            );
+            if (repaired && repaired.call && !garbageToEmpty) call = repaired.call;
           }
           next.push(call);
           loopFingerprints.push(call);
@@ -620,35 +723,98 @@ async function runAgentLoop({
       const executor = executors[mapped] || executors[name];
       if (!executor) {
         result = `ERROR: unknown tool "${name}". Available: ${Object.keys(executors).join(', ')}`;
-      } else if (args.__parse_error) {
-        result = `ERROR: tool arguments were not valid JSON: ${args.raw}`;
       } else {
-        try {
-          bail(iteration);
-          // The per-call signal lets an in-flight execute_python/bash sandbox
-          // command die WITH the Stop button, not just between tool calls.
-          result = await executor(args, { signal });
-        } catch (err) {
-          if (signal?.aborted) bail(iteration);
-          let retried = false;
-          try {
-            const w60 = loadEngine3h60();
-            if (w60 && typeof w60.retryTransientToolError === 'function') {
-              const retry = w60.retryTransientToolError({
-                attempt: 0,
-                status: err && (err.status || err.statusCode),
-                code: err && err.code,
+        let execArgs = args;
+        if (execArgs && execArgs.__parse_error) {
+          const recovered = recoverParsedToolArgs(execArgs.raw, call);
+          if (recovered.ok && recovered.value && !recovered.value.__parse_error) {
+            consecutiveRepairFails = 0;
+            execArgs = recovered.value;
+          } else {
+            consecutiveRepairFails += 1;
+            if (consecutiveRepairFails >= MAX_CONSECUTIVE_REPAIR_FAILS) {
+              const classified = classifyLoopError({ code: 'tool_repair_exhausted' });
+              onEvent({
+                type: 'error',
+                code: classified.code,
+                message: classified.message,
+                retryable: classified.retryable,
+                iteration,
               });
-              if (retry && retry.retry && typeof executor === 'function') {
-                result = await executor(args, { signal });
-                retried = true;
-              }
+              stoppedReason = 'tool_repair_exhausted';
+              return {
+                finalText: finalText || '',
+                iterations: iteration,
+                steps,
+                stoppedReason,
+                verificationAttempts,
+                errorCode: 'tool_repair_exhausted',
+                errorMessage: classified.message,
+              };
             }
-          } catch (_) { /* retry failed — fall through */ }
-          if (!retried) result = `ERROR: ${err?.message || String(err)}`;
+            result = `ERROR: tool arguments were not valid JSON: ${execArgs.raw}`;
+          }
+        }
+        if (result === undefined) {
+          try {
+            bail(iteration);
+            // The per-call signal lets an in-flight execute_python/bash sandbox
+            // command die WITH the Stop button, not just between tool calls.
+            const adapter = loadEngineAdapter();
+            if (adapter && typeof adapter.retryToolWithBackoff === 'function') {
+              const retried = await adapter.retryToolWithBackoff(
+                async () => executor(execArgs, { signal }),
+                {
+                  maxAttempts: 3,
+                  isRetryable: typeof adapter.isRetryableToolFailure === 'function'
+                    ? adapter.isRetryableToolFailure
+                    : undefined,
+                  signal,
+                  sleepFn: retrySleepFn,
+                },
+              );
+              if (retried && retried.ok) {
+                result = retried.value;
+              } else {
+                if (signal?.aborted) bail(iteration);
+                const err = (retried && retried.error) || new Error('tool_retry_exhausted');
+                const transient = typeof adapter.isRetryableToolFailure === 'function'
+                  && adapter.isRetryableToolFailure(err);
+                if (transient) {
+                  const classified = classifyLoopError({ code: 'tool_retry_exhausted' });
+                  onEvent({
+                    type: 'error',
+                    code: classified.code,
+                    message: classified.message,
+                    retryable: classified.retryable,
+                    iteration,
+                  });
+                  stoppedReason = 'tool_retry_exhausted';
+                  return {
+                    finalText: finalText || '',
+                    iterations: iteration,
+                    steps,
+                    stoppedReason,
+                    verificationAttempts,
+                    errorCode: 'tool_retry_exhausted',
+                    errorMessage: classified.message,
+                  };
+                }
+                result = `ERROR: ${err?.message || String(err)}`;
+              }
+            } else {
+              result = await executor(execArgs, { signal });
+            }
+          } catch (err) {
+            if (signal?.aborted) bail(iteration);
+            result = `ERROR: ${err?.message || String(err)}`;
+          }
+          lastProgressAt = Date.now();
+        }
+        if (typeof result === 'string' && result.startsWith('ERROR:')) {
           try {
             const w60 = loadEngine3h60();
-            if (!retried && w60 && typeof w60.settleCreditsOnError === 'function') {
+            if (w60 && typeof w60.settleCreditsOnError === 'function') {
               w60.settleCreditsOnError({
                 errored: true,
                 usage: { streamedChars: String(finalText || '').length },
@@ -656,7 +822,6 @@ async function runAgentLoop({
             }
           } catch (_) { /* 3H60 fail-open */ }
         }
-        lastProgressAt = Date.now();
       }
 
       // ── F7 (multimodal) hook ────────────────────────────────────────────
@@ -711,6 +876,7 @@ module.exports = {
   LLM_RETRY_MAX,
   STREAM_STALL_MS_DEFAULT,
   STREAM_STALL_CANCEL_AFTER,
+  MAX_CONSECUTIVE_REPAIR_FAILS,
   resolveAgentRunnerMaxTokens,
   isLlmCreditError,
   stallIfNoEvent20sMidStream,
@@ -718,4 +884,5 @@ module.exports = {
   heartbeatFence,
   stealStaleFence,
   classifyLoopError,
+  compactMessagesInPlace,
 };

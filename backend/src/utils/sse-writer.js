@@ -112,6 +112,30 @@ function createSSEWriter(res, options = {}) {
   // 5+ s on a slow provider.
   try { res.write(': connected\n\n'); } catch { closed = true; }
 
+  // Live generate/agent streams: honor Last-Event-ID against an optional
+  // seq ring. Inclusive replay is opt-in via options.inclusive (default
+  // exclusive so 3H32-S-002 stays green). Fail-open — missing adapter
+  // never blocks the writer.
+  try {
+    if (options.ring && options.lastEventId != null) {
+      const ad = require('../services/agent-runner/engine-adapter');
+      if (typeof ad.honorLastEventId === 'function') {
+        const honored = ad.honorLastEventId(options.lastEventId, options.ring, {
+          inclusive: options.inclusive === true,
+        });
+        const replay = (honored && honored.replay) || [];
+        for (const frame of replay) {
+          if (!frame) continue;
+          if (typeof frame.payload === 'string') {
+            try { res.write(frame.payload); } catch { closed = true; break; }
+          } else if (frame.data != null) {
+            try { res.write(formatEvent(frame.data)); } catch { closed = true; break; }
+          }
+        }
+      }
+    }
+  } catch (_) { /* adapter fail-open */ }
+
   const cancelHeartbeat = startSSEHeartbeat(res, {
     intervalMs: options.heartbeatMs,
   });
