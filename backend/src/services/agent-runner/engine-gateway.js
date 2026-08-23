@@ -833,6 +833,36 @@ async function governThen(input, run) {
         if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
           ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
         }
+        if (typeof ad.chargeOnlyBilledTokensOnError === 'function' && input && input.error) {
+          ad.chargeOnlyBilledTokensOnError({ billed: input.billedTokens, estimated: input.estimatedTokens, error: input.error });
+        }
+        if (typeof ad.refundHoldRemainderIfUnderReserved === 'function' && input && input.reserved != null) {
+          ad.refundHoldRemainderIfUnderReserved({ reserved: input.reserved, used: input.usedTokens != null ? input.usedTokens : input.tokens });
+        }
+        if (typeof ad.neverDoubleChargeCachedPromptTokens === 'function' && input && input.cachedTokens != null) {
+          ad.neverDoubleChargeCachedPromptTokens({ promptTokens: input.promptTokens, cachedTokens: input.cachedTokens, chargedCached: input.chargedCached });
+        }
+        if (typeof ad.neverRetry422Unprocessable === 'function' && input && (input.status === 422 || input.code === '422')) {
+          ad.neverRetry422Unprocessable(input);
+        }
+        if (typeof ad.backoffOn408RequestTimeout === 'function' && input && (input.status === 408 || input.code === '408')) {
+          const b = ad.backoffOn408RequestTimeout(input, { attempt: input.attempt });
+          if (b && b.delayMs != null) input.retryDelayMs = b.delayMs;
+        }
+        if (typeof ad.classifyEpipeAsClientGone === 'function' && input && input.error) {
+          ad.classifyEpipeAsClientGone(input.error);
+        }
+        if (typeof ad.rejectPgvectorDimMismatch === 'function' && input && input.embedding && input.hitEmbedding) {
+          ad.rejectPgvectorDimMismatch(input.embedding, input.hitEmbedding);
+        }
+        if (typeof ad.refuseSubagentDepthOver2 === 'function' && input && input.subagentDepth != null) {
+          const depth = ad.refuseSubagentDepthOver2(input.subagentDepth);
+          if (depth && depth.ok === false) {
+            const err = new Error('subagent_depth');
+            err.code = 'subagent_depth';
+            throw err;
+          }
+        }
         if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
           ad.classifyEconnabortedAsCancelled(input.error);
         }

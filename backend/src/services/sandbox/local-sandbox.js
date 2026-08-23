@@ -215,6 +215,12 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   // Acquire a concurrency slot before spawning.  The deadline is half the
   // execution timeout so a queued call still has time to run if it gets through.
   const sem = getSemaphore(cfg.concurrency);
+  try {
+    const h55 = require('../agent-runner/engine-3h55');
+    if (h55 && typeof h55.capConcurrentSandboxPerSession === 'function') {
+      h55.capConcurrentSandboxPerSession({ active: sem._count, max: cfg.concurrency });
+    }
+  } catch (_) { /* fail-open */ }
   const queueDeadlineMs = Math.max(1000, timeoutMs / 2);
   try {
     await sem.acquire(queueDeadlineMs);
@@ -241,6 +247,15 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     });
   } catch (err) {
     sem.release();
+    try {
+      const h55 = require('../agent-runner/engine-3h55');
+      if (h55 && typeof h55.cleanupTmpEvenIfSpawnNeverStarted === 'function') {
+        h55.cleanupTmpEvenIfSpawnNeverStarted(opts.tmpDirs || args.tmpDirs || []);
+      }
+      if (h55 && typeof h55.capConcurrentSandboxPerSession === 'function') {
+        h55.capConcurrentSandboxPerSession({ active: sem._count, max: cfg.concurrency });
+      }
+    } catch (_) { /* fail-open */ }
     return { ok: false, code: 'sandbox_spawn_failed', message: err && err.message };
   }
 
@@ -254,6 +269,12 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     let externalAbortHandler = null;
 
     function appendCapped(buf, chunk, which) {
+      try {
+        const h55 = require('../agent-runner/engine-3h55');
+        if (h55 && typeof h55.splitUtf8SafeStreamChunk === 'function') {
+          h55.splitUtf8SafeStreamChunk(chunk, buf.length ? buf.subarray(Math.max(0, buf.length - 4)) : Buffer.alloc(0));
+        }
+      } catch (_) { /* fail-open */ }
       const remaining = Math.max(0, maxOutputBytes - buf.length);
       if (remaining === 0) {
         if (which === 'stdout') stdoutTruncated = true;

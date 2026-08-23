@@ -15,6 +15,10 @@ const {
   callModelWithRetry,
 } = require('./native-llm');
 
+function load3h55() {
+  try { return require('./engine-3h55'); } catch (_) { return null; }
+}
+
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
 function recordModelTelemetry(event) {
@@ -208,6 +212,9 @@ async function runAgentLoop({
   let stallCount = 0;
   let lastProgressAt = Date.now();
   let fenceToken = null;
+  let lengthRetried = false;
+  const recentToolNames = [];
+  const h55 = load3h55();
   if (kv && threadId) {
     try {
       const safety = await stealStaleFence(kv, threadId);
@@ -247,6 +254,9 @@ async function runAgentLoop({
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      if (h55 && typeof h55.recordCancelPartialUsage === 'function') {
+        try { h55.recordCancelPartialUsage({ cancelled: true, promptTokens: 0, completionTokens: 0 }); } catch (_) { /* audit only */ }
+      }
     }
     throwIfAborted(signal);
   };
@@ -305,6 +315,9 @@ async function runAgentLoop({
         tokensOut: response?.usage?.completion_tokens,
       });
       lastProgressAt = Date.now();
+      if (h55 && typeof h55.ttfbHintWhenOverP95 === 'function' && modelTtfbMs != null) {
+        try { h55.ttfbHintWhenOverP95({ ttfbMs: modelTtfbMs }); } catch (_) { /* hint only */ }
+      }
       bail(iteration);
     } catch (err) {
       recordModelTelemetry({
@@ -342,6 +355,55 @@ async function runAgentLoop({
         toolCalls = asNativeCalls(parsed, iteration);
         viaReact = true;
       }
+    }
+    if (h55 && typeof h55.retryIfStopReasonLength === 'function' && !toolCalls.length) {
+      try {
+        const lengthRetry = h55.retryIfStopReasonLength(response, { retried: lengthRetried });
+        if (lengthRetry.retry) {
+          lengthRetried = true;
+          onEvent({ type: 'retry', reason: 'stop_length', attempt: 1, label: 'Reintentando por corte' });
+          continue;
+        }
+      } catch (_) { /* fail-open */ }
+    }
+
+    if (toolCalls.length && h55) {
+      try {
+        const repaired = [];
+        for (const call of toolCalls) {
+          const rawName = call?.function?.name || call?.name || '';
+          const fix = typeof h55.repairPartialToolCallName === 'function'
+            ? h55.repairPartialToolCallName(rawName)
+            : { name: rawName, ok: true };
+          if (fix && fix.name && call?.function && fix.name !== rawName) call.function.name = fix.name;
+          repaired.push(fix && fix.name ? fix.name : rawName);
+        }
+        if (typeof h55.rejectNullToolArguments === 'function') {
+          const nulled = h55.rejectNullToolArguments(toolCalls);
+          if (nulled && Array.isArray(nulled.calls)) toolCalls = nulled.calls;
+        }
+        if (typeof h55.refuseUnknownToolAgainstManifest === 'function') {
+          const manifest = Object.keys(executors || {});
+          for (const call of toolCalls) {
+            const n = call?.function?.name || call?.name || '';
+            h55.refuseUnknownToolAgainstManifest(n, manifest);
+          }
+        }
+        if (typeof h55.detectToolPingPongABAB === 'function') {
+          const ping = h55.detectToolPingPongABAB([...recentToolNames, ...repaired]);
+          if (ping && ping.cut) {
+            stoppedReason = 'tool_ping_pong';
+            onEvent({
+              type: 'error',
+              code: ping.code,
+              message: (h55.actionableErrorHint && h55.actionableErrorHint(ping.code).hint) || 'Bucle de herramientas detectado.',
+              retryable: false,
+              iteration,
+            });
+            return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'tool_ping_pong' };
+          }
+        }
+      } catch (_) { /* fail-open: existing tool path still runs */ }
     }
 
     if (!toolCalls.length) {
@@ -404,6 +466,9 @@ async function runAgentLoop({
           verified: false,
         });
       } else {
+        if (h55 && typeof h55.completeLoopOnlyAfterToolResultsSettle === 'function') {
+          try { h55.completeLoopOnlyAfterToolResultsSettle(messages); } catch (_) { /* settle hint */ }
+        }
         stoppedReason = 'final';
         onEvent({ type: 'final', text: finalText, iterations: iteration, label: 'Listo', verified: true });
       }
@@ -430,6 +495,8 @@ async function runAgentLoop({
       bail(iteration);
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
+      recentToolNames.push(mapped);
+      if (recentToolNames.length > 8) recentToolNames.splice(0, recentToolNames.length - 8);
       const args = safeParseArgs(call?.function?.arguments);
       onEvent({
         type: 'tool_call',

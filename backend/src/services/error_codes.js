@@ -374,6 +374,44 @@ const CODES = Object.freeze({
   SUBAGENT_SAME_TOOL: 'subagent_same_tool',
   MEMORY_SORT: 'memory_sort',
   TOOL_ARGS_ARRAY: 'tool_args_array',
+  LOOP_UNSETTLE: 'loop_unsettle',
+  STOP_LENGTH: 'stop_length',
+  REPAIR_NOOP: 'repair_noop',
+  TOOL_ARGS_NULL: 'tool_args_null',
+  TOOL_UNKNOWN: 'tool_unknown',
+  HTTP_408: 'http_408',
+  JSON_UNQUOTED_KEY: 'json_unquoted_key',
+  PLAN_BUDGET: 'plan_budget',
+  TOOL_PING_PONG: 'tool_ping_pong',
+  SUBAGENT_DEPTH: 'subagent_depth',
+  SUBAGENT_WALL: 'subagent_wall',
+  COMPACT_PIN: 'compact_pin',
+  COMPACT_DROP_IMAGE: 'compact_drop_image',
+  PGVECTOR_DIM: 'pgvector_dim',
+  MEMORY_DEDUPE: 'memory_dedupe',
+  CKPT_CRC_MISMATCH: 'ckpt_crc_mismatch',
+  CKPT_ROLLBACK_MISMATCH: 'ckpt_rollback_mismatch',
+  DIFF_HUNK: 'diff_hunk',
+  SYNTAX_INVALID: 'syntax_invalid',
+  WRITE_REVERTED: 'write_reverted',
+  RAW_MISMATCH: 'raw_mismatch',
+  DIFF_OVERLAP: 'diff_overlap',
+  UTF8_SPLIT: 'utf8_split',
+  SANDBOX_SESSION_CAP: 'sandbox_session_cap',
+  SANDBOX_TMP_CLEANUP: 'sandbox_tmp_cleanup',
+  SSE_HB_ID: 'sse_hb_id',
+  SSE_RESUME_SKIP: 'sse_resume_skip',
+  SSE_HB_SESSION: 'sse_hb_session',
+  SSE_CANCEL_DRAIN: 'sse_cancel_drain',
+  QUEUE_SEQ: 'queue_seq',
+  EVENT_ORDER: 'event_order',
+  WRITER_SUPERSEDED: 'writer_superseded',
+  CREDIT_BILLED_ONLY: 'credit_billed_only',
+  CREDIT_REFUND_REMAINDER: 'credit_refund_remainder',
+  CREDIT_CACHED_ONCE: 'credit_cached_once',
+  CREDIT_CANCEL_PARTIAL: 'credit_cancel_partial',
+  UNPROCESSABLE: 'unprocessable',
+  TTFB_SLOW: 'ttfb_slow',
 });
 
 function isRetryable(code) {
@@ -431,7 +469,9 @@ function isRetryable(code) {
     || c === 'client_gone'
     || c === 'queue_generate_cap'
     || c === 'net_timeout'
-    || c === 'pg_disconnect';
+    || c === 'pg_disconnect'
+    || c === 'http_408'
+    || c === 'stop_length';
 }
 
 function publicError(code, extra) {
@@ -453,6 +493,8 @@ function httpStatusFor(code) {
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
+  if (c === 'unprocessable' || c === CODES.UNPROCESSABLE) return 422;
+  if (c === 'queue_seq' || c === CODES.QUEUE_SEQ) return 409;
   return 400;
 }
 

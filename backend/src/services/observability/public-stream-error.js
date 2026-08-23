@@ -11,6 +11,48 @@ metrics.registerCounter('siragpt_stream_failures_total', {
 
 const RULES = [
   {
+    code: 'client_gone',
+    retryable: false,
+    matches: (error, text) => String(error?.code || '').toUpperCase() === 'EPIPE' || /\bepipe\b/i.test(text),
+    message: 'El cliente cerró la conexión.',
+  },
+  {
+    code: 'unprocessable',
+    retryable: false,
+    matches: (error) => Number(error?.status) === 422 || String(error?.code || '') === 'unprocessable',
+    message: 'El payload no se pudo procesar. No reintento.',
+  },
+  {
+    code: 'tool_ping_pong',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'tool_ping_pong',
+    message: 'Detecté un bucle de herramientas y lo detuve.',
+  },
+  {
+    code: 'loop_unsettle',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'loop_unsettle',
+    message: 'Aún hay herramientas sin resultado. No cierro el turno.',
+  },
+  {
+    code: 'pgvector_dim',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'pgvector_dim',
+    message: 'El embedding no coincide en dimensión.',
+  },
+  {
+    code: 'diff_overlap',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'diff_overlap',
+    message: 'Los hunks del diff se solapan.',
+  },
+  {
+    code: 'syntax_invalid',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'syntax_invalid',
+    message: 'El archivo quedó con sintaxis inválida y se revirtió.',
+  },
+  {
     code: 'aborted',
     retryable: true,
     matches: (error, text) => error?.name === 'AbortError' || /\babort(?:ed)?\b/i.test(text),

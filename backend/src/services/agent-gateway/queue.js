@@ -168,6 +168,24 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.rejectOutOfOrderEnqueueSeq === 'function') {
+          const seqGate = adWait.rejectOutOfOrderEnqueueSeq({
+            lastSeq: opts && opts.lastSeq,
+            nextSeq: opts && (opts.nextSeq != null ? opts.nextSeq : enqueueSeq),
+          });
+          if (seqGate && seqGate.ok === false) {
+            const err = new Error('queue_seq');
+            err.code = 'queue_seq';
+            err.status = 409;
+            return Promise.reject(err);
+          }
+        }
+        if (typeof adWait.dropEventsFromSupersededWriter === 'function') {
+          adWait.dropEventsFromSupersededWriter({
+            writerId: opts && opts.writerId,
+            activeWriterId: writers.get(key),
+          });
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);
