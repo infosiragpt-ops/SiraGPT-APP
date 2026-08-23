@@ -20,6 +20,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- Chat Pensando uses professional LOADERS CELESTE v2 (bouncing `#38BDF8`
+  bars + per-phase icons for search / Word / PDF / code / media). Stream
+  updates swap icon + label only; success flashes ¡Listo! then collapses;
+  failure shows the X state. See `docs/thinking-loaders.md`.
 - Chat `/chat` UX, a11y, and OCR pass: attachments stay inside the user
   bubble at 1×, code blocks meet WCAG contrast with copy + URL linkification,
   the conversation rail is 46rem, thinking disclosures are keyboard-accessible,
