@@ -38,7 +38,8 @@
     "../lib/native/storage.ts",
     "../lib/native/haptics.ts",
     "../lib/notifications/push.ts",
-    "../lib/integrations/verify-webhook.ts"
+    "../lib/integrations/verify-webhook.ts",
+    "../lib/code-chrome-lock.ts"
   ],
   "exclude": [
     "../tests/lib"

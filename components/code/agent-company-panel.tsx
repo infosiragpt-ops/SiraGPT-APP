@@ -28,7 +28,6 @@ import {
   FolderOpen,
   Gauge,
   Languages,
-  LayoutDashboard,
   LayoutGrid,
   Link2,
   List,
@@ -61,6 +60,7 @@ import {
   X,
 } from "lucide-react"
 import { toast } from "sonner"
+import { CODE_CHROME_LOCK } from "@/lib/code-chrome-lock"
 
 import {
   AlertDialog,
@@ -3446,12 +3446,12 @@ function CompanyHome({
   snapshot,
   departmentRows,
   logicalAgentCapacity,
-  activePreviewView,
+  activePreviewView: _activePreviewView,
   onOpenOffice,
-  onOpenDashboard,
-  onOpenControl,
-  onOpenFiles,
-  onOpenResources,
+  onOpenDashboard: _onOpenDashboard,
+  onOpenControl: _onOpenControl,
+  onOpenFiles: _onOpenFiles,
+  onOpenResources: _onOpenResources,
   onOpenDepartment,
   onOpenComputer,
   onAddDepartment,
@@ -3552,15 +3552,15 @@ function CompanyHome({
           </div>
         ) : null}
 
+        {!CODE_CHROME_LOCK.showForbiddenCompanyNav ? (
         <nav
-          aria-label="Herramientas de la empresa"
-          className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
+          aria-label="Routines"
+          data-testid="code-routines-slot"
+          className={cn("px-2", hideFooter ? "mt-2" : "mt-3")}
         >
-          <CompanyNavRow compact={hideFooter} active={activePreviewView === "dashboard"} icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
-          <CompanyNavRow compact={hideFooter} active={activePreviewView === "control"} icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />
-          <CompanyNavRow compact={hideFooter} active={activePreviewView === "files"} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
-          <CompanyNavRow compact={hideFooter} active={activePreviewView === "resources"} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Routines</p>
         </nav>
+        ) : null}
 
         <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
           <div className="min-w-0">
@@ -3835,45 +3835,6 @@ function CompanyHome({
         </button>
       </footer>
     </div>
-  )
-}
-
-function CompanyNavRow({
-  icon: Icon,
-  label,
-  count,
-  onClick,
-  compact = false,
-  active = false,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  count?: number
-  onClick: () => void
-  compact?: boolean
-  active?: boolean
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        compact && "h-8 gap-2 rounded-md px-2 text-xs",
-        active && "bg-muted/65 text-foreground",
-      )}
-      aria-current={active ? "page" : undefined}
-    >
-      <Icon className={cn(
-        "h-[18px] w-[18px] text-muted-foreground group-hover:text-foreground",
-        compact && "h-3.5 w-3.5",
-      )} />
-      <span className="flex-1">{label}</span>
-      {typeof count === "number" && count > 0 ? (
-        <span className="text-xs font-semibold tabular-nums text-sky-500">{count}</span>
-      ) : null}
-      <ChevronRight className="h-4 w-4 text-muted-foreground/45" />
-    </button>
   )
 }
 

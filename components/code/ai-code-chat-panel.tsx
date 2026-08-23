@@ -114,10 +114,8 @@ import {
 } from "@/lib/code-agent-company"
 import {
   CODE_AGENT_REQUEST_EVENT,
-  CODE_AUTONOMOUS_STARTERS,
   claimCodeAgentRequest,
   claimPendingCodeAgentInstruction,
-  requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
 import {
   buildProactiveCompanySystemBlock,
@@ -5280,79 +5278,15 @@ function CodeAttachmentTray({
 }
 
 function EmptyChat({
-  active,
-  proactive = false,
-  durable = false,
+  active: _active,
+  proactive: _proactive = false,
+  durable: _durable = false,
 }: {
   active: boolean
   proactive?: boolean
   durable?: boolean
-}) {
-  return (
-    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
-      <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
-        <span
-          className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
-          aria-hidden="true"
-        />
-        {durable ? "Agente cloud disponible · hasta 4 h" : "Builder local disponible"}
-      </span>
-      <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
-        <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
-      </span>
-      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
-      </h2>
-      <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
-        {proactive
-          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
-      </p>
-      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
-        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
-          <button
-            key={starter.id}
-            type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
-            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
-            data-testid={`code-agent-starter-${starter.id}`}
-          >
-            <span className="flex items-start gap-3">
-              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
-                {starter.id === "ai-platform" ? (
-                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-                ) : starter.id === "business-os" ? (
-                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Rocket className="h-4 w-4" aria-hidden="true" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center justify-between gap-2">
-                  <span className="text-[13px] font-semibold text-foreground">{starter.title}</span>
-                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
-                </span>
-                <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
-                  {starter.description}
-                </span>
-                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-                  {starter.meta}
-                </span>
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
-        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
-          <React.Fragment key={step}>
-            {index > 0 ? <span aria-hidden="true">→</span> : null}
-            <span>{step}</span>
-          </React.Fragment>
-        ))}
-      </div>
-    </div>
-  )
+}): null {
+  return null
 }
 
 function ChatBubble({

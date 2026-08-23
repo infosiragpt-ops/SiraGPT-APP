@@ -27,8 +27,12 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
+  getActiveDepartmentComputer,
+  getActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
@@ -43,6 +47,7 @@ import { AgentCompanyPanel } from "./agent-company-panel"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
+import { DepartmentComputerPane } from "./department-computer-pane"
 import { PreviewPane } from "./preview-pane"
 
 // The chat panel and preview are the two heaviest subtrees in the workspace
@@ -106,7 +111,36 @@ export function CodeWorkspace() {
   // time with a bottom toggle (Empresa ↔ Preview).
   const isMobile = useResolvedMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
+  const [departmentComputer, setDepartmentComputer] = React.useState<{
+    id: string
+    name: string
+    projectId?: string | null
+  } | null>(() => getActiveDepartmentSelection())
+  const [computerOpen, setComputerOpen] = React.useState(false)
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    const sync = (event: Event) => {
+      const selection = (event as CustomEvent<{ selection?: { id: string; name: string; projectId?: string | null } | null }>).detail?.selection
+      setDepartmentComputer(selection ?? { id: "ceo-office", name: "CEO Office" })
+    }
+    setDepartmentComputer(getActiveDepartmentSelection())
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
+  }, [])
+
+  const openDepartmentComputer = React.useCallback(() => {
+    const selection = getActiveDepartmentSelection() || departmentComputer || { id: "ceo-office", name: "CEO Office" }
+    setDepartmentComputer(selection)
+    setComputerOpen(true)
+    if (isMobile) setMobileView("preview")
+  }, [departmentComputer, isMobile])
+
+  React.useEffect(() => {
+    const onOpen = () => openDepartmentComputer()
+    window.addEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+    return () => window.removeEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+  }, [openDepartmentComputer])
 
   React.useEffect(() => {
     const onFocusCeo = () => {
@@ -521,6 +555,9 @@ export function CodeWorkspace() {
         }}
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
+        departmentComputer={departmentComputer}
+        onOpenDepartmentComputer={openDepartmentComputer}
+        computerOpen={computerOpen}
       />
 
       <div className="relative min-h-0 flex-1">
@@ -533,7 +570,15 @@ export function CodeWorkspace() {
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    {previewOpen ? (
+                    {computerOpen && departmentComputer ? (
+                      <DepartmentComputerPane
+                        departmentName={departmentComputer.name}
+                        departmentId={departmentComputer.id}
+                        projectId={departmentComputer.projectId}
+                        computerRunId={getActiveDepartmentComputer() || `dept-${departmentComputer.id}`}
+                        onClose={() => setComputerOpen(false)}
+                      />
+                    ) : previewOpen ? (
                       <MemoPreviewPane />
                     ) : (
                       <div className="flex h-full min-h-0 items-center justify-center bg-muted/10 px-6 py-10">
