@@ -5899,7 +5899,7 @@ router.post(
           const missing = resumeSession.record.chunks.slice(replayStart);
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
-            const frame = `data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`);
+            const frame = `data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`;
             res.write(`id: ${sid}:${replayStart + i + 1}\n`);
             res.write(frame);
           }
