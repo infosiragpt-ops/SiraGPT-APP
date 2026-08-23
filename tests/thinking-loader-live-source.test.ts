@@ -19,7 +19,25 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.doesNotMatch(timeline, /function SunburstIcon/)
     assert.match(loader, /data-thinking-loader=\{state\}/)
     assert.match(loader, /loaderChipSrc\(state\)/)
-    assert.match(docs, /retired for live Pensando/)
+    assert.match(loader, /import \{ PensandoBars \} from "@\/components\/pensando-bars"/)
+    assert.match(loader, /<PensandoBars /)
+    assert.match(loader, /data-pensando-bars=\{terminal \? undefined : "1"\}/)
+    assert.match(docs, /bouncing three-bar SVG/)
+    assert.match(docs, /retired/)
+  })
+
+  it("ships PensandoBars with Luis geometry and hardcoded #38BDF8", () => {
+    const bars = source("components/pensando-bars.tsx")
+    const svg = source("public/loaders/pensando.svg")
+    assert.match(bars, /viewBox="10 40 45 50"/)
+    assert.match(bars, /fill=\{SIRA_CELESTE\}/)
+    assert.match(bars, /values="0 0; 0 20; 0 0"/)
+    assert.match(bars, /begin: "0.2s"/)
+    assert.match(bars, /begin: "0.4s"/)
+    assert.match(bars, /dur="0.6s"/)
+    assert.doesNotMatch(bars, /fill=\{?["']currentColor["']\}?/)
+    assert.match(svg, /viewBox="10 40 45 50"/)
+    assert.match(svg, /fill="#38BDF8"/)
   })
 
   it("forces kind loader + pensando state on active ThinkingTrace / AgentTrace rows", () => {
@@ -49,6 +67,18 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.match(message, /<ThinkingTrace/)
     assert.match(message, /<ThinkingPlaceholder/)
     assert.match(message, /message\.role === 'ASSISTANT'/)
+  })
+
+  it("does not reuse the active step string as the RunTrace header label", () => {
+    const steps = source("components/agentic-steps.tsx")
+    const liveStart = steps.indexOf("if (isLiveActivity) {")
+    const liveEnd = steps.indexOf("{liveExpanded && (", liveStart)
+    const liveBlock = steps.slice(liveStart, liveEnd)
+    assert.match(liveBlock, /<ThinkingStatusLoader/)
+    assert.match(liveBlock, /state=\{headerState\}/)
+    assert.doesNotMatch(liveBlock, /label=\{headerLabel\}/)
+    assert.match(steps, /headerKitLabel/)
+    assert.match(steps, /humanizeToolDetail/)
   })
 
   it("keeps RunTrace on the assistant bubble only, keyed by step_id", () => {

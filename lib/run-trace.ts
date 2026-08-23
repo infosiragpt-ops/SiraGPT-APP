@@ -63,6 +63,10 @@ export const HUMAN_TOOL_LABELS: Record<string, string> = {
   document_pipeline: "Construyendo archivo",
   spreadsheet: "Preparando hoja de cálculo",
   presentation: "Preparando presentación",
+  create_presentation: "Creando presentación",
+  render_preview: "Renderizando vista previa",
+  set_slide_background: "Aplicando el fondo",
+  add_slide: "Agregando una diapositiva",
   pdf: "Preparando PDF",
   docintel_analyze: "Leyendo el documento",
   docintel_retrieve: "Consultando el documento",
@@ -113,6 +117,31 @@ export function retryLabel(baseLabel: string, attempt: number, maxAttempts = 3):
   const clean = String(baseLabel || "Procesando tarea").replace(/\s*·\s*Reintentando\s*\(\d+\/\d+\)\s*$/i, "").trim()
   if (attempt <= 1) return clean
   return `${clean} · Reintentando (${Math.min(attempt, maxAttempts)}/${maxAttempts})`
+}
+
+const ENGLISH_TOOL_TOKEN_RE = /^[a-z]+(?:[_\s-][a-z0-9]+)+$/i
+
+/**
+ * Map a raw tool name or a compound "a · b" detail to Spanish labels only.
+ * English tokens such as `create presentation · render preview` become
+ * `Creando presentación · Renderizando vista previa`.
+ */
+export function humanizeToolDetail(raw?: string | null): string | null {
+  const text = String(raw || "").replace(/\s+/g, " ").trim()
+  if (!text) return null
+  const parts = text.split(/\s*[·•|,]\s*/).map((part) => part.trim()).filter(Boolean)
+  const mapped = parts
+    .map((part) => {
+      const key = normalizeToolKey(part)
+      if (HUMAN_TOOL_LABELS[key]) return HUMAN_TOOL_LABELS[key]
+      const compact = key.replace(/_/g, "")
+      if (HUMAN_TOOL_LABELS[compact]) return HUMAN_TOOL_LABELS[compact]
+      if (ENGLISH_TOOL_TOKEN_RE.test(part) && !/[áéíóúñü¿¡]/i.test(part)) return null
+      return part
+    })
+    .filter((part): part is string => Boolean(part))
+  if (!mapped.length) return null
+  return mapped.join(" · ")
 }
 
 export function descriptionsDiffer(label: string, description?: string | null): boolean {
@@ -180,7 +209,7 @@ export function projectStepRow(step: {
       : step.status === "cancelled" ? "cancelled"
         : step.status === "running" || step.status === "pending" ? "running"
           : "done"
-  const rawDescription = typeof step.reasoning === "string" ? step.reasoning.trim() : ""
+  const rawDescription = humanizeToolDetail(typeof step.reasoning === "string" ? step.reasoning.trim() : "")
   const description = descriptionsDiffer(label, rawDescription) ? rawDescription : null
   return {
     id: step.id,

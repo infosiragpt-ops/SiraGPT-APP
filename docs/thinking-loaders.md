@@ -1,100 +1,96 @@
-# LOADERS CELESTE v2 — Pensando
+# LOADERS CELESTE — one glyph for every in-progress state
 
-Professional thinking states for `/chat` (DeepSeek). Every in-progress
-state shares the **same** bouncing bars so a phase change only swaps the
-top icon + Spanish label.
+Professional thinking states for `/chat` (DeepSeek). **Every in-progress
+state shares the same bouncing three-bar SVG.** Phase meaning lives in
+the Spanish label next to it — never in a lupa, W, PDF seal, or sunburst.
 
-## Kit (19 SVGs in `public/loaders/`)
+## Live glyph (authoritative)
 
-| File | Label |
+`public/loaders/pensando.svg` and the inline `PensandoBars` component
+render Luis's exact geometry:
+
+- `viewBox="10 40 45 50"`
+- rects at `x=20/30/40`, `y=50`, `width=4`, `height=10`
+- bounce `values="0 0; 0 20; 0 0"`, `dur="0.6s"`
+- begins `0` / `0.2s` / `0.4s`
+- fill `#38BDF8` (never `currentColor`)
+
+`prefers-reduced-motion: reduce` keeps the same three bars and drops
+`animateTransform`. Static copy: `public/loaders/icons/pensando.svg`.
+
+## Labels carry meaning
+
+| State | Label |
 |---|---|
-| `pensando.svg` | Pensando… — **bars only**, `viewBox="0 0 64 64"` |
-| `pensando-original.svg` | Luis original crop — `viewBox="10 40 45 50"`, bars at `y=50` |
-| `buscando-internet.svg` | Buscando en internet… — magnifying glass, stroke `#38BDF8` |
-| `generando-codigo.svg` | Generando código… — `</>` chevrons |
-| `generando-word.svg` | Generando documento Word… — rounded rect + white W |
-| `generando-pdf.svg` | Generando PDF… — similar seal |
-| `generando-ppt.svg` | Generando presentación… — similar seal |
-| `generando-excel.svg` | Generando hoja de cálculo… — similar seal |
-| `generando-imagen.svg` | Generando imagen… |
-| `generando-audio.svg` | Generando audio… |
-| `generando-video.svg` | Generando video… |
-| `analizando-archivo.svg` | Analizando archivo… |
-| `subiendo-archivo.svg` | Subiendo archivo… |
-| `descargando-archivo.svg` | Descargando archivo… |
-| `enviando-correo.svg` | Enviando correo… |
-| `procesando-datos.svg` | Procesando datos… |
-| `cargando-general.svg` | Cargando… |
-| `completado.svg` | ¡Listo! — animated check, **no bars** |
-| `error.svg` | Ocurrió un error — animated X, **no bars** |
+| `pensando` | Pensando… |
+| `buscando-internet` | Buscando en internet… |
+| `generando-codigo` | Generando código… |
+| `generando-word` | Generando documento Word… |
+| `generando-pdf` | Generando PDF… |
+| `generando-ppt` | Generando presentación… |
+| `generando-excel` | Generando hoja de cálculo… |
+| `generando-imagen` | Generando imagen… |
+| `generando-audio` | Generando audio… |
+| `generando-video` | Generando video… |
+| `analizando-archivo` | Analizando archivo… |
+| `subiendo-archivo` | Subiendo archivo… |
+| `descargando-archivo` | Descargando archivo… |
+| `enviando-correo` | Enviando correo… |
+| `procesando-datos` | Procesando datos… |
+| `cargando-general` | Cargando… |
+| `completado` | ¡Listo! — static check, **no bounce** |
+| `error` | Ocurrió un error — static X, **no bounce** |
 
-Static copies (no SMIL) live in `public/loaders/icons/` for
-`prefers-reduced-motion`.
-
-Regenerate: `node scripts/generate-celeste-loaders.cjs`
-
-## Animation contract
-
-Shared bounce (every file except `completado` / `error` / the original crop):
-
-```svg
-<rect x="20" y="32" width="4" height="10" fill="#38BDF8">
-  <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0" dur="0.6s" repeatCount="indefinite"/>
-</rect>
-<!-- same at x=30 begin=0.2s and x=40 begin=0.4s -->
-```
-
-- Color: brand celeste `#38BDF8` (`--sira-celeste` / `--step-running`)
-- Top static icon stays above `y≈24`; dots sit at `y=32`
-- `prefers-reduced-motion: reduce` swaps in the static icon copy
+Seal / lupa kit files may still sit on disk under `public/loaders/` for
+the catalog. They are **not** the live glyph. `loaderChipSrc()` returns
+`/loaders/pensando.svg` for every non-terminal state.
 
 ## Tool → state (LEEME)
 
-| Signal | State |
+| Signal | State (label only) |
 |---|---|
-| `web_search`, `deep_search`, `read_url`, `scientific_search`, `github_search`, “Buscando…” | `buscando-internet` |
-| `docintel*`, `rag_retrieve`, `read_file`, “Analizando archivo” | `analizando-archivo` |
-| `create_docx`, `*.docx`, “documento Word” | `generando-word` |
+| `web_search`, `deep_search`, `read_url`, “Buscando…” | `buscando-internet` |
+| `docintel*`, `rag_retrieve`, `read_file` | `analizando-archivo` |
+| `create_docx`, `*.docx` | `generando-word` |
 | `pdf`, `*.pdf` | `generando-pdf` |
 | `presentation`, `*.pptx` | `generando-ppt` |
 | `spreadsheet`, `*.xlsx` | `generando-excel` |
-| `write_file`, `edit_file`, `execute_python`, `execute_bash` | `generando-codigo` |
-| `generate_image`, `create_chart`, visual tools | `generando-imagen` |
-| `generate_speech`, `generate_music` | `generando-audio` |
-| `generate_video` | `generando-video` |
-| `upload*`, ingest | `subiendo-archivo` |
-| `download*` | `descargando-archivo` |
-| `send_email`, `gmail` | `enviando-correo` |
-| `python_exec`, `code_sandbox` | `procesando-datos` |
+| `write_file`, `edit_file`, `execute_python` | `generando-codigo` |
+| `generate_image`, visual tools | `generando-imagen` |
 | run `completed` / `succeeded` | `completado` (brief flash, then collapse) |
 | run `error` / `failed` | `error` |
 | default | `pensando` |
 
-Implementation: `lib/thinking-loaders.ts` (`mapEventToLoaderState`,
-`mapToolToLoaderState`). Step identity prefers `step_id` (RunTrace PR 393).
+Implementation: `lib/thinking-loaders.ts` (`mapEventToLoaderState`).
+Step identity prefers `step_id`.
 
 ## UI wiring
 
-- `ThinkingStatusLoader` — **status chip and live glyph** (kit SVG + Spanish
-  label + elapsed). `density="glyph"` is the 20px rail dot.
-- `ClaudeThinkingTimeline` header **and** step icons: active / `kind` `loader`
-  or `sunburst` render the kit via `ThinkingStatusLoader`. The Claude sunburst
-  (`claude-think-sunburst`) is **retired for live Pensando** — it must never
-  appear on an in-progress row.
-- `ThinkingTrace` / `AgentTrace` / `ThinkingPlaceholder` emit `kind: "loader"`
-  plus `loaderState` (`pensando` or the mapped tool). They do not force
-  `kind: "sunburst"` for the live hop.
-- `/chat` assistant thinking surfaces in `message-component` use
-  `ThinkingStatusLoader`, not `ThinkingIndicator`.
-- `AgenticSteps` live header uses the same chip; inherited by RunTrace.
-- RunTrace (PR 393): this chip is the header; the **step list stays
-  semantic** (`--step-running` blue, `--step-failed` red only — never brand-red)
+- `PensandoBars` — inline SVG, fill `#38BDF8`, reduced-motion static.
+- `ThinkingStatusLoader` — in-progress always mounts `PensandoBars` +
+  the kit Spanish label. Terminal states keep check / X.
+- `ClaudeThinkingTimeline` header and `kind` `loader|sunburst` → the
+  same bars. The Claude sunburst is **retired** for live Pensando.
+- `ThinkingTrace` / `AgentTrace` / `ThinkingPlaceholder` emit
+  `kind: "loader"` + `loaderState`. They never force `kind: "sunburst"`.
+- RunTrace live header uses the **kit label** (`Generando presentación…`
+  / `Pensando…`), not the active step string, so the header and the
+  step list never repeat the same copy.
+- English tool tokens (`create presentation · render preview`) are
+  mapped to Spanish via `humanizeToolDetail`.
+- `/chat` assistant thinking surfaces use `ThinkingStatusLoader`.
+  Compact process chips (`LongOperationIndicator`, AgentStatus
+  `thinking`) render the same bars. Button busy states may still use
+  `ThinkingIndicator` (not a Pensando row).
 
-`/code` Ejecutar / Arrancando is **not** this surface. Do not reuse these
-loaders on the preview-pane run button.
+`/code` Ejecutar / Arrancando is **not** this surface.
 
 ## Tests
 
-- `tests/thinking-loader-map.test.ts` — kit catalog + tool → state
-- `tests/thinking-loader-live-source.test.ts` — live Pensando uses kit SVGs;
-  no `claude-think-sunburst` on the active path
+- `tests/thinking-loader-map.test.ts` — chip path is always
+  `/loaders/pensando.svg` while in progress; `pensando.svg` matches
+  the y=50 contract
+- `tests/thinking-loader-live-source.test.ts` — live path mounts
+  `PensandoBars`; no sunburst; no per-tool seal glyph
+- `tests/run-trace-reducer.test.ts` — Spanish humanization of tool
+  tokens

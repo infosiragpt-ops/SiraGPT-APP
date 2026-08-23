@@ -57,14 +57,29 @@ describe("thinking-loaders · kit catalog", () => {
     assert.equal(LOADER_LABELS.completado, "¡Listo!")
     assert.equal(LOADER_LABELS.error, "Ocurrió un error")
     assert.equal(loaderSrc("generando-pdf"), "/loaders/generando-pdf.svg")
-    assert.equal(loaderIconSrc("generando-pdf"), "/loaders/icons/generando-pdf.svg")
-    assert.equal(loaderChipSrc("pensando"), "/loaders/pensando-original.svg")
-    assert.equal(loaderChipSrc("buscando-internet"), "/loaders/buscando-internet.svg")
+    assert.equal(loaderIconSrc("generando-pdf"), "/loaders/icons/pensando.svg")
+    assert.equal(loaderChipSrc("pensando"), "/loaders/pensando.svg")
+    assert.equal(loaderChipSrc("buscando-internet"), "/loaders/pensando.svg")
+    assert.equal(loaderChipSrc("generando-ppt"), "/loaders/pensando.svg")
+    assert.equal(loaderChipSrc("generando-word"), "/loaders/pensando.svg")
+    assert.equal(loaderChipSrc("completado"), "/loaders/completado.svg")
     assert.equal(loaderLabel("pensando", "Buscando “clima”…"), "Buscando “clima”…")
     assert.equal(loaderLabel("pensando", "   "), "Pensando…")
   })
 
-  it("matches the shared bounce snippet (y=32, down 20px) except terminal + original crop", () => {
+  it("uses Luis bounce geometry for the live pensando glyph (y=50, viewBox 10 40 45 50)", () => {
+    const live = readFileSync(join(loadersDir, "pensando.svg"), "utf8")
+    assert.match(live, /viewBox="10 40 45 50"/)
+    assert.match(live, /<rect x="20" y="50" width="4" height="10" fill="#38BDF8">/)
+    assert.match(live, /<rect x="30" y="50" width="4" height="10" fill="#38BDF8">/)
+    assert.match(live, /<rect x="40" y="50" width="4" height="10" fill="#38BDF8">/)
+    assert.match(live, /values="0 0; 0 20; 0 0"/)
+    assert.match(live, /begin="0"/)
+    assert.match(live, /begin="0.2s"/)
+    assert.match(live, /begin="0.4s"/)
+    assert.match(live, /dur="0.6s"/)
+    assert.doesNotMatch(live, /currentColor/)
+
     for (const name of KIT_SVG_FILES) {
       const full = join(loadersDir, `${name}.svg`)
       assert.equal(existsSync(full), true, full)
@@ -74,12 +89,9 @@ describe("thinking-loaders · kit catalog", () => {
         assert.match(svg, /<animate /)
         continue
       }
-      if (name === "pensando-original") {
+      if (name === "pensando" || name === "pensando-original") {
         assert.match(svg, /viewBox="10 40 45 50"/)
         assert.match(svg, /<rect x="20" y="50" width="4" height="10" fill="#38BDF8">/)
-        assert.match(svg, /<rect x="30" y="50" width="4" height="10" fill="#38BDF8">/)
-        assert.match(svg, /<rect x="40" y="50" width="4" height="10" fill="#38BDF8">/)
-        assert.match(svg, /values="0 0; 0 20; 0 0"/)
         continue
       }
       assert.match(svg, /viewBox="0 0 64 64"/)

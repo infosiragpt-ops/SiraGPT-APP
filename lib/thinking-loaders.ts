@@ -69,18 +69,25 @@ export function loaderSrc(state: LoaderState): string {
   return `/loaders/${state}.svg`
 }
 
+/** Luis's three-bar crop — the only animated in-progress glyph. */
+export const PENSANDO_BARS_SRC = "/loaders/pensando.svg"
+export const PENSANDO_BARS_STATIC_SRC = "/loaders/icons/pensando.svg"
+
 /** Static (no SMIL) copy for prefers-reduced-motion. */
 export function loaderIconSrc(state: LoaderState): string {
-  return `/loaders/icons/${state}.svg`
+  if (isTerminalLoaderState(state)) return `/loaders/icons/${state}.svg`
+  return PENSANDO_BARS_STATIC_SRC
 }
 
 /**
- * Header chip source. `pensando` uses Luis's original crop so the three
- * bars fill the chip; every other state is the matching 64×64 kit file.
+ * In-progress chips always use the same three celeste bars.
+ * Seal / lupa / W / PDF kit files stay on disk for the catalog but are
+ * never the live glyph — Spanish labels carry the phase meaning.
+ * Terminal states keep the static check / X.
  */
 export function loaderChipSrc(state: LoaderState): string {
-  if (state === "pensando") return "/loaders/pensando-original.svg"
-  return loaderSrc(state)
+  if (isTerminalLoaderState(state)) return loaderSrc(state)
+  return PENSANDO_BARS_SRC
 }
 
 export function loaderLabel(state: LoaderState, override?: string | null): string {

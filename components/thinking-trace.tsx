@@ -3,7 +3,7 @@
 import { useTranslations } from "next-intl"
 import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
-import { humanToolLabel } from "@/lib/run-trace"
+import { humanToolLabel, humanizeToolDetail } from "@/lib/run-trace"
 
 export type ThinkingToolCall = {
   index: number
@@ -37,6 +37,8 @@ export function firstReasoningSentence(reasoning: string): string {
 function describeTool(name: string | undefined, t: ReturnType<typeof useTranslations>): string {
   const mapped = humanToolLabel(name, "")
   if (mapped) return mapped
+  const humanized = humanizeToolDetail(name)
+  if (humanized) return humanized
   const n = String(name || "").toLowerCase()
   if (n.indexOf("search") >= 0) return t("toolSearching")
   if (n.indexOf("read") >= 0 || n.indexOf("url") >= 0 || n.indexOf("browse") >= 0) return t("toolReading")

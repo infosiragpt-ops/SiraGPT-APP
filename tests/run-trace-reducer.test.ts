@@ -13,6 +13,7 @@ import {
   RUN_TRACE_STALE_MS,
   shouldRenderRunTrace,
   upsertMonotonicStep,
+  humanizeToolDetail,
 } from "../lib/run-trace"
 import { toolToProfessionalLabel } from "../lib/agent-task-presentation"
 
@@ -28,6 +29,16 @@ describe("run-trace · human labels", () => {
     assert.equal(humanToolLabel("docintel retrieve"), "Consultando el documento")
     assert.equal(toolToProfessionalLabel("docintel analyze"), "Leyendo el documento")
     assert.equal(toolToProfessionalLabel("docintel_retrieve"), "Consultando el documento")
+  })
+
+  it("humanizes English tool-token subtext into Spanish labels", () => {
+    assert.equal(
+      humanizeToolDetail("create presentation · render preview"),
+      "Creando presentación · Renderizando vista previa",
+    )
+    assert.equal(humanizeToolDetail("create_presentation"), "Creando presentación")
+    assert.equal(humanizeToolDetail("render preview"), "Renderizando vista previa")
+    assert.equal(toolToProfessionalLabel("create presentation · render preview"), "Creando presentación · Renderizando vista previa")
   })
 })
 

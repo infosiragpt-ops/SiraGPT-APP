@@ -184,7 +184,6 @@ export function ClaudeThinkingTimeline({ steps, className, compact }: { steps: C
       {headerState && current ? (
         <ThinkingStatusLoader
           state={headerState}
-          label={current.label}
           elapsedSec={current.elapsedSec}
           compact={compact}
           announce={false}

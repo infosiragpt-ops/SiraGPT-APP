@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import clsx from "clsx"
 import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
+import { humanizeToolDetail } from "@/lib/run-trace"
 
 interface IncomingStep {
   id?: string
@@ -25,7 +26,8 @@ interface Props {
 }
 
 function incomingToRow(step: IncomingStep, idx: number, elapsedSec: number, isLastActive: boolean): ClaudeTimelineStep {
-  const label = (step.humanDescription || step.label || step.name || "Herramienta").trim()
+  const rawLabel = (step.humanDescription || step.label || step.name || "Herramienta").trim()
+  const label = humanizeToolDetail(rawLabel) || rawLabel
   const running = step.status === "planned" || step.status === "executing" || step.status === "running"
   const failed = step.status === "error" || step.status === "denied"
   const status = failed ? "error" : (running || isLastActive && running) ? "active" : "done"
