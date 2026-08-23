@@ -119,6 +119,7 @@ import {
   claimPendingCodeAgentInstruction,
   requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
+import { departmentEmptySuggestions } from "@/lib/code-department-empty-suggestions"
 import {
   buildProactiveCompanySystemBlock,
   claimPendingSeedPrompt,
@@ -126,8 +127,10 @@ import {
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
   CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  getActiveDepartmentSelection,
   notifyCompanyAssociationChanged,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   setActiveCodexProject,
@@ -4936,7 +4939,13 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+          <EmptyChat
+            active={agentsActive}
+            proactive={proactiveEnabled}
+            durable={codexAvailable}
+            departmentId={bardNav?.departmentId}
+            departmentName={bardNav?.departmentName || _title}
+          />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -5283,13 +5292,34 @@ function EmptyChat({
   active,
   proactive = false,
   durable = false,
+  departmentId,
+  departmentName,
 }: {
   active: boolean
   proactive?: boolean
   durable?: boolean
+  departmentId?: string
+  departmentName?: string
 }) {
+  const [selection, setSelection] = React.useState(() => getActiveDepartmentSelection())
+  React.useEffect(() => {
+    const onSelect = (event: Event) => {
+      const next = (event as CustomEvent<{ selection: ReturnType<typeof getActiveDepartmentSelection> }>).detail?.selection
+      if (next) setSelection(next)
+    }
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+  }, [])
+  const resolved = departmentEmptySuggestions(
+    departmentId || selection?.id,
+    departmentName || selection?.name,
+  )
+
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
+    <div
+      className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center"
+      data-testid="code-chat-empty-state"
+    >
       <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
         <span
           className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
@@ -5300,32 +5330,51 @@ function EmptyChat({
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
-      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-department">
+        {resolved.name}
       </h2>
       <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
         {proactive
-          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
+          ? "Modo PROACTIVO activo. Elige una acción o escribe el objetivo de este departamento."
+          : "Elige una acción o escribe qué debe hacer este departamento."}
       </p>
       <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
-        {CODE_AUTONOMOUS_STARTERS.map((starter) => (
+        {resolved.suggestions.map((suggestion) => (
           <button
-            key={starter.id}
+            key={suggestion.id}
             type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
-            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
-            data-testid={`code-agent-starter-${starter.id}`}
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => requestCodeAgentInstruction(suggestion.prompt, { mode: "app" })}
+            data-testid={`code-dept-suggestion-${suggestion.id}`}
+            aria-label={suggestion.label}
+            title={suggestion.label}
           >
             <span className="flex items-start gap-3">
               <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
-                {starter.id === "ai-platform" ? (
-                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-                ) : starter.id === "business-os" ? (
-                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Rocket className="h-4 w-4" aria-hidden="true" />
-                )}
+                <Rocket className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-foreground">{suggestion.label}</span>
+                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+        {CODE_AUTONOMOUS_STARTERS.slice(0, 1).map((starter) => (
+          <button
+            key={starter.id}
+            type="button"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
+            data-testid={`code-agent-starter-${starter.id}`}
+            aria-label={starter.title}
+            title={starter.title}
+          >
+            <span className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
+                <BrainCircuit className="h-4 w-4" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2">
@@ -5335,20 +5384,9 @@ function EmptyChat({
                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                   {starter.description}
                 </span>
-                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
-                  {starter.meta}
-                </span>
               </span>
             </span>
           </button>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
-        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
-          <React.Fragment key={step}>
-            {index > 0 ? <span aria-hidden="true">→</span> : null}
-            <span>{step}</span>
-          </React.Fragment>
         ))}
       </div>
     </div>

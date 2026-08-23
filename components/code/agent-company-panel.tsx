@@ -3625,7 +3625,7 @@ function CompanyHome({
                 <button
                   type="button"
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left transition-colors hover:bg-transparent active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                     hideFooter && "gap-2",
                   )}
                   onClick={() => onOpenDepartment(department.id)}
@@ -3648,8 +3648,15 @@ function CompanyHome({
                     />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                    <span className="flex items-start gap-1.5">
+                      <span
+                        className={cn(
+                          "whitespace-normal break-words text-[13px] font-semibold leading-snug",
+                          hideFooter && "text-[11px]",
+                        )}
+                        title={department.name}
+                        data-dept-name-wrap="1"
+                      >
                         {department.name}
                       </span>
                       {isPinned ? (
@@ -3687,7 +3694,7 @@ function CompanyHome({
                   <button
                     type="button"
                     className={cn(
-                      "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/90 hover:text-foreground",
+                      "inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/90 hover:text-foreground active:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
                       hideFooter && "h-7 w-7",
                     )}
                     aria-label={`Abrir computadora de ${department.name}`}
@@ -3858,7 +3865,7 @@ function CompanyNavRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 active:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
         compact && "h-8 gap-2 rounded-md px-2 text-xs",
         active && "bg-muted/65 text-foreground",
       )}
