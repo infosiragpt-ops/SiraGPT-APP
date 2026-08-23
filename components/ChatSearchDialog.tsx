@@ -20,6 +20,8 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { useChat } from "@/lib/chat-context-integrated"
+import { apiClient } from "@/lib/api"
+import { useTranslations } from "next-intl"
 import { useRouter, usePathname } from "next/navigation"
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -34,7 +36,17 @@ interface SearchResult {
   title: string
   updatedAt: string
   messageCount?: number
+  /** Present when the hit comes from server-side full-text search. */
+  snippet?: string
+  /** Present when the hit comes from server-side full-text search. */
+  messageId?: string
 }
+
+type FullTextHit = NonNullable<
+  Awaited<ReturnType<typeof apiClient.searchChats>>["results"]
+>[number]
+
+const SEARCH_LIMIT = 30
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -72,7 +84,25 @@ function formatChatTime(dateString: string): string {
   return date.toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })
 }
 
+// The backend builds snippets with ts_headline using <mark>/</mark> and
+// may include ellipses. Message content is user/model text that can
+// contain angle brackets, so strip every tag except our highlight pair
+// and escape the rest before the snippet is handed to
+// dangerouslySetInnerHTML.
+function sanitizeSnippetHtml(rawSnippet: string): string {
+  const escaped = rawSnippet
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+  return escaped
+    .replace(/&lt;mark&gt;/g, "<mark>")
+    .replace(/&lt;\/mark&gt;/g, "</mark>")
+}
+
 export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) {
+  const t = useTranslations("chatSearch")
   const [searchQuery, setSearchQuery] = React.useState("")
   const [debouncedQuery, setDebouncedQuery] = React.useState("")
   const [searchResults, setSearchResults] = React.useState<SearchResult[]>([])
@@ -89,34 +119,99 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   const pathname = usePathname()
   const inputRef = React.useRef<HTMLInputElement>(null)
   const itemRefs = React.useRef<Map<number, HTMLButtonElement | null>>(new Map())
+  const searchAbortRef = React.useRef<AbortController | null>(null)
+  const [serverSearchFailed, setServerSearchFailed] = React.useState(false)
 
   // Debounce search query
   React.useEffect(() => {
-    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 200)
+    const timer = setTimeout(() => setDebouncedQuery(searchQuery), 250)
     return () => clearTimeout(timer)
   }, [searchQuery])
 
-  // Compute results from loaded chats, filtered by the debounced query.
   React.useEffect(() => {
-    const query = debouncedQuery.trim().toLowerCase()
-    const source = chats.filter((chat) => chat && chat.id)
+    return () => searchAbortRef.current?.abort()
+  }, [])
 
-    const matched = (query
-      ? source.filter(
+  // Compute results for the debounced query. With a query we hit the
+  // server-side full-text search (all history, ranked, with snippets);
+  // without one we render the locally loaded recents as before. If the
+  // backend search fails we fall back to the old title-only local filter
+  // so the dialog degrades instead of showing a dead end.
+  React.useEffect(() => {
+    const query = debouncedQuery.trim()
+    if (!query) {
+      searchAbortRef.current?.abort()
+      searchAbortRef.current = null
+      setServerSearchFailed(false)
+      setSearchResults(
+        chats.filter((chat) => chat && chat.id).map((chat) => ({
+          id: chat.id,
+          title: chat.title || "Chat sin título",
+          updatedAt: chat.updatedAt,
+          messageCount: chat.messages?.length || 0,
+        }))
+      )
+      setIsSearching(false)
+      return
+    }
+
+    const lowerQuery = query.toLowerCase()
+    const localFallback = () =>
+      chats
+        .filter((chat) => chat && chat.id)
+        .filter(
           (chat) =>
-            chat.title?.toLowerCase().includes(query) ||
-            chat.id.toLowerCase().includes(query)
+            chat.title?.toLowerCase().includes(lowerQuery) ||
+            chat.id.toLowerCase().includes(lowerQuery)
         )
-      : source
-    ).map((chat) => ({
-      id: chat.id,
-      title: chat.title || "Chat sin título",
-      updatedAt: chat.updatedAt,
-      messageCount: chat.messages?.length || 0,
-    }))
+        .map((chat) => ({
+          id: chat.id,
+          title: chat.title || "Chat sin título",
+          updatedAt: chat.updatedAt,
+          messageCount: chat.messages?.length || 0,
+        }))
 
-    setSearchResults(matched)
-    setIsSearching(false)
+    let cancelled = false
+    searchAbortRef.current?.abort()
+    const controller = new AbortController()
+    searchAbortRef.current = controller
+
+    apiClient
+      .searchChats(query, { limit: SEARCH_LIMIT, signal: controller.signal })
+      .then((response) => {
+        if (cancelled) return
+        const hits: FullTextHit[] = Array.isArray(response?.results)
+          ? response.results
+          : []
+        // Dedupe by chat: several messages of the same chat may match;
+        // the dialog navigates to chats, so keep the best-ranked hit.
+        const byChat = new Map<string, FullTextHit>()
+        for (const hit of hits) {
+          if (hit?.chatId && !byChat.has(hit.chatId)) byChat.set(hit.chatId, hit)
+        }
+        setSearchResults(
+          Array.from(byChat.values()).map((hit) => ({
+            id: hit.chatId,
+            title: hit.chatTitle || "Chat sin título",
+            updatedAt: hit.timestamp,
+            snippet: hit.snippet || "",
+            messageId: hit.messageId,
+          }))
+        )
+        setServerSearchFailed(false)
+        setIsSearching(false)
+      })
+      .catch((error) => {
+        if (cancelled || controller.signal.aborted) return
+        console.error("Full-text chat search failed; falling back to local titles:", error)
+        setSearchResults(localFallback())
+        setServerSearchFailed(true)
+        setIsSearching(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [debouncedQuery, chats])
 
   // While the user is typing (query differs from the settled debounced value)
@@ -231,7 +326,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
             <Search className="h-[18px] w-[18px] shrink-0 text-zinc-400 dark:text-zinc-500" />
             <Input
               ref={inputRef}
-              placeholder="Buscar en tus chats…"
+              placeholder={t("placeholder")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -270,9 +365,11 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                     <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800/50">
                       <MessageSquare className="h-5 w-5 opacity-70" />
                     </div>
-                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Sin resultados</p>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{t("noResults")}</p>
                     <p className="mt-1 text-xs">
-                      No encontramos chats para «{searchQuery}»
+                      {serverSearchFailed
+                        ? t("serverFallback")
+                        : t("noResultsFor", { query: searchQuery })}
                     </p>
                   </>
                 ) : (
@@ -280,8 +377,8 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                     <div className="mb-3 flex h-11 w-11 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800/50">
                       <History className="h-5 w-5 opacity-70" />
                     </div>
-                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Aún no tienes chats</p>
-                    <p className="mt-1 text-xs">Empieza una conversación para verla aquí</p>
+                    <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">{t("emptyHistory")}</p>
+                    <p className="mt-1 text-xs">{t("emptyHistoryHint")}</p>
                   </>
                 )}
               </div>
@@ -325,21 +422,34 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                                   ? highlightSearchTerm(chat.title, searchQuery)
                                   : chat.title}
                               </div>
-                              <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
-                                <span className="inline-flex items-center gap-1">
+                              {chat.snippet ? (
+                                <div
+                                  className="mt-0.5 line-clamp-2 text-xs leading-snug text-zinc-500 dark:text-zinc-400 [&_mark]:rounded-[3px] [&_mark]:bg-primary/15 [&_mark]:px-0.5 [&_mark]:font-semibold [&_mark]:text-foreground"
+                                  dangerouslySetInnerHTML={{ __html: sanitizeSnippetHtml(chat.snippet) }}
+                                />
+                              ) : (
+                                <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
+                                  <span className="inline-flex items-center gap-1">
+                                    <Clock className="h-3 w-3" />
+                                    {formatChatTime(chat.updatedAt)}
+                                  </span>
+                                  {chat.messageCount ? (
+                                    <>
+                                      <span className="text-zinc-300 dark:text-zinc-700">·</span>
+                                      <span className="inline-flex items-center gap-1">
+                                        <MessageSquare className="h-3 w-3" />
+                                        {chat.messageCount}
+                                      </span>
+                                    </>
+                                  ) : null}
+                                </div>
+                              )}
+                              {chat.snippet && (
+                                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
                                   <Clock className="h-3 w-3" />
                                   {formatChatTime(chat.updatedAt)}
-                                </span>
-                                {chat.messageCount ? (
-                                  <>
-                                    <span className="text-zinc-300 dark:text-zinc-700">·</span>
-                                    <span className="inline-flex items-center gap-1">
-                                      <MessageSquare className="h-3 w-3" />
-                                      {chat.messageCount}
-                                    </span>
-                                  </>
-                                ) : null}
-                              </div>
+                                </div>
+                              )}
                             </div>
                             <CornerDownLeft
                               className={cn(
@@ -375,7 +485,9 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
         <div className="flex shrink-0 items-center justify-between border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#0E131B] px-4 py-2 text-[11px] text-zinc-400 dark:text-zinc-500">
           <span className="tabular-nums">
             {resultCount > 0
-              ? `${resultCount} ${resultCount === 1 ? "chat" : "chats"}`
+              ? resultCount === 1
+                ? t("resultCountOne", { count: resultCount })
+                : t("resultCountMany", { count: resultCount })
               : ""}
           </span>
           <div className="hidden items-center gap-3 sm:flex">
