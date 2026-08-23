@@ -72,7 +72,7 @@ export function shouldRetryOcr(confidence: number, usefulChars: number): boolean
 }
 
 export function looksLikeTranscriptionRequest(text: string): boolean {
-  return /\b(transcrib|ocr|lee(?:r)?\s+(?:el|la|este|esta)\s+(?:texto|imagen|captura)|qu[eé]\s+dice)\b/i.test(
+  return /(?:transcrib\w*|ocr\b|lee(?:r)?\s+(?:el|la|este|esta)\s+(?:texto|imagen|captura)|qu[eé]\s+dice)/i.test(
     String(text || ""),
   )
 }
@@ -125,6 +125,12 @@ export function applyAdaptiveThreshold(
       const meanSq = rect(integralSq, x0, y0, x1, y1) / count
       const variance = Math.max(0, meanSq - mean * mean)
       const std = Math.sqrt(variance)
+      // Uniform patches have no local contrast — classify by mean so a
+      // dark URL strip does not flip to white (classic Sauvola pitfall).
+      if (std < 8) {
+        out[y * width + x] = mean < 128 ? 0 : 255
+        continue
+      }
       const threshold = mean * (1 + k * (std / 128 - 1))
       out[y * width + x] = data[y * width + x] > threshold ? 255 : 0
     }

@@ -28,17 +28,18 @@ describe("chat OCR preprocess helpers", () => {
     assert.equal(looksLikeTranscriptionRequest("qué dice esta captura"), true)
     assert.equal(looksLikeTranscriptionRequest("hola"), false)
 
-    const width = 24
-    const height = 8
+    const width = 120
+    const height = 40
     const data = new Uint8ClampedArray(width * height)
     for (let y = 0; y < height; y += 1) {
+      const ink = y % 8 < 3
       for (let x = 0; x < width; x += 1) {
-        data[y * width + x] = x < 12 ? 20 : 230
+        data[y * width + x] = ink ? 12 : 244
       }
     }
     applyAdaptiveThreshold({ data, width, height })
-    assert.equal(data[4], 0)
-    assert.equal(data[20], 255)
+    assert.equal(data[2], 0)
+    assert.equal(data[width * 5 + 2], 255)
     assert.equal(estimateDeskewAngle({ data, width, height }), 0)
   })
 })
