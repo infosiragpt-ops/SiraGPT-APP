@@ -51,6 +51,8 @@ import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-dialog"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
+import { mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -80,6 +82,8 @@ interface TimelineStepProjection {
   status: "running" | "done" | "error"
   phase: AgentStatusIconKind
   count: number
+  tool?: string
+  loaderState: LoaderState
   /** Claude-style web research trace: queries + their result lists. */
   searchCalls: ProjectedSearchCall[]
   /** Domains the agent is fetching ("Obteniendo datos de …"). */
@@ -167,6 +171,7 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
         if (target && !fetchTargets.includes(target)) fetchTargets.push(target)
       }
     }
+    const firstTool = (step.toolCalls || [])[0]?.tool
     const row = projectStepRow({
       id: step.id,
       label: step.label,
@@ -183,6 +188,14 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
       status: row.status === "failed" ? "error" : row.status === "running" ? "running" : "done",
       phase: phaseFromStep(step, row.label),
       count: 1,
+      tool: firstTool,
+      loaderState: mapEventToLoaderState({
+        tool: firstTool,
+        label: row.label,
+        text: reasoning,
+        status: step.status,
+        step_id: step.id,
+      }),
       searchCalls,
       fetchTargets,
     }
@@ -190,6 +203,8 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
     if (previous && previous.label === item.label && previous.detail === item.detail && previous.status === item.status) {
       previous.count += 1
       previous.id = item.id
+      previous.tool = item.tool
+      previous.loaderState = item.loaderState
       previous.searchCalls.push(...item.searchCalls)
       previous.fetchTargets.push(...item.fetchTargets.filter((t) => !previous.fetchTargets.includes(t)))
     } else {
@@ -902,9 +917,9 @@ function TimelineRow({
       <div className="flex w-5 shrink-0 justify-center text-muted-foreground">
         <div className={cn(
           "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 ring-1 ring-border/50",
-          status === "done" && "text-emerald-600",
-          status === "running" && "text-sky-600 shadow-[0_0_0_3px_rgba(14,165,233,0.08)]",
-          status === "error" && "text-red-600",
+          status === "done" && "text-[var(--step-done,#059669)]",
+          status === "running" && "text-[var(--step-running,#38BDF8)] shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
+          status === "error" && "text-[var(--step-failed,#B45353)]",
           (!status || status === "muted") && "text-muted-foreground",
         )}>
           {icon}
@@ -974,11 +989,6 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     }, 1000)
     return () => window.clearInterval(id)
   }, [live])
-  const elapsedLabel = elapsedSec >= 60
-    ? `${Math.floor(elapsedSec / 60)}m ${String(elapsedSec % 60).padStart(2, "0")}s`
-    : elapsedSec >= 3
-      ? `${elapsedSec}s`
-      : ""
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
   const timelineSteps = React.useMemo(() => projectTimelineSteps(state.steps), [state.steps])
   const runningTimelineStep = React.useMemo(
@@ -1005,6 +1015,8 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   // to "stale". The persisted JSON is untouched; the next event
   // delta would re-arm the live view.
   const [stale, setStale] = React.useState(false)
+  const [terminalFlash, setTerminalFlash] = React.useState<LoaderState | null>(null)
+  const wasLiveRef = React.useRef(false)
   React.useEffect(() => {
     setStale(false)
     if (state.done || state.error) return
@@ -1019,8 +1031,17 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   }, [state.done, state.error, state.lastEventAt, state.heartbeatAt])
 
   const isLiveActivity = Boolean(!state.done && !state.error && !stale)
-  const isCompletedActivity = Boolean(state.done && !state.error)
+  const isCompletedActivity = Boolean(state.done && !state.error && !terminalFlash)
   const isStaleActivity = Boolean(stale && !state.done && !state.error)
+
+  React.useEffect(() => {
+    if (wasLiveRef.current && state.done && !state.error) {
+      setTerminalFlash("completado")
+    } else if (wasLiveRef.current && state.error) {
+      setTerminalFlash("error")
+    }
+    wasLiveRef.current = isLiveActivity
+  }, [state.done, state.error, isLiveActivity])
 
   const cancelTask = React.useCallback(async () => {
     if (!taskId || cancelling) return
@@ -1059,6 +1080,23 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     assistantMessageId: state.meta?.assistantMessageId,
   })
   if (role && !assistantOk) return null
+
+  if (terminalFlash === "completado" || terminalFlash === "error") {
+    return (
+      <div className={cn("my-2.5 w-full max-w-2xl", className)}>
+        <ThinkingStatusLoader
+          state={terminalFlash}
+          elapsedSec={elapsedSec}
+          onSettled={() => setTerminalFlash(null)}
+        />
+        {hasDeliverable ? (
+          <div className="mt-2">
+            <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
+          </div>
+        ) : null}
+      </div>
+    )
+  }
 
   if (isCompletedActivity || hideSteps) {
     // Succeeded runs collapse to one expandable line. Artifacts stay
@@ -1158,13 +1196,11 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             aria-label="Ver actividad del agente"
             className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
           >
-            <ThinkingIndicator size="sm" label="Trabajando" />
-            <span className="thinking-shimmer-text min-w-0 truncate text-[13px] font-medium tracking-tight">
-              {headerLabel}
-            </span>
-            {elapsedLabel && (
-              <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground/55">{elapsedLabel}</span>
-            )}
+            <ThinkingStatusLoader
+              state={runningTimelineStep?.loaderState || mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })}
+              label={headerLabel}
+              elapsedSec={elapsedSec >= 3 ? elapsedSec : null}
+            />
             {liveExpanded ? (
               <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
             ) : (

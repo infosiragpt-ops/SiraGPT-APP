@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="analizando archivo">
+  <title>SiraGPT loader · analizando archivo</title>
+  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M23 11h11.5L41 17.8V31H23z"/>
+    <path d="M34.5 11.1v6.7H41"/>
+    <circle cx="38.6" cy="29.6" r="5.1"/>
+    <path d="M42.2 33.4 45.4 36.6"/>
+  </g>
+  
+</svg>

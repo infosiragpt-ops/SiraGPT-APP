@@ -150,6 +150,13 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --code-fg: #e8eef7;
     --content-max: 46rem;
 
+    /* RunTrace / Pensando stepper — running is brand celeste, never red. */
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #059669;
+    --step-failed: #B45353;
+
     /*
      * Motion tokens — Claude-grade snappy easing. The "smooth" curve
      * is fastest at the start (perceived snappiness) and decays to
@@ -243,6 +250,12 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     --code-bg: #121826;
     --code-fg: #e8eef7;
     --content-max: 46rem;
+
+    --sira-celeste: #38BDF8;
+    --step-pending: #8A8580;
+    --step-running: #38BDF8;
+    --step-done: #34D399;
+    --step-failed: #F87171;
   }
 
   /*
@@ -8010,6 +8023,9 @@ html[dir="rtl"] .right-3 { left: 0.75rem; right: auto; }
     animation: none;
     background-image: none;
     color: hsl(var(--muted-foreground));
+  }
+  .celeste-bounce-bars animateTransform {
+    display: none;
   }
 }
 

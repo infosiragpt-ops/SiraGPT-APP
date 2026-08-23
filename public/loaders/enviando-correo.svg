@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="enviando correo">
+  <title>SiraGPT loader · enviando correo</title>
+  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="20.5" y="14" width="23" height="14.5" rx="2"/>
+    <path d="M21.4 15.6 32 23.2 42.6 15.6"/>
+  </g>
+  
+  <g class="celeste-bars" transform="translate(18 40)" fill="#38BDF8">
+    <rect x="0" y="0" width="4" height="10" rx="2">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 -20; 0 0" begin="0s" dur="0.6s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="10" y="0" width="4" height="10" rx="2">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 -20; 0 0" begin="0.2s" dur="0.6s" repeatCount="indefinite"/>
+    </rect>
+    <rect x="20" y="0" width="4" height="10" rx="2">
+      <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 -20; 0 0" begin="0.4s" dur="0.6s" repeatCount="indefinite"/>
+    </rect>
+  </g>
+</svg>

@@ -48,7 +48,8 @@
     "../lib/native/haptics.ts",
     "../lib/notifications/push.ts",
     "../lib/integrations/verify-webhook.ts",
-    "../lib/format-schedule-es-pe.ts"
+    "../lib/format-schedule-es-pe.ts",
+    "../lib/thinking-loaders.ts"
   ],
   "exclude": [
     "../tests/lib"

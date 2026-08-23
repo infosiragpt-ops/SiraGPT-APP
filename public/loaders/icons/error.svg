@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="error">
+  <title>SiraGPT loader · error</title>
+  <g fill="none" stroke="#F87171" stroke-width="1.9" stroke-linecap="round">
+    <circle cx="32" cy="28" r="12"/>
+    <path d="M27.2 23.2 36.8 32.8M36.8 23.2 27.2 32.8"/>
+  </g>
+  
+</svg>
