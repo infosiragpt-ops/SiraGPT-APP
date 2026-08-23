@@ -3280,7 +3280,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             />
                         ) : null}
                         {message.error ? (
-                            <ErrorMessage onRegenerate={onRegenerate} />
+                            // Partial content already streamed before the
+                            // failure must stay visible: replacing the bubble
+                            // body with the red banner threw away the user's
+                            // answer mid-stream (dead-screen feel).
+                            <>
+                                {typeof displayedContent === "string" && displayedContent.trim() ? (
+                                    <MessageContent content={displayedContent} />
+                                ) : null}
+                                <div className={displayedContent && displayedContent.trim() ? "mt-2" : undefined}>
+                                    <ErrorMessage onRegenerate={onRegenerate} />
+                                </div>
+                            </>
                         ) : isThinking && !hasAgentTrace ? (
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}
