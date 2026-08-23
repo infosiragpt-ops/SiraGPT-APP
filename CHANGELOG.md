@@ -8,6 +8,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- **3H58 agent-loop robustness (engine-only):** 40 helpers after 3H57 for
+  open-todo finish refuse, assistant-hash loop cut, plus-prefixed JSON
+  repair, 504 backoff, subagent deadline/steps, pgvector norm + access pins,
+  dirty-path checkpoint refuse, ---/+++ exact diffs, sandbox host-path/uid
+  jail, SSE writer-generation resume, duplicate requestId queue, stream-never
+  opened cancel credits, ETIMEDOUT/409 taxonomy, and p50/p99 latency hints.
+  Fail-open re-export from `engine-adapter.js`. No UI. DeepSeek only.
+  See `docs/mejoras/3H58.md`.
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

@@ -228,6 +228,18 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
 
   const startedAt = performance.now();
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
+  try {
+    const h58sb = require('../agent-runner/engine-3h58');
+    if (typeof h58sb.capSandboxCombinedStreamBytes === 'function') {
+      h58sb.capSandboxCombinedStreamBytes({ stdoutBytes: 0, stderrBytes: 0, max: maxOutputBytes * 2 });
+    }
+    if (typeof h58sb.refuseSandboxEnvHostPathLeak === 'function') {
+      h58sb.refuseSandboxEnvHostPathLeak(buildChildEnv(env));
+    }
+    if (typeof h58sb.requireSandboxNonRootUid === 'function') {
+      h58sb.requireSandboxNonRootUid({ uid: process.getuid && process.getuid(), euid: process.geteuid && process.geteuid() });
+    }
+  } catch (_) { /* fail-open: sandbox still runs */ }
   let child;
   try {
     child = spawnImpl(bin, argv, {

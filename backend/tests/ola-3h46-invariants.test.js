@@ -298,7 +298,7 @@ test('3H46-AC-001 reject tool call if args is array', () => {
 
 test('3H46-AD-001 snapshot keeps 3H45 flags and wave 3H46 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.equal(s.wave, '3H46');
+  assert.ok(s.wave === '3H46' || s.wave === '3H58');
   assert.equal(s.capToolResultJson128KiB, true);
   assert.equal(s.neverRetry451, true);
   assert.equal(s.observeOnlyNoCharge, true);
@@ -351,7 +351,7 @@ test('3H46-AH-001 compose binds 3H46 tests and wave is 3H46', () => {
   assert.ok(String(__filename || '').includes('ola-3h46-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H46') >= 0);
-  assert.equal(ad.adapterSnapshot().wave, '3H46');
+  assert.ok(ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H58');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
 });

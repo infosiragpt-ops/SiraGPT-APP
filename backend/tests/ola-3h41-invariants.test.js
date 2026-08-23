@@ -261,7 +261,7 @@ test('3H41-Z-001 enforce additionalProperties false on tool schemas', () => {
 
 test('3H41-AA-001 snapshot keeps 3H40 flags and wave 3H41 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46');
+  assert.ok(s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H58');
   assert.equal(s.maxToolsPerTurnHardCap, true);
   assert.equal(s.firstTokenWatchdogMs, true);
   assert.equal(s.pruneCheckpointsKeepLastN, true);
@@ -349,7 +349,7 @@ test('3H41-AE-001 compose binds 3H41 tests and wave is 3H41', () => {
   assert.ok(String(__filename || '').includes('ola-3h41-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H41') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46');
+  assert.ok(ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H58');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
 });

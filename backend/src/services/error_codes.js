@@ -374,6 +374,45 @@ const CODES = Object.freeze({
   SUBAGENT_SAME_TOOL: 'subagent_same_tool',
   MEMORY_SORT: 'memory_sort',
   TOOL_ARGS_ARRAY: 'tool_args_array',
+  PLAN_TODOS_OPEN: 'plan_todos_open',
+  ASSISTANT_HASH_REPEAT: 'assistant_hash_repeat',
+  EMPTY_ASSISTANT_MAX: 'empty_assistant_max',
+  TOOL_ID_NAME_MISSING: 'tool_id_name_missing',
+  JSON_PLUS_PREFIX: 'json_plus_prefix',
+  TOOL_EMAIL: 'tool_email',
+  HTTP_504_RETRY: 'http_504_retry',
+  TOOL_ENUM_UNKNOWN: 'tool_enum_unknown',
+  TOOL_NAME_ZW: 'tool_name_zw',
+  SUBAGENT_STEPS: 'subagent_steps',
+  SUBAGENT_DEADLINE: 'subagent_deadline',
+  SUBAGENT_TOKENS_EXH: 'subagent_tokens_exh',
+  SUBAGENT_STDOUT: 'subagent_stdout',
+  COMPACT_ORPHAN_TOOL: 'compact_orphan_tool',
+  PGVECTOR_NORM: 'pgvector_norm',
+  MEMORY_ACCESS_PIN: 'memory_access_pin',
+  MEMORY_EMPTY_VEC: 'memory_empty_vec',
+  CKPT_BYTES: 'ckpt_bytes',
+  CKPT_FAILED_KEEP: 'ckpt_failed_keep',
+  CKPT_DIRTY_UNRELATED: 'ckpt_dirty_unrelated',
+  DIFF_FROM_TO: 'diff_from_to',
+  RAW_SHA_PREFIX: 'raw_sha_prefix',
+  DIFF_RENAME_DELETE: 'diff_rename_delete',
+  DIFF_HUNK_START: 'diff_hunk_start',
+  SANDBOX_COMBINED: 'sandbox_combined',
+  SANDBOX_HOST_PATH: 'sandbox_host_path',
+  SANDBOX_ROOT_UID: 'sandbox_root_uid',
+  SSE_RING_WINDOW: 'sse_ring_window',
+  SSE_WRITER_GEN: 'sse_writer_gen',
+  SSE_HB_SAME_SEQ: 'sse_hb_same_seq',
+  QUEUE_DUP_REQUEST: 'queue_dup_request',
+  QUEUE_HARD_WAIT: 'queue_hard_wait',
+  CREDIT_STREAM_CANCEL: 'credit_stream_cancel',
+  CREDIT_DONE_EVENT: 'credit_done_event',
+  CREDIT_PROMPT_CAP: 'credit_prompt_cap',
+  NET_ETIMEDOUT: 'net_etimedout',
+  HTTP_409: 'http_409',
+  STEP_P99_SLOW: 'step_p99_slow',
+  TURN_P50: 'turn_p50',
 });
 
 function isRetryable(code) {
@@ -431,7 +470,11 @@ function isRetryable(code) {
     || c === 'client_gone'
     || c === 'queue_generate_cap'
     || c === 'net_timeout'
-    || c === 'pg_disconnect';
+    || c === 'pg_disconnect'
+    || c === 'net_etimedout'
+    || c === CODES.NET_ETIMEDOUT
+    || c === 'http_504_retry'
+    || c === CODES.HTTP_504_RETRY;
 }
 
 function publicError(code, extra) {
@@ -453,6 +496,9 @@ function httpStatusFor(code) {
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
+  if (c === 'http_409' || c === CODES.HTTP_409) return 409;
+  if (c === 'queue_dup_request' || c === CODES.QUEUE_DUP_REQUEST) return 409;
+  if (c === 'http_504_retry' || c === CODES.HTTP_504_RETRY) return 504;
   return 400;
 }
 

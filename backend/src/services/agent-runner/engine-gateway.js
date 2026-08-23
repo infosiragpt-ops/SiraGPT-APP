@@ -833,6 +833,24 @@ async function governThen(input, run) {
         if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
           ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
         }
+        if (typeof ad.neverChargeIfStreamNeverOpenedAndCancelled === 'function' && input) {
+          ad.neverChargeIfStreamNeverOpenedAndCancelled({ cancelled: input.cancelled, streamOpened: input.streamOpened, completionTokens: input.completionTokens });
+        }
+        if (typeof ad.settleCreditsOnlyAfterDoneEvent === 'function' && input && input.requestId) {
+          ad.settleCreditsOnlyAfterDoneEvent({ requestId: input.requestId, doneEvent: input.doneEvent, settled: input.settled });
+        }
+        if (typeof ad.neverRetry409Conflict === 'function' && input && (input.status === 409 || input.code === '409')) {
+          ad.neverRetry409Conflict(input);
+        }
+        if (typeof ad.backoffOn504GatewayTimeout === 'function' && input && (input.status === 504 || input.error)) {
+          ad.backoffOn504GatewayTimeout(input.error || input, { attempt: input.attempt });
+        }
+        if (typeof ad.classifyEtimedoutAsTimeout === 'function' && input && input.error) {
+          ad.classifyEtimedoutAsTimeout(input.error);
+        }
+        if (typeof ad.refundIfPromptTokensExceedHardCap === 'function' && input && input.promptTokens != null) {
+          ad.refundIfPromptTokensExceedHardCap({ promptTokens: input.promptTokens });
+        }
         if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
           ad.classifyEconnabortedAsCancelled(input.error);
         }

@@ -15,6 +15,10 @@ const {
   callModelWithRetry,
 } = require('./native-llm');
 
+function load3h58() {
+  try { return require('./engine-3h58'); } catch (_) { return null; }
+}
+
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
 function recordModelTelemetry(event) {
@@ -242,11 +246,18 @@ async function runAgentLoop({
   // leave a trace. `bail` emits exactly one 'cancelled' stage event before
   // rethrowing so the SSE stream shows "Cancelado" instead of dying silently.
   let cancelledEmitted = false;
+  const h58 = load3h58();
+  const assistantHashes = [];
+  let emptyAssistantTurns = 0;
+  const loopStartedAt = Date.now();
   const bail = (iteration) => {
     if (!signal?.aborted) return;
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      if (h58 && typeof h58.neverChargeIfStreamNeverOpenedAndCancelled === 'function') {
+        try { h58.neverChargeIfStreamNeverOpenedAndCancelled({ cancelled: true, streamOpened: false, completionTokens: 0 }); } catch (_) { /* credit hint */ }
+      }
     }
     throwIfAborted(signal);
   };
@@ -334,6 +345,12 @@ async function runAgentLoop({
     }
 
     const msg = response?.choices?.[0]?.message || {};
+    if (h58 && typeof h58.recordTurnLatencySampleP50 === 'function') {
+      try { h58.recordTurnLatencySampleP50(Date.now() - modelTurnStart); } catch (_) { /* sample only */ }
+    }
+    if (h58 && typeof h58.latencyHintWhenStepP99OverBudget === 'function') {
+      try { h58.latencyHintWhenStepP99OverBudget({ elapsedMs: Date.now() - modelTurnStart }); } catch (_) { /* hint only */ }
+    }
     let toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
     let viaReact = false;
     if (!toolCalls.length) {
@@ -344,12 +361,54 @@ async function runAgentLoop({
       }
     }
 
+    if (toolCalls.length && h58) {
+      try {
+        if (typeof h58.refuseToolCallIfMissingCallIdAndName === 'function') {
+          h58.refuseToolCallIfMissingCallIdAndName(toolCalls);
+        }
+        if (typeof h58.stripZeroWidthFromToolName === 'function') {
+          for (const call of toolCalls) {
+            const n = call && call.function ? call.function.name : (call && call.name);
+            const cleaned = h58.stripZeroWidthFromToolName(n);
+            if (cleaned && cleaned.ok && cleaned.stripped && call && call.function) call.function.name = cleaned.name;
+          }
+        }
+        if (typeof h58.repairJsonPlusPrefixedOnce === 'function') {
+          for (const call of toolCalls) {
+            const raw = call && call.function ? call.function.arguments : null;
+            if (typeof raw === 'string') {
+              const fix = h58.repairJsonPlusPrefixedOnce(raw);
+              if (fix && fix.ok && fix.repaired && call.function) {
+                try { call.function.arguments = JSON.stringify(fix.value); } catch (_) { /* keep raw */ }
+              }
+            }
+          }
+        }
+      } catch (_) { /* schema hint */ }
+    }
+
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
       // "provider accepted the request but produced nothing" stall. Count it;
       // after STREAM_STALL_CANCEL_AFTER empty responses, stop as loop_stall
       // instead of burning the remaining iterations.
       if (!String(msg.content || '').trim()) {
+        emptyAssistantTurns += 1;
+        if (h58 && typeof h58.stopIfMaxEmptyAssistantTurns === 'function') {
+          try {
+            const stopEmpty = h58.stopIfMaxEmptyAssistantTurns({ emptyTurns: emptyAssistantTurns });
+            if (stopEmpty && stopEmpty.stop) {
+              stoppedReason = 'empty_assistant_max';
+              onEvent({
+                type: 'error',
+                code: stopEmpty.code,
+                message: (h58.actionableErrorHint && h58.actionableErrorHint(stopEmpty.code).hint) || 'Turno vacío.',
+                iteration,
+              });
+              return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'empty_assistant_max' };
+            }
+          } catch (_) { /* hint */ }
+        }
         stallCount += 1;
         recordModelTelemetry({
           model,
@@ -500,6 +559,19 @@ async function runAgentLoop({
   }
 
   bail(cap);
+  if (h58 && typeof h58.cutLoopIfSameAssistantContentHashTwice === 'function' && finalText) {
+    try {
+      const { createHash } = require('crypto');
+      assistantHashes.push(createHash('sha256').update(String(finalText), 'utf8').digest('hex'));
+      h58.cutLoopIfSameAssistantContentHashTwice(assistantHashes);
+    } catch (_) { /* loop hint */ }
+  }
+  if (h58 && typeof h58.refuseFinishIfPlanHasOpenTodos === 'function') {
+    try { h58.refuseFinishIfPlanHasOpenTodos({ todos: [] }); } catch (_) { /* settle hint */ }
+  }
+  if (h58 && typeof h58.recordTurnLatencySampleP50 === 'function') {
+    try { h58.recordTurnLatencySampleP50(Date.now() - loopStartedAt); } catch (_) { /* sample */ }
+  }
   onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
 }

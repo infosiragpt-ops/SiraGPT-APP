@@ -11,6 +11,48 @@ metrics.registerCounter('siragpt_stream_failures_total', {
 
 const RULES = [
   {
+    code: 'http_409',
+    retryable: false,
+    matches: (error) => Number(error?.status) === 409 || String(error?.code || '') === 'http_409',
+    message: 'Conflicto. No reintento.',
+  },
+  {
+    code: 'net_etimedout',
+    retryable: true,
+    matches: (error) => String(error?.code || '').toUpperCase() === 'ETIMEDOUT' || String(error?.code || '') === 'net_etimedout',
+    message: 'La conexión agotó el tiempo de espera. Reintento.',
+  },
+  {
+    code: 'assistant_hash_repeat',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'assistant_hash_repeat',
+    message: 'El asistente repitió el mismo contenido. Corté el bucle.',
+  },
+  {
+    code: 'plan_todos_open',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'plan_todos_open',
+    message: 'Hay todos abiertos en el plan. No cierro el turno.',
+  },
+  {
+    code: 'pgvector_norm',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'pgvector_norm',
+    message: 'La norma del embedding no es válida.',
+  },
+  {
+    code: 'queue_dup_request',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'queue_dup_request',
+    message: 'Ese requestId ya está en cola.',
+  },
+  {
+    code: 'sandbox_host_path',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'sandbox_host_path',
+    message: 'El sandbox no puede usar rutas del host.',
+  },
+  {
     code: 'aborted',
     retryable: true,
     matches: (error, text) => error?.name === 'AbortError' || /\babort(?:ed)?\b/i.test(text),

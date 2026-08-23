@@ -37,6 +37,10 @@
 
 const { startSSEHeartbeat } = require('./sse-heartbeat');
 
+function load3h58() {
+  try { return require('../services/agent-runner/engine-3h58'); } catch (_) { return null; }
+}
+
 const SSE_HEADERS = Object.freeze({
   'Content-Type': 'text/event-stream; charset=utf-8',
   'Cache-Control': 'no-cache, no-transform',
@@ -90,6 +94,20 @@ function createSSEWriter(res, options = {}) {
   // the response headers immediately so EventSource fires `open`. Without
   // it the browser waits for the first real `data:` frame, which can be
   // 5+ s on a slow provider.
+  const h58sse = load3h58();
+  if (h58sse && typeof h58sse.resumeReplaySkipIdsOutsideRingWindow === 'function' && options.replay) {
+    try { h58sse.resumeReplaySkipIdsOutsideRingWindow(options.replay, { lastEventId: options.lastEventId }); } catch (_) { /* resume hint */ }
+  }
+  if (h58sse && typeof h58sse.rejectResumeIfWriterGenerationMismatch === 'function' && options.resumeGeneration != null) {
+    try { h58sse.rejectResumeIfWriterGenerationMismatch({ writerGeneration: options.writerGeneration, resumeGeneration: options.resumeGeneration }); } catch (_) { /* writer */ }
+  }
+  if (h58sse && typeof h58sse.dropHeartbeatIfSeqUnchanged === 'function') {
+    try { h58sse.dropHeartbeatIfSeqUnchanged({ lastSeq: options.lastSeq, seq: options.seq }); } catch (_) { /* hb */ }
+  }
+  if (h58sse && typeof h58sse.heartbeatStampServerNowMs === 'function') {
+    try { h58sse.heartbeatStampServerNowMs({ now: Date.now() }); } catch (_) { /* stamp */ }
+  }
+
   try { res.write(': connected\n\n'); } catch { closed = true; }
 
   const cancelHeartbeat = startSSEHeartbeat(res, {
@@ -139,6 +157,9 @@ function createSSEWriter(res, options = {}) {
     },
     done() {
       cancelHeartbeat();
+      if (h58sse && typeof h58sse.heartbeatStampServerNowMs === 'function') {
+        try { h58sse.heartbeatStampServerNowMs({ now: Date.now() }); } catch (_) { /* close */ }
+      }
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
         try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
@@ -146,6 +167,9 @@ function createSSEWriter(res, options = {}) {
     },
     close() {
       cancelHeartbeat();
+      if (h58sse && typeof h58sse.dropHeartbeatIfSeqUnchanged === 'function') {
+        try { h58sse.dropHeartbeatIfSeqUnchanged({ lastSeq: options.lastSeq, seq: options.seq }); } catch (_) { /* close */ }
+      }
       try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
     },
   };

@@ -95,6 +95,22 @@ function createSessionQueue() {
       return Promise.reject(err);
     }
     try {
+      const ad58 = loadAdapter();
+      if (ad58 && typeof ad58.rejectEnqueueIfDuplicateRequestId === 'function' && opts && opts.requestId) {
+        const dup = ad58.rejectEnqueueIfDuplicateRequestId({ requestId: opts.requestId });
+        if (dup && dup.ok === false) {
+          const err = new Error('queue_dup_request');
+          err.code = 'queue_dup_request';
+          return Promise.reject(err);
+        }
+      }
+      if (ad58 && typeof ad58.demoteQueueIfWaitedOverHardCap === 'function') {
+        ad58.demoteQueueIfWaitedOverHardCap({ waitedMs: Number((opts && (opts.waitedMs || opts.queuedMs)) || 0) });
+      }
+    } catch (dupErr) {
+      if (dupErr && dupErr.code === 'queue_dup_request') return Promise.reject(dupErr);
+    }
+    try {
       const adPend = loadAdapter();
       const userKey = String((opts && (opts.userId || opts.user_id)) || key);
       if (adPend && typeof adPend.maxPendingGeneratePerUser === 'function') {
