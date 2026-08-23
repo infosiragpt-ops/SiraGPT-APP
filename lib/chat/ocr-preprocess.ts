@@ -287,13 +287,17 @@ export async function preprocessImageFile(
 
 type TesseractWorkerLike = {
   recognize: (input: Blob | File) => Promise<{ data: { text?: string; confidence?: number } }>
-  terminate: () => Promise<void>
+  terminate: () => Promise<unknown>
+}
+
+type TesseractModuleLike = {
+  createWorker?: (lang?: string) => Promise<TesseractWorkerLike>
 }
 
 async function createTesseractWorker(): Promise<TesseractWorkerLike | null> {
   try {
     const mod = await import("tesseract.js")
-    const createWorker = (mod as { createWorker?: (lang?: string) => Promise<TesseractWorkerLike> }).createWorker
+    const createWorker = (mod as unknown as TesseractModuleLike).createWorker
     if (!createWorker) return null
     return await createWorker("spa+eng")
   } catch {
