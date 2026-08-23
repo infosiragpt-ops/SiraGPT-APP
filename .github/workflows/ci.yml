@@ -575,7 +575,7 @@ jobs:
   visual-regression-check:
     name: Visual regression · pixel-perfect snapshots
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -593,9 +593,26 @@ jobs:
       - name: Install Playwright Chromium
         run: npx playwright install chromium
 
-      - name: Run visual regression snapshots
+      # Hard gate: pixel comparison against committed baselines in
+      # tests/visual-snapshots (2% tolerance). Fails the CI final gate on
+      # any unexpected visual drift. Diffs upload below for review.
+      - name: Run visual regression comparison (hard gate)
+        id: visual_run
+        env:
+          NEXT_PUBLIC_API_URL: /api
         run: |
-          npx playwright test --grep '@visual-regression' --reporter=list || echo "::warning::Some visual regression snapshots differ; review screenshots manually."
+          npm run test:e2e -- --reporter=list e2e/visual-regression.spec.ts
+
+      - name: Diagnose missing baselines
+        if: failure() && steps.visual_run.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          if git status --porcelain tests/visual-snapshots | grep -q '^??'; then
+            echo "::error::tests/visual-snapshots has no baselines yet."
+            echo "::error::Generate them once from a Linux environment and commit the PNGs to this branch:"
+            echo "::error::  npx playwright test e2e/visual-regression.spec.ts --update-snapshots"
+            echo "::error::(macOS/Windows render fonts differently — commit Linux-rendered baselines only.)"
+          fi
 
       - name: Upload visual diffs on failure
         if: failure()
