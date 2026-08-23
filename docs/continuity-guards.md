@@ -94,6 +94,11 @@ bash scripts/reapply-code-ui-lock.sh --check
 `production-main`. If an engine wave or FE recreate drops an anchor, CI
 goes red **before** deploy.
 
+Intentional `/code` chrome or picker-lock SSOT edits must also run
+`npm run ui-lock:update` and commit `docs/UI_LOCK_HASHES.txt` in the
+same change. That is how prior /code PRs accepted a visual-surface
+diff without undoing the product lock.
+
 ## Related
 
 - `docs/code-ui-lock.md` — desktop chrome contract

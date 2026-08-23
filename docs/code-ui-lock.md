@@ -21,7 +21,11 @@ Source of truth: `lib/code-chrome-lock.ts`.
 
 ## Re-apply / verify
 
+Intentional `/code` chrome, Grok, or picker-lock SSOT edits must re-baseline
+the visual-surface hashes in the same commit:
+
 ```bash
+npm run ui-lock:update
 bash scripts/reapply-code-ui-lock.sh --check
 ```
 
