@@ -30,7 +30,7 @@ function installMatchMedia(matches: boolean) {
   const listeners = new Set<() => void>()
   vi.stubGlobal("matchMedia", vi.fn(() => ({
     matches,
-    media: "(max-width: 639px)",
+    media: "(max-width: 767px)",
     onchange: null,
     addEventListener: (_event: string, listener: () => void) => listeners.add(listener),
     removeEventListener: (_event: string, listener: () => void) => listeners.delete(listener),

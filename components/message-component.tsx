@@ -3192,7 +3192,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 "[&_ul]:!my-1 [&_ol]:!my-1 [&_pre]:!my-1.5",
                             )}>
                                 {isEditing ? (
-                                    <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
+                                    <div className="space-y-2 w-full min-w-0 md:min-w-[500px]">
                                         <Textarea
                                             value={editedContent}
                                             onChange={(e) => setEditedContent(e.target.value)}

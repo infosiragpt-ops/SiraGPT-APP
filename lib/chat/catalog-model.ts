@@ -24,6 +24,16 @@ function isAllowedGenerationModel(name?: string, provider?: string): boolean {
   return isAllowedProvider(provider)
 }
 
+/** Chat model picker: DeepSeek V4 Flash/Pro only — never OpenRouter. */
+export function isAllowedCatalogGenerationModel(name?: string, provider?: string): boolean {
+  return isAllowedGenerationModel(name, provider)
+}
+
+export function listDeepSeekCatalogModels<T extends CatalogModelLike>(models: T[] = []): T[] {
+  if (!Array.isArray(models) || models.length === 0) return []
+  return models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
+}
+
 function normalizeGenerationModel(name?: string): string {
   return bareModelName(name) === PRO ? PRO : FLASH
 }

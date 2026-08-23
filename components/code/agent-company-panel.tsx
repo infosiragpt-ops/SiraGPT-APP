@@ -3554,7 +3554,8 @@ function CompanyHome({
 
         <nav
           aria-label="Herramientas de la empresa"
-          className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
+          data-company-desktop-tools="1"
+          className={cn("space-y-0.5 max-md:hidden", hideFooter ? "mt-2" : "mt-3")}
         >
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "dashboard"} icon={LayoutDashboard} label="Panel" onClick={onOpenDashboard} />
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "control"} icon={ListTree} label="Controlar" count={snapshot.taskCount} onClick={onOpenControl} />

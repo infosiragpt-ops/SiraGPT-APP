@@ -481,6 +481,7 @@ export function CodeWorkspace() {
 
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
+      {isMobile === false ? (
       <WorkspaceTopBar
         openPanels={openPanels}
         onTogglePanel={handleTogglePanel}
@@ -522,6 +523,7 @@ export function CodeWorkspace() {
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
       />
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
         {(() => {
@@ -613,7 +615,7 @@ export function CodeWorkspace() {
                     {mainArea}
                   </div>
                 </div>
-                <div className="flex shrink-0 border-t border-border/60 bg-background">
+                <div className="flex shrink-0 border-t border-border/60 bg-background pb-[env(safe-area-inset-bottom,0px)]">
                   {([
                     { id: "chat", label: "Empresa" },
                     { id: "preview", label: "Preview" },

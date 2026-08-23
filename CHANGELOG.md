@@ -20,6 +20,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- Phone + desktop web shells for `/chat` and `/code`: compact viewports overlay
+  preview panes instead of the 420+460 split, DeepSeek-only model pickers, and
+  `/code` hides the desktop top bar / company tool rows on phones. See
+  `docs/responsive-phone-web.md`.
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
   dark themes, including hover and focus states.
 
