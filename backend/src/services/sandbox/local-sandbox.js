@@ -25,6 +25,10 @@ const os = require('os');
 const path = require('path');
 const { performance } = require('perf_hooks');
 
+function load3h57() {
+  try { return require('../agent-runner/engine-3h57'); } catch (_) { return null; }
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const HARD_MAX_TIMEOUT_MS = 5 * 60_000;
 const MIN_TIMEOUT_MS = 100;
@@ -228,6 +232,22 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
 
   const startedAt = performance.now();
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
+  const h57sb = load3h57();
+  if (h57sb && typeof h57sb.requireSandboxCwdUnderWorkspace === 'function' && (args.cwd || args.workdir)) {
+    try {
+      const jail = h57sb.requireSandboxCwdUnderWorkspace(
+        args.cwd || args.workdir,
+        args.workspace || args.cwd || args.workdir,
+      );
+      if (jail && jail.ok === false) {
+        sem.release();
+        return { ok: false, code: jail.code || 'sandbox_cwd', message: 'sandbox cwd outside workspace' };
+      }
+    } catch (_) { /* fail-open */ }
+  }
+  if (h57sb && typeof h57sb.refuseSandboxOpenFilesOverCap === 'function') {
+    try { h57sb.refuseSandboxOpenFilesOverCap({ openFiles: args.openFiles || 0 }); } catch (_) { /* hint */ }
+  }
   let child;
   try {
     child = spawnImpl(bin, argv, {
@@ -316,6 +336,9 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       let durationMs = elapsedMs();
       const stdout = stdoutBuf.toString('utf8');
       const stderr = stderrBuf.toString('utf8');
+      if (h57sb && typeof h57sb.capSandboxStderrBytesPerCommand === 'function') {
+        try { h57sb.capSandboxStderrBytesPerCommand({ bytes: stderrBuf.length }); } catch (_) { /* cap hint */ }
+      }
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);

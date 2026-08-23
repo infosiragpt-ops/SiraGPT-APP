@@ -168,6 +168,22 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        try {
+          const h57q = (function load3h57() {
+            try { return require('../agent-runner/engine-3h57'); } catch (_) { return null; }
+          }());
+          if (h57q && typeof h57q.rejectEnqueueIfQueueDepthOverCap === 'function') {
+            const over = h57q.rejectEnqueueIfQueueDepthOverCap({ depth: queued, max: MAX_PENDING });
+            if (over && over.ok === false) {
+              const err = new Error('queue_depth');
+              err.code = 'queue_depth';
+              return Promise.reject(err);
+            }
+          }
+          if (h57q && typeof h57q.promoteQueueIfDeadlineWithinMs === 'function') {
+            h57q.promoteQueueIfDeadlineWithinMs({ remainingMs: opts && opts.remainingMs, windowMs: 1500 });
+          }
+        } catch (_) { /* fail-open: existing queue path still runs */ }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

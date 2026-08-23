@@ -15,6 +15,10 @@ const {
   callModelWithRetry,
 } = require('./native-llm');
 
+function load3h57() {
+  try { return require('./engine-3h57'); } catch (_) { return null; }
+}
+
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
 function recordModelTelemetry(event) {
@@ -208,6 +212,8 @@ async function runAgentLoop({
   let stallCount = 0;
   let lastProgressAt = Date.now();
   let fenceToken = null;
+  let cancelPartialDropped = false;
+  const h57 = load3h57();
   if (kv && threadId) {
     try {
       const safety = await stealStaleFence(kv, threadId);
@@ -247,6 +253,12 @@ async function runAgentLoop({
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      if (h57 && typeof h57.dropPartialSseFrameOnCancel === 'function' && !cancelPartialDropped) {
+        try {
+          const drop = h57.dropPartialSseFrameOnCancel({ cancelled: true, partial: true, dropped: cancelPartialDropped });
+          if (drop && drop.drop) cancelPartialDropped = true;
+        } catch (_) { /* audit only */ }
+      }
     }
     throwIfAborted(signal);
   };
@@ -305,6 +317,12 @@ async function runAgentLoop({
         tokensOut: response?.usage?.completion_tokens,
       });
       lastProgressAt = Date.now();
+      if (h57 && typeof h57.latencyHintWhenTtfbOverBudget === 'function') {
+        try { h57.latencyHintWhenTtfbOverBudget({ ttfbMs: modelTtfbMs }); } catch (_) { /* hint only */ }
+      }
+      if (h57 && typeof h57.recordStepLatencySampleP95 === 'function') {
+        try { h57.recordStepLatencySampleP95(Date.now() - modelTurnStart); } catch (_) { /* sample only */ }
+      }
       bail(iteration);
     } catch (err) {
       recordModelTelemetry({
@@ -342,6 +360,49 @@ async function runAgentLoop({
         toolCalls = asNativeCalls(parsed, iteration);
         viaReact = true;
       }
+    }
+
+    if (toolCalls.length && h57) {
+      try {
+        if (typeof h57.cutLoopIfSameObservationHashThrice === 'function') {
+          const hashes = steps.map((s) => s && (s.observationHash || s.resultHash || s.hash)).filter(Boolean);
+          const cut = h57.cutLoopIfSameObservationHashThrice(hashes);
+          if (cut && cut.cut) {
+            stoppedReason = 'obs_hash_repeat';
+            onEvent({
+              type: 'error',
+              code: cut.code,
+              message: (h57.actionableErrorHint && h57.actionableErrorHint(cut.code).hint) || 'Observación repetida.',
+              retryable: false,
+              iteration,
+            });
+            return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'obs_hash_repeat' };
+          }
+        }
+        if (typeof h57.repairJsonDoubleEncodedOnce === 'function') {
+          for (const call of toolCalls) {
+            const raw = call?.function?.arguments;
+            if (typeof raw === 'string') {
+              const fix = h57.repairJsonDoubleEncodedOnce(raw);
+              if (fix && fix.ok && fix.repaired && call.function) {
+                call.function.arguments = typeof fix.value === 'string' ? fix.value : JSON.stringify(fix.value);
+              }
+            }
+          }
+        }
+        if (typeof h57.refuseAssistantToolCallWithoutName === 'function') {
+          h57.refuseAssistantToolCallWithoutName(toolCalls);
+        }
+        if (typeof h57.stripControlCharsFromToolName === 'function') {
+          for (const call of toolCalls) {
+            const n = call?.function?.name;
+            if (typeof n === 'string' && call.function) {
+              const cleaned = h57.stripControlCharsFromToolName(n);
+              if (cleaned && cleaned.ok && cleaned.stripped) call.function.name = cleaned.name;
+            }
+          }
+        }
+      } catch (_) { /* fail-open: existing tool path still runs */ }
     }
 
     if (!toolCalls.length) {
@@ -404,6 +465,12 @@ async function runAgentLoop({
           verified: false,
         });
       } else {
+        if (h57 && typeof h57.refuseFinishIfToolResultsPending === 'function') {
+          try { h57.refuseFinishIfToolResultsPending({ messages }); } catch (_) { /* settle hint */ }
+        }
+        if (h57 && typeof h57.stopIfEmptyFinalAfterMaxRepairAttempts === 'function') {
+          try { h57.stopIfEmptyFinalAfterMaxRepairAttempts({ text: finalText, repairAttempts: verificationAttempts }); } catch (_) { /* hint */ }
+        }
         stoppedReason = 'final';
         onEvent({ type: 'final', text: finalText, iterations: iteration, label: 'Listo', verified: true });
       }

@@ -43,6 +43,9 @@
  * scrub, drop buffered tokens on cancel, SSE id monotonic, coalesced
  * in-flight call ids, settle credits if client gone, json/abort taxonomy,
  * skip duplicate web_fetch same URL per turn.
+ * 3H57 extends (does not smash) 3H46: fail-open helpers in engine-3h57.js
+ * (pending tool-result settle, observation-hash cut, 503 Retry-After, fence
+ * fanout, exact hunk counts, sandbox cwd jail, SSE acked resume, 403/ECONNREFUSED).
  * 3H40 extends (does not smash) 3H39: hard cap 32 tools/step, abort nested
  * subagents on parent halt, unquoted-key JSON repair, drop NUL args,
  * integer coerce, empty-model circuit, budget hint every 5 steps,
@@ -85,6 +88,11 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+
+function load3h57() {
+  try { return require('./engine-3h57'); } catch (_) { return {}; }
+}
+const h57 = load3h57();
 
 const COMMENT_HEARTBEAT_MS = 15_000;
 const CLAIM_TTL_MS = 45_000;
@@ -4785,7 +4793,47 @@ function adapterSnapshot() {
     refuseSubagentIfSameToolAsParent: true,
     sortMemoryHitsByScoreDesc: true,
     rejectToolCallIfArgsIsArray: true,
-    wave: '3H46',
+    refuseFinishIfToolResultsPending: true,
+    cutLoopIfSameObservationHashThrice: true,
+    stopIfEmptyFinalAfterMaxRepairAttempts: true,
+    refuseAssistantToolCallWithoutName: true,
+    repairJsonDoubleEncodedOnce: true,
+    coerceIsoDateStringOrRefuse: true,
+    backoffOn503RetryAfterHeader: true,
+    refuseToolIfArgTypeMismatchAfterCoerce: true,
+    stripControlCharsFromToolName: true,
+    inheritSubagentMaxOutputTokens: true,
+    cutSubagentIfTokenBudgetZero: true,
+    refuseSubagentIfParentFenceLost: true,
+    capNestedSubagentFanout: true,
+    compactKeepLastSystemAndPinnedFacts: true,
+    rejectPgvectorDimZeroOrNegative: true,
+    pinFactsWhenScoreAboveThreshold: true,
+    dropDuplicateMemoryHitsById: true,
+    refuseRollbackIfChecksumMismatch: true,
+    checkpointKeepTombstonedSeqs: true,
+    refuseRollbackIfTargetNewerThanHead: true,
+    refuseDiffMissingIndexLine: true,
+    verifyReadAfterWriteByteHash: true,
+    refusePatchIfNewFileHasMinusLines: true,
+    requireExactHunkHeaderCounts: true,
+    capSandboxStderrBytesPerCommand: true,
+    refuseSandboxOpenFilesOverCap: true,
+    requireSandboxCwdUnderWorkspace: true,
+    resumeReplaySkipAckedIds: true,
+    rejectResumeIfSessionIdMismatch: true,
+    dropPartialSseFrameOnCancel: true,
+    heartbeatSkipIfClientGone: true,
+    rejectEnqueueIfQueueDepthOverCap: true,
+    promoteQueueIfDeadlineWithinMs: true,
+    neverChargeIfPromptOnlyAndCancelled: true,
+    settleCreditsOncePerRequestId: true,
+    refundIfCompletionTokensNegative: true,
+    classifyEconnrefusedAsUnavailable: true,
+    neverRetry403Forbidden: true,
+    latencyHintWhenTtfbOverBudget: true,
+    recordStepLatencySampleP95: true,
+    wave: '3H57',
     interpreter: 'local',
     openrouterGenerate: false,
     sandboxUsesRunsc: false,
@@ -6831,6 +6879,12 @@ function observeOnlyNoCharge({ tools, names, observeOnly } = {}) {
 
 
 // ---------------------------------------------------------------------------
+// 3H57 remaining holes vs Claude Code/Cowork after 3H56
+//  Helpers live in engine-3h57.js (fail-open re-exported here). Additive —
+//  does not smash 3H46 flags or production durability stacks in loop/sse-writer.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // 3H46 remaining holes vs Claude Code/Cowork after 3H45
 // ---------------------------------------------------------------------------
 
@@ -7597,6 +7651,46 @@ module.exports = {
   refuseSubagentIfSameToolAsParent,
   sortMemoryHitsByScoreDesc,
   rejectToolCallIfArgsIsArray,
+  refuseFinishIfToolResultsPending: h57.refuseFinishIfToolResultsPending,
+  cutLoopIfSameObservationHashThrice: h57.cutLoopIfSameObservationHashThrice,
+  stopIfEmptyFinalAfterMaxRepairAttempts: h57.stopIfEmptyFinalAfterMaxRepairAttempts,
+  refuseAssistantToolCallWithoutName: h57.refuseAssistantToolCallWithoutName,
+  repairJsonDoubleEncodedOnce: h57.repairJsonDoubleEncodedOnce,
+  coerceIsoDateStringOrRefuse: h57.coerceIsoDateStringOrRefuse,
+  backoffOn503RetryAfterHeader: h57.backoffOn503RetryAfterHeader,
+  refuseToolIfArgTypeMismatchAfterCoerce: h57.refuseToolIfArgTypeMismatchAfterCoerce,
+  stripControlCharsFromToolName: h57.stripControlCharsFromToolName,
+  inheritSubagentMaxOutputTokens: h57.inheritSubagentMaxOutputTokens,
+  cutSubagentIfTokenBudgetZero: h57.cutSubagentIfTokenBudgetZero,
+  refuseSubagentIfParentFenceLost: h57.refuseSubagentIfParentFenceLost,
+  capNestedSubagentFanout: h57.capNestedSubagentFanout,
+  compactKeepLastSystemAndPinnedFacts: h57.compactKeepLastSystemAndPinnedFacts,
+  rejectPgvectorDimZeroOrNegative: h57.rejectPgvectorDimZeroOrNegative,
+  pinFactsWhenScoreAboveThreshold: h57.pinFactsWhenScoreAboveThreshold,
+  dropDuplicateMemoryHitsById: h57.dropDuplicateMemoryHitsById,
+  refuseRollbackIfChecksumMismatch: h57.refuseRollbackIfChecksumMismatch,
+  checkpointKeepTombstonedSeqs: h57.checkpointKeepTombstonedSeqs,
+  refuseRollbackIfTargetNewerThanHead: h57.refuseRollbackIfTargetNewerThanHead,
+  refuseDiffMissingIndexLine: h57.refuseDiffMissingIndexLine,
+  verifyReadAfterWriteByteHash: h57.verifyReadAfterWriteByteHash,
+  refusePatchIfNewFileHasMinusLines: h57.refusePatchIfNewFileHasMinusLines,
+  requireExactHunkHeaderCounts: h57.requireExactHunkHeaderCounts,
+  capSandboxStderrBytesPerCommand: h57.capSandboxStderrBytesPerCommand,
+  refuseSandboxOpenFilesOverCap: h57.refuseSandboxOpenFilesOverCap,
+  requireSandboxCwdUnderWorkspace: h57.requireSandboxCwdUnderWorkspace,
+  resumeReplaySkipAckedIds: h57.resumeReplaySkipAckedIds,
+  rejectResumeIfSessionIdMismatch: h57.rejectResumeIfSessionIdMismatch,
+  dropPartialSseFrameOnCancel: h57.dropPartialSseFrameOnCancel,
+  heartbeatSkipIfClientGone: h57.heartbeatSkipIfClientGone,
+  rejectEnqueueIfQueueDepthOverCap: h57.rejectEnqueueIfQueueDepthOverCap,
+  promoteQueueIfDeadlineWithinMs: h57.promoteQueueIfDeadlineWithinMs,
+  neverChargeIfPromptOnlyAndCancelled: h57.neverChargeIfPromptOnlyAndCancelled,
+  settleCreditsOncePerRequestId: h57.settleCreditsOncePerRequestId,
+  refundIfCompletionTokensNegative: h57.refundIfCompletionTokensNegative,
+  classifyEconnrefusedAsUnavailable: h57.classifyEconnrefusedAsUnavailable,
+  neverRetry403Forbidden: h57.neverRetry403Forbidden,
+  latencyHintWhenTtfbOverBudget: h57.latencyHintWhenTtfbOverBudget,
+  recordStepLatencySampleP95: h57.recordStepLatencySampleP95,
   TOOL_NAME_ALLOWLIST,
   MODEL_TIMEOUT_MS,
   MODEL_TTFB_MS,

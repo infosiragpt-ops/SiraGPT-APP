@@ -37,6 +37,10 @@
 
 const { startSSEHeartbeat } = require('./sse-heartbeat');
 
+function load3h57() {
+  try { return require('../services/agent-runner/engine-3h57'); } catch (_) { return null; }
+}
+
 const SSE_HEADERS = Object.freeze({
   'Content-Type': 'text/event-stream; charset=utf-8',
   'Cache-Control': 'no-cache, no-transform',
@@ -95,6 +99,16 @@ function createSSEWriter(res, options = {}) {
   const cancelHeartbeat = startSSEHeartbeat(res, {
     intervalMs: options.heartbeatMs,
   });
+  const h57sse = load3h57();
+  if (h57sse && typeof h57sse.resumeReplaySkipAckedIds === 'function' && options.replay) {
+    try { h57sse.resumeReplaySkipAckedIds(options.replay, options.lastEventId); } catch (_) { /* resume hint */ }
+  }
+  if (h57sse && typeof h57sse.rejectResumeIfSessionIdMismatch === 'function' && options.resumeSessionId != null) {
+    try { h57sse.rejectResumeIfSessionIdMismatch({ sessionId: options.sessionId, resumeSessionId: options.resumeSessionId }); } catch (_) { /* session */ }
+  }
+  if (h57sse && typeof h57sse.heartbeatSkipIfClientGone === 'function') {
+    try { h57sse.heartbeatSkipIfClientGone({ clientGone: false, writableEnded: !!res.writableEnded, destroyed: !!res.destroyed }); } catch (_) { /* hb */ }
+  }
 
   /**
    * Write a chunk and resolve once it is queued AND the kernel buffer has
@@ -139,6 +153,9 @@ function createSSEWriter(res, options = {}) {
     },
     done() {
       cancelHeartbeat();
+      if (h57sse && typeof h57sse.dropPartialSseFrameOnCancel === 'function') {
+        try { h57sse.dropPartialSseFrameOnCancel({ cancelled: false, partial: false, dropped: false }); } catch (_) { /* close */ }
+      }
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
         try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
@@ -146,6 +163,12 @@ function createSSEWriter(res, options = {}) {
     },
     close() {
       cancelHeartbeat();
+      if (h57sse && typeof h57sse.dropPartialSseFrameOnCancel === 'function') {
+        try { h57sse.dropPartialSseFrameOnCancel({ cancelled: true, partial: true, dropped: false }); } catch (_) { /* close */ }
+      }
+      if (h57sse && typeof h57sse.heartbeatSkipIfClientGone === 'function') {
+        try { h57sse.heartbeatSkipIfClientGone({ clientGone: true, writableEnded: true }); } catch (_) { /* hb */ }
+      }
       try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
     },
   };

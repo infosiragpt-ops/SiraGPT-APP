@@ -11,6 +11,42 @@ metrics.registerCounter('siragpt_stream_failures_total', {
 
 const RULES = [
   {
+    code: 'http_403',
+    retryable: false,
+    matches: (error) => Number(error?.status) === 403 || String(error?.code || '') === 'http_403',
+    message: 'Permiso denegado. No reintento.',
+  },
+  {
+    code: 'net_econnrefused',
+    retryable: true,
+    matches: (error) => String(error?.code || '').toUpperCase() === 'ECONNREFUSED' || String(error?.code || '') === 'net_econnrefused',
+    message: 'El destino rechazó la conexión. Reintento.',
+  },
+  {
+    code: 'obs_hash_repeat',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'obs_hash_repeat',
+    message: 'La misma observación se repitió tres veces. Detuve el bucle.',
+  },
+  {
+    code: 'tool_results_pending',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'tool_results_pending',
+    message: 'Hay resultados de herramientas pendientes. No cierro el turno.',
+  },
+  {
+    code: 'pgvector_dim',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'pgvector_dim',
+    message: 'El embedding tiene una dimensión inválida.',
+  },
+  {
+    code: 'queue_depth',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'queue_depth',
+    message: 'La cola de la sesión está llena. Inténtalo en unos segundos.',
+  },
+  {
     code: 'aborted',
     retryable: true,
     matches: (error, text) => error?.name === 'AbortError' || /\babort(?:ed)?\b/i.test(text),

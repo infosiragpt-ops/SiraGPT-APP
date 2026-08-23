@@ -374,6 +374,46 @@ const CODES = Object.freeze({
   SUBAGENT_SAME_TOOL: 'subagent_same_tool',
   MEMORY_SORT: 'memory_sort',
   TOOL_ARGS_ARRAY: 'tool_args_array',
+  TOOL_RESULTS_PENDING: 'tool_results_pending',
+  OBS_HASH_REPEAT: 'obs_hash_repeat',
+  EMPTY_FINAL_REPAIRS: 'empty_final_repairs',
+  TOOL_NAME_MISSING: 'tool_name_missing',
+  JSON_DOUBLE_ENCODED: 'json_double_encoded',
+  TOOL_ISO_DATE: 'tool_iso_date',
+  HTTP_503_RETRY_AFTER: 'http_503_retry_after',
+  TOOL_TYPE_MISMATCH: 'tool_type_mismatch',
+  TOOL_NAME_CTRL: 'tool_name_ctrl',
+  SUBAGENT_OUT_TOKENS: 'subagent_out_tokens',
+  SUBAGENT_TOKENS_ZERO: 'subagent_tokens_zero',
+  SUBAGENT_FENCE_LOST: 'subagent_fence_lost',
+  SUBAGENT_FANOUT: 'subagent_fanout',
+  COMPACT_SYS_PIN: 'compact_sys_pin',
+  PGVECTOR_DIM: 'pgvector_dim',
+  MEMORY_PIN_SCORE: 'memory_pin_score',
+  MEMORY_ID_DUP: 'memory_id_dup',
+  CKPT_CHECKSUM: 'ckpt_checksum',
+  CKPT_TOMBSTONE_KEEP: 'ckpt_tombstone_keep',
+  CKPT_FUTURE: 'ckpt_future',
+  DIFF_INDEX: 'diff_index',
+  RAW_BYTE_HASH: 'raw_byte_hash',
+  DIFF_NEW_MINUS: 'diff_new_minus',
+  DIFF_HUNK_COUNT: 'diff_hunk_count',
+  SANDBOX_STDERR_CAP: 'sandbox_stderr_cap',
+  SANDBOX_NFILES: 'sandbox_nfiles',
+  SANDBOX_CWD: 'sandbox_cwd',
+  SSE_SKIP_ACKED: 'sse_skip_acked',
+  SSE_SESSION_MISMATCH: 'sse_session_mismatch',
+  SSE_DROP_PARTIAL: 'sse_drop_partial',
+  SSE_HB_GONE: 'sse_hb_gone',
+  QUEUE_DEPTH: 'queue_depth',
+  QUEUE_DEADLINE: 'queue_deadline',
+  CREDIT_PROMPT_CANCEL: 'credit_prompt_cancel',
+  CREDIT_SETTLE_REQ: 'credit_settle_req',
+  CREDIT_NEG_COMPLETION: 'credit_neg_completion',
+  NET_ECONNREFUSED: 'net_econnrefused',
+  HTTP_403: 'http_403',
+  TTFB_SLOW: 'ttfb_slow',
+  STEP_P95: 'step_p95',
 });
 
 function isRetryable(code) {
@@ -431,7 +471,9 @@ function isRetryable(code) {
     || c === 'client_gone'
     || c === 'queue_generate_cap'
     || c === 'net_timeout'
-    || c === 'pg_disconnect';
+    || c === 'pg_disconnect'
+    || c === 'http_503_retry_after'
+    || c === 'net_econnrefused';
 }
 
 function publicError(code, extra) {
@@ -453,6 +495,8 @@ function httpStatusFor(code) {
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
+  if (c === 'http_403' || c === CODES.HTTP_403) return 403;
+  if (c === 'queue_depth' || c === CODES.QUEUE_DEPTH) return 429;
   return 400;
 }
 

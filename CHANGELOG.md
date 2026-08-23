@@ -8,6 +8,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- **3H57 agent-loop robustness (engine-only):** 40 helpers after 3H56 for
+  pending tool-result settle, observation-hash loop cut, double-encoded JSON
+  repair, 503 Retry-After, subagent fence/fanout, pgvector dim + score pins,
+  checksum/future-seq checkpoint refuse, exact hunk counts, sandbox cwd/stderr
+  jail, SSE acked-id resume + cancel-drop, session queue depth/deadline,
+  prompt-only cancel credits, ECONNREFUSED/403 taxonomy, and TTFB p95 hints.
+  Fail-open re-export from `engine-adapter.js`. No UI. DeepSeek only.
+  See `docs/mejoras/3H57.md`.
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

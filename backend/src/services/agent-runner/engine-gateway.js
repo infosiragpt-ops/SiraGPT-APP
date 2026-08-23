@@ -818,6 +818,27 @@ async function governThen(input, run) {
         if (typeof ad.neverRetry410Gone === 'function' && input && (input.status === 410 || input.code === '410')) {
           ad.neverRetry410Gone(input);
         }
+        try {
+          const h57 = (function load3h57() {
+            try { return require('./engine-3h57'); } catch (_) { return null; }
+          }());
+          if (h57 && typeof h57.neverRetry403Forbidden === 'function' && (input.status === 403 || input.code === '403')) {
+            h57.neverRetry403Forbidden(input);
+          }
+          if (h57 && typeof h57.backoffOn503RetryAfterHeader === 'function' && (input.status === 503 || input.error)) {
+            h57.backoffOn503RetryAfterHeader(input.error || input);
+          }
+          if (h57 && typeof h57.classifyEconnrefusedAsUnavailable === 'function' && input.error) {
+            h57.classifyEconnrefusedAsUnavailable(input.error);
+          }
+          if (h57 && typeof h57.neverChargeIfPromptOnlyAndCancelled === 'function') {
+            h57.neverChargeIfPromptOnlyAndCancelled({
+              cancelled: input.cancelled || input.aborted,
+              promptTokens: input.promptTokens,
+              completionTokens: input.completionTokens,
+            });
+          }
+        } catch (_) { /* fail-open: existing gateway path still runs */ }
         if (typeof ad.ignoreNegativePromptTokens === 'function' && input && input.promptTokens != null) {
           ad.ignoreNegativePromptTokens({ promptTokens: input.promptTokens, completionTokens: input.completionTokens, totalTokens: input.totalTokens });
         }
