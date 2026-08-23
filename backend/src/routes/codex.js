@@ -13,6 +13,7 @@
  *   POST /api/codex/projects/:id/export          → mirror src a disco  (auth)
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
  *   GET  /api/codex/projects/:id/files           → lista de archivos  (auth)
+ *   POST /api/codex/projects/:id/exec            → comando en el workspace del proyecto (auth + acceso agente)
  *   GET  /api/codex/projects/:id/file?path=      → contenido archivo  (auth)
  *   GET  /api/codex/projects/:id/budget          → gasto/corte diario  (auth)
  *
@@ -2069,6 +2070,76 @@ router.get('/projects/:id/file', authenticateToken, async (req, res) => {
     return res.status(502).json({ error: 'runner_unreachable', message: err.message });
   }
 });
+
+// ── Project terminal exec (Shell del panel sobre un proyecto Codex) ─────────
+// One-shot command in the project's workspace via the sandbox sidecar — the
+// same hardened exec the agent's run_command uses (allowlist de binarios,
+// setpriv/prlimit/setsid, sin shell). Antes de esta ruta el panel llamaba
+// GET /files?command=..., que ignoraba `command` y devolvía la lista de
+// archivos: la Shell en modo workspace estaba muerta (audit P0).
+const EXEC_MAX_ARGS = 64;
+const EXEC_MAX_ARG_CHARS = 4_000;
+const EXEC_MAX_TOTAL_CHARS = 32_000;
+const EXEC_DEFAULT_TIMEOUT_MS = 30_000;
+const EXEC_MAX_TIMEOUT_MS = 120_000; // espejo del EXEC_MAX_TIMEOUT_MS del runner
+
+const execValidators = [
+  body('cmd')
+    .isArray({ min: 1, max: EXEC_MAX_ARGS })
+    .withMessage(`cmd must be an array of 1-${EXEC_MAX_ARGS} strings`),
+  body('cmd.*')
+    .isString()
+    .withMessage('each cmd item must be a string')
+    .bail()
+    .isLength({ min: 1, max: EXEC_MAX_ARG_CHARS })
+    .withMessage(`each cmd item must be 1-${EXEC_MAX_ARG_CHARS} chars`),
+  body('cmd').custom((cmd) => {
+    if (!Array.isArray(cmd)) return true;
+    const total = cmd.reduce((sum, a) => sum + String(a || '').length, 0);
+    if (total > EXEC_MAX_TOTAL_CHARS) {
+      throw new Error(`total cmd length must be <= ${EXEC_MAX_TOTAL_CHARS} chars`);
+    }
+    return true;
+  }),
+  body('run').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
+  body('timeoutMs').optional({ nullable: true }).isInt({ min: 1_000, max: EXEC_MAX_TIMEOUT_MS }),
+];
+
+router.post(
+  '/projects/:id/exec',
+  authenticateToken,
+  requireCodexAgentAccess,
+  execValidators,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+
+    try {
+      const project = await loadOwnedProject(req, res);
+      if (!project) return undefined;
+      const cmd = req.body.cmd.map((a) => String(a));
+      const run = typeof req.body.run === 'string' && req.body.run.trim() ? req.body.run.trim() : null;
+      const timeoutMs = Number(req.body.timeoutMs) || undefined;
+      const runner = createSandboxClient();
+      const scoped = run && typeof runner.forRun === 'function' ? runner.forRun(run, project.id) : runner;
+      const out = await scoped.exec(project.id, cmd, { timeoutMs });
+      return res.json({
+        ok: Boolean(out?.ok),
+        exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
+        timedOut: Boolean(out?.timedOut),
+        stdout: String(out?.stdout || ''),
+        stderr: String(out?.stderr || ''),
+      });
+    } catch (err) {
+      const status = Number(err?.status) || 0;
+      // Map the sidecar's error vocabulary onto this route's contract.
+      if (status === 400) return res.status(400).json({ error: err.body?.error || 'invalid_command' });
+      if (status === 404) return res.status(404).json({ error: 'workspace_not_found' });
+      if (status === 409) return res.status(409).json({ error: err.body?.error || 'workspace_unavailable' });
+      return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    }
+  },
+);
 
 // ── Runs (feature 05) ───────────────────────────────────────────────────────
 // Create/list/detail are scoped under the project (POST/GET /projects/:id/runs)
