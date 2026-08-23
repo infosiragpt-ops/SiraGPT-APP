@@ -8,6 +8,8 @@ const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
+const extractFastpath = require('../services/document-extract-fastpath');
+const officeImages = require('../services/office-image-extractor');
 const { isPersistedPreviewSource } = require('../services/document-pipeline/preview-object-ready');
 const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
@@ -98,6 +100,20 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
     // No document to index; treat the upload as terminal-ready so
     // the file row converges to a non-pending state for the UI to
     // poll. (Images / pure thumbnails land here.)
+    fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+    return false;
+  }
+
+  // Preview + chat use extractedText immediately. Embeddings wait for
+  // the first send (operational-rag.ensureIndexed). The composer chip
+  // can leave "Extrayendo texto" without waiting on Voyage/OpenAI.
+  if (extractFastpath.shouldSkipRagUntilSend()) {
+    console.log('[files] RAG skip-until-send', JSON.stringify({
+      event: 'file_rag_skip_until_send',
+      file_id: fileRecord.id,
+      user_id: userId,
+      chars: fileRecord.extractedText ? fileRecord.extractedText.length : 0,
+    }));
     fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
     return false;
   }
@@ -354,6 +370,95 @@ function enqueueAsyncFileProcessing(task) {
   setImmediate(drainAsyncFileProcessingQueue);
 }
 
+function extractProcessOptions() {
+  return {
+    deferOfficeImageOcr: extractFastpath.shouldDeferOfficeImageOcr(),
+  };
+}
+
+function ragIndexLabel(queued) {
+  if (queued) return 'queued';
+  if (extractFastpath.shouldSkipRagUntilSend()) return 'deferred';
+  return 'skipped';
+}
+
+async function warmLibreOfficePreview(file, fileRecord) {
+  const sourcePath = file?.path;
+  if (!sourcePath || !fileRecord?.id) return;
+  if (!documentRenderer.isConvertible(file.mimetype || fileRecord.mimeType, file.originalname || fileRecord.originalName)) {
+    return;
+  }
+  try {
+    const out = await documentRenderer.renderToPdf({
+      id: fileRecord.id,
+      path: sourcePath,
+      mimeType: file.mimetype || fileRecord.mimeType,
+      originalName: file.originalname || fileRecord.originalName,
+    });
+    console.log('[files] preview cache warm', JSON.stringify({
+      event: 'file_preview_cache_warm',
+      file_id: fileRecord.id,
+      fromCache: Boolean(out?.fromCache),
+      engine: out?.engine || null,
+    }));
+  } catch (err) {
+    console.warn('[files] preview cache warm failed:', err?.message || err);
+  }
+}
+
+function schedulePostExtractEnrichment({
+  file,
+  userId,
+  prismaClient,
+  fileRecord,
+  result,
+  thumbnailPath,
+  analyzeTimeoutMs,
+}) {
+  enqueueAsyncFileProcessing(async () => {
+    try {
+      fileRecord = await appendDeferredOfficeImageOcr(file.path, fileRecord, prismaClient);
+      await warmLibreOfficePreview(file, fileRecord);
+      try {
+        await withTimeout(
+          documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
+          analyzeTimeoutMs,
+          `document analysis (${file.originalname})`,
+        );
+      } catch (analysisError) {
+        console.warn('[files] document analysis failed:', analysisError.message || analysisError);
+      }
+      try {
+        const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+        if (storedRef && storedRef !== file.path) {
+          await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+        }
+      } catch (offloadErr) {
+        console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr);
+      }
+    } catch (err) {
+      console.warn('[files] post-extract enrichment failed:', err?.message || err);
+    }
+  });
+}
+
+async function appendDeferredOfficeImageOcr(filePath, fileRecord, prismaClient) {
+  if (!extractFastpath.shouldDeferOfficeImageOcr()) return fileRecord;
+  if (!filePath) return fileRecord;
+  try {
+    const appendix = await officeImages.extractImageAppendix(filePath);
+    if (!appendix) return fileRecord;
+    const next = `${fileRecord.extractedText || ''}\n\n${appendix}`;
+    return prismaClient.file.update({
+      where: { id: fileRecord.id },
+      data: { extractedText: next },
+    });
+  } catch (err) {
+    console.warn('[files] deferred office image OCR failed:', err?.message || err);
+    return fileRecord;
+  }
+}
+
 /**
  * Process files in parallel batches. Each batch goes through:
  * DB record → validate → extract → thumbnail → OpenAI Files → RAG schedule.
@@ -447,8 +552,9 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // critical because the reverse proxy cuts the response at ~30s. Each
         // is individually bounded and degrades to a safe default on failure,
         // so a slow/down upstream never fails the upload.
+        const extractStarted = Date.now();
         const [result, thumbnailPath, openaiFileId] = await Promise.all([
-          withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
+          withTimeout(fileProcessor.processFile(file, extractProcessOptions()), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
             .catch((extractErr) => {
               console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
               return { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -461,38 +567,36 @@ async function processFilesInParallel(files, userId, prismaClient) {
           uploadToOpenAiFiles(file),
         ]);
 
-        // ── Update DB record ──
+        // Persist text immediately so chat/preview can use it. RAG embeddings
+        // are skip-until-send by default — they no longer block the chip.
         fileRecord = await prismaClient.file.update({
           where: { id: fileRecord.id },
           data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
         });
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
+          userId,
+          durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
+        });
 
         const ragQueued = scheduleDefaultRagIndex(userId, fileRecord);
         const ocrMeta = serializeOcrMeta(result);
-        let analysis = null;
-        try {
-          analysis = await withTimeout(
-            documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
-            ANALYZE_TIMEOUT_MS,
-            `document analysis (${file.originalname})`,
-          );
-        } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
-
-        // Offload the binary (+ thumbnail) to R2 AFTER extraction and analysis,
-        // which may re-read the local file. Keeps nothing durable on the VM.
-        try {
-          const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
-          if (storedRef && storedRef !== file.path) {
-            fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
-          }
-        } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
+        schedulePostExtractEnrichment({
+          file,
+          userId,
+          prismaClient,
+          fileRecord,
+          result,
+          thumbnailPath,
+          analyzeTimeoutMs: ANALYZE_TIMEOUT_MS,
+        });
+        const analysis = null;
 
         // The upload itself succeeded (binary stored + record updated), so we
         // always report success. A degraded extraction is surfaced as a soft
         // `extractionWarning`, not a hard `error`, so the attachment stays
         // usable instead of being shown as a failed upload.
         const extractionDegraded = result.success === false;
-        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragQueued ? 'queued' : 'skipped', success: true, error: null, extractionWarning: extractionDegraded ? (result.error || 'extraction_degraded') : null };
+        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: fileRecord.extractedText || result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragIndexLabel(ragQueued), extractMs: result?.timings?.totalMs || null, success: true, error: null, extractionWarning: extractionDegraded ? (result.error || 'extraction_degraded') : null };
       } catch (error) {
         console.error('File processing error:', error);
         if (fileRecord?.id) { await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` }); }
@@ -591,8 +695,9 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // "failed" — it stays uploaded and usable (preview + OpenAI Files API),
     // just without locally-extracted text.
     let result;
+    const extractStarted = Date.now();
     try {
-      result = await withTimeout(fileProcessor.processFile(file), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
+      result = await withTimeout(fileProcessor.processFile(file, extractProcessOptions()), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -610,21 +715,21 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
       where: { id: fileRecord.id },
       data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
     });
+    await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
+      userId,
+      durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
+    });
 
     scheduleDefaultRagIndex(userId, fileRecord);
-    try {
-      // Bound analyzeFile with the same budget the synchronous path uses, so a
-      // hung analysis can't leave the R2 offload + path update below unrun.
-      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ASYNC_ANALYZE_TIMEOUT_MS, `async document analysis (${file.originalname})`);
-    } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
-
-    // Offload binary (+ thumbnail) to R2 after extraction + analysis.
-    try {
-      const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
-      if (storedRef && storedRef !== file.path) {
-        fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
-      }
-    } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
+    schedulePostExtractEnrichment({
+      file,
+      userId,
+      prismaClient,
+      fileRecord,
+      result,
+      thumbnailPath,
+      analyzeTimeoutMs: ASYNC_ANALYZE_TIMEOUT_MS,
+    });
 
     if (thumbnailPath) {
       // Thumbnail is stored on disk for later consumers; no extra DB field exists
