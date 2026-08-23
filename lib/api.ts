@@ -1264,6 +1264,32 @@ class ApiClient {
     return this.request(`/chats${query ? `?${query}` : ''}`);
   }
 
+  // Full-text search across the user's chat history (server-side Postgres
+  // tsvector + GIN, see backend/src/routes/search.js). Returns ranked
+  // message hits with chat context and <mark>-highlighted snippets.
+  async searchChats(q: string, params?: { limit?: number; chatId?: string; signal?: AbortSignal }): Promise<{
+    query: string;
+    lang?: string;
+    total?: number;
+    results?: Array<{
+      messageId: string;
+      chatId: string;
+      chatTitle: string;
+      role: string;
+      snippet: string;
+      timestamp: string;
+      rank: number;
+    }>;
+    fallback?: string;
+  }> {
+    const query = new URLSearchParams({
+      q,
+      ...(params?.limit ? { limit: String(params.limit) } : {}),
+      ...(params?.chatId ? { chatId: params.chatId } : {}),
+    }).toString();
+    return this.request(`/search?${query}`, { signal: params?.signal });
+  }
+
   // getChat / createChat / updateChat all return ChatEnvelope at runtime,
   // but the consumers store the result in the local `Chat` interface
   // (which narrows `id` to `string`). Cycle 42 keeps these as `any` to

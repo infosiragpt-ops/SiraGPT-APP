@@ -652,5 +652,15 @@
     "sendHint": "යවන්න",
     "stopHint": "නවත්වන්න",
     "dropFiles": "උඩුගත කිරීමට ගොනු මෙහි දමන්න"
+  },
+  "chatSearch": {
+    "placeholder": "Search your chats…",
+    "noResults": "No results",
+    "noResultsFor": "We couldn't find chats matching “{query}”",
+    "serverFallback": "Couldn't reach server search; showing local title matches.",
+    "emptyHistory": "You have no chats yet",
+    "emptyHistoryHint": "Start a conversation and it will show up here",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }
