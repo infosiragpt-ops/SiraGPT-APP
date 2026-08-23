@@ -670,6 +670,30 @@ jobs:
             echo "[deploy-workflow] Deploy frontend check passed: ${FRONTEND_URL}"
             wait_version "${TARGET_SHA}" "${SIRAGPT_VERSION}"
             echo "[deploy-workflow] Deploy version check passed: ${VERSION_URL} commit=${TARGET_SHA} version=${SIRAGPT_VERSION}"
+            # ── Post-deploy error canary (flota/release-canario-rollback) ──
+            # Compares the recent 5xx ratio (standard-class SLO counters via
+            # the co-located Prometheus) against the pre-deploy baseline.
+            # A breach exits non-zero INSIDE this script, so the EXIT trap
+            # rolls production back to ${PREV_SHA} with the exact same path
+            # used for build/health failures. Traffic-gated: quiet windows
+            # pass without inventing a breach. Disable per-deploy with
+            # CANARY_ENABLED=0 in the environment if it ever misfires.
+            if [[ "${CANARY_ENABLED:-1}" == "1" ]]; then
+              echo "[deploy-workflow] Running post-deploy error canary (recent=${CANARY_RECENT_MINUTES:-10}m baseline=${CANARY_BASELINE_MINUTES:-60}m max=${CANARY_ERROR_RATIO_MAX:-0.05})"
+              ${COMPOSE} exec -T -e CANARY_PROM_URL="${CANARY_PROM_URL:-http://prometheus:9090}" \
+                -e CANARY_ERROR_RATIO_MAX="${CANARY_ERROR_RATIO_MAX:-0.05}" \
+                -e CANARY_RATIO_MULTIPLIER="${CANARY_RATIO_MULTIPLIER:-3}" \
+                -e CANARY_MIN_ABS_DELTA="${CANARY_MIN_ABS_DELTA:-0.01}" \
+                -e CANARY_MIN_REQUESTS="${CANARY_MIN_REQUESTS:-20}" \
+                -e CANARY_RECENT_MINUTES="${CANARY_RECENT_MINUTES:-10}" \
+                -e CANARY_BASELINE_MINUTES="${CANARY_BASELINE_MINUTES:-60}" \
+                -e CANARY_POLL_INTERVAL_SECONDS="${CANARY_POLL_INTERVAL_SECONDS:-30}" \
+                -e CANARY_TIMEOUT_SECONDS="${CANARY_TIMEOUT_SECONDS:-600}" \
+                backend node scripts/post-deploy-error-canary.js </dev/null
+              echo "[deploy-workflow] Post-deploy error canary passed"
+            else
+              echo "[deploy-workflow] Post-deploy error canary disabled (CANARY_ENABLED=0)"
+            fi
             run_code_runtime_canary
             echo "[deploy-workflow] /code runtime canary passed (build, render, second run)"
             cleanup_old_rollback_images
