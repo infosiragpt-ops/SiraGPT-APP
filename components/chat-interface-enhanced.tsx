@@ -354,7 +354,7 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
-import { brandModelLabel } from "@/lib/chat/brand-label"
+import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
 import {
   enrichImageFilesWithClientOcr,
   isWeakOcrText,
@@ -2642,7 +2642,9 @@ const ActiveToolsDisplay = ({
   ) => {
     const options = mediaModelOptions[tool];
     const selected = options.find((option: any) => option.name === value) || options[0];
-    const label = selected?.displayName || (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
+    const label = selected
+      ? brandModelLabel(selected)
+      : (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
     const disabled = options.length === 0;
 
     return (
@@ -2689,7 +2691,7 @@ const ActiveToolsDisplay = ({
                       <IconProvider name={option.iconName || "Bot"} size={17} className="shrink-0" />
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={option.displayName}>{option.displayName}</span>
+                      <span className="block truncate font-semibold leading-4 text-zinc-900 dark:text-white/92" title={brandModelLabel(option)}>{brandModelLabel(option)}</span>
                       <span className="block truncate text-[10.5px] font-medium leading-3 text-zinc-500 dark:text-white/62" title={[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}>
                         {[option.provider, option.qualityTier, option.mode].filter(Boolean).join(" / ") || "Modelo"}
                       </span>
@@ -3838,7 +3840,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: nextModel.name });
-      toast.success(`Modelo actualizado: ${nextModel.displayName || nextModel.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(nextModel)}`);
     } catch (error) {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -3912,7 +3914,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo del GPT");
     }
@@ -4047,7 +4049,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
     try {
       await apiClient.updateChat(currentChat.id, { model: model.name });
-      toast.success(`Modelo de la empresa actualizado: ${model.displayName || model.name}`);
+      toast.success(`Modelo de la empresa actualizado: ${brandModelLabel(model)}`);
     } catch {
       toast.error("No se pudo actualizar el modelo de la empresa");
     }
@@ -4101,7 +4103,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     return (
       <div className="model-provider-heading">
         <ModelLogo model={sample} compact />
-        <span className="min-w-0 flex-1 truncate">{provider}</span>
+        <span className="min-w-0 flex-1 truncate">{brandProviderLabel(provider)}</span>
         <span className="model-provider-count">{models.length}</span>
       </div>
     );
@@ -4127,7 +4129,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       }}>
         <DropdownMenuTrigger className="chat-model-trigger flex items-center gap-2 px-3 py-2 rounded-md bg-background hover:bg-muted transition">
           <Video className="h-4 w-4" />
-          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData?.displayName || 'Select Video Model'}</span>
+          <span className="chat-model-label text-sm font-medium truncate">{selectedVideoModelData ? brandModelLabel(selectedVideoModelData) : 'Select Video Model'}</span>
           <div className="flex items-center gap-1">
             <div className="w-2 h-2 bg-green-500 rounded-full" title="API Key configured" />
             <ChevronDown className="h-4 w-4 opacity-70" />
@@ -4168,7 +4170,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                   >
                     <Video className="h-5 w-5 flex-shrink-0" />
                     <div className="flex flex-col flex-1">
-                      <span className="text-sm">{model.displayName}</span>
+                      <span className="text-sm">{brandModelLabel(model)}</span>
                     </div>
                   </DropdownMenuItem>
                 ))
@@ -4187,7 +4189,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
 
 
   if ((currentChat?.projectId || currentChat?.project) && !(currentChat?.customGptId || currentChat?.customGpt)) {
-    const activeModelLabel = selectedProjectModel?.displayName || activeProjectModelName || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedProjectModel || activeProjectModelName || "Modelo");
 
     return (
       <>
@@ -4245,7 +4247,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeProjectModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4367,7 +4369,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       baseUrl: process.env.NEXT_PUBLIC_IMAGE_URL || process.env.NEXT_PUBLIC_API_URL,
     });
     const customGptTextIcon = String(customGptIcon || "").trim();
-    const activeModelLabel = selectedGptModel?.displayName || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo";
+    const activeModelLabel = brandModelLabel(selectedGptModel || currentChat?.model || customGpt?.modelName || selectedModel || "Modelo");
     const activeModelName = currentChat?.model || customGpt?.modelName || selectedModel;
     const gptMenuItemClass = "h-11 rounded-xl px-2.5 text-[13px] font-medium";
     const gptMenuIconClass = "mr-2.5 h-4 w-4 shrink-0 text-muted-foreground";
@@ -4441,7 +4443,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
                                 const isActive = model.name === activeModelName;
                                 const isComingSoon = Boolean(model.comingSoon);
                                 const label = getModelDisplayLabel(model);
-                                const attribution = resolveModelAttributionName(model);
+                                const attribution = brandProviderLabel(resolveModelAttributionName(model));
                                 return (
                                   <DropdownMenuItem
                                     key={model.name}
@@ -4770,7 +4772,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
     const label = getModelDisplayLabel(model);
-    const attribution = resolveModelAttributionName(model);
+    const attribution = brandProviderLabel(resolveModelAttributionName(model));
     return (
       <DropdownMenuItem
         aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
@@ -9398,7 +9400,7 @@ But first, you need to connect your Spotify account securely using the button be
       imageModelForSendOverride = String(activeImageModel.name).trim();
       if (imageModelForSendOverride !== selectedImageModelForSend) {
         setSelectedImageModel(imageModelForSendOverride);
-        toast.info(`El modelo seleccionado ya no esta activo. Usare ${activeImageModel.displayName || activeImageModel.name}.`);
+        toast.info(`El modelo seleccionado ya no esta activo. Usare ${brandModelLabel(activeImageModel)}.`);
       }
     }
 
@@ -10741,7 +10743,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           console.warn('No se pudo refrescar el catalogo de modelos de imagen:', refreshError?.message || refreshError);
         }
         const inactiveMessage = fallbackModel?.name
-          ? `El modelo seleccionado ya no esta activo. Cambie a ${fallbackModel.displayName || fallbackModel.name}; vuelve a enviar la imagen.`
+          ? `El modelo seleccionado ya no esta activo. Cambie a ${brandModelLabel(fallbackModel)}; vuelve a enviar la imagen.`
           : 'El modelo seleccionado ya no esta activo. Activa un modelo de imagen en Admin Models antes de generar.';
         if (fallbackModel?.name) {
           setSelectedImageModel(fallbackModel.name);
@@ -12805,7 +12807,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                <CreditsBadge className="hidden sm:inline-flex" />
+                <CreditsBadge />
                 {/* Model selector moved to the composer (next to the mic),
                     Claude-style. See renderComposerModelControls(). */}
               </div>

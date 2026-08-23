@@ -4,6 +4,7 @@ import {
   SIRA_PRO_LABEL,
   SIRA_RAPIDO_LABEL,
   brandModelLabel,
+  brandProviderLabel,
   looksLikeRawVendorModelId,
 } from "../lib/chat/brand-label"
 
@@ -24,5 +25,11 @@ describe("chat brand model labels", () => {
     assert.equal(brandModelLabel("openai/gpt-5"), SIRA_RAPIDO_LABEL)
     assert.equal(looksLikeRawVendorModelId("Deepseek V4 PRO"), true)
     assert.equal(looksLikeRawVendorModelId(SIRA_PRO_LABEL), false)
+  })
+
+  it("maps vendor provider headings to Sira", () => {
+    assert.equal(brandProviderLabel("DeepSeek"), "Sira")
+    assert.equal(brandProviderLabel("OpenAI"), "Sira")
+    assert.equal(brandProviderLabel("Anthropic"), "Anthropic")
   })
 })

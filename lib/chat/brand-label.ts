@@ -73,3 +73,20 @@ export function brandModelLabel(source: BrandLabelSource): string {
   if (looksLikeRawVendorModelId(raw)) return SIRA_RAPIDO_LABEL
   return raw
 }
+
+const VENDOR_PROVIDER_RE = /^(deepseek|openai)$/i
+
+/**
+ * Provider / attribution line for chat chrome. DeepSeek and leftover
+ * OpenAI names collapse to "Sira" so a picker heading never says
+ * "DeepSeek" under a Sira Pro row.
+ */
+export function brandProviderLabel(source: BrandLabelSource): string {
+  const hay = collectModelSearchText(source)
+  if (!hay) return "Sira"
+  if (/deepseek|openai|gpt-?4|gpt-?5/i.test(hay) || VENDOR_PROVIDER_RE.test(hay)) {
+    return "Sira"
+  }
+  if (typeof source === "string") return source.trim()
+  return firstString(source?.provider) || "Sira"
+}
