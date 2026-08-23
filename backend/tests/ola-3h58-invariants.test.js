@@ -124,7 +124,7 @@ test('3H58-J-001 sandbox combined/host-path/uid jail', () => {
 });
 
 test('3H58-K-001 SSE ring window, writer gen, same-seq hb, stamp', () => {
-  const skip = h58.resumeReplaySkipIdsOutsideRingWindow([{ id: 1 }, { id: 90 }, { id: 91 }], { lastEventId: 100, window: 8 });
+  const skip = h58.resumeReplaySkipIdsOutsideRingWindow([{ id: 1 }, { id: 95 }, { id: 99 }], { lastEventId: 100, window: 8 });
   assert.equal(skip.skipped, 1);
   assert.equal(h58.rejectResumeIfWriterGenerationMismatch({ writerGeneration: 2, resumeGeneration: 3 }).ok, false);
   assert.equal(h58.dropHeartbeatIfSeqUnchanged({ lastSeq: 4, seq: 4 }).drop, true);
