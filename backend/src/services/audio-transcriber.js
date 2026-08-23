@@ -20,6 +20,12 @@ const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
 
+// Stable markers of the failure block generated below. Indexers use them to
+// recognize (and skip) placeholder text, so they must stay in sync with
+// generatePlaceholder() — changing the wording here must update both consts.
+const PLACEHOLDER_STATUS_MARKER = 'Status: Transcription not available (';
+const PLACEHOLDER_REFERENCE_MARKER = 'This media file has been uploaded for reference';
+
 const WHISPER_MODEL = process.env.WHISPER_MODEL || 'whisper-1';
 const WHISPER_LANGUAGE = process.env.WHISPER_LANGUAGE || undefined;
 const AUDIO_MAX_FILE_BYTES = Number.parseInt(process.env.AUDIO_MAX_FILE_BYTES || String(25 * 1024 * 1024), 10);
@@ -154,4 +160,18 @@ function generatePlaceholder(fileName, label, mimeType, reason) {
   ].join('\n');
 }
 
-module.exports = { transcribe, AUDIO_MAX_FILE_BYTES, AUDIO_MIME_MAP };
+// True when the text is a generatePlaceholder() failure block rather than
+// real content. Detection is text-based so it also catches placeholders that
+// were persisted before this guard existed — no data migration needed.
+function isPlaceholderText(text) {
+  return typeof text === 'string'
+    && text.includes(PLACEHOLDER_STATUS_MARKER)
+    && text.includes(PLACEHOLDER_REFERENCE_MARKER);
+}
+
+module.exports = {
+  transcribe,
+  isPlaceholderText,
+  AUDIO_MAX_FILE_BYTES,
+  AUDIO_MIME_MAP,
+};

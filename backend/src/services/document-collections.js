@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const rag = require('./rag-service');
+const { isPlaceholderText } = require('./audio-transcriber');
 
 const DEFAULT_MAX_COLLECTION_DOCUMENTS = 500;
 const DEFAULT_MAX_RETRIEVED_CHUNKS = 24;
@@ -126,6 +127,9 @@ function normalizeDocumentIds(documentIds) {
 function makeChunkRecords(file, options = {}) {
   const text = String(file?.extractedText || '').trim();
   if (!text) return [];
+  // Transcription failure blocks are status notes, not content — never
+  // embed them into collection indexes.
+  if (isPlaceholderText(text)) return [];
   const chunkSize = positiveInt(options.chunkSizeChars, DEFAULT_CHUNK_SIZE_CHARS);
   const overlap = positiveInt(options.chunkOverlapChars, DEFAULT_CHUNK_OVERLAP_CHARS);
   const records = [];
