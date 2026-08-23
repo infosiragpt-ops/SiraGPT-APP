@@ -1510,10 +1510,22 @@ router.post('/:chatId/messages/:messageId/share', authenticateToken, async (req,
 
 
 // --- Editar el mensaje de un usuario (versión mejorada) ---
-router.put('/messages/:messageId', authenticateToken, async (req, res) => {
+router.put('/messages/:messageId', [
+  body('files').optional().isArray(),
+  body('metadata')
+    .optional()
+    .custom(isValidMessageMetadata)
+    .withMessage('Metadata must be a plain object or a JSON string containing a plain object'),
+], authenticateToken, async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
     const { messageId } = req.params;
-    const { content } = req.body;
+    const { content, files } = req.body;
+    const metadata = parseMessageMetadata(req.body.metadata);
     if (!content || content.trim() === "") {
       return res.status(400).json({ error: "Content cannot be empty." });
     }
@@ -1544,10 +1556,19 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
         }
       });
 
-      // Paso 3: Actualizar el mensaje original con el nuevo contenido
+      // Paso 3: Actualizar el mensaje original. Solo tocamos files/metadata
+      // cuando el cliente los envía: una edición de solo texto no debe
+      // destruir los adjuntos existentes (regresión #flota-chat-ramificar).
+      const editData = { content: content.trim() };
+      if (files !== undefined) {
+        editData.files = files;
+      }
+      if (Object.keys(metadata).length > 0) {
+        editData.metadata = metadata;
+      }
       const updatedMessage = await tx.message.update({
         where: { id: messageId },
-        data: { content: content.trim() }
+        data: editData
       });
 
       // Paso 4: Actualizar también el timestamp 'updatedAt' del chat
@@ -1564,7 +1585,7 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
 
   } catch (error) {
     console.error('Edit message error:', error);
-    if (error.message.includes("Message not found")) {
+    if (error.message && error.message.includes("Message not found")) {
       return res.status(404).json({ error: error.message });
     }
     res.status(500).json({ error: 'Failed to edit message' });
