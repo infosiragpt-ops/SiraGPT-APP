@@ -38,7 +38,7 @@ function useMobileDrawer(): boolean {
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") return
-    const media = window.matchMedia("(max-width: 639px)")
+    const media = window.matchMedia("(max-width: 767px)")
     const sync = () => setIsMobile(media.matches)
     sync()
     if (typeof media.addEventListener === "function") media.addEventListener("change", sync)
@@ -218,7 +218,7 @@ function ArtifactPanelMounted({
   return (
     // Mobile: full-screen drawer overlay (fixed inset-0, z-40) so the
     // panel doesn't get squeezed into the unusable 30% width that the
-    // resizable split assigns it on small viewports. Desktop (sm+):
+    // resizable split assigns it on small viewports. Desktop (md+ / 768):
     // restore the inline split-pane behavior — the parent's
     // resizable divider continues to control width.
     <>
@@ -240,7 +240,7 @@ function ArtifactPanelMounted({
       tabIndex={-1}
       data-open="true"
       data-presentation={isMobileDrawer ? "mobile-drawer" : "desktop-split"}
-      className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 transition-transform duration-200 ease-out translate-x-full data-[open=true]:translate-x-0 sm:relative sm:inset-auto sm:z-auto sm:translate-x-0 sm:transition-none"
+      className="fixed inset-0 z-40 flex h-full w-full min-w-0 flex-col bg-white dark:bg-zinc-900 border-l border-border/60 transition-transform duration-200 ease-out translate-x-full data-[open=true]:translate-x-0 md:relative md:inset-auto md:z-auto md:translate-x-0 md:transition-none"
     >
       {/* Header */}
       <div className="flex items-center justify-between gap-3 border-b border-border/60 px-4 py-2.5 bg-white dark:bg-zinc-900">

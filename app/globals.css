@@ -8584,3 +8584,68 @@ body:has(.admin-sidebar-drawer[data-state="open"]) [data-radix-dialog-overlay] {
   overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
 }
+
+/* ── Product-wide phone + web responsive shells (<768) ───────────────
+   Desktop layouts stay untouched. These rules only kick in on phones:
+   overflow, touch targets, iOS home-bar clearance, overlay viewers,
+   and /code chrome that would otherwise crush the workspace. */
+@media (max-width: 767px) {
+  .app-shell-viewport {
+    max-width: 100%;
+    overflow-x: clip;
+  }
+
+  .chat-header-actions {
+    min-width: 0;
+    max-width: calc(100% - 3.25rem);
+  }
+
+  /* Reference /chat chrome: hamburger + briefcase + share only. */
+  .chat-header-actions .chat-optional-action,
+  .chat-header-actions .chat-plan-action {
+    display: none !important;
+  }
+
+  .composer-attachment-chip {
+    min-width: 0 !important;
+    max-width: min(100%, 20rem) !important;
+  }
+
+  /* Attachment / document modal becomes a full-screen slide, not 85vh. */
+  .unified-doc-viewer[aria-modal="true"] {
+    left: 0 !important;
+    top: 0 !important;
+    right: 0;
+    bottom: 0;
+    transform: none !important;
+    width: 100% !important;
+    height: 100dvh !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  [data-testid="chat-right-panel"][data-presentation="mobile-overlay"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  /* /code: hide leftover desktop lock items if they remount on a phone. */
+  [data-testid="workspace-top-bar"] {
+    display: none !important;
+  }
+
+  [data-company-desktop-tools="1"] {
+    display: none !important;
+  }
+
+  [data-testid="workspace-header-run-stop"] {
+    display: none !important;
+  }
+
+  .code-workspace-tool-table,
+  [data-testid="workspace-sql-table"] {
+    min-width: 0 !important;
+  }
+}

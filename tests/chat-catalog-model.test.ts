@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { listDeepSeekCatalogModels, resolveCatalogModel } from "../lib/chat/catalog-model"
 
 describe("chat catalog model", () => {
   it("keeps Flash when it is the selected generation model", () => {
@@ -41,5 +41,15 @@ describe("chat catalog model", () => {
       ], "OpenRouter"),
       { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
     )
+  })
+
+  it("lists only DeepSeek Flash/Pro for the chat model picker", () => {
+    const listed = listDeepSeekCatalogModels([
+      { name: "deepseek-v4-flash", provider: "DeepSeek" },
+      { name: "deepseek-v4-pro", provider: "DeepSeek" },
+      { name: "gpt-4o-mini", provider: "OpenAI" },
+      { name: "moonshotai/kimi-k2.6", provider: "OpenRouter" },
+    ])
+    assert.deepEqual(listed.map((model) => model.name), ["deepseek-v4-flash", "deepseek-v4-pro"])
   })
 })

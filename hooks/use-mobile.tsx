@@ -58,6 +58,17 @@ export function useDocumentPreviewOverlay(): boolean {
   return useCompactViewport(DOCUMENT_PREVIEW_OVERLAY_MAX_PX)
 }
 
+/**
+ * Any chat right-pane tenant (Word / Excel / search / sources / artifact /
+ * audio / cowork) uses the same overlay threshold as document preview.
+ * Below this width the 420+460 split mins crush the transcript.
+ */
+export const CHAT_PANEL_OVERLAY_MAX_PX = DOCUMENT_PREVIEW_OVERLAY_MAX_PX
+
+export function useChatPanelOverlay(): boolean {
+  return useCompactViewport(CHAT_PANEL_OVERLAY_MAX_PX)
+}
+
 /** `null` only during SSR. Client components read the viewport on first paint. */
 export function useResolvedMobile(): boolean | null {
   const [isMobile, setIsMobile] = React.useState<boolean | null>(() => {

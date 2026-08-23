@@ -1038,7 +1038,8 @@ function ReplitLogsTab({ lines, deploying, url, status }: { lines: string[]; dep
         </a>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="min-w-[960px]">
+        <div className="min-w-0 overflow-x-auto">
+        <div className="min-w-[960px] max-md:min-w-[36rem]">
           <div className="grid h-[30px] grid-cols-[34px_174px_104px_72px_minmax(540px,1fr)] items-center border-b border-[#353535] bg-[#262626] text-[12px] text-[#e7e7e7]">
             <div className="pl-[6px]"><span className="block h-5 w-5 rounded-[5px] border border-[#4c4c4c] bg-[#2f2f2f]" /></div>
             <div>Time</div>
@@ -1072,6 +1073,7 @@ function ReplitLogsTab({ lines, deploying, url, status }: { lines: string[]; dep
             {collapsed ? "Logs collapsed" : "Sin logs todavia. Pulsa Publicar para ver build + subida."}
           </div>
         ) : null}
+        </div>
       </div>
       <div className="flex h-9 shrink-0 items-center justify-between border-t border-[#353535] bg-[#232323] px-2 text-[12px] text-[#c6c6c6]">
         <div className="flex items-center gap-3">

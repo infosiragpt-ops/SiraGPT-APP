@@ -133,6 +133,7 @@ import {
   shouldDetachAgentTaskRecovery,
 } from "@/lib/api"
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
+import { listDeepSeekCatalogModels } from "@/lib/chat/catalog-model"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
@@ -1982,7 +1983,7 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
                 isImage
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
-                  : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                  : "composer-attachment-chip flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -4727,8 +4728,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     );
   }
 
-  // Filter models based on search query
-  const filteredModels = availableModels.filter((model: any) =>
+  // Filter models based on search query. Generation picker is DeepSeek-only
+  // (Flash/Pro) — OpenRouter / OpenAI catalog rows never appear in the pill.
+  const generationModels = listDeepSeekCatalogModels(availableModels);
+  const filteredModels = generationModels.filter((model: any) =>
     model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.provider?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -11421,6 +11424,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     composerPreviewAttachment ||
     sidePreviewAttachment
   );
+  // ≤879px: every right-pane tenant overlays instead of the 420+460 split.
+  const compactChatLayout = previewUsesOverlay;
   const rightPanelActive = Boolean(
     coworkPanelOpen ||
     showAudioPanel ||
@@ -11431,7 +11436,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     isExcelConnectorActive ||
     activeArtifact
   );
-  const coworkMobileFullscreen = Boolean(coworkPanelOpen && isSidebarMobile);
+  const chatPanelFullscreen = Boolean(rightPanelActive && compactChatLayout);
   const effectiveSplitRatio = splitRatio;
 
   // Mutual exclusion: the Fuentes pane is the lowest-priority right-pane
@@ -12705,7 +12710,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             share width with it via the resizable divider; otherwise we
             take the full container. min-w-0 so children can shrink. */}
         <div
-          style={rightPanelActive && !coworkMobileFullscreen
+          style={rightPanelActive && !chatPanelFullscreen
             ? {
                 flex: '1 1 auto',
                 minWidth: SPLIT_LEFT_MIN_PX,
@@ -12714,7 +12719,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             : undefined}
           className={cn(
             "relative h-full min-w-0 flex-col overflow-hidden",
-            coworkMobileFullscreen ? "hidden" : "flex",
+            chatPanelFullscreen ? "hidden" : "flex",
             !rightPanelActive && "w-full",
           )}
         >
@@ -13171,7 +13176,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             to reset to 50/50. Persisted in localStorage. */}
         {rightPanelActive && (
           <>
-            {!coworkMobileFullscreen && (
+            {!chatPanelFullscreen && (
               <div
                 role="separator"
                 aria-orientation="vertical"
@@ -13194,8 +13199,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               </div>
             )}
             <div
+              data-testid="chat-right-panel"
+              data-presentation={chatPanelFullscreen ? "mobile-overlay" : "desktop-split"}
               style={{
-                width: coworkMobileFullscreen
+                width: chatPanelFullscreen
                   ? '100%'
                   : showAudioPanel
                   ? `clamp(320px, ${100 - effectiveSplitRatio}%, 420px)`
@@ -13381,8 +13388,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         )}
         {previewUsesOverlay && !documentPreviewUrl && composerPreviewAttachment && (
           <UnifiedDocumentViewer
-            variant="panel"
-            className="h-full"
+            variant="modal"
             open={true}
             onClose={() => setComposerPreviewIndex(null)}
             attachment={composerPreviewAttachment}
@@ -13395,8 +13401,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         )}
         {previewUsesOverlay && !documentPreviewUrl && !composerPreviewAttachment && sidePreviewAttachment && (
           <UnifiedDocumentViewer
-            variant="panel"
-            className="h-full"
+            variant="modal"
             open={true}
             onClose={() => {
               setSidePreviewAttachment(null);

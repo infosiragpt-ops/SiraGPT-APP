@@ -6,7 +6,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 
-import { isSlowModel, recommendFastModel } from "../lib/code-agent/model-policy"
+import { isSlowModel, listDeepSeekGenerationModels, recommendFastModel } from "../lib/code-agent/model-policy"
 
 test("isSlowModel flags reasoning/heavy models", () => {
   for (const id of ["openai/gpt-5.5", "gpt-5", "o1-preview", "o3-mini", "claude-opus-4", "deepseek-r1"]) {
@@ -53,4 +53,13 @@ test("recommendFastModel returns null on empty input", () => {
 test("recommendFastModel can pick Pro when Flash is absent", () => {
   const pick = recommendFastModel([{ name: "deepseek-v4-pro", provider: "DeepSeek" }, { name: "openai/gpt-4o-mini" }])
   assert.equal(pick?.name, "deepseek-v4-pro")
+})
+
+test("listDeepSeekGenerationModels drops OpenRouter and other providers", () => {
+  const listed = listDeepSeekGenerationModels([
+    { name: "deepseek-v4-flash", provider: "DeepSeek" },
+    { name: "deepseek-v4-pro", provider: "OpenRouter" },
+    { name: "gpt-4o-mini", provider: "OpenAI" },
+  ])
+  assert.deepEqual(listed.map((model) => model.name), ["deepseek-v4-flash"])
 })
