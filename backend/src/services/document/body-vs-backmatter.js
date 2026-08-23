@@ -94,9 +94,11 @@ function countUsefulWords(text) {
 /**
  * Split extracted document text into body vs trailing back matter.
  * Returns { body, backmatter, boundary } — boundary is -1 when no
- * back-matter region was found or when cutting would gut the document
- * (body < 25% of original or < 200 useful words): false positives must
- * never empty out short documents whose only heading mentions "anexos".
+ * back-matter region was found or when cutting would gut the document.
+ * The anti-gutting guard scales with document size: large documents
+ * must keep a real body (>= 200 useful words); every document must keep
+ * most of its substance in the body (> 40% of its useful words), so a
+ * lone "Anexos" heading can never empty out a short note.
  */
 function splitBodyVsBackmatter(text) {
   const source = String(text || '');
@@ -114,7 +116,11 @@ function splitBodyVsBackmatter(text) {
   const candidateBody = source.slice(0, regions[0].start).trim();
   const backmatter = source.slice(regions[0].start).trim();
   const bodyWords = countUsefulWords(candidateBody);
-  const tooAggressive = candidateBody.length < source.length * 0.25 || bodyWords < 200;
+  const totalWords = countUsefulWords(source);
+  const tooAggressive =
+    candidateBody.length < source.length * 0.25 ||
+    (totalWords >= 200 && bodyWords < 200) ||
+    bodyWords < totalWords * 0.4;
   if (tooAggressive) {
     return { body: source, backmatter: '', boundary: -1 };
   }
