@@ -31,6 +31,7 @@ const fsp = require('fs').promises;
 const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
+const { buildSofficeConvertArgs } = require('./document-pipeline/soffice-pdf-export');
 
 const UPLOAD_DIR = process.env.UPLOAD_DIR || 'uploads';
 const RENDER_CACHE_DIR = path.join(UPLOAD_DIR, '_rendered');
@@ -162,17 +163,11 @@ async function convertViaLibreOffice(srcPath) {
 
   try {
     await new Promise((resolve, reject) => {
-      const args = [
-        `-env:UserInstallation=file://${profileDir}`,
-        '--headless',
-        '--norestore',
-        '--nolockcheck',
-        '--nodefault',
-        '--nofirststartwizard',
-        '--convert-to', 'pdf',
-        '--outdir', outDir,
-        srcPath,
-      ];
+      const args = buildSofficeConvertArgs({
+        sourcePath: srcPath,
+        outDir,
+        profileDir,
+      });
       const child = spawn(LIBREOFFICE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       let stderr = '';
       child.stderr.on('data', (d) => { stderr += d.toString(); });

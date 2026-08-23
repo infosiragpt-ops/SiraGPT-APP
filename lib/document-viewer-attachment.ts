@@ -6,6 +6,12 @@ export interface DocumentViewerAttachment {
   file?: File | null
   url?: string | null
   extractedText?: string | null
+  /** Composer upload status — used to gate the right-pane preview. */
+  status?: string | null
+  /** 0..100 HTTP upload progress, synced with the composer chip. */
+  uploadProgress?: number | null
+  /** RAG pipeline stage (uploaded/extracting/…) after HTTP upload. */
+  processingStage?: string | null
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -152,5 +158,50 @@ export function toDocumentViewerAttachment(
       record.text,
       record.content,
     ),
+    status: firstString(
+      record.status,
+      record.uploadStatus,
+      record.upload_status,
+    ),
+    uploadProgress: firstNumber(
+      record.uploadProgress,
+      record.upload_progress,
+      record.progress,
+    ),
+    processingStage: firstString(
+      record.processingStage,
+      record.processing_stage,
+      record.stage,
+    ),
   }
+}
+
+/**
+ * Merge the composer's per-temp/per-id progress map onto an attachment
+ * so the right pane can show the same % as the chip.
+ */
+export function toDocumentViewerAttachmentWithProgress(
+  source: unknown,
+  progressMap?: Record<string, number> | null,
+  fallbackName = "archivo",
+): DocumentViewerAttachment {
+  const record = source && typeof source === "object"
+    ? source as Record<string, any>
+    : {}
+  const keys = [record.id, record.tempId, record.temp_id, record.fileId, record.file_id]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+  let mapped: number | null = null
+  if (progressMap) {
+    for (const key of keys) {
+      const value = progressMap[key]
+      if (typeof value === "number" && Number.isFinite(value)) {
+        mapped = value
+        break
+      }
+    }
+  }
+  return toDocumentViewerAttachment(
+    mapped == null ? source : { ...record, uploadProgress: mapped },
+    fallbackName,
+  )
 }

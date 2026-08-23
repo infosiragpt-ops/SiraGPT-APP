@@ -2,8 +2,9 @@
 
 /**
  * FEATURE_DOC_ENGINE — default false.
- * Solo 1/true/yes/on activan el motor OOXML. Cualquier otro valor (incluido
- * ausente) deja el chat en el path de edición por párrafos existente.
+ * Solo 1/true/yes/on activan BullMQ / sandbox / /api/documents.
+ * El transplant in-process de /chat (tryDocEngineAfterSelection) corre
+ * siempre, salvo SIRAGPT_CHAT_TEMPLATE_TRANSFORM=0.
  */
 
 function isTruthyEnv(value) {
@@ -12,6 +13,15 @@ function isTruthyEnv(value) {
 
 function isDocEngineEnabled(env = process.env) {
   return isTruthyEnv(env.FEATURE_DOC_ENGINE);
+}
+
+/**
+ * In-process /chat UPN-style transplant. Default ON so "pasa este word
+ * al formato UPN" never returns the empty plantilla when FEATURE_DOC_ENGINE
+ * (BullMQ/sandbox) is still off. Kill-switch: SIRAGPT_CHAT_TEMPLATE_TRANSFORM=0.
+ */
+function isChatTemplateTransformEnabled(env = process.env) {
+  return !/^(0|false|off|no)$/i.test(String(env.SIRAGPT_CHAT_TEMPLATE_TRANSFORM ?? '1').trim());
 }
 
 function getDocEngineConfig(env = process.env) {
@@ -54,16 +64,22 @@ function isTemplateTransformRequest(prompt = '', files = []) {
   // Cualquier 2+ docx + formato|format|plantilla|UPN|pasalo. "pasalo" no
   // matchea \bpasa\b. "format" (sin o) es el typo de "pasalo a mi format".
   const templateCue = /\b(formato|format|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text);
-  const passCue = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/.test(text);
+  // Do NOT treat bare "usando todos los documentos" as a template transform
+  // (usa\w* used to fire). "usa esta plantilla" still matches via templateCue.
+  const passCue = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*)\b/.test(text);
+  const useTemplate = /\b(usa\w*|usar)\b/.test(text) && /\b(plantilla|template|formato|format|upn)\b/.test(text);
   const hashNames = (String(prompt || '').match(/##\s*\S+\.docx/gi) || []).length >= 2;
-  if (count >= 2 && (templateCue || passCue || hashNames)) return true;
+  if (count >= 2 && (templateCue || passCue || useTemplate || hashNames)) return true;
   if (count >= 1 && templateCue && passCue) return true;
+  // Recent-attachment turn: fileIds empty, prompt still names the transform.
+  if (count === 0 && templateCue && passCue) return true;
   return false;
 }
 
 module.exports = {
   isTruthyEnv,
   isDocEngineEnabled,
+  isChatTemplateTransformEnabled,
   getDocEngineConfig,
   isTemplateTransformRequest,
 };
