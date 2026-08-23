@@ -241,6 +241,8 @@ const SCHEMA_VALIDATOR_CACHE_MAX = Math.max(
 // (task-error-classifier) so the agent loop, retries, and circuit breaker all
 // agree on what "transient" means. Unknown shapes → 'terminal'.
 const { classifyTaskError } = require('../utils/task-error-classifier');
+let engine3h59 = null;
+try { engine3h59 = require('./agent-runner/engine-3h59'); } catch { engine3h59 = null; }
 const TRANSIENT_TOOL_ERROR_WEIGHT = (() => {
   const w = Number(process.env.SIRAGPT_TRANSIENT_TOOL_ERROR_WEIGHT);
   return Number.isFinite(w) && w > 0 && w <= 1 ? w : 0.34;
@@ -993,6 +995,7 @@ async function run(openai, opts) {
   // exhausted-tool re-polling).
   const dupCallCache = new Map();
   let duplicateRepolls = 0;
+  const loopFingerprints = [];
   // Recent provider latencies (ms) — used to stop exploring when the trend
   // says there is no runtime left for another full step (see toolChoice).
   const stepDurations = [];
@@ -1479,6 +1482,25 @@ async function run(openai, opts) {
       // Compute the duplicate-cache signature once per iteration (pure fn of
       // name+args, which are never mutated below) and reuse it at the store site
       // instead of recomputing the stableSchemaKey walk.
+      if (toolName !== 'finalize' && engine3h59 && typeof engine3h59.cutInfiniteLoopByFingerprint === 'function') {
+        loopFingerprints.push({ function: { name: toolName, arguments: call.function?.arguments } });
+        const cut = engine3h59.cutInfiniteLoopByFingerprint(loopFingerprints, { repeat: 2 });
+        if (cut && cut.cut) {
+          forceFinalize = true;
+          stoppedReason = cut.code || 'loop_fingerprint_cut';
+          const observation = {
+            warning: 'loop_fingerprint_cut',
+            message: 'Se repitió la misma herramienta con los mismos argumentos. Devuelvo una respuesta parcial.',
+          };
+          stepRecord.actions.push({ tool: toolName, args: call.function?.arguments || '', observation });
+          messages.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: formatObservation(observation),
+          });
+          continue;
+        }
+      }
       const dupSig = (toolName !== 'finalize' && isParallelSafeTool(toolName))
         ? toolCallSignature(toolName, call.function?.arguments)
         : null;

@@ -9,6 +9,7 @@ import { formatThinkingDuration } from "@/components/thinking-trace"
 import { ClaudeThinkingTimeline, inferClaudeKind, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
 import type { AgentStepClient, AgentRunClient, AgentPermissionClient } from "@/lib/chat-context-integrated"
+import { collapseSuccessLabel, humanToolLabel } from "@/lib/run-trace"
 
 export type AgentTraceProps = {
   reasoning?: string
@@ -30,7 +31,7 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
   const running = step.status === "planned" || step.status === "executing"
   const failed = step.status === "error" || step.status === "denied" || Boolean(step.isError)
   const status = failed ? "error" : running ? "active" : "done"
-  const label = step.humanDescription || step.name || "Herramienta"
+  const label = step.humanDescription || humanToolLabel(step.name)
   const details = prettyJsonOrRaw(step.args) || prettyJsonOrRaw(step.preview)
   return {
     id: step.id,
@@ -88,7 +89,11 @@ export default function AgentTrace({ reasoning = "", reasoningStreaming = false,
   const toolCount = run?.toolCalls ?? steps.length
   const durationMs = run?.durationMs ?? reasoningDurationMs ?? 0
   const prettyDuration = formatThinkingDuration(Math.max(durationMs, 1000))
-  const headerLabel = active ? t("working") : run?.status === "interrupted" ? t("interrupted") : toolCount === 1 ? t("summaryOne", { duration: prettyDuration }) : toolCount > 1 ? t("summary", { duration: prettyDuration, count: toolCount }) : t("summaryNoTools", { duration: prettyDuration })
+  const headerLabel = active
+    ? t("working")
+    : run?.status === "interrupted"
+      ? t("interrupted")
+      : collapseSuccessLabel(Math.max(1, Math.round((durationMs || 1000) / 1000)))
   const rows = useMemo(() => {
     const out: ClaudeTimelineStep[] = []
     if ((reasoning || "").trim() || reasoningStreaming) {

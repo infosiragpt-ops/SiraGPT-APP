@@ -1521,8 +1521,9 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     const state = JSON.parse(codeString);
                     // When the typed AgentTrace timeline is active for this
                     // message, the sentinel contributes only its artifacts —
-                    // one timeline, not two.
-                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
+                    // one timeline, not two. Never mount on the user bubble.
+                    if (message.role !== "ASSISTANT") return null;
+                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
                 } catch {
                     return null;
                 }
@@ -1643,7 +1644,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     if (lang === 'agent-task-state') {
                         try {
                             const state = JSON.parse(codeString);
-                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
+                            if (message.role !== "ASSISTANT") return null;
+                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
                         } catch {
                             return null;
                         }

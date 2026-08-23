@@ -1449,7 +1449,8 @@ router.post(
     // planning / first-LLM-call phase. A bare `: keep-alive` comment is not
     // enough — edge proxies buffer/drop SSE comments — so we also send a real
     // `data:` heartbeat frame (mirrors routes/ai.js). The client reducer
-    // treats unknown `heartbeat` events as a no-op.
+    // refreshes lastEventAt / heartbeatAt so the UI stale banner waits
+    // for missed heartbeats, not quiet business events.
     const inlineHeartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
     heartbeatTimer = setInterval(() => {
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
@@ -3191,17 +3192,21 @@ function reduceAgentState(state, evt) {
         },
       };
     case 'step_start':
+    case 'step.started': {
+      const { upsertMonotonicStep } = require('../services/agents/run-trace');
       return {
         ...state,
-        steps: [...state.steps, {
+        steps: upsertMonotonicStep(state.steps, {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
           ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
-        }],
+        }),
       };
+    }
     case 'tool_call': {
       const stepId = evt.stepId || `tool-${state.steps.length + 1}`;
       const steps = state.steps.some(step => step.id === stepId)
@@ -3253,11 +3258,29 @@ function reduceAgentState(state, evt) {
         }),
       };
     }
+    case 'step.updated': {
+      const updateId = String(evt.id || evt.stepId || '').trim();
+      if (!updateId) return state;
+      return {
+        ...state,
+        steps: state.steps.map((step) =>
+          step.id === updateId
+            ? {
+              ...step,
+              label: evt.label || step.label,
+              reasoning: evt.reasoning || step.reasoning,
+              status: 'running',
+            }
+            : step
+        ),
+      };
+    }
     case 'step_done':
+    case 'step.finished':
       return {
         ...state,
         steps: state.steps.map(step =>
-          step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
+          step.id === evt.id ? { ...step, status: evt.ok === false ? 'error' : 'done' } : step
         ),
       };
     case 'file_artifact': {
@@ -3296,9 +3319,13 @@ function reduceAgentState(state, evt) {
     case 'final_text':
       return { ...state, finalText: evt.markdown };
     case 'done':
+    case 'run.succeeded':
       return { ...state, done: true, stoppedReason: evt.stoppedReason };
     case 'error':
+    case 'run.failed':
       return { ...state, done: true, error: evt.message };
+    case 'heartbeat':
+      return { ...state, lastEventAt: evt.ts || new Date().toISOString(), heartbeatAt: evt.ts || new Date().toISOString() };
     default:
       return state;
   }

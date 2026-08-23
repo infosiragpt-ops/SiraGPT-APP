@@ -1,4 +1,5 @@
 import type { AgentTaskState } from "./agent-task-service"
+import { humanToolLabel, normalizeToolKey } from "./run-trace"
 
 export type AgentActivityStatus =
   | "queued"
@@ -49,12 +50,16 @@ const TOOL_LABELS: Record<string, string> = {
 }
 
 function lookupToolLabel(value: string): string | null {
+  const mapped = humanToolLabel(value, "")
+  if (mapped) return mapped
   const normalized = value.trim()
-  return TOOL_LABELS[normalized] || TOOL_LABELS[normalized.toLowerCase()] || null
+  return TOOL_LABELS[normalized] || TOOL_LABELS[normalized.toLowerCase()] || TOOL_LABELS[normalizeToolKey(normalized)] || null
 }
 
 export function toolToProfessionalLabel(tool?: string | null): string {
   if (!tool) return "Procesando tarea"
+  const mapped = humanToolLabel(tool, "")
+  if (mapped) return mapped
   const normalized = String(tool).trim()
   return lookupToolLabel(normalized) || sanitizeAgentText(normalized.replace(/[_-]+/g, " "), "Procesando tarea")
 }

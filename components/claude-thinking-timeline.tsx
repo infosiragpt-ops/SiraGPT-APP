@@ -3,9 +3,10 @@
 import React, { useEffect, useMemo, useState } from "react"
 import clsx from "clsx"
 
-export const CLAUDE_THINK_ACTIVE = "#C96442"
-export const CLAUDE_THINK_DONE = "#8A8580"
+export const CLAUDE_THINK_ACTIVE = "var(--step-running)"
+export const CLAUDE_THINK_DONE = "var(--step-done)"
 export const CLAUDE_THINK_LINE = "rgba(0,0,0,0.10)"
+export const CLAUDE_THINK_FAILED = "var(--step-failed)"
 
 export type ClaudeTimelineKind = "dot" | "terminal" | "document" | "image" | "sunburst"
 
@@ -102,7 +103,7 @@ export function ClaudeStepIcon({ kind, color }: { kind: ClaudeTimelineKind; colo
 function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }) {
   const [open, setOpen] = useState(false)
   const active = step.status === "active"
-  const color = step.status === "error" ? "#B45353" : active ? CLAUDE_THINK_ACTIVE : CLAUDE_THINK_DONE
+  const color = step.status === "error" ? CLAUDE_THINK_FAILED : active ? CLAUDE_THINK_ACTIVE : CLAUDE_THINK_DONE
   const kind = step.kind || inferClaudeKind(step)
   const needsEllipsis = active && !step.label.endsWith("...") && !step.label.endsWith("…")
   const label = needsEllipsis ? step.label + "…" : step.label

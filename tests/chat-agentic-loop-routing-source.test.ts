@@ -49,8 +49,13 @@ describe("chat agentic loop routing source contract", () => {
       "const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {",
       "switch (intent)",
     )
-    assert.match(helper, /userMessageAlreadyAdded: !isNewChat/)
-    assert.match(helper, /assistantMessageId: !isNewChat \? assistantPlaceholder\.id : undefined/)
+    assert.match(helper, /userMessageAlreadyAdded: true/)
+    assert.match(helper, /assistantMessageId: assistantPlaceholder\.id/)
+    assert.match(
+      source,
+      /const updatedMessages = \[\.\.\.\(prevChat\.messages \|\| \[\]\), userMessage, assistantPlaceholder\]/,
+      "existing chats must seed the assistant bubble so RunTrace never mounts on the user message",
+    )
 
     const switchBlock = sliceBetween("switch (intent) {", "    } catch (err: any) {")
     for (const marker of ["case 'ppt':", "case 'web_search':", "case 'agent_task':"]) {
