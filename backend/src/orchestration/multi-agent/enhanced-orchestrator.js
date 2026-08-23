@@ -198,7 +198,10 @@ function createMultiAgentOrchestrator({ gateway, maxParallel = 3 } = {}) {
     resolveWorkflow,
     selectTeam,
     async run({ intent = '', prompt = '', context = {}, mode } = {}) {
-      const workflow = resolveWorkflow(intent);
+      // Copy the workflow descriptor: WORKFLOWS entries are shared across
+      // requests and instances, so writing `mode` here would permanently
+      // pollute the registry for every later call.
+      const workflow = { ...resolveWorkflow(intent) };
       if (mode) workflow.mode = mode;
       const state = { prompt, context, intent };
 
