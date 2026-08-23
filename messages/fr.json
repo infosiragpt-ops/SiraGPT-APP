@@ -652,5 +652,15 @@
     "titleDefault": "SiraGPT — Plateforme d'IA Multimodale",
     "titleTemplate": "%s · SiraGPT",
     "description": "Plateforme multi-LLM avec génération de texte, image, audio et vidéo. GPT-4, Claude, Gemini et plus en un seul endroit."
+  },
+  "chatSearch": {
+    "placeholder": "Rechercher dans vos chats…",
+    "noResults": "Aucun résultat",
+    "noResultsFor": "Aucun chat trouvé pour « {query} »",
+    "serverFallback": "La recherche serveur a échoué ; affichage des correspondances de titres locales.",
+    "emptyHistory": "Vous n'avez pas encore de chats",
+    "emptyHistoryHint": "Commencez une conversation pour la voir ici",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }
