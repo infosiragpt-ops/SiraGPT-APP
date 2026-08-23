@@ -17,8 +17,10 @@
  *                                                     for untrusted / multi-tenant
  *                                                     deployments)
  *       * SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE=a,b  → only those clearances
- *     Default (no env set): allowed — preserves the local single-user / Builder
- *     workflow that relies on host tools.
+ *     Default (no env set): allowed in development; DENIED in production
+ *     (fail-closed). A prompt-injected turn must not reach the production
+ *     host just because nobody configured a policy env var — same pattern as
+ *     controlTokenForEnv (code-runner) and previewTokenSecret (preview proxy).
  *
  * Shape is compatible with react-agent's `ctx.toolGate`:
  *   gate.authorize(toolName, authCtx) -> { ok: true } | { ok: false, reason }
@@ -46,11 +48,25 @@ function isTruthyFlag(value) {
   return v === '1' || v === 'true' || v === 'yes' || v === 'on';
 }
 
+function isProductionEnv(env) {
+  return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
 function resolvePolicy(env = process.env) {
   return {
     disabled: isTruthyFlag(env.SIRAGPT_HOST_TOOLS_DISABLED),
     requiredClearances: parseList(env.SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE),
+    // Production without an explicit policy denies high-risk host tools:
+    // fail-closed beats a silently permissive multi-tenant deployment.
+    productionDefaultDeny: !policyConfigured(env) && isProductionEnv(env),
   };
+}
+
+function policyConfigured(env = process.env) {
+  return Boolean(
+    env.SIRAGPT_HOST_TOOLS_DISABLED != null
+    || (env.SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE || '').trim(),
+  );
 }
 
 /**
@@ -75,6 +91,9 @@ function createChatToolGate(opts = {}) {
     // High-risk tools: apply deployment policy.
     if (policy.disabled) {
       return { ok: false, reason: 'host_tools_disabled' };
+    }
+    if (policy.productionDefaultDeny) {
+      return { ok: false, reason: 'host_tools_production_denied' };
     }
     if (policy.requiredClearances.length) {
       const clearance = String(authCtx.clearance || '').toLowerCase();
