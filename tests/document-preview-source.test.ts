@@ -68,7 +68,7 @@ test("office previews wait on the server object instead of painting local File p
   )
   assert.match(
     source,
-    /Preparando vista previa/,
+    /PREVIEW_LOADING_LABEL/,
     "loading copy must stay professional and in Spanish",
   )
   assert.match(
@@ -91,7 +91,10 @@ test("generated document preview stays on the loading gate until the object is r
   const source = readFileSync(generatedPreviewSourcePath, "utf8")
   assert.match(source, /previewGate\.ready/)
   assert.match(source, /PREVIEW_LOADING_LABEL/)
-  assert.match(source, /Preparando vista previa/)
+  assert.match(
+    readFileSync(path.join(process.cwd(), "lib/document-preview-gate.ts"), "utf8"),
+    /Preparando vista previa/,
+  )
   assert.doesNotMatch(
     source,
     /setState\(\{ kind: "loading", message: "Generando vista previa…" \}\)/,
