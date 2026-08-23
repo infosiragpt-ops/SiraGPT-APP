@@ -37,6 +37,10 @@
 
 const { startSSEHeartbeat } = require('./sse-heartbeat');
 
+function load3h56() {
+  try { return require('../services/agent-runner/engine-3h56'); } catch (_) { return null; }
+}
+
 const SSE_HEADERS = Object.freeze({
   'Content-Type': 'text/event-stream; charset=utf-8',
   'Cache-Control': 'no-cache, no-transform',
@@ -95,6 +99,16 @@ function createSSEWriter(res, options = {}) {
   const cancelHeartbeat = startSSEHeartbeat(res, {
     intervalMs: options.heartbeatMs,
   });
+  const h56sse = load3h56();
+  if (h56sse && typeof h56sse.resumeReplayMustBeIdempotent === 'function' && options.replay) {
+    try { h56sse.resumeReplayMustBeIdempotent(options.replay, options.lastEventId); } catch (_) { /* resume hint */ }
+  }
+  if (h56sse && typeof h56sse.rejectResumeIfCursorAheadOfHead === 'function' && options.headId != null) {
+    try { h56sse.rejectResumeIfCursorAheadOfHead({ lastEventId: options.lastEventId, headId: options.headId }); } catch (_) { /* cursor */ }
+  }
+  if (h56sse && typeof h56sse.heartbeatJitterWithinWindow === 'function') {
+    try { h56sse.heartbeatJitterWithinWindow({ baseMs: options.heartbeatMs || 15_000, jitterMs: options.heartbeatJitterMs || 0 }); } catch (_) { /* jitter */ }
+  }
 
   /**
    * Write a chunk and resolve once it is queued AND the kernel buffer has
@@ -139,6 +153,9 @@ function createSSEWriter(res, options = {}) {
     },
     done() {
       cancelHeartbeat();
+      if (h56sse && typeof h56sse.dropBufferedTokensOnCancelOnce === 'function') {
+        try { h56sse.dropBufferedTokensOnCancelOnce({ cancelled: false, dropped: false }); } catch (_) { /* close */ }
+      }
       if (this.closed) return Promise.resolve(false);
       return writeWithBackpressure('data: [DONE]\n\n').finally(() => {
         try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
@@ -146,6 +163,9 @@ function createSSEWriter(res, options = {}) {
     },
     close() {
       cancelHeartbeat();
+      if (h56sse && typeof h56sse.dropBufferedTokensOnCancelOnce === 'function') {
+        try { h56sse.dropBufferedTokensOnCancelOnce({ cancelled: true, dropped: false }); } catch (_) { /* close */ }
+      }
       try { if (!res.writableEnded) res.end(); } catch { /* ignore */ }
     },
   };

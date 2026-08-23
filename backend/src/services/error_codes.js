@@ -374,6 +374,45 @@ const CODES = Object.freeze({
   SUBAGENT_SAME_TOOL: 'subagent_same_tool',
   MEMORY_SORT: 'memory_sort',
   TOOL_ARGS_ARRAY: 'tool_args_array',
+  PARALLEL_TOOLS_OPEN: 'parallel_tools_open',
+  TOOL_ID_REUSED: 'tool_id_reused',
+  MAX_STEPS_PARTIAL: 'max_steps_partial',
+  EMPTY_ASSISTANT_OPEN: 'empty_assistant_open',
+  TOOL_ARGS_UNDEFINED: 'tool_args_undefined',
+  JSON_SINGLE_QUOTE_VAL: 'json_single_quote_val',
+  TOOL_ENUM: 'tool_enum',
+  HTTP_429_RETRY_AFTER: 'http_429_retry_after',
+  TOOL_ARGS_STRIP: 'tool_args_strip',
+  TOOL_REQUIRED_MISSING: 'tool_required_missing',
+  SUBAGENT_TOKENS: 'subagent_tokens',
+  SUBAGENT_NO_PROGRESS: 'subagent_no_progress',
+  SUBAGENT_DEADLINE: 'subagent_deadline',
+  SUBAGENT_SIBLINGS: 'subagent_siblings',
+  COMPACT_PIN_PAIR: 'compact_pin_pair',
+  PGVECTOR_NAN: 'pgvector_nan',
+  MEMORY_PIN_FLAG: 'memory_pin_flag',
+  COMPACT_OLD_TOOLS: 'compact_old_tools',
+  CKPT_SEQ: 'ckpt_seq',
+  CKPT_KEEP_PIN: 'ckpt_keep_pin',
+  CKPT_SESSION: 'ckpt_session',
+  DIFF_GIT_HEADER: 'diff_git_header',
+  RAW_LINE_COUNT: 'raw_line_count',
+  DIFF_BINARY: 'diff_binary',
+  DIFF_CONTEXT: 'diff_context',
+  SANDBOX_STDOUT_CAP: 'sandbox_stdout_cap',
+  SANDBOX_RSS: 'sandbox_rss',
+  SANDBOX_TMP_PREFIX: 'sandbox_tmp_prefix',
+  SSE_REPLAY_IDEMPOTENT: 'sse_replay_idempotent',
+  SSE_CURSOR_AHEAD: 'sse_cursor_ahead',
+  SSE_DROP_BUFFER: 'sse_drop_buffer',
+  SSE_HB_JITTER: 'sse_hb_jitter',
+  QUEUE_LOCK: 'queue_lock',
+  QUEUE_STARVE: 'queue_starve',
+  CREDIT_NO_COMPLETION: 'credit_no_completion',
+  CREDIT_SETTLE_ONCE: 'credit_settle_once',
+  DNS_UNAVAILABLE: 'dns_unavailable',
+  HTTP_401: 'http_401',
+  STEP_SLOW: 'step_slow',
 });
 
 function isRetryable(code) {
@@ -431,7 +470,9 @@ function isRetryable(code) {
     || c === 'client_gone'
     || c === 'queue_generate_cap'
     || c === 'net_timeout'
-    || c === 'pg_disconnect';
+    || c === 'pg_disconnect'
+    || c === 'http_429_retry_after'
+    || c === 'dns_unavailable';
 }
 
 function publicError(code, extra) {
@@ -453,6 +494,8 @@ function httpStatusFor(code) {
   if (c === CODES.PAYLOAD_TOO_LONG || c === CODES.CHAT_ID_TOO_LONG || c === 'payload_too_large') return 413;
   if (c === 'legal_unavailable' || c === CODES.LEGAL_UNAVAILABLE) return 451;
   if (c === 'resource_gone' || c === CODES.RESOURCE_GONE) return 410;
+  if (c === 'http_401' || c === CODES.HTTP_401) return 401;
+  if (c === 'queue_lock' || c === CODES.QUEUE_LOCK) return 409;
   return 400;
 }
 

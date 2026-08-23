@@ -15,6 +15,10 @@ const {
   callModelWithRetry,
 } = require('./native-llm');
 
+function load3h56() {
+  try { return require('./engine-3h56'); } catch (_) { return null; }
+}
+
 // Per-model canary telemetry (best-effort; never breaks a turn). Kept as a
 // lazy require so offline tests that never emit a metric still load fast.
 function recordModelTelemetry(event) {
@@ -208,6 +212,8 @@ async function runAgentLoop({
   let stallCount = 0;
   let lastProgressAt = Date.now();
   let fenceToken = null;
+  let cancelBufferDropped = false;
+  const h56 = load3h56();
   if (kv && threadId) {
     try {
       const safety = await stealStaleFence(kv, threadId);
@@ -247,6 +253,12 @@ async function runAgentLoop({
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      if (h56 && typeof h56.dropBufferedTokensOnCancelOnce === 'function' && !cancelBufferDropped) {
+        try {
+          const drop = h56.dropBufferedTokensOnCancelOnce({ cancelled: true, dropped: cancelBufferDropped });
+          if (drop && drop.drop) cancelBufferDropped = true;
+        } catch (_) { /* audit only */ }
+      }
     }
     throwIfAborted(signal);
   };
@@ -305,6 +317,9 @@ async function runAgentLoop({
         tokensOut: response?.usage?.completion_tokens,
       });
       lastProgressAt = Date.now();
+      if (h56 && typeof h56.latencyHintWhenStepOverBudget === 'function') {
+        try { h56.latencyHintWhenStepOverBudget({ elapsedMs: Date.now() - modelTurnStart }); } catch (_) { /* hint only */ }
+      }
       bail(iteration);
     } catch (err) {
       recordModelTelemetry({
@@ -342,6 +357,42 @@ async function runAgentLoop({
         toolCalls = asNativeCalls(parsed, iteration);
         viaReact = true;
       }
+    }
+
+    if (toolCalls.length && h56) {
+      try {
+        if (typeof h56.cutLoopIfSameToolCallIdReused === 'function') {
+          const reused = h56.cutLoopIfSameToolCallIdReused(toolCalls);
+          if (reused && reused.cut) {
+            stoppedReason = 'tool_id_reused';
+            onEvent({
+              type: 'error',
+              code: reused.code,
+              message: (h56.actionableErrorHint && h56.actionableErrorHint(reused.code).hint) || 'tool_call_id reutilizado.',
+              retryable: false,
+              iteration,
+            });
+            return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: 'tool_id_reused' };
+          }
+        }
+        if (typeof h56.repairJsonSingleQuotedValuesOnce === 'function') {
+          for (const call of toolCalls) {
+            const raw = call?.function?.arguments;
+            if (typeof raw === 'string' && raw.includes("'")) {
+              const fix = h56.repairJsonSingleQuotedValuesOnce(raw);
+              if (fix && fix.ok && fix.repaired && call.function) {
+                call.function.arguments = JSON.stringify(fix.value);
+              }
+            }
+          }
+        }
+        if (typeof h56.refuseEmptyAssistantWithOpenTools === 'function') {
+          h56.refuseEmptyAssistantWithOpenTools({
+            content: msg.content,
+            openToolIds: toolCalls.map((c) => c && c.id).filter(Boolean),
+          });
+        }
+      } catch (_) { /* fail-open: existing tool path still runs */ }
     }
 
     if (!toolCalls.length) {
@@ -404,6 +455,9 @@ async function runAgentLoop({
           verified: false,
         });
       } else {
+        if (h56 && typeof h56.refuseFinishWhileParallelToolsOpen === 'function') {
+          try { h56.refuseFinishWhileParallelToolsOpen({ inflight: 0, toolCalls: [] }); } catch (_) { /* settle hint */ }
+        }
         stoppedReason = 'final';
         onEvent({ type: 'final', text: finalText, iterations: iteration, label: 'Listo', verified: true });
       }
@@ -500,6 +554,12 @@ async function runAgentLoop({
   }
 
   bail(cap);
+  if (h56 && typeof h56.stopIfMaxStepsWithPartialFinal === 'function') {
+    try {
+      const partial = h56.stopIfMaxStepsWithPartialFinal({ step: cap, maxSteps: cap, text: finalText });
+      if (partial && partial.text) finalText = partial.text;
+    } catch (_) { /* fail-open */ }
+  }
   onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
 }

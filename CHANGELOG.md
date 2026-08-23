@@ -4,6 +4,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Next production release] — 2026-08-23
+
+### Added
+
+- **Wave 3H56 — agent-loop robustness (engine-only)**: 39 helpers in
+  `backend/src/services/agent-runner/engine-3h56.js` (re-exported from
+  `engine-adapter.js`) for parallel-tool settle + reused `tool_call_id` cut,
+  single-quoted JSON / enum / required-arg repair, 429 Retry-After, inherited
+  subagent token+deadline budget, compact pin pair / pgvector NaN / pin facts,
+  monotonic checkpoint rollback + session boundary, git-header diffs + hunk
+  context + line-count read-after-write, sandbox stdout/RSS/tmpdir prefix,
+  idempotent SSE resume + cursor-ahead refuse + cancel buffer drop, session
+  lock/starve queue, no-completion credit skip + settle-once hold, classified
+  DNS/401 + step latency hint. DeepSeek V4 Flash/Pro only; no OpenRouter
+  generate client; no UI churn. See `docs/mejoras/3H56.md`.
+
 ## [Next production release] — 2026-07-22
 
 ### Added

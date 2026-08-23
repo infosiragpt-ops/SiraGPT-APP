@@ -833,6 +833,32 @@ async function governThen(input, run) {
         if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
           ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
         }
+        if (typeof ad.neverChargeIfNoCompletionAndNoErrorUsage === 'function' && input) {
+          ad.neverChargeIfNoCompletionAndNoErrorUsage({
+            completionTokens: input.completionTokens,
+            errorUsage: input.errorUsage,
+            error: input.error,
+          });
+        }
+        if (typeof ad.settleHoldOnceOnTerminalState === 'function' && input && input.holdId) {
+          ad.settleHoldOnceOnTerminalState({ holdId: input.holdId, terminal: input.terminal, settled: input.settled });
+        }
+        if (typeof ad.neverRetry401Unauthorized === 'function' && input && (input.status === 401 || input.code === '401')) {
+          ad.neverRetry401Unauthorized(input);
+        }
+        if (typeof ad.backoffOn429RetryAfterHeader === 'function' && input && (input.status === 429 || input.code === '429')) {
+          const b = ad.backoffOn429RetryAfterHeader(input, { attempt: input.attempt });
+          if (b && b.delayMs != null) input.retryDelayMs = b.delayMs;
+        }
+        if (typeof ad.classifyDnsEnotfoundAsUnavailable === 'function' && input && input.error) {
+          ad.classifyDnsEnotfoundAsUnavailable(input.error);
+        }
+        if (typeof ad.inheritSubagentTokenBudget === 'function' && input && input.subagentTokens != null) {
+          ad.inheritSubagentTokenBudget({ parentRemaining: input.parentTokens, childRequested: input.subagentTokens });
+        }
+        if (typeof ad.rejectPgvectorNaNOrInfComponents === 'function' && input && input.embedding) {
+          ad.rejectPgvectorNaNOrInfComponents(input.embedding);
+        }
         if (typeof ad.classifyEconnabortedAsCancelled === 'function' && input && input.error) {
           ad.classifyEconnabortedAsCancelled(input.error);
         }

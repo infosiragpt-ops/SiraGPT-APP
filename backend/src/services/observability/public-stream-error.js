@@ -11,6 +11,42 @@ metrics.registerCounter('siragpt_stream_failures_total', {
 
 const RULES = [
   {
+    code: 'http_401',
+    retryable: false,
+    matches: (error) => Number(error?.status) === 401 || String(error?.code || '') === 'http_401',
+    message: 'No autorizado. No reintento.',
+  },
+  {
+    code: 'dns_unavailable',
+    retryable: true,
+    matches: (error, text) => String(error?.code || '').toUpperCase() === 'ENOTFOUND' || /enotfound|eai_again/i.test(text),
+    message: 'No pude resolver el DNS. Reintento.',
+  },
+  {
+    code: 'tool_id_reused',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'tool_id_reused',
+    message: 'El mismo tool_call_id se reutilizó. Detuve el bucle.',
+  },
+  {
+    code: 'parallel_tools_open',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'parallel_tools_open',
+    message: 'Aún hay herramientas en paralelo. No cierro el turno.',
+  },
+  {
+    code: 'pgvector_nan',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'pgvector_nan',
+    message: 'El embedding tiene valores inválidos.',
+  },
+  {
+    code: 'queue_lock',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'queue_lock',
+    message: 'La sesión está ocupada por otro writer.',
+  },
+  {
     code: 'aborted',
     retryable: true,
     matches: (error, text) => error?.name === 'AbortError' || /\babort(?:ed)?\b/i.test(text),

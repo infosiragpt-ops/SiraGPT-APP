@@ -168,6 +168,24 @@ function createSessionQueue() {
             return Promise.reject(err);
           }
         }
+        if (typeof adWait.rejectEnqueueIfSessionLockedByOther === 'function') {
+          const lock = adWait.rejectEnqueueIfSessionLockedByOther({
+            ownerId: opts && (opts.lockOwnerId || opts.ownerId),
+            requesterId: opts && (opts.requesterId || opts.writerId),
+            locked: opts && opts.locked,
+          });
+          if (lock && lock.ok === false) {
+            const err = new Error('queue_lock');
+            err.code = 'queue_lock';
+            err.status = 409;
+            return Promise.reject(err);
+          }
+        }
+        if (typeof adWait.boostStarvedQueueAfterWaitMs === 'function') {
+          adWait.boostStarvedQueueAfterWaitMs({
+            waitedMs: opts && (opts.waitedMs || opts.queuedMs),
+          });
+        }
       }
     } catch (waitErr) {
       if (waitErr && waitErr.code === 'generate_overloaded') return Promise.reject(waitErr);

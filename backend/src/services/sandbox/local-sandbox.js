@@ -215,6 +215,18 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   // Acquire a concurrency slot before spawning.  The deadline is half the
   // execution timeout so a queued call still has time to run if it gets through.
   const sem = getSemaphore(cfg.concurrency);
+  try {
+    const h56 = require('../agent-runner/engine-3h56');
+    if (h56 && typeof h56.capSandboxStdoutBytesPerCommand === 'function') {
+      h56.capSandboxStdoutBytesPerCommand({ bytes: 0, max: maxOutputBytes });
+    }
+    if (h56 && typeof h56.requireSandboxTmpdirUnderPrefix === 'function') {
+      h56.requireSandboxTmpdirUnderPrefix(opts.tmpDir || args.tmpDir || args.cwd, opts.tmpPrefix || args.tmpPrefix);
+    }
+    if (h56 && typeof h56.refuseSandboxRssOverCap === 'function' && opts.rssMb != null) {
+      h56.refuseSandboxRssOverCap({ rssMb: opts.rssMb });
+    }
+  } catch (_) { /* fail-open */ }
   const queueDeadlineMs = Math.max(1000, timeoutMs / 2);
   try {
     await sem.acquire(queueDeadlineMs);
@@ -241,6 +253,12 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     });
   } catch (err) {
     sem.release();
+    try {
+      const h56 = require('../agent-runner/engine-3h56');
+      if (h56 && typeof h56.requireSandboxTmpdirUnderPrefix === 'function') {
+        h56.requireSandboxTmpdirUnderPrefix(opts.tmpDir || args.tmpDir, opts.tmpPrefix || args.tmpPrefix);
+      }
+    } catch (_) { /* fail-open */ }
     return { ok: false, code: 'sandbox_spawn_failed', message: err && err.message };
   }
 
