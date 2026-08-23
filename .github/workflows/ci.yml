@@ -105,6 +105,11 @@ jobs:
       - name: TypeScript check (hard gate)
         run: npx tsc --noEmit --skipLibCheck --ignoreDeprecations 5.0
 
+      - name: /code chrome lock + continuity guards
+        run: |
+          node scripts/assert-continuity-guards.js
+          bash scripts/reapply-code-ui-lock.sh --check
+
       # All 363+ tests — auth validation, payments, agent runtime,
       # memory, citations, SSE, pipeline, security policies, etc.
       - name: Unit & integration tests

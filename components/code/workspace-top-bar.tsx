@@ -6,25 +6,16 @@ import {
   Globe,
   Menu,
   Monitor,
-  Play,
   Plus,
   Search,
-  Square,
   UserPlus,
 } from "lucide-react"
 
 import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { CODE_CHROME_LOCK } from "@/lib/code-chrome-lock"
 import { cn } from "@/lib/utils"
-import {
-  CODE_PREVIEW_STATE_EVENT,
-  CODE_RUNNER_ACTIVE_EVENT,
-  getActiveHostRunId,
-  setActiveHostRunId,
-  type CodePreviewState,
-} from "@/lib/code-workspace-context"
-import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { CODE_OPEN_DEPT_DRAWER_EVENT, useDeptChatChrome } from "./dept-chat-bard"
 import { DesktopMonitorGlyph } from "./department-computer-pane"
 
@@ -47,8 +38,9 @@ export type WorkspaceTopBarProps = {
 }
 
 /**
- * Slim professional workspace header: Preview reopen + Run/Stop + utilities.
- * Company/department labels live in the left sidebar — not duplicated here.
+ * Slim professional workspace header: Preview reopen + Publicar + utilities.
+ * The emerald header run/stop control is banned by CODE_CHROME_LOCK
+ * (see docs/code-ui-lock.md).
  */
 export function WorkspaceTopBar({
   openPanels,
@@ -72,42 +64,6 @@ export function WorkspaceTopBar({
   const computerLabel = departmentComputer
     ? `Computadora de ${departmentComputer.name}`
     : "Computadora del departamento"
-  const [previewPhase, setPreviewPhase] = React.useState<CodePreviewState["phase"]>("idle")
-  const [hostRunId, setHostRunId] = React.useState<string | null>(() => getActiveHostRunId())
-
-  React.useEffect(() => {
-    const onPreview = (event: Event) => {
-      const phase = (event as CustomEvent<CodePreviewState>).detail?.phase
-      if (phase) setPreviewPhase(phase)
-    }
-    const onRun = (event: Event) => {
-      setHostRunId((event as CustomEvent<{ runId: string | null }>).detail?.runId ?? null)
-    }
-    window.addEventListener(CODE_PREVIEW_STATE_EVENT, onPreview)
-    window.addEventListener(CODE_RUNNER_ACTIVE_EVENT, onRun)
-    return () => {
-      window.removeEventListener(CODE_PREVIEW_STATE_EVENT, onPreview)
-      window.removeEventListener(CODE_RUNNER_ACTIVE_EVENT, onRun)
-    }
-  }, [])
-
-  const running = previewPhase === "starting" || previewPhase === "ready" || Boolean(hostRunId)
-
-  const handleRunStop = React.useCallback(() => {
-    if (running) {
-      window.dispatchEvent(new CustomEvent("siragpt:code-stop-app"))
-      const id = getActiveHostRunId()
-      if (id) {
-        void hostRunnerService.stop(id)
-        setActiveHostRunId(null)
-      }
-      setPreviewPhase("idle")
-      setHostRunId(null)
-      return
-    }
-    onTogglePanel("preview")
-    window.dispatchEvent(new CustomEvent("siragpt:code-run-app"))
-  }, [onTogglePanel, running])
 
   return (
     <header
@@ -115,6 +71,8 @@ export function WorkspaceTopBar({
       data-testid="workspace-top-bar"
       data-header-clean="20260815"
       data-drop-dup-header="20260815"
+      data-code-chrome-lock={CODE_CHROME_LOCK.version}
+      data-header-run-stop="0"
     >
       {deptChatChrome ? (
         <Button
@@ -146,21 +104,6 @@ export function WorkspaceTopBar({
       ) : null}
 
       <span className="min-w-0 flex-1" />
-
-      <button
-        type="button"
-        onClick={handleRunStop}
-        aria-label={running ? "Detener la app" : "Ejecutar la app"}
-        title={running ? "Detener" : "Ejecutar"}
-        data-testid="workspace-header-run-stop"
-        className={cn(
-          "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-[11px] font-semibold text-white transition-colors",
-          running ? "bg-red-600/90 hover:bg-red-600" : "bg-emerald-600 hover:bg-emerald-500",
-        )}
-      >
-        {running ? <Square className="h-3 w-3" /> : <Play className="h-3 w-3" />}
-        <span>{previewPhase === "starting" ? "Arrancando…" : running ? "Detener" : "Ejecutar"}</span>
-      </button>
 
       {!openPanels.has("preview") && !computerOpen ? (
         <Button
@@ -215,6 +158,7 @@ export function WorkspaceTopBar({
       >
         <FolderGit2 className="h-3.5 w-3.5" />
       </Button>
+      {CODE_CHROME_LOCK.keepPublishButton ? (
       <button
         type="button"
         aria-label="Publicar el proyecto"
@@ -228,6 +172,7 @@ export function WorkspaceTopBar({
         <Globe className="h-3 w-3" />
         Publicar
       </button>
+      ) : null}
       <Button
         type="button"
         variant="ghost"
