@@ -21,6 +21,10 @@ function recordModelTelemetry(event) {
   try { require('../codex/model-telemetry').recordLlmTurn(event); } catch { /* optional */ }
 }
 
+function loadEngine3h59() {
+  try { return require('./engine-3h59'); } catch (_) { return null; }
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 
 // Keep tool-call turns SHORT. Providers charge/reserve max_tokens up front:
@@ -242,8 +246,22 @@ async function runAgentLoop({
   // leave a trace. `bail` emits exactly one 'cancelled' stage event before
   // rethrowing so the SSE stream shows "Cancelado" instead of dying silently.
   let cancelledEmitted = false;
+  const loopFingerprints = [];
   const bail = (iteration) => {
     if (!signal?.aborted) return;
+    try {
+      const w = loadEngine3h59();
+      if (w && typeof w.accountPartialTokensOnCancel === 'function') {
+        w.accountPartialTokensOnCancel({
+          cancelled: true,
+          streamedChars: String(finalText || '').length,
+          usage: null,
+        });
+      }
+      if (w && typeof w.neverDoubleCountCancelUsage === 'function') {
+        w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted });
+      }
+    } catch (_) { /* 3H59 fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
@@ -343,6 +361,59 @@ async function runAgentLoop({
         viaReact = true;
       }
     }
+
+    try {
+      const w = loadEngine3h59();
+      if (w && toolCalls.length) {
+        const next = [];
+        for (const raw of toolCalls) {
+          let call = raw;
+          if (typeof w.stripUnknownToolCallProperties === 'function') {
+            const stripped = w.stripUnknownToolCallProperties(call);
+            if (stripped && stripped.call) call = stripped.call;
+          }
+          if (typeof w.inferToolNameFromCallId === 'function') {
+            const inferred = w.inferToolNameFromCallId(call, Object.keys(executors || {}));
+            if (inferred && inferred.call) call = inferred.call;
+          }
+          if (typeof w.tolerateIncompleteStreamedToolCall === 'function') {
+            const held = w.tolerateIncompleteStreamedToolCall(call);
+            if (held && (held.hold || held.drop)) continue;
+          }
+          if (typeof w.repairPartialToolCallSchema === 'function') {
+            const repaired = w.repairPartialToolCallSchema(call);
+            if (repaired && repaired.call) call = repaired.call;
+          }
+          next.push(call);
+          loopFingerprints.push(call);
+        }
+        toolCalls = next;
+        if (typeof w.cutInfiniteLoopByFingerprint === 'function') {
+          const cut = w.cutInfiniteLoopByFingerprint(loopFingerprints);
+          if (cut && cut.cut) {
+            const classified = typeof w.classifyEngine3h59Error === 'function'
+              ? w.classifyEngine3h59Error({ code: cut.code })
+              : classifyLoopError({ code: cut.code });
+            onEvent({
+              type: 'error',
+              code: classified.code,
+              message: classified.message,
+              retryable: classified.retryable,
+              iteration,
+            });
+            stoppedReason = cut.code || 'loop_fingerprint_cut';
+            return {
+              finalText: finalText || '',
+              iterations: iteration,
+              steps,
+              stoppedReason,
+              verificationAttempts,
+              errorCode: cut.code,
+            };
+          }
+        }
+      }
+    } catch (_) { /* 3H59 fail-open */ }
 
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
