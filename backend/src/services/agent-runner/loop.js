@@ -513,10 +513,6 @@ async function runAgentLoop({
             const inferred = w.inferToolNameFromCallId(call, Object.keys(executors || {}));
             if (inferred && inferred.call) call = inferred.call;
           }
-          if (typeof w.tolerateIncompleteStreamedToolCall === 'function') {
-            const held = w.tolerateIncompleteStreamedToolCall(call);
-            if (held && (held.hold || held.drop)) continue;
-          }
           if (typeof w.repairPartialToolCallSchema === 'function') {
             const repaired = w.repairPartialToolCallSchema(call);
             // A parse-failed call that only produced `{}` is not a real
@@ -531,8 +527,35 @@ async function runAgentLoop({
             );
             if (repaired && repaired.call && !garbageToEmpty) call = repaired.call;
           }
+          try {
+            const adapter = loadEngineAdapter();
+            const rawArgs = call && call.function ? call.function.arguments : null;
+            if (adapter && typeof adapter.repairTruncatedJson === 'function' && typeof rawArgs === 'string') {
+              const fixed = adapter.repairTruncatedJson(rawArgs);
+              if (fixed && fixed.ok && fixed.value && !fixed.value.__parse_error) {
+                call = {
+                  ...call,
+                  function: {
+                    ...(call.function || {}),
+                    arguments: JSON.stringify(fixed.value),
+                  },
+                };
+              }
+            }
+          } catch (_) { /* adapter fail-open */ }
+          if (typeof w.tolerateIncompleteStreamedToolCall === 'function') {
+            const held = w.tolerateIncompleteStreamedToolCall(call);
+            // A finished model turn is not a streamed partial: holding would
+            // drop the call and skip repair-fail accounting. Only drop.
+            if (held && held.drop) continue;
+          }
           next.push(call);
-          loopFingerprints.push(call);
+          const argsRaw = call && call.function ? call.function.arguments : null;
+          let argsParseable = true;
+          if (typeof argsRaw === 'string') {
+            try { JSON.parse(argsRaw); } catch (_) { argsParseable = false; }
+          }
+          if (argsParseable) loopFingerprints.push(call);
         }
         toolCalls = next;
         if (typeof w.cutInfiniteLoopByFingerprint === 'function') {
@@ -774,6 +797,7 @@ async function runAgentLoop({
                 },
               );
               if (retried && retried.ok) {
+                consecutiveRepairFails = 0;
                 result = retried.value;
               } else {
                 if (signal?.aborted) bail(iteration);
