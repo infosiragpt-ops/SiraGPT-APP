@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Continuity guards so recurring production features stop disappearing after
+  frontend image recreates and engine-only waves: `docs/continuity-guards.md`,
+  `scripts/assert-continuity-guards.js` (CI job), and `/code` chrome lock SSOT
+  (`lib/code-chrome-lock.ts`, `docs/code-ui-lock.md`). Restores SDIE v2 Phase 1,
+  doc-engine UPN hook + `/api/documents`, ACS/noVNC mounts, ChunkLoad bootstrap,
+  and /code mobile Grok chrome that existed on open PRs but were orphaned on
+  `production-main`.
+
+### Added
+
 - Mobile downloads on `/descargas`: first-class iPhone section with the
   Safari "Añadir a pantalla de inicio" steps and an iOS install coach
   (Safari never fires `beforeinstallprompt`), a real Android APK download

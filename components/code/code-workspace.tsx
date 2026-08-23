@@ -27,10 +27,17 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
+  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
+  getActiveDepartmentComputer,
+  getActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
+import { CodeMobileComputerOverlay } from "@/components/code/code-mobile-grok-chrome"
+import { CODE_CHROME_LOCK } from "@/lib/code-chrome-lock"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
@@ -44,6 +51,7 @@ import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
+import { DepartmentComputerPane } from "./department-computer-pane"
 
 // The chat panel and preview are the two heaviest subtrees in the workspace
 // (the chat alone is a ~3k-line component). Workspace-level state changes —
@@ -106,7 +114,40 @@ export function CodeWorkspace() {
   // time with a bottom toggle (Empresa ↔ Preview).
   const isMobile = useResolvedMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
+  const [departmentComputer, setDepartmentComputer] = React.useState<{
+    id: string
+    name: string
+    projectId?: string | null
+  } | null>(() => getActiveDepartmentSelection())
+  const [computerOpen, setComputerOpen] = React.useState(false)
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    const sync = (event: Event) => {
+      const selection = (event as CustomEvent<{ selection?: { id: string; name: string; projectId?: string | null } | null }>).detail?.selection
+      setDepartmentComputer(selection ?? { id: "ceo-office", name: "CEO Office" })
+    }
+    setDepartmentComputer(getActiveDepartmentSelection())
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, sync)
+  }, [])
+
+  const openDepartmentComputer = React.useCallback(() => {
+    const selection = getActiveDepartmentSelection() || departmentComputer || { id: "ceo-office", name: "CEO Office" }
+    setDepartmentComputer(selection)
+    setComputerOpen(true)
+    if (isMobile) setMobileView("chat")
+  }, [departmentComputer, isMobile])
+
+  React.useEffect(() => {
+    const onOpen = () => openDepartmentComputer()
+    window.addEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+    window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onOpen)
+    return () => {
+      window.removeEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+      window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onOpen)
+    }
+  }, [openDepartmentComputer])
 
   React.useEffect(() => {
     const onFocusCeo = () => {
@@ -480,7 +521,15 @@ export function CodeWorkspace() {
   }, [commands, paletteQuery])
 
   return (
-    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className={cn(
+        "flex min-w-0 flex-col overflow-hidden text-foreground",
+        isMobile ? "h-full min-h-0 bg-white" : "h-screen bg-background",
+      )}
+      data-code-mobile-grok={isMobile ? "1" : undefined}
+      data-testid={isMobile ? "code-mobile-grok-shell" : "code-workspace-desktop"}
+    >
+      {isMobile === false || !CODE_CHROME_LOCK.hideDesktopTopBarOnPhone ? (
       <WorkspaceTopBar
         openPanels={openPanels}
         onTogglePanel={handleTogglePanel}
@@ -521,7 +570,11 @@ export function CodeWorkspace() {
         }}
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
+        departmentComputer={departmentComputer}
+        onOpenDepartmentComputer={openDepartmentComputer}
+        computerOpen={computerOpen}
       />
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
         {(() => {
@@ -533,7 +586,15 @@ export function CodeWorkspace() {
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
-                    {previewOpen ? (
+                    {computerOpen && departmentComputer ? (
+                      <DepartmentComputerPane
+                        departmentName={departmentComputer.name}
+                        departmentId={departmentComputer.id}
+                        projectId={departmentComputer.projectId}
+                        computerRunId={getActiveDepartmentComputer() || `dept-${departmentComputer.id}`}
+                        onClose={() => setComputerOpen(false)}
+                      />
+                    ) : previewOpen ? (
                       <MemoPreviewPane />
                     ) : (
                       <div className="flex h-full min-h-0 items-center justify-center bg-muted/10 px-6 py-10">
@@ -604,36 +665,18 @@ export function CodeWorkspace() {
           // hidden) so chat state and the live preview survive switching.
           if (isMobile) {
             return (
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="relative min-h-0 flex-1 overflow-hidden">
-                  <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
-                    <MemoAgentCompanyPanel />
-                  </div>
-                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
-                    {mainArea}
-                  </div>
+              <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white" data-testid="code-mobile-grok-layout">
+                <div className="absolute inset-0">
+                  <MemoAgentCompanyPanel />
                 </div>
-                <div className="flex shrink-0 border-t border-border/60 bg-background">
-                  {([
-                    { id: "chat", label: "Empresa" },
-                    { id: "preview", label: "Preview" },
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setMobileView(tab.id)}
-                      aria-pressed={mobileView === tab.id}
-                      className={cn(
-                        "flex-1 px-3 py-2.5 text-xs font-medium transition-colors",
-                        mobileView === tab.id
-                          ? "border-t-2 border-primary text-foreground"
-                          : "border-t-2 border-transparent text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
-                </div>
+                {computerOpen && departmentComputer ? (
+                  <CodeMobileComputerOverlay
+                    departmentName={departmentComputer.name}
+                    departmentId={departmentComputer.id}
+                    computerRunId={getActiveDepartmentComputer() || `dept-${departmentComputer.id}`}
+                    onClose={() => setComputerOpen(false)}
+                  />
+                ) : null}
               </div>
             )
           }

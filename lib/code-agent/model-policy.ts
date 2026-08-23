@@ -41,6 +41,11 @@ export function isSlowModel(id: string | null | undefined): boolean {
   return SLOW_PATTERNS.some((re) => re.test(s))
 }
 
+export function listDeepSeekGenerationModels<T extends ModelLike>(models: T[]): T[] {
+  if (!Array.isArray(models) || models.length === 0) return []
+  return models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
+}
+
 export function recommendFastModel<T extends ModelLike>(models: T[]): T | null {
   if (!Array.isArray(models) || models.length === 0) return null
   for (const re of FAST_PRIORITY) {
