@@ -100,6 +100,7 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .catch(() => null)
 }
 import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
+import { canOpenComposerPreview, INDEXING_STATUS_LABEL } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
   ImageAspectRatioMark,
@@ -1946,7 +1947,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const longPasteMeta = getLongPasteMetadata(file);
           const imageSizeClass = uploadedFiles.length > 1 ? 'h-[4.5rem] w-[4.5rem]' : 'h-20 w-20';
           const attachment = viewerSiblings[index];
-          const canPreview = !isFailed && attachmentHasPreviewSource(attachment);
+          const canPreview = !isFailed
+            && !isUploading
+            && canOpenComposerPreview({ id: resolveUploadFileId(file), status: file.status })
+            && attachmentHasPreviewSource(attachment);
           const openPreview = () => {
             if (!canPreview || !attachment) return;
             if (onPreviewAttachment) {
@@ -1987,7 +1991,13 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
               )}
-              title={isFailed ? `Subida fallida: ${file.uploadError || 'error'}` : canPreview ? 'Ver documento' : 'Preparando documento'}
+              title={isFailed
+                ? `Subida fallida: ${file.uploadError || 'error'}`
+                : isUploading
+                  ? 'Subiendo…'
+                  : canPreview
+                    ? (file.status === 'processing' ? `Ver documento · ${INDEXING_STATUS_LABEL}` : 'Ver documento')
+                    : 'Preparando documento'}
               onClick={openPreview}
               role="listitem"
               aria-label={chipLabel}
@@ -8989,7 +8999,12 @@ But first, you need to connect your Spotify account securely using the button be
   }, [composerPreviewIndex, composerPreviewSiblings]);
 
   const openComposerDocumentPreview = React.useCallback((index: number) => {
-    if (!uploadedFiles[index]) return;
+    const file = uploadedFiles[index];
+    if (!file) return;
+    if (file.status === "uploading" || !canOpenComposerPreview({
+      id: resolveUploadFileId(file),
+      status: file.status,
+    })) return;
     setSplitViewContent(null);
     setDocumentPreviewUrl(null);
     setSidePreviewAttachment(null);

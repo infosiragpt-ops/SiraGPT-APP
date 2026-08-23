@@ -121,6 +121,8 @@ import DOMPurify from "dompurify"
 import { Document as PdfDocument, Page as PdfPage, pdfjs } from "react-pdf"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
+  CONVERSION_LOADING_LABEL,
+  INDEXING_STATUS_LABEL,
   PREVIEW_LOADING_LABEL,
   isRetryablePreviewError,
   isRetryablePreviewHttpStatus,
@@ -221,6 +223,8 @@ export interface AttachmentLike {
   status?: string | null
   /** 0..100 HTTP upload progress — keep the pane in sync with the chip. */
   uploadProgress?: number | null
+  /** RAG pipeline stage after HTTP upload (does not block original-byte preview). */
+  processingStage?: string | null
 }
 
 interface UnifiedDocumentViewerProps {
@@ -399,6 +403,7 @@ export default function UnifiedDocumentViewer({
 
   const kind = detectKind(attachment)
   const Icon = iconForKind(kind)
+  const previewGate = resolvePreviewGate(attachment)
 
   const downloadUrl = attachment.url ? absUrl(attachment.url) : null
   const canDownload = !!downloadUrl || !!attachment.file
@@ -462,6 +467,9 @@ export default function UnifiedDocumentViewer({
             <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
               {kind !== "unknown" && <span className={liquidMetaPillClass}>{kind}</span>}
               {attachment.size ? <span className={liquidMetaPillClass}>{formatSize(attachment.size)}</span> : null}
+              {previewGate.phase === "indexing" ? (
+                <span className={liquidMetaPillClass}>{INDEXING_STATUS_LABEL}</span>
+              ) : null}
               {siblings && siblings.length > 1 && idx >= 0 ? (
                 <span className={liquidMetaPillClass}>{idx + 1} / {siblings.length}</span>
               ) : null}
@@ -759,7 +767,7 @@ function ServerConvertedPdfRenderer({
   if (state === "probing") {
     const canWaitForServer = canUseServerPdfConversion(a) || !hasClientPreviewSource(a)
     if (canWaitForServer) {
-      return <LoadingState label={PREVIEW_LOADING_LABEL} progress={a.uploadProgress ?? 100} />
+      return <LoadingState label={CONVERSION_LOADING_LABEL} />
     }
     return <>{fallback}</>
   }

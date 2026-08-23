@@ -114,6 +114,20 @@ test("document viewer attachments carry composer upload status and progress", ()
   assert.equal(attachment.file, file)
 })
 
+test("document viewer attachments carry RAG processing stage after persist", () => {
+  const attachment = toDocumentViewerAttachment({
+    id: "file_abc",
+    name: "tesis.docx",
+    status: "processing",
+    processingStage: "extracting",
+    url: "/uploads/user/tesis.docx",
+  })
+
+  assert.equal(attachment.status, "processing")
+  assert.equal(attachment.processingStage, "extracting")
+  assert.equal(attachment.url, "/uploads/user/tesis.docx")
+})
+
 test("file-like detection works without relying on browser File globals", () => {
   const file = fakeFile("notes.txt", "text/plain")
 

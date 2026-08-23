@@ -23,7 +23,7 @@ import DOMPurify from "dompurify"
 import { readXlsxWorkbook, xlsxRowToValues } from "@/lib/xlsx-client"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { PREVIEW_LOADING_LABEL, resolvePreviewGate } from "@/lib/document-preview-gate"
+import { CONVERSION_LOADING_LABEL, PREVIEW_LOADING_LABEL, resolvePreviewGate } from "@/lib/document-preview-gate"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 
 // Keep the full document viewer (pdf.js, DOCX/XLSX/PPTX renderers, etc.) out
@@ -798,7 +798,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         // the inferred agent-artifact endpoint.
         const pdfEndpoint = explicitPdfUrl || derivePreviewPdfUrl(downloadUrl) || derivePreviewPdfUrl(assetUrl)
         if (pdfEndpoint) {
-          setState({ kind: "loading", message: PREVIEW_LOADING_LABEL })
+          setState({ kind: "loading", message: CONVERSION_LOADING_LABEL })
           try {
             const pdfResp = await fetchPreviewAsset(pdfEndpoint)
             if (pdfResp.ok && (pdfResp.headers.get("content-type") || "").includes("pdf")) {

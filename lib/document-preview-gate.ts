@@ -1,24 +1,28 @@
 /**
  * Document preview readiness gate.
  *
- * The composer can open the right-pane viewer while bytes are still
- * leaving the browser. Rendering from the in-memory File in that window
- * produces a "finished" PDF-style page (docx-preview / mammoth) while
- * the chip is still at 80–90%. This module is the single decision for
- * "show professional loading" vs "the server has the full object".
+ * The composer chip's combined bar is dual-phase (HTTP upload 0–50, then
+ * server RAG processing 50–100). ~80% is typically extracting/chunking
+ * AFTER the server already has a stable file.id. Preview must:
+ *   - stay closed while HTTP upload is still in flight (temp id only)
+ *   - allow the original bytes once the object is persisted, even if
+ *     RAG is still indexing
+ *   - show a professional skeleton while LibreOffice converts to PDF
  */
 
-export type PreviewGatePhase = "uploading" | "converting" | "ready" | "failed"
+export type PreviewGatePhase = "uploading" | "indexing" | "converting" | "ready" | "failed"
 
 export interface PreviewGateInput {
   id?: string | null
   url?: string | null
   status?: string | null
   uploadProgress?: number | null
+  processingStage?: string | null
   file?: unknown
 }
 
 export interface PreviewGate {
+  /** True when the right pane may render original bytes / start conversion. */
   ready: boolean
   phase: PreviewGatePhase
   progress: number
@@ -27,6 +31,20 @@ export interface PreviewGate {
 
 const TEMP_ID_RE = /^temp(?:[-_]|$)/i
 const LOCAL_ONLY_URL_RE = /^(?:blob:|data:)/i
+const INDEXING_STAGES = new Set([
+  "uploaded",
+  "validating",
+  "extracting",
+  "chunking",
+  "embedding",
+  "indexing",
+  "processing",
+])
+
+export const CONVERSION_LOADING_LABEL = "Generando vista previa…"
+export const INDEXING_STATUS_LABEL = "Subido · preparando índice…"
+export const UPLOAD_STATUS_LABEL = "Subiendo…"
+export const PREVIEW_LOADING_LABEL = CONVERSION_LOADING_LABEL
 
 export function clampPreviewProgress(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value)
@@ -59,19 +77,26 @@ export function isRetryablePreviewError(error: unknown): boolean {
 }
 
 /**
- * True once the HTTP upload finished AND the server persisted a real
- * file row (stable id and/or /uploads URL). Local File blobs do not
- * count — they exist before the server has the object.
+ * Chip click / openComposerDocumentPreview gate.
+ * HTTP upload must be finished (stable file.id). RAG indexing does not block.
  */
+export function canOpenComposerPreview(input: PreviewGateInput = {}): boolean {
+  const status = String(input.status || "").toLowerCase()
+  if (status === "failed" || status === "uploading") return false
+  return isStableServerFileId(input.id) || hasServerBackedPreviewUrl(input.url)
+}
+
 export function isPreviewObjectReady(input: PreviewGateInput): boolean {
   return resolvePreviewGate(input).ready
 }
 
 export function resolvePreviewGate(input: PreviewGateInput = {}): PreviewGate {
   const status = String(input.status || "").toLowerCase()
+  const stage = String(input.processingStage || "").toLowerCase()
   const progress = clampPreviewProgress(input.uploadProgress)
   const stableId = isStableServerFileId(input.id)
   const serverUrl = hasServerBackedPreviewUrl(input.url)
+  const persisted = stableId || serverUrl
 
   if (status === "failed") {
     return {
@@ -82,35 +107,24 @@ export function resolvePreviewGate(input: PreviewGateInput = {}): PreviewGate {
     }
   }
 
-  const uploadInFlight =
-    status === "uploading" ||
-    (!stableId && !serverUrl && (status === "" || progress < 100))
+  const uploadInFlight = status === "uploading" || (!persisted && status !== "ready")
 
   if (uploadInFlight) {
-    const shown = progress > 0 ? Math.min(99, progress) : 1
+    const shown = progress > 0 ? Math.min(99, Math.round(progress)) : 1
     return {
       ready: false,
       phase: "uploading",
       progress: shown,
-      label: "Preparando vista previa…",
+      label: UPLOAD_STATUS_LABEL,
     }
   }
 
-  if (!stableId && !serverUrl) {
-    return {
-      ready: false,
-      phase: "uploading",
-      progress: progress > 0 ? Math.min(99, progress) : 1,
-      label: "Preparando vista previa…",
-    }
-  }
-
-  if (status === "processing") {
+  if (status === "processing" || INDEXING_STAGES.has(stage)) {
     return {
       ready: true,
-      phase: "converting",
-      progress: Math.max(progress, 100),
-      label: "Preparando vista previa…",
+      phase: "indexing",
+      progress: 100,
+      label: INDEXING_STATUS_LABEL,
     }
   }
 
@@ -121,5 +135,3 @@ export function resolvePreviewGate(input: PreviewGateInput = {}): PreviewGate {
     label: "",
   }
 }
-
-export const PREVIEW_LOADING_LABEL = "Preparando vista previa…"

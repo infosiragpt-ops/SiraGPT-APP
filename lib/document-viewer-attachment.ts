@@ -10,6 +10,8 @@ export interface DocumentViewerAttachment {
   status?: string | null
   /** 0..100 HTTP upload progress, synced with the composer chip. */
   uploadProgress?: number | null
+  /** RAG pipeline stage (uploaded/extracting/…) after HTTP upload. */
+  processingStage?: string | null
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -165,6 +167,11 @@ export function toDocumentViewerAttachment(
       record.uploadProgress,
       record.upload_progress,
       record.progress,
+    ),
+    processingStage: firstString(
+      record.processingStage,
+      record.processing_stage,
+      record.stage,
     ),
   }
 }

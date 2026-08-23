@@ -18,6 +18,24 @@ test("composer chips pass live upload progress into the right-pane viewer", () =
   )
 })
 
+test("composer chips do not open preview until HTTP upload has a stable file id", () => {
+  const source = readFileSync(path.join(root, "components/chat-interface-enhanced.tsx"), "utf8")
+  assert.match(source, /canOpenComposerPreview/)
+  assert.match(source, /!isUploading/)
+  assert.match(
+    source,
+    /file\.status === "uploading" \|\| !canOpenComposerPreview/,
+    "openComposerDocumentPreview must refuse clicks while the XHR is still in flight",
+  )
+})
+
+test("composer chip progress shows a visible upload vs processing label", () => {
+  const source = readFileSync(path.join(root, "components/file-upload-progress.tsx"), "utf8")
+  assert.match(source, /describeComposerChipProgress/)
+  assert.match(source, /truncate text-\[10\.5px\]/)
+  assert.match(source, /\{label\}/)
+})
+
 test("files render waits for the persisted object instead of converting a partial upload", () => {
   const source = readFileSync(path.join(root, "backend/src/routes/files.js"), "utf8")
   assert.match(source, /isPersistedPreviewSource/)
