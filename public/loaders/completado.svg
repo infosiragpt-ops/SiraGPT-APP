@@ -1,9 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="completado">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="completado">
   <title>SiraGPT loader · completado</title>
-  <g fill="none" stroke="#34D399" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-    <circle cx="32" cy="28" r="12"/>
-    <path d="M25.6 28.2 29.8 32.4 39 22.8"/>
+  <g fill="none" stroke="#38BDF8" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="32" cy="32" r="16" stroke-dasharray="101" stroke-dashoffset="101">
+      <animate attributeName="stroke-dashoffset" from="101" to="0" dur="0.45s" fill="freeze"/>
+    </circle>
+    <path d="M22 33 29 40 44 24" stroke-dasharray="36" stroke-dashoffset="36">
+      <animate attributeName="stroke-dashoffset" from="36" to="0" begin="0.2s" dur="0.35s" fill="freeze"/>
+    </path>
   </g>
-  
 </svg>

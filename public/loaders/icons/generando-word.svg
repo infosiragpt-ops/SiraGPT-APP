@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="generando word">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="generando word">
   <title>SiraGPT loader · generando word</title>
-  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M24 10.5h12.5L44 18v16.5H24z"/>
-    <path d="M36.5 10.6v7.4H44"/>
-    <path d="M28.2 22.2 30.4 30h1.6l1.5-5.2 1.5 5.2h1.6l2.2-7.8" stroke-width="1.5"/>
-  </g>
-  
+  <rect x="22" y="2.5" width="20" height="20" rx="4.5" fill="#38BDF8"/>
+  <text x="32" y="16.8" text-anchor="middle" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="700">W</text>
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8"/>
 </svg>

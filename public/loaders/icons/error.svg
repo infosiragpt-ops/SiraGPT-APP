@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="error">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="error">
   <title>SiraGPT loader · error</title>
-  <g fill="none" stroke="#F87171" stroke-width="1.9" stroke-linecap="round">
-    <circle cx="32" cy="28" r="12"/>
-    <path d="M27.2 23.2 36.8 32.8M36.8 23.2 27.2 32.8"/>
+  <g fill="none" stroke="#F87171" stroke-width="3" stroke-linecap="round">
+    <circle cx="32" cy="32" r="16"/>
+    <path d="M24 24 40 40M40 24 24 40"/>
   </g>
-  
 </svg>

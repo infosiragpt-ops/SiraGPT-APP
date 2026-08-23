@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="generando video">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="generando video">
   <title>SiraGPT loader · generando video</title>
-  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="20.5" y="13" width="23" height="16" rx="2.4"/>
-    <path d="M29 17.6 36.4 21 29 24.4z" fill="#38BDF8" stroke="none"/>
+  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round">
+    <rect x="20.5" y="5" width="23" height="16" rx="2.4"/>
+    <path d="M29 9.6 36.4 13 29 16.4z" fill="#38BDF8" stroke="none"/>
   </g>
-  
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8"/>
 </svg>

@@ -2,45 +2,51 @@
 
 Professional thinking states for `/chat` (DeepSeek). Every in-progress
 state shares the **same** bouncing bars so a phase change only swaps the
-top icon + Spanish label — the bounce never restarts.
+top icon + Spanish label.
 
-## Kit
+## Kit (19 SVGs in `public/loaders/`)
 
 | File | Label |
 |---|---|
-| `public/loaders/pensando.svg` | Pensando… |
-| `public/loaders/buscando-internet.svg` | Buscando en internet… |
-| `public/loaders/generando-codigo.svg` | Generando código… |
-| `public/loaders/generando-word.svg` | Generando documento Word… |
-| `public/loaders/generando-pdf.svg` | Generando PDF… |
-| `public/loaders/generando-ppt.svg` | Generando presentación… |
-| `public/loaders/generando-excel.svg` | Generando hoja de cálculo… |
-| `public/loaders/generando-imagen.svg` | Generando imagen… |
-| `public/loaders/generando-audio.svg` | Generando audio… |
-| `public/loaders/generando-video.svg` | Generando video… |
-| `public/loaders/analizando-archivo.svg` | Analizando archivo… |
-| `public/loaders/subiendo-archivo.svg` | Subiendo archivo… |
-| `public/loaders/descargando-archivo.svg` | Descargando archivo… |
-| `public/loaders/enviando-correo.svg` | Enviando correo… |
-| `public/loaders/procesando-datos.svg` | Procesando datos… |
-| `public/loaders/cargando-general.svg` | Cargando… |
-| `public/loaders/puntitos.svg` | Pensando… (bars only) |
-| `public/loaders/completado.svg` | ¡Listo! (check, no bars) |
-| `public/loaders/error.svg` | Ocurrió un error (X, no bars) |
+| `pensando.svg` | Pensando… — **bars only**, `viewBox="0 0 64 64"` |
+| `pensando-original.svg` | Luis original crop — `viewBox="10 40 45 50"`, bars at `y=50` |
+| `buscando-internet.svg` | Buscando en internet… — magnifying glass, stroke `#38BDF8` |
+| `generando-codigo.svg` | Generando código… — `</>` chevrons |
+| `generando-word.svg` | Generando documento Word… — rounded rect + white W |
+| `generando-pdf.svg` | Generando PDF… — similar seal |
+| `generando-ppt.svg` | Generando presentación… — similar seal |
+| `generando-excel.svg` | Generando hoja de cálculo… — similar seal |
+| `generando-imagen.svg` | Generando imagen… |
+| `generando-audio.svg` | Generando audio… |
+| `generando-video.svg` | Generando video… |
+| `analizando-archivo.svg` | Analizando archivo… |
+| `subiendo-archivo.svg` | Subiendo archivo… |
+| `descargando-archivo.svg` | Descargando archivo… |
+| `enviando-correo.svg` | Enviando correo… |
+| `procesando-datos.svg` | Procesando datos… |
+| `cargando-general.svg` | Cargando… |
+| `completado.svg` | ¡Listo! — animated check, **no bars** |
+| `error.svg` | Ocurrió un error — animated X, **no bars** |
 
-Icon-only copies (no SMIL bars) live in `public/loaders/icons/` so
-`ThinkingStatusLoader` can swap the glyph without remounting the bounce.
+Static copies (no SMIL) live in `public/loaders/icons/` for
+`prefers-reduced-motion`.
 
 Regenerate: `node scripts/generate-celeste-loaders.cjs`
 
 ## Animation contract
 
-- Color: brand celeste `#38BDF8` (`--sira-celeste` / `--step-running`)
-- Bars: 4×10 px, rx 2
-- Bounce: 20 px, `dur=0.6s`, delays `0 / 0.2 / 0.4s`
-- `prefers-reduced-motion: reduce` freezes the bars
+Shared bounce (every file except `completado` / `error` / the original crop):
 
-Terminal states omit the bars.
+```svg
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8">
+  <animateTransform attributeType="xml" attributeName="transform" type="translate" values="0 0; 0 20; 0 0" begin="0" dur="0.6s" repeatCount="indefinite"/>
+</rect>
+<!-- same at x=30 begin=0.2s and x=40 begin=0.4s -->
+```
+
+- Color: brand celeste `#38BDF8` (`--sira-celeste` / `--step-running`)
+- Top static icon stays above `y≈24`; dots sit at `y=32`
+- `prefers-reduced-motion: reduce` swaps in the static icon copy
 
 ## Tool → state (LEEME)
 
@@ -69,11 +75,11 @@ Implementation: `lib/thinking-loaders.ts` (`mapEventToLoaderState`,
 
 ## UI wiring
 
-- `ThinkingStatusLoader` — header: icon + stable bars + label + elapsed
-- `ClaudeThinkingTimeline` — one header loader; trail uses semantic
-  `--step-pending / --step-running / --step-done / --step-failed`
-- `AgenticStepsRenderer` live header on `/chat`
-- `ThinkingPlaceholder` / `ThinkingTrace` / `AgentTrace` inherit via the timeline
+- `ThinkingStatusLoader` — **status chip** (kit SVG + Spanish label + elapsed)
+- `ClaudeThinkingTimeline` header, `AgenticSteps` live header, inherited by
+  ThinkingPlaceholder / ThinkingTrace / AgentTrace
+- RunTrace (PR 393): this chip is the header; the **step list stays
+  semantic** (`--step-running` blue, `--step-failed` red only — never brand-red)
 
 `/code` Ejecutar / Arrancando is **not** this surface. Do not reuse these
 loaders on the preview-pane run button.

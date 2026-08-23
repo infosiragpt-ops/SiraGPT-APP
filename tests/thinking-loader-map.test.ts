@@ -1,13 +1,15 @@
 import assert from "node:assert/strict"
-import { readFileSync, existsSync } from "node:fs"
+import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { describe, it } from "node:test"
 
 import {
+  KIT_SVG_FILES,
   LOADER_LABELS,
   LOADER_STATES,
   isLoaderState,
   isTerminalLoaderState,
+  loaderChipSrc,
   loaderIconSrc,
   loaderLabel,
   loaderSrc,
@@ -17,12 +19,31 @@ import {
 } from "../lib/thinking-loaders"
 
 const repoRoot = join(__dirname, "..", "..")
+const loadersDir = join(repoRoot, "public", "loaders")
+
+const EXACT_BOUNCE = [
+  /<rect x="20" y="32" width="4" height="10" fill="#38BDF8">/,
+  /<rect x="30" y="32" width="4" height="10" fill="#38BDF8">/,
+  /<rect x="40" y="32" width="4" height="10" fill="#38BDF8">/,
+  /values="0 0; 0 20; 0 0"/,
+  /begin="0"/,
+  /begin="0.2s"/,
+  /begin="0.4s"/,
+  /dur="0.6s"/,
+] as const
 
 describe("thinking-loaders · kit catalog", () => {
-  it("exposes 19 loader states including terminal check/X", () => {
-    assert.equal(LOADER_STATES.length, 19)
+  it("ships exactly 19 kit SVGs under public/loaders/", () => {
+    assert.equal(KIT_SVG_FILES.length, 19)
+    assert.equal(LOADER_STATES.length, 18)
+    const files = readdirSync(loadersDir).filter((name) => name.endsWith(".svg")).sort()
+    assert.deepEqual(
+      files,
+      [...KIT_SVG_FILES].map((name) => `${name}.svg`).sort(),
+    )
     assert.ok(isLoaderState("pensando"))
-    assert.ok(isLoaderState("puntitos"))
+    assert.equal(isLoaderState("pensando-original"), false)
+    assert.equal(isLoaderState("puntitos"), false)
     assert.equal(isLoaderState("unknown"), false)
     assert.equal(isTerminalLoaderState("completado"), true)
     assert.equal(isTerminalLoaderState("error"), true)
@@ -37,28 +58,54 @@ describe("thinking-loaders · kit catalog", () => {
     assert.equal(LOADER_LABELS.error, "Ocurrió un error")
     assert.equal(loaderSrc("generando-pdf"), "/loaders/generando-pdf.svg")
     assert.equal(loaderIconSrc("generando-pdf"), "/loaders/icons/generando-pdf.svg")
+    assert.equal(loaderChipSrc("pensando"), "/loaders/pensando-original.svg")
+    assert.equal(loaderChipSrc("buscando-internet"), "/loaders/buscando-internet.svg")
     assert.equal(loaderLabel("pensando", "Buscando “clima”…"), "Buscando “clima”…")
     assert.equal(loaderLabel("pensando", "   "), "Pensando…")
   })
 
-  it("ships kit SVGs with shared bounce and terminal states without bars", () => {
-    for (const state of LOADER_STATES) {
-      const full = join(repoRoot, "public", "loaders", `${state}.svg`)
-      const icon = join(repoRoot, "public", "loaders", "icons", `${state}.svg`)
+  it("matches the shared bounce snippet (y=32, down 20px) except terminal + original crop", () => {
+    for (const name of KIT_SVG_FILES) {
+      const full = join(loadersDir, `${name}.svg`)
       assert.equal(existsSync(full), true, full)
-      assert.equal(existsSync(icon), true, icon)
       const svg = readFileSync(full, "utf8")
-      if (state === "completado" || state === "error") {
+      if (name === "completado" || name === "error") {
         assert.doesNotMatch(svg, /animateTransform/)
-      } else {
-        assert.match(svg, /width="4" height="10"/)
-        assert.match(svg, /dur="0.6s"/)
-        assert.match(svg, /begin="0s"/)
-        assert.match(svg, /begin="0.2s"/)
-        assert.match(svg, /begin="0.4s"/)
-        assert.match(svg, /#38BDF8/)
+        assert.match(svg, /<animate /)
+        continue
+      }
+      if (name === "pensando-original") {
+        assert.match(svg, /viewBox="10 40 45 50"/)
+        assert.match(svg, /<rect x="20" y="50" width="4" height="10" fill="#38BDF8">/)
+        assert.match(svg, /<rect x="30" y="50" width="4" height="10" fill="#38BDF8">/)
+        assert.match(svg, /<rect x="40" y="50" width="4" height="10" fill="#38BDF8">/)
+        assert.match(svg, /values="0 0; 0 20; 0 0"/)
+        continue
+      }
+      assert.match(svg, /viewBox="0 0 64 64"/)
+      for (const pattern of EXACT_BOUNCE) {
+        assert.match(svg, pattern, `${name} missing ${pattern}`)
       }
     }
+  })
+
+  it("keeps pensando as bars-only and document states as seals + bars", () => {
+    const pensando = readFileSync(join(loadersDir, "pensando.svg"), "utf8")
+    assert.doesNotMatch(pensando, /<path /)
+    assert.doesNotMatch(pensando, /<circle /)
+    assert.doesNotMatch(pensando, /<text /)
+    assert.equal((pensando.match(/<rect /g) || []).length, 3)
+
+    const word = readFileSync(join(loadersDir, "generando-word.svg"), "utf8")
+    assert.match(word, /rx="4.5"/)
+    assert.match(word, />W</)
+
+    const search = readFileSync(join(loadersDir, "buscando-internet.svg"), "utf8")
+    assert.match(search, /stroke="#38BDF8"/)
+    assert.match(search, /<circle /)
+
+    const code = readFileSync(join(loadersDir, "generando-codigo.svg"), "utf8")
+    assert.match(code, /<path d="M26 6 20 13 26 20"/)
   })
 })
 

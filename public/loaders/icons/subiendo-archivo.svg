@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="subiendo archivo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="subiendo archivo">
   <title>SiraGPT loader · subiendo archivo</title>
   <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M23 14h11.5L41 20.8V33H23z"/>
-    <path d="M34.5 14.1v6.7H41"/>
-    <path d="M32 29.2V22.4M28.6 25.2 32 21.8 35.4 25.2"/>
+    <path d="M22 5h10.5L39 11.6V22H22z"/>
+    <path d="M32.5 5.1v6.5H39"/>
+    <path d="M30.5 19.2V12.8M27.4 15.4 30.5 12.2 33.6 15.4"/>
   </g>
-  
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8"/>
 </svg>

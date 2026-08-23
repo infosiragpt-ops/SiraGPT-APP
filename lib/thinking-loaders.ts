@@ -7,6 +7,7 @@
 
 export const SIRA_CELESTE = "#38BDF8"
 
+/** Runtime states wired into ThinkingStatusLoader / tool map. */
 export const LOADER_STATES = [
   "pensando",
   "buscando-internet",
@@ -24,10 +25,12 @@ export const LOADER_STATES = [
   "enviando-correo",
   "procesando-datos",
   "cargando-general",
-  "puntitos",
   "completado",
   "error",
 ] as const
+
+/** All 19 kit files under public/loaders/ (includes Luis's original crop). */
+export const KIT_SVG_FILES = ["pensando-original", ...LOADER_STATES] as const
 
 export type LoaderState = (typeof LOADER_STATES)[number]
 
@@ -48,7 +51,6 @@ export const LOADER_LABELS: Record<LoaderState, string> = {
   "enviando-correo": "Enviando correo…",
   "procesando-datos": "Procesando datos…",
   "cargando-general": "Cargando…",
-  puntitos: "Pensando…",
   completado: "¡Listo!",
   error: "Ocurrió un error",
 }
@@ -67,9 +69,18 @@ export function loaderSrc(state: LoaderState): string {
   return `/loaders/${state}.svg`
 }
 
-/** Icon-only SVG (no bars) so the header can swap glyphs without restarting bounce. */
+/** Static (no SMIL) copy for prefers-reduced-motion. */
 export function loaderIconSrc(state: LoaderState): string {
   return `/loaders/icons/${state}.svg`
+}
+
+/**
+ * Header chip source. `pensando` uses Luis's original crop so the three
+ * bars fill the chip; every other state is the matching 64×64 kit file.
+ */
+export function loaderChipSrc(state: LoaderState): string {
+  if (state === "pensando") return "/loaders/pensando-original.svg"
+  return loaderSrc(state)
 }
 
 export function loaderLabel(state: LoaderState, override?: string | null): string {

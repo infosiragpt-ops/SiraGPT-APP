@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" role="img" aria-label="generando excel">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="generando excel">
   <title>SiraGPT loader · generando excel</title>
-  <g fill="none" stroke="#38BDF8" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="21" y="12" width="22" height="18" rx="2"/>
-    <path d="M21 18h22M21 24h22M28.2 12v18M36 12v18"/>
-  </g>
-  
+  <rect x="22" y="2.5" width="20" height="20" rx="4.5" fill="#38BDF8"/>
+  <text x="32" y="16.8" text-anchor="middle" fill="#ffffff" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="700">X</text>
+<rect x="20" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="30" y="32" width="4" height="10" fill="#38BDF8"/>
+<rect x="40" y="32" width="4" height="10" fill="#38BDF8"/>
 </svg>

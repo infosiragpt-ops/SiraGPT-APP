@@ -8,8 +8,9 @@ import {
   LOADER_LABELS,
   SIRA_CELESTE,
   isTerminalLoaderState,
-  loaderLabel,
+  loaderChipSrc,
   loaderIconSrc,
+  loaderLabel,
   loaderSrc,
 } from "@/lib/thinking-loaders"
 
@@ -34,37 +35,11 @@ function formatElapsed(sec: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-function CelesteBounceBars({
-  color = SIRA_CELESTE,
-  reduced,
-}: {
-  color?: string
-  reduced: boolean
-}) {
-  return (
-    <svg viewBox="0 0 28 32" width="22" height="18" aria-hidden="true" focusable="false" className="celeste-bounce-bars">
-      {[0, 10, 20].map((x, i) => (
-        <rect key={x} x={x} y={reduced ? 11 : 20} width="4" height="10" rx="2" fill={color}>
-          {reduced ? null : (
-            <animateTransform
-              attributeType="xml"
-              attributeName="transform"
-              type="translate"
-              values="0 0; 0 -20; 0 0"
-              begin={`${i * 0.2}s`}
-              dur="0.6s"
-              repeatCount="indefinite"
-            />
-          )}
-        </rect>
-      ))}
-    </svg>
-  )
-}
-
 /**
- * Professional thinking header. Bars stay mounted so a state change only
- * swaps the top icon + label — the bounce never restarts.
+ * Status chip for Pensando / AgenticSteps / RunTrace header.
+ * Renders the kit SVG from public/loaders/ so bounce geometry matches Luis's
+ * snippet exactly. The step list (not this chip) keeps semantic colors —
+ * running is --step-running blue, never brand-red.
  */
 export function ThinkingStatusLoader({
   state,
@@ -81,6 +56,7 @@ export function ThinkingStatusLoader({
   const terminal = isTerminalLoaderState(state)
   const elapsed =
     !terminal && typeof elapsedSec === "number" && elapsedSec >= 0 ? formatElapsed(elapsedSec) : null
+  const src = reduced ? loaderIconSrc(state) : loaderChipSrc(state)
 
   React.useEffect(() => {
     if (!onSettled || (state !== "completado" && state !== "error")) return
@@ -97,38 +73,34 @@ export function ThinkingStatusLoader({
       aria-label={text}
       data-thinking-loader={state}
       data-loader-src={loaderSrc(state)}
+      data-loader-chip={src}
       className={cn(
         "thinking-status-loader inline-flex min-w-0 items-center",
         compact ? "gap-2" : "gap-2.5",
         className,
       )}
+      style={{ color: `var(--sira-celeste, ${SIRA_CELESTE})` }}
     >
       <span
         className={cn(
-          "flex shrink-0 flex-col items-center justify-center",
-          compact ? "w-7" : "w-8",
+          "flex shrink-0 items-center justify-center",
+          compact ? "h-7 w-7" : "h-8 w-8",
         )}
         aria-hidden="true"
       >
-        {/* Tiny static kit glyph from /public; next/image adds nothing for 1KB SVG swaps. */}
+        {/* Kit SVG from /public — next/image adds nothing for 1KB SMIL swaps. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={loaderIconSrc(state)}
+          src={src}
           alt=""
           width={compact ? 28 : 32}
           height={compact ? 28 : 32}
           className={cn(
-            "pointer-events-none select-none object-contain object-top",
-            compact ? "h-[18px] w-7" : "h-5 w-8",
-            terminal && (compact ? "h-7 w-7" : "h-8 w-8"),
+            "pointer-events-none select-none object-contain",
+            compact ? "h-7 w-7" : "h-8 w-8",
           )}
           draggable={false}
         />
-        {!terminal ? (
-          <span className="pointer-events-none -mt-0.5">
-            <CelesteBounceBars reduced={reduced} />
-          </span>
-        ) : null}
       </span>
       {hideLabel ? null : (
         <span
