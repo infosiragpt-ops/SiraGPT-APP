@@ -307,13 +307,13 @@ describe('upload R2 fallback streams same-origin bytes', () => {
     };
   }
 
-  function buildApp(storage) {
+  function buildApp(storage, fallbackOpts = {}) {
     const app = express();
     app.use(cookieParser());
     const mount = (base) => {
       app.use(base, createUploadStaticAccessGuard({ uploadsDir: uploadDir, prisma }));
       app.use(base, express.static(uploadDir));
-      app.use(base, createUploadR2Fallback({ objectStorage: storage }));
+      app.use(base, createUploadR2Fallback({ objectStorage: storage, ...fallbackOpts }));
       app.use(base, (_req, res) => res.status(404).json({ error: 'File not found' }));
     };
     mount('/uploads');
@@ -418,16 +418,87 @@ describe('upload R2 fallback streams same-origin bytes', () => {
     const storage = fakeStorage({
       objects: new Map([['r2:uploads/user-a/contrato.pdf', bytes]]),
     });
-    const res = await getBinary(buildApp(storage), '/uploads/user-a/contrato.pdf', {
-      Authorization: auth.authHeader,
-      Origin: 'http://localhost:3000',
-    });
+    // Mirror CI: NODE_ENV=production + CORS_ORIGINS without localhost.
+    const ciEnv = {
+      NODE_ENV: 'production',
+      CORS_ORIGINS: 'https://web.ci.example.test',
+      FRONTEND_URL: 'https://web.ci.example.test',
+    };
+    const res = await getBinary(
+      buildApp(storage, { env: ciEnv }),
+      '/uploads/user-a/contrato.pdf',
+      {
+        Authorization: auth.authHeader,
+        Origin: 'http://localhost:3000',
+      },
+    );
 
     assert.equal(res.status, 200);
     assert.equal(res.headers['access-control-allow-origin'], 'http://localhost:3000');
     assert.equal(res.headers['access-control-allow-credentials'], 'true');
     assert.match(String(res.headers['access-control-expose-headers'] || ''), /Content-Type/);
     assert.equal(res.headers.location, undefined);
+  });
+
+  test('echoes localhost:3000 when CORS_ORIGINS is the CI production allowlist', () => {
+    const sent = {};
+    const res = {
+      setHeader(name, value) { sent[name.toLowerCase()] = value; },
+    };
+    const applied = applyUploadPreviewCors(
+      { headers: { origin: 'http://localhost:3000' } },
+      res,
+      {
+        env: {
+          NODE_ENV: 'production',
+          CORS_ORIGINS: 'https://web.ci.example.test',
+          FRONTEND_URL: 'https://web.ci.example.test',
+        },
+      },
+    );
+    assert.equal(applied, true);
+    assert.equal(sent['access-control-allow-origin'], 'http://localhost:3000');
+    assert.equal(sent['access-control-allow-credentials'], 'true');
+  });
+
+  test('echoes the configured production chat origin on streamed uploads', () => {
+    const sent = {};
+    const res = {
+      setHeader(name, value) { sent[name.toLowerCase()] = value; },
+    };
+    const applied = applyUploadPreviewCors(
+      { headers: { origin: 'https://siragpt.com' } },
+      res,
+      {
+        env: {
+          NODE_ENV: 'production',
+          CORS_ORIGINS: 'https://siragpt.com,https://www.siragpt.com',
+        },
+      },
+    );
+    assert.equal(applied, true);
+    assert.equal(sent['access-control-allow-origin'], 'https://siragpt.com');
+    assert.equal(sent['access-control-allow-credentials'], 'true');
+  });
+
+  test('echoes FRONTEND_URL when it is the chat origin', () => {
+    const sent = {};
+    const res = {
+      setHeader(name, value) { sent[name.toLowerCase()] = value; },
+    };
+    const applied = applyUploadPreviewCors(
+      { headers: { origin: 'https://web.ci.example.test' } },
+      res,
+      {
+        env: {
+          NODE_ENV: 'production',
+          CORS_ORIGINS: 'https://api.ci.example.test',
+          FRONTEND_URL: 'https://web.ci.example.test',
+        },
+      },
+    );
+    assert.equal(applied, true);
+    assert.equal(sent['access-control-allow-origin'], 'https://web.ci.example.test');
   });
 
   test('does not echo CORS for an origin outside the allowlist', () => {

@@ -5,7 +5,7 @@ const {
   findSessionByPresentedToken,
 } = require('../services/auth/session-token-persistence');
 const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
-const { resolveAllowedOrigins } = require('./cors-policy');
+const { DEV_FALLBACK, resolveAllowedOrigins } = require('./cors-policy');
 
 const UPLOAD_CONTENT_TYPES = {
   '.pdf': 'application/pdf',
@@ -50,10 +50,36 @@ const UPLOAD_CORS_EXPOSE = [
 ].join(', ');
 
 /**
+ * Extra chat origins that must keep credentialed CORS on `/uploads` even
+ * when CORS_ORIGINS is a production-only list (CI sets
+ * `https://web.ci.example.test`; local Next still sends localhost:3000).
+ * Scoped to this middleware — global credentialed CORS stays fail-closed.
+ */
+function resolveUploadPreviewOrigins(env = process.env, resolveOrigins = resolveAllowedOrigins) {
+  const extras = [...DEV_FALLBACK];
+  const frontend = String(env?.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (/^https?:\/\//i.test(frontend)) {
+    try { extras.push(new URL(frontend).origin); } catch { /* ignore */ }
+  }
+  let configured = [];
+  try {
+    const resolved = resolveOrigins(env);
+    if (Array.isArray(resolved)) configured = resolved;
+  } catch {
+    // Misconfigured CORS_ORIGINS must not strip localhost chat preview.
+  }
+  return [...new Set([...extras, ...configured])];
+}
+
+/**
  * Credentialed CORS for `/uploads` preview fetches. Chat may call the API
  * host (NEXT_PUBLIC_IMAGE_URL) with Origin: https://siragpt.com. A 302 to
  * R2 drops these headers; streaming on this origin must echo them so
  * `fetch(..., { credentials: 'include' })` can read the PDF/DOCX body.
+ *
+ * Always unions DEV_FALLBACK (localhost / 127.0.0.1 :3000/:3001) so the
+ * same-origin stream works for local Next and CI, even when CORS_ORIGINS
+ * is production-only. Foreign origins are still refused.
  */
 function applyUploadPreviewCors(req, res, {
   resolveOrigins = resolveAllowedOrigins,
@@ -61,13 +87,7 @@ function applyUploadPreviewCors(req, res, {
 } = {}) {
   const origin = String(req.headers?.origin || '').trim();
   if (!origin) return false;
-  let allowed;
-  try {
-    allowed = resolveOrigins(env);
-  } catch {
-    return false;
-  }
-  if (!Array.isArray(allowed)) return false;
+  const allowed = resolveUploadPreviewOrigins(env, resolveOrigins);
   if (!allowed.includes('*') && !allowed.includes(origin)) return false;
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -348,7 +368,11 @@ function createUploadStaticAccessGuard({ uploadsDir, prisma, jwtSecret = process
  * dies with TypeError "Failed to fetch" / XHR status 0 (no CORS on the signed
  * URL). Same-origin bytes keep PDF.js, iframes, and DOCX preview working.
  */
-function createUploadR2Fallback({ objectStorage = require('../services/object-storage') } = {}) {
+function createUploadR2Fallback({
+  objectStorage = require('../services/object-storage'),
+  resolveOrigins,
+  env,
+} = {}) {
   return async function uploadR2Fallback(req, res, next) {
     try {
       if (req.method !== 'GET' && req.method !== 'HEAD') return next();
@@ -365,7 +389,7 @@ function createUploadR2Fallback({ objectStorage = require('../services/object-st
       );
       if (!stream || typeof stream.pipe !== 'function') return next();
 
-      applyUploadPreviewCors(req, res);
+      applyUploadPreviewCors(req, res, { resolveOrigins, env });
       res.setHeader('Content-Type', contentTypeForUploadPath(relativePath, contentType));
       res.setHeader('Cache-Control', 'private, max-age=60');
       res.setHeader(
@@ -403,6 +427,7 @@ module.exports = {
   UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS,
   UPLOAD_MEDIA_TOKEN_TYPE,
   applyUploadPreviewCors,
+  resolveUploadPreviewOrigins,
   classifyUploadPath,
   contentTypeForUploadPath,
   createUploadMediaTokenHandler,
