@@ -43,7 +43,7 @@ export type EditorSaveOptions = {
 /** Minimal shape of the apiClient surface this module needs. */
 export type EditorApiClient = {
   saveDocumentEdit?: (fileId: string, body: { content: string; chatId?: string; summary?: string }) => Promise<unknown>
-  getFileContent?: (id: string) => Promise<string>
+  getFileContent?: (id: string, versionId?: string) => Promise<string>
   request?: (endpoint: string, options?: { method?: string; body?: string }) => Promise<unknown>
 }
 
@@ -297,6 +297,32 @@ export async function buildExportBlob(
   return {
     blob: new Blob([markdown || ""], { type }),
     filename: `${safeBase}.${format}`,
+  }
+}
+
+/**
+ * Persist a manual edit as a new FileVersion via the backend edit route.
+ *
+ * Graceful degradation: if the route/endpoint isn't available (older backend,
+ * mock server without the edit route), falls back to returning a locally-built
+ * version record so the UI can still show "saved" for the current session.
+ */
+/**
+ * Load the effective editor content for a file. With `versionId` (a restored
+ * text version), reads that version's stored text; otherwise falls back to
+ * the file's extracted original.
+ */
+export async function loadDocumentContent(
+  fileId: string,
+  apiClient: unknown,
+  versionId?: string,
+): Promise<string> {
+  const client = fallbackApiClient(apiClient)
+  if (typeof client.getFileContent !== "function") return ""
+  try {
+    return String((await client.getFileContent(fileId, versionId)) || "")
+  } catch {
+    return ""
   }
 }
 

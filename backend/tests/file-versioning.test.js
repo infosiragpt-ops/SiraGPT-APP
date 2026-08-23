@@ -121,6 +121,54 @@ describe('versioning', () => {
     }), null);
   });
 
+  test('restore of a manual text edit creates a content-backed head (no artifact)', async () => {
+    const prisma = makeFakePrisma();
+    await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: 'artifact-edit', filename: 'tesis.docx', summary: 'edición agéntica',
+    });
+    const manual = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: null, filename: 'tesis.md',
+      summary: 'Edición manual desde el editor de documentos',
+    });
+    // Mirror the edit route: the edited Markdown is persisted on the row.
+    manual.content = '# Tesis corregida\n\nPárrafo editado.';
+
+    const result = await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: manual.id, userId: 'u1', createdByChatId: 'chat-2',
+    });
+
+    assert.ok(result, 'a text version must be restorable');
+    assert.equal(result.restored.version, 3);
+    assert.equal(result.restored.artifactId, null, 'text restores stay content-backed');
+    assert.equal(result.restored.content, '# Tesis corregida\n\nPárrafo editado.');
+    assert.equal(result.restored.editPlan.restoreKind, 'text');
+    assert.match(result.restored.summary, /Restaurada desde la versión 2/);
+  });
+
+  test('restore of an artifact version carries no stray content field', async () => {
+    const prisma = makeFakePrisma();
+    const withArtifact = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: 'art-9', filename: 'tesis.docx', summary: 'binario',
+    });
+    const result = await restoreFileVersion(prisma, { fileId: 'file-a', versionId: withArtifact.id, userId: 'u1' });
+    assert.equal(result.restored.content, undefined);
+    assert.equal(result.restored.editPlan.restoreKind, 'artifact');
+  });
+
+  test('restoring a version with neither artifact nor content fails explicitly', async () => {
+    const prisma = makeFakePrisma();
+    prisma._rows.push({
+      id: 'fv-empty', fileId: 'file-a', userId: 'u1', version: 5,
+      artifactId: null, content: null, filename: 'hueco.docx',
+      validationPassed: true, createdAt: new Date(),
+    });
+    await assert.rejects(
+      () => restoreFileVersion(prisma, { fileId: 'file-a', versionId: 'fv-empty', userId: 'u1' }),
+      (err) => err.code === 'VERSION_NOT_RESTORABLE',
+    );
+    assert.equal(prisma._rows.length, 1, 'no new head is created for a non-restorable source');
+  });
+
   test('best-effort: create failure returns null, never throws', async () => {
     const prisma = makeFakePrisma({ failCreate: true });
     assert.equal(await recordFileVersion(prisma, { fileId: 'f', userId: 'u', filename: 'x' }), null);

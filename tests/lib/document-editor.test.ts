@@ -5,6 +5,7 @@ import {
   markdownToDocxBlob,
   buildExportBlob,
   saveEditedDocument,
+  loadDocumentContent,
   isEditorContentWithinLimits,
 } from '@/lib/chat/document-editor'
 
@@ -164,6 +165,31 @@ describe('saveEditedDocument', () => {
     })
     expect(request).toHaveBeenCalled()
     expect(result.version.version).toBe(1)
+  })
+})
+
+describe('loadDocumentContent', () => {
+  it('passes versionId to getFileContent for a restored text version', async () => {
+    const getFileContent = vi.fn().mockResolvedValue('# Versión restaurada')
+    const text = await loadDocumentContent('f1', { getFileContent }, 'v7')
+    expect(getFileContent).toHaveBeenCalledWith('f1', 'v7')
+    expect(text).toBe('# Versión restaurada')
+  })
+
+  it('loads the extracted original when no versionId is given', async () => {
+    const getFileContent = vi.fn().mockResolvedValue('original')
+    const text = await loadDocumentContent('f1', { getFileContent })
+    expect(getFileContent).toHaveBeenCalledWith('f1', undefined)
+    expect(text).toBe('original')
+  })
+
+  it('returns "" on fetch failure instead of throwing', async () => {
+    const getFileContent = vi.fn().mockRejectedValue(new Error('network'))
+    expect(await loadDocumentContent('f1', { getFileContent }, 'v1')).toBe('')
+  })
+
+  it('returns "" when the client has no getFileContent', async () => {
+    expect(await loadDocumentContent('f1', {})).toBe('')
   })
 })
 

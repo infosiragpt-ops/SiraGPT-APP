@@ -44,6 +44,7 @@ import {
   Flag,
   Settings,
   PenSquare,
+  Pencil,
   MessageSquare,
   Star,
   Disc3,
@@ -100,6 +101,12 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .catch(() => null)
 }
 import { getAttachmentLocalFile, toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
+// Rich-text editor panel for uploaded documents — lazy so the Tiptap bundle
+// stays out of the eager chat route. TiptapEditor is not SSR-safe, hence ssr:false.
+const DocumentEditorPanel = dynamic(
+  () => import("@/components/chat/DocumentEditorPanel").then((m) => m.DocumentEditorPanel),
+  { ssr: false, loading: () => null },
+)
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import {
   ImageAspectRatioMark,
@@ -1849,6 +1856,7 @@ type ActiveOptionsDisplayProps = {
   onPreviewAttachment?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
   onFileProcessingStatusChange?: (file: any, status: FileProcessingStatus) => void;
   moveFile?: (index: number, delta: -1 | 1) => void;
+  onEditDocument?: (file: any, result?: unknown) => void;
 }
 
 function areActiveOptionsDisplayPropsEqual(
@@ -1863,7 +1871,8 @@ function areActiveOptionsDisplayPropsEqual(
     prev.restoreLongPasteToInput === next.restoreLongPasteToInput &&
     prev.onPreviewAttachment === next.onPreviewAttachment &&
     prev.onFileProcessingStatusChange === next.onFileProcessingStatusChange &&
-    prev.moveFile === next.moveFile
+    prev.moveFile === next.moveFile &&
+    prev.onEditDocument === next.onEditDocument
   )
 }
 
@@ -1877,9 +1886,13 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
   onPreviewAttachment,
   onFileProcessingStatusChange,
   moveFile,
+  onEditDocument,
 }: ActiveOptionsDisplayProps) {
   // Screen-reader announcement for keyboard reordering (aria-live).
   const [reorderAnnouncement, setReorderAnnouncement] = React.useState("");
+  // Document editor state — pick the file being edited / saved.
+  const [editingFile, setEditingFile] = React.useState<any | null>(null);
+  const [editingFileId, setEditingFileId] = React.useState<string | null>(null);
   // Inline expanded preview for "PEGADO" text-snippet chips.
   const [expandedSnippetId, setExpandedSnippetId] = React.useState<string | null>(null);
   // Viewer state — same reusable viewer used by sent-message chips, so
@@ -1954,6 +1967,23 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
             } else {
               setViewingIndex(index);
             }
+          };
+
+          // Rich-text edit: available once the upload has a real id (i.e. is
+          // not still uploading / failed) and the chip has a document-ish name.
+          const docEditId = resolveUploadFileId(file);
+          const docEditLabel = String(file.originalName || file.name || file.filename || "");
+          const canEditDocument = Boolean(
+            docEditId
+            && !isFailed
+            && /\.(md|markdown|txt|docx?|pdf|rtf|odt|ods|odp|pptx?|xlsx?|csv)$/i.test(docEditLabel)
+            && typeof onEditDocument === "function"
+          );
+          const openDocEditor = () => {
+            if (!canEditDocument) return;
+            setEditingFile(file);
+            setEditingFileId(String(docEditId));
+            onEditDocument?.(file);
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
@@ -2185,6 +2215,18 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                         <RefreshCw className="h-3.5 w-3.5" />
                       </Button>
                     )}
+                    {canEditDocument && !longPasteMeta && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-5 w-5 p-0 hover:bg-gray-200 dark:hover:bg-muted rounded-full text-muted-foreground"
+                        onClick={(e) => { e.stopPropagation(); openDocEditor(); }}
+                        title="Editar documento"
+                        aria-label={`Editar documento ${file.name || ""}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -2212,6 +2254,14 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const newIdx = viewerSiblings.findIndex(s => s === next);
           if (newIdx >= 0) setViewingIndex(newIdx);
         }}
+      />
+      <DocumentEditorPanel
+        open={editingFile !== null}
+        file={editingFile}
+        fileId={editingFileId || undefined}
+        apiClient={apiClient}
+        onClose={() => { setEditingFile(null); setEditingFileId(null); }}
+        onSaved={(result) => onEditDocument?.(editingFile, result)}
       />
     </div>
   );
@@ -5026,6 +5076,31 @@ function ChatInterfaceContent() {
   const currentChatId = currentChat?.id ?? null
   const currentChatIdRef = React.useRef<string | null>(currentChatId)
   currentChatIdRef.current = currentChatId
+
+  // Persisted chat-turn association for the rich-text document editor. When
+  // the user saves an edit of an uploaded document, we record a USER message
+  // referencing the file (id-only) so the edited doc is recoverable from chat
+  // history — same shape the composer uses for attached files.
+  const handleDocumentEditorSaved = React.useCallback(async (file: any, _result?: unknown) => {
+    const targetChatId = currentChatIdRef.current;
+    const fileIds = collectUploadFileIds(file ? [file] : []);
+    if (!targetChatId || fileIds.length === 0) return;
+    const displayName = String(file?.originalName || file?.name || file?.filename || "documento editado");
+    try {
+      await apiClient.addMessage(targetChatId, {
+        role: "USER",
+        content: `Edité el documento "${displayName}" desde el editor de documentos.`,
+        files: fileIds,
+        metadata: {
+          source: "document-editor",
+          editedAt: new Date().toISOString(),
+        },
+        idempotencyKey: `doc-edit-${fileIds[0]}-${Date.now()}`,
+      });
+    } catch (err) {
+      console.warn("[document-editor] chat-turn attach failed (non-fatal):", err);
+    }
+  }, []);
   // Live refs so stable (identity-fixed) callbacks like `branchMessage` can
   // read the latest chat/model without re-creating — required because the
   // memoized MessageComponent ignores callback prop changes.
@@ -7705,6 +7780,7 @@ But first, you need to connect your Spotify account securely using the button be
             moveFile={moveFile}
             onPreviewAttachment={handleComposerAttachmentPreview}
             onFileProcessingStatusChange={handleFileProcessingStatusChange}
+            onEditDocument={handleDocumentEditorSaved}
           />
           <SelectedTextDisplay text={selectedWordText} onClear={() => setSelectedWordText(null)} />
         </>
