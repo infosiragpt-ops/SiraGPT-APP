@@ -973,12 +973,17 @@ function startCommentHeartbeat({
   };
 }
 
-function honorLastEventId(headerValue, ring) {
+function honorLastEventId(headerValue, ring, opts = {}) {
   const n = Number(String(headerValue || '').trim());
   if (!Number.isFinite(n) || n < 0) return { ok: true, replay: [], last: 0 };
   const frames = Array.isArray(ring) ? ring : [];
-  const replay = frames.filter((f) => Number(f && f.seq) > n);
-  return { ok: true, replay, last: n, code: replay.length ? 'sse_resume' : null };
+  const inclusive = Boolean(opts && opts.inclusive);
+  const replay = frames.filter((f) => {
+    const seq = Number(f && f.seq);
+    if (!Number.isFinite(seq)) return false;
+    return inclusive ? seq >= n : seq > n;
+  });
+  return { ok: true, replay, last: n, code: replay.length ? 'sse_resume' : null, inclusive };
 }
 
 function dedupConsecutiveAssistantCalls(calls) {

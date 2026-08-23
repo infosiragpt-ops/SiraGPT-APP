@@ -1,6 +1,6 @@
 # Benchmark de capacidades del motor — SiraGPT
 
-Versión del rubric: **3H60** (2026-08-23, ola 15:57 Lima).  
+Versión del rubric: **3H60** (2026-08-23, ola 15:57 Lima) + **hot path #388 / #399**.  
 Alcance: **solo motor** (agent loop, tools, SSE, contexto, checkpoints, créditos). UI sin cambios.
 
 Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Cada fila defiende un cambio medible. `unmeasured` incluye cómo medirla en la siguiente ola.
@@ -33,6 +33,7 @@ Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Ca
 ```bash
 cd backend
 node --test tests/ola-3h60-invariants.test.js tests/ola-3h59-invariants.test.js
+node --test tests/engine-hotpath-wire.test.js
 node --test tests/sse-writer.test.js tests/public-stream-error.test.js tests/sandbox-local-and-router.test.js
 ```
 
@@ -49,3 +50,25 @@ Carga real (p50/p95 first-token / end-of-turn): aún **unmeasured en VPS**. Inst
 - Rollback de checkpoint a disco/git (hoy snapshot de bytes + restore callback).
 - Reconnect SSE e2e con EventSource real + Last-Event-ID persistido en cookie/header.
 - Accounting de créditos contra ledger Prisma en el path de error (hoy settle helper + gateway hook).
+
+## Hot path #388 / #399
+
+3H60 ya está en `production-main`. Este ship **no** reescribe PRs 381–385 ni sustituye el overlay: cablea los exports **vivos de #388** (`engine-adapter.js` + `engine-3h59.js`) en el hot path, fail-closed.
+
+| Señal | Cómo se mide |
+|---|---|
+| Wired | `loop.js` / `ai.js` llaman el helper #388 por su nombre exportado |
+| Fail-closed | error de herramienta transitoria o repair-fail **detiene** el loop |
+| Tests | `backend/tests/engine-hotpath-wire.test.js` + 3H32-S-002 (exclusive default) |
+
+| Capacidad | Target (Claude Code / Cowork) | Medido en vivo (antes) | Medido tras este ship | Helper #388 |
+|---|---|---|---|---|
+| 1. Tool-call retry / repair | Reintento transitorio (timeout / ECONNRESET / 502) del **mismo** tool; re-invoke tras repair; stop tras N repair-fail | Una pasada `repairPartialToolCallSchema` + `executor(args)` una vez; `catch` → string `ERROR`. `retryToolWithBackoff` / `isRetryableToolFailure` existían en `engine-adapter.js` y **cero callsites** en `loop.js` | `loop.js` llama `retryToolWithBackoff` + `isRetryableToolFailure` (max 3). Tras `__parse_error`, `repairTruncatedJson` y re-invoke. 3 repair-fail consecutivos → `tool_repair_exhausted`. Transient exhaust → `tool_retry_exhausted` (no sigue el loop con strings ERROR). 3H60 `settleCreditsOnError` se conserva en el path ERROR | `retryToolWithBackoff`, `isRetryableToolFailure`, `repairTruncatedJson`, `repairPartialToolCallSchema` |
+| 2. Session queue / SSE | Heartbeat en el stream de **generate**; Last-Event-ID replay **inclusivo** si hay ring; flush al cancel; FIFO per-session | Generate in-process; BullMQ default OFF. ChatRun `: ping` 15s **no** es generate. Generate usaba `setInterval` crudo. `honorLastEventId` era exclusivo (`seq > n`). FIFO ya existe en `agent-gateway/queue.js` (`lanes` + `sessionQueueOrderBySeq`) | Generate usa `startCommentHeartbeat`. `honorLastEventId(..., { inclusive: true })` cuando hay ring de chunks. Default del helper sigue exclusivo (3H32-S-002 verde). Cancel/finally llama `stop()`. BullMQ **sigue OFF**. No se aplicó 381–385 | `startCommentHeartbeat`, `honorLastEventId`, `sessionQueueOrderBySeq` |
+| 3. Context compaction | Compactar **antes** de `callModel` si pasa presupuesto; conservar system + pins; sin UI `/compact` | `compactUntilTokenBudget` / `anchorCriticalFacts` / `compactPreserveFactAnchors` existían y **cero callsites** en `loop.js` / `index.js` | `compactMessagesInPlace` corre antes de cada `callModel`: `compactUntilTokenBudget` + restore de `anchorCriticalFacts` / `compactPreserveFactAnchors`. 3H60 compact-if-`messages.length > 24` se conserva. Sin ruta `/compact` | `compactUntilTokenBudget`, `estimateCompactTokens`, `anchorCriticalFacts`, `compactPreserveFactAnchors` |
+
+### Notas de no-regresión
+
+- El hot path usa nombres #388 (`retryToolWithBackoff`, `honorLastEventId`, `compactUntilTokenBudget`). Los helpers 3H60 (`retryTransientToolError`, `sseReplayFromLastEventId`, …) **siguen** en el overlay y en el loop fail-open; no se borran.
+- `honorLastEventId` sin `{ inclusive: true }` sigue filtrando `seq > n`.
+- DeepSeek only. Sin OpenRouter. Sin cambios de UI. Sin `docker compose down -v`.

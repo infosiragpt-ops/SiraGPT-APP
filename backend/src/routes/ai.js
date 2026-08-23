@@ -1767,6 +1767,52 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 }
 
 const streamControllers = new Map();
+
+function stopGenerateSseHeartbeat(handle) {
+  if (!handle) return null;
+  if (typeof handle.stop === 'function') {
+    try { handle.stop(); } catch (_) { /* already cleared */ }
+    return null;
+  }
+  try { clearInterval(handle); } catch (_) { /* not a timer */ }
+  return null;
+}
+
+function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
+  try {
+    const { startCommentHeartbeat } = require('../services/agent-runner/engine-adapter');
+    return startCommentHeartbeat({
+      write: (chunk) => {
+        try { res.write(chunk); } catch (_) { /* socket gone */ }
+      },
+      intervalMs,
+      signal,
+    });
+  } catch (_) {
+    const timer = setInterval(() => {
+      try { res.write(`: ping ${Date.now()}\n\n`); } catch { /* socket gone */ }
+    }, intervalMs);
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return { stop() { try { clearInterval(timer); } catch (_) {} } };
+  }
+}
+
+function inclusiveReplayStartFromRing(chunks, lastPosition) {
+  const list = Array.isArray(chunks) ? chunks : [];
+  const fallback = Math.min(Math.max(0, Number(lastPosition) || 0), list.length);
+  try {
+    const { honorLastEventId } = require('../services/agent-runner/engine-adapter');
+    const ring = list.map((content, i) => ({ seq: i + 1, content }));
+    const honored = honorLastEventId(String(lastPosition), ring, { inclusive: true });
+    if (honored && Array.isArray(honored.replay) && honored.replay.length) {
+      const firstSeq = Number(honored.replay[0].seq);
+      if (Number.isFinite(firstSeq) && firstSeq > 0) return firstSeq - 1;
+    }
+    if (honored && honored.ok) return list.length;
+  } catch (_) { /* adapter fail-open: exclusive slice */ }
+  return fallback;
+}
+
 router.post(
   '/generate',
   [
@@ -2027,10 +2073,7 @@ router.post(
           res.setHeader('X-Accel-Buffering', 'no');
           if (typeof res.flushHeaders === 'function') res.flushHeaders();
           try { res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now(), replay: true })}\n\n`); } catch {}
-          keepAlive = setInterval(() => {
-            try { res.write(`: ping ${Date.now()}\n\n`); }
-            catch { clearInterval(keepAlive); keepAlive = null; }
-          }, 5000);
+          keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal });
           try {
             const replay = await publicWebTurn.entry.promise;
             if (Array.isArray(replay?.sources) && replay.sources.length > 0) {
@@ -2349,7 +2392,7 @@ router.post(
             res.setHeader('X-Accel-Buffering', 'no');
             if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-            const durableReplayStart = Math.min(resumeReplayPosition, record.chunks.length);
+            const durableReplayStart = inclusiveReplayStartFromRing(record.chunks, resumeReplayPosition);
             const replay = record.chunks.slice(durableReplayStart);
             for (let i = 0; i < replay.length; i += 1) {
               const position = durableReplayStart + i + 1;
@@ -2487,14 +2530,10 @@ router.post(
       res.setHeader('X-Accel-Buffering', 'no');
       if (typeof res.flushHeaders === 'function') res.flushHeaders();
       try { res.write(`data: ${JSON.stringify({ type: 'start', at: Date.now() })}\n\n`); } catch { /* socket gone */ }
-      // Start keep-alive heartbeat right away so proxies / Replit's edge
-      // don't time out while enrichment runs. Cleared in the outer finally.
-      keepAlive = setInterval(() => {
-        try {
-          res.write(`: ping ${Date.now()}\n\n`);
-          res.write(`data: ${JSON.stringify({ type: 'heartbeat', at: Date.now() })}\n\n`);
-        } catch { clearInterval(keepAlive); keepAlive = null; }
-      }, 5000);
+      // Live #388 startCommentHeartbeat on the generate stream (ChatRun
+      // `: ping` 15s is a different path). 5s interval keeps proxy/edge
+      // from timing out during enrichment. Cleared in the outer finally.
+      keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal });
 
       // Document-followup recovery (chat path): when a user asks about an
       // already-uploaded document WITHOUT re-attaching it, reattach the most
@@ -5856,11 +5895,12 @@ router.post(
         };
         // Replay missing chunks
         try {
-          const missing = resumeSession.record.chunks.slice(resumeReplayPosition);
+          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition);
+          const missing = resumeSession.record.chunks.slice(replayStart);
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
-            const frame = `data: ${JSON.stringify({ content: chunk, _resumed: true })}\n\n`;
-            res.write(`id: ${sid}:${resumeReplayPosition + i + 1}\n`);
+            const frame = 'data: ' + JSON.stringify({ content: chunk, _resumed: true }) + '\n\n';
+            res.write(`id: ${sid}:${replayStart + i + 1}\n`);
             res.write(frame);
           }
         } catch (replayErr) {
@@ -6036,7 +6076,7 @@ router.post(
         if (cacheHandle && typeof cacheHandle.complete === 'function') {
           try { cacheHandle.complete(); } catch (_) {}
         }
-        if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+        keepAlive = stopGenerateSseHeartbeat(keepAlive);
         if (!res.writableEnded) res.end();
         return;
       }
@@ -7373,10 +7413,7 @@ router.post(
       // mark the shared resume record complete/failed a second time.
       if (streamResumeFollower) return;
 
-      if (keepAlive) {
-        clearInterval(keepAlive);
-        keepAlive = null;
-      }
+      keepAlive = stopGenerateSseHeartbeat(keepAlive);
       if (resumeLeaseHeartbeat) {
         clearInterval(resumeLeaseHeartbeat);
         resumeLeaseHeartbeat = null;
