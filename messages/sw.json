@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Kompyuta ya wakala",
+        "status": {
+          "live": "Moja kwa moja",
+          "starting": "Inaanza…",
+          "error": "Hitilafu",
+          "idle": "Inasubiri"
+        },
+        "dock": {
+          "browser": "Kivinjari",
+          "files": "Faili",
+          "terminal": "Terminal",
+          "desktop": "Dawati"
+        },
+        "routines": {
+          "toggle": "Ratiba",
+          "active": "hai"
+        }
+      }
     }
   },
   "meta": {

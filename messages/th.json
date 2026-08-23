@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "คอมพิวเตอร์ของเอเจนต์",
+        "status": {
+          "live": "สด",
+          "starting": "กำลังเริ่ม…",
+          "error": "ข้อผิดพลาด",
+          "idle": "กำลังรอ"
+        },
+        "dock": {
+          "browser": "เบราว์เซอร์",
+          "files": "ไฟล์",
+          "terminal": "เทอร์มินัล",
+          "desktop": "เดสก์ท็อป"
+        },
+        "routines": {
+          "toggle": "กิจวัตร",
+          "active": "ใช้งาน"
+        }
+      }
     }
   },
   "meta": {

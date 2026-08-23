@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "에이전트 컴퓨터",
+        "status": {
+          "live": "라이브",
+          "starting": "시작 중…",
+          "error": "오류",
+          "idle": "대기 중"
+        },
+        "dock": {
+          "browser": "브라우저",
+          "files": "파일",
+          "terminal": "터미널",
+          "desktop": "데스크톱"
+        },
+        "routines": {
+          "toggle": "루틴",
+          "active": "활성"
+        }
+      }
     }
   },
   "meta": {

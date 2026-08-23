@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "מחשב הסוכן",
+        "status": {
+          "live": "בשידור חי",
+          "starting": "מתחיל…",
+          "error": "שגיאה",
+          "idle": "בהמתנה"
+        },
+        "dock": {
+          "browser": "דפדפן",
+          "files": "קבצים",
+          "terminal": "מסוף",
+          "desktop": "שולחן עבודה"
+        },
+        "routines": {
+          "toggle": "שגרות",
+          "active": "פעיל"
+        }
+      }
     }
   },
   "meta": {

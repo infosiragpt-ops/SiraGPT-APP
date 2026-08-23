@@ -645,7 +645,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Компьютер агента",
+        "status": {
+          "live": "Прямой эфир",
+          "starting": "Запуск…",
+          "error": "Ошибка",
+          "idle": "Ожидание"
+        },
+        "dock": {
+          "browser": "Браузер",
+          "files": "Файлы",
+          "terminal": "Терминал",
+          "desktop": "Рабочий стол"
+        },
+        "routines": {
+          "toggle": "Рутины",
+          "active": "активна"
+        }
+      }
     }
   },
   "meta": {

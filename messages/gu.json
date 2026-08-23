@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "એજન્ટનું કમ્પ્યુટર",
+        "status": {
+          "live": "લાઇવ",
+          "starting": "શરૂ થઈ રહ્યું છે…",
+          "error": "ભૂલ",
+          "idle": "રાહ જોઈ રહ્યું છે"
+        },
+        "dock": {
+          "browser": "બ્રાઉઝર",
+          "files": "ફાઇલો",
+          "terminal": "ટર્મિનલ",
+          "desktop": "ડેસ્કટોપ"
+        },
+        "routines": {
+          "toggle": "દિનચર્યા",
+          "active": "સક્રિય"
+        }
+      }
     }
   },
   "meta": {

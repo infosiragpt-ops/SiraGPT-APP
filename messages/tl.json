@@ -573,7 +573,26 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Kompyuter ng ahente",
+        "status": {
+          "live": "Live",
+          "starting": "Sinisimulan…",
+          "error": "Error",
+          "idle": "Naghihintay"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Mga file",
+          "terminal": "Terminal",
+          "desktop": "Desktop"
+        },
+        "routines": {
+          "toggle": "Mga routine",
+          "active": "aktibo"
+        }
+      }
     }
   },
   "meta": {
