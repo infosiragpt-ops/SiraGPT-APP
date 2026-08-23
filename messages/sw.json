@@ -652,5 +652,23 @@
     "sendHint": "Tuma",
     "stopHint": "Acha",
     "dropFiles": "Acha faili hapa ili kuzipakia"
+  },
+  "sharePage": {
+    "loading": "Inapakiwa…",
+    "errorTitle": "Kosa limetokea",
+    "errorBody": "Mazungumzo yaliyoshirikishwa hayakuwezi kupakiwa. Tafadhali jaribu tena.",
+    "notFoundTitle": "Mazungumzo yaliyoshirikishwa hayapatikani",
+    "notFoundBody": "Kiungo hiki hakipo au kimefutwa na mmiliki.",
+    "goHome": "Nenda SiraGPT",
+    "defaultTitle": "Mazungumzo yaliyoshirikishwa",
+    "subtitleComplete": "Mazungumzo yenye jumbe {count}",
+    "saveToAccount": "Hifadhi kwenye akaunti yangu",
+    "saving": "Inahifadhiwa…",
+    "saved": "Imehifadhiwa kwenye akaunti yako!",
+    "saveFailed": "Imeshindikana kuhifadhi. Jaribu tena.",
+    "loginRequired": "Unahitaji kuingia ili kuhifadhi.",
+    "loginToSave": "Ingia ili uhifadhi",
+    "saveHint": "Unaweza kuhifadhi nakala kwenye akaunti yako.",
+    "readHint": "Mazungumzo haya yanaweza kusomwa bila malipo."
   }
 }

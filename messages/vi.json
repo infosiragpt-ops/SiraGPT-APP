@@ -652,5 +652,23 @@
     "sendHint": "Gửi",
     "stopHint": "Dừng",
     "dropFiles": "Thả các tệp để tải lên"
+  },
+  "sharePage": {
+    "loading": "Đang tải…",
+    "errorTitle": "Đã xảy ra lỗi",
+    "errorBody": "Không thể tải cuộc trò chuyện được chia sẻ. Vui lòng thử lại.",
+    "notFoundTitle": "Không tìm thấy cuộc trò chuyện được chia sẻ",
+    "notFoundBody": "Liên kết này không tồn tại hoặc đã bị chủ sở hữu thu hồi.",
+    "goHome": "Đến SiraGPT",
+    "defaultTitle": "Cuộc trò chuyện được chia sẻ",
+    "subtitleComplete": "Cuộc trò chuyện với {count} tin nhắn",
+    "saveToAccount": "Lưu vào tài khoản của tôi",
+    "saving": "Đang lưu…",
+    "saved": "Đã lưu vào tài khoản của bạn!",
+    "saveFailed": "Không thể lưu. Vui lòng thử lại.",
+    "loginRequired": "Bạn cần đăng nhập để lưu.",
+    "loginToSave": "Đăng nhập để lưu",
+    "saveHint": "Bạn có thể lưu bản sao vào tài khoản của mình.",
+    "readHint": "Cuộc trò chuyện này có thể đọc miễn phí."
   }
 }

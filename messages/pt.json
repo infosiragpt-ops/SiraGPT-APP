@@ -652,5 +652,23 @@
     "titleDefault": "SiraGPT — Plataforma de IA Multimodal",
     "titleTemplate": "%s · SiraGPT",
     "description": "Plataforma multi-LLM com geração de texto, imagem, áudio e vídeo. GPT-4, Claude, Gemini e mais em um só lugar."
+  },
+  "sharePage": {
+    "loading": "Carregando…",
+    "errorTitle": "Ocorreu um erro",
+    "errorBody": "Não foi possível carregar a conversa partilhada. Tente novamente.",
+    "notFoundTitle": "Conversa partilhada não encontrada",
+    "notFoundBody": "Este link não existe ou foi revogado pelo proprietário.",
+    "goHome": "Ir para o SiraGPT",
+    "defaultTitle": "Conversa partilhada",
+    "subtitleComplete": "Conversa com {count, plural, one {# mensagem} other {# mensagens}}",
+    "saveToAccount": "Guardar na minha conta",
+    "saving": "A guardar…",
+    "saved": "Guardado na sua conta!",
+    "saveFailed": "Não foi possível guardar. Tente novamente.",
+    "loginRequired": "Precisa de iniciar sessão para guardar.",
+    "loginToSave": "Inicie sessão para guardar",
+    "saveHint": "Pode guardar uma cópia na sua conta.",
+    "readHint": "Esta conversa pode ser lida gratuitamente."
   }
 }

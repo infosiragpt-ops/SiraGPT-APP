@@ -652,5 +652,23 @@
     "sendHint": "Send",
     "stopHint": "Stop",
     "dropFiles": "Slipp filerne for at uploade"
+  },
+  "sharePage": {
+    "loading": "Indlæser…",
+    "errorTitle": "Der opstod en fejl",
+    "errorBody": "Det delte samtale kunne ikke indlæses. Prøv igen.",
+    "notFoundTitle": "Den delte samtale blev ikke fundet",
+    "notFoundBody": "Dette link findes ikke eller er blevet annulleret af ejeren.",
+    "goHome": "Gå til SiraGPT",
+    "defaultTitle": "Delt samtale",
+    "subtitleComplete": "Samtale med {count, plural, one {# besked} other {# beskeder}}",
+    "saveToAccount": "Gem i min konto",
+    "saving": "Gemmer…",
+    "saved": "Gemt i din konto!",
+    "saveFailed": "Kunne ikke gemme. Prøv igen.",
+    "loginRequired": "Log ind for at gemme.",
+    "loginToSave": "Log ind for at gemme",
+    "saveHint": "Du kan gemme en kopi i din konto.",
+    "readHint": "Denne samtale kan læses gratis."
   }
 }

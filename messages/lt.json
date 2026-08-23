@@ -652,5 +652,23 @@
     "sendHint": "Siųsti",
     "stopHint": "Stabdyti",
     "dropFiles": "Nuvilkite failus čia, kad įkeltumėte"
+  },
+  "sharePage": {
+    "loading": "Įkeliama…",
+    "errorTitle": "Įvyko klaida",
+    "errorBody": "Nepavyko įkelti bendrinamo pokalbio. Bandykite dar kartą.",
+    "notFoundTitle": "Bendrinamas pokalbis nerastas",
+    "notFoundBody": "Ši nuoroda neegzistuoja arba savininkas ją panaikino.",
+    "goHome": "Eiti į SiraGPT",
+    "defaultTitle": "Bendrinamas pokalbis",
+    "subtitleComplete": "Pokalbis su {count, plural, one {# žinute} few {# žinutėmis} many {# žinučių} other {# žinute}}",
+    "saveToAccount": "Įrašyti į mano paskyrą",
+    "saving": "Įrašoma…",
+    "saved": "Įrašyta į jūsų paskyrą!",
+    "saveFailed": "Nepavyko įrašyti. Bandykite dar kartą.",
+    "loginRequired": "Norint įrašyti, reikia prisijungti.",
+    "loginToSave": "Prisijunkite, kad įrašytumėte",
+    "saveHint": "Kopiją galite įrašyti į savo paskyrą.",
+    "readHint": "Šį pokalbį galima skaityti nemokamai."
   }
 }

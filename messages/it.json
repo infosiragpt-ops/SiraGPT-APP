@@ -652,5 +652,23 @@
     "sendHint": "Invia",
     "stopHint": "Interrompi",
     "dropFiles": "Rilascia i file per caricarli"
+  },
+  "sharePage": {
+    "loading": "Caricamento…",
+    "errorTitle": "Si è verificato un errore",
+    "errorBody": "Impossibile caricare la conversazione condivisa. Riprova.",
+    "notFoundTitle": "Conversazione condivisa non trovata",
+    "notFoundBody": "Questo collegamento non esiste o è stato revocato dal proprietario.",
+    "goHome": "Vai a SiraGPT",
+    "defaultTitle": "Conversazione condivisa",
+    "subtitleComplete": "Conversazione con {count, plural, one {# messaggio} other {# messaggi}}",
+    "saveToAccount": "Salva nel mio account",
+    "saving": "Salvataggio…",
+    "saved": "Salvato nel tuo account!",
+    "saveFailed": "Impossibile salvare. Riprova.",
+    "loginRequired": "Per salvare devi accedere.",
+    "loginToSave": "Accedi per salvare",
+    "saveHint": "Puoi salvare una copia nel tuo account.",
+    "readHint": "Questa conversazione è liberamente leggibile."
   }
 }

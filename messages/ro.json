@@ -652,5 +652,23 @@
     "sendHint": "Trimite",
     "stopHint": "Oprește",
     "dropFiles": "Trage fișierele aici pentru a le încărca"
+  },
+  "sharePage": {
+    "loading": "Se încarcă…",
+    "errorTitle": "A apărut o eroare",
+    "errorBody": "Conversația partajată nu a putut fi încărcată. Încercați din nou.",
+    "notFoundTitle": "Conversația partajată nu a fost găsită",
+    "notFoundBody": "acest link nu există sau a fost revocat de proprietar.",
+    "goHome": "Mergi la SiraGPT",
+    "defaultTitle": "Conversație partajată",
+    "subtitleComplete": "Conversație cu {count, plural, one {# mesaj} few {# mesaje} other {# mesaje}}",
+    "saveToAccount": "Salvează în contul meu",
+    "saving": "Se salvează…",
+    "saved": "Salvat în contul tău!",
+    "saveFailed": "Nu s-a putut salva. Încercați din nou.",
+    "loginRequired": "Trebuie să vă autentificați pentru a salva.",
+    "loginToSave": "Autentificați-vă pentru a salva",
+    "saveHint": "Puteți salva o copie în contul dvs.",
+    "readHint": "Această conversație poate fi citită gratuit."
   }
 }

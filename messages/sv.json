@@ -652,5 +652,23 @@
     "sendHint": "Skicka",
     "stopHint": "Stoppa",
     "dropFiles": "Dra filer hit för att ladda upp"
+  },
+  "sharePage": {
+    "loading": "Laddar…",
+    "errorTitle": "Ett fel uppstod",
+    "errorBody": "Den delade konversationen kunde inte läsas in. Försök igen.",
+    "notFoundTitle": "Den delade konversationen hittades inte",
+    "notFoundBody": "Den här länken finns inte eller har återkallats av ägaren.",
+    "goHome": "Gå till SiraGPT",
+    "defaultTitle": "Delad konversation",
+    "subtitleComplete": "Konversation med {count, plural, one {# meddelande} other {# meddelanden}}",
+    "saveToAccount": "Spara till mitt konto",
+    "saving": "Sparar…",
+    "saved": "Sparat till ditt konto!",
+    "saveFailed": "Kunde inte spara. Försök igen.",
+    "loginRequired": "Du måste logga in för att spara.",
+    "loginToSave": "Logga in för att spara",
+    "saveHint": "Du kan spara en kopia till ditt konto.",
+    "readHint": "Denna konversation kan läsas gratis."
   }
 }

@@ -652,5 +652,23 @@
     "sendHint": "Gönder",
     "stopHint": "Durdur",
     "dropFiles": "Yüklemek için dosyaları buraya bırak"
+  },
+  "sharePage": {
+    "loading": "Yükleniyor…",
+    "errorTitle": "Bir hata oluştu",
+    "errorBody": "Paylaşılan sohbet yüklenemedi. Lütfen tekrar deneyin.",
+    "notFoundTitle": "Paylaşılan sohbet bulunamadı",
+    "notFoundBody": "Bu bağlantı mevcut değil veya sahibi tarafından iptal edildi.",
+    "goHome": "SiraGPT'ye git",
+    "defaultTitle": "Paylaşılan sohbet",
+    "subtitleComplete": "{count} mesajlı sohbet",
+    "saveToAccount": "Hesabıma kaydet",
+    "saving": "Kaydediliyor…",
+    "saved": "Hesabınıza kaydedildi!",
+    "saveFailed": "Kaydedilemedi. Lütfen tekrar deneyin.",
+    "loginRequired": "Kaydetmek için giriş yapmalısınız.",
+    "loginToSave": "Kaydetmek için giriş yap",
+    "saveHint": "Bir kopyayı hesabınıza kaydedebilirsiniz.",
+    "readHint": "Bu sohbet ücretsiz okunabilir."
   }
 }

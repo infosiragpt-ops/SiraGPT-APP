@@ -832,10 +832,18 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         data: { deletedAt },
       });
 
+      // Revocar el enlace público: /api/public/share/:shareId filtra por
+      // isShared=true; sin esto el enlace seguiría sirviendo el chat
+      // (y sus mensajes) después de que el usuario lo borre.
+      await tx.messageShare.deleteMany({
+        where: { chatId: chat.id },
+      });
+
       return tx.chat.update({
         where: { id: chat.id },
         data: {
           deletedAt,
+          isShared: false,
           isArchived: true,
           updatedAt: deletedAt,
         },

@@ -652,5 +652,23 @@
     "sendHint": "שלח",
     "stopHint": "עצור",
     "dropFiles": "שחרר את הקבצים להעלאה"
+  },
+  "sharePage": {
+    "loading": "טוען…",
+    "errorTitle": "אירעה שגיאה",
+    "errorBody": "לא ניתן לטעון את השיחה המשותפת. נסו שוב.",
+    "notFoundTitle": "השיחה המשותפת לא נמצאה",
+    "notFoundBody": "הקישור הזה לא קיים או בוטל על ידי הבעלים.",
+    "goHome": "עבור אל SiraGPT",
+    "defaultTitle": "שיחה משותפת",
+    "subtitleComplete": "שיחה עם {count, plural, one {הודעה אחת} other {# הודעות}}",
+    "saveToAccount": "שמור בחשבון שלי",
+    "saving": "שומר…",
+    "saved": "נשמר בחשבונכם!",
+    "saveFailed": "השמירה נכשלה. נסו שוב.",
+    "loginRequired": "צריך להתחבר כדי לשמור.",
+    "loginToSave": "התחברו כדי לשמור",
+    "saveHint": "אפשר לשמור עותק בחשבונכם.",
+    "readHint": "אפשר לקרוא את השיחה הזו בחינם."
   }
 }

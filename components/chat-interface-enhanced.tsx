@@ -353,6 +353,7 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { buildShareUrl } from "@/lib/share-link"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -7290,8 +7291,10 @@ But first, you need to connect your Spotify account securely using the button be
 
     try {
       const response = await apiClient.handleShare(currentChat.id);
-      const baseUrl = process.env.NEXT_PUBLIC_URL || `http://localhost:${process.env.PORT || 3000}`;
-      const url = `${baseUrl}/share/${response.shareableLink}`;
+      // URL desde el origen real del navegador (ver lib/share-link.ts):
+      // NEXT_PUBLIC_URL puede faltar o apuntar a otro dominio y el enlace
+      // quedaría roto para quien lo recibe.
+      const url = buildShareUrl(String(response.shareableLink), "chat");
       const r = await copyTextSafe(url);
       toast.success(r.ok
         ? "Enlace para compartir copiado"

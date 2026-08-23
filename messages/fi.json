@@ -652,5 +652,23 @@
     "sendHint": "Lähetä",
     "stopHint": "Pysäytä",
     "dropFiles": "Pudota tiedostot ladataksesi ne"
+  },
+  "sharePage": {
+    "loading": "Ladataan…",
+    "errorTitle": "Tapahtui virhe",
+    "errorBody": "Jaettua keskustelua ei voitu ladata. Yritä uudelleen.",
+    "notFoundTitle": "Jaettua keskustelua ei löytynyt",
+    "notFoundBody": "Tämä linkki ei ole olemassa tai omistaja peruutti sen.",
+    "goHome": "Siirry SiraGPT:hen",
+    "defaultTitle": "Jaettu keskustelu",
+    "subtitleComplete": "Keskustelu, jossa on {count, plural, one {# viesti} other {# viestiä}}",
+    "saveToAccount": "Tallenna tililleni",
+    "saving": "Tallennetaan…",
+    "saved": "Tallennettu tilillesi!",
+    "saveFailed": "Tallennus epäonnistui. Yritä uudelleen.",
+    "loginRequired": "Tallentaminen vaatii kirjautumisen.",
+    "loginToSave": "Kirjaudu tallentaaksesi",
+    "saveHint": "Voit tallenna kopion tilillesi.",
+    "readHint": "Tämä keskustelu on luettavissa ilmaiseksi."
   }
 }
