@@ -10,6 +10,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 const {
+  applyUploadPreviewCors,
   createUploadMediaTokenHandler,
   createUploadStaticAccessGuard,
   createUploadR2Fallback,
@@ -309,10 +310,14 @@ describe('upload R2 fallback streams same-origin bytes', () => {
   function buildApp(storage) {
     const app = express();
     app.use(cookieParser());
-    app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir: uploadDir, prisma }));
-    app.use('/uploads', express.static(uploadDir));
-    app.use('/uploads', createUploadR2Fallback({ objectStorage: storage }));
-    app.use('/uploads', (_req, res) => res.status(404).json({ error: 'File not found' }));
+    const mount = (base) => {
+      app.use(base, createUploadStaticAccessGuard({ uploadsDir: uploadDir, prisma }));
+      app.use(base, express.static(uploadDir));
+      app.use(base, createUploadR2Fallback({ objectStorage: storage }));
+      app.use(base, (_req, res) => res.status(404).json({ error: 'File not found' }));
+    };
+    mount('/uploads');
+    mount('/api/uploads');
     return app;
   }
 
@@ -406,6 +411,60 @@ describe('upload R2 fallback streams same-origin bytes', () => {
 
     assert.equal(res.status, 404);
     assert.equal(storage.calls.readStream, 0);
+  });
+
+  test('echoes credentialed CORS for an allowlisted chat origin', async () => {
+    const bytes = Buffer.from('%PDF-1.4 cors-preview');
+    const storage = fakeStorage({
+      objects: new Map([['r2:uploads/user-a/contrato.pdf', bytes]]),
+    });
+    const res = await getBinary(buildApp(storage), '/uploads/user-a/contrato.pdf', {
+      Authorization: auth.authHeader,
+      Origin: 'http://localhost:3000',
+    });
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['access-control-allow-origin'], 'http://localhost:3000');
+    assert.equal(res.headers['access-control-allow-credentials'], 'true');
+    assert.match(String(res.headers['access-control-expose-headers'] || ''), /Content-Type/);
+    assert.equal(res.headers.location, undefined);
+  });
+
+  test('does not echo CORS for an origin outside the allowlist', () => {
+    const sent = {};
+    const res = {
+      setHeader(name, value) { sent[name.toLowerCase()] = value; },
+    };
+    const applied = applyUploadPreviewCors(
+      { headers: { origin: 'https://evil.example' } },
+      res,
+      { resolveOrigins: () => ['https://siragpt.com'] },
+    );
+    assert.equal(applied, false);
+    assert.equal(sent['access-control-allow-origin'], undefined);
+  });
+
+  test('streams the live chip path shape via /api/uploads (authenticated proxy)', async () => {
+    const userId = 'cmqcv09q10000qu01lxftg1r7';
+    auth.restore();
+    auth = installAuthSessionMock({ id: userId });
+    fs.mkdirSync(path.join(uploadDir, userId), { recursive: true });
+    const filename = 'files-1787459261443-51ade1ca8948.pdf';
+    const bytes = Buffer.from('%PDF-1.4 live-chip');
+    const storage = fakeStorage({
+      objects: new Map([[`r2:uploads/${userId}/${filename}`, bytes]]),
+    });
+    const res = await getBinary(
+      buildApp(storage),
+      `/api/uploads/${userId}/${filename}`,
+      { Authorization: auth.authHeader, Origin: 'https://siragpt.com' },
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(res.headers['content-type'], 'application/pdf');
+    assert.equal(res.headers['x-upload-source'], 'r2-stream');
+    assert.equal(res.headers.location, undefined);
+    assert.equal(Buffer.from(res.body).toString('utf8'), bytes.toString('utf8'));
   });
 
   test('still prefers a local file over the R2 stream', async () => {

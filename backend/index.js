@@ -1009,6 +1009,19 @@ app.use('/uploads', express.static(uploadsDir, {
 // the object through this origin. A 302 to a signed R2 URL breaks chat
 // preview (CORS / Failed to fetch). Auth already enforced by the guard above.
 app.use('/uploads', createUploadR2Fallback());
+// Authenticated /api alias of the same stack. Chat preview can fetch
+// `/api/uploads/<user>/<file>` (credentials + Bearer) when `/uploads` is
+// rewritten to a host the browser cannot follow. Same guard + stream.
+app.use('/api/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/api/uploads', express.static(uploadsDir, {
+    setHeaders: (res, filePath) => {
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+        if (/\.pptx$/i.test(filePath)) {
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+        }
+    }
+}));
+app.use('/api/uploads', createUploadR2Fallback());
 
 
 // ── Health probes ───────────────────────────────────────────────

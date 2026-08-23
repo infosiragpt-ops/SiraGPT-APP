@@ -5,6 +5,7 @@ const {
   findSessionByPresentedToken,
 } = require('../services/auth/session-token-persistence');
 const { pipeStreamToResponse } = require('../utils/pipe-stream-to-response');
+const { resolveAllowedOrigins } = require('./cors-policy');
 
 const UPLOAD_CONTENT_TYPES = {
   '.pdf': 'application/pdf',
@@ -37,6 +38,42 @@ function contentTypeForUploadPath(relativePath, objectType) {
   const fromObject = String(objectType || '').trim();
   if (fromObject && fromObject !== 'application/octet-stream') return fromObject;
   return fromExt || fromObject || 'application/octet-stream';
+}
+
+const UPLOAD_CORS_EXPOSE = [
+  'Content-Disposition',
+  'Content-Length',
+  'Content-Type',
+  'Content-Range',
+  'Accept-Ranges',
+  'X-Upload-Source',
+].join(', ');
+
+/**
+ * Credentialed CORS for `/uploads` preview fetches. Chat may call the API
+ * host (NEXT_PUBLIC_IMAGE_URL) with Origin: https://siragpt.com. A 302 to
+ * R2 drops these headers; streaming on this origin must echo them so
+ * `fetch(..., { credentials: 'include' })` can read the PDF/DOCX body.
+ */
+function applyUploadPreviewCors(req, res, {
+  resolveOrigins = resolveAllowedOrigins,
+  env = process.env,
+} = {}) {
+  const origin = String(req.headers?.origin || '').trim();
+  if (!origin) return false;
+  let allowed;
+  try {
+    allowed = resolveOrigins(env);
+  } catch {
+    return false;
+  }
+  if (!Array.isArray(allowed)) return false;
+  if (!allowed.includes('*') && !allowed.includes(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Expose-Headers', UPLOAD_CORS_EXPOSE);
+  return true;
 }
 
 const UPLOAD_MEDIA_TOKEN_AUDIENCE = 'siragpt-upload-static';
@@ -328,6 +365,7 @@ function createUploadR2Fallback({ objectStorage = require('../services/object-st
       );
       if (!stream || typeof stream.pipe !== 'function') return next();
 
+      applyUploadPreviewCors(req, res);
       res.setHeader('Content-Type', contentTypeForUploadPath(relativePath, contentType));
       res.setHeader('Cache-Control', 'private, max-age=60');
       res.setHeader(
@@ -364,6 +402,7 @@ module.exports = {
   UPLOAD_MEDIA_TOKEN_DEFAULT_TTL_SECONDS,
   UPLOAD_MEDIA_TOKEN_MAX_TTL_SECONDS,
   UPLOAD_MEDIA_TOKEN_TYPE,
+  applyUploadPreviewCors,
   classifyUploadPath,
   contentTypeForUploadPath,
   createUploadMediaTokenHandler,
