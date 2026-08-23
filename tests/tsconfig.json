@@ -45,7 +45,9 @@
     "../lib/code-workspace-errors.ts",
     "../lib/code-workspace-error-boundary.ts",
     "../lib/client-bundle-recovery.ts",
-    "../lib/client-build-id.ts"
+    "../lib/client-build-id.ts",
+    "../lib/generation-model-lock.ts",
+    "../lib/admin-activos-lock.ts"
   ],
   "exclude": [
     "../tests/lib"

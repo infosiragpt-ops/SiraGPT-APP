@@ -1,28 +1,43 @@
 # /code continuity (ilación)
 
 Frontend ships as a Next.js **standalone image**. Host TSX is **not** read at
-runtime (unlike backend `FEATURE_DOC_ENGINE` bind-mounts). Therefore:
+runtime (unlike backend `FEATURE_*` bind-mounts).
 
-1. **Source of truth** = GitHub `production-main` (merge `feat/restore-code-lost`).
-2. Before any `build frontend` / `up -d --no-deps --force-recreate frontend`:
-   ```bash
-   bash scripts/preserve-code-patches.sh
-   ```
-3. Rebuild recipe (prod stack — do **not** include base `docker-compose.yml`):
-   ```bash
-   docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env build frontend
-   docker compose -f docker-compose.prod.yml -f docker-compose.production.override.yml --env-file .env up -d --no-deps --force-recreate frontend
-   ```
-4. Never `compose down -v`. Never recreate backend just to ship FE.
-5. ACS viewer: same-origin `https://siragpt.com/agent-computer/...` via Caddy
-   `forward_auth` + `orch-client.js` `reconnect=1` embed URLs.
+## Frontend recreate — HARD BAN
 
-6. Apply `deploy/docker-compose.restore-code.override.yml` volumes on the VPS
-   production override (backend index mount for `/api/agent-computer`, FE source
-   mounts for rebuild continuity). After any backend recreate, confirm
-   `desktopCtx` in `agent-runner` + `multimodal` and `DEPARTMENT COMPUTER` in
-   `prompt.js` still present.
-7. ACS Conectar fix checklist: mount `agent-computer` router in `backend/index.js`,
-   Caddy `handle /agent-computer/*` + `forward_auth` → `/api/agent-computer/embed-auth`,
-   `orch-client` same-origin embed with `autoconnect=1&reconnect=1`, session cookie
-   / `sira_ac` bridge so the noVNC iframe is authenticated.
+Do **not** run `docker compose ... --force-recreate frontend` or an ad-hoc
+`build frontend` on the VPS to apply engine waves, flags, or host patches.
+
+The only legal frontend ship is: merge to `production-main` → CI green →
+the production deploy pipeline that builds that SHA.
+
+`scripts/preserve-code-patches.sh` is a last-resort backup of git-anchored
+files. It is **not** permission to rebuild or recreate the frontend image.
+
+## Source of truth
+
+1. GitHub `production-main` (this tree). Not `/opt/siragpt` sed patches.
+2. Before a **backend** recreate:
+
+   ```bash
+   node scripts/assert-continuity-guards.js
+   bash scripts/reapply-code-ui-lock.sh --check
+   ```
+
+3. Never `compose down -v`. Never recreate frontend just to ship a backend
+   flag. Never recreate backend just to ship FE.
+
+## ACS / Computadora
+
+- Same-origin `https://siragpt.com/agent-computer/...` via Caddy
+  `forward_auth` → `/api/agent-computer/embed-auth`.
+- Mount `agent-computer` + `dept-computer` in `backend/index.js`.
+- `orch-client` same-origin embed with `autoconnect=1&reconnect=1`.
+- After any backend recreate, confirm `desktopCtx` in `agent-runner` and
+  `DEPARTMENT COMPUTER` in the prompt still present.
+
+## OpenSpec in /code
+
+Instruction skills under `backend/src/skills/openspec-*/SKILL.md` are
+loaded by the agent-runner via `openspecSkillsRoot()`. Do not move them
+to a VPS-only path.
