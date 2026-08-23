@@ -254,6 +254,23 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     let externalAbortHandler = null;
 
     function appendCapped(buf, chunk, which) {
+      try {
+        const w60 = require('../agent-runner/engine-3h60');
+        if (typeof w60.sandboxStreamChunkCap === 'function') {
+          const capped = w60.sandboxStreamChunkCap({
+            chunk,
+            used: buf.length,
+            cap: maxOutputBytes,
+          });
+          if (capped && capped.truncated) {
+            if (which === 'stdout') stdoutTruncated = true;
+            else stderrTruncated = true;
+          }
+          if (capped && capped.chunk) {
+            return Buffer.concat([buf, Buffer.from(capped.chunk)]);
+          }
+        }
+      } catch (_) { /* 3H60 fail-open */ }
       const remaining = Math.max(0, maxOutputBytes - buf.length);
       if (remaining === 0) {
         if (which === 'stdout') stdoutTruncated = true;
@@ -280,6 +297,18 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       if (killedReason) return;
       killedReason = reason;
       try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      if (reason === 'aborted') {
+        try {
+          const w60 = require('../agent-runner/engine-3h60');
+          if (typeof w60.sandboxFinallyCleanupOnAbort === 'function') {
+            w60.sandboxFinallyCleanupOnAbort({
+              aborted: true,
+              workdir: args.cwd || args.workdir || null,
+              pid: child && child.pid,
+            });
+          }
+        } catch (_) { /* 3H60 fail-open */ }
+      }
     }
 
     timer = setTimeout(() => killChild('timeout'), timeoutMs);
