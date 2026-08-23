@@ -5402,17 +5402,27 @@ router.post(
       const __cacheableBlockCount = systemBlocks.filter((b) => b.cacheable).length;
       console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} blocks=${systemBlocks.length} cacheable=${__cacheableBlockCount} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} openclaw=${openclawRuntimeProfile?.routing?.reason || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
 
-      // ✅ IMPROVED: Get previous chat history with proper image handling
+      // ✅ IMPROVED: Get previous chat history with proper image handling.
+      // Bounded to the most recent N messages: fitMessagesToContext below
+      // trims this down to the model's context window anyway, so reading the
+      // full table per turn is wasted DB work that grows O(N²) over a chat's
+      // lifetime. Cap is configurable via SIRAGPT_CHAT_HISTORY_CAP.
+      const __historyCap = Math.max(
+        20,
+        Number.parseInt(process.env.SIRAGPT_CHAT_HISTORY_CAP, 10) || 200,
+      );
       let historyMessages = [];
       if (canPersist) {
         historyMessages = await prisma.message.findMany({
           where: { chatId },
-          orderBy: { timestamp: 'asc' },
+          orderBy: { timestamp: 'desc' },
+          take: __historyCap,
           // reasoningDetails: raw OpenRouter thinking blocks (incl. signed
           // Anthropic thinking) replayed verbatim on later turns — see the
           // history-mapping loop below.
           select: { role: true, content: true, files: true, reasoningDetails: true }
         });
+        historyMessages.reverse(); // restore oldest→newest for the mapping loop
       }
       // Anthropic models via OpenRouter require the raw `reasoning_details`
       // of prior assistant turns replayed INTACT when the conversation
@@ -11105,12 +11115,16 @@ router.post(
         }
       }
 
-      // Fetch chat history from the database
-      const historyMessages = await prisma.message.findMany({
-        where: { chatId, chat: { userId } },
-        orderBy: { timestamp: 'asc' },
-        select: { role: true, content: true }
-      });
+      // Fetch chat history from the database — bounded to the most recent
+      // 100 messages; chart generation only needs recent context.
+      const historyMessages = (
+        await prisma.message.findMany({
+          where: { chatId, chat: { userId } },
+          orderBy: { timestamp: 'desc' },
+          take: 100,
+          select: { role: true, content: true }
+        })
+      ).reverse();
 
       // Format messages for the AI service
       const messages = historyMessages.map(m => ({
