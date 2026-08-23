@@ -6,13 +6,21 @@ import {
   Check,
   Clipboard,
   GitBranch,
+  MoreHorizontal,
   RefreshCw,
   Share2,
   ThumbsDown,
   ThumbsUp,
   Volume2,
   VolumeX,
-  X as XIcon} from "lucide-react"
+} from "lucide-react"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { brandModelLabel } from "@/lib/chat/brand-label"
 import {
   Tooltip,
   TooltipContent,
@@ -170,6 +178,7 @@ function RailButton({
         <button
           type="button"
           aria-label={label}
+          title={label}
           aria-pressed={pressed}
           disabled={disabled || loading}
           onClick={onClick}
@@ -282,7 +291,7 @@ export function MessageActionRail({
 
   // #99 — prettify model id for the trailing pill (kept inline so we
   // don't ship another import for ~10 lines of mapping).
-  const prettyModel = React.useMemo(() => prettifyModelId(model), [model])
+  const prettyModel = React.useMemo(() => brandModelLabel(model), [model])
   const showModelBadge = !isLive && !hasError && hasText && !!prettyModel
 
   // Nothing to render? Don't render the container either — keeps the
@@ -436,51 +445,6 @@ export function MessageActionRail({
             icon={copyPulse === "success" ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
           />
         )}
-        {showSpeak && (
-          <RailButton
-            label={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
-            disabled={allDisabled}
-            loading={isLoadingAudio}
-            pressed={isSpeaking}
-            glow={isSpeaking ? "accent" : null}
-            onClick={handleSpeakClick}
-            icon={
-              isSpeaking ? (
-                <span className="group/sp relative inline-flex h-4 w-4 items-center justify-center">
-                  {/* Equalizer by default; swaps to a Stop glyph on hover so
-                      the click affordance stays obvious. */}
-                  <span className="group-hover/sp:opacity-0 transition-opacity">
-                    <SpeakingEqualizer />
-                  </span>
-                  <VolumeX className="absolute h-4 w-4 opacity-0 transition-opacity group-hover/sp:opacity-100" />
-                </span>
-              ) : (
-                <Volume2 className="h-4 w-4" />
-              )
-            }
-          />
-        )}
-        {showFeedback && (
-          <>
-            <RailButton
-              label={localFeedback === "liked" ? "Quitar me gusta" : "Me gusta"}
-              disabled={allDisabled}
-              loading={isSubmittingFeedback === "liked"}
-              pressed={localFeedback === "liked"}
-              onClick={() => handleFeedbackClick("liked")}
-              icon={<ThumbsUp className="h-4 w-4" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
-            />
-            <RailButton
-              label={localFeedback === "disliked" ? "Quitar valoración negativa" : "No me gusta"}
-              disabled={allDisabled}
-              loading={isSubmittingFeedback === "disliked"}
-              pressed={localFeedback === "disliked"}
-              destructive={localFeedback === "disliked"}
-              onClick={() => handleFeedbackClick("disliked")}
-              icon={<ThumbsDown className="h-4 w-4" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
-            />
-          </>
-        )}
         {showRegenerate && (
           <RailButton
             label={regenerationBadge ? `Regenerar respuesta · versión ${regenerationBadge}` : "Regenerar respuesta"}
@@ -505,55 +469,92 @@ export function MessageActionRail({
             }
           />
         )}
-        {showShare && (
-          <RailButton
-            label="Copiar enlace al mensaje"
-            disabled={allDisabled}
-            loading={isSharing}
-            pulse={sharePulse}
-            onClick={handleShareClick}
-            icon={sharePulse === "success" ? <Check className="h-4 w-4" /> : sharePulse === "error" ? <XIcon className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
-          />
+        {showFeedback && (
+          <>
+            <RailButton
+              label={localFeedback === "liked" ? "Quitar me gusta" : "Me gusta"}
+              disabled={allDisabled}
+              loading={isSubmittingFeedback === "liked"}
+              pressed={localFeedback === "liked"}
+              onClick={() => handleFeedbackClick("liked")}
+              icon={<ThumbsUp className="h-4 w-4" strokeWidth={localFeedback === "liked" ? 2.5 : 1.75} />}
+            />
+            <RailButton
+              label={localFeedback === "disliked" ? "Quitar valoración negativa" : "No me gusta"}
+              disabled={allDisabled}
+              loading={isSubmittingFeedback === "disliked"}
+              pressed={localFeedback === "disliked"}
+              destructive={localFeedback === "disliked"}
+              onClick={() => handleFeedbackClick("disliked")}
+              icon={<ThumbsDown className="h-4 w-4" strokeWidth={localFeedback === "disliked" ? 2.5 : 1.75} />}
+            />
+          </>
         )}
-        {showBranch && (
-          // ── "Bifurcar conversación" ──────────────────────────────────
-          // The new, future-facing action. As AI moves from single linear
-          // chats to *exploring a tree of reasoning paths*, branching a
-          // conversation from any answer (git-style, without losing the
-          // original) becomes a core primitive — non-destructive
-          // experimentation with prompts, models and directions. Wired as
-          // an optional handler so it lights up only where the host app
-          // supports forking.
-          <RailButton
-            label="Bifurcar conversación"
-            disabled={allDisabled}
-            loading={isBranching}
-            onClick={handleBranchClick}
-            icon={<GitBranch className="h-4 w-4" />}
-          />
-        )}
-        {showRemember && (
-          // ── "Recordar" (memoria persistente del agente) ──────────────
-          // The most future-facing action of all: software that *remembers*.
-          // The next generation of AI tools is defined by agents with durable,
-          // cross-session memory — pin an answer and the assistant keeps it as
-          // a long-term fact about you, so future chats start already knowing
-          // it. Self-contained: the parent persists it to the user's memory
-          // document. Once saved, the icon latches to a filled/accent state.
-          <RailButton
-            label={remembered ? "Guardado en memoria" : "Recordar esto"}
-            disabled={allDisabled}
-            loading={isRemembering}
-            pressed={remembered}
-            pulse={rememberPulse}
-            glow={remembered ? "accent" : null}
-            onClick={handleRememberClick}
-            icon={
-              rememberPulse === "success" || remembered
-                ? <BrainCircuit className="h-4 w-4" strokeWidth={2.25} />
-                : <BrainCircuit className="h-4 w-4" />
-            }
-          />
+        {(showSpeak || showShare || showBranch || showRemember) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Más acciones"
+                title="Más acciones"
+                disabled={allDisabled}
+                className={cn(
+                  "inline-flex h-9 w-9 items-center justify-center rounded-xl",
+                  "text-muted-foreground/80 hover:text-foreground",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                  allDisabled && "opacity-40 cursor-not-allowed",
+                )}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-[12rem]">
+              {showSpeak && (
+                <DropdownMenuItem
+                  disabled={allDisabled || isLoadingAudio}
+                  onClick={handleSpeakClick}
+                  aria-label={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
+                  title={isSpeaking ? "Detener lectura" : "Leer en voz alta"}
+                >
+                  {isSpeaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                  {isSpeaking ? "Detener lectura" : "Leer en voz alta"}
+                </DropdownMenuItem>
+              )}
+              {showShare && (
+                <DropdownMenuItem
+                  disabled={allDisabled || isSharing}
+                  onClick={handleShareClick}
+                  aria-label="Copiar enlace al mensaje"
+                  title="Copiar enlace al mensaje"
+                >
+                  {sharePulse === "success" ? <Check className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+                  Copiar enlace al mensaje
+                </DropdownMenuItem>
+              )}
+              {showBranch && (
+                <DropdownMenuItem
+                  disabled={allDisabled || isBranching}
+                  onClick={handleBranchClick}
+                  aria-label="Bifurcar conversación"
+                  title="Bifurcar conversación"
+                >
+                  <GitBranch className="h-4 w-4" />
+                  Bifurcar conversación
+                </DropdownMenuItem>
+              )}
+              {showRemember && (
+                <DropdownMenuItem
+                  disabled={allDisabled || isRemembering}
+                  onClick={handleRememberClick}
+                  aria-label={remembered ? "Guardado en memoria" : "Recordar esto"}
+                  title={remembered ? "Guardado en memoria" : "Recordar esto"}
+                >
+                  <BrainCircuit className="h-4 w-4" />
+                  {remembered ? "Guardado en memoria" : "Recordar esto"}
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
         {showModelBadge && (
           // #99 — Modelo respondedor. Pill no interactiva, color muy
@@ -576,56 +577,13 @@ export function MessageActionRail({
               </span>
             </TooltipTrigger>
             <TooltipContent side="bottom" sideOffset={6} className="text-[11.5px] font-medium">
-              {model}
+              {prettyModel}
             </TooltipContent>
           </Tooltip>
         )}
       </div>
     </TooltipProvider>
   )
-}
-
-// #99 — Map common model ids to a human label. Anything we don't
-// recognise just gets returned as-is (truncated) so future models
-// still show up without code changes.
-function prettifyModelId(raw?: string): string | null {
-  if (!raw || typeof raw !== "string") return null
-  const id = raw.trim()
-  if (!id) return null
-  const lower = id.toLowerCase()
-  const map: Array<[RegExp, string]> = [
-    [/^gpt-?5(?:[-.]|$)/, "GPT-5"],
-    [/^gpt-?4o-mini\b/, "GPT-4o mini"],
-    [/^gpt-?4o\b/, "GPT-4o"],
-    [/^gpt-?4\.1\b/, "GPT-4.1"],
-    [/^gpt-?4\b/, "GPT-4"],
-    [/^o4-mini\b/, "o4-mini"],
-    [/^o3-mini\b/, "o3-mini"],
-    [/^o3\b/, "o3"],
-    [/^o1\b/, "o1"],
-    [/^claude.*opus.*4/, "Claude Opus 4"],
-    [/^claude.*sonnet.*4/, "Claude Sonnet 4"],
-    [/^claude.*haiku/, "Claude Haiku"],
-    [/^claude.*opus/, "Claude Opus"],
-    [/^claude.*sonnet/, "Claude Sonnet"],
-    [/^gemini-?2\.5.*pro/, "Gemini 2.5 Pro"],
-    [/^gemini-?2\.5.*flash/, "Gemini 2.5 Flash"],
-    [/^gemini-?2\.0.*flash/, "Gemini 2.0 Flash"],
-    [/^gemini.*pro/, "Gemini Pro"],
-    [/^gemini.*flash/, "Gemini Flash"],
-    [/^deepseek-?r1/, "DeepSeek R1"],
-    [/^deepseek-?v3/, "DeepSeek V3"],
-    [/^llama-?3\.3/, "Llama 3.3"],
-    [/^llama-?3\.1/, "Llama 3.1"],
-    [/^mistral-?large/, "Mistral Large"],
-    [/^grok/, "Grok"],
-    [/^qwen/, "Qwen"],
-  ]
-  for (const [rx, label] of map) {
-    if (rx.test(lower)) return label
-  }
-  // Unknown id — show a short, readable version (cap at 24 chars).
-  return id.length > 24 ? id.slice(0, 23) + "…" : id
 }
 
 export default MessageActionRail

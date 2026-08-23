@@ -110,6 +110,59 @@ export function stageProgressPercent(stage: FileProcessingStage | null | undefin
  * surface that reads stage data — chip in composer, chip in sent
  * message, future admin panel — shares one Spanish vocabulary.
  */
+export type ComposerProgressPhase = "upload" | "processing" | "failed"
+
+export interface ComposerChipProgress {
+  label: string
+  phase: ComposerProgressPhase
+  barPercent: number
+}
+
+/**
+ * Visible composer-chip copy. The combined bar is dual-phase (HTTP
+ * upload 0–50, RAG processing 50–100). The label must say which phase
+ * is running — a naked bar at ~80% reads as a stuck upload even though
+ * the file.id already exists and preview is safe.
+ */
+export function describeComposerChipProgress(input: {
+  uploading: boolean
+  uploadProgress?: number
+  stage?: FileProcessingStage | null
+  error?: string | null
+} = { uploading: false }): ComposerChipProgress {
+  const uploadProgress = Number(input.uploadProgress)
+  const httpPct = Number.isFinite(uploadProgress)
+    ? Math.max(0, Math.min(100, uploadProgress))
+    : 0
+
+  if (input.uploading) {
+    return {
+      label: `Subiendo · ${Math.round(httpPct)}%`,
+      phase: "upload",
+      barPercent: Math.min(50, (httpPct / 100) * 50),
+    }
+  }
+
+  if (input.stage === "failed") {
+    return {
+      label: describeStage("failed", input.error).label,
+      phase: "failed",
+      barPercent: 100,
+    }
+  }
+
+  const stage = input.stage || null
+  const detail = !stage || stage === "uploaded" || stage === "validating"
+    ? "preparando índice…"
+    : describeStage(stage).label
+  const processingShare = stage ? stageProgressPercent(stage) : 0
+  return {
+    label: `Subido · ${detail}`,
+    phase: "processing",
+    barPercent: 50 + (processingShare / 100) * 50,
+  }
+}
+
 export function describeStage(
   stage: FileProcessingStage | null,
   error?: string | null,
