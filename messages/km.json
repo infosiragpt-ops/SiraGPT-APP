@@ -575,22 +575,32 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
       "agentComputer": {
-        "title": "កុំព្យូទ័ររបស់ភ្នាក់ងារ",
+        "title": "Agent computer",
         "status": {
-          "live": "ផ្ទាល់",
-          "starting": "កំពុងចាប់ផ្តើម…",
-          "error": "កំហុស",
-          "idle": "កំពុងរង់ចាំ"
+          "live": "Live",
+          "starting": "Starting…",
+          "error": "Error",
+          "idle": "Waiting"
         },
         "dock": {
-          "browser": "កម្មវិធីរុករក",
-          "files": "ឯកសារ",
-          "terminal": "ស្ថានីយ",
-          "desktop": "ផ្ទៃតុ"
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
         },
         "routines": {
-          "toggle": "ទម្លាប់",
-          "active": "សកម្ម"
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
         }
       }
     }

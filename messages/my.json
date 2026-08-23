@@ -575,22 +575,32 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
       "agentComputer": {
-        "title": "အေဂျင်တီ၏ ကွန်ပျူတာ",
+        "title": "Agent computer",
         "status": {
-          "live": "တိုက်ရိုက်",
-          "starting": "စတင်နေသည်…",
-          "error": "အမှား",
-          "idle": "စောင့်နေသည်"
+          "live": "Live",
+          "starting": "Starting…",
+          "error": "Error",
+          "idle": "Waiting"
         },
         "dock": {
-          "browser": "ဘရောက်ဆာ",
-          "files": "ဖိုင်များ",
-          "terminal": "တာမီနယ်",
-          "desktop": "ဒेसက်တော့"
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
         },
         "routines": {
-          "toggle": "ပုံမှန်လုပ်ငန်းများ",
-          "active": "အသက်ဝင်"
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
         }
       }
     }

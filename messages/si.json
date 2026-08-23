@@ -575,22 +575,32 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
       "agentComputer": {
-        "title": "නියෝජිතයාගේ පරිගණකය",
+        "title": "Agent computer",
         "status": {
-          "live": "සජීවී",
-          "starting": "ආරම්භ වෙමින්…",
-          "error": "දෝෂයකි",
-          "idle": "රැඳී සිටිමින්"
+          "live": "Live",
+          "starting": "Starting…",
+          "error": "Error",
+          "idle": "Waiting"
         },
         "dock": {
-          "browser": "බ්‍රව්සරය",
-          "files": "ගොනු",
-          "terminal": "ටර්මිනලය",
-          "desktop": "වැඩතලය"
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
         },
         "routines": {
-          "toggle": "දිනචරියා",
-          "active": "ක්‍රියාකාරී"
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
         }
       }
     }

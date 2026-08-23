@@ -575,22 +575,32 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
       "agentComputer": {
-        "title": "Počítač agenta",
+        "title": "Agent computer",
         "status": {
-          "live": "Živě",
-          "starting": "Spouští se…",
-          "error": "Chyba",
-          "idle": "Čekání"
+          "live": "Live",
+          "starting": "Starting…",
+          "error": "Error",
+          "idle": "Waiting"
         },
         "dock": {
-          "browser": "Prohlížeč",
-          "files": "Soubory",
-          "terminal": "Terminál",
-          "desktop": "Plocha"
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
         },
         "routines": {
-          "toggle": "Rutiny",
-          "active": "aktivní"
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
         }
       }
     }

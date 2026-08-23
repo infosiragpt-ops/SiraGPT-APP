@@ -575,22 +575,32 @@
       "forbiddenTitle": "Restricted access",
       "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
       "agentComputer": {
-        "title": "ஏஜென்டின் கணினி",
+        "title": "Agent computer",
         "status": {
-          "live": "நேரடி",
-          "starting": "தொடங்குகிறது…",
-          "error": "பிழை",
-          "idle": "காத்திருப்பு"
+          "live": "Live",
+          "starting": "Starting…",
+          "error": "Error",
+          "idle": "Waiting"
         },
         "dock": {
-          "browser": "உலாவி",
-          "files": "கோப்புகள்",
-          "terminal": "முனையகம்",
-          "desktop": "டெஸ்க்டாப்"
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
         },
         "routines": {
-          "toggle": "வழக்கமான பணிகள்",
-          "active": "செயலில்"
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
         }
       }
     }
