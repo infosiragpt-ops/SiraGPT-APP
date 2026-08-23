@@ -195,6 +195,7 @@ import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/l
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
   RESEARCH_FOLLOW_UP_EVENT,
+  buildConversationInsightsMessage,
   buildScientificPapersMessage,
   ensureResearchCommandChat,
   type ResearchResultSource,
@@ -6767,17 +6768,17 @@ But first, you need to connect your Spotify account securely using the button be
   const [shortcutsOpen, setShortcutsOpen] = React.useState(false);
 
   // Global Cmd/Ctrl + / opens the keyboard shortcuts help modal. We attach
-  // at the window level so it works regardless of which child has focus,
-  // and skip when the user is mid-IME composition or inside a
-  // contenteditable that should claim the slash key.
+  // at the window level so it works regardless of which child has focus.
+  // The theme toggle lives in KeyboardShortcutsProvider under
+  // Cmd/Ctrl+Shift+L — this chord is help-only so both never fire together.
   React.useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const isAccel = e.metaKey || e.ctrlKey;
-      if (!isAccel) return;
-      if (e.key !== "/" && e.key !== "?") return;
+      if (!isAccel || e.shiftKey || e.altKey) return;
+      if (e.key !== "/") return;
       // Avoid stealing the chord while typing inside a textarea where the
       // user might want a literal "/" — but only if no modifier is held.
-      // (Here both modifiers are required, so we always toggle.)
+      // (Here the modifier is required, so we always toggle.)
       e.preventDefault();
       setShortcutsOpen((v) => !v);
     }
@@ -9197,8 +9198,45 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     if (slash.command === "summarize") {
-      toast.info(`/summarize "${query.slice(0, 80)}..."`);
-      // Future: route to a summarization endpoint with current chat + attachments
+      const chat = currentChatRef.current;
+      const history = Array.isArray(chat?.messages)
+        ? chat.messages.slice(-40).map((m: any) => ({
+            role: m?.role === "ASSISTANT" || m?.role === "assistant" ? "assistant" : "user",
+            content: String(m?.content ?? m?.text ?? ""),
+          }))
+        : [];
+      if (!history.some((m: any) => m.content.trim())) {
+        toast.info("No hay mensajes que resumir aún — escribe algo y vuelve a intentarlo.");
+        return;
+      }
+      const summarizeToast = toast.loading("📊 Generando insights de la conversación…", { duration: Infinity });
+      try {
+        const apiBase = (typeof window !== "undefined" && (window as any).NEXT_PUBLIC_API_URL) ||
+          (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api");
+        const url = apiBase.replace(/\/$/, "") + "/circuit-attribution/conversation-summary";
+        const request = await apiClient.prepareMutatingFetch({
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({ chatId: chat?.id || undefined, history, markdown: true }),
+        });
+        const res = await authenticatedFetch(url, request);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (!data?.ok || typeof data.markdown !== "string") throw new Error("Respuesta sin insights");
+        if (chat?.id && typeof apiClient.addMessage === "function") {
+          await apiClient.addMessage(chat.id, {
+            role: "ASSISTANT",
+            content: buildConversationInsightsMessage(data.markdown, data.summary?.turnsAnalyzed ?? null),
+          });
+          await selectChat(chat.id);
+        }
+        toast.success(`✅ Insights listos — ${data.summary?.turnsAnalyzed ?? 0} turnos analizados`, {
+          id: summarizeToast,
+          duration: 5000,
+        });
+      } catch (err: any) {
+        toast.error(`/summarize failed: ${err?.message || err}`, { id: summarizeToast, duration: 6000 });
+      }
       return;
     }
 

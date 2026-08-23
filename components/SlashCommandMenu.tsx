@@ -10,9 +10,10 @@
  *                            (continues working through phases until the
  *                            goal is met — paper search + browser visits +
  *                            screenshot analysis + decision/refine cycle).
- *
- * The component is intentionally framework-light: it doesn't manage the
- * textarea focus or DOM itself, it just reports back via onCommandPick.
+ *   /research <consulta>  →  Scientific search across 16 sources; persists
+ *                            a result card in the chat.
+ *   /summarize            →  Conversation insights card from the current
+ *                            chat history (no LLM usage).
  */
 
 import * as React from "react"
@@ -46,7 +47,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   {
     id: "summarize",
     label: "Summarize",
-    description: "Resume documentos adjuntos o el último mensaje.",
+    description: "Tarjeta de insights de la conversación actual (entidades, metas, creencias).",
     insert: "/summarize ",
     icon: <FileText className="h-4 w-4" />,
   },

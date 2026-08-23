@@ -9,7 +9,7 @@
  *   · "?"               → open shortcuts help modal
  *   · Cmd/Ctrl+K        → open command palette (cmdk)
  *   · Cmd/Ctrl+N        → new chat (router.push("/"))
- *   · Cmd/Ctrl+/        → toggle theme (light ↔ dark)
+ *   · Cmd/Ctrl+Shift+L  → toggle theme (light ↔ dark)
  *   · Esc               → close any open shortcut UI we own
  *
  * Already handled elsewhere (we document them in the help modal but
@@ -86,7 +86,7 @@ const SHORTCUTS: Array<{ section: string; items: Shortcut[] }> = [
   {
     section: "Apariencia",
     items: [
-      { combo: "Cmd/Ctrl + /", description: "Cambiar entre tema claro y oscuro" },
+      { combo: "Cmd/Ctrl + Shift + L", description: "Cambiar entre tema claro y oscuro" },
     ],
   },
   {
@@ -152,7 +152,7 @@ export function KeyboardShortcutsProvider() {
       const typing = isTypingTarget(event.target)
 
       // Cmd/Ctrl combos — always honored.
-      if (meta && !event.shiftKey && !event.altKey) {
+      if (meta && !event.altKey) {
         const key = event.key.toLowerCase()
         if (key === "k") {
           event.preventDefault()
@@ -164,7 +164,7 @@ export function KeyboardShortcutsProvider() {
           newChat()
           return
         }
-        if (key === "/") {
+        if (key === "l" && event.shiftKey) {
           event.preventDefault()
           toggleTheme()
           return
@@ -223,7 +223,7 @@ export function KeyboardShortcutsProvider() {
                 <Moon className="mr-2 h-4 w-4" />
               )}
               <span>Cambiar tema</span>
-              <span className="ml-auto text-xs text-muted-foreground">Cmd/Ctrl+/</span>
+              <span className="ml-auto text-xs text-muted-foreground">Cmd/Ctrl+Shift+L</span>
             </CommandItem>
             <CommandItem
               onSelect={() => {
