@@ -329,8 +329,12 @@ test('runAgentLoop caps at 25 iterations', async () => {
     executors: { async list_files() { return '(no files)'; } },
     maxIterations: 25,
   });
-  assert.equal(result.stoppedReason, 'max_iterations');
-  assert.equal(result.iterations, 25);
+  // 3H32 repeat-cut: 30 identical tool+args calls no longer burn the full
+  // 25-iteration budget — the loop stops at the consecutive-repeat cap with
+  // an honest loop_cut instead of a fake "Listo".
+  assert.equal(result.stoppedReason, 'loop_cut');
+  assert.ok(result.iterations < 25);
+  assert.ok(result.iterations >= 2);
 });
 
 test('makeToolExecutors execute_python execute_bash render_preview set_slide_background', async () => {

@@ -427,6 +427,9 @@ async function runAgentRunner({
       maxIterations,
       onEvent,
       signal: abortScope.signal,
+      // Scope the anti-loop guards (repeat-cut + step budget) to this chat
+      // session so retries share one budget instead of resetting it.
+      threadId: chatId || null,
     });
     throwIfAborted(abortScope.signal);
     outputs = await collectValidOutputs(sandbox, onEvent);
@@ -465,6 +468,7 @@ async function runAgentRunner({
         maxIterations: Math.min(maxIterations, 8),
         onEvent,
         signal: abortScope.signal,
+        threadId: chatId || null,
       });
       throwIfAborted(abortScope.signal);
       outputs = await collectValidOutputs(sandbox, onEvent);
@@ -582,6 +586,7 @@ const AGENT_RUNNER_FAILURE_COPY = {
   no_output: 'el agente terminó sin producir un archivo verificado',
   verification_failed: 'el agente no pudo verificar que el archivo quedara correcto',
   max_iterations: 'el agente agotó sus pasos sin producir un archivo verificado',
+  loop_cut: 'el agente repitió el mismo paso demasiadas veces y el bucle fue detenido para no consumir recursos sin avanzar',
   exception: 'el agente falló con un error inesperado',
   // F4 — orchestrator-specific honest failures
   budget_exceeded: 'el agente superó el presupuesto de iteraciones/tokens asignado a la tarea y se detuvo para no seguir consumiendo recursos',

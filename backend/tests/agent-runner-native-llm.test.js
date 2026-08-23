@@ -148,4 +148,131 @@ describe('native-llm module', () => {
     assert.ok(calls <= 3);
     assert.ok(events.some((e) => e.code === 'loop_stall'));
   });
+
+  test('runAgentLoop cuts a same-tool+args repeat loop with loop_cut (PPTX incident)', async () => {
+    const loopingClient = {
+      chat: {
+        completions: {
+          create: async () => ({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: `call_${Math.random().toString(36).slice(2, 8)}`,
+                  type: 'function',
+                  function: { name: 'execute_python', arguments: JSON.stringify({ code: 'print(1)' }) },
+                }],
+              },
+            }],
+          }),
+        },
+      },
+    };
+    let executions = 0;
+    const events = [];
+    const result = await loop.runAgentLoop({
+      client: loopingClient,
+      model: FLASH,
+      messages: [{ role: 'user', content: 'haz la lámina' }],
+      tools: [],
+      executors: { execute_python: async () => { executions += 1; return 'ok'; } },
+      maxIterations: 25,
+      onEvent: (e) => events.push(e),
+    });
+    assert.equal(result.stoppedReason, 'loop_cut');
+    assert.equal(result.errorCode, 'loop_cut');
+    // Cut at the adapter's IDENTICAL_CONSECUTIVE=2 — far below the 25 budget.
+    assert.ok(executions <= 3);
+    assert.ok(events.some((e) => e.code === 'loop_cut' && /repitió el mismo paso/.test(e.message)));
+    // The loop must NOT close with an honest-looking final.
+    assert.ok(!events.some((e) => e.type === 'final'));
+  });
+
+  test('runAgentLoop exhausted budget without deliverable emits error, not a fake final', async () => {
+    // Distinct args every turn → no repeat-cut; loop runs to exhaustion.
+    let n = 0;
+    const variedClient = {
+      chat: {
+        completions: {
+          create: async () => {
+            n += 1;
+            return {
+              choices: [{
+                message: {
+                  content: null,
+                  tool_calls: [{
+                    id: `call_${n}`,
+                    type: 'function',
+                    function: { name: 'execute_bash', arguments: JSON.stringify({ command: `echo step-${n}` }) },
+                  }],
+                },
+              }],
+            };
+          },
+        },
+      },
+    };
+    const events = [];
+    const result = await loop.runAgentLoop({
+      client: variedClient,
+      model: FLASH,
+      messages: [{ role: 'user', content: 'trabajo largo' }],
+      tools: [],
+      executors: { execute_bash: async () => 'ok' },
+      maxIterations: 4,
+      onEvent: (e) => events.push(e),
+    });
+    assert.equal(result.stoppedReason, 'max_iterations');
+    assert.equal(result.errorCode, 'budget_exceeded');
+    assert.ok(!events.some((e) => e.type === 'final'));
+    assert.ok(events.some((e) => e.code === 'budget_exceeded'));
+  });
+
+  test('runAgentLoop still finishes honestly when the model delivers text after tool work', async () => {
+    let n = 0;
+    const finishingClient = {
+      chat: {
+        completions: {
+          create: async () => {
+            n += 1;
+            if (n === 1) {
+              return {
+                choices: [{
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'c1',
+                        type: 'function',
+                        function: { name: 'execute_bash', arguments: JSON.stringify({ command: 'ls' }) },
+                      },
+                      {
+                        id: 'c2',
+                        type: 'function',
+                        function: { name: 'render_preview', arguments: JSON.stringify({ path: 'outputs/a.pptx' }) },
+                      },
+                    ],
+                  },
+                }],
+              };
+            }
+            return { choices: [{ message: { content: 'Deck terminado y verificado.' } }] };
+          },
+        },
+      },
+    };
+    const events = [];
+    const result = await loop.runAgentLoop({
+      client: finishingClient,
+      model: FLASH,
+      messages: [{ role: 'user', content: 'x' }],
+      tools: [],
+      executors: { execute_bash: async () => 'done', render_preview: async () => ({ ok: true }) },
+      maxIterations: 5,
+      onEvent: (e) => events.push(e),
+    });
+    assert.equal(result.stoppedReason, 'final');
+    assert.equal(result.finalText, 'Deck terminado y verificado.');
+    assert.ok(events.some((e) => e.type === 'final' && e.verified === true));
+  });
 });
