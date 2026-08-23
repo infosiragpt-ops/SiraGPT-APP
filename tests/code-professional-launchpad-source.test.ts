@@ -11,7 +11,8 @@ describe("professional /code launchpad", () => {
     assert.match(chatSource, /CODE_AGENT_REQUEST_EVENT/)
     assert.match(chatSource, /const effectiveMode = opts\?\.mode \?\? composerMode/)
     assert.match(chatSource, /parked\.text, \{ files: parked\.files, mode: parked\.mode \}/)
-    assert.match(chatSource, /requestCodeAgentInstruction\(starter\.prompt, \{ mode: "app" \}\)/)
+    assert.match(chatSource, /function EmptyChat[\s\S]{0,400}return null/)
+    assert.doesNotMatch(chatSource, /requestCodeAgentInstruction\(starter\.prompt, \{ mode: "app" \}\)/)
   })
 
   it("separates autonomous builds from local prototypes", () => {
