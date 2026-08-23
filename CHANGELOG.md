@@ -20,6 +20,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- Chat `/chat` UX, a11y, and OCR pass: attachments stay inside the user
+  bubble at 1×, code blocks meet WCAG contrast with copy + URL linkification,
+  the conversation rail is 46rem, thinking disclosures are keyboard-accessible,
+  message actions collapse under `⋯`, DeepSeek ids render as Sira Pro / Sira
+  Rápido, the send disc uses the brand token, the sidebar keeps history +
+  credits, and client/server OCR upscales tiny banners before the model
+  answers. See `docs/chat-ux-a11y-ocr-checklist.md`.
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
   dark themes, including hover and focus states.
 

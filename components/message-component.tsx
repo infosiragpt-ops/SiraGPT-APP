@@ -96,6 +96,7 @@ import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachme
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { brandModelLabel } from "@/lib/chat/brand-label"
 import {
     copyMarkdownToWordClipboard,
     createWordClipboardPayloadFromSelection,
@@ -430,6 +431,9 @@ function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "th
 
 function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => void }) {
     const [failed, setFailed] = React.useState(false);
+    const [naturalWidth, setNaturalWidth] = React.useState<number | null>(
+        Number.isFinite(Number(file?.width)) ? Number(file.width) : null,
+    );
     const imageUrl = resolveUserImageAttachmentUrl(file);
     if (!imageUrl || failed) {
         return (
@@ -449,8 +453,13 @@ function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => v
         <img
             src={imageUrl}
             alt={file.name || file.originalName || "Image"}
-            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
+            className="chat-user-image max-h-[350px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+            style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
             onClick={() => onOpen(imageUrl)}
+            onLoad={(event) => {
+                const width = event.currentTarget.naturalWidth;
+                if (width > 0) setNaturalWidth(width);
+            }}
             onError={(event) => {
                 event.currentTarget.removeAttribute("src");
                 setFailed(true);
@@ -1576,10 +1585,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 }
                 return <pre>{children}</pre>
             },
-            p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
+            p: ({ children }: any) => <p className="mb-4 text-base leading-[1.6]">{children}</p>,
+            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-[1.6]">{children}</ul>,
+            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-[1.6]">{children}</ol>,
+            li: ({ children }: any) => <li className="mb-1.5 text-base leading-[1.6]">{children}</li>,
             h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
             h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
             h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
@@ -1778,7 +1787,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 <div
                     ref={contentRef}
                     className={cn(
-                        "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
+                        "prose prose-sm dark:prose-invert max-w-none text-current leading-[1.6]",
                         "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                         "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
                     )}
@@ -3118,18 +3127,16 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                   * appeared twice in the user bubble. Removed.
                   */}
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
-                    <div className="flex flex-col items-end gap-2">
-                        <div className="flex flex-wrap justify-end gap-2">
-                            {parsedFiles
-                                .filter(isRenderableImageAttachment)
-                                .map((file: any, index: number) => (
-                                    <UserChatImage
-                                        key={`img-${index}`}
-                                        file={file}
-                                        onOpen={setSelectedImage}
-                                    />
-                                ))}
-                        </div>
+                    <div className="msg-user-attachments">
+                        {parsedFiles
+                            .filter(isRenderableImageAttachment)
+                            .map((file: any, index: number) => (
+                                <UserChatImage
+                                    key={`img-${index}`}
+                                    file={file}
+                                    onOpen={setSelectedImage}
+                                />
+                            ))}
                     </div>
                 )}
 
@@ -3140,7 +3147,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     return (
         <article
-            className="flex"
+            className={cn("flex", message.role === "USER" ? "msg--user" : "msg--assistant")}
             data-message-id={message.id}
             aria-label={message.role === 'USER' ? tMessageActions("userMessage") : tMessageActions("assistantResponse")}
         >
@@ -3152,12 +3159,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
             <div className={`group flex flex-col flex-1 ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
-                    <>
-                        {hasRenderableUserFiles && (
-                            <div className="w-full max-w-[92%] md:max-w-2xl mb-2">
-                                <FileDisplay />
-                            </div>
-                        )}
+                    <div className="msg-user-stack">
+                        {hasRenderableUserFiles && <FileDisplay />}
                         {/* Document chips — clickable, open the same
                             UnifiedDocumentViewer as the composer. Filters
                             out images (FileDisplay renders them inline). */}
@@ -3254,7 +3257,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 </Button>
                             </div>
                         )}
-                    </>
+                    </div>
                 )}
 
                 {message.role === 'ASSISTANT' && (
@@ -3355,10 +3358,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && (message as any).model ? (
                             <div
                                 className="mt-1 mb-0.5 text-[11px] leading-none text-muted-foreground/70 select-none"
-                                title={`Respondido con ${(message as any).model}`}
-                                aria-label={`Respondido con ${(message as any).model}`}
+                                title={`Respondido con ${brandModelLabel((message as any).model)}`}
+                                aria-label={`Respondido con ${brandModelLabel((message as any).model)}`}
                             >
-                                {String((message as any).model).split('/').pop()}
+                                {brandModelLabel((message as any).model)}
                             </div>
                         ) : null}
                         {!isVideoMessage && (
@@ -3510,7 +3513,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         <img
                             src={selectedImage}
                             alt="Full size image"
-                            className="max-w-full max-h-[90vh] object-contain rounded-lg"
+                            className="chat-image-zoom max-w-full max-h-[90vh] object-contain rounded-lg"
                             onClick={(e) => e.stopPropagation()}
                         />
                     </div>

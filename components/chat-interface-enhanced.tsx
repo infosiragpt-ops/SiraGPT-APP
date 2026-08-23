@@ -354,6 +354,14 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // contexts (preview iframes, denied permission, insecure origin) and, when not
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
+import { brandModelLabel } from "@/lib/chat/brand-label"
+import {
+  enrichImageFilesWithClientOcr,
+  isWeakOcrText,
+  looksLikeTranscriptionRequest,
+  recognizeImageWithRetry,
+} from "@/lib/chat/ocr-preprocess"
+import { CreditsBadge } from "@/components/CreditsBadge"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -3597,13 +3605,7 @@ const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\
 const getModelBrandKey = (model: any) => MODEL_BRAND_BY_ICON[resolveModelIconName(model)] || "other"
 
 const getModelDisplayLabel = (model: any) => {
-  const provider = resolveModelProviderName(model)
-  const label = String(model?.displayName || model?.name || "Modelo").trim()
-  if (!label || provider === "Otros") return label || "Modelo"
-  return label
-    .replace(new RegExp(`^${escapeRegExp(provider)}\\s*[:·/-]\\s*`, "i"), "")
-    .replace(/^OpenAI\s+GPT\s+/i, "GPT ")
-    .trim() || label
+  return brandModelLabel(model)
 }
 
 const getNavbarModelSelectorChatSignature = (chat: any) => [
@@ -4823,7 +4825,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : brandModelLabel(selectedModel)}</span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -5252,6 +5254,8 @@ function ChatInterfaceContent() {
     return selected?.provider || providerForMediaModel(modelName, selectProvider);
   }, [imageModelsForComposer, selectProvider]);
   const scrollAreaRef = React.useRef<HTMLDivElement>(null)
+  const chatLogEndRef = React.useRef<HTMLDivElement>(null)
+  const wasStreamingRef = React.useRef(false)
   const chatCreationInitiated = React.useRef(false);
   const prevChatIdRef = React.useRef<string | undefined>();
   const composerHighlightOverlayRef = React.useRef<HTMLDivElement>(null);
@@ -5520,6 +5524,15 @@ function ChatInterfaceContent() {
     if (!isAtBottom) return;
     scrollToBottom();
   }, [streamingContentLen, isCurrentChatStreaming, isAtBottom, scrollToBottom]);
+
+  React.useEffect(() => {
+    if (wasStreamingRef.current && !isCurrentChatStreaming) {
+      try {
+        chatLogEndRef.current?.focus({ preventScroll: true })
+      } catch { /* ignore */ }
+    }
+    wasStreamingRef.current = isCurrentChatStreaming
+  }, [isCurrentChatStreaming]);
 
   const [isUploading, setIsUploading] = React.useState(false);
   const [isDragging, setIsDragging] = React.useState(false);
@@ -8321,6 +8334,32 @@ But first, you need to connect your Spotify account securely using the button be
             uploadedFilesRef.current = next;
             return next;
           });
+          chunkTemps.forEach((tf, idx) => {
+            const mergedFile = merged[idx];
+            if (!mergedFile || !(tf.file instanceof File) || !String(tf.type || "").startsWith("image/")) return;
+            void recognizeImageWithRetry(tf.file).then((ocr) => {
+              if (!ocr.text) return;
+              setUploadedFiles((cur: any[]) => {
+                const next = cur.map((f: any) =>
+                  f.tempId === tf.tempId
+                    ? {
+                        ...f,
+                        extractedText: ocr.text,
+                        ocr: {
+                          ...(f.ocr || {}),
+                          confidence: ocr.confidence,
+                          provider: "tesseract.js",
+                          clientPreprocess: true,
+                          retries: ocr.retries,
+                        },
+                      }
+                    : f
+                );
+                uploadedFilesRef.current = next;
+                return next;
+              });
+            }).catch(() => {});
+          });
 
           setTimeout(() => {
             setUploadProgress(prev => {
@@ -9496,7 +9535,24 @@ REWRITTEN TEXT:`;
       }
       return; // Stop further execution
     }
-    const filesToSend = [...composerFiles];
+    let filesToSend = [...composerFiles];
+    const imageAttachments = filesToSend.filter((file: any) =>
+      String(file?.type || file?.mimeType || "").startsWith("image/"),
+    );
+    if (imageAttachments.length > 0) {
+      const wantsTranscription = looksLikeTranscriptionRequest(msg);
+      const weakOcr = imageAttachments.some((file: any) =>
+        isWeakOcrText(file?.extractedText, file?.ocr?.confidence),
+      );
+      if (wantsTranscription || weakOcr) {
+        try {
+          filesToSend = await enrichImageFilesWithClientOcr(filesToSend, {
+            prompt: msg,
+            force: wantsTranscription,
+          });
+        } catch { /* client OCR is best-effort before the model answers */ }
+      }
+    }
     const buildImageEditPrompt = (rawPrompt: string) => {
       const editFile = filesToSend.find((file: any) => file?.editRegion);
       if (!editFile?.editRegion) return rawPrompt;
@@ -12737,18 +12793,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className="shrink-0 md:hidden">
+                <div className={cn("shrink-0", sidebarOpen && "md:hidden")}>
                   <SidebarTrigger
                     className={cn(
                       "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
                       "hover:bg-transparent focus-visible:bg-transparent"
                     )}
-                    aria-label="Abrir el menú lateral"
-                    title="Abrir el menú lateral"
+                    aria-label={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
+                    title={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
                   >
                     <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
+                <CreditsBadge className="hidden sm:inline-flex" />
                 {/* Model selector moved to the composer (next to the mic),
                     Claude-style. See renderComposerModelControls(). */}
               </div>
@@ -13033,7 +13090,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                       (mobile) viewport — the "la barra de chat desaparece"
                       bug after the 2nd message. */}
                   <ScrollArea className="chat-message-scroll flex-1 min-h-0 w-full" ref={scrollAreaRef} onClickCapture={handleMessageAreaClick}>
-                    <div className="chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full">
+                    <div
+                      role="log"
+                      aria-live="polite"
+                      aria-relevant="additions"
+                      className="chat-log chat-message-scroll-content chat-conversation-column space-y-2 mx-auto w-full"
+                    >
                       <ChatMessageList
                         messages={currentChat?.messages ?? EMPTY_CHAT_MESSAGES}
                         isStreaming={isCurrentChatStreaming}
@@ -13046,6 +13108,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                         onDocumentPreview={handleDocumentPreview}
                         onAttachmentPreview={handleAttachmentPreview}
                         onOpenSources={handleOpenSources}
+                      />
+                      <div
+                        ref={chatLogEndRef}
+                        className="chat-log-end sr-only"
+                        tabIndex={-1}
+                        aria-hidden="true"
                       />
                     </div>
                   </ScrollArea>

@@ -114,12 +114,17 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
       )}
       <div className="flex w-full items-center gap-2 py-[5px]" style={{ color }}>
         {step.expandable && step.details ? (
-          <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="flex min-w-0 flex-1 items-center gap-2 text-left" style={{ color }}>
-            <span className="relative z-[1] flex h-5 w-5 shrink-0 items-center justify-center bg-background" data-kind={kind}><ClaudeStepIcon kind={kind} color={color} /></span>
-            <span className="claude-think-chevron shrink-0 select-none text-[11px] leading-none">{">"}</span>
-            <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
-            {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
-          </button>
+          <details className="min-w-0 flex-1" open={open} onToggle={(event) => setOpen((event.target as HTMLDetailsElement).open)}>
+            <summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 text-left" style={{ color }}>
+              <span className="relative z-[1] flex h-5 w-5 shrink-0 items-center justify-center bg-background" data-kind={kind}><ClaudeStepIcon kind={kind} color={color} /></span>
+              <svg className="think-chevron h-3 w-3 shrink-0" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M6 3.5 11 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span className="min-w-0 flex-1 truncate font-sans text-[13.5px] leading-5 tracking-[-0.01em]">{label}</span>
+              {elapsed ? <span className="claude-think-elapsed ml-3 shrink-0 font-sans text-[12.5px] tabular-nums leading-5">{elapsed}</span> : null}
+            </summary>
+            <pre className="mb-1.5 ml-7 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 px-2 py-1.5 font-mono text-[11px] leading-4 text-muted-foreground">{step.details}</pre>
+          </details>
         ) : (
           <>
             <span className="relative z-[1] flex h-5 w-5 shrink-0 items-center justify-center bg-background" data-kind={kind}><ClaudeStepIcon kind={kind} color={color} /></span>
@@ -128,7 +133,6 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
           </>
         )}
       </div>
-      {open && step.details ? <pre className="mb-1.5 ml-7 max-h-40 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/40 px-2 py-1.5 font-mono text-[11px] leading-4 text-muted-foreground">{step.details}</pre> : null}
     </div>
   )
 }

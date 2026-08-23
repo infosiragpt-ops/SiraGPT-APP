@@ -112,6 +112,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { CreditsBadge } from "@/components/CreditsBadge"
 import NotificationCenter from "./notification-center"
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
@@ -1528,7 +1529,7 @@ export function AppSidebar() {
                         const isFailed = streamStatus === "error"
 
                         return (
-                          <SidebarMenuItem key={chat.id}>
+                          <SidebarMenuItem key={chat.id} className="chat-history-item">
                             <div className="flex w-full items-center gap-0.5 group">
                               {isEditing ? (
                                 <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
@@ -1912,8 +1913,11 @@ export function AppSidebar() {
                       <span className="text-sm font-medium truncate">
                         {user?.name || "Admin User"}
                       </span>
-                      <span className="text-xs text-muted-foreground">
-                        {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span className="truncate">
+                          {user?.isSuperAdmin ? t("superAdministrator") : user?.isAdmin ? t("administrator") : user?.plan || t("freePlan")}
+                        </span>
+                        <CreditsBadge />
                       </span>
                     </div>
                   </SidebarMenuButton>
