@@ -1,4 +1,6 @@
 import assert from "node:assert/strict"
+import { readFileSync, existsSync } from "node:fs"
+import { join } from "node:path"
 import { describe, it } from "node:test"
 
 import {
@@ -13,6 +15,8 @@ import {
   mapToolToLoaderState,
   stepIdentity,
 } from "../lib/thinking-loaders"
+
+const repoRoot = join(__dirname, "..", "..")
 
 describe("thinking-loaders · kit catalog", () => {
   it("exposes 19 loader states including terminal check/X", () => {
@@ -35,6 +39,26 @@ describe("thinking-loaders · kit catalog", () => {
     assert.equal(loaderIconSrc("generando-pdf"), "/loaders/icons/generando-pdf.svg")
     assert.equal(loaderLabel("pensando", "Buscando “clima”…"), "Buscando “clima”…")
     assert.equal(loaderLabel("pensando", "   "), "Pensando…")
+  })
+
+  it("ships kit SVGs with shared bounce and terminal states without bars", () => {
+    for (const state of LOADER_STATES) {
+      const full = join(repoRoot, "public", "loaders", `${state}.svg`)
+      const icon = join(repoRoot, "public", "loaders", "icons", `${state}.svg`)
+      assert.equal(existsSync(full), true, full)
+      assert.equal(existsSync(icon), true, icon)
+      const svg = readFileSync(full, "utf8")
+      if (state === "completado" || state === "error") {
+        assert.doesNotMatch(svg, /animateTransform/)
+      } else {
+        assert.match(svg, /width="4" height="10"/)
+        assert.match(svg, /dur="0.6s"/)
+        assert.match(svg, /begin="0s"/)
+        assert.match(svg, /begin="0.2s"/)
+        assert.match(svg, /begin="0.4s"/)
+        assert.match(svg, /#38BDF8/)
+      }
+    }
   })
 })
 

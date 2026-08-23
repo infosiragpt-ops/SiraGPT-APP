@@ -22,6 +22,8 @@ export type ThinkingStatusLoaderProps = {
   elapsedSec?: number | null
   compact?: boolean
   hideLabel?: boolean
+  /** Set false when nested inside another role=status region. */
+  announce?: boolean
   className?: string
   onSettled?: (state: Extract<LoaderState, "completado" | "error">) => void
 }
@@ -70,6 +72,7 @@ export function ThinkingStatusLoader({
   elapsedSec,
   compact = false,
   hideLabel = false,
+  announce = true,
   className,
   onSettled,
 }: ThinkingStatusLoaderProps) {
@@ -80,16 +83,17 @@ export function ThinkingStatusLoader({
     !terminal && typeof elapsedSec === "number" && elapsedSec >= 0 ? formatElapsed(elapsedSec) : null
 
   React.useEffect(() => {
-    if (!onSettled || !terminal) return
-    const wait = state === "completado" ? COMPLETADO_FLASH_MS : 0
-    const id = window.setTimeout(() => onSettled(state), wait)
+    if (!onSettled || (state !== "completado" && state !== "error")) return
+    const settled = state
+    const wait = settled === "completado" ? COMPLETADO_FLASH_MS : 0
+    const id = window.setTimeout(() => onSettled(settled), wait)
     return () => window.clearTimeout(id)
-  }, [onSettled, state, terminal])
+  }, [onSettled, state])
 
   return (
     <div
-      role="status"
-      aria-live="polite"
+      role={announce ? "status" : undefined}
+      aria-live={announce ? "polite" : undefined}
       aria-label={text}
       data-thinking-loader={state}
       data-loader-src={loaderSrc(state)}
@@ -106,6 +110,8 @@ export function ThinkingStatusLoader({
         )}
         aria-hidden="true"
       >
+        {/* Tiny static kit glyph from /public; next/image adds nothing for 1KB SVG swaps. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={loaderIconSrc(state)}
           alt=""

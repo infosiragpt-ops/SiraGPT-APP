@@ -1200,6 +1200,7 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
               state={runningTimelineStep?.loaderState || mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })}
               label={headerLabel}
               elapsedSec={elapsedSec >= 3 ? elapsedSec : null}
+              announce={false}
             />
             {liveExpanded ? (
               <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />

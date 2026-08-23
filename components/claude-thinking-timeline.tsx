@@ -184,6 +184,7 @@ export function ClaudeThinkingTimeline({ steps, className, compact }: { steps: C
           label={current.label}
           elapsedSec={current.elapsedSec}
           compact={compact}
+          announce={false}
           className="mb-1"
         />
       ) : null}
