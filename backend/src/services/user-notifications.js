@@ -199,6 +199,69 @@ async function handleTriggerEvent(prisma, event, payload, userId) {
       return row ? [row] : [];
     }
 
+    // flota/chat-pwa-notificaciones — agent run terminal events land in the
+    // inbox AND fan out to web-push. severity 'critical' is what flips the
+    // webpush-delivery bridge (see createNotification above), so every
+    // terminal run event is critical by contract: the user closed the tab
+    // and is waiting for exactly this signal.
+    const RUN_EVENT_STATUS = {
+      'codex.run.completed': { type: 'agent_run_completed', severity: 'critical' },
+      'codex.run.failed': { type: 'agent_run_failed', severity: 'critical' },
+      'codex.run.cancelled': { type: 'agent_run_cancelled', severity: 'info' },
+    };
+    if (RUN_EVENT_STATUS[event]) {
+      if (!userId) return [];
+      const meta = RUN_EVENT_STATUS[event];
+      const prompt = clampStr(p.prompt || p.goal || p.title || '', 120);
+      // Push/inbox titles localize via User.locale (ISO 639-1). Spanish is
+      // the product default; any locale without an entry below falls back
+      // to it. This is backend copy — next-intl messages/*.json is not
+      // involved, so the 59-locale frontend coverage is untouched.
+      let userLocale = null;
+      try {
+        if (prisma.user?.findUnique) {
+          const u = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { locale: true },
+          }).catch(() => null);
+          userLocale = typeof u?.locale === 'string' ? u.locale.slice(0, 2).toLowerCase() : null;
+        }
+      } catch { /* locale lookup best-effort */ }
+      const RUN_TITLES = {
+        es: { completed: 'Agente terminó', failed: 'Agente falló', cancelled: 'Agente cancelado' },
+        en: { completed: 'Agent finished', failed: 'Agent failed', cancelled: 'Agent cancelled' },
+        pt: { completed: 'Agente terminou', failed: 'Agente falhou', cancelled: 'Agente cancelado' },
+        fr: { completed: 'Agent terminé', failed: "Échec de l'agent", cancelled: 'Agent annulé' },
+        de: { completed: 'Agent fertig', failed: 'Agent fehlgeschlagen', cancelled: 'Agent abgebrochen' },
+      };
+      const titles = RUN_TITLES[userLocale] || RUN_TITLES.es;
+      const title = event === 'codex.run.completed'
+        ? titles.completed
+        : event === 'codex.run.failed'
+          ? titles.failed
+          : titles.cancelled;
+      const detail = event === 'codex.run.failed'
+        ? clampStr(p.error || '', 300)
+        : '';
+      const message = [prompt, detail].filter(Boolean).join(' — ') || `Run ${p.runId || ''}`.trim();
+      const row = await createNotification(prisma, {
+        userId,
+        type: meta.type,
+        orgId: typeof p.orgId === 'string' ? p.orgId : undefined,
+        title,
+        message: clampStr(message, 500),
+        severity: meta.severity,
+        metadata: {
+          runId: p.runId || null,
+          projectId: p.projectId || null,
+          status: p.status || null,
+          model: p.model || null,
+          actionUrl: '/chat',
+        },
+      });
+      return row ? [row] : [];
+    }
+
     if (event === 'org.announcement.created') {
       // Only critical announcements broadcast into the inbox.
       if (p.severity !== 'critical') return [];

@@ -22,6 +22,10 @@ const OfficeClipboardBridge = nextDynamic(
   () => import("@/components/office-clipboard-bridge").then((m) => m.OfficeClipboardBridge),
   { ssr: false }
 )
+const PushBootstrap = nextDynamic(
+  () => import("@/components/push-bootstrap").then((m) => m.PushBootstrap),
+  { ssr: false }
+)
 
 export function LayoutClientEffects() {
   return (
@@ -31,6 +35,7 @@ export function LayoutClientEffects() {
       <WebVitalsReporter />
       <SyncfusionBannerRemover />
       <OfficeClipboardBridge />
+      <PushBootstrap />
     </>
   )
 }

@@ -79,7 +79,12 @@ function makePrisma(initialRows = [], users = []) {
       },
     },
     user: {
-      findUnique: async ({ where }) => users.find((u) => u.email === where.email) || null,
+      findUnique: async (args = {}) => {
+        const byEmail = users.find((u) => u.email === args.where?.email);
+        if (byEmail) return byEmail;
+        // Locale lookups by id — used by the codex.run.* inbox mapping.
+        return prisma._userById || null;
+      },
     },
     orgMembership: {
       findMany: async ({ where }) => {
@@ -87,6 +92,7 @@ function makePrisma(initialRows = [], users = []) {
       },
     },
     _members: [],
+    _userById: null,
   };
   return prisma;
 }
@@ -184,6 +190,77 @@ describe('user-notifications.handleTriggerEvent', () => {
     assert.equal(rows.length, 3);
     assert.equal(rows.every((r) => r.severity === 'critical'), true);
     assert.deepEqual(rows.map((r) => r.userId).sort(), ['m1', 'm2', 'm3']);
+  });
+
+  // flota/chat-pwa-notificaciones — agent run terminal events.
+  test('codex.run.completed → critical inbox row with prompt excerpt + actionUrl', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'codex.run.completed', {
+      runId: 'r1', projectId: 'p1', status: 'done',
+      prompt: 'Arregla el login del panel',
+      model: 'deepseek-v4-pro',
+    }, 'u1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].userId, 'u1');
+    assert.equal(rows[0].type, 'agent_run_completed');
+    assert.equal(rows[0].severity, 'critical');
+    assert.ok(rows[0].message.includes('Arregla el login'));
+    assert.equal(rows[0].metadata.actionUrl, '/chat');
+    assert.equal(rows[0].metadata.runId, 'r1');
+  });
+
+  test('codex.run.failed → row carries the redacted error detail', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'codex.run.failed', {
+      runId: 'r2', status: 'error', prompt: 'Sube el PR',
+      error: 'type check failed',
+    }, 'u1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].type, 'agent_run_failed');
+    assert.equal(rows[0].severity, 'critical');
+    assert.ok(rows[0].message.includes('type check failed'));
+  });
+
+  test('codex.run.cancelled → info row (inbox only, no push)', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'codex.run.cancelled', {
+      runId: 'r3', status: 'cancelled', prompt: 'Clona el repo',
+    }, 'u1');
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].type, 'agent_run_cancelled');
+    assert.equal(rows[0].severity, 'info');
+  });
+
+  test('codex.run.completed without userId is a no-op', async () => {
+    const prisma = makePrisma();
+    const rows = await svc.handleTriggerEvent(prisma, 'codex.run.completed', {
+      runId: 'r4', prompt: 'x',
+    }, '');
+    assert.equal(rows.length, 0);
+    assert.equal(prisma._rows.length, 0);
+  });
+
+  test('codex.run.completed localizes title via User.locale (en) and falls back to es', async () => {
+    const prismaEn = makePrisma();
+    prismaEn._userById = { locale: 'en' };
+    const rowsEn = await svc.handleTriggerEvent(prismaEn, 'codex.run.completed', {
+      runId: 'r5', prompt: 'Ship the PR',
+    }, 'u1');
+    assert.equal(rowsEn[0].title, 'Agent finished');
+
+    const prismaUnknown = makePrisma();
+    prismaUnknown._userById = { locale: 'zz' };
+    const rowsFallback = await svc.handleTriggerEvent(prismaUnknown, 'codex.run.failed', {
+      runId: 'r6', prompt: 'x', error: 'boom',
+    }, 'u1');
+    assert.equal(rowsFallback[0].title, 'Agente falló');
+
+    // No user row at all → Spanish default.
+    const prismaNone = makePrisma();
+    const rowsNone = await svc.handleTriggerEvent(prismaNone, 'codex.run.cancelled', {
+      runId: 'r7', prompt: 'x',
+    }, 'u1');
+    assert.equal(rowsNone[0].title, 'Agente cancelado');
   });
 
   test('org.announcement.created (info) → no-op', async () => {

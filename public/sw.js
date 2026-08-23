@@ -25,7 +25,7 @@
  *   - Bump SCHEMA_VERSION whenever the PRECACHE_URLS list or fetch policy
  *     changes shape (e.g. adding new pre-cached assets).
  */
-const SCHEMA_VERSION = 'sira-v2'
+const SCHEMA_VERSION = 'sira-v3'
 // Placeholder replaced at deploy time. Falls back to 'dev' for local builds
 // so the SW still functions without the substitution step.
 const BUILD_ID = '__SIRAGPT_BUILD_ID__'.startsWith('__') ? 'dev' : '__SIRAGPT_BUILD_ID__'
@@ -39,6 +39,7 @@ const PRECACHE_URLS = [
   '/sira-gpt-512.png',
   '/manifest.webmanifest',
 ]
+// Bumped: push + notificationclick handlers added to this SW.
 
 // Paths that must never be intercepted or cached even if they happen to
 // match a static-looking pattern. Treated as a deny-list applied before
@@ -166,4 +167,68 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting()
+})
+
+/*
+ * Web Push delivery (flota/chat-pwa-notificaciones).
+ *
+ * The backend (backend/src/services/webpush-delivery.js) sends a JSON
+ * payload shaped like:
+ *   { id, title, body, severity, type, createdAt, metadata }
+ * where `metadata.actionUrl` (when present) is the in-app deep link,
+ * e.g. "/chat?runId=...". Every notification MUST call
+ * showNotification — Chrome enforces userVisibleOnly and will revoke
+ * the push permission for the origin if a push event has no visible
+ * notification.
+ */
+function pushClickTarget(data) {
+  const raw = data && typeof data === 'object' ? data.metadata?.actionUrl || data.metadata?.url : null
+  if (typeof raw !== 'string' || !raw.startsWith('/')) return '/chat'
+  return raw
+}
+
+self.addEventListener('push', (event) => {
+  let payload = null
+  try {
+    payload = event.data ? event.data.json() : null
+  } catch {
+    // Non-JSON payloads still need a visible notification.
+    payload = { title: 'SiraGPT', body: event.data ? event.data.text() : '' }
+  }
+
+  const title = typeof payload?.title === 'string' && payload.title.trim()
+    ? payload.title.trim().slice(0, 200)
+    : 'SiraGPT'
+  const options = {
+    body: typeof payload?.body === 'string' ? payload.body.slice(0, 300) : '',
+    icon: '/sira-gpt-192.png',
+    badge: '/sira-gpt-192.png',
+    tag: typeof payload?.id === 'string' && payload.id ? `siragpt-notif-${payload.id}` : undefined,
+    data: { url: pushClickTarget(payload) },
+    requireInteraction: false,
+  }
+
+  event.waitUntil(self.registration.showNotification(title, options))
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = event.notification.data?.url || '/chat'
+  const abs = new URL(target, self.location.origin).href
+
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // Focus an existing window of ours if any; navigate it when it is
+      // on another route so the deep link still lands.
+      for (const client of clientList) {
+        if (client.url.startsWith(self.location.origin)) {
+          if (!client.url.startsWith(abs)) {
+            client.navigate(abs).catch(() => {})
+          }
+          return client.focus()
+        }
+      }
+      return self.clients.openWindow(abs)
+    }),
+  )
 })
