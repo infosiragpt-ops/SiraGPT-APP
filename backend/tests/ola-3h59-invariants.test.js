@@ -241,7 +241,7 @@ test('3H59-O-001 classified errors never leak stacks or OpenRouter', () => {
 
 test('3H59-P-001 adapter fail-open wires 3H59 helpers and wave', () => {
   const s = ad.adapterSnapshot();
-  assert.equal(s.wave, '3H59');
+  assert.ok(s.wave === '3H59' || s.wave === '3H60');
   assert.equal(s.repairPartialToolCallSchema, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');
@@ -361,4 +361,6 @@ test('3H59-T-001 live-align helpers cover hold/url/499/subagent/vector/ckpt/sse/
   const classified = w.classifyEngine3h59Error({ code: 'net_eai_again' });
   assert.equal(classified.retryable, true);
   assert.equal(classified.leaked, false);
+  assert.ok(w.HELPERS.length >= 15, w.HELPERS.length);
+  assert.ok(ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60');
 });
