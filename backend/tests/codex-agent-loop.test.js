@@ -1302,6 +1302,96 @@ test('subagent delegations are serialized by default on a shared checkout', asyn
   assert.equal(maxInFlight, 1);
 });
 
+// ── Generic anti-loop guards (identical actions / identical observations) ────
+
+function capturingLlm(makeResponse) {
+  const seen = [];
+  const lastSeen = [];
+  let calls = 0;
+  const fn = async ({ messages }) => {
+    calls += 1;
+    seen.push(messages.map((m) => String(m.content)).join('\n'));
+    // Cumulative snapshots double-count nudges when substring-matched; the
+    // newest message alone is what the loop appended this turn.
+    lastSeen.push(String(messages[messages.length - 1]?.content || ''));
+    return makeResponse(calls);
+  };
+  fn.seen = seen;
+  fn.lastSeen = lastSeen;
+  fn.count = () => calls;
+  return fn;
+}
+
+test('loop cut: repeated identical action → [LOOP_CUT] nudge, then graceful close keeping the work', async () => {
+  let reads = 0;
+  const llm = capturingLlm(() => ({ text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] }));
+  const f = fakeDeps({ llmTurn: llm, env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '50' } });
+  // Count only the target read: the harness runner.readFile also serves the
+  // framework's settings/notes/SIRA.md lookups, which must not pollute the count.
+  const innerReadFile = f.deps.runner.readFile;
+  f.deps.runner.readFile = async (...a) => { if (a[1] === 'src/App.tsx') reads += 1; return innerReadFile(...a); };
+
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+
+  assert.equal(res.status, 'done', 'second breach closes gracefully instead of crashing');
+  assert.equal(reads, 2, 'only the first two identical reads really executed');
+  const cutEnds = f.events.filter((e) => e.type === 'action_end' && /loop_cut/.test(e.data.outputSummary || ''));
+  assert.equal(cutEnds.length, 1, 'the third identical call is refused exactly once');
+  assert.equal(llm.count(), 4);
+  assert.ok(llm.seen[3].includes('[LOOP_CUT]'), 'the refusal feeds a hard course-correction nudge');
+  assert.ok(f.events.some((e) => e.type === 'narrative_delta' && /Corté la corrida/.test(e.data.text || '')), 'the close explains itself');
+});
+
+test('loop cut: varying arguments resets the streak — diverse work never trips the guard', async () => {
+  const llm = capturingLlm((calls) => ({
+    text: '',
+    toolCalls: [{ name: 'read_file', args: { path: calls % 2 ? 'src/A.tsx' : 'src/B.tsx' } }],
+  }));
+  const f = fakeDeps({ llmTurn: llm, env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '6' } });
+
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+
+  assert.equal(res.status, 'done');
+  assert.equal(llm.count(), 6, 'the full budget is available to diverse work');
+  assert.ok(!f.events.some((e) => e.type === 'action_end' && /loop_cut/.test(e.data.outputSummary || '')));
+  assert.ok(!llm.seen.join('\n').includes('[LOOP_CUT]'));
+});
+
+test('identical observations produce exactly one [LOOP] course-correction nudge and the run continues', async () => {
+  const llm = capturingLlm((calls) => {
+    if (calls > 5) return { text: 'termino con lo revisado', toolCalls: [] };
+    return { text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] };
+  });
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '10', CODEX_MAX_IDENTICAL_ACTIONS: '999' },
+  });
+
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+
+  assert.equal(res.status, 'done');
+  const loopNudges = llm.lastSeen.filter((m) => m.includes('[LOOP]'));
+  assert.equal(loopNudges.length, 1, 'one nudge per identical-output streak, never a spam');
+  assert.ok(llm.lastSeen[4].includes('[LOOP]'), 'the nudge lands after the 4th byte-identical observation');
+});
+
+test('CODEX_MAX_IDENTICAL_ACTIONS=2 tightens the cut via env', async () => {
+  let reads = 0;
+  const llm = capturingLlm(() => ({ text: '', toolCalls: [{ name: 'read_file', args: { path: 'src/App.tsx' } }] }));
+  const f = fakeDeps({
+    llmTurn: llm,
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '20', CODEX_MAX_IDENTICAL_ACTIONS: '2' },
+  });
+  const innerReadFile = f.deps.runner.readFile;
+  f.deps.runner.readFile = async (...a) => { if (a[1] === 'src/App.tsx') reads += 1; return innerReadFile(...a); };
+
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build', prompt: 'crea algo' }, project: { id: 'p1', name: 'X' }, deps: f.deps });
+
+  assert.equal(res.status, 'done');
+  assert.equal(reads, 1, 'with limit 2 the second identical call is already refused');
+  assert.equal(llm.count(), 3, 'nudge turn, then the breaching turn closes the run');
+});
+
 // ── Plan-aware budget extension (auto-continue) ──────────────────────────────
 
 function endlessToolLlm() {
@@ -1315,7 +1405,9 @@ test('build loop extends the step budget when the plan still has pending tasks',
   const llm = endlessToolLlm();
   const f = fakeDeps({
     llmTurn: llm,
-    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '1' },
+    // These tests intentionally repeat read_file with frozen args; disable the
+    // identical-action loop cut so the budget-extension arithmetic stays isolated.
+    env: { NODE_ENV: 'test', CODEX_AUTO_VERIFY: '0', CODEX_MAX_STEPS: '2', CODEX_PLAN_EXTENSIONS: '1', CODEX_MAX_IDENTICAL_ACTIONS: '999' },
     plan: { architecture: 'x', pages: [], components: [], tasks: [{ id: 't1', title: 'Construir el dashboard' }] },
   });
   // Neutral prompt: 'crm'/'tienda' would trigger the big-playbook doubled

@@ -51,6 +51,15 @@ const DEFAULT_MAX_SAME_FILE_WRITES = 3;
 // to retry with a smaller write before giving up and closing honestly. Bounds
 // a pathological model that keeps overrunning its output budget.
 const MAX_TRUNCATION_RETRIES = 3;
+// Anti-loop (generic): after this many CONSECUTIVE identical (tool, args)
+// executions the loop refuses the next one and, on one more repeat, closes
+// the run gracefully. The write-thrash guard below only sees write_file /
+// edit_file; without this a model burns the whole step budget spinning on
+// identical run_command/read_file/grep calls.
+const DEFAULT_MAX_IDENTICAL_ACTIONS = 3;
+// Distinct actions returning byte-identical observations before attaching a
+// change-course nudge to the tool result (once per streak).
+const DEFAULT_MAX_IDENTICAL_OBSERVATIONS = 4;
 // Keep this many tail messages verbatim when compacting (the model needs the
 // recent working set intact; older tool dumps compress well).
 const COMPACT_KEEP_TAIL = 10;
@@ -81,6 +90,25 @@ function readPosInt(raw, fallback) {
 function flagEnabled(raw) {
   const value = String(raw || '').trim().toLowerCase();
   return value === '1' || value === 'true' || value === 'on';
+}
+
+/** Stable identity for "same tool + same arguments" loop detection. */
+function actionFingerprint(name, args) {
+  let serialized;
+  try {
+    serialized = JSON.stringify(args ?? null);
+  } catch {
+    serialized = String(args);
+  }
+  return `${name}::${serialized}`;
+}
+
+/** Cheap collision-resistant fingerprint of a tool observation (djb2 + length). */
+function observationFingerprint(text) {
+  const s = String(text || '');
+  let h = 5381;
+  for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return `${h}:${s.length}`;
 }
 
 function productionFeatureEnabled(env, key) {
@@ -1703,6 +1731,8 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   const maxToolsPerTurn = readPosInt(env.CODEX_MAX_TOOLS_PER_TURN, DEFAULT_MAX_TOOLS_PER_TURN);
   const maxVerifyRounds = readPosInt(env.CODEX_MAX_VERIFY_ROUNDS, DEFAULT_MAX_VERIFY_ROUNDS);
   const maxSameFileWrites = readPosInt(env.CODEX_MAX_SAME_FILE_WRITES, DEFAULT_MAX_SAME_FILE_WRITES);
+  const maxIdenticalActions = readPosInt(env.CODEX_MAX_IDENTICAL_ACTIONS, DEFAULT_MAX_IDENTICAL_ACTIONS);
+  const maxIdenticalObservations = readPosInt(env.CODEX_MAX_IDENTICAL_OBSERVATIONS, DEFAULT_MAX_IDENTICAL_OBSERVATIONS);
   // Parallel specialists are unsafe while they share one checkout: several
   // built-in and custom agents can write/edit the same files. Keep them
   // serialized until the sandbox provider assigns an independent worktree to
@@ -1933,6 +1963,16 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   let sameWriteRun = 0;
   const writeTotals = new Map();
   const nudgedPaths = new Set();
+  // Generic loop-cut state (see executeCall): consecutive identical actions
+  // and identical observations. Mechanism ported from agent-runner/
+  // engine-adapter's createConsecutiveRepeatCut / identicalObservationLoopCut,
+  // which existed fully tested but was never wired into this loop.
+  let lastActionKey = null;
+  let identicalRun = 0;
+  let loopCutRefusals = 0;
+  let lastObsKey = null;
+  let obsRun = 0;
+  let obsNudgeSent = false;
   // Truncation state: an eco-tier (Cerebras/prompted) model can overrun its
   // output budget mid-write, cutting off the tool_call fence. That yields zero
   // parsed calls — indistinguishable from "done" — so without this the build
@@ -2180,6 +2220,35 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
       const tool = buildTools.getTool(call.name) || dynamicTools.get(call.name) || null;
       const actionId = `a${++actionCounter}`;
+
+      // ── Generic loop-cut: consecutive identical (tool, args) executions.
+      // The write-thrash guard only covers write/edit; this catches a model
+      // spinning on run_command/read_file/grep_search with frozen arguments.
+      if (tool && tool.kind !== 'file_write') {
+        const actionKey = actionFingerprint(call.name, call.args);
+        if (actionKey === lastActionKey) identicalRun += 1;
+        else { lastActionKey = actionKey; identicalRun = 1; }
+        if (identicalRun >= maxIdenticalActions) {
+          if (loopCutRefusals < 1) {
+            // First cut: refuse execution, feed a hard nudge, keep the run alive.
+            loopCutRefusals += 1;
+            await eventStore.appendEvent(run.id, 'action_start', { actionId, kind: tool.kind, command: undefined, path: undefined, groupId }, { prisma });
+            await eventStore.appendEvent(run.id, 'action_end', { actionId, status: 'error', outputSummary: `loop_cut: ${call.name} idéntica ${identicalRun}× consecutivas`, durationMs: 0 }, { prisma });
+            if (metrics?.recordAction) metrics.recordAction(tool.kind, 0);
+            return {
+              message: `[LOOP_CUT] "${call.name}" con estos mismos argumentos ya se ejecutó ${identicalRun} veces seguidas con el mismo resultado. NO se volvió a ejecutar. Cambia de estrategia: otros argumentos, otra herramienta, o termina declarando el resultado.`,
+              blocking: null,
+            };
+          }
+          // Still repeating after the nudge: close the run gracefully instead
+          // of burning the remaining step budget. The work done so far is real.
+          const cutError = new Error(`loop_cut: ${call.name} idéntica ${identicalRun}× consecutivas tras el aviso`);
+          cutError.code = 'CODEX_LOOP_CUT';
+          cutError.gracefulClose = true;
+          throw cutError;
+        }
+      }
+
       const policyDecision = projectSettingsModule.toolDecision(projectSettings, call.name);
       if (!policyDecision.allowed) {
         const deniedKind = tool?.kind || 'terminal';
@@ -2435,8 +2504,23 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         sameWriteRun = 0;
       }
 
+      // Identical-observation nudge: distinct actions returning byte-identical
+      // output mean the model is reading the same frozen state (e.g. re-running
+      // a failing command hoping for a different result). Attach a course
+      // correction once per streak; never abort on it.
+      let obsNudge = '';
+      if (!result.isError && tool.kind !== 'file_write') {
+        const obsKey = observationFingerprint(result.observation);
+        if (obsKey === lastObsKey) obsRun += 1;
+        else { lastObsKey = obsKey; obsRun = 1; obsNudgeSent = false; }
+        if (obsRun >= maxIdenticalObservations && !obsNudgeSent) {
+          obsNudgeSent = true;
+          obsNudge = `\n[LOOP] Últimas ${obsRun} acciones produjeron EXACTAMENTE la misma salida. El estado que estás consultando no cambia con lo que haces: cambia de enfoque (otro comando, otro archivo, otra parte del plan) o termina declarando el resultado.`;
+        }
+      }
+
       return {
-        message: toolResultContent(call.name, result.observation, outputSummary, thrashNudge),
+        message: toolResultContent(call.name, result.observation, outputSummary, `${thrashNudge}${obsNudge}`),
         blocking: blockingPattern ? { pattern: blockingPattern, detail: result.observation || outputSummary } : null,
       };
     };
@@ -2446,13 +2530,22 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       enabled: parallelTools,
       parallelSubagents,
     });
-    for (const batch of batches) {
-      const batchOutcomes = batch.length > 1
-        ? await Promise.all(batch.map((call) => executeCall(call)))
-        : [await executeCall(batch[0])];
-      outcomes.push(...batchOutcomes);
-      // A permission request pauses the run before later dependency batches.
-      if (batchOutcomes.some((outcome) => outcome?.approval)) break;
+    let loopCutError = null;
+    try {
+      for (const batch of batches) {
+        const batchOutcomes = batch.length > 1
+          ? await Promise.all(batch.map((call) => executeCall(call)))
+          : [await executeCall(batch[0])];
+        outcomes.push(...batchOutcomes);
+        // A permission request pauses the run before later dependency batches.
+        if (batchOutcomes.some((outcome) => outcome?.approval)) break;
+      }
+    } catch (error) {
+      // A model that keeps repeating an identical action after the LOOP_CUT
+      // nudge ends the run here: close gracefully with what was built instead
+      // of surfacing an internal crash.
+      if (error?.code !== 'CODEX_LOOP_CUT') throw error;
+      loopCutError = error;
     }
 
     for (const o of outcomes) messages.push({ role: 'user', content: o.message });
@@ -2473,6 +2566,41 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     if (blocked) {
       await eventStore.appendEvent(run.id, 'action_required', toActionRequired(blocked.blocking.pattern, blocked.blocking.detail), { prisma }).catch(() => {});
       return { status: 'error', error: blocked.blocking.pattern.title };
+    }
+    if (loopCutError) {
+      await eventStore.appendEvent(run.id, 'narrative_delta', {
+        text: `Corté la corrida porque el modelo siguió repitiendo exactamente la misma acción tras el aviso (${String(loopCutError.message).replace(/^loop_cut: /, '')}). Cierro con lo construido hasta aquí.`,
+      }, { prisma }).catch(() => {});
+      const cutStopHook = projectHooks.applyStopHooks(hookState?.hooks, {
+        status: 'budget_exhausted',
+        reason: 'loop_cut',
+        runId: run.id,
+      });
+      if (!cutStopHook.allowed) {
+        return { status: 'error', error: `stop hook denied: ${cutStopHook.message}` };
+      }
+      const closed = await closeBuild({
+        run,
+        project,
+        runner,
+        eventStore,
+        prisma,
+        llmTurn,
+        clock,
+        env,
+        metrics,
+        sourcePrompt,
+        webSearch,
+        checkpointService: checkpointServiceForRun,
+        sessionService: deps.sessionService,
+        backgroundTaskService: deps.backgroundTaskService,
+        backgroundWatchers,
+        browserCheck: deps.browserCheck,
+      });
+      if (budgetTerminalError) {
+        return { status: 'error', error: budgetTerminalError.message };
+      }
+      return terminalOutcomeAfterClose(closed, cutStopHook, 'proactive quality gate failed');
     }
     await persistContextSnapshot({
       run,
