@@ -9,7 +9,12 @@
  *     AgentTask[] plan that the panel persists into state.tasks.
  *   - nextWorkTaskAction(): decide the next agent action after a generate/patch
  *     completed — auto-continue to the next pending task (proactive, no user
- *     input), retry a failed stream/quality gate, or stop when the plan is done.
+ *     input), retry a failed stream/quality/tool-output gate, or stop when the
+ *     plan is done.
+ *
+ * Frente 2: every tool-call RESULT is validated (tool-output-validator) before
+ * the loop chains the next step, so corrupt/truncated/empty tool output stops
+ * the chain early instead of poisoning later steps.
  */
 
 import type { AgentAction, AgentState, AgentTask } from "./types"
@@ -19,7 +24,18 @@ import {
   type StreamValidationResult,
 } from "./stream-validator"
 import type { QualityGateResult } from "./quality-gate"
+import {
+  DEFAULT_EMPTY_OK_TOOLS,
+  validateToolOutput,
+  type ToolOutputValidation,
+} from "./tool-output-validator"
 import { advanceIterationBudget, isBudgetExhausted, nextPendingTask } from "./orchestrator"
+
+/**
+ * Default allowEmpty set for chained /code steps: search/list tools may
+ * legitimately return nothing. File reads/writes/builds stay strict.
+ */
+export const DEFAULT_CHAIN_EMPTY_OK_TOOLS: readonly string[] = DEFAULT_EMPTY_OK_TOOLS
 
 /** Build an ordered task plan from a natural-language instruction. */
 export function planAgentTasks(
@@ -83,12 +99,12 @@ export function splitInstructionIntoSteps(instruction: string): PlannedStep[] {
   }))
 }
 
-/** Public retry decision used by the panel after a stream/quality failure. */
+/** Public retry decision used by the panel after a stream/quality/tool-output failure. */
 export interface RetryDecision {
   shouldRetry: boolean
   attempts: number
   instruction?: string
-  reason: "stream" | "quality" | "none"
+  reason: "stream" | "quality" | "tool_output" | "none"
 }
 
 /** True when a retry is still allowed (attempts < MAX_STREAM_RETRIES). */
@@ -167,4 +183,54 @@ export function buildQualityRetry(
     instruction: gate.retryInstruction,
     reason: "quality",
   }
+}
+
+// ---- Frente 2 · tool-output validation before chaining ----------------------
+
+/**
+ * Validate every tool-call result of a chained step sequence BEFORE the next
+ * step consumes it. Returns the first failed step's verdict plus its index, or
+ * null when the whole chain is safe to continue. Pure — no side effects.
+ *
+ * The executor (panel / engine loop) calls this at the chaining point; a
+ * non-null verdict must stop the chain and feed `verdict.retryInstruction`
+ * into the bounded retry machinery instead of advancing the plan.
+ */
+export function validateStepChain(
+  steps: ReadonlyArray<{ toolName: string; output?: unknown }>,
+): ToolOutputValidation & { index?: number } | null {
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index]
+    if (!step) continue
+    const verdict = validateToolOutput(step.toolName, step.output)
+    if (!verdict.ok) return { ...verdict, index }
+  }
+  return null
+}
+
+/**
+ * Drive a tool-output failure toward the next retry instruction, mirroring
+ * buildStreamRetry/buildQualityRetry so all three gates share one retry
+ * contract and budget.
+ */
+export function buildToolOutputRetry(
+  verdict: ToolOutputValidation | null,
+  attempts: number,
+): RetryDecision {
+  if (!verdict || verdict.ok) return { shouldRetry: false, attempts, reason: "none" }
+  if (!canRetry(attempts)) return { shouldRetry: false, attempts, reason: "tool_output" }
+  return {
+    shouldRetry: true,
+    attempts: attempts + 1,
+    instruction: verdict.retryInstruction,
+    reason: "tool_output",
+  }
+}
+
+/** Convenience wrapper: validate one tool result against the default allowEmpty set. */
+export function isToolOutputChainable(toolName: string, output: unknown): boolean {
+  const verdict = validateToolOutput(toolName, output, {
+    allowEmptyTools: [...DEFAULT_CHAIN_EMPTY_OK_TOOLS],
+  })
+  return verdict.ok
 }
