@@ -75,9 +75,18 @@ Implementation: `lib/thinking-loaders.ts` (`mapEventToLoaderState`,
 
 ## UI wiring
 
-- `ThinkingStatusLoader` — **status chip** (kit SVG + Spanish label + elapsed)
-- `ClaudeThinkingTimeline` header, `AgenticSteps` live header, inherited by
-  ThinkingPlaceholder / ThinkingTrace / AgentTrace
+- `ThinkingStatusLoader` — **status chip and live glyph** (kit SVG + Spanish
+  label + elapsed). `density="glyph"` is the 20px rail dot.
+- `ClaudeThinkingTimeline` header **and** step icons: active / `kind` `loader`
+  or `sunburst` render the kit via `ThinkingStatusLoader`. The Claude sunburst
+  (`claude-think-sunburst`) is **retired for live Pensando** — it must never
+  appear on an in-progress row.
+- `ThinkingTrace` / `AgentTrace` / `ThinkingPlaceholder` emit `kind: "loader"`
+  plus `loaderState` (`pensando` or the mapped tool). They do not force
+  `kind: "sunburst"` for the live hop.
+- `/chat` assistant thinking surfaces in `message-component` use
+  `ThinkingStatusLoader`, not `ThinkingIndicator`.
+- `AgenticSteps` live header uses the same chip; inherited by RunTrace.
 - RunTrace (PR 393): this chip is the header; the **step list stays
   semantic** (`--step-running` blue, `--step-failed` red only — never brand-red)
 
@@ -86,4 +95,6 @@ loaders on the preview-pane run button.
 
 ## Tests
 
-`tests/thinking-loader-map.test.ts`
+- `tests/thinking-loader-map.test.ts` — kit catalog + tool → state
+- `tests/thinking-loader-live-source.test.ts` — live Pensando uses kit SVGs;
+  no `claude-think-sunburst` on the active path

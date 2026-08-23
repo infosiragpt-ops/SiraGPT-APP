@@ -95,7 +95,7 @@ import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
 import { brandModelLabel } from "@/lib/chat/brand-label"
 import {
     copyMarkdownToWordClipboard,
@@ -2828,8 +2828,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             return (
                 <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
                     <div className="flex items-center gap-2 text-sm">
-                        <ThinkingIndicator size="sm" />
-                        <span className="font-medium">Generating Presentation...</span>
+                        <ThinkingStatusLoader state="generando-ppt" compact label="Generando presentación…" />
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
                         Your presentation is being created. This may take a moment.
@@ -3026,7 +3025,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div key={index} className="relative inline-block group">
                                         {imageLoading[`file-${index}`] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <ThinkingIndicator size="lg" className="text-primary" />
+                                                <ThinkingStatusLoader state="generando-imagen" hideLabel compact density="glyph" announce={false} />
                                             </div>
                                         )}
                                         {imageError[`file-${index}`] ? (
@@ -3077,7 +3076,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <ThinkingIndicator size="lg" className="text-primary" />
+                                                <ThinkingStatusLoader state="generando-imagen" hideLabel compact density="glyph" announce={false} />
                                             </div>
                                         )}
                                         {imageError['content-image'] ? (
@@ -3424,7 +3423,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <ThinkingIndicator size="lg" />
+                                <ThinkingStatusLoader state="cargando-general" hideLabel compact announce={false} />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
@@ -3446,7 +3445,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <ThinkingIndicator size="lg" />
+                                <ThinkingStatusLoader state="cargando-general" hideLabel compact announce={false} />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>

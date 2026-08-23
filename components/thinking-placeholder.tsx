@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react"
 import clsx from "clsx"
-import { ClaudeThinkingTimeline, inferClaudeKind, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
+import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
 
 interface IncomingStep {
@@ -36,6 +36,7 @@ function incomingToRow(step: IncomingStep, idx: number, elapsedSec: number, isLa
     tool: step.name,
     status,
     kind: inferClaudeKind({ tool: step.name, label, status }),
+    loaderState: inferLoaderState({ tool: step.name, label, status }),
     elapsedSec: status === "active" ? elapsedSec : null,
     expandable: details.length > 0,
     details: details || undefined,
@@ -68,7 +69,14 @@ export const ThinkingPlaceholder = ({ stage, compact = false, className, steps }
     }))
     return [
       ...completed,
-      { id: "active-" + label, label, status: "active" as const, kind: inferClaudeKind({ label, status: "active" }), elapsedSec },
+      {
+        id: "active-" + label,
+        label,
+        status: "active" as const,
+        kind: inferClaudeKind({ label, status: "active" }),
+        loaderState: inferLoaderState({ label, status: "active" }),
+        elapsedSec,
+      },
     ]
   }, [incoming, history, label, elapsedSec])
 

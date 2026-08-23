@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import {
+  Columns2,
   FolderGit2,
   Globe,
   Menu,
@@ -13,6 +14,7 @@ import {
   UserPlus,
 } from "lucide-react"
 
+import NotificationCenter from "@/components/notification-center"
 import UpgradeModal from "@/components/UpgradeModal"
 import { Button } from "@/components/ui/button"
 import {
@@ -47,6 +49,7 @@ export type WorkspaceTopBarProps = {
   onOpenPublishing: () => void
   publishingOpen?: boolean
   onToggleChat: () => void
+  chatOpen?: boolean
   departmentComputer?: { id: string; name: string } | null
   onOpenDepartmentComputer?: () => void
   computerOpen?: boolean
@@ -69,7 +72,8 @@ export function WorkspaceTopBar({
   codeOpen,
   onOpenPublishing,
   publishingOpen,
-  onToggleChat: _onToggleChat,
+  onToggleChat,
+  chatOpen = true,
   departmentComputer,
   onOpenDepartmentComputer,
   computerOpen = false,
@@ -178,7 +182,22 @@ export function WorkspaceTopBar({
         className="flex shrink-0 items-center gap-1"
         aria-label="Herramientas de la barra"
         data-testid="workspace-header-icon-cluster"
+        data-empresas-topbar-icons="6"
       >
+        <span data-testid="workspace-header-notifications" className="inline-flex">
+          <NotificationCenter />
+        </span>
+        <button
+          type="button"
+          className={cn(TOOLBAR_ICON, chatOpen && "bg-muted/70 text-foreground")}
+          aria-label={chatOpen ? "Ocultar el panel de chat" : "Mostrar el panel de chat"}
+          title={chatOpen ? "Ocultar el panel de chat" : "Mostrar el panel de chat"}
+          aria-pressed={chatOpen}
+          data-testid="workspace-header-split"
+          onClick={onToggleChat}
+        >
+          <Columns2 className="h-3.5 w-3.5" />
+        </button>
         {toolsMenu ?? (
           <button
             type="button"

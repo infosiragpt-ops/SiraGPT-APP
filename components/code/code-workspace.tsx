@@ -585,6 +585,7 @@ export function CodeWorkspace() {
         }}
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
+        chatOpen={chatOpen}
         departmentComputer={departmentComputer}
         onOpenDepartmentComputer={toggleDepartmentComputer}
         computerOpen={computerOpen}

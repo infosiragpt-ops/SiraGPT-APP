@@ -63,23 +63,6 @@ export function inferLoaderState(input: {
   })
 }
 
-function SunburstIcon({ color }: { color: string }) {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" className="claude-think-sunburst animate-spin" style={{ animationDuration: "1.15s" }} aria-hidden="true">
-      <g fill={color}>
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(0 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(45 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(90 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(135 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(180 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(225 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(270 8 8)" />
-        <rect x="7.15" y="0.6" width="1.7" height="4.2" rx="0.7" transform="rotate(315 8 8)" />
-      </g>
-    </svg>
-  )
-}
-
 function TerminalIcon({ color }: { color: string }) {
   return (
     <span className="claude-think-terminal select-none font-mono leading-none" style={{ color, fontSize: 10, letterSpacing: "-0.04em" }} aria-hidden="true">
@@ -112,8 +95,28 @@ function DotIcon({ color }: { color: string }) {
   return <span className="block h-[7px] w-[7px] rounded-full" style={{ background: color }} aria-hidden="true" />
 }
 
-export function ClaudeStepIcon({ kind, color }: { kind: ClaudeTimelineKind; color: string }) {
-  if (kind === "sunburst" || kind === "loader") return <SunburstIcon color={color} />
+export function ClaudeStepIcon({
+  kind,
+  color,
+  loaderState,
+}: {
+  kind: ClaudeTimelineKind
+  color: string
+  loaderState?: LoaderState
+}) {
+  // Live Pensando / tool hops always use the Luis kit SVG. `sunburst` is
+  // kept as a kind alias so older traces still resolve to the bouncing bars.
+  if (kind === "sunburst" || kind === "loader") {
+    return (
+      <ThinkingStatusLoader
+        state={loaderState || "pensando"}
+        hideLabel
+        compact
+        density="glyph"
+        announce={false}
+      />
+    )
+  }
   if (kind === "terminal") return <TerminalIcon color={color} />
   if (kind === "document") return <DocumentIcon color={color} />
   if (kind === "image") return <ImageIcon color={color} />
@@ -129,7 +132,7 @@ function StepRow({ step, isLast }: { step: ClaudeTimelineStep; isLast: boolean }
   const needsEllipsis = active && !step.label.endsWith("...") && !step.label.endsWith("…")
   const label = needsEllipsis ? step.label + "…" : step.label
   const elapsed = active && typeof step.elapsedSec === "number" && step.elapsedSec >= 0 ? formatClaudeElapsed(step.elapsedSec) : null
-  const glyph = <ClaudeStepIcon kind={kind} color={color} />
+  const glyph = <ClaudeStepIcon kind={kind} color={color} loaderState={loaderState} />
   return (
     <div className={clsx("claude-think-row relative", active && "claude-think-row--active")}>
       {!isLast && (

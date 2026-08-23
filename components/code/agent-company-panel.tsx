@@ -3652,11 +3652,12 @@ function CompanyHome({
                     <span className="flex min-w-0 items-start gap-1.5">
                       <span
                         className={cn(
-                          "min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-snug [overflow-wrap:anywhere]",
+                          "min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-snug [overflow-wrap:anywhere] xl:whitespace-normal xl:overflow-visible xl:text-clip",
                           hideFooter && "text-[11px]",
                         )}
                         title={department.name}
                         data-dept-name-wrap="1"
+                        data-dept-name-1280="wrap"
                       >
                         {department.name}
                       </span>

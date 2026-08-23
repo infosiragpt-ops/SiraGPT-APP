@@ -1,7 +1,7 @@
 "use client"
 
 import { useTranslations } from "next-intl"
-import { ClaudeThinkingTimeline, inferClaudeKind, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
+import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
 import { humanToolLabel } from "@/lib/run-trace"
 
@@ -56,7 +56,8 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
       id: "think-header",
       label: streaming ? t("thinking") : (durationMs && durationMs > 0 ? t("thoughtFor", { duration: formatThinkingDuration(durationMs) }) : t("thought")),
       status: streaming && !(toolCalls && toolCalls.length) ? "active" : "done",
-      kind: streaming && !(toolCalls && toolCalls.length) ? "sunburst" : "dot",
+      kind: streaming && !(toolCalls && toolCalls.length) ? "loader" : "dot",
+      loaderState: streaming && !(toolCalls && toolCalls.length) ? "pensando" : undefined,
       elapsedSec: streaming && !(toolCalls && toolCalls.length) ? elapsedSec : null,
       expandable: Boolean((reasoning || "").trim()),
       details: (reasoning || "").trim() || undefined,
@@ -72,6 +73,7 @@ export default function ThinkingTrace({ reasoning, streaming, durationMs, toolCa
       tool: call.name,
       status,
       kind: inferClaudeKind({ tool: call.name, label, status }),
+      loaderState: inferLoaderState({ tool: call.name, label, status }),
       elapsedSec: status === "active" ? elapsedSec : null,
       expandable: Boolean((call.args || "").trim()),
       details: (call.args || "").trim() || undefined,

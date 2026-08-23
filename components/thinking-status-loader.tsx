@@ -16,12 +16,16 @@ import {
 
 export const COMPLETADO_FLASH_MS = 1200
 
+export type ThinkingStatusLoaderDensity = "chip" | "glyph"
+
 export type ThinkingStatusLoaderProps = {
   state: LoaderState
   /** Overrides the kit Spanish label (human step text wins). */
   label?: string | null
   elapsedSec?: number | null
   compact?: boolean
+  /** `glyph` is the 20px rail dot; `chip` is the header/status size. */
+  density?: ThinkingStatusLoaderDensity
   hideLabel?: boolean
   /** Set false when nested inside another role=status region. */
   announce?: boolean
@@ -41,11 +45,17 @@ function formatElapsed(sec: number): string {
  * snippet exactly. The step list (not this chip) keeps semantic colors —
  * running is --step-running blue, never brand-red.
  */
+const DENSITY_PX: Record<ThinkingStatusLoaderDensity, number> = {
+  chip: 32,
+  glyph: 20,
+}
+
 export function ThinkingStatusLoader({
   state,
   label,
   elapsedSec,
   compact = false,
+  density,
   hideLabel = false,
   announce = true,
   className,
@@ -54,6 +64,9 @@ export function ThinkingStatusLoader({
   const reduced = usePrefersReducedMotion()
   const text = loaderLabel(state, label)
   const terminal = isTerminalLoaderState(state)
+  const resolvedDensity: ThinkingStatusLoaderDensity = density || "chip"
+  const glyph = resolvedDensity === "glyph"
+  const px = glyph ? DENSITY_PX.glyph : compact ? 28 : DENSITY_PX.chip
   const elapsed =
     !terminal && typeof elapsedSec === "number" && elapsedSec >= 0 ? formatElapsed(elapsedSec) : null
   const src = reduced ? loaderIconSrc(state) : loaderChipSrc(state)
@@ -76,16 +89,14 @@ export function ThinkingStatusLoader({
       data-loader-chip={src}
       className={cn(
         "thinking-status-loader inline-flex min-w-0 items-center",
-        compact ? "gap-2" : "gap-2.5",
+        glyph ? "gap-0" : compact ? "gap-2" : "gap-2.5",
         className,
       )}
       style={{ color: `var(--sira-celeste, ${SIRA_CELESTE})` }}
     >
       <span
-        className={cn(
-          "flex shrink-0 items-center justify-center",
-          compact ? "h-7 w-7" : "h-8 w-8",
-        )}
+        className="flex shrink-0 items-center justify-center"
+        style={{ width: px, height: px }}
         aria-hidden="true"
       >
         {/* Kit SVG from /public — next/image adds nothing for 1KB SMIL swaps. */}
@@ -93,12 +104,10 @@ export function ThinkingStatusLoader({
         <img
           src={src}
           alt=""
-          width={compact ? 28 : 32}
-          height={compact ? 28 : 32}
-          className={cn(
-            "pointer-events-none select-none object-contain",
-            compact ? "h-7 w-7" : "h-8 w-8",
-          )}
+          width={px}
+          height={px}
+          className="pointer-events-none select-none object-contain"
+          style={{ width: px, height: px }}
           draggable={false}
         />
       </span>

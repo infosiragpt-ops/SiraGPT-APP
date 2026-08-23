@@ -15,6 +15,14 @@ vi.mock("@/components/UpgradeModal", () => ({
   ),
 }))
 
+vi.mock("@/components/notification-center", () => ({
+  default: () => (
+    <button type="button" aria-label="Sin notificaciones nuevas" title="Sin notificaciones nuevas">
+      Notificaciones
+    </button>
+  ),
+}))
+
 vi.mock("@/components/code/project-chip", () => ({
   ProjectChip: () => <div>Proyecto</div>,
 }))

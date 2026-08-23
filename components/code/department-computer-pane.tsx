@@ -52,7 +52,7 @@ function embedFrom(session: AgentSession): string {
   if (session.embedUrl) return session.embedUrl
   const id = session.sessionId
   if (!id) return ""
-  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=remote&scale_cursor=true&path=agent-computer/sessions/${id}/novnc/websockify`
+  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=agent-computer/sessions/${id}/novnc/websockify`
 }
 
 async function ensureMemberDesktop(): Promise<AgentSession> {
@@ -142,7 +142,7 @@ export function DepartmentComputerPane({
 
   return (
     <section
-      className="absolute inset-0 flex min-h-0 flex-col bg-[#1b1b1d] text-zinc-50 outline-none"
+      className="relative flex h-full min-h-0 w-full flex-col bg-[#1b1b1d] text-zinc-50 outline-none"
       data-testid="department-computer-pane"
       data-dept-real-computer="1"
       data-agent-computer-novnc="1"
@@ -176,9 +176,9 @@ export function DepartmentComputerPane({
         </Button>
       </header>
 
-      <div className="relative min-h-0 flex-1 bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
         {embedUrl ? (
-          <ComputerViewer url={embedUrl} className="absolute inset-0 h-full w-full" />
+          <ComputerViewer url={embedUrl} className="absolute inset-0 h-full w-full min-h-0" />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div>

@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { apiClient } from "@/lib/api"
 import { formatThinkingDuration } from "@/components/thinking-trace"
-import { ClaudeThinkingTimeline, inferClaudeKind, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
+import { ClaudeThinkingTimeline, inferClaudeKind, inferLoaderState, useClaudeElapsedSec } from "@/components/claude-thinking-timeline"
 import type { ClaudeTimelineStep } from "@/components/claude-thinking-timeline"
 import type { AgentStepClient, AgentRunClient, AgentPermissionClient } from "@/lib/chat-context-integrated"
 import { collapseSuccessLabel, humanToolLabel } from "@/lib/run-trace"
@@ -39,6 +39,7 @@ function stepToRow(step: AgentStepClient, elapsedSec: number): ClaudeTimelineSte
     tool: step.name,
     status,
     kind: inferClaudeKind({ tool: step.name, label, status }),
+    loaderState: inferLoaderState({ tool: step.name, label, status }),
     elapsedSec: status === "active" ? elapsedSec : null,
     expandable: Boolean(details),
     details: details || undefined,
@@ -97,7 +98,16 @@ export default function AgentTrace({ reasoning = "", reasoningStreaming = false,
   const rows = useMemo(() => {
     const out: ClaudeTimelineStep[] = []
     if ((reasoning || "").trim() || reasoningStreaming) {
-      out.push({ id: "agent-think", label: reasoningStreaming ? "Pensando…" : "Pensando", status: reasoningStreaming && steps.length === 0 ? "active" : "done", kind: reasoningStreaming && steps.length === 0 ? "sunburst" : "dot", elapsedSec: reasoningStreaming && steps.length === 0 ? elapsedSec : null, expandable: Boolean((reasoning || "").trim()), details: (reasoning || "").trim() || undefined })
+      out.push({
+        id: "agent-think",
+        label: reasoningStreaming ? "Pensando…" : "Pensando",
+        status: reasoningStreaming && steps.length === 0 ? "active" : "done",
+        kind: reasoningStreaming && steps.length === 0 ? "loader" : "dot",
+        loaderState: reasoningStreaming && steps.length === 0 ? "pensando" : undefined,
+        elapsedSec: reasoningStreaming && steps.length === 0 ? elapsedSec : null,
+        expandable: Boolean((reasoning || "").trim()),
+        details: (reasoning || "").trim() || undefined,
+      })
     }
     steps.forEach((s) => out.push(stepToRow(s, elapsedSec)))
     return out
