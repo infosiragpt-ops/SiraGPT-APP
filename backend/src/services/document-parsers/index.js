@@ -278,24 +278,35 @@ async function tryParserById(parserId, filePath, options, mimeType) {
       };
     }
     case "exceljs": {
-      const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require("../xlsx-safe-workbook");
-      const workbook = await readXlsxFile(filePath);
-      const { worksheets } = selectWorkbookWorksheets(workbook);
-      const parts = [];
-      worksheets.forEach((ws) => {
-        const rows = worksheetRows(ws, { maxRows: 1000 }).filter(
-          (r) => Array.isArray(r) && r.length > 0
-        );
-        if (rows.length === 0) return;
-        parts.push(`Sheet: ${ws.name}`);
-        rows.forEach((row) => parts.push(row.join("\t")));
-      });
-      const text = parts.join("\n");
-      return {
-        text,
-        parser: "exceljs",
-        metadata: { engine: "exceljs", charCount: text.length },
-      };
+      // Streaming first: the in-memory workbook load holds the whole Cell
+      // graph and is what times out / OOMs on large books.
+      try {
+        const { extractXlsxTextStreaming } = require("../document/streaming-xlsx");
+        return await extractXlsxTextStreaming(filePath);
+      } catch (streamErr) {
+        const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require("../xlsx-safe-workbook");
+        const workbook = await readXlsxFile(filePath);
+        const { worksheets } = selectWorkbookWorksheets(workbook);
+        const parts = [];
+        worksheets.forEach((ws) => {
+          const rows = worksheetRows(ws, { maxRows: 1000 }).filter(
+            (r) => Array.isArray(r) && r.length > 0
+          );
+          if (rows.length === 0) return;
+          parts.push(`Sheet: ${ws.name}`);
+          rows.forEach((row) => parts.push(row.join("\t")));
+        });
+        const text = parts.join("\n");
+        log.warn("exceljs stream reader failed, fell back to in-memory", {
+          filePath,
+          error: streamErr.message,
+        });
+        return {
+          text,
+          parser: "exceljs",
+          metadata: { engine: "exceljs", charCount: text.length },
+        };
+      }
     }
     default:
       throw new Error(`unknown parser id: ${parserId}`);
