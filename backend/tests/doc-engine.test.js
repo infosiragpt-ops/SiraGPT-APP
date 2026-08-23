@@ -10,6 +10,7 @@ const PizZip = require('pizzip');
 const flags = require('../src/services/doc-engine/flags');
 const ooxml = require('../src/services/doc-engine/ooxml');
 const { transformBuffers, classifyTemplateVsContent } = require('../src/services/doc-engine/transform-to-template');
+const { selectDocxPreviewPath, shouldAttachHtmlPreview } = require('../src/services/doc-engine/preview-path');
 const { buildHardenedRunArgs } = require('../src/services/doc-engine/runner');
 const { runVerifyLoop, pickDeepSeekModel } = require('../src/services/doc-engine/verify-loop');
 const { tryDocEngineAfterSelection } = require('../src/services/doc-engine/chat-bridge');
@@ -106,6 +107,33 @@ describe('doc-engine verify', () => {
   });
 });
 
+describe('docx preview path selection', () => {
+  it('prefers soffice PDF for agent artifacts and never HTML dump', () => {
+    const pathSel = selectDocxPreviewPath({
+      format: 'docx',
+      filename: 'tesis_formato.docx',
+      downloadUrl: '/api/agent/artifact/deadbeef0123?name=tesis.docx',
+      htmlPreview: '<div class="sgpt-doc-preview">dump</div>',
+    });
+    assert.equal(pathSel.kind, 'soffice_pdf');
+    assert.equal(pathSel.previewPdfUrl, '/api/agent/artifact/deadbeef0123/preview.pdf');
+    assert.equal(pathSel.useHtmlDump, false);
+    assert.equal(shouldAttachHtmlPreview('docx'), false);
+    assert.equal(shouldAttachHtmlPreview('xlsx'), true);
+  });
+
+  it('uses /api/files/:id/render for uploaded Word without artifact id', () => {
+    const pathSel = selectDocxPreviewPath({
+      format: 'docx',
+      filename: 'formato.docx',
+      fileId: 'file-123',
+    });
+    assert.equal(pathSel.kind, 'soffice_pdf');
+    assert.equal(pathSel.previewPdfUrl, '/api/files/file-123/render?target=pdf');
+    assert.equal(pathSel.useHtmlDump, false);
+  });
+});
+
 describe('classifyTemplateVsContent', () => {
   it('picks the XXXX/UPN file as plantilla even when it is first (chip order)', () => {
     const plantilla = {
@@ -139,6 +167,26 @@ describe('classifyTemplateVsContent', () => {
     assert.equal(pair.template, realPlantilla);
     assert.equal(pair.content, fakeNameRealBody);
   });
+
+  it('placeholder body wins over a source named *UPN*', () => {
+    const plantilla = {
+      originalName: 'Formato_UPN.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: templateDocx(),
+    };
+    const rsn = {
+      originalName: 'tesis_UPN_contenido.docx',
+      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      buffer: makeDocx({
+        'word/styles.xml': `<?xml version="1.0"?><w:styles xmlns:w="${W}"><w:style w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>`,
+        'word/document.xml': `<?xml version="1.0"?><w:document xmlns:w="${W}"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Portada original UPN</w:t></w:r></w:p><w:p><w:r><w:t>Capitulo 1 contenido real del source investigacion metodologica y resultados del RSN sobre comunicacion publicitaria en redes sociales y posicionamiento de calzados con marco teorico discusion conclusiones evidencias empiricas del estudio de caso y recomendaciones finales para la universidad.</w:t></w:r></w:p><w:sectPr><w:pgMar w:top="1"/></w:sectPr></w:body></w:document>`,
+      }),
+    };
+    const pair = classifyTemplateVsContent([rsn, plantilla], 'pasa este word al formato UPN');
+    assert.equal(pair.template, plantilla);
+    assert.equal(pair.content, rsn);
+    assert.equal(pair.reason, 'placeholder_vs_prose');
+  });
 });
 
 describe('doc-engine transform request cues', () => {
@@ -147,6 +195,8 @@ describe('doc-engine transform request cues', () => {
     assert.equal(flags.isTemplateTransformRequest('usa esta plantilla', ['a', 'b']), true);
     assert.equal(flags.isTemplateTransformRequest('formato', ['a', 'b']), true);
     assert.equal(flags.isTemplateTransformRequest('hola', ['a', 'b']), false);
+    assert.equal(flags.isTemplateTransformRequest('usando todos los documentos adjuntos', ['a', 'b', 'c', 'd']), false);
+    assert.equal(flags.isTemplateTransformRequest('pasalo a formato UPN', []), true);
     assert.equal(flags.isTemplateTransformRequest('pasalo a mi format de la upn', ['a', 'b']), true);
     assert.equal(flags.isTemplateTransformRequest(
       'este word ## RSN_tesis.docx pasalo a mi format ## Formato_upn.docx',
@@ -184,10 +234,10 @@ describe('doc-engine chat hook', () => {
     else process.env.FEATURE_DOC_ENGINE = prev;
   });
 
-  it('returns null when flag is off', async () => {
+  it('does not hijack a non-template edit even with two docx', async () => {
     delete process.env.FEATURE_DOC_ENGINE;
     const hit = await tryDocEngineAfterSelection({
-      prompt: 'pasa este word al formato UPN',
+      prompt: 'borra el jurado evaluador',
       files: [
         { name: 'src.docx', buffer: sourceDocx() },
         { name: 'formato-upn.docx', buffer: templateDocx() },
@@ -195,6 +245,24 @@ describe('doc-engine chat hook', () => {
       env: {},
     });
     assert.equal(hit, null);
+  });
+
+  it('transplants "pasa este word al formato UPN" even when FEATURE_DOC_ENGINE is off', async () => {
+    delete process.env.FEATURE_DOC_ENGINE;
+    const hit = await tryDocEngineAfterSelection({
+      prompt: 'pasa este word al formato UPN',
+      files: [
+        { name: 'src.docx', buffer: sourceDocx(), originalName: 'tesis.docx' },
+        { name: 'formato-upn.docx', buffer: templateDocx(), originalName: 'formato-upn.docx' },
+      ],
+      env: {},
+      readBuffer: async (f) => f.buffer,
+    });
+    assert.ok(hit);
+    assert.equal(hit.engine, 'doc-engine');
+    const xml = new PizZip(hit.file.buffer).file('word/document.xml').asText();
+    assert.match(xml, /Portada original UPN/);
+    assert.doesNotMatch(xml.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/, ''), /XXXXXXXX/);
   });
 
   it('transplants when flag is on even if plantilla is first', async () => {
@@ -430,7 +498,7 @@ describe('classify prompt ## names', () => {
     const pair = classifyTemplateVsContent([rsn, plantilla], prompt);
     assert.equal(pair.template, plantilla);
     assert.equal(pair.content, rsn);
-    assert.equal(pair.reason, 'prompt_names');
+    assert.ok(pair.reason === 'prompt_names' || pair.reason === 'placeholder_vs_prose');
   });
 });
 

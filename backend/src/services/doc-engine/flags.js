@@ -36,6 +36,15 @@ function getDocEngineConfig(env = process.env) {
   };
 }
 
+/**
+ * In-process PizZip transplant for /chat. FEATURE_DOC_ENGINE still gates
+ * BullMQ / sandbox / /api/documents. The chat path must transplant on
+ * "pasa este word al formato UPN" even when that flag is off.
+ */
+function shouldRunChatTemplateTransform(prompt = '', files = []) {
+  return isTemplateTransformRequest(prompt, files);
+}
+
 function isTemplateTransformRequest(prompt = '', files = []) {
   const text = String(prompt || '')
     .toLowerCase()
@@ -56,8 +65,10 @@ function isTemplateTransformRequest(prompt = '', files = []) {
   const templateCue = /\b(formato|format|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/.test(text);
   const passCue = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/.test(text);
   const hashNames = (String(prompt || '').match(/##\s*\S+\.docx/gi) || []).length >= 2;
-  if (count >= 2 && (templateCue || passCue || hashNames)) return true;
-  if (count >= 1 && templateCue && passCue) return true;
+  if (hashNames) return true;
+  // passCue alone is too broad ("usando todos los documentos…").
+  // 2+ attachments still need formato|plantilla|UPN|pasalo.
+  if (templateCue && (passCue || count >= 2)) return true;
   return false;
 }
 
@@ -66,4 +77,5 @@ module.exports = {
   isDocEngineEnabled,
   getDocEngineConfig,
   isTemplateTransformRequest,
+  shouldRunChatTemplateTransform,
 };

@@ -773,16 +773,23 @@ function ArtifactCard({
       return
     }
 
-    const previewUrl = artifact.previewHtml
+    const isWord = /\.docx?$/i.test(artifact.filename || "") || artifact.format === "docx" || artifact.format === "doc"
+    // Word: never open the mammoth HTML dump. Prefer soffice→PDF (page images,
+    // zoom, 1/N) via previewPdfUrl or /api/agent/artifact/:id/preview.pdf.
+    const previewUrl = !isWord && artifact.previewHtml
       ? `data:text/html;charset=utf-8,${encodeURIComponent(artifact.previewHtml)}`
       : href
+    const artifactId = String(artifact.id || "").replace(/[^a-f0-9]/gi, "")
+    const previewPdfUrl = artifact.previewPdfUrl
+      || (artifactId.length >= 6 ? `/api/agent/artifact/${artifactId}/preview.pdf` : undefined)
 
     onDocumentPreview({
       url: previewUrl,
       downloadUrl: href,
       filename: artifact.filename,
+      previewPdfUrl,
     })
-  }, [artifact.filename, artifact.previewHtml, href, onDocumentPreview])
+  }, [artifact.filename, artifact.format, artifact.id, artifact.previewHtml, artifact.previewPdfUrl, href, onDocumentPreview])
 
   return (
     <>

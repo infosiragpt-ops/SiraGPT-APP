@@ -9,12 +9,14 @@
  */
 
 const path = require('path');
-const { isDocEngineEnabled } = require('./flags');
+const { shouldRunChatTemplateTransform } = require('./flags');
 const {
   classifyTemplateVsContent,
   transformToTemplate,
   bodyStillHasPlaceholders,
+  extractVisibleText,
 } = require('./transform-to-template');
+const { selectDocxPreviewPath } = require('./preview-path');
 
 function isDocxLike(file = {}) {
   const name = String(file?.originalName || file?.filename || file?.name || '');
@@ -89,6 +91,13 @@ function persistOrWrap({ buffer, filename, userId, chatId, validation }) {
   } else if (!artifact.validation) {
     artifact.validation = validation;
   }
+  const preview = selectDocxPreviewPath({
+    format: 'docx',
+    downloadUrl: artifact.downloadUrl,
+    artifactId: artifact.id,
+  });
+  if (preview.previewPdfUrl) artifact.previewPdfUrl = preview.previewPdfUrl;
+  artifact.previewHtml = null;
   return artifact;
 }
 
@@ -106,7 +115,7 @@ async function tryDocEngineAfterSelection({
   env = process.env,
   readBuffer,
 } = {}) {
-  if (!isDocEngineEnabled(env)) return null;
+  if (!shouldRunChatTemplateTransform(displayPrompt || prompt, files)) return null;
   const docs = (Array.isArray(files) ? files : []).filter(isDocxLike);
   if (docs.length < 2) return null;
 
@@ -133,7 +142,9 @@ async function tryDocEngineAfterSelection({
   });
   try {
     const validation = buildValidation(transformed);
-    if (validation.passed !== true) {
+    const sourceText = extractVisibleText(transformed.documentXml || '');
+    const sourceHadContent = Boolean(transformed.transplantedBlocks > 0 && sourceText.replace(/X{4,}/gi, '').trim().length >= 40);
+    if (validation.passed !== true && !sourceHadContent) {
       try {
         console.warn(`[doc-engine] validation failed transplanted=${transformed.transplantedBlocks || 0} sectOk=${validation.checks && validation.checks.template_sectpr_preserved} placeholders=${validation.checks && !validation.checks.no_leftover_placeholders}`);
       } catch { /* noop */ }
@@ -167,6 +178,7 @@ async function tryDocEngineAfterSelection({
       artifact,
       validation,
       previewHtml: null,
+      previewPdfUrl: artifact.previewPdfUrl || null,
       format: 'docx',
       engine: 'doc-engine',
       contentFile: pair.content,

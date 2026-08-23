@@ -191,11 +191,21 @@ const EDIT_VERBS = new RegExp(`${STRONG_EDIT_VERBS.source}|${WEAK_EDIT_VERBS.sou
  * @param {string} text user message (any case)
  * @returns {boolean}
  */
+const TEMPLATE_TRANSFORM_RE = /\b(formato|format|plantilla|template|upn|apa|ieee|pasalo|pasala)\b/i;
+const TEMPLATE_PASS_RE = /\b(pasa\w*|aplica\w*|convierte\w*|traslad\w*|transplant\w*|usa\w*|usar)\b/i;
+
+function isTemplateTransformEditRequest(text) {
+  const t = String(text == null ? '' : text);
+  if (!t.trim()) return false;
+  return TEMPLATE_TRANSFORM_RE.test(t) && TEMPLATE_PASS_RE.test(t);
+}
+
 function isDocumentEditRequest(text) {
   const t = String(text == null ? '' : text);
   if (!t.trim()) return false;
   if (isDocumentCorrectionEditRequest(t)) return true;
   if (isDocumentStyleEditRequest(t)) return true;
+  if (isTemplateTransformEditRequest(t)) return true;
   if (STRONG_EDIT_VERBS.test(t)) return true;
   return WEAK_EDIT_VERBS.test(t) && (ARTIFACT_NOUNS.test(t) || ATTACHED_FILE_NOUNS.test(t));
 }
@@ -205,6 +215,7 @@ module.exports = {
   isArtifactDeliverableRequest,
   isDocumentEditRequest,
   isDocumentStyleEditRequest,
+  isTemplateTransformEditRequest,
   ACTION_VERBS,
   CREATION_VERBS,
   ARTIFACT_NOUNS,

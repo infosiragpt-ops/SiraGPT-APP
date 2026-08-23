@@ -122,6 +122,13 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf + imágenes"
   // must create a NEW .pptx from sources — never "preserve PDF + anexos".
   if (wantsNewPresentationDeliverable(prompt)) return false;
+  // "pasa este word al formato UPN" / "pasalo a mi format" is a template
+  // transplant, not a paragraph edit and not anexos-only. Must enter the
+  // source-preserving preloop so tryDocEngineAfterSelection can run.
+  try {
+    const { isTemplateTransformRequest } = require('./doc-engine/flags');
+    if (isTemplateTransformRequest(prompt, files)) return true;
+  } catch { /* flags optional at load time */ }
   const verbHay = withCollapsedRepeats(text);
   const editVerbHay = verbHay.replace(/\beditables?\b/g, '');
   const hasFiles = Array.isArray(files) ? files.length > 0 : Boolean(files);
@@ -3954,7 +3961,8 @@ async function persistEditedArtifact({
     validation,
   });
   let previewHtml = null;
-  if (['docx', 'xlsx', 'csv'].includes(format)) {
+  const { shouldAttachHtmlPreview, selectDocxPreviewPath } = require('./doc-engine/preview-path');
+  if (shouldAttachHtmlPreview(format)) {
     try {
       const preview = await renderPreview(format, buffer.toString('base64'));
       previewHtml = preview?.html || null;
@@ -3962,6 +3970,14 @@ async function persistEditedArtifact({
       previewHtml = null;
     }
   }
+  const previewPath = selectDocxPreviewPath({
+    format,
+    filename,
+    downloadUrl: artifact.downloadUrl,
+    artifactId: artifact.id,
+  });
+  if (previewPath.previewPdfUrl) artifact.previewPdfUrl = previewPath.previewPdfUrl;
+  artifact.previewHtml = previewHtml;
   return { artifact, previewHtml, mime };
 }
 
@@ -8390,6 +8406,37 @@ async function tryGenerateSourcePreservingDocumentEdit({
   const assetFiles = Array.isArray(sourceFiles.assetFiles) ? sourceFiles.assetFiles : [];
   const priorArtifacts = await loadRecentGeneratedArtifactSourceFiles(prisma, { userId, chatId });
   const intentFiles = sourceFiles.length ? sourceFiles : priorArtifacts;
+  const { isTemplateTransformRequest } = require('./doc-engine/flags');
+  const templateTransform = isTemplateTransformRequest(requestText, intentFiles.length ? intentFiles : sourceFiles);
+  if (templateTransform || isSourcePreservingEditRequest(requestText, intentFiles)) {
+    try {
+      const { tryDocEngineAfterSelection } = require('./doc-engine/chat-bridge');
+      const engineHit = await tryDocEngineAfterSelection({
+        files: sourceFiles.length ? sourceFiles : intentFiles,
+        prompt,
+        displayPrompt: requestText,
+        userId,
+        chatId,
+        signal,
+        env: process.env,
+      });
+      if (engineHit) return engineHit;
+    } catch (engineErr) {
+      try { console.warn('[doc-engine] chat hook failed:', engineErr && engineErr.message); } catch { /* noop */ }
+      if (templateTransform && (sourceFiles.filter(isDocxFile).length >= 2 || intentFiles.filter(isDocxFile).length >= 2)) {
+        const error = new Error('No pude transplantar el contenido fuente a la plantilla. Adjunta el Word original y el Formato UPN e inténtalo de nuevo.');
+        error.code = 'DOC_ENGINE_TRANSFORM_FAILED';
+        error.validationOnlyFailure = true;
+        throw error;
+      }
+    }
+    if (templateTransform && (sourceFiles.filter(isDocxFile).length >= 2 || intentFiles.filter(isDocxFile).length >= 2)) {
+      const error = new Error('No pude transplantar el contenido fuente a la plantilla. Adjunta el Word original y el Formato UPN e inténtalo de nuevo.');
+      error.code = 'DOC_ENGINE_TRANSFORM_FAILED';
+      error.validationOnlyFailure = true;
+      throw error;
+    }
+  }
   if (!isSourcePreservingEditRequest(requestText, intentFiles)) return null;
   const targetedSection = isTargetedSectionFillRequest(requestText);
   const selection = selectSourcePreservingDocumentSet({ requestText, sourceFiles, priorArtifacts });

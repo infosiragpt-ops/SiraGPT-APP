@@ -32,6 +32,7 @@ export interface AgentArtifact {
   sizeBytes: number
   downloadUrl: string
   previewHtml?: string | null
+  previewPdfUrl?: string | null
   validation?: Record<string, unknown> | null
   sourceFileId?: string | null
   documentVersion?: { id: string; version: number; sourceFileId: string } | null
