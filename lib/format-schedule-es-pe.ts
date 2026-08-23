@@ -61,20 +61,17 @@ function weekdayPhrase(days: number[] | "any"): string | null {
   return labels.map((label, index) => (index === 0 ? label.charAt(0).toUpperCase() + label.slice(1) : label)).join(", ")
 }
 
+function looksLikeCronField(token: string): boolean {
+  return /^(\*|\d+)(-\d+)?(\/\d+)?(,\d+(-\d+)?(\/\d+)?)*$/.test(token)
+}
+
 function fromCron(expr: string): string | null {
   const tokens = expr.trim().split(/\s+/)
-  if (tokens.length !== 5) return null
+  if (tokens.length !== 5 || !tokens.every(looksLikeCronField)) return null
   const minutes = parseField(tokens[0], 0, 59)
   const hours = parseField(tokens[1], 0, 23)
   const dow = parseField(tokens[4], 0, 7)
   const minute = minutes === "any" ? 0 : minutes[0] ?? 0
-
-  if (hours !== "any" && hours.length > 0 && tokens[1].includes("*/") === false) {
-    const clocks = joinClocks(hours, minute)
-    const days = weekdayPhrase(dow)
-    if (days) return `${days} a las ${clocks}`
-    return `Todos los días a las ${clocks}`
-  }
 
   const hourStep = /^(\*|\d+-\d+)\/(\d+)$/.exec(tokens[1])
   if (hourStep) {
@@ -82,6 +79,13 @@ function fromCron(expr: string): string | null {
     if (Number.isInteger(step) && step > 0) {
       return `Cada ${step} horas a las ${formatClock(0, minute)}`
     }
+  }
+
+  if (hours !== "any" && hours.length > 0) {
+    const clocks = joinClocks(hours, minute)
+    const days = weekdayPhrase(dow)
+    if (days) return `${days} a las ${clocks}`
+    return `Todos los días a las ${clocks}`
   }
 
   if (tokens[1] === "*" && minutes !== "any" && minutes.length === 1) {
