@@ -38,7 +38,7 @@ export function ComputerViewer({
   }, [url, updateStatus])
 
   const statusLabel: Record<ComputerViewerStatus, string> = {
-    idle: "Idle",
+    idle: "Inactivo",
     connecting: "Conectando",
     connected: "En vivo",
     disconnected: "Reconectando",
@@ -47,9 +47,10 @@ export function ComputerViewer({
 
   return (
     <div
-      className={cn("relative h-full w-full overflow-hidden bg-zinc-950", className)}
+      className={cn("relative h-full w-full overflow-hidden bg-[#1b1b1d]", className)}
       data-testid="agent-computer-viewer"
       data-novnc-embed="vnc.html"
+      data-novnc-fit="cover"
     >
       <div
         className={cn(
@@ -68,8 +69,8 @@ export function ComputerViewer({
         <iframe
           src={url}
           title="noVNC desktop"
-          className="absolute inset-0 h-full w-full border-0 bg-black"
-          style={{ pointerEvents: "auto" }}
+          className="absolute inset-0 h-full w-full min-h-full min-w-full border-0 bg-[#1b1b1d] object-cover"
+          style={{ pointerEvents: "auto", width: "100%", height: "100%", background: "#1b1b1d" }}
           allow="clipboard-read; clipboard-write; fullscreen; autoplay; pointer-lock"
           data-testid="agent-computer-novnc-frame"
           data-novnc-src="vnc.html"

@@ -31,6 +31,9 @@
  */
 
 const { calculateCost } = require('./observability/llm-cost');
+// engine-3h59 fingerprint cut lives in agent-runner/loop.js. This chat
+// loop already stops repeats via dupCallCache + EXHAUSTED_REPOLL_LIMIT
+// (identical args) and the 5× unavailable breaker (hard failures).
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
