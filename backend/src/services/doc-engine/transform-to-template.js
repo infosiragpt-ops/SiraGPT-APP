@@ -127,7 +127,7 @@ function looksLikeRealProseDocx(file = {}, peek = {}) {
   const body = String(peek.visibleText || file.extractedText || extractVisibleText(peek.documentXml || ''));
   const xxxx = (body.match(/X{4,}/gi) || []).length;
   const words = body.trim().split(/\s+/).filter((w) => w && !/^X{4,}$/i.test(w));
-  return xxxx === 0 && words.length >= 40;
+  return xxxx === 0 && words.length >= 12;
 }
 
 function pairFromPromptNames(docs, prompt = '') {
@@ -138,7 +138,13 @@ function pairFromPromptNames(docs, prompt = '') {
   if (!text || docs.length < 2) return null;
   const hashes = [...String(prompt || '').matchAll(/##\s*([^\n#]+\.docx)/gi)]
     .map((m) => m[1].trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
-  const isTmplName = (f) => /(formato|plantilla|template|\bupn\b)/i.test(fileDocxName(f));
+  const isTmplName = (f) => {
+    const name = fileDocxName(f);
+    if (/(formato|plantilla|template)/i.test(name)) return true;
+    // "tesis_UPN.docx" is the source, not the plantilla.
+    if (/\bupn\b/i.test(name) && !/(tesis|informe|rsn|contenido|source|original|capitulo)/i.test(name)) return true;
+    return false;
+  };
   const mentioned = docs.filter((f) => {
     const name = fileDocxName(f).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const base = name.replace(/\.docx$/i, '');
@@ -170,6 +176,24 @@ function classifyTemplateVsContent(files = [], prompt = '') {
       source: docs[0] || null,
       docs,
       reason: 'need_two_docx',
+    };
+  }
+  // Hard override before prompt-name pairing: tesis_UPN.docx is CONTENT
+  // when another file is the XXXX plantilla. Name-based pairing used to
+  // treat "UPN" in the thesis filename as the template and return empty.
+  const peeked = docs.map((file) => {
+    const peek = peekDocxXml(file);
+    return { file, peek };
+  });
+  const placeholder = peeked.find((row) => looksLikePlaceholderDocx(row.file, row.peek));
+  const prose = peeked.find((row) => row.file !== placeholder?.file && looksLikeRealProseDocx(row.file, row.peek));
+  if (placeholder && prose) {
+    return {
+      template: placeholder.file,
+      content: prose.file,
+      source: prose.file,
+      docs,
+      reason: 'placeholder_vs_prose',
     };
   }
   const fromPrompt = pairFromPromptNames(docs, prompt);

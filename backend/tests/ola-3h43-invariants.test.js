@@ -290,7 +290,7 @@ test('3H43-AD-001 close SSE then settle credits order', () => {
 
 test('3H43-AE-001 snapshot keeps 3H42 flags and wave 3H43 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46');
+  assert.ok(s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59');
   assert.equal(s.ensureUniqueToolCallIdsAcrossResume, true);
   assert.equal(s.enforceTotalTurnWall120s, true);
   assert.equal(s.capToolArgBytes32KiB, true);
@@ -351,7 +351,7 @@ test('3H43-AI-001 compose binds 3H43 tests and wave is 3H43', () => {
   assert.ok(String(__filename || '').includes('ola-3h43-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H43') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46');
+  assert.ok(ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
 });

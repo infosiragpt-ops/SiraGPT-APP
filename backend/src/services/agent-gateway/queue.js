@@ -297,6 +297,19 @@ function createSessionQueue() {
     const list = jobRecords.get(key) || [];
     list.push(job);
     try {
+      const w59 = require('../agent-runner/engine-3h59');
+      if (typeof w59.sessionQueueOrderBySeq === 'function') {
+        const ordered = w59.sessionQueueOrderBySeq(list);
+        if (ordered && Array.isArray(ordered.events)) {
+          list.length = 0;
+          for (const ev of ordered.events) list.push(ev);
+        }
+      }
+      if (typeof w59.sessionQueueDropLateOutOfOrder === 'function') {
+        w59.sessionQueueDropLateOutOfOrder(list, { headSeq: enqueueSeq, maxLag: 2 });
+      }
+    } catch (_) { /* 3H59 fail-open */ }
+    try {
       const adFair = loadAdapter();
       if (adFair && typeof adFair.fairQueueStarvationBound === 'function') {
         const fairQ = adFair.fairQueueStarvationBound(list, {
