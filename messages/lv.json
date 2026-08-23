@@ -652,5 +652,23 @@
     "sendHint": "Sūtīt",
     "stopHint": "Apturēt",
     "dropFiles": "Nometiet failus šeit, lai augšupielādētu"
+  },
+  "sharePage": {
+    "loading": "Ielādē…",
+    "errorTitle": "Radās kļūda",
+    "errorBody": "Kopīgoto sarunu nevarēja ielādēt. Mēģiniet vēlreiz.",
+    "notFoundTitle": "Kopīgotā saruna nav atrasta",
+    "notFoundBody": "Šī saite neeksistē vai arī tās īpašnieks to atcēla.",
+    "goHome": "Doties uz SiraGPT",
+    "defaultTitle": "Kopīgota saruna",
+    "subtitleComplete": "Saruna ar {count, plural, zero {# ziņojumiem} one {# ziņojumu} other {# ziņojumiem}}",
+    "saveToAccount": "Saglabāt manā kontā",
+    "saving": "Saglabā…",
+    "saved": "Saglabāts jūsu kontā!",
+    "saveFailed": "Neizdevās saglabāt. Mēģiniet vēlreiz.",
+    "loginRequired": "Lai saglabātu, jāpieslēdzas.",
+    "loginToSave": "Pieslēgties, lai saglabātu",
+    "saveHint": "Kopiju varat saglabāt savā kontā.",
+    "readHint": "Šo sarunu var lasīt bez maksas."
   }
 }

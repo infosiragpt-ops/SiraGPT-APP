@@ -652,5 +652,23 @@
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "sharePage": {
+    "loading": "読み込み中…",
+    "errorTitle": "エラーが発生しました",
+    "errorBody": "共有された会話を読み込めませんでした。もう一度お試しください。",
+    "notFoundTitle": "共有された会話が見つかりません",
+    "notFoundBody": "このリンクは存在しないか、所有者によって取り消されました。",
+    "goHome": "SiraGPT へ移動",
+    "defaultTitle": "共有された会話",
+    "subtitleComplete": "{count} 件のメッセージを含む会話",
+    "saveToAccount": "アカウントに保存",
+    "saving": "保存中…",
+    "saved": "アカウントに保存しました！",
+    "saveFailed": "保存できませんでした。もう一度お試しください。",
+    "loginRequired": "保存するにはサインインが必要です。",
+    "loginToSave": "サインインして保存",
+    "saveHint": "コピーをアカウントに保存できます。",
+    "readHint": "この会話は無料で閲覧できます。"
   }
 }

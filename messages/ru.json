@@ -652,5 +652,23 @@
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "sharePage": {
+    "loading": "Загрузка…",
+    "errorTitle": "Произошла ошибка",
+    "errorBody": "Не удалось загрузить общий диалог. Попробуйте ещё раз.",
+    "notFoundTitle": "Общий диалог не найден",
+    "notFoundBody": "Эта ссылка не существует или была отозвана владельцем.",
+    "goHome": "Перейти в SiraGPT",
+    "defaultTitle": "Общий диалог",
+    "subtitleComplete": "Диалог с {count, plural, one {# сообщением} few {# сообщениями} many {# сообщений} other {# сообщениями}}",
+    "saveToAccount": "Сохранить в мой аккаунт",
+    "saving": "Сохранение…",
+    "saved": "Сохранено в вашем аккаунте!",
+    "saveFailed": "Не удалось сохранить. Попробуйте ещё раз.",
+    "loginRequired": "Для сохранения нужно войти.",
+    "loginToSave": "Войдите, чтобы сохранить",
+    "saveHint": "Вы можете сохранить копию в своём аккаунте.",
+    "readHint": "Этот диалог доступен для бесплатного чтения."
   }
 }

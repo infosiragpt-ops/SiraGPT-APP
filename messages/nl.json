@@ -652,5 +652,23 @@
     "sendHint": "Verzenden",
     "stopHint": "Stoppen",
     "dropFiles": "Laat de bestanden los om ze te uploaden"
+  },
+  "sharePage": {
+    "loading": "Laden…",
+    "errorTitle": "Er is een fout opgetreden",
+    "errorBody": "Het gedeelde gesprek kon niet worden geladen. Probeer het opnieuw.",
+    "notFoundTitle": "Gedeeld gesprek niet gevonden",
+    "notFoundBody": "Deze link bestaat niet of is ingetrokken door de eigenaar.",
+    "goHome": "Ga naar SiraGPT",
+    "defaultTitle": "Gedeeld gesprek",
+    "subtitleComplete": "Gesprek met {count, plural, one {# bericht} other {# berichten}}",
+    "saveToAccount": "Opslaan in mijn account",
+    "saving": "Opslaan…",
+    "saved": "Opgeslagen in je account!",
+    "saveFailed": "Opslaan mislukt. Probeer het opnieuw.",
+    "loginRequired": "Je moet inloggen om op te slaan.",
+    "loginToSave": "Log in om op te slaan",
+    "saveHint": "Je kunt een kopie in je account opslaan.",
+    "readHint": "Dit gesprek is vrij te lezen."
   }
 }

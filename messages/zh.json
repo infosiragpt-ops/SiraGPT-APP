@@ -652,5 +652,23 @@
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "sharePage": {
+    "loading": "加载中…",
+    "errorTitle": "出错了",
+    "errorBody": "无法加载分享的对话，请重试。",
+    "notFoundTitle": "未找到分享的对话",
+    "notFoundBody": "该链接不存在或已被所有者撤销。",
+    "goHome": "前往 SiraGPT",
+    "defaultTitle": "分享的对话",
+    "subtitleComplete": "包含 {count} 条消息的对话",
+    "saveToAccount": "保存到我的账户",
+    "saving": "正在保存…",
+    "saved": "已保存到您的账户！",
+    "saveFailed": "保存失败，请重试。",
+    "loginRequired": "需要登录后才能保存。",
+    "loginToSave": "登录以保存",
+    "saveHint": "您可以将其副本保存到您的账户。",
+    "readHint": "此对话可免费阅读。"
   }
 }

@@ -652,5 +652,23 @@
     "sendHint": "Pošlji",
     "stopHint": "Ustavi",
     "dropFiles": "Povlecite datoteke sem za nalaganje"
+  },
+  "sharePage": {
+    "loading": "Nalaganje…",
+    "errorTitle": "Prišlo je do napake",
+    "errorBody": "Deljenega pogovora ni bilo mogoče naložiti. Poskusite znova.",
+    "notFoundTitle": "Deljeni pogovor ni najden",
+    "notFoundBody": "Ta povezava ne obstaja ali jo je lastnik preklical.",
+    "goHome": "Pojdi na SiraGPT",
+    "defaultTitle": "Deljeni pogovor",
+    "subtitleComplete": "Pogovor z {count, plural, one {# sporočilom} two {# sporočiloma} few {# sporočili} other {# sporočili}}",
+    "saveToAccount": "Shrani v moj račun",
+    "saving": "Shranjujem…",
+    "saved": "Shranjeno v vaš račun!",
+    "saveFailed": "Shranjevanje ni uspelo. Poskusite znova.",
+    "loginRequired": "Za shranjevanje se morate prijaviti.",
+    "loginToSave": "Prijavite se za shranjevanje",
+    "saveHint": "Kopijo lahko shranite v svoj račun.",
+    "readHint": "Ta pogovor lahko brezplačno preberete."
   }
 }

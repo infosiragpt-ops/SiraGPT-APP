@@ -652,5 +652,23 @@
     "sendHint": "Odeslat",
     "stopHint": "Zastavit",
     "dropFiles": "Pusťte soubory pro nahrání"
+  },
+  "sharePage": {
+    "loading": "Načítání…",
+    "errorTitle": "Došlo k chybě",
+    "errorBody": "Sdílenou konverzaci nelze načíst. Zkuste to prosím znovu.",
+    "notFoundTitle": "Sdílená konverzace nenalezena",
+    "notFoundBody": "Tento odkaz neexistuje nebo byl vlastníkem zrušen.",
+    "goHome": "Přejít na SiraGPT",
+    "defaultTitle": "Sdílená konverzace",
+    "subtitleComplete": "Konverzace s {count, plural, one {# zprávou} few {# zprávami} many {# zprávami} other {# zprávami}}",
+    "saveToAccount": "Uložit do mého účtu",
+    "saving": "Ukládání…",
+    "saved": "Uloženo do vašeho účtu!",
+    "saveFailed": "Uložení se nezdařilo. Zkuste to znovu.",
+    "loginRequired": "Pro uložení se musíte přihlásit.",
+    "loginToSave": "Přihlaste se pro uložení",
+    "saveHint": "Kopii si můžete uložit do svého účtu.",
+    "readHint": "Tuto konverzaci si můžete přečíst zdarma."
   }
 }

@@ -652,5 +652,23 @@
     "sendHint": "Send",
     "stopHint": "Stopp",
     "dropFiles": "Slipp filene for å laste dem opp"
+  },
+  "sharePage": {
+    "loading": "Laster…",
+    "errorTitle": "En feil oppstod",
+    "errorBody": "Den delte samtalen kunne ikke lastes inn. Prøv igjen.",
+    "notFoundTitle": "Den delte samtalen ble ikke funnet",
+    "notFoundBody": "Denne lenken finnes ikke eller ble trukket tilbake av eieren.",
+    "goHome": "Gå til SiraGPT",
+    "defaultTitle": "Delt samtale",
+    "subtitleComplete": "Samtale med {count, plural, one {# melding} other {# meldinger}}",
+    "saveToAccount": "Lagre i kontoen min",
+    "saving": "Lagrer…",
+    "saved": "Lagret i kontoen din!",
+    "saveFailed": "Kunne ikke lagre. Prøv igjen.",
+    "loginRequired": "Du må logge inn for å lagre.",
+    "loginToSave": "Logg inn for å lagre",
+    "saveHint": "Du kan lagre en kopi i kontoen din.",
+    "readHint": "Denne samtalen kan leses gratis."
   }
 }

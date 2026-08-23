@@ -7,18 +7,20 @@ const router = express.Router();
 router.get('/share/:shareId', async (req, res) => {
     try {
         const { shareId } = req.params;
-        const chat = await prisma.chat.findUnique({
-            where: { shareId, isShared: true },
+        const chat = await prisma.chat.findFirst({
+            where: { shareId, isShared: true, deletedAt: null },
             include: {
                 messages: {
+                    // Nunca exponer mensajes soft-deleted por un enlace público.
+                    where: { deletedAt: null },
                     orderBy: { timestamp: 'asc' },
-                    select: { 
-                        id: true, 
-                        role: true, 
-                        content: true, 
-                        files: true, 
-                        metadata: true, 
-                        timestamp: true 
+                    select: {
+                        id: true,
+                        role: true,
+                        content: true,
+                        files: true,
+                        metadata: true,
+                        timestamp: true
                     }
                 }
             }
@@ -65,23 +67,25 @@ router.get('/share/message/:shareId', async (req, res) => {
             where: { id: shareId },
             include: {
                 chat: {
+                    // Si el chat origen fue borrado, el enlace muere con él.
+                    where: { deletedAt: null },
                     select: { title: true, model: true }
                 }
             }
         });
 
-        if (!messageShare) {
+        if (!messageShare || !messageShare.chat) {
             return res.status(404).json({ error: 'Shared message not found.' });
         }
 
-        // Get the user and assistant messages
-        const userMessage = await prisma.message.findUnique({
-            where: { id: messageShare.userMessageId },
+        // Get the user and assistant messages (soft-deleted → 404)
+        const userMessage = await prisma.message.findFirst({
+            where: { id: messageShare.userMessageId, deletedAt: null },
             select: { id: true, role: true, content: true, files: true, metadata: true, timestamp: true }
         });
 
-        const assistantMessage = await prisma.message.findUnique({
-            where: { id: messageShare.assistantMessageId },
+        const assistantMessage = await prisma.message.findFirst({
+            where: { id: messageShare.assistantMessageId, deletedAt: null },
             select: { id: true, role: true, content: true, files: true, metadata: true, timestamp: true }
         });
 

@@ -652,5 +652,23 @@
     "sendHint": "Hantar",
     "stopHint": "Hentikan",
     "dropFiles": "Lepaskan fail di sini untuk memuat naik"
+  },
+  "sharePage": {
+    "loading": "Memuatkan…",
+    "errorTitle": "Ralat berlaku",
+    "errorBody": "Perbualan kongsi tidak dapat dimuatkan. Sila cuba lagi.",
+    "notFoundTitle": "Perbualan kongsi tidak dijumpai",
+    "notFoundBody": "Pautan ini tidak wujud atau telah ditarik balik oleh pemiliknya.",
+    "goHome": "Pergi ke SiraGPT",
+    "defaultTitle": "Perbualan kongsi",
+    "subtitleComplete": "Perbualan dengan {count} mesej",
+    "saveToAccount": "Simpan ke akaun saya",
+    "saving": "Menyimpan…",
+    "saved": "Disimpan ke akaun anda!",
+    "saveFailed": "Tidak dapat menyimpan. Cuba lagi.",
+    "loginRequired": "Anda perlu log masuk untuk menyimpan.",
+    "loginToSave": "Log masuk untuk menyimpan",
+    "saveHint": "Anda boleh menyimpan salinan ke akaun anda.",
+    "readHint": "Perbualan ini boleh dibaca secara percuma."
   }
 }

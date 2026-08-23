@@ -652,5 +652,23 @@
     "sendHint": "Yuborish",
     "stopHint": "To'xtatish",
     "dropFiles": "Yuklash uchun fayllarni shu yerga tashlang"
+  },
+  "sharePage": {
+    "loading": "Yuklanmoqda…",
+    "errorTitle": "Xatolik yuz berdi",
+    "errorBody": "Ulashilgan suhbatni yuklab boʻlmadi. Qayta urinib koʻring.",
+    "notFoundTitle": "Ulashilgan suhbat topilmadi",
+    "notFoundBody": "Bu havola mavjud emas yoki egasi uni bekor qilgan.",
+    "goHome": "SiraGPT ga oʻtish",
+    "defaultTitle": "Ulashilgan suhbat",
+    "subtitleComplete": "{count} xabarli suhbat",
+    "saveToAccount": "Hisobimga saqlash",
+    "saving": "Saqlanmoqda…",
+    "saved": "Hisobingizga saqlandi!",
+    "saveFailed": "Saqlab boʻlmadi. Qayta urinib koʻring.",
+    "loginRequired": "Saqlash uchun tizimga kiring.",
+    "loginToSave": "Saqlash uchun kiring",
+    "saveHint": "Nusxani hisobingizga saqlashingiz mumkin.",
+    "readHint": "Bu suhbatni bepul oʻqish mumkin."
   }
 }

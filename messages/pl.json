@@ -652,5 +652,23 @@
     "sendHint": "Wyślij",
     "stopHint": "Zatrzymaj",
     "dropFiles": "Upuść pliki, aby je przesłać"
+  },
+  "sharePage": {
+    "loading": "Ładowanie…",
+    "errorTitle": "Wystąpił błąd",
+    "errorBody": "Nie udało się załadować udostępnionej rozmowy. Spróbuj ponownie.",
+    "notFoundTitle": "Udostępniona rozmowa nie została znaleziona",
+    "notFoundBody": "Ten link nie istnieje lub został cofnięty przez właściciela.",
+    "goHome": "Przejdź do SiraGPT",
+    "defaultTitle": "Udostępniona rozmowa",
+    "subtitleComplete": "Rozmowa z {count, plural, one {# wiadomością} few {# wiadomościami} many {# wiadomościami} other {# wiadomościami}}",
+    "saveToAccount": "Zapisz na moim koncie",
+    "saving": "Zapisywanie…",
+    "saved": "Zapisano na Twoim koncie!",
+    "saveFailed": "Nie udało się zapisać. Spróbuj ponownie.",
+    "loginRequired": "Aby zapisać, musisz się zalogować.",
+    "loginToSave": "Zaloguj się, aby zapisać",
+    "saveHint": "Możesz zapisać kopię na swoim koncie.",
+    "readHint": "Ta rozmowa jest dostępna do czytania bezpłatnie."
   }
 }

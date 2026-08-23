@@ -93,6 +93,7 @@ import SourcesChip from "./SourcesChip"
 import ComputerUseReasoning from "./ComputerUseReasoning"
 import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
+import { buildShareUrl } from "@/lib/share-link"
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
@@ -1182,10 +1183,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             const response = await apiClient.shareMessage(message.id, message.chatId);
             const shareId = response?.shareableLink;
             if (!shareId) throw new Error("La respuesta del servidor no incluyó el shareableLink.");
-            const baseUrl = (typeof window !== "undefined" && window.location?.origin)
-                || process.env.NEXT_PUBLIC_URL
-                || `http://localhost:${process.env.PORT || 3000}`;
-            const url = `${baseUrl}/share/message/${shareId}`;
+            // Origen real del navegador — nunca localhost (lib/share-link.ts).
+            const url = buildShareUrl(String(shareId), "message");
             // Best-effort copy; if clipboard fails we still show the URL in the toast.
             try {
                 if (typeof navigator !== "undefined" && navigator.clipboard && window.isSecureContext) {

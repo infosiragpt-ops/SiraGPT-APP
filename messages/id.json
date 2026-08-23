@@ -652,5 +652,23 @@
     "sendHint": "Kirim",
     "stopHint": "Hentikan",
     "dropFiles": "Lepaskan file untuk mengunggah"
+  },
+  "sharePage": {
+    "loading": "Memuat…",
+    "errorTitle": "Terjadi kesalahan",
+    "errorBody": "Percakapan bersama tidak dapat dimuat. Silakan coba lagi.",
+    "notFoundTitle": "Percakapan bersama tidak ditemukan",
+    "notFoundBody": "Tautan ini tidak ada atau telah dicabut oleh pemiliknya.",
+    "goHome": "Buka SiraGPT",
+    "defaultTitle": "Percakapan bersama",
+    "subtitleComplete": "Percakapan dengan {count} pesan",
+    "saveToAccount": "Simpan ke akun saya",
+    "saving": "Menyimpan…",
+    "saved": "Tersimpan ke akun Anda!",
+    "saveFailed": "Tidak dapat menyimpan. Coba lagi.",
+    "loginRequired": "Anda perlu masuk untuk menyimpan.",
+    "loginToSave": "Masuk untuk menyimpan",
+    "saveHint": "Anda dapat menyimpan salinan ke akun Anda.",
+    "readHint": "Percakapan ini dapat dibaca gratis."
   }
 }

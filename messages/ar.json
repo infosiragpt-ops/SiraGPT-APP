@@ -655,5 +655,23 @@
     "sendHint": "إرسال",
     "stopHint": "إيقاف",
     "dropFiles": "أفلت الملفات لرفعها"
+  },
+  "sharePage": {
+    "loading": "جارٍ التحميل…",
+    "errorTitle": "حدث خطأ ما",
+    "errorBody": "تعذّر تحميل المحادثة المشتركة. حاول مرة أخرى.",
+    "notFoundTitle": "المحادثة المشتركة غير موجودة",
+    "notFoundBody": "هذا الرابط غير موجود أو تم إلغاؤه من قِبل المالك.",
+    "goHome": "الذهاب إلى SiraGPT",
+    "defaultTitle": "محادثة مشتركة",
+    "subtitleComplete": "محادثة بعدد {count, plural, one {رسالة واحدة} other {# رسالة}}",
+    "saveToAccount": "حفظ في حسابي",
+    "saving": "جارٍ الحفظ…",
+    "saved": "تم الحفظ في حسابك!",
+    "saveFailed": "تعذّر الحفظ. حاول مرة أخرى.",
+    "loginRequired": "تحتاج إلى تسجيل الدخول للحفظ.",
+    "loginToSave": "سجّل الدخول للحفظ",
+    "saveHint": "يمكنك حفظ نسخة إلى حسابك.",
+    "readHint": "يمكن قراءة هذه المحادثة مجانًا."
   }
 }

@@ -33,6 +33,7 @@
     "../lib/sentry-config.ts",
     "../lib/retry-after-fetch.ts",
     "../lib/deep-links.ts",
+    "../lib/share-link.ts",
     "../lib/native/share.ts",
     "../lib/native/clipboard.ts",
     "../lib/native/storage.ts",

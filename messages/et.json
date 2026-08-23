@@ -652,5 +652,23 @@
     "sendHint": "Saada",
     "stopHint": "Peata",
     "dropFiles": "Lohista failid üleslaadimiseks"
+  },
+  "sharePage": {
+    "loading": "Laadimine…",
+    "errorTitle": "Ilmnes viga",
+    "errorBody": "Jagatud vestlust ei saanud laadida. Proovige uuesti.",
+    "notFoundTitle": "Jagatud vestlust ei leitud",
+    "notFoundBody": "See link ei eksisteeri või omanik tühistas selle.",
+    "goHome": "Mine SiraGPT-sse",
+    "defaultTitle": "Jagatud vestlus",
+    "subtitleComplete": "Vestlus {count} sõnumiga",
+    "saveToAccount": "Salvesta minu kontosse",
+    "saving": "Salvestamine…",
+    "saved": "Salvestati teie kontosse!",
+    "saveFailed": "Salvestamine ebaõnnestus. Proovige uuesti.",
+    "loginRequired": "Salvestamiseks logige sisse.",
+    "loginToSave": "Salvestamiseks logige sisse",
+    "saveHint": "Saate koopia oma kontosse salvestada.",
+    "readHint": "Seda vestlust saab tasuta lugeda."
   }
 }

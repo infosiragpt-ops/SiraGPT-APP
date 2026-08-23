@@ -652,5 +652,23 @@
     "sendHint": "Ipadala",
     "stopHint": "Itigil",
     "dropFiles": "Ihulog ang mga file dito upang i-upload"
+  },
+  "sharePage": {
+    "loading": "Naglo-load…",
+    "errorTitle": "May naganap na error",
+    "errorBody": "Hindi ma-load ang ibinahaging pag-uusap. Pakisubukang muli.",
+    "notFoundTitle": "Hindi natagpuan ang ibinahaging pag-uusap",
+    "notFoundBody": "Ang link na ito ay wala na o binawi ng may-ari.",
+    "goHome": "Punta sa SiraGPT",
+    "defaultTitle": "Ibinahaging pag-uusap",
+    "subtitleComplete": "Pag-uusap na may {count} mensahe",
+    "saveToAccount": "I-save sa aking account",
+    "saving": "Sine-save…",
+    "saved": "Na-save sa iyong account!",
+    "saveFailed": "Hindi na-save. Pakisubukang muli.",
+    "loginRequired": "Kailangan mong mag-sign in para mag-save.",
+    "loginToSave": "Mag-sign in para mag-save",
+    "saveHint": "Maaari mong i-save ang isang kopya sa iyong account.",
+    "readHint": "Ang pag-uusap na ito ay maaaring basahin nang libre."
   }
 }

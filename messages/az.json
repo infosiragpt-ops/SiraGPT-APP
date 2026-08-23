@@ -652,5 +652,23 @@
     "sendHint": "Göndər",
     "stopHint": "Dayandır",
     "dropFiles": "Yükləmək üçün faylları buraxın"
+  },
+  "sharePage": {
+    "loading": "Yüklənir…",
+    "errorTitle": "Xəta baş verdi",
+    "errorBody": "Paylaşılan söhbəti yükləmək mümkün olmadı. Yenidən cəhd edin.",
+    "notFoundTitle": "Paylaşılan söhbət tapılmadı",
+    "notFoundBody": "Bu bağlantı mövcud deyil və ya sahibi tərəfindən ləğv edilib.",
+    "goHome": "SiraGPT-ə keç",
+    "defaultTitle": "Paylaşılan söhbət",
+    "subtitleComplete": "{count} mesajlıq söhbət",
+    "saveToAccount": "Hesabıma saxla",
+    "saving": "Saxlanılır…",
+    "saved": "Hesabınıza saxlanıldı!",
+    "saveFailed": "Saxlamaq mümkün olmadı. Yenidən cəhd edin.",
+    "loginRequired": "Saxlamaq üçün daxil olun.",
+    "loginToSave": "Saxlamaq üçün daxil ol",
+    "saveHint": "Bir nüsxəni hesabınıza saxlaya bilərsiniz.",
+    "readHint": "Bu söhbəti pulsuz oxumaq mümkündür."
   }
 }

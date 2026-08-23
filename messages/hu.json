@@ -652,5 +652,23 @@
     "sendHint": "Küldés",
     "stopHint": "Leállítás",
     "dropFiles": "Húzd ide a fájlokat a feltöltéshez"
+  },
+  "sharePage": {
+    "loading": "Betöltés…",
+    "errorTitle": "Hiba történt",
+    "errorBody": "A megosztott beszélgetést nem lehet betölteni. Kérjük, próbálja újra.",
+    "notFoundTitle": "A megosztott beszélgetés nem található",
+    "notFoundBody": "Ez a hivatkozás nem létezik, vagy a tulajdonos visszavonta.",
+    "goHome": "Ugrás a SiraGPT-re",
+    "defaultTitle": "Megosztott beszélgetés",
+    "subtitleComplete": "Beszélgetés {count} üzenettel",
+    "saveToAccount": "Mentés a fiókomba",
+    "saving": "Mentés…",
+    "saved": "Elmentve a fiókjába!",
+    "saveFailed": "Nem sikerült menteni. Próbálja újra.",
+    "loginRequired": "A mentéshez bejelentkezés szükséges.",
+    "loginToSave": "Jelentkezzen be a mentéshez",
+    "saveHint": "Másolatot menthet a fiókjába.",
+    "readHint": "Ez a beszélgetés ingyenesen olvasható."
   }
 }

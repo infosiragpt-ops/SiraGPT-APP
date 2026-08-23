@@ -652,5 +652,23 @@
     "sendHint": "ላክ",
     "stopHint": "አቁም",
     "dropFiles": "ለመጫን ፋይሎችን እዚህ ያኑሩ"
+  },
+  "sharePage": {
+    "loading": "በመጫን ላይ…",
+    "errorTitle": "ስህተት ተከስቷል",
+    "errorBody": "የተጋራውን ውይይት መጫን አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
+    "notFoundTitle": "የተጋራ ውይይት አልተገኘም",
+    "notFoundBody": "ይህ ማጋሪያ ትስስር አልተገኘም ወይም በገዢው ተሰርዟል።",
+    "goHome": "ወደ SiraGPT ይሂዱ",
+    "defaultTitle": "የተጋራ ውይይት",
+    "subtitleComplete": "የ{count, plural, one {# መልእክት} other {# መልእክቶች}} ውይይት",
+    "saveToAccount": "ወደ ሒሳቤ አስቀምጥ",
+    "saving": "በማስቀመጥ ላይ…",
+    "saved": "ወደ ሒሳብዎ ተቀምጧል!",
+    "saveFailed": "ማስቀመጥ አልተቻለም። እባክዎ እንደገና ይሞክሩ።",
+    "loginRequired": "ለማስቀመጥ መግቢያ ያስፈልጋል።",
+    "loginToSave": "ለማስቀመጥ ይግቡ",
+    "saveHint": "ኮፒ ለማድረግ ወደ ሒሳብዎ ማስቀመጥ ይችላሉ።",
+    "readHint": "ይህ ውይይት በነፃ ማንበብ ይቻላል።"
   }
 }

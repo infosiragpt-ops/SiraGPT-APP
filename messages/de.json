@@ -652,5 +652,23 @@
     "titleDefault": "SiraGPT — Multimodale KI-Plattform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM-Plattform mit Text-, Bild-, Audio- und Videogenerierung. GPT-4, Claude, Gemini und mehr an einem Ort."
+  },
+  "sharePage": {
+    "loading": "Wird geladen…",
+    "errorTitle": "Ein Fehler ist aufgetreten",
+    "errorBody": "Die geteilte Unterhaltung konnte nicht geladen werden. Bitte erneut versuchen.",
+    "notFoundTitle": "Geteilte Unterhaltung nicht gefunden",
+    "notFoundBody": "Dieser Link existiert nicht oder wurde vom Besitzer widerrufen.",
+    "goHome": "Zu SiraGPT gehen",
+    "defaultTitle": "Geteilte Unterhaltung",
+    "subtitleComplete": "Unterhaltung mit {count, plural, one {# Nachricht} other {# Nachrichten}}",
+    "saveToAccount": "In meinem Konto speichern",
+    "saving": "Wird gespeichert…",
+    "saved": "In Ihrem Konto gespeichert!",
+    "saveFailed": "Speichern fehlgeschlagen. Bitte erneut versuchen.",
+    "loginRequired": "Zum Speichern ist eine Anmeldung nötig.",
+    "loginToSave": "Zum Speichern anmelden",
+    "saveHint": "Sie können eine Kopie in Ihrem Konto speichern.",
+    "readHint": "Diese Unterhaltung ist frei lesbar."
   }
 }
