@@ -56,14 +56,12 @@ import { buildSpokenResponseSummary } from '@/lib/voice/spoken-response-summary'
 import ReactMarkdown from 'react-markdown'
 import { PerformanceOptimizer } from "@/lib/performance-optimizer"
 import { markdownRehypePlugins, markdownRemarkPlugins } from '@/lib/markdown-sanitize'
-import { normalizeMathDelimiters } from '@/lib/markdown/normalize-math'
-import MemoMarkdownBlock from '@/components/markdown/memo-markdown-block'
-import { splitStableHead } from '@/lib/markdown-block-split'
+import MessageContent from './message-content'
+import type { ExpandedTablePayload } from './message-content'
 import { DownloadButtons } from './download-buttons';
-import TableControls from './TableControls';
 import ImageGenerationEffect from './ImageGenerationEffect';
 // import CodePreview from './code-preview';
-import { parseCodeFromContent, hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
+import { hasWebDevelopmentCode, combineWebCode, detectCodeType } from '@/lib/code-detection';
 const ChartComponent = dynamic(() => import('./chart-component'), {
   ssr: false,
   loading: () => <div className="h-64 w-full animate-pulse bg-muted/30 rounded" aria-hidden="true" />,
@@ -74,10 +72,6 @@ import { VizArtifactDisplay } from './viz/viz-artifact-display';
 import { DocArtifactDisplay } from './doc/doc-artifact-display';
 import { InteractiveArtifactDisplay } from './artifact/interactive-artifact-display';
 import { PresentationView } from './presentation-view';
-import { CustomCodeBlock } from "./ui/custom-code-block"
-import { PapersResultCard } from "./papers-result-card"
-import { shouldUnwrapInteractiveFence } from "@/lib/interactive-message-blocks"
-import { ArtifactCard, isExecutableArtifact } from "./chat/ArtifactCard"
 import ProcessingGmailCard from "./ProcessingGmailCard"
 import ExtractedDataDownload from "./ExtractedDataDownload"
 import ThesisProgressComponent from "./ThesisProgressComponent"
@@ -98,27 +92,8 @@ import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import {
     copyMarkdownToWordClipboard,
-    createWordClipboardPayloadFromSelection,
-    setClipboardDataForWord,
     stripNonCopyableArtifactBlocks,
 } from "@/lib/rich-clipboard"
-
-// Adjusted truncateUrl function to ensure links are not overly shortened.
-// Guards against non-string inputs — the renderer is fed citation/source
-// objects from the backend whose `url` field is occasionally null,
-// undefined or wrapped in an object during streaming. Without this
-// guard the whole message bubble crashes with
-// "url.split is not a function" and shows the red "no se pudo
-// renderizar" error.
-const truncateUrl = (url: unknown, maxLength: number = 30) => {
-    if (typeof url !== 'string' || url.length === 0) return '';
-    if (url.length <= maxLength) return url;
-    const parts = url.split('/');
-    const domain = parts[2] ?? url;
-    const path = parts.slice(3).join('/');
-    const truncatedPath = path.length > 25 ? `${path.slice(0, 25)}...` : path;
-    return path ? `${domain}/${truncatedPath}` : domain;
-};
 
 // Extract web-search sources for the ChatGPT-style "Fuentes" chip. Live
 // turns attach `sources`/`searchActivity` to the message during streaming;
@@ -955,18 +930,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     const [tableTitle, setTableTitle] = useState<string>('');
 
-    // Code preview states (now memoized for performance)
-
-    const getNodeText = (node: any): string => {
-        if (node.type === 'text') {
-            return node.value;
-        }
-        if (node.children) {
-            return node.children.map(getNodeText).join('');
-        }
-        return '';
-    };
-
+    // Stable identity across renders so React.memo(MessageContent) can skip
+    // re-rendering during token flushes; setters are stable by contract.
+    const handleExpandTable = useCallback(({ headers, rows, title }: ExpandedTablePayload) => {
+        setTableHeaders(headers);
+        setTableData(rows);
+        setTableTitle(title);
+        setIsTableExpanded(true);
+    }, []);
 
 
     // Video-specific states
@@ -1014,35 +985,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         window.addEventListener('keydown', handleEscape);
         return () => window.removeEventListener('keydown', handleEscape);
     }, [selectedImage]);
-
-    // Optimized code detection with memoization to prevent repeated parsing
-    const parsedCode = useMemo(() => {
-        if (message.content && (message.role === 'assistant' || message.role === 'ASSISTANT')) {
-            return parseCodeFromContent(message.content);
-        }
-        return null;
-    }, [message.content, message.role]);
-
-    const canPreviewMessage = useMemo(() => {
-        if (!parsedCode) return false;
-        if (!parsedCode.hasWebCode) return false;
-        if (parsedCode.hasNonWebCode && !parsedCode.combinedCode) return false;
-        return !!(parsedCode.combinedCode || parsedCode.html);
-    }, [parsedCode]);
-
-    const handlePreview = () => {
-        if (!parsedCode || !onToggleSplitView) return;
-
-        const content = {
-            htmlCode: parsedCode.html || '',
-            cssCode: parsedCode.css || '',
-            jsCode: parsedCode.js || '',
-            combinedCode: parsedCode.combinedCode || '',
-            title: 'Code Preview'
-        };
-
-        onToggleSplitView(content);
-    };
 
     // Cleanup audio when component unmounts. Cancels both the
     // ElevenLabs <audio> element and any in-flight browser TTS
@@ -1496,354 +1438,6 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const hasGmailEntry = useMemo(() => {
         return Array.isArray(parsedFiles) && parsedFiles.some((f: any) => f?.type === 'gmail_emails' || f?.type === 'gmail_search_results')
     }, [parsedFiles])
-
-    // Optimized CodeBlock component with performance improvements.
-    // Meta-AI-style artifact routing: when the code is executable
-    // (html with DOCTYPE/html/canvas/svg, or svg/mermaid), mount
-    // the ArtifactCard (inline iframe preview + 4-button rail) in
-    // place of the plain syntax-highlighted block.
-    const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
-        const match = /language-([\w-]+)/.exec(className || '');
-        if (!inline && match) {
-            const language = match[1];
-            const codeString = String(children).replace(/\n$/, '');
-            if (language === 'agent-task-state') {
-                try {
-                    const state = JSON.parse(codeString);
-                    // When the typed AgentTrace timeline is active for this
-                    // message, the sentinel contributes only its artifacts —
-                    // one timeline, not two.
-                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
-                } catch {
-                    return null;
-                }
-            }
-            if (language === 'scientific-papers') {
-                try {
-                    return <PapersResultCard data={JSON.parse(codeString)} />;
-                } catch {
-                    return null;
-                }
-            }
-            if (isExecutableArtifact(language, codeString)) {
-                return <ArtifactCard code={codeString} language={language} />;
-            }
-            return (
-                <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
-                    {children}
-                </CustomCodeBlock>
-            );
-        }
-        return (
-            <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                {children}
-            </code>
-        );
-    };
-
-    // Optimized message content rendering with performance safeguards
-    const MessageContent = ({ content: rawContent }: { content: string }) => {
-        // Normalize `\( \)` / `\[ \]` TeX bracket delimiters (commonly emitted
-        // by LLMs) to `$ $` / `$$ $$` once, up front, so every downstream
-        // branch — direct ReactMarkdown, the streaming head/tail split, and the
-        // memoized block — renders math via KaTeX. Code spans/blocks are left
-        // untouched and the helper is a no-op when no brackets are present.
-        const content = React.useMemo(() => normalizeMathDelimiters(rawContent), [rawContent]);
-        // ✅ PERFORMANCE FIX: Use simple rendering for streaming messages
-        // if (isStreaming) {
-        //     return (
-        //         <div className="prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed">
-        //             <p className="mb-3 text-base whitespace-pre-wrap">{message.content}</p>
-        //         </div>
-        //     );
-        // }
-
-
-        // Messages always render at full height — the old "Ver más / Ver
-        // menos" clamp was removed by user request (having to expand every
-        // long answer was friction, not comfort).
-        const contentRef = useRef<HTMLDivElement>(null);
-
-        // Tag-renderers that don't depend on streaming/final mode. Kept
-        // as a single useMemo so both maps reuse the same references and
-        // MemoMarkdownBlock can rely on components identity for memoing.
-        const baseComponents = useMemo(() => ({
-            pre: ({ children }: any) => {
-                const child = React.Children.toArray(children)[0]
-                const childProps = React.isValidElement(child) ? (child.props as any) : null
-                if (shouldUnwrapInteractiveFence(childProps?.className)) {
-                    return <>{children}</>
-                }
-                return <pre>{children}</pre>
-            },
-            p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
-            h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
-            h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
-            h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
-            h4: ({ children }: any) => <h4 className="mb-2 text-base font-semibold leading-7">{children}</h4>,
-            hr: () => <hr className="my-4 border-muted" />,
-            blockquote: ({ children }: any) => <blockquote className="border-l-4 border-muted pl-4 mb-3 italic">{children}</blockquote>,
-            th: ({ children }: any) => <th className="border border-muted px-3 py-2 bg-muted/50 text-left font-medium text-sm whitespace-nowrap">{children}</th>,
-            td: ({ children }: any) => <td className="border border-muted px-3 py-2 text-sm align-top" style={{ overflowWrap: 'break-word', maxWidth: '28rem' }}>{children}</td>,
-            strong: ({ children }: any) => <strong className="font-semibold">{children}</strong>,
-            em: ({ children }: any) => <em className="italic">{children}</em>,
-            a: ({ href, children, ...props }: any) => {
-                // Only bare-URL link text goes through truncateUrl. Passing
-                // React children blindly broke two cases: nested markdown in
-                // the label ([**SiraGPT** docs](url) → children is an array →
-                // typeof guard returned '' → INVISIBLE link) and long prose
-                // labels with slashes got mangled by the domain/path logic.
-                const single = Array.isArray(children) && children.length === 1 ? children[0] : children;
-                const isBareUrl = typeof single === 'string' && /^(https?:\/\/|www\.)/i.test(single.trim());
-                return (
-                    <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sky-600 hover:text-sky-800 underline decoration-sky-400 hover:decoration-sky-600"
-                        title={href}
-                        {...props}
-                    >
-                        {isBareUrl ? truncateUrl(single) : children}
-                    </a>
-                );
-            },
-        }), []);
-
-        // Streaming-only map: stable as long as the message id doesn't
-        // change. Crucially does NOT close over `message.content`, so it
-        // survives every token without invalidating MemoMarkdownBlock.
-        const streamingComponents = useMemo(() => ({
-            ...baseComponents,
-            table: ({ children }: any) => (
-                <div className="group relative mt-3">
-                    <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                        <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                    </div>
-                    <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-                </div>
-            ),
-            code: ({ node, inline, className, children, ...props }: any) => {
-                const match = /language-([\w-]+)/.exec(className || '');
-                if (!inline && match) {
-                    const lang = (match[1] || '').toLowerCase();
-                    const codeString = String(children).replace(/\n$/, '');
-                    if (lang === 'agent-task-state') {
-                        try {
-                            const state = JSON.parse(codeString);
-                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
-                        } catch {
-                            return null;
-                        }
-                    }
-                    if (lang === 'scientific-papers') {
-                        try {
-                            return <PapersResultCard data={JSON.parse(codeString)} />;
-                        } catch {
-                            return null;
-                        }
-                    }
-                    const willBeArtifact = isExecutableArtifact(lang, codeString)
-                        || (lang === 'html' && /<!doctype|<html[\s>]/i.test(codeString.slice(0, 200)))
-                        || (lang === 'mermaid')
-                        || (lang === 'svg');
-                    if (willBeArtifact) {
-                        return (
-                            <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/70">
-                                <div className="flex items-center justify-between px-3.5 py-1.5 border-b border-white/[0.04]">
-                                    <span className="text-[11px] font-sans tracking-wide text-zinc-500">{lang}</span>
-                                    <span className="inline-flex items-center gap-1.5 text-[11px] text-emerald-400/90">
-                                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                        Generando artefacto…
-                                    </span>
-                                </div>
-                                <div className="relative">
-                                    <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-200 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-zinc-950/90 to-transparent" />
-                                </div>
-                            </div>
-                        );
-                    }
-                    return (
-                        <div className="my-4 overflow-hidden rounded-lg border border-black/[0.06] dark:border-white/[0.06] bg-zinc-950/60">
-                            <div className="px-3.5 py-1.5 border-b border-white/[0.04] text-[11px] font-sans tracking-wide text-zinc-500">{lang}</div>
-                            <pre className="text-[12.5px] leading-[1.55] whitespace-pre-wrap p-3.5 font-mono text-zinc-100 max-h-[280px] overflow-auto"><code>{codeString}</code></pre>
-                        </div>
-                    );
-                }
-                return (
-                    <code className="text-sm font-mono bg-muted px-[0.4rem] py-[0.2rem] rounded-sm" {...props}>{children}</code>
-                );
-            },
-        // onDocumentPreview is typically stable (callback from parent);
-        // baseComponents is stable. hasAgentTrace flips once when the first
-        // typed tool frame lands — the map must recompute then so the live
-        // sentinel hands the timeline over to AgentTrace.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, onDocumentPreview, hasAgentTrace]);
-
-        // Final (post-streaming) map: enriches the table with controls
-        // tied to the now-stable message.content. Recomputed only when
-        // streaming ends or the user edits a stored message.
-        const finalComponents = useMemo(() => ({
-            ...baseComponents,
-            table: ({ node, children, ...props }: any) => {
-                let title = '';
-                const parent = node.parent;
-                if (parent) {
-                    const tableIndex = parent.children.indexOf(node);
-                    for (let i = tableIndex - 1; i >= 0; i--) {
-                        const sibling = parent.children[i];
-                        if (sibling.tagName === 'h1' || sibling.tagName === 'h2' || sibling.tagName === 'h3') {
-                            title = getNodeText(sibling);
-                            break;
-                        }
-                        if (sibling.type !== 'text' || sibling.value.trim() !== '') {
-                            break;
-                        }
-                    }
-                }
-
-                const handleExpand = () => {
-                    const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                    const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                    const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e != "\n") ?? [];
-                    const data = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                    setTableHeaders(headers);
-                    setTableData(data);
-                    setTableTitle(title);
-                    setIsTableExpanded(true);
-                };
-                const tHead = node.children.find((child: any) => child.tagName === 'thead');
-                const tBody = node.children.find((child: any) => child.tagName === 'tbody');
-                const headers = tHead?.children?.[0]?.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? [];
-                const rows = tBody?.children?.map((tr: any) => tr.children?.map(getNodeText).filter((e: string) => e !== "\n") ?? []) ?? [];
-                const selectedTableData = headers.length > 0
-                    ? { headers, rows }
-                    : null;
-
-                return (
-                    <div className="group relative mt-3">
-                        <TableControls
-                            content={message.content}
-                            messageId={message.id}
-                            tableData={selectedTableData}
-                            onExpand={handleExpand}
-                            title={title}
-                        />
-                        <div className="overflow-x-auto w-full min-w-0 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-transparent hover:scrollbar-thumb-gray-600" style={{ WebkitOverflowScrolling: 'touch', maxWidth: '100vw' }}>
-                            <table className="border-collapse border border-muted mb-3 w-full" style={{ minWidth: "520px" }}>{children}</table>
-                        </div>
-                        <div className="block md:hidden mt-1 text-xs text-muted-foreground text-center select-none">Desliza para ver la tabla completa</div>
-                    </div>
-                );
-            },
-            code: CodeBlock,
-        // CodeBlock is recreated per MessageComponent render but content
-        // and id only stabilize after streaming, where we actually use
-        // this map; keep deps explicit.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-        }), [baseComponents, CodeBlock, message.id, message.content]);
-
-        const components = isStreaming ? streamingComponents : finalComponents;
-
-        if (message.role === 'ASSISTANT' && (content === '[GENERATING_IMAGE]' || content === '[PROCESSING_GMAIL]' || content === '[PROCESSING_CALENDAR_ACTION]' || content === '[PROCESSING_DRIVE_ACTION]' || content === '[GENERATING_PPT]' || content === '[GENERATING_VECTOR_PPT]' || content === '[THESIS_GENERATING]' || content.startsWith('[THESIS_GENERATING]'))) {
-            return null;
-        }
-        // Don't render markdown for image-only messages to improve performance
-        if (isImageOnlyMessage() || isVideoMessage) {
-            return null;
-        }
-
-        const handleRenderedCopy = (event: React.ClipboardEvent<HTMLDivElement>) => {
-            const payload = createWordClipboardPayloadFromSelection(event.currentTarget, content);
-            if (!payload) return;
-
-            setClipboardDataForWord(event.clipboardData, payload);
-            event.preventDefault();
-            toast.success("Selección copiada con formato para Word");
-        };
-
-        return (
-            // [&_p:last-child]:!mb-0 trims the trailing 1em margin that
-            // `prose-sm` adds to the final paragraph — that margin was
-            // pushing the action rail visually too far from the message.
-            // We keep all other prose typography intact. (The class name is a
-            // stable DOM hook; the expand/collapse it once hosted was removed.)
-            <div className="sgpt-message-collapsible">
-              <div className="relative">
-                <div
-                    ref={contentRef}
-                    className={cn(
-                        "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
-                        "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
-                        "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
-                    )}
-                    data-sgpt-rich-copy-root=""
-                    onCopyCapture={handleRenderedCopy}
-                >
-                {(() => {
-                    // While streaming, split the assistant content into a
-                    // stable "head" (closed blocks) and a "live tail" so
-                    // closed paragraphs/code/lists don't get re-parsed and
-                    // re-rendered on every incoming token. The head is
-                    // wrapped in a React.memo'd block that compares the
-                    // content string and the components reference; both
-                    // are stable across token deltas thanks to the
-                    // streamingComponents useMemo above.
-                    const isStreamingAssistant = isStreaming && message.role === 'ASSISTANT';
-                    if (!isStreamingAssistant) {
-                        return (
-                            <ReactMarkdown
-                                remarkPlugins={markdownRemarkPlugins}
-                                rehypePlugins={markdownRehypePlugins}
-                                components={components}
-                            >
-                                {content}
-                            </ReactMarkdown>
-                        );
-                    }
-                    const { head, tail } = splitStableHead(content);
-                    if (!head) {
-                        return (
-                            <ReactMarkdown
-                                remarkPlugins={markdownRemarkPlugins}
-                                rehypePlugins={markdownRehypePlugins}
-                                components={components}
-                            >
-                                {content}
-                            </ReactMarkdown>
-                        );
-                    }
-                    return (
-                        <>
-                            <MemoMarkdownBlock content={head} components={components} />
-                            {tail ? (
-                                <ReactMarkdown
-                                    remarkPlugins={markdownRemarkPlugins}
-                                    rehypePlugins={markdownRehypePlugins}
-                                    components={components}
-                                >
-                                    {tail}
-                                </ReactMarkdown>
-                            ) : null}
-                        </>
-                    );
-                })()}
-                {isStreaming && message.role === 'ASSISTANT' ? (
-                    <span
-                        aria-hidden="true"
-                        className="premium-caret ml-0.5 inline-block w-[0.5ch] h-[1em] -mb-[0.15em] bg-current align-baseline rounded-[1px]"
-                    />
-                ) : null}
-                </div>
-              </div>
-            </div>
-        );
-    };
 
     const videoEntry = useMemo(
         () => Array.isArray(parsedFiles) ? parsedFiles.find((f: any) => f?.type === 'video') : null,
@@ -3211,7 +2805,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         </div>
                                     </div>
                                 ) : (
-                                    <MessageContent content={formatAgentTaskUserContent(message.content)} />
+                                    <MessageContent content={formatAgentTaskUserContent(message.content)} role="USER" messageId={`${message.id}-agent-task`} />
                                 )}
                             </Card>
                         )}
@@ -3302,16 +2896,16 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         // "before" prose, then the interactive viewer, then the
                                         // "after" prose. Otherwise fall back to plain text.
                                         const parsed = extractArtifact(displayedContent || '');
-                                        if (!parsed) return <MessageContent content={displayedContent} />;
+                                        if (!parsed) return <MessageContent content={displayedContent} role={message.role} messageId={message.id} isStreaming={isStreaming} hasAgentTrace={hasAgentTrace} onDocumentPreview={onDocumentPreview} onToggleSplitView={onToggleSplitView} onExpandTable={handleExpandTable} />;
                                         return (
                                             <>
-                                                {parsed.before && <MessageContent content={parsed.before} />}
+                                                {parsed.before && <MessageContent content={parsed.before} role={message.role} messageId={message.id} isStreaming={isStreaming} hasAgentTrace={hasAgentTrace} onDocumentPreview={onDocumentPreview} onToggleSplitView={onToggleSplitView} onExpandTable={handleExpandTable} />}
                                                 <InteractiveArtifact
                                                     html={parsed.artifact.html}
                                                     title={parsed.artifact.title}
                                                     description={parsed.artifact.description}
                                                 />
-                                                {parsed.after && <MessageContent content={parsed.after} />}
+                                                {parsed.after && <MessageContent content={parsed.after} role={message.role} messageId={message.id} isStreaming={isStreaming} hasAgentTrace={hasAgentTrace} onDocumentPreview={onDocumentPreview} onToggleSplitView={onToggleSplitView} onExpandTable={handleExpandTable} />}
                                             </>
                                         );
                                     })()
