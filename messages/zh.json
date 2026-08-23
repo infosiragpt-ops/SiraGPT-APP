@@ -652,5 +652,15 @@
     "titleDefault": "SiraGPT — Multimodal AI Platform",
     "titleTemplate": "%s · SiraGPT",
     "description": "Multi-LLM platform with text, image, audio and video generation. GPT-4, Claude, Gemini and more in one place."
+  },
+  "chatSearch": {
+    "placeholder": "搜索你的聊天…",
+    "noResults": "无结果",
+    "noResultsFor": "未找到与「{query}」匹配的聊天",
+    "serverFallback": "服务器搜索不可用；显示本地标题匹配。",
+    "emptyHistory": "还没有聊天",
+    "emptyHistoryHint": "开始对话后会显示在这里",
+    "resultCountOne": "{count} 个聊天",
+    "resultCountMany": "{count} 个聊天"
   }
 }
