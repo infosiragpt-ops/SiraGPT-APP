@@ -34,6 +34,16 @@ function isAllowedGenerationModel(id: string, provider?: string): boolean {
   return p === "deepseek"
 }
 
+/** Phone /code composer: DeepSeek V4 Flash/Pro only — never OpenRouter. */
+export function isDeepSeekGenerationModel(id: string, provider?: string): boolean {
+  return isAllowedGenerationModel(id, provider)
+}
+
+export function listDeepSeekGenerationModels<T extends ModelLike>(models: T[]): T[] {
+  if (!Array.isArray(models) || models.length === 0) return []
+  return models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
+}
+
 export function isSlowModel(id: string | null | undefined): boolean {
   const s = String(id || "")
   if (!s) return false

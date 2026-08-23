@@ -22,6 +22,8 @@
     "../lib/app-wrapper-routes.ts",
     "../lib/long-paste.ts",
     "../lib/composer-layout.ts",
+    "../lib/code-mobile-grok.ts",
+    "../lib/code-agent/model-policy.ts",
     "../lib/message-preservation.ts",
     "../lib/attachment-url.ts",
     "../lib/attachment-ingest.ts",

@@ -81,6 +81,12 @@ const BrowserVoicePlayer = React.lazy(() =>
 )
 
 import { DictationButton } from "@/components/codex/dictation-button"
+import {
+  CodeMobileGrokHeader,
+  CodeMobileGrokMic,
+} from "@/components/code/code-mobile-grok-chrome"
+import { useResolvedMobile } from "@/hooks/use-mobile"
+import { askAgentPlaceholder } from "@/lib/code-mobile-grok"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -128,6 +134,7 @@ import {
 import {
   CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
   notifyCompanyAssociationChanged,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   setActiveCodexProject,
@@ -201,7 +208,7 @@ import {
   COMPOSER_MODE_LABEL,
   COMPOSER_PLACEHOLDER,
 } from "@/lib/code-agent/composer-mode-config"
-import { isSlowModel, recommendFastModel } from "@/lib/code-agent/model-policy"
+import { isSlowModel, listDeepSeekGenerationModels, recommendFastModel } from "@/lib/code-agent/model-policy"
 import {
   ModelCircuitBreakerRegistry,
   computeBackoffMs,
@@ -834,7 +841,7 @@ export type AICodeChatPanelProps = {
   bardNav?: DeptChatBardNav
 }
 
-export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
+export function AICodeChatPanel({ embedded = false, title: _title, onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
   const {
     selectedModel,
@@ -857,6 +864,8 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   } = useCodeWorkspace()
 
   const hasBardNav = Boolean(bardNav)
+  const isMobileGrok = useResolvedMobile() === true
+  const grokAgentName = bardNav?.departmentName || _title || "CEO Office"
   const [deptDrawerOpen, setDeptDrawerOpen] = React.useState(false)
   React.useEffect(() => {
     setDeptChatChrome(hasBardNav)
@@ -1027,18 +1036,19 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   // What the model picker shows: the real catalog when present, else the single
   // policy fallback so the user sees "Gema4" rather than an endless spinner.
   const pickerModels = React.useMemo<ModelOption[]>(() => {
-    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
-    if (fallbackModel) {
-      return [
-        {
-          name: fallbackModel.name,
-          displayName: fallbackModel.displayName,
-          provider: fallbackModel.provider,
-        } as ModelOption,
-      ]
-    }
-    return []
-  }, [availableModels, fallbackModel])
+    const catalog = (availableModels && availableModels.length > 0
+      ? availableModels
+      : fallbackModel
+        ? [{
+            name: fallbackModel.name,
+            displayName: fallbackModel.displayName,
+            provider: fallbackModel.provider,
+          }]
+        : []) as ModelOption[]
+    // Phone Grok chrome: DeepSeek only — never surface OpenRouter slugs.
+    if (isMobileGrok) return listDeepSeekGenerationModels(catalog)
+    return catalog
+  }, [availableModels, fallbackModel, isMobileGrok])
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -4888,11 +4898,13 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
   return (
     <div
       className={cn(
-        "relative flex h-full min-h-0 min-w-0 flex-col bg-zinc-50/70 text-foreground dark:bg-zinc-950",
+        "relative flex h-full min-h-0 min-w-0 flex-col text-foreground",
+        isMobileGrok ? "bg-white" : "bg-zinc-50/70 dark:bg-zinc-950",
         bardNav && "dept-chat-bard",
       )}
       data-embedded={embedded ? "true" : undefined}
       data-testid={bardNav ? "dept-chat-bard" : undefined}
+      data-code-mobile-grok={isMobileGrok ? "1" : undefined}
     >
       {codeDraggingFiles ? (
         <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border border-dashed border-[#0f87ff]/60 bg-background/80 text-center text-sm font-medium text-[#0b6ccc] shadow-2xl shadow-[#0f87ff]/10 backdrop-blur-sm dark:text-[#5ab3ff]">
@@ -4905,6 +4917,20 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
           open={deptDrawerOpen}
           nav={bardNav}
           onClose={() => setDeptDrawerOpen(false)}
+        />
+      ) : null}
+      {isMobileGrok ? (
+        <CodeMobileGrokHeader
+          agentName={grokAgentName}
+          online
+          onBack={() => {
+            if (bardNav) bardNav.onBackToCompany()
+            else onBack?.()
+          }}
+          onOpenAgentMenu={bardNav ? () => setDeptDrawerOpen(true) : undefined}
+          onOpenComputer={() => {
+            window.dispatchEvent(new CustomEvent(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT))
+          }}
         />
       ) : null}
       {/* Duplicate CEO Office | history | + bar removed (data-drop-dup-header). */}
@@ -4951,12 +4977,129 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
         )}
       </div>
 
-      {bardNav ? (
+      {bardNav && !isMobileGrok ? (
         <div className="dept-chat-fab-wrap pointer-events-none absolute inset-x-0 z-20 flex justify-end px-3">
           <DeptChatFab onNewConversation={bardNav.onNewConversation} />
         </div>
       ) : null}
 
+      {isMobileGrok ? (
+        <form
+          onSubmit={onSubmit}
+          className="code-composer code-mobile-grok-composer shrink-0"
+          data-testid="code-composer"
+        >
+          <input
+            ref={codeFileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={handleComposerFileInput}
+            aria-label="Adjuntar archivos al agente de APPS"
+          />
+          <CodeAttachmentTray
+            files={codeAttachments}
+            progress={codeUploadProgress}
+            onRemove={removeCodeAttachment}
+            onRetry={retryCodeAttachment}
+          />
+          <div
+            className="code-mobile-grok-composer-row"
+            onDragOver={handleComposerDragOver}
+            onDrop={handleComposerDrop}
+          >
+            <ComposerPlusMenu
+              mode={composerMode}
+              includeContext={includeContext}
+              activeFileLabel={activeFileLabel}
+              engineAvailable={engineAvailable}
+              engineMode={engineMode}
+              circular
+              onAttach={() => codeFileInputRef.current?.click()}
+              onModeChange={(mode) => {
+                if (mode === "plan" && composerModeRef.current !== "plan") {
+                  planReturnModeRef.current = composerModeRef.current
+                } else if (mode !== "plan") {
+                  planReturnModeRef.current = mode
+                }
+                setComposerMode(mode)
+                inputRef.current?.focus()
+              }}
+              onIncludeContextChange={setIncludeContext}
+              onEngineModeChange={setEngineMode}
+            >
+              {pickerModels.length > 0 ? (
+                <div className="px-1.5 py-1" data-testid="code-mobile-grok-model">
+                  <ModelPickerInline
+                    models={pickerModels}
+                    selectedModel={activeModelName || ""}
+                    fast={modelIsFast}
+                    selectedEffort={selectedEffort}
+                    onSelectEffort={setSelectedEffort}
+                    onSelect={(m) => chooseCodeModel({ name: m.name, provider: m.provider })}
+                  />
+                </div>
+              ) : null}
+            </ComposerPlusMenu>
+            <div
+              data-testid="code-composer-surface"
+              className={cn(
+                "code-composer__surface code-mobile-grok-capsule",
+                codeDraggingFiles && "is-drop-target",
+              )}
+            >
+              <Textarea
+                aria-label={`Mensaje para ${grokAgentName}`}
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={onKeyDown}
+                onPaste={handleCodeTextareaPaste}
+                placeholder={askAgentPlaceholder(grokAgentName)}
+                rows={1}
+                data-testid="code-mobile-grok-input"
+                className="code-composer__input max-h-[140px] min-h-[28px] resize-none border-0 bg-transparent px-1 py-0.5 text-[16px] leading-[1.45] shadow-none outline-none ring-0 placeholder:text-muted-foreground/55 focus-visible:ring-0"
+              />
+              <div className="code-mobile-grok-capsule-actions">
+                <CodeMobileGrokMic
+                  locale={typeof navigator !== "undefined" ? navigator.language : "es-ES"}
+                  onTranscript={(text) => {
+                    const chunk = text.trim()
+                    if (!chunk) return
+                    setInput((prev) => normalizeChatInput(prev ? `${prev} ${chunk}` : chunk).value)
+                    inputRef.current?.focus()
+                  }}
+                />
+                {busy ? (
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    className={cn("code-composer__stop", activeCodexCancellationState === "failed" && "is-failed")}
+                    onClick={cancelStream}
+                    disabled={activeCodexCancellationState === "cancelling"}
+                    aria-label="Detener"
+                  >
+                    {activeCodexCancellationState === "cancelling"
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : <StopCircle className="h-4 w-4" />}
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="code-composer__send"
+                    disabled={!canSubmitCodePrompt}
+                    aria-label="Enviar"
+                  >
+                    <ComposerSendArrow className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        </form>
+      ) : (
       <form onSubmit={onSubmit} className="code-composer shrink-0" data-testid="code-composer">
         <div
           data-testid="code-composer-surface"
@@ -5172,6 +5315,7 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
           </div>
         </div>
       </form>
+      )}
     </div>
   )
 }
@@ -5694,6 +5838,9 @@ function ComposerPlusMenu({
   onModeChange,
   onIncludeContextChange,
   onEngineModeChange,
+  circular = false,
+  onAttach,
+  children,
 }: {
   mode: ComposerMode
   includeContext: boolean
@@ -5703,6 +5850,9 @@ function ComposerPlusMenu({
   onModeChange: (mode: ComposerMode) => void
   onIncludeContextChange: (value: boolean) => void
   onEngineModeChange: React.Dispatch<React.SetStateAction<boolean>>
+  circular?: boolean
+  onAttach?: () => void
+  children?: React.ReactNode
 }) {
   const itemClass = "h-9 gap-2.5 rounded-md px-2.5 text-sm"
   const iconClass = "h-[18px] w-[18px] text-muted-foreground"
@@ -5714,10 +5864,11 @@ function ComposerPlusMenu({
           type="button"
           variant="ghost"
           size="icon"
-          className="code-composer__icon-btn"
+          className={circular ? "code-mobile-grok-circle code-mobile-grok-plus" : "code-composer__icon-btn"}
           aria-label="Modo, contexto y herramientas"
+          data-testid={circular ? "code-mobile-grok-plus" : undefined}
         >
-          <Plus className="h-4 w-4" />
+          <Plus className={circular ? "h-5 w-5" : "h-4 w-4"} strokeWidth={circular ? 2.25 : 2} />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
@@ -5730,6 +5881,13 @@ function ComposerPlusMenu({
           {COMPOSER_MODE_LABEL[mode]}
           {activeFileLabel && includeContext ? ` · ${activeFileLabel}` : ""}
         </DropdownMenuLabel>
+        {onAttach ? (
+          <DropdownMenuItem className={itemClass} onClick={onAttach}>
+            <Paperclip className={iconClass} />
+            <span>Adjuntar archivo</span>
+          </DropdownMenuItem>
+        ) : null}
+        {children}
         <DropdownMenuItem
           className={itemClass}
           onClick={() => window.dispatchEvent(new CustomEvent(CODE_OPEN_TOOL_LAUNCHER_EVENT))}

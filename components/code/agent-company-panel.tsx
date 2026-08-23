@@ -2672,6 +2672,7 @@ export function AgentCompanyPanel() {
             onDeleteDepartment={(department) => setDeleteDepartmentTarget(department)}
             user={user}
             hideFooter={dockedInAppsRail}
+            hideCompanyTools={isMobile}
             proactiveOn={proactiveOn}
             proactiveBusy={proactiveBusy}
             proactiveState={proactiveState}
@@ -3461,6 +3462,7 @@ function CompanyHome({
   onDeleteDepartment,
   user,
   hideFooter = false,
+  hideCompanyTools = false,
   proactiveOn,
   proactiveBusy,
   proactiveState,
@@ -3495,6 +3497,7 @@ function CompanyHome({
   onDeleteDepartment: (department: AgentDepartmentDefinition) => void
   user: ReturnType<typeof useAuth>["user"]
   hideFooter?: boolean
+  hideCompanyTools?: boolean
   proactiveOn: boolean
   proactiveBusy: boolean
   proactiveState: CodexProactiveState
@@ -3552,6 +3555,7 @@ function CompanyHome({
           </div>
         ) : null}
 
+        {hideCompanyTools ? null : (
         <nav
           aria-label="Herramientas de la empresa"
           className={cn("space-y-0.5", hideFooter ? "mt-2" : "mt-3")}
@@ -3561,6 +3565,7 @@ function CompanyHome({
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "files"} icon={FolderOpen} label="Archivos" count={snapshot.fileCount} onClick={onOpenFiles} />
           <CompanyNavRow compact={hideFooter} active={activePreviewView === "resources"} icon={BriefcaseBusiness} label="Recursos" count={snapshot.resourceCount} onClick={onOpenResources} />
         </nav>
+        )}
 
         <div className={cn("flex items-center justify-between px-2", hideFooter ? "mt-3" : "mt-4")}>
           <div className="min-w-0">
