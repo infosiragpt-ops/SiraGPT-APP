@@ -27,9 +27,14 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
+  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
+  getActiveDepartmentSelection,
   useCodeWorkspace,
+  type ActiveDepartmentSelection,
 } from "@/lib/code-workspace-context"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
@@ -39,10 +44,13 @@ import {
   focusCeoChatColumn,
 } from "@/lib/code-agent-company-proactive"
 
+import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { AgentCompanyPanel } from "./agent-company-panel"
 import { AgentComputerShell } from "./agent-computer-shell"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
+import { CompanyRoutinesPanel } from "./company-routines-panel"
+import { DepartmentComputerPane } from "./department-computer-pane"
 import { NewTabPane } from "./new-tab-pane"
 import { PreviewPane } from "./preview-pane"
 
@@ -108,6 +116,10 @@ export function CodeWorkspace() {
   const isMobile = useResolvedMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
+  const [computerOpen, setComputerOpen] = React.useState(true)
+  const [departmentComputer, setDepartmentComputer] = React.useState<ActiveDepartmentSelection>(() =>
+    getActiveDepartmentSelection() || { id: "ceo-office", name: "CEO Office" },
+  )
 
   React.useEffect(() => {
     const onFocusCeo = () => {
@@ -117,8 +129,36 @@ export function CodeWorkspace() {
         chatColumnRef.current?.querySelector<HTMLElement>("textarea, [contenteditable='true']")?.focus()
       })
     }
+    const onOpenComputer = (event: Event) => {
+      const detail = (event as CustomEvent<{ runId?: string; departmentId?: string; projectId?: string | null }>).detail
+      const current = getActiveDepartmentSelection()
+      setDepartmentComputer({
+        id: detail?.departmentId || current?.id || "ceo-office",
+        name: current?.name || "CEO Office",
+        projectId: detail?.projectId || current?.projectId || null,
+      })
+      setComputerOpen(true)
+    }
+    const onSelectDepartment = (event: Event) => {
+      const selection = (event as CustomEvent<{ selection: ActiveDepartmentSelection }>).detail?.selection
+      if (selection) setDepartmentComputer(selection)
+    }
     window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
-    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+    window.addEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpenComputer)
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelectDepartment)
+    return () => {
+      window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+      window.removeEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpenComputer)
+      window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelectDepartment)
+    }
+  }, [])
+
+  const toggleDepartmentComputer = React.useCallback(() => {
+    setComputerOpen((open) => {
+      if (open) return false
+      window.dispatchEvent(new CustomEvent(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT))
+      return true
+    })
   }, [])
 
   React.useEffect(() => {
@@ -480,6 +520,29 @@ export function CodeWorkspace() {
     )
   }, [commands, paletteQuery])
 
+  const registerVisibleCompanySlot = React.useCallback((element: HTMLDivElement | null) => {
+    registerAgentCompanyPreviewSlot(element)
+  }, [])
+
+  const computerRoutines = computerOpen ? (
+    <div
+      className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-[#1b1b1d]"
+      data-testid="empresas-computer-routines"
+      data-empresas-right-column="computer-routines"
+    >
+      <div className="relative min-h-0 flex-1">
+        <DepartmentComputerPane
+          departmentName={departmentComputer?.name || "CEO Office"}
+          departmentId={departmentComputer?.id || "ceo-office"}
+          projectId={departmentComputer?.projectId}
+          computerRunId={departmentComputer?.id ? `dept-${departmentComputer.id}` : "dept-ceo-office"}
+          onClose={() => setComputerOpen(false)}
+        />
+      </div>
+      <CompanyRoutinesPanel />
+    </div>
+  ) : null
+
   return (
     <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
       <WorkspaceTopBar
@@ -490,8 +553,9 @@ export function CodeWorkspace() {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground hover:text-foreground"
-            aria-label="Abrir herramientas"
+            className="h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground active:bg-muted active:scale-[0.96] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            aria-label="Nueva pestaña"
+            title="Nueva pestaña"
             onClick={() => {
               // On mobile the picker lives in the preview pane, which is
               // hidden behind the Agente view — surface it before opening.
@@ -522,6 +586,10 @@ export function CodeWorkspace() {
         }}
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
+        chatOpen={chatOpen}
+        departmentComputer={departmentComputer}
+        onOpenDepartmentComputer={toggleDepartmentComputer}
+        computerOpen={computerOpen}
       />
 
       <div className="relative min-h-0 flex-1">
@@ -595,6 +663,27 @@ export function CodeWorkspace() {
             </AgentComputerShell>
           )
 
+          const rightColumn = (
+            <div
+              className="relative h-full min-h-0 min-w-0"
+              data-empresas-right-column={computerOpen ? "computer-routines" : "preview"}
+            >
+              <div
+                className={cn("absolute inset-0", computerOpen && "invisible pointer-events-none")}
+                aria-hidden={computerOpen || undefined}
+                data-testid="empresas-preview-underlay"
+              >
+                {mainArea}
+              </div>
+              {computerRoutines}
+              <div
+                ref={registerVisibleCompanySlot}
+                className="pointer-events-none absolute inset-0 z-40 [&>*]:pointer-events-auto"
+                data-testid="empresas-company-preview-slot"
+              />
+            </div>
+          )
+
           // Wait for the first width measurement so a phone never mounts the
           // desktop split (that would start Preview and then unmount it).
           if (isMobile === null) {
@@ -613,7 +702,7 @@ export function CodeWorkspace() {
                     <MemoAgentCompanyPanel />
                   </div>
                   <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
-                    {mainArea}
+                    {rightColumn}
                   </div>
                 </div>
                 <div className="flex shrink-0 border-t border-border/60 bg-background">
@@ -679,7 +768,7 @@ export function CodeWorkspace() {
                   minSize={32}
                   className="relative min-w-0"
                 >
-                  {mainArea}
+                  {rightColumn}
                 </ResizablePanel>
               </ResizablePanelGroup>
             </>

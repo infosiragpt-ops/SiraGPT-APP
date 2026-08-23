@@ -302,6 +302,8 @@ describe('source-preserving document edit', () => {
     assert.equal(isSourcePreservingEditRequest('corrige la redacción', []), false);
     assert.equal(isSourcePreservingEditRequest('dame un resumen en un solo párrafo', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('calcula la diferencia usando los documentos adjuntos', ['file-docx']), false);
+    assert.equal(isSourcePreservingEditRequest('pasa este word al formato UPN', ['src.docx', 'formato-upn.docx']), true);
+    assert.equal(isSourcePreservingEditRequest('usando todos los documentos adjuntos', ['a.docx', 'b.docx']), false);
     assert.equal(isSourcePreservingEditRequest('compara el PDF y el DOCX adjuntos e indica la cifra final', ['file-docx']), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional: incluye tabla Excel, índice y conclusiones.', []), false);
     assert.equal(isSourcePreservingEditRequest('Genera un Word profesional sobre el documento adjunto: incluye tabla Excel, índice y conclusiones.', ['file-docx']), false);

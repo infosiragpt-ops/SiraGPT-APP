@@ -3,6 +3,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { streamSseJson, agentTaskResumeHeaders } from "./sse-client"
 import { resolveCatalogModel } from "./chat/catalog-model"
+import { upsertMonotonicStep } from "./run-trace"
 
 /**
  * agent-task-service — SSE adapter for POST /api/agent/task.
@@ -87,15 +88,22 @@ export type AgentTaskEvent =
   | { type: "document_analysis"; analysisIds?: string[]; evidenceRefs?: Array<Record<string, unknown>>; summary?: string; ts?: string; seq?: number }
   | { type: "cycle_init"; taskId?: string; stages?: Array<{ id: string; label: string }>; documentType?: string | null; field?: string | null; citationStyle?: string | null; code?: string | null; ts?: string; seq?: number }
   | { type: "cycle_stage"; taskId?: string; stage: string; status: "start" | "done" | string; label?: string; note?: string; ts?: string; seq?: number }
-  | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus; assistantMessageId?: string }
   | { type: "activity"; text: string; tool?: string; ts?: string; seq?: number }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
+  | { type: "step.started"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
+  | { type: "step.updated"; id?: string; stepId?: string; label?: string; reasoning?: string }
+  | { type: "step.finished"; id: string; ok?: boolean; summary?: string }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
   | { type: "step_done"; id: string; ok: boolean; summary?: string }
   | { type: "file_artifact"; stepId?: string; artifact: AgentArtifact }
   | { type: "final_text"; markdown: string }
   | { type: "done"; stoppedReason: string; stats: { steps: number; artifacts: number }; dbMessageId?: string | null }
+  | { type: "run.started"; runId?: string; taskId?: string; assistantMessageId?: string }
+  | { type: "run.succeeded"; stoppedReason?: string; stats?: { steps?: number; artifacts?: number } }
+  | { type: "run.failed"; message?: string }
+  | { type: "heartbeat"; at?: number; ts?: string }
   | { type: "error"; message: string }
 
 export interface AgentTaskRunArgs {
@@ -406,7 +414,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { taskId?: string; goal?: string; model?: string; runtimeModel?: string; runtimeProvider?: string; tools?: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  meta?: { taskId?: string; goal?: string; model?: string; runtimeModel?: string; runtimeProvider?: string; tools?: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus; assistantMessageId?: string }
   steps: Array<{
     id: string
     label: string
@@ -415,6 +423,7 @@ export interface AgentTaskState {
     // surfaced in the timeline so the chat shows its thinking like Claude.
     reasoning?: string
     status: "running" | "done" | "error"
+    retryCount?: number
     toolCalls: Array<{
       tool: string
       preview?: string
@@ -447,6 +456,8 @@ export interface AgentTaskState {
   error?: string
   /** ISO timestamp of the last SSE event seen (heartbeats included). */
   lastEventAt?: string
+  /** ISO timestamp of the last transport heartbeat (`: ping` / type:heartbeat). */
+  heartbeatAt?: string
 }
 
 export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
@@ -557,32 +568,59 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
         }].slice(-10),
       }
     case "meta":
+    case "run.started":
       return {
         ...state,
         meta: {
-          taskId: evt.taskId,
-          goal: evt.goal,
-          model: evt.model,
-          runtimeModel: evt.runtimeModel,
-          runtimeProvider: evt.runtimeProvider,
-          tools: evt.tools,
+          ...(state.meta || {}),
+          taskId: (evt as { taskId?: string }).taskId || state.meta?.taskId,
+          goal: (evt as { goal?: string }).goal || state.meta?.goal,
+          model: (evt as { model?: string }).model || state.meta?.model,
+          runtimeModel: (evt as { runtimeModel?: string }).runtimeModel || state.meta?.runtimeModel,
+          runtimeProvider: (evt as { runtimeProvider?: string }).runtimeProvider || state.meta?.runtimeProvider,
+          tools: (evt as { tools?: string[] }).tools || state.meta?.tools,
+          assistantMessageId: (evt as { assistantMessageId?: string }).assistantMessageId || state.meta?.assistantMessageId,
         },
+      }
+    case "heartbeat":
+      return {
+        ...state,
+        heartbeatAt: (evt as { ts?: string }).ts || new Date().toISOString(),
       }
     case "activity":
       return { ...state, currentActivity: evt.text || state.currentActivity || null }
     case "step_start":
+    case "step.started":
       return {
         ...state,
         currentActivity: evt.label || state.currentActivity || null,
-        steps: [...state.steps, {
+        steps: upsertMonotonicStep(state.steps, {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
           ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
-          status: "running",
+          status: "running" as const,
+          retryCount: 1,
           toolCalls: [],
-        }],
+        }),
       }
+    case "step.updated": {
+      const updateId = String((evt as { id?: string; stepId?: string }).id || (evt as { stepId?: string }).stepId || "")
+      if (!updateId) return state
+      return {
+        ...state,
+        steps: state.steps.map((step) =>
+          step.id === updateId
+            ? {
+              ...step,
+              label: (evt as { label?: string }).label || step.label,
+              reasoning: (evt as { reasoning?: string }).reasoning || step.reasoning,
+              status: "running" as const,
+            }
+            : step
+        ),
+      }
+    }
     case "tool_call": {
       const callStepId = evt.stepId || `tool-${state.steps.length + 1}`
       const callSteps = state.steps.some(s => s.id === callStepId)
@@ -645,10 +683,11 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
       }
     }
     case "step_done":
+    case "step.finished":
       return {
         ...state,
         steps: state.steps.map(s =>
-          s.id === evt.id ? { ...s, status: evt.ok ? "done" : "error" } : s
+          s.id === evt.id ? { ...s, status: (evt as { ok?: boolean }).ok === false ? "error" : "done" } : s
         ),
       }
     case "file_artifact": {
@@ -691,9 +730,11 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
     case "final_text":
       return { ...state, finalText: evt.markdown }
     case "done":
-      return { ...state, done: true, stoppedReason: evt.stoppedReason, currentActivity: null }
+    case "run.succeeded":
+      return { ...state, done: true, stoppedReason: (evt as { stoppedReason?: string }).stoppedReason, currentActivity: null }
     case "error":
-      return { ...state, done: true, error: evt.message, currentActivity: null }
+    case "run.failed":
+      return { ...state, done: true, error: (evt as { message?: string }).message || "run_failed", currentActivity: null }
     default:
       return state
   }
