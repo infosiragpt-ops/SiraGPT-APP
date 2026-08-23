@@ -27,10 +27,14 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable"
 import {
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   CODE_OPEN_TOOL_EVENT,
+  getActiveDepartmentComputer,
+  getActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
+import { CodeMobileComputerOverlay } from "@/components/code/code-mobile-grok-chrome"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { WORKSPACE_TOOLS, type WorkspaceToolId } from "@/lib/code-workspace-tools"
 
@@ -106,7 +110,35 @@ export function CodeWorkspace() {
   // time with a bottom toggle (Empresa ↔ Preview).
   const isMobile = useResolvedMobile()
   const [mobileView, setMobileView] = React.useState<"chat" | "preview">("chat")
+  const [mobileComputer, setMobileComputer] = React.useState<{
+    id: string
+    name: string
+    runId: string
+  } | null>(null)
   const chatColumnRef = React.useRef<HTMLDivElement | null>(null)
+
+  React.useEffect(() => {
+    if (!isMobile) {
+      setMobileComputer(null)
+      return
+    }
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        runId?: string
+        departmentId?: string
+        departmentName?: string
+      }>).detail
+      const selection = getActiveDepartmentSelection()
+      const id = detail?.departmentId || selection?.id || "ceo-office"
+      setMobileComputer({
+        id,
+        name: detail?.departmentName || selection?.name || (id === "ceo-office" ? "CEO Office" : id),
+        runId: detail?.runId || getActiveDepartmentComputer() || `dept-${id}`,
+      })
+    }
+    window.addEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+    return () => window.removeEventListener(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, onOpen)
+  }, [isMobile])
 
   React.useEffect(() => {
     const onFocusCeo = () => {
@@ -480,7 +512,15 @@ export function CodeWorkspace() {
   }, [commands, paletteQuery])
 
   return (
-    <div className="flex h-screen min-w-0 flex-col overflow-hidden bg-background text-foreground">
+    <div
+      className={cn(
+        "flex min-w-0 flex-col overflow-hidden text-foreground",
+        isMobile ? "h-full min-h-0 bg-white" : "h-screen bg-background",
+      )}
+      data-code-mobile-grok={isMobile ? "1" : undefined}
+      data-testid={isMobile ? "code-mobile-grok-shell" : "code-workspace-desktop"}
+    >
+      {isMobile ? null : (
       <WorkspaceTopBar
         openPanels={openPanels}
         onTogglePanel={handleTogglePanel}
@@ -522,8 +562,9 @@ export function CodeWorkspace() {
         publishingOpen={activeTool === "publishing"}
         onToggleChat={toggleChat}
       />
+      )}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {(() => {
           // Shared right-hand area: the preview + optional terminal (plus the
           // code-hub / tool / launcher overlays). The panel tabs live in the
@@ -598,41 +639,32 @@ export function CodeWorkspace() {
             return <div className="h-full min-h-0 bg-background" data-testid="code-workspace-layout-pending" />
           }
 
-          // ── Mobile: one panel at a time + a bottom Agente/Preview toggle ──
-          // The desktop horizontal resizable split is unusable on a phone
-          // (two crammed columns). Both panels stay MOUNTED (toggled with
-          // hidden) so chat state and the live preview survive switching.
+          // ── Phone: Grok Bot chrome (white canvas, no desktop top bar).
+          // Computer opens as an overlay; Preview stays mounted but hidden.
           if (isMobile) {
             return (
-              <div className="flex h-full min-h-0 flex-col">
-                <div className="relative min-h-0 flex-1 overflow-hidden">
-                  <div className={cn("absolute inset-0", mobileView === "chat" ? "block" : "hidden")}>
+              <div className="relative flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-white" data-testid="code-mobile-grok-layout">
+                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white">
+                  <div className={cn(
+                    "absolute inset-0 min-h-0 flex-col",
+                    mobileView === "chat" ? "flex" : "hidden",
+                  )}>
                     <MemoAgentCompanyPanel />
                   </div>
-                  <div className={cn("absolute inset-0", mobileView === "preview" ? "block" : "hidden")}>
+                  <div className={cn(
+                    "absolute inset-0 min-h-0 flex-col",
+                    mobileView === "preview" ? "flex" : "hidden",
+                  )}>
                     {mainArea}
                   </div>
-                </div>
-                <div className="flex shrink-0 border-t border-border/60 bg-background">
-                  {([
-                    { id: "chat", label: "Empresa" },
-                    { id: "preview", label: "Preview" },
-                  ] as const).map((tab) => (
-                    <button
-                      key={tab.id}
-                      type="button"
-                      onClick={() => setMobileView(tab.id)}
-                      aria-pressed={mobileView === tab.id}
-                      className={cn(
-                        "flex-1 px-3 py-2.5 text-xs font-medium transition-colors",
-                        mobileView === tab.id
-                          ? "border-t-2 border-primary text-foreground"
-                          : "border-t-2 border-transparent text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {tab.label}
-                    </button>
-                  ))}
+                  {mobileComputer ? (
+                    <CodeMobileComputerOverlay
+                      departmentName={mobileComputer.name}
+                      departmentId={mobileComputer.id}
+                      computerRunId={mobileComputer.runId}
+                      onClose={() => setMobileComputer(null)}
+                    />
+                  ) : null}
                 </div>
               </div>
             )
