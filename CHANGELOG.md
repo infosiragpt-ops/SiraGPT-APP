@@ -20,6 +20,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- Engine 3H60 (no UI): 32 fail-open helpers after 3H59 — tool-arg coerce/fence/enum
+  + transient retry, A-B-A-B oscillation cut, faithful compact + query prune +
+  pinned-memory recover, file-byte checkpoint / read-after-write hash / syntax
+  revert, sandbox chunk cap + abort cleanup, SSE Last-Event-ID replay +
+  comment heartbeat (no seq bump) + AbortController cancel, session
+  single-writer + seq-gap wait, credit settle on error (never charge before
+  first token). DeepSeek Flash/Pro only. See `docs/mejoras/benchmark-capacidades.md`.
 - Chat Pensando uses professional LOADERS CELESTE v2 (bouncing `#38BDF8`
   bars + per-phase icons for search / Word / PDF / code / media). Stream
   updates swap icon + label only; success flashes ¡Listo! then collapses;
