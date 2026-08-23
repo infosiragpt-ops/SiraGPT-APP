@@ -51,11 +51,40 @@ test('default flags: skip RAG until send, skip external parsers, pdftotext on', 
     SIRAGPT_EXTERNAL_PARSER_FIRST: undefined,
     SIRAGPT_PDFTOTEXT: undefined,
     SIRAGPT_DEFER_OFFICE_IMAGE_OCR: undefined,
+    SIRAGPT_UPLOAD_CONCURRENCY: undefined,
+    SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY: undefined,
+    SIRAGPT_OFFICE_VISION_MIN_TEXT: undefined,
+    SIRAGPT_OFFICE_IMAGE_VISION: undefined,
   }, () => {
     assert.equal(fastpath.shouldSkipRagUntilSend(), true);
     assert.equal(fastpath.shouldRunExternalParsers(), false);
     assert.equal(fastpath.pdftotextEnabled(), true);
     assert.equal(fastpath.shouldDeferOfficeImageOcr(), true);
+    assert.equal(fastpath.uploadConcurrency(), 4);
+    assert.equal(fastpath.asyncFileProcessingConcurrency(), 8);
+    assert.equal(fastpath.officeVisionMinText(), 800);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('short'), true);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(800)), false);
+  });
+});
+
+test('office vision stays on for short text and can be forced', async () => {
+  await withEnv({ SIRAGPT_OFFICE_VISION_MIN_TEXT: undefined, SIRAGPT_OFFICE_IMAGE_VISION: undefined }, () => {
+    assert.equal(fastpath.shouldAllowOfficeImageVision('logo-only deck'), true);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(799)), true);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(800)), false);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(800), { allowVision: true }), true);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('short', { allowVision: false }), false);
+  });
+  await withEnv({ SIRAGPT_OFFICE_IMAGE_VISION: '0' }, () => {
+    assert.equal(fastpath.shouldAllowOfficeImageVision('tiny'), false);
+  });
+  await withEnv({ SIRAGPT_OFFICE_IMAGE_VISION: '1' }, () => {
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(5000)), true);
+  });
+  await withEnv({ SIRAGPT_OFFICE_VISION_MIN_TEXT: '200' }, () => {
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(199)), true);
+    assert.equal(fastpath.shouldAllowOfficeImageVision('x'.repeat(200)), false);
   });
 });
 
@@ -239,6 +268,28 @@ test('_withEmbeddedImageText skips OCR when deferred', async () => {
   assert.equal(text, 'BASE');
 });
 
+test('_withEmbeddedImageText disables vision when office text is already long', async () => {
+  const calls = [];
+  const orig = officeImages.extractImageAppendix;
+  officeImages.extractImageAppendix = async (_path, opts) => {
+    calls.push(opts || {});
+    return '';
+  };
+  try {
+    await fileProcessor._withEmbeddedImageText('/tmp/doc.docx', 'x'.repeat(800), 'docx', {
+      deferOfficeImageOcr: false,
+    });
+    await fileProcessor._withEmbeddedImageText('/tmp/scan.docx', 'foto', 'docx', {
+      deferOfficeImageOcr: false,
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].allowVision, false);
+    assert.equal(calls[1].allowVision, true);
+  } finally {
+    officeImages.extractImageAppendix = orig;
+  }
+});
+
 test('processFile returns stage timings for a text file', async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'siragpt-txt-fast-'));
   const filePath = path.join(dir, 'note.txt');
@@ -284,4 +335,13 @@ test('PR 386 R2 stream contract remains in the upload static middleware', () => 
   const src = fs.readFileSync(path.join(__dirname, '../src/middleware/upload-static-access.js'), 'utf8');
   assert.match(src, /r2-stream/);
   assert.match(src, /pipeStreamToResponse|readStream/);
+});
+
+test('files route keeps skip-until-send RAG and applies the office-vision gate', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../src/routes/files.js'), 'utf8');
+  assert.match(src, /shouldSkipRagUntilSend/);
+  assert.match(src, /shouldAllowOfficeImageVision/);
+  assert.match(src, /uploadConcurrency/);
+  assert.match(src, /asyncFileProcessingConcurrency/);
+  assert.doesNotMatch(src, /SIRAGPT_UPLOAD_CONCURRENCY \|\| '5'/);
 });

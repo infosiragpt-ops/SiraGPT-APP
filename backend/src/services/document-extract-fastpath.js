@@ -57,6 +57,34 @@ function officeImageOcrConcurrency() {
   return intFromEnv('SIRAGPT_OFFICE_IMAGE_OCR_CONCURRENCY', 3, 1, 8);
 }
 
+/** Parallel files per upload batch. Live VPS measured 4 as the sweet spot. */
+function uploadConcurrency() {
+  return intFromEnv('SIRAGPT_UPLOAD_CONCURRENCY', 4, 1, 32);
+}
+
+/** Background post-extract workers (deferred OCR / preview warm / analyze). */
+function asyncFileProcessingConcurrency() {
+  return intFromEnv('SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY', 8, 1, 32);
+}
+
+/**
+ * GPT-4o vision on Office logos is the 31–34s extract stall on a
+ * text-heavy DOCX. Tesseract still runs; vision stays on for short
+ * text (photo slides, screenshot-only docs).
+ */
+function officeVisionMinText() {
+  return intFromEnv('SIRAGPT_OFFICE_VISION_MIN_TEXT', 800, 0, 1_000_000);
+}
+
+function shouldAllowOfficeImageVision(baseText, opts = {}) {
+  if (opts.allowVision === false) return false;
+  if (opts.allowVision === true) return true;
+  const forced = process.env.SIRAGPT_OFFICE_IMAGE_VISION;
+  if (forced === '0' || /^(false|no|off)$/i.test(String(forced || '').trim())) return false;
+  if (forced === '1' || /^(true|yes|on)$/i.test(String(forced || '').trim())) return true;
+  return String(baseText || '').length < officeVisionMinText();
+}
+
 function embedBatchSize() {
   return intFromEnv('SIRAGPT_EMBED_BATCH', 128, 16, 512);
 }
@@ -251,6 +279,7 @@ function __setExecFileForTests(fn) {
 }
 
 module.exports = {
+  asyncFileProcessingConcurrency,
   coverageFromPages,
   createStageTimer,
   decodeXmlEntities,
@@ -261,11 +290,14 @@ module.exports = {
   formatPptxExtraction,
   logExtractTiming,
   officeImageOcrConcurrency,
+  officeVisionMinText,
   pdftotextEnabled,
+  shouldAllowOfficeImageVision,
   shouldDeferOfficeImageOcr,
   shouldRunExternalParsers,
   shouldSkipRagUntilSend,
   splitPdftotextPages,
   tryPdftotext,
+  uploadConcurrency,
   __setExecFileForTests,
 };

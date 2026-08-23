@@ -346,8 +346,8 @@ async function uploadToOpenAiFiles(file) {
 // ─── Parallel batch processor ──────────────────────────────────────────────
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
 // event loop, DB connection pool, and upstream API rate limits.
-const MAX_CONCURRENT = Number.parseInt(process.env.SIRAGPT_UPLOAD_CONCURRENCY || '5', 10);
-const ASYNC_FILE_PROCESSING_CONCURRENCY = Math.max(1, Number.parseInt(process.env.SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY || '2', 10));
+const MAX_CONCURRENT = extractFastpath.uploadConcurrency();
+const ASYNC_FILE_PROCESSING_CONCURRENCY = extractFastpath.asyncFileProcessingConcurrency();
 const asyncFileProcessingQueue = [];
 let activeAsyncFileProcessors = 0;
 
@@ -446,7 +446,16 @@ async function appendDeferredOfficeImageOcr(filePath, fileRecord, prismaClient) 
   if (!extractFastpath.shouldDeferOfficeImageOcr()) return fileRecord;
   if (!filePath) return fileRecord;
   try {
-    const appendix = await officeImages.extractImageAppendix(filePath);
+    const allowVision = extractFastpath.shouldAllowOfficeImageVision(fileRecord.extractedText);
+    if (!allowVision) {
+      console.log('[files] office vision skipped', JSON.stringify({
+        event: 'file_office_vision_skipped',
+        file_id: fileRecord.id,
+        chars: fileRecord.extractedText ? fileRecord.extractedText.length : 0,
+        minText: extractFastpath.officeVisionMinText(),
+      }));
+    }
+    const appendix = await officeImages.extractImageAppendix(filePath, { allowVision });
     if (!appendix) return fileRecord;
     const next = `${fileRecord.extractedText || ''}\n\n${appendix}`;
     return prismaClient.file.update({

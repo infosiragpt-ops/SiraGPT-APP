@@ -931,9 +931,10 @@ class FileProcessor {
   async _withEmbeddedImageText(filePath, baseText, kind, options = {}) {
     if (options.deferOfficeImageOcr === true) return baseText;
     try {
-      const appendix = await officeImages.extractImageAppendix(filePath);
+      const allowVision = extractFastpath.shouldAllowOfficeImageVision(baseText, options);
+      const appendix = await officeImages.extractImageAppendix(filePath, { allowVision });
       if (appendix) {
-        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars)`);
+        console.log(`[fileProcessor] ${kind}: appended OCR text from embedded images (${appendix.length} chars, vision=${allowVision})`);
         return `${baseText}\n\n${appendix}`;
       }
     } catch (error) {
