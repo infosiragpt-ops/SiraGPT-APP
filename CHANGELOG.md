@@ -49,6 +49,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
   dark themes, including hover and focus states.
 
+### Fixed
+
+- User chat bubbles no longer stack short words letter-by-letter (`h / o / l / a`).
+  `overflow-wrap: anywhere` plus `width: fit-content` shrank min-content to 1ch;
+  bubbles now hug with `width: max-content` and wrap at word boundaries.
+
 ## [0.4.3 / backend 1.3.3] — Cycles 171-180 milestone — 2026-05-20
 
 Eighth decade past the centenarian. **PATCH** bumps (root

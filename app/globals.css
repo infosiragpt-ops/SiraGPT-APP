@@ -976,7 +976,22 @@ details[open] > summary .think-chevron,
 }
 
 .chat-user-bubble {
+  /* Hug short words ("hola"). Do not pair fit-content with wrap-anywhere
+     — that shrinks min-content to 1ch and stacks letters vertically. */
+  box-sizing: border-box;
+  width: max-content;
   max-width: min(70%, 32rem);
+  overflow-wrap: break-word;
+  word-break: normal;
+  white-space: pre-wrap;
+  hyphens: none;
+}
+
+.chat-user-bubble,
+.chat-user-bubble .prose,
+.chat-user-bubble p {
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .chat-assistant-message {
