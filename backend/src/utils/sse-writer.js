@@ -177,6 +177,26 @@ function createSSEWriter(res, options = {}) {
   try {
     if (options.ring && options.lastEventId != null) {
       const ad = require('../services/agent-runner/engine-adapter');
+      if (typeof ad.rejectLastEventIdGoingBackwards === 'function') {
+        const head = Number(options.headSeq);
+        ad.rejectLastEventIdGoingBackwards({
+          lastEventId: options.lastEventId,
+          currentSeq: Number.isFinite(head) ? head : undefined,
+          stored: options.cursorStore && options.cursorStore.cursor,
+        });
+      }
+      if (typeof ad.replayLastNSseEventsFromCursor === 'function' && Array.isArray(options.ring)) {
+        ad.replayLastNSseEventsFromCursor(options.ring, { cursor: options.lastEventId });
+      }
+      if (typeof ad.sseEventIdMonotonic === 'function') {
+        ad.sseEventIdMonotonic({
+          lastSent: options.headSeq,
+          lastEventId: options.lastEventId,
+        });
+      }
+      if (typeof ad.dropDuplicateSseEventIds === 'function' && Array.isArray(options.ring)) {
+        ad.dropDuplicateSseEventIds(options.ring);
+      }
       if (typeof ad.honorLastEventId === 'function') {
         const honored = ad.honorLastEventId(options.lastEventId, options.ring, {
           inclusive: options.inclusive === true,

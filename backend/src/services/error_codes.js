@@ -405,6 +405,7 @@ const CODES = Object.freeze({
   SSE_CURSOR_PERSIST: 'sse_cursor_persist',
   SESSION_CKPT_PERSIST: 'session_ckpt_persist',
   SESSION_CKPT_HYDRATE: 'session_ckpt_hydrate',
+  CREDIT_LEDGER_COMPLETE: 'credit_ledger_complete',
 });
 
 function isRetryable(code) {
@@ -473,7 +474,9 @@ function isRetryable(code) {
     || c === 'sse_replay_resume'
     || c === 'session_writer_busy'
     || c === 'session_queue_gap'
-    || c === 'ckpt_bytes_rollback';
+    || c === 'ckpt_bytes_rollback'
+    || c === 'ttfb_abort'
+    || c === 'sse_id_backwards';
 }
 
 function publicError(code, extra) {
