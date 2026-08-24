@@ -37,6 +37,10 @@ function loadEngine3h61() {
   try { return require('./engine-3h61'); } catch (_) { return null; }
 }
 
+function loadEngine3h62() {
+  try { return require('./engine-3h62'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -71,6 +75,19 @@ async function executeWith3h59Checkpoint({
   executors,
 }) {
   const filePath = execArgs && (execArgs.path || execArgs.filename);
+  const diffText = execArgs && (execArgs.diff || execArgs.patch);
+  if (diffText && /apply_patch|edit_file|apply_diff/i.test(String(mapped || ''))) {
+    try {
+      const w62 = loadEngine3h62();
+      if (w62 && typeof w62.requireExactDiffMarkersClosed === 'function') {
+        const markers = w62.requireExactDiffMarkersClosed(diffText);
+        if (markers && markers.ok === false) {
+          const classified = classifyLoopError({ code: 'diff_markers' });
+          return `ERROR: ${classified.message}`;
+        }
+      }
+    } catch (_) { /* 3H62 fail-open: write still gated by timeout rollback */ }
+  }
   const hook = adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function'
     ? adapter.checkpointHookBeforeMutatingTool({ tool: mapped, path: filePath, name: mapped })
     : { hook: false };
@@ -126,6 +143,38 @@ async function executeWith3h59Checkpoint({
         adapter.skipCheckpointIfUnchanged({ beforeHash, afterHash });
       } catch (_) { /* skip is advisory */ }
     }
+  }
+
+  const uniqueness = /old_str occurs more than once|old_str not found|old_str must not be empty/i
+    .test(String((thrown && thrown.message) || result || ''));
+  if (hook && hook.hook === true && filePath && !flags.timedOut && !uniqueness) {
+    try {
+      const w62 = loadEngine3h62();
+      if (w62 && typeof w62.validateWriteThenRevertClosed === 'function') {
+        let afterBytes = null;
+        try {
+          afterBytes = await readBytes(filePath);
+          if (afterBytes != null && !Buffer.isBuffer(afterBytes)) afterBytes = Buffer.from(afterBytes);
+        } catch (_) { afterBytes = null; }
+        const expected = execArgs && execArgs.content != null
+          ? Buffer.from(String(execArgs.content))
+          : null;
+        const validated = await w62.validateWriteThenRevertClosed({
+          path: filePath,
+          beforeBytes,
+          afterBytes,
+          expectedBytes: expected,
+          restore: writeBytes,
+          tool: mapped,
+          diff: diffText,
+          result,
+        });
+        if (validated && validated.reverted) {
+          const classified = classifyLoopError({ code: validated.code || 'write_syntax_revert' });
+          result = `ERROR: ${classified.message}`;
+        }
+      }
+    } catch (_) { /* 3H62 fail-open: timeout rollback still applies */ }
   }
 
   if (flags.timedOut || /sandbox_timeout|timed?\s*out/i.test(String(result))) {
@@ -247,6 +296,13 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
   try {
+    const w62 = loadEngine3h62();
+    if (w62 && typeof w62.classifyEngine3h62Error === 'function') {
+      const hit = w62.classifyEngine3h62Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H62 fail-open to 3H61 */ }
+  try {
     const w61 = loadEngine3h61();
     if (w61 && typeof w61.classifyPublicLoopErrorClosed === 'function') {
       const hit = w61.classifyPublicLoopErrorClosed({ code, err });
@@ -290,6 +346,24 @@ function classifyLoopError({ code, err } = {}) {
         retryable: false,
         message: 'El sub-trabajo no avanzó. Lo detuve para no girar en vacío.',
       };
+    case 'write_syntax_revert':
+      return {
+        code,
+        retryable: false,
+        message: 'La escritura dejó sintaxis inválida. Restauré el original.',
+      };
+    case 'write_hash_mismatch':
+      return {
+        code,
+        retryable: true,
+        message: 'El hash posterior a la escritura no coincidió. No di el cambio por bueno.',
+      };
+    case 'diff_markers':
+      return {
+        code,
+        retryable: false,
+        message: 'El diff no trae marcadores ---/+++. No lo apliqué.',
+      };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
   }
@@ -300,14 +374,22 @@ function classifyLoopError({ code, err } = {}) {
  * Uses live #388 helpers only: compactUntilTokenBudget + 3H59 fact anchors.
  * Mutates the array in place so callers keep the same reference.
  */
-function compactMessagesInPlace(messages) {
+function compactMessagesInPlace(messages, opts = {}) {
   const adapter = loadEngineAdapter();
   if (!adapter || typeof adapter.compactUntilTokenBudget !== 'function') return false;
   if (!Array.isArray(messages) || messages.length === 0) return false;
   const budget = Math.max(1500, resolveAgentRunnerMaxTokens());
   if (typeof adapter.estimateCompactTokens === 'function') {
     const used = adapter.estimateCompactTokens(messages);
-    if (Number.isFinite(used) && used <= budget) return false;
+    if (Number.isFinite(used) && used <= budget) {
+      const pinned = tryRestorePins(messages, messages, opts);
+      if (pinned && pinned !== messages && Array.isArray(opts.memoryHits) && opts.memoryHits.length) {
+        messages.length = 0;
+        for (const m of pinned) messages.push(m);
+        return true;
+      }
+      return false;
+    }
   }
   const packed = adapter.compactUntilTokenBudget(messages, { remaining: budget, keep: 6 });
   if (!packed || !Array.isArray(packed.messages)) return false;
@@ -320,10 +402,26 @@ function compactMessagesInPlace(messages) {
       if (restored && Array.isArray(restored.messages)) next = restored.messages;
     }
   } catch (_) { /* 3H59 fail-open */ }
+  next = tryRestorePins(messages, next, opts) || next;
   if (next === messages) return Boolean(packed.compressed);
   messages.length = 0;
   for (const m of next) messages.push(m);
   return true;
+}
+
+function tryRestorePins(original, compacted, opts = {}) {
+  try {
+    const w62 = loadEngine3h62();
+    if (w62 && typeof w62.recoverPgvectorPinsClosed === 'function' && Array.isArray(opts.memoryHits) && opts.memoryHits.length) {
+      const recovered = w62.recoverPgvectorPinsClosed({
+        compacted,
+        memoryHits: opts.memoryHits,
+        query: opts.query,
+      });
+      if (recovered && !recovered.then && Array.isArray(recovered.messages)) return recovered.messages;
+    }
+  } catch (_) { /* 3H62 fail-open */ }
+  return compacted;
 }
 
 function recoverParsedToolArgs(raw, call) {
@@ -448,6 +546,9 @@ async function runAgentLoop({
   kv = null,
   threadId = null,
   stallMs = STREAM_STALL_MS_DEFAULT,
+  memoryHits = null,
+  recall = null,
+  persistRoot = null,
 } = {}) {
   if (!client?.chat?.completions?.create) throw new Error('runAgentLoop: client is required');
   const cap = Math.max(1, Math.min(50, Number(maxIterations) || MAX_ITERATIONS_DEFAULT));
@@ -494,6 +595,30 @@ async function runAgentLoop({
   let cancelledEmitted = false;
   let consecutiveRepairFails = 0;
   const loopFingerprints = [];
+  let pinHits = Array.isArray(memoryHits) ? memoryHits.slice() : [];
+  const turnStartedAt = Date.now();
+  try {
+    const w62 = loadEngine3h62();
+    if (w62 && threadId && typeof w62.hydrateSessionCheckpointClosed === 'function') {
+      w62.hydrateSessionCheckpointClosed({ sessionKey: threadId, root: persistRoot });
+    }
+    if (w62 && typeof w62.recoverPgvectorPinsClosed === 'function' && (pinHits.length || typeof recall === 'function')) {
+      const lastUser = Array.isArray(messages)
+        ? [...messages].reverse().find((m) => m && m.role === 'user')
+        : null;
+      const recovered = await w62.recoverPgvectorPinsClosed({
+        compacted: messages,
+        memoryHits: pinHits,
+        retrieve: recall,
+        query: lastUser && lastUser.content,
+      });
+      if (recovered && Array.isArray(recovered.hits) && recovered.hits.length) pinHits = recovered.hits;
+      if (recovered && recovered.recovered && Array.isArray(recovered.messages)) {
+        messages.length = 0;
+        for (const m of recovered.messages) messages.push(m);
+      }
+    }
+  } catch (_) { /* 3H62 fail-open */ }
   const bail = (iteration) => {
     if (!signal?.aborted) return;
     let cancelUsage = null;
@@ -538,6 +663,19 @@ async function runAgentLoop({
         });
       }
     } catch (_) { /* 3H60 fail-open */ }
+    try {
+      const w62 = loadEngine3h62();
+      if (w62 && typeof w62.settleLedgerOnErrorClosed === 'function') {
+        const ledger = w62.settleLedgerOnErrorClosed({
+          cancelled: true,
+          errored: false,
+          usage: { streamedChars: String(finalText || '').length },
+          alreadySettled: cancelledEmitted,
+          firstToken: Boolean(finalText),
+        });
+        if (ledger && !cancelUsage) cancelUsage = ledger;
+      }
+    } catch (_) { /* 3H62 fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
@@ -550,6 +688,7 @@ async function runAgentLoop({
     }
   };
 
+  try {
   for (let iteration = 1; iteration <= cap; iteration += 1) {
     bail(iteration);
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
@@ -609,7 +748,7 @@ async function runAgentLoop({
     const modelTurnStart = Date.now();
     let modelTtfbMs = null;
     try {
-      compactMessagesInPlace(messages);
+      compactMessagesInPlace(messages, { memoryHits: pinHits });
       response = await callModel({
         client,
         model,
@@ -817,6 +956,12 @@ async function runAgentLoop({
         if (typeof w60.observeScriptedLatencySample === 'function' && modelTtfbMs != null) {
           w60.observeScriptedLatencySample('first_token', modelTtfbMs);
         }
+        try {
+          const w62 = loadEngine3h62();
+          if (w62 && typeof w62.observeTurnLatencyClosed === 'function' && modelTtfbMs != null) {
+            w62.observeTurnLatencyClosed({ kind: 'first_token', ms: modelTtfbMs });
+          }
+        } catch (_) { /* 3H62 fail-open */ }
       }
     } catch (_) { /* 3H60 fail-open */ }
 
@@ -1064,6 +1209,17 @@ async function runAgentLoop({
                 usage: { streamedChars: String(finalText || '').length },
               });
             }
+            try {
+              const w62 = loadEngine3h62();
+              if (w62 && typeof w62.settleLedgerOnErrorClosed === 'function') {
+                w62.settleLedgerOnErrorClosed({
+                  errored: true,
+                  cancelled: false,
+                  usage: { streamedChars: String(finalText || '').length },
+                  firstToken: Boolean(finalText),
+                });
+              }
+            } catch (_) { /* 3H62 fail-open */ }
           } catch (_) { /* 3H60 fail-open */ }
         }
       }
@@ -1150,6 +1306,25 @@ async function runAgentLoop({
   bail(cap);
   onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
+  } finally {
+    try {
+      const w62 = loadEngine3h62();
+      if (w62 && typeof w62.observeTurnLatencyClosed === 'function') {
+        w62.observeTurnLatencyClosed({
+          kind: 'turn_end',
+          startedAt: turnStartedAt,
+          now: Date.now(),
+        });
+      }
+      if (w62 && threadId && typeof w62.persistSessionCheckpointClosed === 'function') {
+        w62.persistSessionCheckpointClosed({
+          sessionKey: threadId,
+          state: { messages, steps, stoppedReason, finalText },
+          root: persistRoot,
+        });
+      }
+    } catch (_) { /* 3H62 fail-open */ }
+  }
 }
 
 module.exports = {

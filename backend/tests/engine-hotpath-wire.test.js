@@ -73,7 +73,12 @@ test('hot-path source wires live #388 helper names (3H60 overlay may coexist)', 
   assert.match(loopSrc, /skipCheckpointIfUnchanged/);
   assert.match(loopSrc, /sandboxTimeoutThenCleanup/);
   assert.match(loopSrc, /sandboxReapOrphanWorkdirs/);
+  assert.match(loopSrc, /validateWriteThenRevertClosed/);
+  assert.match(loopSrc, /recoverPgvectorPinsClosed/);
+  assert.match(loopSrc, /settleLedgerOnErrorClosed/);
   assert.match(aiSrc, /startCommentHeartbeat/);
+  assert.match(aiSrc, /persistLastEventIdClosed/);
+  assert.match(aiSrc, /resumeGenerateFromPersistedIdClosed/);
   assert.match(aiSrc, /honorLastEventId/);
   assert.match(aiSrc, /inclusiveReplayStartFromRing/);
   assert.match(aiSrc, /stopGenerateSseHeartbeat/);

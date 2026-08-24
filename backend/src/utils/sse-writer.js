@@ -87,6 +87,31 @@ function createSSEWriter(res, options = {}) {
   }
 
   try {
+    const w62 = require('../services/agent-runner/engine-3h62');
+    if (typeof w62.resumeGenerateFromPersistedIdClosed === 'function' && options.resume === true) {
+      const resumed = w62.resumeGenerateFromPersistedIdClosed({
+        headerLastEventId: options.lastEventId,
+        sessionKey: options.sessionKey,
+        ring: options.ring,
+        listeners: options.priorListeners || [],
+        store: options.cursorStore,
+        headSeq: options.headSeq,
+        resume: true,
+      });
+      if (resumed && resumed.reset) {
+        options.lastEventId = undefined;
+        resumeReset = true;
+      }
+      if (resumed && typeof w62.persistLastEventIdClosed === 'function' && options.sessionKey && Number.isFinite(Number(resumed.lastEventId))) {
+        w62.persistLastEventIdClosed({
+          sessionKey: options.sessionKey,
+          lastEventId: resumed.lastEventId,
+          store: options.cursorStore,
+        });
+      }
+    }
+  } catch (_) { /* 3H62 fail-open to 3H61 */ }
+  try {
     const w61 = require('../services/agent-runner/engine-3h61');
     if (typeof w61.applySseResumeGuardsClosed === 'function') {
       const guards = w61.applySseResumeGuardsClosed({

@@ -8,5 +8,6 @@ Documentación de las olas **engine-only**. No cubre UI / chrome de `/chat` o `/
 | 3H60 | 2026-08-23 | 32 helpers: coerce/enum/fence, oscilación A-B-A-B, compacto fiel + prune + memory pins, checkpoint bytes + RAW hash + syntax revert, SSE Last-Event-ID replay + abort, single-writer + seq gap, credit settle on **error**, p50/p95 scripted | [3H60.md](./3H60.md) |
 | Hot path #388 | 2026-08-23 | Wire live #388 names into `loop.js` + generate SSE: `retryToolWithBackoff`, `compactUntilTokenBudget`, `startCommentHeartbeat`, inclusive `honorLastEventId` | [benchmark-capacidades.md](./benchmark-capacidades.md#hot-path-388--399) |
 | **3H61** | 2026-08-23 | Reexporta helpers #388/3H59 por adapter y los llama por nombre en `loop.js` + generate: `checkpointHookBeforeMutatingTool` / `rollbackHookOnTimedOutWrite` / `sandboxTimeoutThenCleanup` / `sseResumeDropsPriorListeners`… (sin overlay names nuevos) | [3H61.md](./3H61.md) · [benchmark-capacidades.md](./benchmark-capacidades.md) |
+| **3H62** | 2026-08-24 | RAW + syntax revert + exact diff; Last-Event-ID persistido + resume inclusivo; checkpoint de sesión en disco; pins pgvector en compact; ledger Prisma en cancel/error; p50/p95 first-token/turn-end | [3H62.md](./3H62.md) · [benchmark-capacidades.md](./benchmark-capacidades.md) |
 
-UI sin cambios en 3H60, hot-path #399 ni 3H61 (Empresas lock, RunTrace assistant-only, loaders celeste). DeepSeek Flash/Pro only.
+UI sin cambios en 3H60, hot-path #399, 3H61 ni 3H62 (Empresas lock, RunTrace assistant-only, loaders celeste). DeepSeek Flash/Pro only.

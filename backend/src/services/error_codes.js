@@ -401,6 +401,10 @@ const CODES = Object.freeze({
   SESSION_QUEUE_GAP: 'session_queue_gap',
   CREDIT_ERROR_SETTLE: 'credit_error_settle',
   CREDIT_PRE_TOKEN: 'credit_pre_token',
+  CREDIT_LEDGER_SETTLE: 'credit_ledger_settle',
+  SSE_CURSOR_PERSIST: 'sse_cursor_persist',
+  SESSION_CKPT_PERSIST: 'session_ckpt_persist',
+  SESSION_CKPT_HYDRATE: 'session_ckpt_hydrate',
 });
 
 function isRetryable(code) {

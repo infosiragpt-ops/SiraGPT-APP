@@ -1836,9 +1836,26 @@ function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
   }
 }
 
-function inclusiveReplayStartFromRing(chunks, lastPosition) {
+function inclusiveReplayStartFromRing(chunks, lastPosition, opts = {}) {
   const list = Array.isArray(chunks) ? chunks : [];
   const fallback = Math.min(Math.max(0, Number(lastPosition) || 0), list.length);
+  try {
+    const w62 = require('../services/agent-runner/engine-3h62');
+    if (typeof w62.resumeGenerateFromPersistedIdClosed === 'function') {
+      const ring = list.map((content, i) => ({ seq: i + 1, content }));
+      const resumed = w62.resumeGenerateFromPersistedIdClosed({
+        headerLastEventId: lastPosition,
+        sessionKey: opts.sessionKey,
+        ring,
+        listeners: opts.listeners || [],
+        store: opts.store,
+        headSeq: list.length,
+        resume: true,
+      });
+      if (resumed && resumed.reset) return 0;
+      if (resumed && Number.isFinite(resumed.start)) return resumed.start;
+    }
+  } catch (_) { /* 3H62 fail-open to 3H59 */ }
   try {
     const {
       sseResumeDropsPriorListeners,
@@ -5963,7 +5980,9 @@ router.post(
         };
         // Replay missing chunks
         try {
-          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition);
+          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition, {
+            sessionKey: sid,
+          });
           const missing = resumeSession.record.chunks.slice(replayStart);
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
@@ -6006,6 +6025,15 @@ router.post(
                     // updated before the Redis write, so active reconnects see
                     // this high-water frame even while Redis is behind.
                     streamResume.append(sid, obj.content).catch(() => {});
+                    try {
+                      const w62 = require('../services/agent-runner/engine-3h62');
+                      if (typeof w62.persistLastEventIdClosed === 'function') {
+                        w62.persistLastEventIdClosed({
+                          sessionKey: sid,
+                          lastEventId: activeResume.nextPosition,
+                        });
+                      }
+                    } catch (_) { /* 3H62 persist is best-effort */ }
                   } else if (!activeResume.resumeDegraded) {
                     // Do not emit an id beyond the durable chunk cap. The
                     // explicit frame tells clients that later tail content is
@@ -7489,6 +7517,36 @@ router.post(
           });
         } catch (_) { /* cancel settle is best-effort */ }
       }
+      try {
+        const w62 = require('../services/agent-runner/engine-3h62');
+        if (typeof w62.observeTurnLatencyClosed === 'function') {
+          w62.observeTurnLatencyClosed({
+            kind: 'turn_end',
+            startedAt: __generateStartedAt,
+            now: Date.now(),
+          });
+        }
+        const shouldSettle = Boolean(signal && signal.aborted) || Boolean(streamFailureMessage);
+        if (shouldSettle && typeof w62.settleLedgerOnErrorClosed === 'function') {
+          w62.settleLedgerOnErrorClosed({
+            cancelled: Boolean(signal && signal.aborted),
+            errored: Boolean(streamFailureMessage) && !(signal && signal.aborted),
+            usage: { streamedChars: String(fullResponseContent || '').length },
+            alreadySettled: cancelUsageState.recorded === true,
+            firstToken: Boolean(fullResponseContent),
+            prisma: req && req.prisma,
+            transaction: req && req._chargedCredits,
+          });
+        }
+        if (resumeSession && resumeSession.streamId && typeof w62.persistLastEventIdClosed === 'function') {
+          w62.persistLastEventIdClosed({
+            sessionKey: resumeSession.streamId,
+            lastEventId: resumeSession.record && Array.isArray(resumeSession.record.chunks)
+              ? resumeSession.record.chunks.length
+              : undefined,
+          });
+        }
+      } catch (_) { /* 3H62 generate finally is best-effort */ }
       if (resumeLeaseHeartbeat) {
         clearInterval(resumeLeaseHeartbeat);
         resumeLeaseHeartbeat = null;
