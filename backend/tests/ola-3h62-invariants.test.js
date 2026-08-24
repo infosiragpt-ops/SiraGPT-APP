@@ -346,6 +346,30 @@ test('3H62-M-001 runAgentLoop persists session checkpoint and recovers pins', as
   try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* tmp */ }
 });
 
+test('3H62-S-001 runAgentLoop hydrates empty messages from disk checkpoint', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-3h62-hydrate-'));
+  w62.persistSessionCheckpointClosed({
+    sessionKey: 'thread-hydrate-empty',
+    state: { messages: [{ role: 'user', content: 'reanuda desde disco 3H62' }] },
+    root,
+  });
+  const messages = [];
+  const result = await runAgentLoop({
+    client: scriptedClient([{ content: 'ok-from-disk-ckpt' }]),
+    model: 'deepseek-v4-flash',
+    messages,
+    tools: [],
+    executors: {},
+    threadId: 'thread-hydrate-empty',
+    persistRoot: root,
+    maxIterations: 2,
+  });
+  assert.equal(result.stoppedReason, 'final');
+  assert.ok(messages.some((m) => String(m && m.content).includes('reanuda desde disco 3H62')));
+  assert.equal(result.finalText, 'ok-from-disk-ckpt');
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* tmp */ }
+});
+
 test('3H62-N-001 compact under budget still restores injected pins', () => {
   const messages = [
     { role: 'system', content: 'short' },
@@ -380,6 +404,7 @@ test('3H62-P-001 live loop/generate/sse import 3H62 helper names', () => {
   assert.ok(loop.includes('requireExactDiffMarkersClosed'));
   assert.ok(loop.includes('recoverPgvectorPinsClosed'));
   assert.ok(loop.includes('persistSessionCheckpointClosed'));
+  assert.ok(loop.includes('hydrateSessionCheckpointClosed'));
   assert.ok(loop.includes('settleLedgerOnErrorClosed'));
   assert.ok(loop.includes('observeTurnLatencyClosed'));
   assert.ok(loop.includes('checkpointHookBeforeMutatingTool'));

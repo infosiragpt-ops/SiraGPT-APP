@@ -600,7 +600,18 @@ async function runAgentLoop({
   try {
     const w62 = loadEngine3h62();
     if (w62 && threadId && typeof w62.hydrateSessionCheckpointClosed === 'function') {
-      w62.hydrateSessionCheckpointClosed({ sessionKey: threadId, root: persistRoot });
+      const hydrated = w62.hydrateSessionCheckpointClosed({ sessionKey: threadId, root: persistRoot });
+      if (
+        hydrated &&
+        hydrated.hydrated &&
+        hydrated.state &&
+        Array.isArray(hydrated.state.messages) &&
+        hydrated.state.messages.length &&
+        Array.isArray(messages) &&
+        messages.length === 0
+      ) {
+        for (const m of hydrated.state.messages) messages.push(m);
+      }
     }
     if (w62 && typeof w62.recoverPgvectorPinsClosed === 'function' && (pinHits.length || typeof recall === 'function')) {
       const lastUser = Array.isArray(messages)
