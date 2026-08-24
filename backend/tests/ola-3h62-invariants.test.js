@@ -391,6 +391,9 @@ test('3H62-O-001 adapter snapshot and DeepSeek lock are 3H62', () => {
   assert.equal(typeof ad.validateWriteThenRevertClosed, 'function');
   assert.equal(typeof ad.persistLastEventIdClosed, 'function');
   assert.equal(typeof ad.settleLedgerOnErrorClosed, 'function');
+  assert.equal(typeof ad.recordFirstTokenLatencySampleP95, 'function');
+  assert.equal(typeof ad.retrieveMemoryBeforeGenerateClosed, 'function');
+  assert.equal(typeof ad.persistSseLastEventIdCursor, 'function');
   assert.equal(typeof ad.checkpointHookBeforeMutatingTool, 'function');
   assert.equal(ad.checkpointHookBeforeMutatingTool, w59.checkpointHookBeforeMutatingTool);
   assert.equal(ad.loadOptionalEngineWave('engine-3h62').WAVE, '3H62');
@@ -414,7 +417,15 @@ test('3H62-P-001 live loop/generate/sse import 3H62 helper names', () => {
   assert.ok(ai.includes('sseResumeDropsPriorListeners'));
   const sse = read('src/utils/sse-writer.js');
   assert.ok(sse.includes('resumeGenerateFromPersistedIdClosed'));
+  assert.ok(sse.includes('persistSseLastEventIdCursor'));
   assert.ok(sse.includes('sseResumeDropsPriorListeners'));
+  assert.ok(loop.includes('retrieveMemoryBeforeGenerateClosed'));
+  assert.ok(loop.includes('retrieveMemoryForLoop'));
+  assert.ok(loop.includes('recordFirstTokenLatencySampleP95'));
+  assert.ok(ai.includes('persistSseLastEventIdCursor'));
+  assert.ok(ai.includes('sira_last_event_id'));
+  assert.ok(ai.includes('retrieveMemoryForLoop'));
+  assert.ok(ai.includes('recordFirstTokenLatencySampleP95'));
   const tools = read('src/services/doc-agent/tools.js');
   assert.ok(tools.includes('validateWriteThenRevertClosed'));
   const gw = read('src/services/agent-runner/engine-gateway.js');
@@ -464,4 +475,96 @@ test('3H62-R-001 classified 3H62 errors are Spanish and never leak stacks', () =
   const src = read('src/services/observability/public-stream-error.js');
   assert.ok(src.includes("code: 'write_syntax_revert'"));
   assert.equal(/sk-[a-zA-Z0-9]{8}/.test(src), false);
+});
+
+test('3H62-T-001 persistSseLastEventIdCursor is invoked via persistCursor inject', () => {
+  const calls = [];
+  const store = {};
+  const out = w62.persistLastEventIdClosed({
+    sessionKey: 'sid-cursor',
+    lastEventId: 5,
+    store,
+    persistCursor: (args) => { calls.push(args); return ad.persistSseLastEventIdCursor(args); },
+  });
+  assert.equal(out.persisted, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].lastEventId, 5);
+  assert.equal(ad.persistSseLastEventIdCursor({ lastEventId: 3, store }).stale, true);
+});
+
+test('3H62-U-001 durable Last-Event-ID prefers cookie then file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-3h62-cookie-'));
+  w62.persistLastEventIdClosed({ sessionKey: 'chat-cookie', lastEventId: 4, root });
+  const fromCookie = w62.readDurableLastEventIdClosed({
+    cookieHeader: 'sira_last_event_id=chat-cookie%3A9; Path=/api/ai',
+    sessionKey: 'chat-cookie',
+    root,
+  });
+  assert.equal(fromCookie.source, 'cookie');
+  assert.equal(fromCookie.lastEventId, 9);
+  const fromFile = w62.readDurableLastEventIdClosed({
+    sessionKey: 'chat-cookie',
+    root,
+  });
+  assert.equal(fromFile.source, 'file');
+  assert.equal(fromFile.lastEventId, 4);
+  const baked = w62.cookieForLastEventId({ sessionKey: 'chat-cookie', lastEventId: 9 });
+  assert.ok(baked.header.includes('sira_last_event_id='));
+  try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* tmp */ }
+});
+
+test('3H62-V-001 retrieve-before-generate times out and drops inf/low scores', async () => {
+  const infHits = [
+    { factId: 'a', content: 'keep', score: 0.9 },
+    { factId: 'b', content: 'inf', score: Number.POSITIVE_INFINITY },
+    { factId: 'c', content: 'low', score: 0.01 },
+  ];
+  const filtered = await w62.retrieveMemoryBeforeGenerateClosed({ memoryHits: infHits, minScore: 0.25 });
+  assert.equal(filtered.hits.length, 1);
+  assert.equal(filtered.hits[0].factId, 'a');
+  assert.equal(filtered.droppedInf, 1);
+  assert.equal(filtered.droppedScore, 1);
+
+  const timed = await w62.retrieveMemoryBeforeGenerateClosed({
+    query: 'q',
+    retrieve: () => new Promise(() => {}),
+    timeoutMs: 15,
+  });
+  assert.equal(timed.timedOut, true);
+  assert.equal(timed.failOpen, true);
+  assert.equal(timed.hits.length, 0);
+  assert.equal(timed.code, 'pgvector_timeout');
+  const to = ad.pgvectorMemoryQueryTimeout({ elapsedMs: timed.elapsedMs || 15, timeoutMs: 15 });
+  assert.equal(to.timedOut, true);
+});
+
+test('3H62-W-001 recordFirstTokenLatencySampleP95 fake timers + over-budget hint', () => {
+  const { mock } = require('node:test');
+  mock.timers.enable({ apis: ['Date'], now: 5_000 });
+  try {
+    const ring = [];
+    mock.timers.tick(40);
+    const a = w62.recordFirstTokenLatencySampleP95({
+      startedAt: 5_000,
+      now: Date.now(),
+      store: ring,
+      budgetMs: 8_000,
+    });
+    assert.equal(a.ok, true);
+    assert.equal(a.ms, 40);
+    assert.equal(a.overBudget, false);
+    mock.timers.tick(9_000);
+    const late = w62.recordFirstTokenLatencySampleP95({
+      startedAt: 5_000,
+      now: Date.now(),
+      store: ring,
+      budgetMs: 8_000,
+    });
+    assert.equal(late.overBudget, true);
+    assert.equal(late.hint, 'first_token_over_budget');
+    assert.equal(late.snapshot.p95, late.ms);
+    assert.ok(late.p95 != null);
+  } finally {
+    mock.timers.reset();
+  }
 });

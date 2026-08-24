@@ -613,10 +613,52 @@ async function runAgentLoop({
         for (const m of hydrated.state.messages) messages.push(m);
       }
     }
+    const lastUser = Array.isArray(messages)
+      ? [...messages].reverse().find((m) => m && m.role === 'user')
+      : null;
+    if (w62 && typeof w62.retrieveMemoryBeforeGenerateClosed === 'function') {
+      const retrieved = await w62.retrieveMemoryBeforeGenerateClosed({
+        query: lastUser && lastUser.content,
+        retrieve: recall,
+        memoryHits: pinHits,
+        timeoutMs: 2000,
+      });
+      if (retrieved && Array.isArray(retrieved.hits) && retrieved.hits.length) pinHits = retrieved.hits;
+      try {
+        const adapter = loadEngineAdapter();
+        if (adapter && typeof adapter.pgvectorMemoryQueryTimeout === 'function') {
+          const to = adapter.pgvectorMemoryQueryTimeout({
+            elapsedMs: retrieved && retrieved.elapsedMs,
+            timeoutMs: 2000,
+          });
+          if (to && to.timedOut) pinHits = [];
+        }
+        if (adapter && typeof adapter.skipMemoryIfScoreNaN === 'function' && pinHits.length) {
+          const nan = adapter.skipMemoryIfScoreNaN(pinHits);
+          if (nan && Array.isArray(nan.facts)) pinHits = nan.facts;
+        }
+        if (adapter && typeof adapter.rejectNaNInfinityNumbers === 'function' && pinHits.length) {
+          pinHits = pinHits.filter((h) => adapter.rejectNaNInfinityNumbers(h).ok !== false);
+        }
+        if (adapter && typeof adapter.minScoreMemoryRetrieve === 'function' && pinHits.length) {
+          const scored = adapter.minScoreMemoryRetrieve(pinHits);
+          if (scored && Array.isArray(scored.facts)) pinHits = scored.facts;
+        }
+        if (typeof recall !== 'function') {
+          try {
+            const dur = require('./engine-durability');
+            if (dur && typeof dur.retrieveMemoryForLoop === 'function' && lastUser && lastUser.content && !pinHits.length) {
+              const extra = await dur.retrieveMemoryForLoop({
+                query: lastUser.content,
+                recall,
+              });
+              if (Array.isArray(extra) && extra.length) pinHits = extra;
+            }
+          } catch (_) { /* durability optional */ }
+        }
+      } catch (_) { /* adapter memory filters fail-open */ }
+    }
     if (w62 && typeof w62.recoverPgvectorPinsClosed === 'function' && (pinHits.length || typeof recall === 'function')) {
-      const lastUser = Array.isArray(messages)
-        ? [...messages].reverse().find((m) => m && m.role === 'user')
-        : null;
       const recovered = await w62.recoverPgvectorPinsClosed({
         compacted: messages,
         memoryHits: pinHits,
@@ -969,9 +1011,17 @@ async function runAgentLoop({
         }
         try {
           const w62 = loadEngine3h62();
-          if (w62 && typeof w62.observeTurnLatencyClosed === 'function' && modelTtfbMs != null) {
+          if (w62 && typeof w62.recordFirstTokenLatencySampleP95 === 'function' && modelTtfbMs != null) {
+            w62.recordFirstTokenLatencySampleP95({ ms: modelTtfbMs });
+          } else if (w62 && typeof w62.observeTurnLatencyClosed === 'function' && modelTtfbMs != null) {
             w62.observeTurnLatencyClosed({ kind: 'first_token', ms: modelTtfbMs });
           }
+          try {
+            const rel = require('./engine-reliability');
+            if (rel && typeof rel.observeFirstToken === 'function' && modelTtfbMs != null) {
+              rel.observeFirstToken(modelTtfbMs);
+            }
+          } catch (_) { /* reliability optional */ }
         } catch (_) { /* 3H62 fail-open */ }
       }
     } catch (_) { /* 3H60 fail-open */ }

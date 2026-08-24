@@ -26,6 +26,10 @@ const path = require('path');
 const WAVE = '3H62';
 const SSE_CURSOR_DIR = 'siragpt-sse-cursors';
 const SESSION_CKPT_DIR = 'siragpt-session-ckpts';
+const SSE_CURSOR_COOKIE = 'sira_last_event_id';
+const PGVECTOR_QUERY_TIMEOUT_MS = 2_000;
+const MEMORY_MIN_SCORE = 0.25;
+const FIRST_TOKEN_BUDGET_MS = 8_000;
 const STACK_RE = /(?:at\s+\S+\s+\([^)]+:\d+:\d+\)|^\s*at\s+\S+:\d+:\d+)/m;
 const SECRET_RE = /sk-[A-Za-z0-9_\-]{8,}/g;
 const UNIQUENESS_RE = /old_str occurs more than once|old_str not found|old_str must not be empty/i;
@@ -223,6 +227,7 @@ function persistLastEventIdClosed({
   seq,
   store,
   root,
+  persistCursor,
 } = {}) {
   const id = lastEventId != null ? Number(lastEventId) : Number(seq);
   if (!Number.isFinite(id) || id < 0) {
@@ -236,6 +241,9 @@ function persistLastEventIdClosed({
   rec.cursor = id;
   rec.lastEventId = id;
   if (store instanceof Map && sessionKey) store.set(String(sessionKey), { lastEventId: id, cursor: id });
+  if (typeof persistCursor === 'function') {
+    try { persistCursor({ lastEventId: id, seq: id, store: rec }); } catch (_) { /* injected adapter persist */ }
+  }
   const key = String(sessionKey || rec.sessionKey || '');
   if (key) {
     try {
@@ -659,6 +667,238 @@ function classifyEngine3h62Error(input) {
   };
 }
 
+/**
+ * Resolve Last-Event-ID from header, cookie, in-memory cursor store, then file.
+ * Cookie never starts a foreign resume — callers must still own the streamId.
+ */
+function readDurableLastEventIdClosed({
+  headerLastEventId,
+  cookieHeader,
+  cookieName = SSE_CURSOR_COOKIE,
+  sessionKey,
+  store,
+  root,
+} = {}) {
+  const fromHeader = Number(String(headerLastEventId == null ? '' : headerLastEventId).split(':').pop());
+  if (Number.isFinite(fromHeader) && fromHeader >= 0 && String(headerLastEventId || '').trim()) {
+    return { lastEventId: fromHeader, source: 'header', cookieName };
+  }
+  if (cookieHeader) {
+    let parsed = null;
+    try {
+      const cookie = require('cookie');
+      parsed = cookie.parse(String(cookieHeader));
+    } catch (_) {
+      const m = String(cookieHeader).match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`));
+      parsed = m ? { [cookieName]: decodeURIComponent(m[1]) } : {};
+    }
+    const raw = parsed && parsed[cookieName];
+    if (raw) {
+      const pos = Number(String(raw).split(':').pop());
+      const sid = String(raw).includes(':') ? String(raw).slice(0, String(raw).lastIndexOf(':')) : '';
+      if (Number.isFinite(pos) && pos >= 0 && (!sessionKey || !sid || sid === String(sessionKey))) {
+        return { lastEventId: pos, source: 'cookie', cookieName, sessionKey: sid || sessionKey || '' };
+      }
+    }
+  }
+  if (store instanceof Map && sessionKey && store.has(String(sessionKey))) {
+    const rec = store.get(String(sessionKey));
+    const n = Number(rec && (rec.lastEventId != null ? rec.lastEventId : rec.cursor));
+    if (Number.isFinite(n)) return { lastEventId: n, source: 'store', cookieName };
+  }
+  if (store && typeof store === 'object' && !(store instanceof Map)) {
+    const n = Number(store.lastEventId != null ? store.lastEventId : store.cursor);
+    if (Number.isFinite(n) && n >= 0) return { lastEventId: n, source: 'store', cookieName };
+  }
+  if (sessionKey) {
+    const file = readJson(filePathFor(SSE_CURSOR_DIR, sessionKey, root));
+    if (file) {
+      const n = Number(file.lastEventId != null ? file.lastEventId : file.cursor);
+      if (Number.isFinite(n)) return { lastEventId: n, source: 'file', cookieName };
+    }
+  }
+  return { lastEventId: 0, source: null, cookieName };
+}
+
+function cookieForLastEventId({ sessionKey, lastEventId, cookieName = SSE_CURSOR_COOKIE } = {}) {
+  const id = Number(lastEventId);
+  const key = String(sessionKey || '');
+  if (!key || !Number.isFinite(id) || id < 0) return null;
+  return {
+    name: cookieName,
+    value: `${key}:${id}`,
+    header: `${cookieName}=${encodeURIComponent(`${key}:${id}`)}; Path=/api/ai; HttpOnly; SameSite=Lax; Max-Age=7200`,
+  };
+}
+
+/**
+ * Retrieve-before-generate with 2s timeout, inf/NaN reject, min-score drop.
+ * Fail-open: timeout or retrieve error → empty hits, generation continues.
+ */
+async function retrieveMemoryBeforeGenerateClosed({
+  query,
+  userId,
+  chatId,
+  recall,
+  store,
+  retrieve,
+  memoryHits,
+  timeoutMs = PGVECTOR_QUERY_TIMEOUT_MS,
+  minScore = MEMORY_MIN_SCORE,
+  now = Date.now,
+} = {}) {
+  const started = Number(typeof now === 'function' ? now() : now) || Date.now();
+  const cap = Math.max(1, Number(timeoutMs) || PGVECTOR_QUERY_TIMEOUT_MS);
+  const floor = Number.isFinite(Number(minScore)) ? Number(minScore) : MEMORY_MIN_SCORE;
+  const filterHits = (list) => {
+    const out = [];
+    let droppedInf = 0;
+    let droppedScore = 0;
+    for (const h of Array.isArray(list) ? list : []) {
+      const score = h && typeof h === 'object' ? (h.score != null ? h.score : h.similarity) : null;
+      if (score != null) {
+        const n = Number(score);
+        if (!Number.isFinite(n)) { droppedInf += 1; continue; }
+        if (n < floor) { droppedScore += 1; continue; }
+      }
+      out.push(h);
+    }
+    return { hits: out, droppedInf, droppedScore };
+  };
+
+  if (Array.isArray(memoryHits) && memoryHits.length && typeof retrieve !== 'function' && typeof recall !== 'function') {
+    const filtered = filterHits(memoryHits);
+    return {
+      ok: true,
+      hits: filtered.hits,
+      timedOut: false,
+      failOpen: false,
+      droppedInf: filtered.droppedInf,
+      droppedScore: filtered.droppedScore,
+      elapsedMs: 0,
+      timeoutMs: cap,
+      via: 'injected',
+      code: null,
+    };
+  }
+
+  let retrieveFn = retrieve;
+  if (typeof retrieveFn !== 'function' && typeof recall === 'function') retrieveFn = recall;
+  if (typeof retrieveFn !== 'function') {
+    try {
+      const dur = require('./engine-durability');
+      if (dur && typeof dur.retrieveMemoryForLoop === 'function') {
+        retrieveFn = (args) => dur.retrieveMemoryForLoop(args);
+      }
+    } catch (_) { retrieveFn = null; }
+  }
+  if (typeof retrieveFn !== 'function') {
+    return {
+      ok: true,
+      hits: filterHits(memoryHits).hits,
+      timedOut: false,
+      failOpen: true,
+      skipped: true,
+      elapsedMs: 0,
+      timeoutMs: cap,
+      via: 'none',
+      code: null,
+    };
+  }
+
+  let timedOut = false;
+  let rawHits = [];
+  try {
+    const work = Promise.resolve(retrieveFn({
+      query,
+      userId,
+      chatId,
+      store,
+      recall,
+    }));
+    const raced = await Promise.race([
+      work.then((hits) => ({ hits, timedOut: false })),
+      new Promise((resolve) => {
+        setTimeout(() => resolve({ hits: [], timedOut: true }), cap);
+      }),
+    ]);
+    timedOut = raced.timedOut === true;
+    rawHits = timedOut ? [] : (Array.isArray(raced.hits) ? raced.hits : []);
+  } catch (err) {
+    const code = err && err.code === 'pgvector_failed' ? 'pgvector_failed' : 'retrieve_memory_failed';
+    return {
+      ok: true,
+      hits: [],
+      timedOut: false,
+      failOpen: true,
+      elapsedMs: Math.max(0, (typeof now === 'function' ? now() : Date.now()) - started),
+      timeoutMs: cap,
+      via: 'retrieve',
+      code,
+    };
+  }
+  const elapsedMs = Math.max(0, (typeof now === 'function' ? now() : Date.now()) - started);
+  if (timedOut || elapsedMs >= cap) {
+    return {
+      ok: true,
+      hits: [],
+      timedOut: true,
+      failOpen: true,
+      elapsedMs,
+      timeoutMs: cap,
+      via: 'retrieve',
+      code: 'pgvector_timeout',
+    };
+  }
+  const filtered = filterHits(rawHits);
+  return {
+    ok: true,
+    hits: filtered.hits,
+    timedOut: false,
+    failOpen: false,
+    droppedInf: filtered.droppedInf,
+    droppedScore: filtered.droppedScore,
+    elapsedMs,
+    timeoutMs: cap,
+    via: 'retrieve',
+    code: null,
+  };
+}
+
+/**
+ * Scripted first-token p50/p95 + over-budget hint. Never invents Flash numbers.
+ * Also forwards to engine-reliability.observeFirstToken when present.
+ */
+function recordFirstTokenLatencySampleP95({
+  ms,
+  startedAt,
+  now,
+  store,
+  budgetMs = FIRST_TOKEN_BUDGET_MS,
+} = {}) {
+  const observed = observeTurnLatencyClosed({ kind: 'first_token', ms, startedAt, now, store });
+  try {
+    const rel = require('./engine-reliability');
+    if (rel && typeof rel.observeFirstToken === 'function' && Number.isFinite(observed.ms)) {
+      rel.observeFirstToken(observed.ms);
+    }
+  } catch (_) { /* reliability optional */ }
+  const snap = (observed && observed.snapshot) || { p50: null, p95: null, count: 0, source: 'scripted' };
+  const overBudget = Number.isFinite(observed.ms) && observed.ms > Number(budgetMs);
+  return {
+    ok: observed.ok === true,
+    kind: 'first_token',
+    ms: observed.ms,
+    p50: snap.p50,
+    p95: snap.p95,
+    count: snap.count,
+    snapshot: snap,
+    overBudget,
+    hint: overBudget ? 'first_token_over_budget' : null,
+    code: overBudget ? 'ttfb_watchdog' : null,
+  };
+}
+
 function refuseOpenRouterInWave3h62(env = process.env) {
   const w59 = loadWave59();
   if (w59 && typeof w59.refuseOpenRouterInWave3h59 === 'function') {
@@ -685,6 +925,9 @@ const FLAGS = Object.freeze({
   recoverPgvectorPinsClosed: true,
   settleLedgerOnErrorClosed: true,
   observeTurnLatencyClosed: true,
+  readDurableLastEventIdClosed: true,
+  retrieveMemoryBeforeGenerateClosed: true,
+  recordFirstTokenLatencySampleP95: true,
   classifyEngine3h62Error: true,
   refuseOpenRouterInWave3h62: true,
 });
@@ -717,8 +960,13 @@ module.exports = {
   recoverPgvectorPinsClosed,
   settleLedgerOnErrorClosed,
   observeTurnLatencyClosed,
+  readDurableLastEventIdClosed,
+  cookieForLastEventId,
+  retrieveMemoryBeforeGenerateClosed,
+  recordFirstTokenLatencySampleP95,
   classifyEngine3h62Error,
   refuseOpenRouterInWave3h62,
   looksLikeLogicalToolReject,
   waveSnapshot,
+  SSE_CURSOR_COOKIE,
 };
