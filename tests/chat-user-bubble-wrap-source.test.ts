@@ -16,25 +16,27 @@ function firstRule(css: string, selector: string): string {
 }
 
 describe("chat user bubble · short-word wrap", () => {
-  it("does not use overflow-wrap:anywhere on the user bubble itself", () => {
+  it("renders user text as an inline span, not a block prose <p>", () => {
     const tsx = source("components/message-component.tsx")
     const marker = '"chat-user-bubble'
     const start = tsx.indexOf(marker)
     assert.ok(start >= 0, "missing chat-user-bubble class")
     const block = tsx.slice(start, tsx.indexOf("}>", start) + 2)
 
-    assert.match(block, /w-max/)
     assert.doesNotMatch(block, /w-fit/)
     assert.doesNotMatch(block, /overflow-wrap:anywhere/)
     assert.doesNotMatch(block, /word-break:break-word/)
     assert.doesNotMatch(block, /break-all/)
+    assert.match(tsx, /chat-user-bubble-inner/)
+    assert.match(tsx, /<span className="chat-user-bubble-inner">/)
   })
 
-  it("sizes the bubble with max-content and wraps at word boundaries", () => {
+  it("sizes the bubble as inline-block so short words stay on one line", () => {
     const css = source("app/globals.css")
     const rule = firstRule(css, ".chat-user-bubble")
 
-    assert.match(rule, /width:\s*max-content/)
+    assert.match(rule, /display:\s*inline-block/)
+    assert.match(rule, /width:\s*auto/)
     assert.match(rule, /max-width:\s*min\(70%,\s*32rem\)/)
     assert.match(rule, /overflow-wrap:\s*break-word/)
     assert.match(rule, /word-break:\s*normal/)

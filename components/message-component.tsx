@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { collapseStackedLetters } from "@/lib/chat-input-normalize"
 import dynamic from "next/dynamic"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 const UnifiedDocumentViewer = dynamic(
@@ -304,7 +305,7 @@ const resolveUserImageAttachmentUrl = (file: any) => {
 };
 
 const formatAgentTaskUserContent = (content: string) => {
-    return String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim();
+    return collapseStackedLetters(String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim());
 };
 
 const extractRenderableAgentTaskContent = (content: string) => {
@@ -3171,29 +3172,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         />
 
                         {hasContent && (
-                            // User-message bubble — ChatGPT-like hug.
-                            //   `w-max`            natural text width ("hola" stays
-                            //                      one line). Do NOT use w-fit with
-                            //                      overflow-wrap:anywhere — that
-                            //                      collapses min-content to 1ch.
-                            //   max-w via CSS      70% / 32rem (88% on mobile)
-                            //   wrap via CSS       overflow-wrap: break-word
-                            //   px-4 py-2.5        16×10 padding
-                            //   [&_p]:m-0          kills prose <p> margins that
-                            //                      ballooned short text like "hola"
-                            //   rounded-br-[8px]   subtle tail toward sender
+                            // User-message bubble — inline-block hug.
+                            // Block prose/`<p>` inside a max-content box still
+                            // shrinks to 1ch ("h / o / l / a"). Plain text is
+                            // an inline span; markdown keeps wrappers as
+                            // `display: contents` via CSS.
                             <Card className={cn(
-                                "chat-user-bubble relative w-max rounded-[18px] rounded-br-[8px]",
+                                "chat-user-bubble relative rounded-[18px] rounded-br-[8px]",
                                 "px-4 py-2.5",
                                 "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
                                 "text-[15px] leading-[1.5] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",
-                                // Strip prose margins and inherit the bubble type
-                                // so a one-word "hola" is not 16px inside 15px.
-                                "[&_.prose]:!m-0 [&_p]:!my-0 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
-                                "[&_p]:!text-[inherit] [&_p]:!leading-[inherit]",
-                                "[&_ul]:!my-1 [&_ol]:!my-1 [&_pre]:!my-1.5",
                             )}>
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
@@ -3215,7 +3205,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         </div>
                                     </div>
                                 ) : (
-                                    <MessageContent content={formatAgentTaskUserContent(message.content)} />
+                                    <span className="chat-user-bubble-inner">{formatAgentTaskUserContent(message.content)}</span>
                                 )}
                             </Card>
                         )}
