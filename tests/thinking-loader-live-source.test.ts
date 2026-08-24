@@ -29,6 +29,8 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
   it("ships PensandoBars with Luis geometry and hardcoded #38BDF8", () => {
     const bars = source("components/pensando-bars.tsx")
     const svg = source("public/loaders/pensando.svg")
+    const icon = source("components/icons/thinking-bars-icon.tsx")
+    const indicator = source("components/ui/thinking-indicator.tsx")
     assert.match(bars, /viewBox="10 40 45 50"/)
     assert.match(bars, /fill=\{SIRA_CELESTE\}/)
     assert.match(bars, /values="0 0; 0 20; 0 0"/)
@@ -38,6 +40,14 @@ describe("thinking loaders · live Pensando uses the Luis kit", () => {
     assert.doesNotMatch(bars, /fill=\{?["']currentColor["']\}?/)
     assert.match(svg, /viewBox="10 40 45 50"/)
     assert.match(svg, /fill="#38BDF8"/)
+    assert.doesNotMatch(svg, /currentColor/)
+    assert.match(icon, /viewBox="10 40 45 50"/)
+    assert.match(icon, /fill=\{SIRA_CELESTE\}/)
+    assert.doesNotMatch(icon.replace(/\/\*[\s\S]*?\*\//g, ""), /currentColor/)
+    assert.match(indicator, /import \{ PensandoBars \} from "@\/components\/pensando-bars"/)
+    assert.match(indicator, /<PensandoBars size=\{px\} \/>/)
+    assert.doesNotMatch(indicator, /DotmCircular15/)
+    assert.doesNotMatch(indicator, /THINKING_GLYPH_COLOR/)
   })
 
   it("forces kind loader + pensando state on active ThinkingTrace / AgentTrace rows", () => {

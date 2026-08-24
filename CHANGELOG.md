@@ -48,6 +48,9 @@ and improvement cycles follow a sequential number with the date the work landed.
   answers. See `docs/chat-ux-a11y-ocr-checklist.md`.
 - Reduced the chat composer outline to a single `0.5px` hairline in light and
   dark themes, including hover and focus states.
+- Every in-progress process uses the same three bouncing celeste bars
+  (`#38BDF8`, `viewBox="10 40 45 50"`). `ThinkingIndicator` no longer
+  renders the red circular glyph.
 
 ### Fixed
 
