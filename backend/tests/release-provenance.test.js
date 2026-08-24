@@ -37,21 +37,37 @@ test('/api/version prefers the build-injected application version', () => {
 });
 
 test('/api/version never reports malformed release provenance as a commit', () => {
-  const info = loadVersionInfo({ GIT_COMMIT: 'not-a-git-sha' });
-  assert.notEqual(info.commit, 'not-a-git-sha');
-  assert.match(info.commit, /^(unknown|[0-9a-f]{7,40})$/i);
+  const { resolveCommit } = require('../src/utils/deployed-tree-commit');
+  const commit = resolveCommit({ GIT_COMMIT: 'not-a-git-sha' }, { gitSha: null });
+  assert.notEqual(commit, 'not-a-git-sha');
+  assert.match(commit, /^(unknown|[0-9a-f]{7,40})$/i);
 });
 
-test('/api/version reports an exact valid build-injected commit', () => {
+test('/api/version reports an exact valid build-injected commit when git tree is absent', () => {
   const commit = 'a4f15ce9a4f15ce9a4f15ce9a4f15ce9a4f15ce9';
-  const info = loadVersionInfo({ GIT_COMMIT: commit });
-  assert.equal(info.commit, commit);
+  const { resolveCommit } = require('../src/utils/deployed-tree-commit');
+  assert.equal(resolveCommit({ GIT_COMMIT: commit }, { gitSha: null }), commit);
+});
+
+test('/api/version prefers the deployed tree SHA over a stale GIT_COMMIT env', () => {
+  const stale = 'a4f15ce9a4f15ce9a4f15ce9a4f15ce9a4f15ce9';
+  const live = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const { resolveCommit } = require('../src/utils/deployed-tree-commit');
+  assert.equal(resolveCommit({ GIT_COMMIT: stale }, { gitSha: live }), live);
 });
 
 test('/api/version rejects short commit identifiers', () => {
-  const info = loadVersionInfo({ GIT_COMMIT: 'a4f15ce' });
-  assert.notEqual(info.commit, 'a4f15ce');
-  assert.match(info.commit, /^(unknown|[0-9a-f]{40})$/i);
+  const { resolveCommit } = require('../src/utils/deployed-tree-commit');
+  const commit = resolveCommit({ GIT_COMMIT: 'a4f15ce' }, { gitSha: null });
+  assert.notEqual(commit, 'a4f15ce');
+  assert.match(commit, /^(unknown|[0-9a-f]{40})$/i);
+});
+
+test('version route and env loader bind deployed-tree commit resolution', () => {
+  const version = read('backend/src/routes/version.js');
+  const loadEnv = read('backend/src/config/load-env.js');
+  assert.match(version, /utils\/deployed-tree-commit/);
+  assert.match(loadEnv, /applyGitCommitFromDeployedTree/);
 });
 
 test('backend image receives immutable release provenance at build time', () => {
@@ -203,6 +219,8 @@ test('official production deploy paths use the bounded migration-only wrapper', 
     deployScript,
     /node scripts\/start-with-migrations\.js --migrate-only/,
   );
+  assert.match(deployScript, /git -C "\$\{APP_DIR\}" rev-parse HEAD/);
+  assert.match(deployScript, /export GIT_COMMIT/);
   assert.doesNotMatch(workflow, /\bnpx\s+prisma\b/);
   assert.doesNotMatch(deployScript, /\bnpx\s+prisma\b/);
   assert.match(workflow, /Database migration failed; aborting deploy/);
