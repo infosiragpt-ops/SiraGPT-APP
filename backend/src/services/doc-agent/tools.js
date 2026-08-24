@@ -138,7 +138,7 @@ async function runMutatingSandboxWrite(sandbox, { tool, path: filePath, execute 
       await sandbox.writeFile(String(p), bytes);
     },
   });
-  if (guarded && guarded.rolledBack) {
+  if (guarded && guarded.rolledBack && guarded.timedOut) {
     const classified = typeof w61.classifyPublicLoopErrorClosed === 'function'
       ? w61.classifyPublicLoopErrorClosed({ code: 'ckpt_rollback_timeout' })
       : { message: 'La escritura expiró. Revertí al checkpoint anterior.' };

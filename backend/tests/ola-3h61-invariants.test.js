@@ -96,6 +96,31 @@ test('3H61-C-001 skip checkpoint when write is a no-op', async () => {
   assert.equal(guarded.code, 'ckpt_skip_unchanged');
 });
 
+test('3H61-S-001 str_replace uniqueness/miss errors are not rewritten as rollback', async () => {
+  const files = { 'a.txt': Buffer.from('uno dos uno') };
+  const dup = await w61.guardMutatingWriteClosed({
+    tool: 'str_replace',
+    path: 'a.txt',
+    execute: async () => 'ERROR: old_str occurs more than once in a.txt. Add surrounding context to make it unique.',
+    readBytes: async (p) => files[p] || null,
+    writeBytes: async (p, bytes) => { files[p] = Buffer.from(bytes); },
+  });
+  assert.equal(dup.rolledBack, false);
+  assert.equal(dup.timedOut, false);
+  assert.match(dup.result, /more than once/);
+  assert.equal(files['a.txt'].toString(), 'uno dos uno');
+
+  const miss = await w61.guardMutatingWriteClosed({
+    tool: 'str_replace',
+    path: 'a.txt',
+    execute: async () => 'ERROR: old_str not found in a.txt. Read the file and copy the exact text (including whitespace).',
+    readBytes: async (p) => files[p] || null,
+    writeBytes: async (p, bytes) => { files[p] = Buffer.from(bytes); },
+  });
+  assert.equal(miss.rolledBack, false);
+  assert.match(miss.result, /not found/);
+});
+
 test('3H61-D-001 read tools never take a write checkpoint', async () => {
   const guarded = await w61.guardMutatingWriteClosed({
     tool: 'read_file',

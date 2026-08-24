@@ -105,14 +105,16 @@ async function executeWith3h59Checkpoint({
   const flags = looksLikeTimedOutOrFailedWrite(thrown || result);
   if (hook && hook.hook === true && filePath && adapter && typeof adapter.rollbackHookOnTimedOutWrite === 'function') {
     const rb = adapter.rollbackHookOnTimedOutWrite({
-      timedOut: flags.timedOut || flags.failed,
+      timedOut: flags.timedOut,
       path: filePath,
       checkpointId: beforeHash || null,
     });
     if (rb && rb.rollback === true && beforeBytes) {
       try { await writeBytes(filePath, beforeBytes); } catch (_) { /* restore best-effort */ }
-      const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
-      result = `ERROR: ${classified.message}`;
+      if (flags.timedOut) {
+        const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
+        result = `ERROR: ${classified.message}`;
+      }
     } else if (!flags.failed && adapter && typeof adapter.skipCheckpointIfUnchanged === 'function') {
       try {
         let afterBytes = await readBytes(filePath);

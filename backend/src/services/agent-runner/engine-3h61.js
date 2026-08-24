@@ -141,7 +141,7 @@ async function guardMutatingWriteClosed({
 
   const rb = w59 && typeof w59.rollbackHookOnTimedOutWrite === 'function'
     ? w59.rollbackHookOnTimedOutWrite({
-      timedOut: timedOut || failed,
+      timedOut,
       path: p,
       checkpointId: snapshot && snapshot.sha256,
     })
