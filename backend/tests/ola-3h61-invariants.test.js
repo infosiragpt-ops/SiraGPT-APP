@@ -276,6 +276,28 @@ test('3H61-L-001 runAgentLoop rolls back a timed-out write via raw file tools', 
   assert.match(String(result.steps[0].resultPreview), /Revertí|ERROR/);
 });
 
+test('3H61-R-001 runAgentLoop invokes sandboxTimeoutThenCleanup on sandbox tool timeout', async () => {
+  const workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-sbx-loop-'));
+  const result = await runAgentLoop({
+    client: scriptedClient([
+      { toolCalls: [{ name: 'execute_python', args: { code: 'pass', workdir, timeoutMs: 50 } }] },
+      { content: 'ok after cleanup' },
+    ]),
+    model: 'deepseek-v4-flash',
+    messages: [{ role: 'user', content: 'corre' }],
+    tools: [],
+    executors: {
+      async execute_python() { return 'ERROR: sandbox_timeout after 50ms'; },
+      __sandboxWorkdir: workdir,
+      __sandboxDirs: [{ path: workdir, orphan: true, mtimeMs: 0 }],
+    },
+    maxIterations: 4,
+  });
+  assert.equal(result.steps[0].ok, false);
+  assert.match(String(result.steps[0].resultPreview), /sandbox_timeout|ERROR/);
+  try { fs.rmSync(workdir, { recursive: true, force: true }); } catch (_) { /* may already be reaped */ }
+});
+
 test('3H61-M-001 runAgentLoop cuts idle subtask and accounts cancel once', async () => {
   const ac = new AbortController();
   const events = [];
@@ -360,30 +382,46 @@ test('3H61-O-001 adapter snapshot and DeepSeek lock are 3H61', () => {
   assert.equal(s.interpreter, 'local');
   assert.equal(typeof ad.guardMutatingWriteClosed, 'function');
   assert.equal(typeof ad.settleCancelUsageClosed, 'function');
+  assert.equal(typeof ad.checkpointHookBeforeMutatingTool, 'function');
+  assert.equal(typeof ad.rollbackHookOnTimedOutWrite, 'function');
+  assert.equal(typeof ad.skipCheckpointIfUnchanged, 'function');
+  assert.equal(typeof ad.sandboxTimeoutThenCleanup, 'function');
+  assert.equal(typeof ad.sandboxReapOrphanWorkdirs, 'function');
+  assert.equal(typeof ad.sseResumeDropsPriorListeners, 'function');
+  assert.equal(typeof ad.sseCancelClearsHeartbeat, 'function');
+  assert.equal(typeof ad.sseResumeRejectsSeqPastHead, 'function');
+  assert.equal(ad.checkpointHookBeforeMutatingTool, w59.checkpointHookBeforeMutatingTool);
   assert.equal(ad.loadOptionalEngineWave('engine-3h61').WAVE, '3H61');
   assert.equal(w61.refuseOpenRouterInWave3h61({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(w61.refuseOpenRouterInWave3h61({ DEEPSEEK_BASE_URL: 'https://api.deepseek.com' }).ok, true);
 });
 
-test('3H61-P-001 live loop/sandbox/sse/generate import 3H61 helpers', () => {
+test('3H61-P-001 live loop/sandbox/sse/generate import 3H59 helper names', () => {
   const loop = read('src/services/agent-runner/loop.js');
-  assert.ok(loop.includes('engine-3h61'));
-  assert.ok(loop.includes('guardMutatingWriteClosed'));
+  assert.ok(loop.includes('checkpointHookBeforeMutatingTool'));
+  assert.ok(loop.includes('rollbackHookOnTimedOutWrite'));
+  assert.ok(loop.includes('skipCheckpointIfUnchanged'));
+  assert.ok(loop.includes('sandboxTimeoutThenCleanup'));
+  assert.ok(loop.includes('sandboxReapOrphanWorkdirs'));
   assert.ok(loop.includes('settleCancelUsageClosed'));
   assert.ok(loop.includes('enforceSubtaskProgressClosed'));
-  assert.ok(loop.includes('checkpointHookBeforeMutatingTool') === false
-    || loop.includes('guardMutatingWriteClosed'));
+  const adapter = read('src/services/agent-runner/engine-adapter.js');
+  assert.ok(adapter.includes('checkpointHookBeforeMutatingTool'));
+  assert.ok(adapter.includes('sandboxTimeoutThenCleanup'));
+  assert.ok(adapter.includes('sseResumeDropsPriorListeners'));
   const sse = read('src/utils/sse-writer.js');
-  assert.ok(sse.includes('applySseResumeGuardsClosed'));
-  assert.ok(sse.includes('applySseCancelHeartbeatClosed'));
+  assert.ok(sse.includes('sseResumeDropsPriorListeners'));
+  assert.ok(sse.includes('sseCancelClearsHeartbeat'));
+  assert.ok(sse.includes('sseResumeRejectsSeqPastHead'));
   const sbx = read('src/services/sandbox/local-sandbox.js');
-  assert.ok(sbx.includes('cleanupSandboxOnTimeoutClosed'));
   assert.ok(sbx.includes('sandboxTimeoutThenCleanup'));
   const ai = read('src/routes/ai.js');
-  assert.ok(ai.includes('settleGenerateCancelUsageOnce'));
-  assert.ok(ai.includes('applySseResumeGuardsClosed'));
+  assert.ok(ai.includes('sseCancelClearsHeartbeat'));
+  assert.ok(ai.includes('sseResumeDropsPriorListeners'));
+  assert.ok(ai.includes('sseResumeRejectsSeqPastHead'));
   const tools = read('src/services/doc-agent/tools.js');
-  assert.ok(tools.includes('guardMutatingWriteClosed'));
+  assert.ok(tools.includes('checkpointHookBeforeMutatingTool'));
+  assert.ok(tools.includes('sandboxTimeoutThenCleanup'));
 });
 
 test('3H61-Q-001 public stream + error codes map rollback without traces', () => {

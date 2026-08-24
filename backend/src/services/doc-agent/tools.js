@@ -113,7 +113,15 @@ function loadEngine3h61() {
   try { return require('../agent-runner/engine-3h61'); } catch (_) { return null; }
 }
 
+function loadEngineAdapter() {
+  try { return require('../agent-runner/engine-adapter'); } catch (_) { return null; }
+}
+
 async function runMutatingSandboxWrite(sandbox, { tool, path: filePath, execute }) {
+  const adapter = loadEngineAdapter();
+  if (adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function') {
+    adapter.checkpointHookBeforeMutatingTool({ tool, path: filePath, name: tool });
+  }
   const w61 = loadEngine3h61();
   if (!w61 || typeof w61.guardMutatingWriteClosed !== 'function') {
     return execute();
@@ -150,6 +158,22 @@ function makeToolExecutors(sandbox) {
       if (r.stderr) parts.push(`[stderr] ${r.stderr}`);
       parts.push(r.timedOut ? `[exit ${r.exitCode} — TIMED OUT]` : `[exit ${r.exitCode}]`);
       const output = cap(parts.join('\n'));
+      if (r.aborted || r.timedOut) {
+        try {
+          const adapter = loadEngineAdapter();
+          const workdir = sandbox && (sandbox.workdir || sandbox.cwd || sandbox.sessionWorkdir);
+          if (adapter && typeof adapter.sandboxTimeoutThenCleanup === 'function') {
+            adapter.sandboxTimeoutThenCleanup({
+              elapsedMs: Number(r.durationMs) || 120000,
+              timeoutMs: Number(r.timeoutMs) || 120000,
+              workdir,
+            });
+          }
+          if (adapter && typeof adapter.sandboxReapOrphanWorkdirs === 'function' && workdir) {
+            adapter.sandboxReapOrphanWorkdirs([{ path: workdir, orphan: true, mtimeMs: Date.now() }], { now: Date.now() });
+          }
+        } catch (_) { /* 3H59 fail-open */ }
+      }
       if (r.aborted) return `ERROR: sandbox command aborted\n${output}`;
       if (r.timedOut) return `ERROR: sandbox command timed out\n${output}`;
       if (Number(r.exitCode) !== 0) return `ERROR: sandbox command failed\n${output}`;

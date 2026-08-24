@@ -37,6 +37,129 @@ function loadEngine3h61() {
   try { return require('./engine-3h61'); } catch (_) { return null; }
 }
 
+function looksLikeTimedOutOrFailedWrite(value) {
+  if (value == null) return { timedOut: false, failed: false };
+  const code = String((value && value.code) || '');
+  const msg = String((value && value.message) || value);
+  const timedOut = /^(ETIMEDOUT|ESOCKETTIMEDOUT|TIMEOUT|SANDBOX_TIMEOUT|OPERATION_TIMEOUT)$/i.test(code)
+    || /timed?\s*out|ETIMEDOUT|sandbox_timeout|deadline/i.test(msg);
+  const failed = (value instanceof Error)
+    || (typeof value === 'string' && value.startsWith('ERROR:'))
+    || timedOut;
+  return { timedOut, failed };
+}
+
+function sha256HexLoop(bytes) {
+  const crypto = require('crypto');
+  const raw = bytes == null ? Buffer.alloc(0) : Buffer.from(bytes);
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Fail-closed mutating write + sandbox timeout using live #388 / 3H59 names
+ * from the adapter (not overlay aliases). Snapshot → execute → rollback on
+ * timeout/fail → skip if unchanged → sandboxTimeoutThenCleanup on abort.
+ */
+async function executeWith3h59Checkpoint({
+  adapter,
+  mapped,
+  execArgs,
+  runExecutor,
+  executors,
+}) {
+  const filePath = execArgs && (execArgs.path || execArgs.filename);
+  const hook = adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function'
+    ? adapter.checkpointHookBeforeMutatingTool({ tool: mapped, path: filePath, name: mapped })
+    : { hook: false };
+
+  const readBytes = async (p) => {
+    if (typeof executors.__rawRead === 'function') return executors.__rawRead(p);
+    if (typeof executors.readFile === 'function') return executors.readFile(p);
+    return null;
+  };
+  const writeBytes = async (p, bytes) => {
+    if (typeof executors.__rawWrite === 'function') return executors.__rawWrite(p, bytes);
+    if (typeof executors.writeFile === 'function') return executors.writeFile(p, bytes);
+    return null;
+  };
+
+  let beforeBytes = null;
+  let beforeHash = '';
+  if (hook && hook.hook === true && filePath) {
+    try {
+      beforeBytes = await readBytes(filePath);
+      if (beforeBytes != null && !Buffer.isBuffer(beforeBytes)) beforeBytes = Buffer.from(beforeBytes);
+      if (beforeBytes) beforeHash = sha256HexLoop(beforeBytes);
+    } catch (_) { beforeBytes = null; }
+  }
+
+  let result;
+  let thrown = null;
+  try {
+    result = await runExecutor();
+  } catch (err) {
+    thrown = err;
+    result = `ERROR: ${(err && err.message) || String(err)}`;
+  }
+
+  const flags = looksLikeTimedOutOrFailedWrite(thrown || result);
+  if (hook && hook.hook === true && filePath && adapter && typeof adapter.rollbackHookOnTimedOutWrite === 'function') {
+    const rb = adapter.rollbackHookOnTimedOutWrite({
+      timedOut: flags.timedOut || flags.failed,
+      path: filePath,
+      checkpointId: beforeHash || null,
+    });
+    if (rb && rb.rollback === true && beforeBytes) {
+      try { await writeBytes(filePath, beforeBytes); } catch (_) { /* restore best-effort */ }
+      const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
+      result = `ERROR: ${classified.message}`;
+    } else if (!flags.failed && adapter && typeof adapter.skipCheckpointIfUnchanged === 'function') {
+      try {
+        let afterBytes = await readBytes(filePath);
+        if (afterBytes != null && !Buffer.isBuffer(afterBytes)) afterBytes = Buffer.from(afterBytes);
+        const afterHash = afterBytes != null ? sha256HexLoop(afterBytes) : '';
+        adapter.skipCheckpointIfUnchanged({ beforeHash, afterHash });
+      } catch (_) { /* skip is advisory */ }
+    }
+  }
+
+  if (flags.timedOut || /sandbox_timeout|timed?\s*out/i.test(String(result))) {
+    const workdir = (executors && (executors.__sandboxWorkdir || executors.sandboxWorkdir))
+      || (execArgs && execArgs.workdir)
+      || (thrown && thrown.workdir)
+      || null;
+    const timeoutMs = Math.max(1, Number((execArgs && execArgs.timeoutMs) || (thrown && thrown.timeoutMs) || 8000));
+    if (adapter && typeof adapter.sandboxTimeoutThenCleanup === 'function') {
+      const decision = adapter.sandboxTimeoutThenCleanup({
+        elapsedMs: timeoutMs,
+        timeoutMs,
+        workdir,
+      });
+      if (decision && decision.cleanup === true) {
+        try {
+          const w61 = loadEngine3h61();
+          if (w61 && typeof w61.cleanupSandboxOnTimeoutClosed === 'function') {
+            w61.cleanupSandboxOnTimeoutClosed({
+              elapsedMs: timeoutMs,
+              timeoutMs,
+              workdir,
+            });
+          }
+        } catch (_) { /* apply best-effort */ }
+      }
+    }
+    if (adapter && typeof adapter.sandboxReapOrphanWorkdirs === 'function') {
+      const listed = Array.isArray(executors && executors.__sandboxDirs)
+        ? executors.__sandboxDirs
+        : (workdir ? [{ path: workdir, orphan: true, mtimeMs: Date.now() }] : []);
+      if (listed.length) adapter.sandboxReapOrphanWorkdirs(listed, { now: Date.now() });
+    }
+  }
+
+  if (thrown && thrown.stopLoop) throw thrown;
+  return result;
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 const MAX_CONSECUTIVE_REPAIR_FAILS = 3;
 
@@ -894,38 +1017,13 @@ async function runAgentLoop({
             return undefined;
           };
           try {
-            const w61 = loadEngine3h61();
-            if (w61 && typeof w61.guardMutatingWriteClosed === 'function') {
-              const guarded = await w61.guardMutatingWriteClosed({
-                tool: mapped,
-                path: execArgs && (execArgs.path || execArgs.filename),
-                name: mapped,
-                execute: runExecutor,
-                readBytes: async (p) => {
-                  if (typeof executors.__rawRead === 'function') return executors.__rawRead(p);
-                  if (typeof executors.readFile === 'function') return executors.readFile(p);
-                  return null;
-                },
-                writeBytes: async (p, bytes) => {
-                  if (typeof executors.__rawWrite === 'function') return executors.__rawWrite(p, bytes);
-                  if (typeof executors.writeFile === 'function') return executors.writeFile(p, bytes);
-                  if (typeof executors.write_file === 'function') {
-                    return executors.write_file({
-                      path: p,
-                      content: Buffer.from(bytes).toString('utf8'),
-                    }, { signal });
-                  }
-                  return null;
-                },
-              });
-              result = guarded.result;
-              if (guarded.rolledBack) {
-                const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
-                result = `ERROR: ${classified.message}`;
-              }
-            } else {
-              result = await runExecutor();
-            }
+            result = await executeWith3h59Checkpoint({
+              adapter: loadEngineAdapter(),
+              mapped,
+              execArgs,
+              runExecutor,
+              executors,
+            });
           } catch (err) {
             if (err && err.stopLoop) {
               const classified = err.classified || classifyLoopError({ code: err.code || 'tool_retry_exhausted', err });

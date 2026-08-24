@@ -7681,4 +7681,25 @@ function bindOptionalEngineWaves(target) {
   return target;
 }
 
-module.exports = bindOptionalEngineWaves(module.exports);
+/** Live #388 / 3H59 helpers the loop and generate path import by name. */
+function bindLive388CheckpointSandboxSse(target) {
+  let w = null;
+  try { w = require('./engine-3h59'); } catch (_) { return target; }
+  if (!w) return target;
+  const names = [
+    'checkpointHookBeforeMutatingTool',
+    'rollbackHookOnTimedOutWrite',
+    'skipCheckpointIfUnchanged',
+    'sandboxTimeoutThenCleanup',
+    'sandboxReapOrphanWorkdirs',
+    'sseResumeDropsPriorListeners',
+    'sseCancelClearsHeartbeat',
+    'sseResumeRejectsSeqPastHead',
+  ];
+  for (const name of names) {
+    if (typeof w[name] === 'function') target[name] = w[name];
+  }
+  return target;
+}
+
+module.exports = bindLive388CheckpointSandboxSse(bindOptionalEngineWaves(module.exports));

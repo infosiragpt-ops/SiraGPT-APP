@@ -16,12 +16,12 @@ Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Ca
 | Compactación fiel | resumen de turnos drop + last user + pins | **medido (unit)** + wiring loop si `messages.length > 24` | 0 pérdida del último user; resumen ≤ 720 chars | `3H60-D-001` |
 | Relevance prune | Jaccard vs query; keepLast=4 | **medido (unit)** | prune solo overlap < 0.12 | `3H60-D-001` |
 | Memory recovery (pgvector pins) | facts `pin`/`score≥0.85` restaurados | **medido (unit)** — no hit live pgvector | 100 % pins recuperados post-compact | `3H60-D-001`; live: `retrieve_memory` + compact |
-| Checkpoints + rollback real | snapshot bytes + restore on timeout/fail | **fail-closed** — `guardMutatingWriteClosed` en `loop.js` + `write_file`/`str_replace` | rollback restaura bytes previos | `3H61-B-001` / `3H61-L-001` |
+| Checkpoints + rollback real | snapshot bytes + restore on timeout/fail | **fail-closed** — `checkpointHookBeforeMutatingTool` + `rollbackHookOnTimedOutWrite` + `skipCheckpointIfUnchanged` via adapter in `loop.js` | rollback restaura bytes previos | `3H61-B-001` / `3H61-L-001` / hot-path source |
 | Edit exact-diff + RAW + syntax revert | ---/+++ required; hash post-write; skip if unchanged | **medido (unit)** + skip-unchanged wired | 0 write inválido persistido; 0 ckpt no-op | `3H60-E-001` + `3H61-C-001` |
-| Sandbox stdout/stderr + timeout + cleanup | cap 64 KiB; cleanup + reap huérfanos `sira-sbx-*` | **fail-closed** — timeout llama `sandboxTimeoutThenCleanup` y borra workdir seguro | 0 workdir huérfano post-timeout | `3H61-E-001` / `3H61-N-001` |
+| Sandbox stdout/stderr + timeout + cleanup | cap 64 KiB; cleanup + reap huérfanos `sira-sbx-*` | **fail-closed** — `loop.js` llama `sandboxTimeoutThenCleanup` + `sandboxReapOrphanWorkdirs` en timeout/abort; `local-sandbox` apply | 0 workdir huérfano post-timeout | `3H61-E-001` / `3H61-N-001` / `3H61-R-001` |
 | SSE heartbeat | comment `: heartbeat` **sin** bump de seq | **medido (unit)** + wired `sse-writer.comment` | 0 seq increment en heartbeat | `3H60-G-001` |
-| SSE reconnect resume | replay events; reject last > head | **fail-closed** — `applySseResumeGuardsClosed` resetea cursor past-head | 0 re-exec; 0 replay desde seq inválido | `3H61-I-001` / `3H61-J-001` |
-| SSE cancel AbortController | abort + drop buffer + clear heartbeat | **fail-closed** — generate `stopGenerateSseHeartbeat` + writer done/close | 0 timers/listeners post-cancel | `3H61-J-001` + 3H59 L |
+| SSE reconnect resume | replay events; reject last > head | **fail-closed** — `ai.js` / `sse-writer` llaman `sseResumeDropsPriorListeners` + `sseResumeRejectsSeqPastHead` | 0 re-exec; 0 replay desde seq inválido | `3H61-I-001` / `3H61-P-001` |
+| SSE cancel AbortController | abort + drop buffer + clear heartbeat | **fail-closed** — generate `sseCancelClearsHeartbeat` + writer done/close | 0 timers/listeners post-cancel | `3H61-J-001` + 3H59 L |
 | Cola por sesión + orden estricto | single-writer; gap detect | **medido (unit)** + wired queue.js | 1 writer; wait en hueco | `3H60-H-001` |
 | Créditos exactos en cancel/error | settle usage real; never double-count | **fail-closed** — `settleCancelUsageClosed` en loop bail + generate finally | 0 cargo si 0 tokens; 0 double settle | `3H61-G-001` / `3H61-M-001` |
 | Errores clasificados ES | message ES; 0 stacks; 0 `sk-` | **fail-closed** — `classifyPublicLoopErrorClosed` en loop/onEvent | 0 stacks en payload público | `3H61-H-001` / `3H61-Q-001` |
@@ -41,7 +41,7 @@ Carga real (p50/p95 first-token / end-of-turn): aún **unmeasured en VPS**. Inst
 
 ## Lo que esta ola (3H61) mueve vs 3H60
 
-3H60 dejó helpers de checkpoint/sandbox/cancel/SSE/anti-loop **definidos** o llamados fail-open (el retorno se descartaba). 3H61 los **aplica**: rollback real si el write falla/timeout; cleanup+reap de workdirs `sira-sbx-*`; usage de cancel una sola vez; Last-Event-ID past-head resetea el replay; `cutSubtaskIfNoProgress` detiene el loop; errores públicos siempre ES.
+3H60 dejó helpers de checkpoint/sandbox/SSE **solo en `engine-3h59.js` HELPERS** (cero callsites en `loop.js` / generate, no reexportados por adapter). 3H61 los **exporta por adapter** y los **llama por nombre**: `checkpointHookBeforeMutatingTool` / `rollbackHookOnTimedOutWrite` / `skipCheckpointIfUnchanged` alrededor de writes; `sandboxTimeoutThenCleanup` + `sandboxReapOrphanWorkdirs` en timeout del loop; `sseResumeDropsPriorListeners` / `sseCancelClearsHeartbeat` / `sseResumeRejectsSeqPastHead` en `ai.js` + `sse-writer`. Sin nombres overlay nuevos para esos helpers.
 
 ## Queda para la siguiente ola
 

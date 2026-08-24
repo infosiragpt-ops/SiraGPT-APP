@@ -1770,6 +1770,15 @@ const streamControllers = new Map();
 
 function stopGenerateSseHeartbeat(handle) {
   try {
+    const { sseCancelClearsHeartbeat } = require('../services/agent-runner/engine-adapter');
+    if (typeof sseCancelClearsHeartbeat === 'function') {
+      sseCancelClearsHeartbeat({
+        cancelled: true,
+        heartbeatTimer: handle && typeof handle.stop === 'function' ? () => handle.stop() : handle,
+      });
+    }
+  } catch (_) { /* 3H59 adapter fail-open */ }
+  try {
     const w61 = require('../services/agent-runner/engine-3h61');
     if (typeof w61.applySseCancelHeartbeatClosed === 'function') {
       w61.applySseCancelHeartbeatClosed({
@@ -1830,6 +1839,22 @@ function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
 function inclusiveReplayStartFromRing(chunks, lastPosition) {
   const list = Array.isArray(chunks) ? chunks : [];
   const fallback = Math.min(Math.max(0, Number(lastPosition) || 0), list.length);
+  try {
+    const {
+      sseResumeDropsPriorListeners,
+      sseResumeRejectsSeqPastHead,
+    } = require('../services/agent-runner/engine-adapter');
+    if (typeof sseResumeDropsPriorListeners === 'function') {
+      sseResumeDropsPriorListeners({ listeners: [], resume: true });
+    }
+    if (typeof sseResumeRejectsSeqPastHead === 'function') {
+      const ahead = sseResumeRejectsSeqPastHead({
+        lastEventId: lastPosition,
+        headSeq: list.length,
+      });
+      if (ahead && ahead.reset) return 0;
+    }
+  } catch (_) { /* 3H59 adapter fail-open */ }
   try {
     const w61 = require('../services/agent-runner/engine-3h61');
     if (typeof w61.applySseResumeGuardsClosed === 'function') {
