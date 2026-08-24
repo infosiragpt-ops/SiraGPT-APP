@@ -833,11 +833,18 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   display: flex;
   justify-content: flex-end;
   width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .msg--user .msg-user-stack {
-  align-self: flex-end;
+  /* Full row width so bubble max-width % has a real containing block.
+     Do not shrink-wrap this stack — that collapsed "hola" to 1ch. */
+  align-self: stretch;
+  box-sizing: border-box;
   display: flex;
+  width: 100%;
+  min-width: 0;
   flex-direction: column;
   align-items: flex-end;
   gap: 0.5rem;
@@ -976,32 +983,30 @@ details[open] > summary .think-chevron,
 }
 
 .chat-user-bubble {
-  /* Inline-block + inline text: "hola" stays one pill. A block <p>
-     inside max-content still shrinks to 1ch (letter stack). */
-  display: inline-block !important;
+  /* Hug "hola" horizontally. Never width:auto/min-content + break-all:
+     that resolves min-content to 1ch and stacks h/o/l/a. */
+  display: block;
   box-sizing: border-box;
-  width: auto !important;
-  max-width: min(70%, 32rem) !important;
-  flex: 0 0 auto !important;
-  min-width: unset !important;
-  overflow-wrap: break-word !important;
-  word-break: normal !important;
-  white-space: pre-wrap;
+  width: max-content;
+  min-width: 44px;
+  max-width: min(80%, 720px);
+  flex: 0 0 auto;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  overflow-wrap: break-word;
+  word-break: normal;
   hyphens: none;
-  vertical-align: top;
 }
 
 .chat-user-bubble-inner {
+  display: block;
+  margin: 0;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
   white-space: pre-wrap;
-  overflow-wrap: break-word;
   word-break: normal;
-}
-
-.chat-user-bubble .sgpt-message-collapsible,
-.chat-user-bubble .sgpt-message-collapsible > .relative,
-.chat-user-bubble .prose,
-.chat-user-bubble p {
-  display: contents;
+  overflow-wrap: break-word;
+  line-height: 1.45;
 }
 
 .chat-assistant-message {
@@ -3133,7 +3138,7 @@ details[open] > summary .think-chevron,
   }
 
   .chat-user-bubble {
-    max-width: min(88%, 32rem);
+    max-width: 88%;
   }
 
   /*
