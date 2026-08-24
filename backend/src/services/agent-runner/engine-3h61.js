@@ -57,8 +57,13 @@ function sha256Hex(bytes) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
+function looksLikeLogicalToolReject(value) {
+  const msg = String((value && value.message) || value || '');
+  return /old_str occurs more than once|old_str not found|old_str must not be empty/i.test(msg);
+}
+
 function looksLikeTimedOutWrite(value) {
-  if (value == null) return false;
+  if (value == null || looksLikeLogicalToolReject(value)) return false;
   const code = String((value && value.code) || '');
   if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|TIMEOUT|SANDBOX_TIMEOUT|OPERATION_TIMEOUT)$/i.test(code)) {
     return true;
@@ -131,11 +136,11 @@ async function guardMutatingWriteClosed({
   try {
     result = await execute();
     timedOut = looksLikeTimedOutWrite(result);
-    failed = looksLikeFailedWrite(result);
+    failed = looksLikeFailedWrite(result) && !looksLikeLogicalToolReject(result);
   } catch (err) {
     thrown = err;
     timedOut = looksLikeTimedOutWrite(err);
-    failed = true;
+    failed = !looksLikeLogicalToolReject(err);
     result = `ERROR: ${(err && err.message) || String(err)}`;
   }
 
@@ -470,5 +475,6 @@ module.exports = {
   enforceSubtaskProgressClosed,
   sliceVerificationTokenBudgetClosed,
   refuseOpenRouterInWave3h61,
+  looksLikeLogicalToolReject,
   waveSnapshot,
 };

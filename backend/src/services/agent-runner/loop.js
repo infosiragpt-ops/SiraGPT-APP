@@ -39,8 +39,11 @@ function loadEngine3h61() {
 
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
+  const msg = String((value && value.message) || value || '');
+  if (/old_str occurs more than once|old_str not found|old_str must not be empty/i.test(msg)) {
+    return { timedOut: false, failed: false };
+  }
   const code = String((value && value.code) || '');
-  const msg = String((value && value.message) || value);
   const timedOut = /^(ETIMEDOUT|ESOCKETTIMEDOUT|TIMEOUT|SANDBOX_TIMEOUT|OPERATION_TIMEOUT)$/i.test(code)
     || /timed?\s*out|ETIMEDOUT|sandbox_timeout|deadline/i.test(msg);
   const failed = (value instanceof Error)

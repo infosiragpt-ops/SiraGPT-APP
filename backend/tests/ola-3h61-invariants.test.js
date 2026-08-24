@@ -119,6 +119,8 @@ test('3H61-S-001 str_replace uniqueness/miss errors are not rewritten as rollbac
   });
   assert.equal(miss.rolledBack, false);
   assert.match(miss.result, /not found/);
+  assert.equal(w61.looksLikeTimedOutWrite('ERROR: old_str occurs more than once in a.txt'), false);
+  assert.equal(w61.looksLikeLogicalToolReject('ERROR: old_str not found in a.txt'), true);
 });
 
 test('3H61-D-001 read tools never take a write checkpoint', async () => {
