@@ -8351,17 +8351,17 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
 
   if (controller) {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
+    controller.abort();
+    streamControllers.delete(`${req.user.id}:${streamId}`);
     try {
       const adStop = require('../services/agent-runner/engine-adapter');
       if (typeof adStop.abortCascade === 'function') {
         adStop.abortCascade({
           userSignal: { aborted: true },
-          modelAbort: function () { try { controller.abort(); } catch (_) {} },
+          modelAbort: function () {},
         });
       }
     } catch (_) { /* 3H63 stop cascade fail-open */ }
-    controller.abort();
-    streamControllers.delete(`${req.user.id}:${streamId}`);
   }
 
   // A Cowork approval intentionally outlives the browser stream. Therefore an

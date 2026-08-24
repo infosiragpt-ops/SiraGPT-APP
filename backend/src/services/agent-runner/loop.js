@@ -1482,7 +1482,8 @@ async function runAgentLoop({
             }
           }
         }
-        if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function') {
+        if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function'
+          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
           const hit = adapter.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache });
           if (hit && hit.cacheHit) {
             result = hit.result;
@@ -1671,7 +1672,8 @@ async function runAgentLoop({
       bail(iteration);
       try {
         const adCache = loadEngineAdapter();
-        if (adCache && typeof adCache.cacheIdenticalToolCallSameTurn === 'function' && !cacheHit) {
+        if (adCache && typeof adCache.cacheIdenticalToolCallSameTurn === 'function' && !cacheHit
+          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
           adCache.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache, result });
         }
         if (adCache && typeof adCache.classifyToolFailure === 'function' && String(result).startsWith('ERROR:')) {
