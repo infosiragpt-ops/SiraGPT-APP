@@ -67,6 +67,8 @@ Step identity prefers `step_id`.
 ## UI wiring
 
 - `PensandoBars` — inline SVG, fill `#38BDF8`, reduced-motion static.
+- `ThinkingIndicator` — same three celeste bars on every in-progress
+  process (docs, auth, PPT, buttons). Never the red circular glyph.
 - `ThinkingStatusLoader` — in-progress always mounts `PensandoBars` +
   the kit Spanish label. Terminal states keep check / X.
 - `ClaudeThinkingTimeline` header and `kind` `loader|sunburst` → the

@@ -277,7 +277,8 @@ import {
 
 import { DiffView } from "./diff-view"
 
-import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { PensandoBars } from "@/components/pensando-bars"
 import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
@@ -5449,7 +5450,7 @@ function ChatBubble({
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
             {turn.streaming ? (
-              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+              <PensandoBars size={16} className="inline shrink-0" />
             ) : null}
           </span>
         ) : null}
