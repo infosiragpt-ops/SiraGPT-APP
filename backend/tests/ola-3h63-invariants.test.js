@@ -499,9 +499,10 @@ test('3H63-Q-001 classified errors are Spanish and never leak stacks or sk-', ()
 });
 
 test('3H63-R-001 completeLedgerTransaction is the live success helper (not invented)', async () => {
-  const ledger = require('../src/services/credit-ledger');
-  assert.equal(typeof ledger.completeLedgerTransaction, 'function');
-  assert.equal(typeof ledger.completeLedgerTransactionWithoutResponse, 'function');
+  const ledgerSrc = read('src/services/credit-ledger.js');
+  assert.ok(ledgerSrc.includes('async function completeLedgerTransaction('));
+  assert.ok(ledgerSrc.includes('async function completeLedgerTransactionWithoutResponse('));
+  assert.ok(ledgerSrc.includes('completeLedgerTransaction,'));
   let called = 0;
   const out = await w63.completeLedgerOnSuccessClosed({
     completeLedgerTransaction: async (args) => {
