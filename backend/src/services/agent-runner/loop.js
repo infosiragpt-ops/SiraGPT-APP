@@ -33,6 +33,138 @@ function loadEngineAdapter() {
   try { return require('./engine-adapter'); } catch (_) { return null; }
 }
 
+function loadEngine3h61() {
+  try { return require('./engine-3h61'); } catch (_) { return null; }
+}
+
+function looksLikeTimedOutOrFailedWrite(value) {
+  if (value == null) return { timedOut: false, failed: false };
+  const msg = String((value && value.message) || value || '');
+  if (/old_str occurs more than once|old_str not found|old_str must not be empty/i.test(msg)) {
+    return { timedOut: false, failed: false };
+  }
+  const code = String((value && value.code) || '');
+  const timedOut = /^(ETIMEDOUT|ESOCKETTIMEDOUT|TIMEOUT|SANDBOX_TIMEOUT|OPERATION_TIMEOUT)$/i.test(code)
+    || /timed?\s*out|ETIMEDOUT|sandbox_timeout|deadline/i.test(msg);
+  const failed = (value instanceof Error)
+    || (typeof value === 'string' && value.startsWith('ERROR:'))
+    || timedOut;
+  return { timedOut, failed };
+}
+
+function sha256HexLoop(bytes) {
+  const crypto = require('crypto');
+  const raw = bytes == null ? Buffer.alloc(0) : Buffer.from(bytes);
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Fail-closed mutating write + sandbox timeout using live #388 / 3H59 names
+ * from the adapter (not overlay aliases). Snapshot → execute → rollback on
+ * timeout/fail → skip if unchanged → sandboxTimeoutThenCleanup on abort.
+ */
+async function executeWith3h59Checkpoint({
+  adapter,
+  mapped,
+  execArgs,
+  runExecutor,
+  executors,
+}) {
+  const filePath = execArgs && (execArgs.path || execArgs.filename);
+  const hook = adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function'
+    ? adapter.checkpointHookBeforeMutatingTool({ tool: mapped, path: filePath, name: mapped })
+    : { hook: false };
+
+  const readBytes = async (p) => {
+    if (typeof executors.__rawRead === 'function') return executors.__rawRead(p);
+    if (typeof executors.readFile === 'function') return executors.readFile(p);
+    return null;
+  };
+  const writeBytes = async (p, bytes) => {
+    if (typeof executors.__rawWrite === 'function') return executors.__rawWrite(p, bytes);
+    if (typeof executors.writeFile === 'function') return executors.writeFile(p, bytes);
+    return null;
+  };
+
+  let beforeBytes = null;
+  let beforeHash = '';
+  if (hook && hook.hook === true && filePath) {
+    try {
+      beforeBytes = await readBytes(filePath);
+      if (beforeBytes != null && !Buffer.isBuffer(beforeBytes)) beforeBytes = Buffer.from(beforeBytes);
+      if (beforeBytes) beforeHash = sha256HexLoop(beforeBytes);
+    } catch (_) { beforeBytes = null; }
+  }
+
+  let result;
+  let thrown = null;
+  try {
+    result = await runExecutor();
+  } catch (err) {
+    thrown = err;
+    result = `ERROR: ${(err && err.message) || String(err)}`;
+  }
+
+  const flags = looksLikeTimedOutOrFailedWrite(thrown || result);
+  if (hook && hook.hook === true && filePath && adapter && typeof adapter.rollbackHookOnTimedOutWrite === 'function') {
+    const rb = adapter.rollbackHookOnTimedOutWrite({
+      timedOut: flags.timedOut,
+      path: filePath,
+      checkpointId: beforeHash || null,
+    });
+    if (rb && rb.rollback === true && beforeBytes) {
+      try { await writeBytes(filePath, beforeBytes); } catch (_) { /* restore best-effort */ }
+      if (flags.timedOut) {
+        const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
+        result = `ERROR: ${classified.message}`;
+      }
+    } else if (!flags.failed && adapter && typeof adapter.skipCheckpointIfUnchanged === 'function') {
+      try {
+        let afterBytes = await readBytes(filePath);
+        if (afterBytes != null && !Buffer.isBuffer(afterBytes)) afterBytes = Buffer.from(afterBytes);
+        const afterHash = afterBytes != null ? sha256HexLoop(afterBytes) : '';
+        adapter.skipCheckpointIfUnchanged({ beforeHash, afterHash });
+      } catch (_) { /* skip is advisory */ }
+    }
+  }
+
+  if (flags.timedOut || /sandbox_timeout|timed?\s*out/i.test(String(result))) {
+    const workdir = (executors && (executors.__sandboxWorkdir || executors.sandboxWorkdir))
+      || (execArgs && execArgs.workdir)
+      || (thrown && thrown.workdir)
+      || null;
+    const timeoutMs = Math.max(1, Number((execArgs && execArgs.timeoutMs) || (thrown && thrown.timeoutMs) || 8000));
+    if (adapter && typeof adapter.sandboxTimeoutThenCleanup === 'function') {
+      const decision = adapter.sandboxTimeoutThenCleanup({
+        elapsedMs: timeoutMs,
+        timeoutMs,
+        workdir,
+      });
+      if (decision && decision.cleanup === true) {
+        try {
+          const w61 = loadEngine3h61();
+          if (w61 && typeof w61.cleanupSandboxOnTimeoutClosed === 'function') {
+            w61.cleanupSandboxOnTimeoutClosed({
+              elapsedMs: timeoutMs,
+              timeoutMs,
+              workdir,
+            });
+          }
+        } catch (_) { /* apply best-effort */ }
+      }
+    }
+    if (adapter && typeof adapter.sandboxReapOrphanWorkdirs === 'function') {
+      const listed = Array.isArray(executors && executors.__sandboxDirs)
+        ? executors.__sandboxDirs
+        : (workdir ? [{ path: workdir, orphan: true, mtimeMs: Date.now() }] : []);
+      if (listed.length) adapter.sandboxReapOrphanWorkdirs(listed, { now: Date.now() });
+    }
+  }
+
+  if (thrown && thrown.stopLoop) throw thrown;
+  return result;
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 const MAX_CONSECUTIVE_REPAIR_FAILS = 3;
 
@@ -112,8 +244,15 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
   }
 }
 
-/** Classify a loop stop into a user-facing code + message. */
-function classifyLoopError({ code } = {}) {
+/** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
+function classifyLoopError({ code, err } = {}) {
+  try {
+    const w61 = loadEngine3h61();
+    if (w61 && typeof w61.classifyPublicLoopErrorClosed === 'function') {
+      const hit = w61.classifyPublicLoopErrorClosed({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H61 fail-open to local table */ }
   switch (code) {
     case 'loop_stall':
       return {
@@ -138,6 +277,18 @@ function classifyLoopError({ code } = {}) {
         code,
         retryable: false,
         message: 'No pude reparar los argumentos de la herramienta. Detuve el bucle.',
+      };
+    case 'ckpt_rollback_timeout':
+      return {
+        code,
+        retryable: true,
+        message: 'La escritura expiró. Revertí al checkpoint anterior.',
+      };
+    case 'subtask_no_progress':
+      return {
+        code,
+        retryable: false,
+        message: 'El sub-trabajo no avanzó. Lo detuve para no girar en vacío.',
       };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
@@ -345,17 +496,29 @@ async function runAgentLoop({
   const loopFingerprints = [];
   const bail = (iteration) => {
     if (!signal?.aborted) return;
+    let cancelUsage = null;
+    try {
+      const w61 = loadEngine3h61();
+      if (w61 && typeof w61.settleCancelUsageClosed === 'function') {
+        cancelUsage = w61.settleCancelUsageClosed({
+          cancelled: true,
+          streamedChars: String(finalText || '').length,
+          usage: null,
+          alreadyRecorded: cancelledEmitted,
+        });
+      }
+    } catch (_) { /* 3H61 fail-open to 3H59 */ }
     try {
       const w = loadEngine3h59();
-      if (w && typeof w.accountPartialTokensOnCancel === 'function') {
-        w.accountPartialTokensOnCancel({
+      if (!cancelUsage && w && typeof w.accountPartialTokensOnCancel === 'function') {
+        cancelUsage = w.accountPartialTokensOnCancel({
           cancelled: true,
           streamedChars: String(finalText || '').length,
           usage: null,
         });
       }
       if (w && typeof w.neverDoubleCountCancelUsage === 'function') {
-        w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted });
+        w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted, usage: cancelUsage });
       }
     } catch (_) { /* 3H59 fail-open */ }
     try {
@@ -377,9 +540,14 @@ async function runAgentLoop({
     } catch (_) { /* 3H60 fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
-      try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
     }
-    throwIfAborted(signal);
+    try {
+      throwIfAborted(signal);
+    } catch (err) {
+      if (err && cancelUsage) err.cancelUsage = cancelUsage;
+      throw err;
+    }
   };
 
   for (let iteration = 1; iteration <= cap; iteration += 1) {
@@ -471,7 +639,14 @@ async function runAgentLoop({
         ttftMs: modelTtfbMs,
       });
       if (signal?.aborted) bail(iteration);
-      onEvent({ type: 'error', message: err?.message || String(err) });
+      const classifiedErr = classifyLoopError({ code: err?.code, err });
+      onEvent({
+        type: 'error',
+        code: classifiedErr.code,
+        message: classifiedErr.message,
+        retryable: classifiedErr.retryable,
+        iteration,
+      });
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -678,6 +853,14 @@ async function runAgentLoop({
       const gate = needsVerification(steps);
       if (gate.needed && verificationAttempts < MAX_VERIFICATION_RETRIES) {
         verificationAttempts += 1;
+        try {
+          const w61 = loadEngine3h61();
+          if (w61 && typeof w61.sliceVerificationTokenBudgetClosed === 'function') {
+            w61.sliceVerificationTokenBudgetClosed({
+              parentRemaining: resolveAgentRunnerMaxTokens(),
+            });
+          }
+        } catch (_) { /* 3H61 fail-open */ }
         onEvent({
           type: 'retry',
           reason: gate.reason,
@@ -779,7 +962,7 @@ async function runAgentLoop({
           }
         }
         if (result === undefined) {
-          try {
+          const runExecutor = async () => {
             bail(iteration);
             // The per-call signal lets an in-flight execute_python/bash sandbox
             // command die WITH the Stop button, not just between tool calls.
@@ -798,58 +981,75 @@ async function runAgentLoop({
               );
               if (retried && retried.ok) {
                 consecutiveRepairFails = 0;
-                result = retried.value;
-              } else {
-                if (signal?.aborted) bail(iteration);
-                const err = (retried && retried.error) || new Error('tool_retry_exhausted');
-                const transient = typeof adapter.isRetryableToolFailure === 'function'
-                  && adapter.isRetryableToolFailure(err);
-                if (transient) {
-                  const classified = classifyLoopError({ code: 'tool_retry_exhausted' });
-                  onEvent({
-                    type: 'error',
-                    code: classified.code,
-                    message: classified.message,
-                    retryable: classified.retryable,
-                    iteration,
-                  });
-                  stoppedReason = 'tool_retry_exhausted';
-                  return {
-                    finalText: finalText || '',
-                    iterations: iteration,
-                    steps,
-                    stoppedReason,
-                    verificationAttempts,
-                    errorCode: 'tool_retry_exhausted',
-                    errorMessage: classified.message,
-                  };
-                }
-                result = `ERROR: ${err?.message || String(err)}`;
+                return retried.value;
               }
-            } else {
-              try {
-                result = await executor(execArgs, { signal });
-              } catch (execErr) {
-                if (signal?.aborted) bail(iteration);
-                let retried = false;
-                try {
-                  const w60 = loadEngine3h60();
-                  if (w60 && typeof w60.retryTransientToolError === 'function') {
-                    const retry = w60.retryTransientToolError({
-                      attempt: 0,
-                      status: execErr && (execErr.status || execErr.statusCode),
-                      code: execErr && execErr.code,
-                    });
-                    if (retry && retry.retry && typeof executor === 'function') {
-                      result = await executor(execArgs, { signal });
-                      retried = true;
-                    }
-                  }
-                } catch (_) { /* 3H60 fail-open */ }
-                if (!retried) result = `ERROR: ${execErr?.message || String(execErr)}`;
+              if (signal?.aborted) bail(iteration);
+              const err = (retried && retried.error) || new Error('tool_retry_exhausted');
+              const transient = typeof adapter.isRetryableToolFailure === 'function'
+                && adapter.isRetryableToolFailure(err);
+              if (transient) {
+                const classified = classifyLoopError({ code: 'tool_retry_exhausted', err });
+                const stopErr = new Error(classified.message);
+                stopErr.code = 'tool_retry_exhausted';
+                stopErr.stopLoop = true;
+                stopErr.classified = classified;
+                throw stopErr;
               }
+              return `ERROR: ${err?.message || String(err)}`;
             }
+            try {
+              return await executor(execArgs, { signal });
+            } catch (execErr) {
+              if (signal?.aborted) bail(iteration);
+              let retried = false;
+              try {
+                const w60 = loadEngine3h60();
+                if (w60 && typeof w60.retryTransientToolError === 'function') {
+                  const retry = w60.retryTransientToolError({
+                    attempt: 0,
+                    status: execErr && (execErr.status || execErr.statusCode),
+                    code: execErr && execErr.code,
+                  });
+                  if (retry && retry.retry && typeof executor === 'function') {
+                    const again = await executor(execArgs, { signal });
+                    retried = true;
+                    return again;
+                  }
+                }
+              } catch (_) { /* 3H60 fail-open */ }
+              if (!retried) return `ERROR: ${execErr?.message || String(execErr)}`;
+            }
+            return undefined;
+          };
+          try {
+            result = await executeWith3h59Checkpoint({
+              adapter: loadEngineAdapter(),
+              mapped,
+              execArgs,
+              runExecutor,
+              executors,
+            });
           } catch (err) {
+            if (err && err.stopLoop) {
+              const classified = err.classified || classifyLoopError({ code: err.code || 'tool_retry_exhausted', err });
+              onEvent({
+                type: 'error',
+                code: classified.code,
+                message: classified.message,
+                retryable: classified.retryable,
+                iteration,
+              });
+              stoppedReason = err.code || 'tool_retry_exhausted';
+              return {
+                finalText: finalText || '',
+                iterations: iteration,
+                steps,
+                stoppedReason,
+                verificationAttempts,
+                errorCode: err.code || 'tool_retry_exhausted',
+                errorMessage: classified.message,
+              };
+            }
             if (signal?.aborted) bail(iteration);
             result = `ERROR: ${err?.message || String(err)}`;
           }
@@ -883,7 +1083,16 @@ async function runAgentLoop({
 
       bail(iteration);
       const ok = !String(result).startsWith('ERROR:');
-      steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
+      steps.push({
+        iteration,
+        tool: mapped,
+        args,
+        ok,
+        resultPreview: previewOf(result, 400),
+        viaReact,
+        tokensDelta: 0,
+        artifactsDelta: ok ? 1 : 0,
+      });
       onEvent({
         type: 'tool_result',
         iteration,
@@ -905,6 +1114,37 @@ async function runAgentLoop({
         } catch (_) { /* F7 module absent — the text result was delivered */ }
       }
     }
+
+    try {
+      const w61 = loadEngine3h61();
+      if (w61 && typeof w61.enforceSubtaskProgressClosed === 'function') {
+        const cut = w61.enforceSubtaskProgressClosed({
+          steps,
+          tokensDelta: 0,
+          artifactsDelta: 0,
+        });
+        if (cut && cut.cut) {
+          const classified = classifyLoopError({ code: cut.code || 'subtask_no_progress' });
+          onEvent({
+            type: 'error',
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+            iteration,
+          });
+          stoppedReason = cut.code || 'subtask_no_progress';
+          return {
+            finalText: finalText || '',
+            iterations: iteration,
+            steps,
+            stoppedReason,
+            verificationAttempts,
+            errorCode: cut.code || 'subtask_no_progress',
+            errorMessage: classified.message,
+          };
+        }
+      }
+    } catch (_) { /* 3H61 fail-open */ }
   }
 
   bail(cap);

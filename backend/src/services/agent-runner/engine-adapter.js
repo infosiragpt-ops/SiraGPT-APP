@@ -606,6 +606,13 @@ function classifyAdapterError(code) {
       if (extra && extra.code && extra.code === c) return extra;
     }
   } catch (_) { /* fail-open */ }
+  try {
+    const w61 = require('./engine-3h61');
+    if (w61 && typeof w61.classifyPublicLoopErrorClosed === 'function') {
+      const extra = w61.classifyPublicLoopErrorClosed({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
   return null;
 }
 
@@ -4829,12 +4836,18 @@ function adapterSnapshot() {
       snap = { ...snap, ...w60.waveSnapshot(), wave: w60.WAVE || '3H60' };
     }
   } catch (_) { /* fail-open: stay on 3H59 if 3H60 is absent */ }
+  try {
+    const w61 = require('./engine-3h61');
+    if (w61 && typeof w61.waveSnapshot === 'function') {
+      snap = { ...snap, ...w61.waveSnapshot(), wave: w61.WAVE || '3H61' };
+    }
+  } catch (_) { /* fail-open: stay on 3H60 if 3H61 is absent */ }
   return snap;
 }
 
 function loadOptionalEngineWave(name) {
   const file = String(name || '').trim();
-  if (!/^engine-3h(?:5[5-9]|60)$/.test(file)) return null;
+  if (!/^engine-3h(?:5[5-9]|6[01])$/.test(file)) return null;
   try {
     return require('./' + file);
   } catch (_) {
@@ -7657,7 +7670,7 @@ module.exports = {
 };
 
 function bindOptionalEngineWaves(target) {
-  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60']) {
+  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61']) {
     const mod = loadOptionalEngineWave(name);
     if (!mod || typeof mod !== 'object') continue;
     for (const [k, v] of Object.entries(mod)) {
@@ -7668,4 +7681,25 @@ function bindOptionalEngineWaves(target) {
   return target;
 }
 
-module.exports = bindOptionalEngineWaves(module.exports);
+/** Live #388 / 3H59 helpers the loop and generate path import by name. */
+function bindLive388CheckpointSandboxSse(target) {
+  let w = null;
+  try { w = require('./engine-3h59'); } catch (_) { return target; }
+  if (!w) return target;
+  const names = [
+    'checkpointHookBeforeMutatingTool',
+    'rollbackHookOnTimedOutWrite',
+    'skipCheckpointIfUnchanged',
+    'sandboxTimeoutThenCleanup',
+    'sandboxReapOrphanWorkdirs',
+    'sseResumeDropsPriorListeners',
+    'sseCancelClearsHeartbeat',
+    'sseResumeRejectsSeqPastHead',
+  ];
+  for (const name of names) {
+    if (typeof w[name] === 'function') target[name] = w[name];
+  }
+  return target;
+}
+
+module.exports = bindLive388CheckpointSandboxSse(bindOptionalEngineWaves(module.exports));

@@ -79,6 +79,7 @@ function createSSEWriter(res, options = {}) {
   } catch { /* ignore */ }
 
   let closed = false;
+  let resumeReset = false;
   const onClose = () => { closed = true; };
   if (typeof res.on === 'function') {
     res.on('close', onClose);
@@ -86,12 +87,31 @@ function createSSEWriter(res, options = {}) {
   }
 
   try {
+    const w61 = require('../services/agent-runner/engine-3h61');
+    if (typeof w61.applySseResumeGuardsClosed === 'function') {
+      const guards = w61.applySseResumeGuardsClosed({
+        listeners: options.priorListeners || [],
+        resume: options.resume === true,
+        lastEventId: options.lastEventId,
+        headSeq: options.headSeq,
+      });
+      if (guards && guards.reset) {
+        options.lastEventId = undefined;
+        resumeReset = true;
+      }
+    }
+  } catch (_) { /* 3H61 fail-open to 3H59 */ }
+  try {
     const w = require('../services/agent-runner/engine-3h59');
     if (options.resume && typeof w.sseResumeDropsPriorListeners === 'function') {
       w.sseResumeDropsPriorListeners({ listeners: options.priorListeners || [], resume: true });
     }
     if (options.lastEventId != null && typeof w.sseResumeRejectsSeqPastHead === 'function') {
-      w.sseResumeRejectsSeqPastHead({ lastEventId: options.lastEventId, headSeq: options.headSeq });
+      const ahead = w.sseResumeRejectsSeqPastHead({ lastEventId: options.lastEventId, headSeq: options.headSeq });
+      if (ahead && ahead.reset) {
+        options.lastEventId = undefined;
+        resumeReset = true;
+      }
     }
   } catch (_) { /* 3H59 fail-open */ }
   try {
@@ -187,7 +207,14 @@ function createSSEWriter(res, options = {}) {
       const safe = String(text == null ? '' : text).replace(/\r?\n/g, ' ');
       return writeWithBackpressure(`: ${safe}\n\n`);
     },
+    get resumeReset() { return resumeReset; },
     done() {
+      try {
+        const w61 = require('../services/agent-runner/engine-3h61');
+        if (typeof w61.applySseCancelHeartbeatClosed === 'function') {
+          w61.applySseCancelHeartbeatClosed({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H61 fail-open */ }
       try {
         const w = require('../services/agent-runner/engine-3h59');
         if (typeof w.sseCancelClearsHeartbeat === 'function') {
@@ -210,6 +237,12 @@ function createSSEWriter(res, options = {}) {
       });
     },
     close() {
+      try {
+        const w61 = require('../services/agent-runner/engine-3h61');
+        if (typeof w61.applySseCancelHeartbeatClosed === 'function') {
+          w61.applySseCancelHeartbeatClosed({ cancelled: true, heartbeatTimer: cancelHeartbeat });
+        }
+      } catch (_) { /* 3H61 fail-open */ }
       try {
         const w = require('../services/agent-runner/engine-3h59');
         if (typeof w.sseCancelClearsHeartbeat === 'function') {

@@ -68,10 +68,18 @@ test('hot-path source wires live #388 helper names (3H60 overlay may coexist)', 
   assert.match(loopSrc, /anchorCriticalFacts/);
   assert.match(loopSrc, /compactPreserveFactAnchors/);
   assert.match(loopSrc, /repairTruncatedJson/);
+  assert.match(loopSrc, /checkpointHookBeforeMutatingTool/);
+  assert.match(loopSrc, /rollbackHookOnTimedOutWrite/);
+  assert.match(loopSrc, /skipCheckpointIfUnchanged/);
+  assert.match(loopSrc, /sandboxTimeoutThenCleanup/);
+  assert.match(loopSrc, /sandboxReapOrphanWorkdirs/);
   assert.match(aiSrc, /startCommentHeartbeat/);
   assert.match(aiSrc, /honorLastEventId/);
   assert.match(aiSrc, /inclusiveReplayStartFromRing/);
   assert.match(aiSrc, /stopGenerateSseHeartbeat/);
+  assert.match(aiSrc, /sseCancelClearsHeartbeat/);
+  assert.match(aiSrc, /sseResumeDropsPriorListeners/);
+  assert.match(aiSrc, /sseResumeRejectsSeqPastHead/);
 });
 
 test('honorLastEventId default stays exclusive (3H32-S-002)', () => {
