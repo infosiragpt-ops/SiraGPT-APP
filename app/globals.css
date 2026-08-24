@@ -976,22 +976,32 @@ details[open] > summary .think-chevron,
 }
 
 .chat-user-bubble {
-  /* Hug short words ("hola"). Do not pair fit-content with wrap-anywhere
-     — that shrinks min-content to 1ch and stacks letters vertically. */
+  /* Inline-block + inline text: "hola" stays one pill. A block <p>
+     inside max-content still shrinks to 1ch (letter stack). */
+  display: inline-block !important;
   box-sizing: border-box;
-  width: max-content;
-  max-width: min(70%, 32rem);
-  overflow-wrap: break-word;
-  word-break: normal;
+  width: auto !important;
+  max-width: min(70%, 32rem) !important;
+  flex: 0 0 auto !important;
+  min-width: unset !important;
+  overflow-wrap: break-word !important;
+  word-break: normal !important;
   white-space: pre-wrap;
   hyphens: none;
+  vertical-align: top;
 }
 
-.chat-user-bubble,
-.chat-user-bubble .prose,
-.chat-user-bubble p {
+.chat-user-bubble-inner {
+  white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+.chat-user-bubble .sgpt-message-collapsible,
+.chat-user-bubble .sgpt-message-collapsible > .relative,
+.chat-user-bubble .prose,
+.chat-user-bubble p {
+  display: contents;
 }
 
 .chat-assistant-message {
