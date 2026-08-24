@@ -241,7 +241,7 @@ function cleanupSandboxOnTimeoutClosed({
     ? w59.sandboxTimeoutThenCleanup({ elapsedMs, timeoutMs, workdir })
     : { timeout: false, cleanup: false };
   let removed = false;
-  if (decision && decision.cleanup === true && workdir && typeof remove === 'function') {
+  if (decision && decision.cleanup === true && workdir && typeof remove === 'function' && isSafeSandboxWorkdir(workdir)) {
     try { removed = Boolean(remove(String(workdir))); } catch (_) { removed = false; }
   }
   return {

@@ -290,7 +290,7 @@ test('3H43-AD-001 close SSE then settle credits order', () => {
 
 test('3H43-AE-001 snapshot keeps 3H42 flags and wave 3H43 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.ensureUniqueToolCallIdsAcrossResume, true);
   assert.equal(s.enforceTotalTurnWall120s, true);
   assert.equal(s.capToolArgBytes32KiB, true);

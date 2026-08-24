@@ -266,7 +266,7 @@ test('3H40-W-001 first token watchdog 8000ms scripted no DeepSeek', () => {
 
 test('3H40-X-001 snapshot keeps 3H39 flags true and wave 3H40 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H40' || s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H40' || s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.joinParallelToolResultsStableOrder, true);
   assert.equal(s.cancelInflightToolsOnStop, true);
   assert.equal(s.jsonRepairTrailingComma, true);

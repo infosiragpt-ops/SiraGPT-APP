@@ -282,9 +282,9 @@ test('3H61-M-001 runAgentLoop cuts idle subtask and accounts cancel once', async
   const idle = runAgentLoop({
     client: scriptedClient([
       { toolCalls: [
-        { name: 'list_files', args: { path: '.' } },
-        { name: 'list_files', args: { path: '.' } },
-        { name: 'list_files', args: { path: '.' } },
+        { name: 'list_files', args: { path: 'a' } },
+        { name: 'glob', args: { pattern: '*.md' } },
+        { name: 'grep', args: { pattern: 'zzz' } },
       ] },
       { content: 'should-not-run' },
     ]),
@@ -293,6 +293,8 @@ test('3H61-M-001 runAgentLoop cuts idle subtask and accounts cancel once', async
     tools: [],
     executors: {
       async list_files() { return 'ERROR: empty'; },
+      async glob() { return 'ERROR: empty'; },
+      async grep() { return 'ERROR: empty'; },
     },
     maxIterations: 6,
     onEvent: (ev) => events.push(ev),

@@ -323,7 +323,7 @@ test('3H45-AC-001 observe-only no-charge', () => {
 
 test('3H45-AD-001 snapshot keeps 3H44 flags and wave 3H45 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.maxInflightToolsPerSession8, true);
   assert.equal(s.neverRetry413, true);
   assert.equal(s.screenshotOnlyNoCharge, true);

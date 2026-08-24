@@ -261,7 +261,7 @@ test('3H41-Z-001 enforce additionalProperties false on tool schemas', () => {
 
 test('3H41-AA-001 snapshot keeps 3H40 flags and wave 3H41 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H41' || s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.maxToolsPerTurnHardCap, true);
   assert.equal(s.firstTokenWatchdogMs, true);
   assert.equal(s.pruneCheckpointsKeepLastN, true);

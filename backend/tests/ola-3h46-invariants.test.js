@@ -298,7 +298,7 @@ test('3H46-AC-001 reject tool call if args is array', () => {
 
 test('3H46-AD-001 snapshot keeps 3H45 flags and wave 3H46 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.capToolResultJson128KiB, true);
   assert.equal(s.neverRetry451, true);
   assert.equal(s.observeOnlyNoCharge, true);

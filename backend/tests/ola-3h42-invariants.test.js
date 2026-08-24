@@ -284,7 +284,7 @@ test('3H42-AA-001 restore last SSE id on resume', () => {
 
 test('3H42-AB-001 snapshot keeps 3H41 flags and wave 3H42 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H42' || s.wave === '3H43' || s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.pruneCheckpointsKeepLastN, true);
   assert.equal(s.persistSseLastEventIdCursor, true);
   assert.equal(s.holdSettleNeverDoubleCharge, true);

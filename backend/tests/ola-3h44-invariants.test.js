@@ -320,7 +320,7 @@ test('3H44-AD-001 screenshot-only no-charge', () => {
 
 test('3H44-AE-001 snapshot keeps 3H43 flags and wave 3H44 DeepSeek lock', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60');
+  assert.ok(s.wave === '3H44' || s.wave === '3H45' || s.wave === '3H46' || s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.capToolArgBytes32KiB, true);
   assert.equal(s.neverRetry402, true);
   assert.equal(s.closeSseThenSettleCredits, true);

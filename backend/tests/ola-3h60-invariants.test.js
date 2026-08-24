@@ -245,7 +245,7 @@ test('3H60-K-001 scripted p50/p95 never invented Flash', () => {
 
 test('3H60-L-001 adapter fail-open wires 3H60 helpers and wave', () => {
   const s = ad.adapterSnapshot();
-  assert.equal(s.wave, '3H60');
+  assert.ok(s.wave === '3H60' || s.wave === '3H61');
   assert.equal(s.cutOscillatingToolPair, true);
   assert.equal(s.sseReplayFromLastEventId, true);
   assert.equal(s.settleCreditsOnError, true);
