@@ -46,6 +46,7 @@ import {
 
 import { registerAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { AgentCompanyPanel } from "./agent-company-panel"
+import { AgentComputerShell } from "./agent-computer-shell"
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { CodeHub } from "./code-hub"
 import { CompanyRoutinesPanel } from "./company-routines-panel"
@@ -597,7 +598,8 @@ export function CodeWorkspace() {
           // code-hub / tool / launcher overlays). The panel tabs live in the
           // global header, so the pane starts directly with the preview.
           const mainArea = (
-            <>
+            <AgentComputerShell>
+              <>
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">
                   <ResizablePanel defaultSize={terminalOpen ? 100 - TERMINAL_DEFAULT_SIZE : 100} minSize={30}>
@@ -658,6 +660,7 @@ export function CodeWorkspace() {
                 openToolIds={openToolIds}
               />
             </>
+            </AgentComputerShell>
           )
 
           const rightColumn = (

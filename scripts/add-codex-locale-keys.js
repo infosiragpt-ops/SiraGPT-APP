@@ -150,7 +150,36 @@ const ES = {
     "disabledTitle": "APPS aún no está activo",
     "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
     "forbiddenTitle": "Acceso restringido",
-    "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
+    "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist.",
+    "agentComputer": {
+      "title": "Computadora del agente",
+      "status": {
+        "live": "En vivo",
+        "starting": "Arrancando…",
+        "error": "Error",
+        "idle": "En espera"
+      },
+      "dock": {
+        "browser": "Navegador",
+        "files": "Archivos",
+        "terminal": "Terminal",
+        "desktop": "Escritorio",
+        "openLabel": "Abrir {app}",
+        "focusedBrowser": "Chrome enfocado en la computadora del agente",
+        "focusedOther": "{app} enfocado",
+        "unavailable": "La computadora del agente no está disponible aquí"
+      },
+      "routines": {
+        "toggle": "Rutinas",
+        "active": "activa",
+        "mejoraConstanteName": "Mejora constante chat y code",
+        "mejoraConstanteSchedule": "cada 3 h",
+        "mejoraConstanteNext": "en curso",
+        "avisarTiendasName": "Avisar tiendas iPhone/Android",
+        "avisarTiendasSchedule": "9:32 / 15:32 días laborables",
+        "avisarTiendasNext": "programada"
+      }
+    }
   }
 };
 
@@ -283,7 +312,36 @@ const EN = {
     "disabledTitle": "APPS is not active yet",
     "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
     "forbiddenTitle": "Restricted access",
-    "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+    "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+    "agentComputer": {
+      "title": "Agent computer",
+      "status": {
+        "live": "Live",
+        "starting": "Starting…",
+        "error": "Error",
+        "idle": "Waiting"
+      },
+      "dock": {
+        "browser": "Browser",
+        "files": "Files",
+        "terminal": "Terminal",
+        "desktop": "Desktop",
+        "openLabel": "Open {app}",
+        "focusedBrowser": "Chrome focused on the agent's computer",
+        "focusedOther": "{app} focused",
+        "unavailable": "The agent's computer is not available here"
+      },
+      "routines": {
+        "toggle": "Routines",
+        "active": "active",
+        "mejoraConstanteName": "Continuous chat and code improvement",
+        "mejoraConstanteSchedule": "every 3 h",
+        "mejoraConstanteNext": "in progress",
+        "avisarTiendasName": "Notify iPhone and Android stores",
+        "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+        "avisarTiendasNext": "scheduled"
+      }
+    }
   }
 };
 
