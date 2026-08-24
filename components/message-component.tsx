@@ -3171,28 +3171,28 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         />
 
                         {hasContent && (
-                            // User-message bubble — tight to content.
-                            //   `w-fit`            shrinks to the natural text width
-                            //   max-w[min(70%,…)]  caps at 70% of conv width / 32rem
-                            //   px-3 py-1.5        snug padding (12px / 6px)
-                            //   [&_p]:m-0          KILLS the `prose` <p> margins
-                            //                      that were ballooning the bubble
-                            //                      around short text like "hola".
-                            //   rounded-br-[6px]   subtle "tail" toward sender side
+                            // User-message bubble — ChatGPT-like hug.
+                            //   `w-max`            natural text width ("hola" stays
+                            //                      one line). Do NOT use w-fit with
+                            //                      overflow-wrap:anywhere — that
+                            //                      collapses min-content to 1ch.
+                            //   max-w via CSS      70% / 32rem (88% on mobile)
+                            //   wrap via CSS       overflow-wrap: break-word
+                            //   px-4 py-2.5        16×10 padding
+                            //   [&_p]:m-0          kills prose <p> margins that
+                            //                      ballooned short text like "hola"
+                            //   rounded-br-[8px]   subtle tail toward sender
                             <Card className={cn(
-                                "chat-user-bubble relative w-fit rounded-[18px] rounded-br-[8px]",
-                                "px-3.5 py-2",
+                                "chat-user-bubble relative w-max rounded-[18px] rounded-br-[8px]",
+                                "px-4 py-2.5",
                                 "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
-                                "text-[14.5px] leading-[1.55] tracking-[-0.005em]",
+                                "text-[15px] leading-[1.5] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",
-                                // Wrap long tokens (pasted URLs, code strings, or
-                                // long sentences in narrow split-view) instead of
-                                // pushing the bubble past the pane edge.
-                                "[overflow-wrap:anywhere] [word-break:break-word]",
-                                // Strip prose margins so the bubble hugs the
-                                // text on every line of content.
+                                // Strip prose margins and inherit the bubble type
+                                // so a one-word "hola" is not 16px inside 15px.
                                 "[&_.prose]:!m-0 [&_p]:!my-0 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
+                                "[&_p]:!text-[inherit] [&_p]:!leading-[inherit]",
                                 "[&_ul]:!my-1 [&_ol]:!my-1 [&_pre]:!my-1.5",
                             )}>
                                 {isEditing ? (
