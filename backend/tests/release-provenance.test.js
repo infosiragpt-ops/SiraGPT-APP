@@ -80,6 +80,16 @@ test('backend image receives immutable release provenance at build time', () => 
   assert.match(dockerfile, /ENV SIRAGPT_VERSION=\$\{SIRAGPT_VERSION\}/);
   assert.match(compose, /GIT_COMMIT:\s+\$\{GIT_COMMIT:-unknown\}/);
   assert.match(compose, /SIRAGPT_VERSION:\s+\$\{SIRAGPT_VERSION:-unknown\}/);
+  const gitCommitInterpolations = compose.match(/GIT_COMMIT:\s+"?\$\{GIT_COMMIT:-unknown\}"?/g) || [];
+  assert.equal(
+    gitCommitInterpolations.length,
+    1,
+    'only the backend build ARG may interpolate GIT_COMMIT; leftover .env must not override the image',
+  );
+  assert.doesNotMatch(
+    compose,
+    /PORT:\s+"5000"[\s\S]{0,400}GIT_COMMIT:\s+"\$\{GIT_COMMIT:-unknown\}"/,
+  );
 });
 
 test('backend Docker build context excludes local secrets and dependencies', () => {
