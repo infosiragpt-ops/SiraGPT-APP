@@ -391,5 +391,5 @@ test('3H40-AC-001 compose binds 3H40 tests and wave is 3H40', () => {
   assert.ok(String(__filename || '').includes('ola-3h40-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H40') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H40' || ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60');
+  assert.ok(ad.adapterSnapshot().wave === '3H40' || ad.adapterSnapshot().wave === '3H41' || ad.adapterSnapshot().wave === '3H42' || ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61');
 });

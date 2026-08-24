@@ -33,6 +33,10 @@ function loadEngineAdapter() {
   try { return require('./engine-adapter'); } catch (_) { return null; }
 }
 
+function loadEngine3h61() {
+  try { return require('./engine-3h61'); } catch (_) { return null; }
+}
+
 const MAX_ITERATIONS_DEFAULT = 25;
 const MAX_CONSECUTIVE_REPAIR_FAILS = 3;
 
@@ -112,8 +116,15 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
   }
 }
 
-/** Classify a loop stop into a user-facing code + message. */
-function classifyLoopError({ code } = {}) {
+/** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
+function classifyLoopError({ code, err } = {}) {
+  try {
+    const w61 = loadEngine3h61();
+    if (w61 && typeof w61.classifyPublicLoopErrorClosed === 'function') {
+      const hit = w61.classifyPublicLoopErrorClosed({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H61 fail-open to local table */ }
   switch (code) {
     case 'loop_stall':
       return {
@@ -138,6 +149,18 @@ function classifyLoopError({ code } = {}) {
         code,
         retryable: false,
         message: 'No pude reparar los argumentos de la herramienta. Detuve el bucle.',
+      };
+    case 'ckpt_rollback_timeout':
+      return {
+        code,
+        retryable: true,
+        message: 'La escritura expiró. Revertí al checkpoint anterior.',
+      };
+    case 'subtask_no_progress':
+      return {
+        code,
+        retryable: false,
+        message: 'El sub-trabajo no avanzó. Lo detuve para no girar en vacío.',
       };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
@@ -345,17 +368,29 @@ async function runAgentLoop({
   const loopFingerprints = [];
   const bail = (iteration) => {
     if (!signal?.aborted) return;
+    let cancelUsage = null;
+    try {
+      const w61 = loadEngine3h61();
+      if (w61 && typeof w61.settleCancelUsageClosed === 'function') {
+        cancelUsage = w61.settleCancelUsageClosed({
+          cancelled: true,
+          streamedChars: String(finalText || '').length,
+          usage: null,
+          alreadyRecorded: cancelledEmitted,
+        });
+      }
+    } catch (_) { /* 3H61 fail-open to 3H59 */ }
     try {
       const w = loadEngine3h59();
-      if (w && typeof w.accountPartialTokensOnCancel === 'function') {
-        w.accountPartialTokensOnCancel({
+      if (!cancelUsage && w && typeof w.accountPartialTokensOnCancel === 'function') {
+        cancelUsage = w.accountPartialTokensOnCancel({
           cancelled: true,
           streamedChars: String(finalText || '').length,
           usage: null,
         });
       }
       if (w && typeof w.neverDoubleCountCancelUsage === 'function') {
-        w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted });
+        w.neverDoubleCountCancelUsage({ alreadyRecorded: cancelledEmitted, usage: cancelUsage });
       }
     } catch (_) { /* 3H59 fail-open */ }
     try {
@@ -377,9 +412,14 @@ async function runAgentLoop({
     } catch (_) { /* 3H60 fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
-      try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado' }); } catch (_) { /* trace only */ }
+      try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
     }
-    throwIfAborted(signal);
+    try {
+      throwIfAborted(signal);
+    } catch (err) {
+      if (err && cancelUsage) err.cancelUsage = cancelUsage;
+      throw err;
+    }
   };
 
   for (let iteration = 1; iteration <= cap; iteration += 1) {
@@ -471,7 +511,14 @@ async function runAgentLoop({
         ttftMs: modelTtfbMs,
       });
       if (signal?.aborted) bail(iteration);
-      onEvent({ type: 'error', message: err?.message || String(err) });
+      const classifiedErr = classifyLoopError({ code: err?.code, err });
+      onEvent({
+        type: 'error',
+        code: classifiedErr.code,
+        message: classifiedErr.message,
+        retryable: classifiedErr.retryable,
+        iteration,
+      });
       if (isLlmCreditError(err)) {
         // Out of credits: no retry can succeed. Stop the loop NOW and hand
         // the reason to the caller so the user gets an honest message
@@ -678,6 +725,14 @@ async function runAgentLoop({
       const gate = needsVerification(steps);
       if (gate.needed && verificationAttempts < MAX_VERIFICATION_RETRIES) {
         verificationAttempts += 1;
+        try {
+          const w61 = loadEngine3h61();
+          if (w61 && typeof w61.sliceVerificationTokenBudgetClosed === 'function') {
+            w61.sliceVerificationTokenBudgetClosed({
+              parentRemaining: resolveAgentRunnerMaxTokens(),
+            });
+          }
+        } catch (_) { /* 3H61 fail-open */ }
         onEvent({
           type: 'retry',
           reason: gate.reason,
@@ -779,7 +834,7 @@ async function runAgentLoop({
           }
         }
         if (result === undefined) {
-          try {
+          const runExecutor = async () => {
             bail(iteration);
             // The per-call signal lets an in-flight execute_python/bash sandbox
             // command die WITH the Stop button, not just between tool calls.
@@ -798,58 +853,100 @@ async function runAgentLoop({
               );
               if (retried && retried.ok) {
                 consecutiveRepairFails = 0;
-                result = retried.value;
-              } else {
-                if (signal?.aborted) bail(iteration);
-                const err = (retried && retried.error) || new Error('tool_retry_exhausted');
-                const transient = typeof adapter.isRetryableToolFailure === 'function'
-                  && adapter.isRetryableToolFailure(err);
-                if (transient) {
-                  const classified = classifyLoopError({ code: 'tool_retry_exhausted' });
-                  onEvent({
-                    type: 'error',
-                    code: classified.code,
-                    message: classified.message,
-                    retryable: classified.retryable,
-                    iteration,
+                return retried.value;
+              }
+              if (signal?.aborted) bail(iteration);
+              const err = (retried && retried.error) || new Error('tool_retry_exhausted');
+              const transient = typeof adapter.isRetryableToolFailure === 'function'
+                && adapter.isRetryableToolFailure(err);
+              if (transient) {
+                const classified = classifyLoopError({ code: 'tool_retry_exhausted', err });
+                const stopErr = new Error(classified.message);
+                stopErr.code = 'tool_retry_exhausted';
+                stopErr.stopLoop = true;
+                stopErr.classified = classified;
+                throw stopErr;
+              }
+              return `ERROR: ${err?.message || String(err)}`;
+            }
+            try {
+              return await executor(execArgs, { signal });
+            } catch (execErr) {
+              if (signal?.aborted) bail(iteration);
+              let retried = false;
+              try {
+                const w60 = loadEngine3h60();
+                if (w60 && typeof w60.retryTransientToolError === 'function') {
+                  const retry = w60.retryTransientToolError({
+                    attempt: 0,
+                    status: execErr && (execErr.status || execErr.statusCode),
+                    code: execErr && execErr.code,
                   });
-                  stoppedReason = 'tool_retry_exhausted';
-                  return {
-                    finalText: finalText || '',
-                    iterations: iteration,
-                    steps,
-                    stoppedReason,
-                    verificationAttempts,
-                    errorCode: 'tool_retry_exhausted',
-                    errorMessage: classified.message,
-                  };
+                  if (retry && retry.retry && typeof executor === 'function') {
+                    const again = await executor(execArgs, { signal });
+                    retried = true;
+                    return again;
+                  }
                 }
-                result = `ERROR: ${err?.message || String(err)}`;
+              } catch (_) { /* 3H60 fail-open */ }
+              if (!retried) return `ERROR: ${execErr?.message || String(execErr)}`;
+            }
+            return undefined;
+          };
+          try {
+            const w61 = loadEngine3h61();
+            if (w61 && typeof w61.guardMutatingWriteClosed === 'function') {
+              const guarded = await w61.guardMutatingWriteClosed({
+                tool: mapped,
+                path: execArgs && (execArgs.path || execArgs.filename),
+                name: mapped,
+                execute: runExecutor,
+                readBytes: async (p) => {
+                  if (typeof executors.__rawRead === 'function') return executors.__rawRead(p);
+                  if (typeof executors.readFile === 'function') return executors.readFile(p);
+                  return null;
+                },
+                writeBytes: async (p, bytes) => {
+                  if (typeof executors.__rawWrite === 'function') return executors.__rawWrite(p, bytes);
+                  if (typeof executors.writeFile === 'function') return executors.writeFile(p, bytes);
+                  if (typeof executors.write_file === 'function') {
+                    return executors.write_file({
+                      path: p,
+                      content: Buffer.from(bytes).toString('utf8'),
+                    }, { signal });
+                  }
+                  return null;
+                },
+              });
+              result = guarded.result;
+              if (guarded.rolledBack) {
+                const classified = classifyLoopError({ code: 'ckpt_rollback_timeout' });
+                result = `ERROR: ${classified.message}`;
               }
             } else {
-              try {
-                result = await executor(execArgs, { signal });
-              } catch (execErr) {
-                if (signal?.aborted) bail(iteration);
-                let retried = false;
-                try {
-                  const w60 = loadEngine3h60();
-                  if (w60 && typeof w60.retryTransientToolError === 'function') {
-                    const retry = w60.retryTransientToolError({
-                      attempt: 0,
-                      status: execErr && (execErr.status || execErr.statusCode),
-                      code: execErr && execErr.code,
-                    });
-                    if (retry && retry.retry && typeof executor === 'function') {
-                      result = await executor(execArgs, { signal });
-                      retried = true;
-                    }
-                  }
-                } catch (_) { /* 3H60 fail-open */ }
-                if (!retried) result = `ERROR: ${execErr?.message || String(execErr)}`;
-              }
+              result = await runExecutor();
             }
           } catch (err) {
+            if (err && err.stopLoop) {
+              const classified = err.classified || classifyLoopError({ code: err.code || 'tool_retry_exhausted', err });
+              onEvent({
+                type: 'error',
+                code: classified.code,
+                message: classified.message,
+                retryable: classified.retryable,
+                iteration,
+              });
+              stoppedReason = err.code || 'tool_retry_exhausted';
+              return {
+                finalText: finalText || '',
+                iterations: iteration,
+                steps,
+                stoppedReason,
+                verificationAttempts,
+                errorCode: err.code || 'tool_retry_exhausted',
+                errorMessage: classified.message,
+              };
+            }
             if (signal?.aborted) bail(iteration);
             result = `ERROR: ${err?.message || String(err)}`;
           }
@@ -883,7 +980,16 @@ async function runAgentLoop({
 
       bail(iteration);
       const ok = !String(result).startsWith('ERROR:');
-      steps.push({ iteration, tool: mapped, args, ok, resultPreview: previewOf(result, 400), viaReact });
+      steps.push({
+        iteration,
+        tool: mapped,
+        args,
+        ok,
+        resultPreview: previewOf(result, 400),
+        viaReact,
+        tokensDelta: 0,
+        artifactsDelta: ok ? 1 : 0,
+      });
       onEvent({
         type: 'tool_result',
         iteration,
@@ -905,6 +1011,37 @@ async function runAgentLoop({
         } catch (_) { /* F7 module absent — the text result was delivered */ }
       }
     }
+
+    try {
+      const w61 = loadEngine3h61();
+      if (w61 && typeof w61.enforceSubtaskProgressClosed === 'function') {
+        const cut = w61.enforceSubtaskProgressClosed({
+          steps,
+          tokensDelta: 0,
+          artifactsDelta: 0,
+        });
+        if (cut && cut.cut) {
+          const classified = classifyLoopError({ code: cut.code || 'subtask_no_progress' });
+          onEvent({
+            type: 'error',
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+            iteration,
+          });
+          stoppedReason = cut.code || 'subtask_no_progress';
+          return {
+            finalText: finalText || '',
+            iterations: iteration,
+            steps,
+            stoppedReason,
+            verificationAttempts,
+            errorCode: cut.code || 'subtask_no_progress',
+            errorMessage: classified.message,
+          };
+        }
+      }
+    } catch (_) { /* 3H61 fail-open */ }
   }
 
   bail(cap);

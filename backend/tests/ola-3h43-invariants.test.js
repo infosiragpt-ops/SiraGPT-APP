@@ -351,7 +351,7 @@ test('3H43-AI-001 compose binds 3H43 tests and wave is 3H43', () => {
   assert.ok(String(__filename || '').includes('ola-3h43-invariants.test.js'));
   const src = read('src/services/agent-runner/engine-adapter.js');
   assert.ok(src.indexOf('3H43') >= 0);
-  assert.ok(ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60');
+  assert.ok(ad.adapterSnapshot().wave === '3H43' || ad.adapterSnapshot().wave === '3H44' || ad.adapterSnapshot().wave === '3H45' || ad.adapterSnapshot().wave === '3H46' || ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61');
   assert.equal(ad.refuseOpenRouterEnv({ SIRAGPT_USE_OPENROUTER: '1' }).ok, false);
   assert.equal(ad.allowDeepSeekGenerateModel('deepseek-v4-flash').ok, true);
 });

@@ -126,6 +126,29 @@ del _r
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024; // 1 MiB per stream
 const HARD_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
+// Session workdirs we are allowed to reap (sira-sbx-* under os.tmpdir()).
+const registeredSandboxWorkdirs = [];
+
+function registerLocalSandboxWorkdir(dir, opts) {
+  try {
+    const w61 = require('../agent-runner/engine-3h61');
+    if (typeof w61.registerSandboxWorkdirClosed === 'function') {
+      return w61.registerSandboxWorkdirClosed(registeredSandboxWorkdirs, dir, opts);
+    }
+  } catch (_) { /* 3H61 fail-open */ }
+  return { registered: false, path: dir == null ? '' : String(dir) };
+}
+
+function reapLocalSandboxOrphans(opts = {}) {
+  try {
+    const w61 = require('../agent-runner/engine-3h61');
+    if (typeof w61.reapOrphanSandboxDirsClosed === 'function') {
+      return w61.reapOrphanSandboxDirsClosed(registeredSandboxWorkdirs, opts);
+    }
+  } catch (_) { /* 3H61 fail-open */ }
+  return { reap: [], removed: [], count: 0, code: null };
+}
+
 const ALLOWED_LANGUAGES = Object.freeze(new Set(['python', 'node', 'bash']));
 
 // Language → { interpreter, code-flag }. We pass user code as a single
@@ -228,6 +251,9 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
 
   const startedAt = performance.now();
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt));
+  const sessionWorkdir = args.cwd || args.workdir || null;
+  if (sessionWorkdir) registerLocalSandboxWorkdir(sessionWorkdir);
+  try { reapLocalSandboxOrphans({ now: Date.now() }); } catch (_) { /* best-effort */ }
   let child;
   try {
     child = spawnImpl(bin, argv, {
@@ -348,6 +374,39 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);
+        let cleaned = null;
+        try {
+          const w61 = require('../agent-runner/engine-3h61');
+          if (typeof w61.cleanupSandboxOnTimeoutClosed === 'function') {
+            cleaned = w61.cleanupSandboxOnTimeoutClosed({
+              elapsedMs: durationMs,
+              timeoutMs,
+              workdir: sessionWorkdir,
+            });
+          } else {
+            const w59 = require('../agent-runner/engine-3h59');
+            if (typeof w59.sandboxTimeoutThenCleanup === 'function') {
+              cleaned = w59.sandboxTimeoutThenCleanup({
+                elapsedMs: durationMs,
+                timeoutMs,
+                workdir: sessionWorkdir,
+              });
+            }
+          }
+        } catch (_) { /* 3H61/3H59 fail-open */ }
+        if (sessionWorkdir) {
+          try {
+            const idx = registeredSandboxWorkdirs.findIndex((d) => {
+              const p = typeof d === 'string' ? d : d && d.path;
+              return p === sessionWorkdir;
+            });
+            if (idx !== -1) registeredSandboxWorkdirs[idx] = {
+              path: sessionWorkdir,
+              mtimeMs: Date.now(),
+              orphan: true,
+            };
+          } catch (_) { /* ignore */ }
+        }
         resolve({
           ok: false,
           code: 'sandbox_timeout',
@@ -355,6 +414,8 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
           stdout, stderr,
           stdoutTruncated, stderrTruncated,
           durationMs,
+          cleaned: Boolean(cleaned && cleaned.cleanup),
+          cleanupCode: cleaned && cleaned.code,
         });
         return;
       }
@@ -389,6 +450,8 @@ module.exports = {
   isLocalSandboxAvailable,
   resolveLocalConfig,
   buildChildEnv,
+  registerLocalSandboxWorkdir,
+  reapLocalSandboxOrphans,
   ALLOWED_LANGUAGES,
   DEFAULT_TIMEOUT_MS,
   HARD_MAX_TIMEOUT_MS,

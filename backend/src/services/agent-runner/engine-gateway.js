@@ -840,8 +840,20 @@ async function governThen(input, run) {
             usage: { promptTokens: input.promptTokens, completionTokens: input.completionTokens },
           });
         }
+        if (typeof ad.settleCancelUsageClosed === 'function' && input && input.cancelled) {
+          input.cancelUsage = ad.settleCancelUsageClosed({
+            cancelled: true,
+            streamedChars: input.streamedChars,
+            usage: { promptTokens: input.promptTokens, completionTokens: input.completionTokens },
+            alreadyRecorded: input.settled === true,
+          });
+        }
         if (typeof ad.classifyEngine3h59Error === 'function' && input && input.error) {
           ad.classifyEngine3h59Error(input.error);
+        }
+        if (typeof ad.classifyPublicLoopErrorClosed === 'function' && input && input.error) {
+          const classified = ad.classifyPublicLoopErrorClosed(input.error);
+          if (classified) input.publicError = classified;
         }
         if (typeof ad.refuseOpenRouterInWave3h59 === 'function' && input && input.env) {
           const or = ad.refuseOpenRouterInWave3h59(input.env);

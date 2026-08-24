@@ -77,6 +77,18 @@ const RULES = [
     message: 'Contabilicé tokens parciales del turno cancelado. No cobré de más.',
   },
   {
+    code: 'ckpt_rollback_timeout',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'ckpt_rollback_timeout',
+    message: 'La escritura expiró. Revertí al checkpoint anterior.',
+  },
+  {
+    code: 'ckpt_skip_unchanged',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'ckpt_skip_unchanged',
+    message: 'Salté el checkpoint: el archivo no cambió.',
+  },
+  {
     code: 'loop_oscillation_cut',
     retryable: false,
     matches: (error) => String(error?.code || '') === 'loop_oscillation_cut',

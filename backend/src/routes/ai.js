@@ -1769,12 +1769,42 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
 const streamControllers = new Map();
 
 function stopGenerateSseHeartbeat(handle) {
+  try {
+    const w61 = require('../services/agent-runner/engine-3h61');
+    if (typeof w61.applySseCancelHeartbeatClosed === 'function') {
+      w61.applySseCancelHeartbeatClosed({
+        cancelled: true,
+        heartbeatTimer: handle && typeof handle.stop === 'function' ? () => handle.stop() : handle,
+      });
+    }
+  } catch (_) { /* 3H61 fail-open */ }
   if (!handle) return null;
   if (typeof handle.stop === 'function') {
     try { handle.stop(); } catch (_) { /* already cleared */ }
     return null;
   }
   try { clearInterval(handle); } catch (_) { /* not a timer */ }
+  return null;
+}
+
+function settleGenerateCancelUsageOnce(state, payload) {
+  const bucket = state && typeof state === 'object' ? state : { recorded: false, last: null };
+  try {
+    const w61 = require('../services/agent-runner/engine-3h61');
+    if (typeof w61.settleCancelUsageClosed === 'function') {
+      const settled = w61.settleCancelUsageClosed({
+        cancelled: true,
+        streamedChars: payload && payload.streamedChars,
+        usage: payload && payload.usage,
+        alreadyRecorded: bucket.recorded === true,
+      });
+      if (settled && (settled.billed || settled.skipped)) {
+        bucket.recorded = true;
+        bucket.last = settled;
+      }
+      return settled;
+    }
+  } catch (_) { /* 3H61 fail-open */ }
   return null;
 }
 
@@ -1800,6 +1830,18 @@ function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
 function inclusiveReplayStartFromRing(chunks, lastPosition) {
   const list = Array.isArray(chunks) ? chunks : [];
   const fallback = Math.min(Math.max(0, Number(lastPosition) || 0), list.length);
+  try {
+    const w61 = require('../services/agent-runner/engine-3h61');
+    if (typeof w61.applySseResumeGuardsClosed === 'function') {
+      const guards = w61.applySseResumeGuardsClosed({
+        listeners: [],
+        resume: true,
+        lastEventId: lastPosition,
+        headSeq: list.length,
+      });
+      if (guards && guards.reset) return 0;
+    }
+  } catch (_) { /* 3H61 fail-open */ }
   try {
     const { honorLastEventId } = require('../services/agent-runner/engine-adapter');
     const ring = list.map((content, i) => ({ seq: i + 1, content }));
@@ -1851,6 +1893,7 @@ router.post(
     // model thinking) plus a silently-dropped client TCP connection
     // can't keep us streaming tokens to a dead socket.
     let keepAlive = null;
+    const cancelUsageState = { recorded: false, last: null };
     // Resume storage ownership must outlive the browser connection. This lease
     // heartbeat keeps a silent hours-long tool/thinking phase reconnectable
     // even after res.write starts failing because the tab detached.
@@ -7414,6 +7457,13 @@ router.post(
       if (streamResumeFollower) return;
 
       keepAlive = stopGenerateSseHeartbeat(keepAlive);
+      if (signal && signal.aborted) {
+        try {
+          settleGenerateCancelUsageOnce(cancelUsageState, {
+            streamedChars: String(fullResponseContent || '').length,
+          });
+        } catch (_) { /* cancel settle is best-effort */ }
+      }
       if (resumeLeaseHeartbeat) {
         clearInterval(resumeLeaseHeartbeat);
         resumeLeaseHeartbeat = null;

@@ -109,11 +109,36 @@ function cap(s) {
     : str;
 }
 
-/**
- * Bind executors to a sandbox session.
- * @param {import('./sandbox')} sandbox
- * @returns {Record<string, (args: any) => Promise<string>>}
- */
+function loadEngine3h61() {
+  try { return require('../agent-runner/engine-3h61'); } catch (_) { return null; }
+}
+
+async function runMutatingSandboxWrite(sandbox, { tool, path: filePath, execute }) {
+  const w61 = loadEngine3h61();
+  if (!w61 || typeof w61.guardMutatingWriteClosed !== 'function') {
+    return execute();
+  }
+  const guarded = await w61.guardMutatingWriteClosed({
+    tool,
+    path: filePath,
+    name: tool,
+    execute,
+    readBytes: async (p) => {
+      try { return await sandbox.readFile(String(p)); } catch (_) { return null; }
+    },
+    writeBytes: async (p, bytes) => {
+      await sandbox.writeFile(String(p), bytes);
+    },
+  });
+  if (guarded && guarded.rolledBack) {
+    const classified = typeof w61.classifyPublicLoopErrorClosed === 'function'
+      ? w61.classifyPublicLoopErrorClosed({ code: 'ckpt_rollback_timeout' })
+      : { message: 'La escritura expiró. Revertí al checkpoint anterior.' };
+    return `ERROR: ${classified.message}`;
+  }
+  return guarded.result;
+}
+
 function makeToolExecutors(sandbox) {
   return {
     async bash(args) {
@@ -151,39 +176,51 @@ function makeToolExecutors(sandbox) {
     },
 
     async write_file(args) {
-      try {
-        const p = String(args?.path || '');
-        const content = String(args?.content ?? '');
-        await sandbox.writeFile(p, content);
-        return `OK: wrote ${Buffer.byteLength(content, 'utf8')} bytes to ${p}`;
-      } catch (err) {
-        return `ERROR: ${err.message}`;
-      }
+      const p = String(args?.path || '');
+      const content = String(args?.content ?? '');
+      return runMutatingSandboxWrite(sandbox, {
+        tool: 'write_file',
+        path: p,
+        execute: async () => {
+          try {
+            await sandbox.writeFile(p, content);
+            return `OK: wrote ${Buffer.byteLength(content, 'utf8')} bytes to ${p}`;
+          } catch (err) {
+            return `ERROR: ${err.message}`;
+          }
+        },
+      });
     },
 
     async str_replace(args) {
-      try {
-        const p = String(args?.path || '');
-        const oldStr = String(args?.old_str ?? '');
-        const newStr = String(args?.new_str ?? '');
-        if (!oldStr) return 'ERROR: old_str must not be empty';
-        const buf = await sandbox.readFile(p);
-        const text = buf.toString('utf8');
-        if (text.includes('\u0000')) {
-          return `ERROR: ${p} is a BINARY file (a .docx/.xlsx/.pptx is a ZIP archive — you cannot text-edit it directly). ` +
-            `First unpack it (e.g. "mkdir -p /workspace/tmp/x && cd /workspace/tmp/x && unzip -o /workspace/uploads/${p.split('/').pop()}"), ` +
-            `then str_replace inside the extracted word/document.xml, then repack with "cd /workspace/tmp/x && zip -q -r /workspace/outputs/NAME.docx ." — or use python3 (python-docx).`;
-        }
-        const first = text.indexOf(oldStr);
-        if (first === -1) return `ERROR: old_str not found in ${p}. Read the file and copy the exact text (including whitespace).`;
-        const second = text.indexOf(oldStr, first + oldStr.length);
-        if (second !== -1) return `ERROR: old_str occurs more than once in ${p}. Add surrounding context to make it unique.`;
-        const updated = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
-        await sandbox.writeFile(p, updated);
-        return `OK: replaced 1 occurrence in ${p}`;
-      } catch (err) {
-        return `ERROR: ${err.message}`;
-      }
+      const p = String(args?.path || '');
+      const oldStr = String(args?.old_str ?? '');
+      const newStr = String(args?.new_str ?? '');
+      return runMutatingSandboxWrite(sandbox, {
+        tool: 'str_replace',
+        path: p,
+        execute: async () => {
+          try {
+            if (!oldStr) return 'ERROR: old_str must not be empty';
+            const buf = await sandbox.readFile(p);
+            const text = buf.toString('utf8');
+            if (text.includes('\u0000')) {
+              return `ERROR: ${p} is a BINARY file (a .docx/.xlsx/.pptx is a ZIP archive — you cannot text-edit it directly). ` +
+                `First unpack it (e.g. "mkdir -p /workspace/tmp/x && cd /workspace/tmp/x && unzip -o /workspace/uploads/${p.split('/').pop()}"), ` +
+                `then str_replace inside the extracted word/document.xml, then repack with "cd /workspace/tmp/x && zip -q -r /workspace/outputs/NAME.docx ." — or use python3 (python-docx).`;
+            }
+            const first = text.indexOf(oldStr);
+            if (first === -1) return `ERROR: old_str not found in ${p}. Read the file and copy the exact text (including whitespace).`;
+            const second = text.indexOf(oldStr, first + oldStr.length);
+            if (second !== -1) return `ERROR: old_str occurs more than once in ${p}. Add surrounding context to make it unique.`;
+            const updated = text.slice(0, first) + newStr + text.slice(first + oldStr.length);
+            await sandbox.writeFile(p, updated);
+            return `OK: replaced 1 occurrence in ${p}`;
+          } catch (err) {
+            return `ERROR: ${err.message}`;
+          }
+        },
+      });
     },
 
     async list_files(args) {
