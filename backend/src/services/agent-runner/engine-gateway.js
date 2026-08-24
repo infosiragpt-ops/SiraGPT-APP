@@ -870,6 +870,19 @@ async function governThen(input, run) {
             usage: { promptTokens: input.promptTokens, completionTokens: input.completionTokens, streamedChars: input.streamedChars },
           });
         }
+        if (typeof ad.settleLedgerOnErrorClosed === 'function' && input && (input.error || input.cancelled)) {
+          input.ledgerSettle = ad.settleLedgerOnErrorClosed({
+            errored: Boolean(input.error) && !input.cancelled,
+            cancelled: input.cancelled === true,
+            alreadySettled: input.settled === true,
+            firstToken: input.firstToken,
+            tokens: input.tokens,
+            usage: { promptTokens: input.promptTokens, completionTokens: input.completionTokens, streamedChars: input.streamedChars },
+            prisma: input.prisma,
+            transaction: input.transaction || input.chargedCredits,
+            failLedger: input.failLedger,
+          });
+        }
         if (typeof ad.neverChargeBeforeFirstToken === 'function' && input) {
           ad.neverChargeBeforeFirstToken({
             firstToken: input.firstToken,

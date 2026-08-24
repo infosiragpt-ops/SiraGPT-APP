@@ -113,6 +113,10 @@ function loadEngine3h61() {
   try { return require('../agent-runner/engine-3h61'); } catch (_) { return null; }
 }
 
+function loadEngine3h62() {
+  try { return require('../agent-runner/engine-3h62'); } catch (_) { return null; }
+}
+
 function loadEngineAdapter() {
   try { return require('../agent-runner/engine-adapter'); } catch (_) { return null; }
 }
@@ -122,6 +126,8 @@ async function runMutatingSandboxWrite(sandbox, { tool, path: filePath, execute 
   if (adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function') {
     adapter.checkpointHookBeforeMutatingTool({ tool, path: filePath, name: tool });
   }
+  let beforeBytes = null;
+  try { beforeBytes = await sandbox.readFile(String(filePath)); } catch (_) { beforeBytes = null; }
   const w61 = loadEngine3h61();
   if (!w61 || typeof w61.guardMutatingWriteClosed !== 'function') {
     return execute();
@@ -147,6 +153,29 @@ async function runMutatingSandboxWrite(sandbox, { tool, path: filePath, execute 
       ? w61.classifyPublicLoopErrorClosed({ code: 'ckpt_rollback_timeout' })
       : { message: 'La escritura expiró. Revertí al checkpoint anterior.' };
     return `ERROR: ${classified.message}`;
+  }
+  if (guarded && !guarded.rolledBack && !guarded.timedOut) {
+    try {
+      const w62 = loadEngine3h62();
+      if (w62 && typeof w62.validateWriteThenRevertClosed === 'function') {
+        let afterBytes = null;
+        try { afterBytes = await sandbox.readFile(String(filePath)); } catch (_) { afterBytes = null; }
+        const validated = await w62.validateWriteThenRevertClosed({
+          path: filePath,
+          beforeBytes,
+          afterBytes,
+          restore: async (p, bytes) => { await sandbox.writeFile(String(p), bytes); },
+          tool,
+          result: original,
+        });
+        if (validated && validated.reverted) {
+          const classified = typeof w62.classifyEngine3h62Error === 'function'
+            ? w62.classifyEngine3h62Error({ code: validated.code || 'write_syntax_revert' })
+            : { message: 'La escritura dejó sintaxis inválida. Restauré el original.' };
+          return `ERROR: ${classified.message}`;
+        }
+      }
+    } catch (_) { /* 3H62 fail-open: uniqueness/timeout messages stay distinct */ }
   }
   return original;
 }

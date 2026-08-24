@@ -87,6 +87,44 @@ function createSSEWriter(res, options = {}) {
   }
 
   try {
+    const w62 = require('../services/agent-runner/engine-3h62');
+    if (typeof w62.resumeGenerateFromPersistedIdClosed === 'function' && options.resume === true) {
+      const resumed = w62.resumeGenerateFromPersistedIdClosed({
+        headerLastEventId: options.lastEventId,
+        sessionKey: options.sessionKey,
+        ring: options.ring,
+        listeners: options.priorListeners || [],
+        store: options.cursorStore,
+        headSeq: options.headSeq,
+        resume: true,
+      });
+      if (resumed && resumed.reset) {
+        options.lastEventId = undefined;
+        resumeReset = true;
+      }
+      if (resumed && typeof w62.persistLastEventIdClosed === 'function' && options.sessionKey && Number.isFinite(Number(resumed.lastEventId))) {
+        let persistCursor;
+        try {
+          const ad = require('../services/agent-runner/engine-adapter');
+          persistCursor = ad.persistSseLastEventIdCursor;
+          if (typeof persistCursor === 'function' && options.cursorStore) {
+            persistCursor({
+              lastEventId: resumed.lastEventId,
+              seq: resumed.lastEventId,
+              store: options.cursorStore,
+            });
+          }
+        } catch (_) { persistCursor = undefined; }
+        w62.persistLastEventIdClosed({
+          sessionKey: options.sessionKey,
+          lastEventId: resumed.lastEventId,
+          store: options.cursorStore,
+          persistCursor,
+        });
+      }
+    }
+  } catch (_) { /* 3H62 fail-open to 3H61 */ }
+  try {
     const w61 = require('../services/agent-runner/engine-3h61');
     if (typeof w61.applySseResumeGuardsClosed === 'function') {
       const guards = w61.applySseResumeGuardsClosed({
@@ -175,6 +213,25 @@ function createSSEWriter(res, options = {}) {
       closed = true;
       return Promise.resolve(false);
     }
+    try {
+      if (options.sessionKey && typeof chunk === 'string' && chunk.startsWith('data:')) {
+        const ad = require('../services/agent-runner/engine-adapter');
+        const store = options.cursorStore || (options._cursorStore = {});
+        const next = (Number(store.cursor) || 0) + 1;
+        if (typeof ad.persistSseLastEventIdCursor === 'function') {
+          ad.persistSseLastEventIdCursor({ lastEventId: next, seq: next, store });
+        }
+        const w62 = require('../services/agent-runner/engine-3h62');
+        if (typeof w62.persistLastEventIdClosed === 'function') {
+          w62.persistLastEventIdClosed({
+            sessionKey: options.sessionKey,
+            lastEventId: next,
+            store,
+            persistCursor: ad.persistSseLastEventIdCursor,
+          });
+        }
+      }
+    } catch (_) { /* durable cursor is best-effort */ }
     if (ok) return Promise.resolve(true);
     // Backpressure: kernel buffer full. Wait for drain or close before
     // letting the caller queue more bytes. Returning the unresolved

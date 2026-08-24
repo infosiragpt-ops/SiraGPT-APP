@@ -241,7 +241,7 @@ test('3H59-O-001 classified errors never leak stacks or OpenRouter', () => {
 
 test('3H59-P-001 adapter fail-open wires 3H59 helpers and wave', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61');
+  assert.ok(s.wave === '3H59' || s.wave === '3H60' || s.wave === '3H61' || s.wave === '3H62');
   assert.equal(s.repairPartialToolCallSchema, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');
@@ -296,5 +296,5 @@ test('3H59-S-001 compose binds 3H59 tests and DeepSeek lock holds', () => {
   assert.ok(String(__filename || '').includes('ola-3h59-invariants.test.js'));
   assert.equal(w.WAVE, '3H59');
   assert.equal(w.HELPERS.length >= 15 && w.HELPERS.length <= 30, true);
-  assert.ok(ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61');
+  assert.ok(ad.adapterSnapshot().wave === '3H59' || ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61' || ad.adapterSnapshot().wave === '3H62');
 });

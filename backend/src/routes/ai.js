@@ -1336,6 +1336,7 @@ const activeGenerateTurns = new Map();
 // production JWT_SECRET is mandatory; when no signing secret is available we
 // disable resume rather than accepting a globally reusable cursor.
 const activeResumeStreams = new Map();
+const sseLastEventCursorBySession = new Map();
 
 function streamResumeSigningSecret() {
   return process.env.SIRAGPT_STREAM_RESUME_SECRET
@@ -1836,9 +1837,26 @@ function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
   }
 }
 
-function inclusiveReplayStartFromRing(chunks, lastPosition) {
+function inclusiveReplayStartFromRing(chunks, lastPosition, opts = {}) {
   const list = Array.isArray(chunks) ? chunks : [];
   const fallback = Math.min(Math.max(0, Number(lastPosition) || 0), list.length);
+  try {
+    const w62 = require('../services/agent-runner/engine-3h62');
+    if (typeof w62.resumeGenerateFromPersistedIdClosed === 'function') {
+      const ring = list.map((content, i) => ({ seq: i + 1, content }));
+      const resumed = w62.resumeGenerateFromPersistedIdClosed({
+        headerLastEventId: lastPosition,
+        sessionKey: opts.sessionKey,
+        ring,
+        listeners: opts.listeners || [],
+        store: opts.store,
+        headSeq: list.length,
+        resume: true,
+      });
+      if (resumed && resumed.reset) return 0;
+      if (resumed && Number.isFinite(resumed.start)) return resumed.start;
+    }
+  } catch (_) { /* 3H62 fail-open to 3H59 */ }
   try {
     const {
       sseResumeDropsPriorListeners,
@@ -1907,6 +1925,11 @@ router.post(
     const signal = controller.signal;
     const { streamId } = req.body;
     const __lastEventIdHeader = req.get && req.get('Last-Event-ID');
+    let __lastEventIdCookie = null;
+    try {
+      const rawCookies = req.headers.cookie ? cookie.parse(req.headers.cookie) : {};
+      __lastEventIdCookie = rawCookies.sira_last_event_id || null;
+    } catch (_) { __lastEventIdCookie = null; }
     const __hasResumeRequest = typeof __lastEventIdHeader === 'string' && __lastEventIdHeader.trim().length > 0;
     // Wall-clock anchor for the end-to-end streaming duration metric
     // (siragpt_ai_request_duration_seconds). Sampled at handler entry
@@ -2395,7 +2418,12 @@ router.post(
       try {
         const parsed = __hasResumeRequest
           ? streamResume.parseLastEventId(__lastEventIdHeader)
-          : null;
+          : (() => {
+            if (!__lastEventIdCookie || !req.body || !req.body.streamId) return null;
+            const fromCookie = streamResume.parseLastEventId(__lastEventIdCookie);
+            if (fromCookie && fromCookie.streamId === req.body.streamId) return fromCookie;
+            return null;
+          })();
         if (__hasResumeRequest && (!parsed || !parsed.streamId)) {
           return res.status(403).json({ error: 'stream_resume_forbidden' });
         }
@@ -2421,6 +2449,26 @@ router.post(
           // durable snapshot while an active owner's append is waiting on
           // Redis; activeResume.frames below fills that exact gap.
           resumeReplayPosition = parsed.position;
+          try {
+            const w62 = require('../services/agent-runner/engine-3h62');
+            const ad = require('../services/agent-runner/engine-adapter');
+            const sid = parsed.streamId;
+            if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
+            const cursorStore = sseLastEventCursorBySession.get(sid);
+            if (typeof ad.persistSseLastEventIdCursor === 'function' && Number.isFinite(parsed.position)) {
+              ad.persistSseLastEventIdCursor({ lastEventId: parsed.position, store: cursorStore });
+            }
+            if (typeof w62.readDurableLastEventIdClosed === 'function' && !(Number.isFinite(resumeReplayPosition) && resumeReplayPosition > 0)) {
+              const durable = w62.readDurableLastEventIdClosed({
+                cookieHeader: req.headers.cookie,
+                sessionKey: sid,
+                store: cursorStore,
+              });
+              if (durable && Number.isFinite(durable.lastEventId) && durable.lastEventId > 0) {
+                resumeReplayPosition = durable.lastEventId;
+              }
+            }
+          } catch (_) { /* 3H62 cursor hydrate is best-effort */ }
         } else {
           const rawStreamId = streamResume.generateStreamId();
           const ownedStreamId = encodeStreamResumeCursor(rawStreamId, userId, chatId);
@@ -2445,6 +2493,18 @@ router.post(
           try {
             res.setHeader('X-Stream-Id', resumeSession.streamId);
             res.setHeader('X-Stream-Cursor', `${resumeSession.streamId}:${resumeSession.record.chunks.length}`);
+            if (!res.headersSent) {
+              const w62 = require('../services/agent-runner/engine-3h62');
+              const baked = w62.cookieForLastEventId({
+                sessionKey: resumeSession.streamId,
+                lastEventId: resumeSession.record.chunks.length,
+              });
+              if (baked && baked.header) {
+                const prev = res.getHeader && res.getHeader('Set-Cookie');
+                const next = Array.isArray(prev) ? prev.concat(baked.header) : (prev ? [prev, baked.header] : baked.header);
+                res.setHeader('Set-Cookie', next);
+              }
+            }
           } catch { /* noop */ }
 
           const activeResume = activeResumeStreams.get(resumeSession.streamId);
@@ -3146,6 +3206,46 @@ router.post(
           }),
         ]);
         recalledMemoryFacts = Array.isArray(_memRecalled) ? _memRecalled : [];
+        try {
+          const w62 = require('../services/agent-runner/engine-3h62');
+          const ad = require('../services/agent-runner/engine-adapter');
+          const dur = require('../services/agent-runner/engine-durability');
+          const t0 = Date.now();
+          let pgHits = [];
+          if (typeof w62.retrieveMemoryBeforeGenerateClosed === 'function') {
+            const retrieved = await w62.retrieveMemoryBeforeGenerateClosed({
+              query: prompt,
+              userId,
+              chatId: canPersist ? chatId : null,
+              retrieve: dur && typeof dur.retrieveMemoryForLoop === 'function'
+                ? (args) => dur.retrieveMemoryForLoop(args)
+                : null,
+              timeoutMs: 2000,
+            });
+            pgHits = (retrieved && Array.isArray(retrieved.hits)) ? retrieved.hits : [];
+            if (typeof ad.pgvectorMemoryQueryTimeout === 'function') {
+              const to = ad.pgvectorMemoryQueryTimeout({
+                elapsedMs: (retrieved && retrieved.elapsedMs) || (Date.now() - t0),
+                timeoutMs: 2000,
+              });
+              if (to && to.timedOut) pgHits = [];
+            }
+          }
+          if (pgHits.length && typeof ad.skipMemoryIfScoreNaN === 'function') {
+            const nan = ad.skipMemoryIfScoreNaN(pgHits);
+            if (nan && Array.isArray(nan.facts)) pgHits = nan.facts;
+          }
+          if (pgHits.length && typeof ad.rejectNaNInfinityNumbers === 'function') {
+            pgHits = pgHits.filter((h) => ad.rejectNaNInfinityNumbers(h).ok !== false);
+          }
+          if (pgHits.length && typeof ad.minScoreMemoryRetrieve === 'function') {
+            const scored = ad.minScoreMemoryRetrieve(pgHits);
+            if (scored && Array.isArray(scored.facts)) pgHits = scored.facts;
+          }
+          if (pgHits.length) {
+            recalledMemoryFacts = recalledMemoryFacts.concat(pgHits);
+          }
+        } catch (_) { /* retrieve-before-generate fail-open */ }
         memoryBlock = longTermMemory.buildMemoryBlock(_memRecalled);
         // Always-on memory DOCUMENT block: surfaces manually-curated and
         // high-priority identity facts even when no semantic match fired.
@@ -5963,7 +6063,9 @@ router.post(
         };
         // Replay missing chunks
         try {
-          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition);
+          const replayStart = inclusiveReplayStartFromRing(resumeSession.record.chunks, resumeReplayPosition, {
+            sessionKey: sid,
+          });
           const missing = resumeSession.record.chunks.slice(replayStart);
           for (let i = 0; i < missing.length; i += 1) {
             const chunk = missing[i];
@@ -6006,6 +6108,53 @@ router.post(
                     // updated before the Redis write, so active reconnects see
                     // this high-water frame even while Redis is behind.
                     streamResume.append(sid, obj.content).catch(() => {});
+                    try {
+                      const w62 = require('../services/agent-runner/engine-3h62');
+                      const ad = require('../services/agent-runner/engine-adapter');
+                      if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
+                      const cursorStore = sseLastEventCursorBySession.get(sid);
+                      if (typeof ad.persistSseLastEventIdCursor === 'function') {
+                        ad.persistSseLastEventIdCursor({
+                          lastEventId: activeResume.nextPosition,
+                          seq: activeResume.nextPosition,
+                          store: cursorStore,
+                        });
+                      }
+                      if (typeof w62.persistLastEventIdClosed === 'function') {
+                        w62.persistLastEventIdClosed({
+                          sessionKey: sid,
+                          lastEventId: activeResume.nextPosition,
+                          store: cursorStore,
+                          persistCursor: ad.persistSseLastEventIdCursor,
+                        });
+                      }
+                      if (!res.headersSent && typeof w62.cookieForLastEventId === 'function') {
+                        const baked = w62.cookieForLastEventId({
+                          sessionKey: sid,
+                          lastEventId: activeResume.nextPosition,
+                        });
+                        if (baked && baked.header) res.setHeader('Set-Cookie', baked.header);
+                      }
+                      if (!activeResume._firstTokenAt && obj.content) {
+                        activeResume._firstTokenAt = Date.now();
+                        if (typeof w62.recordFirstTokenLatencySampleP95 === 'function') {
+                          w62.recordFirstTokenLatencySampleP95({
+                            startedAt: __generateStartedAt,
+                            now: activeResume._firstTokenAt,
+                          });
+                        }
+                        if (typeof ad.observeAdapterLatency === 'function') {
+                          ad.observeAdapterLatency('first_token', activeResume._firstTokenAt - __generateStartedAt);
+                        }
+                        if (typeof ad.firstTokenWatchdogMs === 'function') {
+                          ad.firstTokenWatchdogMs({
+                            firstTokenAt: activeResume._firstTokenAt,
+                            startedAt: __generateStartedAt,
+                            now: activeResume._firstTokenAt,
+                          });
+                        }
+                      }
+                    } catch (_) { /* 3H62 persist is best-effort */ }
                   } else if (!activeResume.resumeDegraded) {
                     // Do not emit an id beyond the durable chunk cap. The
                     // explicit frame tells clients that later tail content is
@@ -7489,6 +7638,54 @@ router.post(
           });
         } catch (_) { /* cancel settle is best-effort */ }
       }
+      try {
+        const w62 = require('../services/agent-runner/engine-3h62');
+        if (typeof w62.observeTurnLatencyClosed === 'function') {
+          w62.observeTurnLatencyClosed({
+            kind: 'turn_end',
+            startedAt: __generateStartedAt,
+            now: Date.now(),
+          });
+        }
+        const shouldSettle = Boolean(signal && signal.aborted) || Boolean(streamFailureMessage);
+        if (shouldSettle && typeof w62.settleLedgerOnErrorClosed === 'function') {
+          w62.settleLedgerOnErrorClosed({
+            cancelled: Boolean(signal && signal.aborted),
+            errored: Boolean(streamFailureMessage) && !(signal && signal.aborted),
+            usage: { streamedChars: String(fullResponseContent || '').length },
+            alreadySettled: cancelUsageState.recorded === true,
+            firstToken: Boolean(fullResponseContent),
+            prisma: req && req.prisma,
+            transaction: req && req._chargedCredits,
+          });
+        }
+        if (resumeSession && resumeSession.streamId && typeof w62.persistLastEventIdClosed === 'function') {
+          const sid = resumeSession.streamId;
+          if (!sseLastEventCursorBySession.has(sid)) sseLastEventCursorBySession.set(sid, {});
+          const cursorStore = sseLastEventCursorBySession.get(sid);
+          const last = resumeSession.record && Array.isArray(resumeSession.record.chunks)
+            ? resumeSession.record.chunks.length
+            : undefined;
+          try {
+            const ad = require('../services/agent-runner/engine-adapter');
+            if (typeof ad.persistSseLastEventIdCursor === 'function' && Number.isFinite(last)) {
+              ad.persistSseLastEventIdCursor({ lastEventId: last, seq: last, store: cursorStore });
+            }
+            w62.persistLastEventIdClosed({
+              sessionKey: sid,
+              lastEventId: last,
+              store: cursorStore,
+              persistCursor: ad.persistSseLastEventIdCursor,
+            });
+          } catch (_) {
+            w62.persistLastEventIdClosed({
+              sessionKey: sid,
+              lastEventId: last,
+              store: cursorStore,
+            });
+          }
+        }
+      } catch (_) { /* 3H62 generate finally is best-effort */ }
       if (resumeLeaseHeartbeat) {
         clearInterval(resumeLeaseHeartbeat);
         resumeLeaseHeartbeat = null;

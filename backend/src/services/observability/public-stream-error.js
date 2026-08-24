@@ -124,6 +124,30 @@ const RULES = [
     matches: (error) => String(error?.code || '') === 'credit_pre_token',
     message: 'No cobré: el stream se cortó antes del primer token.',
   },
+  {
+    code: 'write_syntax_revert',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'write_syntax_revert',
+    message: 'La escritura dejó sintaxis inválida. Restauré el original.',
+  },
+  {
+    code: 'write_hash_mismatch',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'write_hash_mismatch',
+    message: 'El hash posterior a la escritura no coincidió. No di el cambio por bueno.',
+  },
+  {
+    code: 'diff_markers',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'diff_markers',
+    message: 'El diff no trae marcadores ---/+++. No lo apliqué.',
+  },
+  {
+    code: 'credit_ledger_settle',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_ledger_settle',
+    message: 'Asenté el ledger de créditos del turno con error. No cobré de más.',
+  },
 ];
 
 function classifyPublicStreamError(error) {
