@@ -116,6 +116,31 @@ test('DocumentDeliveryPolicy answers attached-document conclusions in chat by de
   assert.equal(policy.thresholds.fileCount, 1);
 });
 
+test('DocumentDeliveryPolicy auto-generates Word when an attached file is summarized', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'dame un resumen',
+    displayGoal: 'dame un resumen',
+    files: ['uploaded-docx-id'],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+  assert.equal(policy.thresholds.fileCount, 1);
+  assert.match(policy.reason, /Word requerido|documental expl[ií]cito/i);
+});
+
+test('DocumentDeliveryPolicy auto-generates Word for executive analysis of an attached document', () => {
+  const policy = buildDocumentDeliveryPolicy({
+    goal: 'Resumen ejecutivo. Análisis del documento adjunto.',
+    files: [{ id: 'file-docx', name: 'tesis.docx' }],
+  });
+
+  assert.equal(policy.mode, 'doc_required');
+  assert.equal(policy.format, 'docx');
+  assert.equal(policy.autoGenerate, true);
+});
+
 test('DocumentDeliveryPolicy keeps cross-document analysis with PDF/DOCX references in chat', () => {
   const policy = buildDocumentDeliveryPolicy({
     goal: 'Usando todos los documentos adjuntos, calcula el total real, explica la contradiccion entre PDF y DOCX e indica que cifra final debe usarse.',
