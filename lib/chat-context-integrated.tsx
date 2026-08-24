@@ -670,6 +670,9 @@ interface AddMessageOptions {
   streamId?: string
   reusePending?: boolean
   requestEnvelope?: PendingAIRequestEnvelope
+  // Optimistic ASSISTANT row already painted by the composer before intent
+  // classification finished; adopted here instead of appending a duplicate.
+  adoptAssistantMessage?: { id: string }
 }
 interface ChatContextType {
   chats: Chat[]
@@ -1273,6 +1276,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // chats start in the same millisecond (e.g. a queue-drain burst), and the
       // reasoning/agent-trace SSE handlers patch by message id — a collision
       // rendered chat A's thinking trace + tool timeline inside chat B.
+      // Adoption: handleSend already inserted an optimistic empty assistant
+      // row (same idempotencyKey) so the thinking skeleton paints before
+      // classification/network round-trips. Adopt that row instead of
+      // appending a duplicate bubble.
       const existingTurn = options?.reusePending
         ? findPendingTurnMatch(activeChat.messages || [], {
             idempotencyKey: turnIdempotencyKey,
@@ -1281,6 +1288,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const existingPlaceholder = existingTurn.assistantIndex >= 0
         ? activeChat.messages?.[existingTurn.assistantIndex]
         : null;
+      const optimisticAssistant = (() => {
+        const adoptedId = options?.adoptAssistantMessage?.id;
+        if (!adoptedId || !activeChat.messages?.length) return null;
+        for (let i = activeChat.messages.length - 1; i >= 0; i -= 1) {
+          const candidate: any = activeChat.messages[i];
+          if (candidate?.id === adoptedId
+            && candidate?.role === 'ASSISTANT'
+            && !candidate?.content
+            && !candidate?.error) return candidate;
+        }
+        return null;
+      })();
       const aiMessagePlaceholder: Message = existingPlaceholder
         ? {
             ...existingPlaceholder,
@@ -1288,7 +1307,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             error: undefined,
             metadata: turnMetadata,
           }
-        : {
+        : optimisticAssistant
+          ? { ...optimisticAssistant, content: '', error: undefined, metadata: turnMetadata } as Message
+          : {
             id: `msg-ai-${activeChat.id}-${safeUUID()}`,
             chatId: activeChat.id,
             role: 'ASSISTANT',
@@ -1296,7 +1317,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             timestamp: new Date().toISOString(),
             metadata: turnMetadata,
           };
-      const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
+      const reuseAssistantPlaceholder = Boolean(existingPlaceholder || optimisticAssistant);
 
       // Add AI placeholder to chat
       setCurrentChat(prevChat => {

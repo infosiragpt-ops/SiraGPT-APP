@@ -9953,6 +9953,7 @@ REWRITTEN TEXT:`;
       role: 'ASSISTANT' as const,
       content: '',
       timestamp: new Date().toISOString(),
+      progressStage: 'Pensando…',
       metadata: JSON.stringify({ idempotencyKey }),
     };
 
@@ -9967,6 +9968,9 @@ REWRITTEN TEXT:`;
       setCurrentChat(tempChat as any);
       chatToUpdate = tempChat as any;
     } else {
+      // Perceived latency: existing chats previously appended only the user
+      // message, leaving a dead frame until classification + network returned.
+      // Paint the same thinking skeleton new chats get, immediately.
       setCurrentChat(prevChat => {
         if (!prevChat) return prevChat;
         const updatedMessages = [...(prevChat.messages || []), userMessage, assistantPlaceholder];
@@ -9975,30 +9979,55 @@ REWRITTEN TEXT:`;
     }
 
 
+    // Dedicated handlers below (search/image/video/connectors/webdev) insert
+    // and manage their own assistant bubbles, so drop our optimistic one to
+    // avoid a duplicate skeleton.
+    const removeOptimisticPlaceholder = () => {
+      setCurrentChat(prevChat => {
+        if (!prevChat) return prevChat;
+        if (!prevChat.messages?.some((m: any) => m.id === assistantPlaceholder.id)) return prevChat;
+        return { ...prevChat, messages: prevChat.messages.filter((m: any) => m.id !== assistantPlaceholder.id) };
+      });
+    };
+
     try {
       // After optimistic update, run the logic.
       // For existing chats, we pass `true` to `addMessage` to skip re-adding the user message.
       // For new chats, `createNewChat` will handle creating the chat, and the context will replace the temp chat.
 
       if (isWebSearchActive || shouldUseAcademicSearch) {
+        removeOptimisticPlaceholder();
         await handleWebSearch(msg);
         markQueuedSendSucceeded();
         return;
       }
       if (isGmailActive) {
+        removeOptimisticPlaceholder();
         await handleGmailCommand(msg);
         markQueuedSendSucceeded();
         return;
       }
       if (isGoogleCalendarActive || isGoogleDriveActive) {
+        removeOptimisticPlaceholder();
         await handleGoogleServicesCommand(msg);
         markQueuedSendSucceeded();
         return;
       }
       if (isSpotifyActive) {
+        removeOptimisticPlaceholder();
         await handleSpotifyCommand(msg);
         markQueuedSendSucceeded();
         return;
+      }
+      // Composer-mode generators paint their own bubbles, so drop our
+      // optimistic skeleton up front. Analysis prompts fall through to the
+      // vision chat path and keep it (it is adopted by the stream).
+      if (
+        (isImageGenerationActive || chatType === 'image'
+          || isVideoGenerationActive || chatType === 'video')
+        && !isImageAnalysisPrompt(msg)
+      ) {
+        removeOptimisticPlaceholder();
       }
       if (isImageGenerationActive || chatType === 'image') {
         // Even with the "Imágenes" composer mode on (it can be left sticky by
@@ -10006,6 +10035,7 @@ REWRITTEN TEXT:`;
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
         // path, not the generator — fall through to normal routing.
         if (!isImageAnalysisPrompt(msg)) {
+          removeOptimisticPlaceholder();
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend), imageModelForSendOverride);
           markQueuedSendSucceeded();
           return;
@@ -10031,6 +10061,7 @@ REWRITTEN TEXT:`;
         // New thesis chats are handled earlier in the function
         const topics = msg.split(',').map(t => t.trim()).filter(t => t.length > 0);
         if (topics.length >= 1) {
+          removeOptimisticPlaceholder();
           await addThesisMessage(topics);
           markQueuedSendSucceeded();
         } else {
@@ -10050,6 +10081,7 @@ REWRITTEN TEXT:`;
       }
       if (isComputerUseActive || chatType === 'computer-use') {
         // Handle Computer Use with the hook
+        removeOptimisticPlaceholder();
         let chatId = currentChat?.id;
 
         // If no current chat, create a new one first
@@ -10172,11 +10204,23 @@ REWRITTEN TEXT:`;
         }
       }
 
+      // Divergent flows (image/video/webdev generators) paint their own
+      // bubbles, so drop our optimistic skeleton up front. Text-family
+      // intents adopt it instead (see adoptAssistantMessage).
+      const intentAdoptsPlaceholder = intent === 'text' || intent === 'ppt' || intent === 'doc' || intent === 'figma'
+        || intent === 'chart' || intent === 'math' || intent === 'viz' || intent === 'web_search' || intent === 'agent_task';
+      if (!intentAdoptsPlaceholder && !isImageAnalysisPrompt(msg)) {
+        removeOptimisticPlaceholder();
+      }
+
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, { idempotencyKey });
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            idempotencyKey,
+            adoptAssistantMessage: { id: assistantPlaceholder.id },
+          });
         }
       };
 
@@ -10199,6 +10243,7 @@ REWRITTEN TEXT:`;
           }
           await handleImageGeneration(buildImageEditPrompt(msg), collectUploadFileIds(filesToSend));
           break;
+
         case 'video':
           isGeneratingVideoRef.current = true;
           isVideoGenerationActiveRef.current = true;
@@ -10272,6 +10317,7 @@ REWRITTEN TEXT:`;
 
       // If intent / send was aborted by user (via Stop), just exit silently.
       if (err?.name === 'AbortError') {
+        removeOptimisticPlaceholder();
         return;
       }
 
@@ -10326,6 +10372,8 @@ REWRITTEN TEXT:`;
 
       // For other errors, show generic error message
       toast.error(err?.message || 'An error occurred. Please try again.');
+
+      removeOptimisticPlaceholder();
 
       // Add error message to chat
       const errorMessage = {
