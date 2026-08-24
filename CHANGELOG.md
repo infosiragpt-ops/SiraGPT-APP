@@ -52,8 +52,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 ### Fixed
 
 - User chat bubbles no longer stack short words letter-by-letter (`h / o / l / a`).
-  The bubble is `inline-block` with inline text (no prose `<p>` shrink-to-1ch),
-  and one-letter-per-line payloads like `h\\no\\nl\\na` are joined on send.
+  The outgoing row is full width; the bubble is `width: max-content` with
+  `min-width: 44px`, `word-break: normal`, and `writing-mode: horizontal-tb`.
 
 ## [0.4.3 / backend 1.3.3] — Cycles 171-180 milestone — 2026-05-20
 

@@ -3159,7 +3159,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 </Avatar>
             )} */}
 
-            <div className={`group flex flex-col flex-1 ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
+            <div className={`group flex w-full min-w-0 flex-col ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
                     <div className="msg-user-stack">
                         {hasRenderableUserFiles && <FileDisplay />}
@@ -3172,17 +3172,17 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         />
 
                         {hasContent && (
-                            // User-message bubble — inline-block hug.
-                            // Block prose/`<p>` inside a max-content box still
-                            // shrinks to 1ch ("h / o / l / a"). Plain text is
-                            // an inline span; markdown keeps wrappers as
-                            // `display: contents` via CSS.
-                            <Card className={cn(
+                            // User bubble: max-content + min 44px. Never
+                            // w-min / width:auto / break-all — that stacks
+                            // "hola" as h/o/l/a. Long lines wrap at words.
+                            <Card
+                                data-testid="user-message"
+                                className={cn(
                                 "chat-user-bubble relative rounded-[18px] rounded-br-[8px]",
-                                "px-4 py-2.5",
+                                "px-[14px] py-2.5",
                                 "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
-                                "text-[15px] leading-[1.5] tracking-[-0.005em]",
+                                "text-[15px] leading-[1.45] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",
                             )}>
                                 {isEditing ? (
@@ -3205,7 +3205,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         </div>
                                     </div>
                                 ) : (
-                                    <span className="chat-user-bubble-inner">{formatAgentTaskUserContent(message.content)}</span>
+                                    <p className="chat-user-bubble-inner">{formatAgentTaskUserContent(message.content)}</p>
                                 )}
                             </Card>
                         )}
