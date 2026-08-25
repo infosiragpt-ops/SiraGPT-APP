@@ -883,6 +883,25 @@ async function governThen(input, run) {
             failLedger: input.failLedger,
           });
         }
+        if (typeof ad.refundPartialTokensOnCancel === 'function' && input && input.cancelled) {
+          ad.refundPartialTokensOnCancel({
+            requestId: input.requestId,
+            cancelled: true,
+            promptTokens: input.promptTokens,
+            completionTokens: input.completionTokens,
+            alreadyRefunded: input.settled === true,
+          });
+        }
+        if (typeof ad.completeLedgerOnSuccessClosed === 'function' && input && !input.error && input.transaction) {
+          input.ledgerComplete = ad.completeLedgerOnSuccessClosed({
+            completeLedgerTransaction: input.completeLedgerTransaction,
+            prisma: input.prisma,
+            transaction: input.transaction || input.chargedCredits,
+            cancelled: input.cancelled === true,
+            tokens: input.tokens,
+            streamedChars: input.streamedChars,
+          });
+        }
         if (typeof ad.neverChargeBeforeFirstToken === 'function' && input) {
           ad.neverChargeBeforeFirstToken({
             firstToken: input.firstToken,

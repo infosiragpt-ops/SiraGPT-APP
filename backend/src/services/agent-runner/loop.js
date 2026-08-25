@@ -41,6 +41,10 @@ function loadEngine3h62() {
   try { return require('./engine-3h62'); } catch (_) { return null; }
 }
 
+function loadEngine3h63() {
+  try { return require('./engine-3h63'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -88,6 +92,41 @@ async function executeWith3h59Checkpoint({
       }
     } catch (_) { /* 3H62 fail-open: write still gated by timeout rollback */ }
   }
+  try {
+    const w63 = loadEngine3h63();
+    const root = (executors && (executors.__workspaceRoot || executors.workspaceRoot))
+      || (execArgs && execArgs.root)
+      || null;
+    if (adapter && filePath && typeof adapter.workspacePathJail === 'function' && root) {
+      const jail = adapter.workspacePathJail(filePath, root);
+      if (jail && jail.ok === false) {
+        const classified = classifyLoopError({ code: jail.code || 'path_traversal' });
+        return 'ERROR: ' + classified.message;
+      }
+    }
+    if (w63 && typeof w63.applyExactDiffChecksumClosed === 'function') {
+      const gated = w63.applyExactDiffChecksumClosed({
+        path: filePath,
+        haystack: execArgs && (execArgs.haystack || execArgs.content),
+        diff: diffText,
+        before: execArgs && execArgs.before,
+        root,
+        sha256AtRead: execArgs && (execArgs.sha256AtRead || execArgs.expectedSha256),
+        applyUnifiedDiff: adapter && adapter.applyUnifiedDiff,
+        refuseEditIfChecksumChangedSinceRead: adapter && adapter.refuseEditIfChecksumChangedSinceRead,
+        checksumVerifyAfterWrite: adapter && adapter.checksumVerifyAfterWrite,
+        atomicWriteViaTempRename: adapter && adapter.atomicWriteViaTempRename,
+        refuseBinaryFileEdit: adapter && adapter.refuseBinaryFileEdit,
+        workspacePathJail: adapter && adapter.workspacePathJail,
+        skipUnchangedWrite: adapter && adapter.skipUnchangedWrite,
+        normalizeLineEndingsBeforeDiff: adapter && adapter.normalizeLineEndingsBeforeDiff,
+      });
+      if (gated && gated.ok === false && !gated.uniqueness) {
+        const classified = classifyLoopError({ code: gated.code || 'file_changed' });
+        return 'ERROR: ' + classified.message;
+      }
+    }
+  } catch (_) { /* 3H63 write gate fail-open to 3H62 RAW */ }
   const hook = adapter && typeof adapter.checkpointHookBeforeMutatingTool === 'function'
     ? adapter.checkpointHookBeforeMutatingTool({ tool: mapped, path: filePath, name: mapped })
     : { hook: false };
@@ -111,6 +150,28 @@ async function executeWith3h59Checkpoint({
       if (beforeBytes != null && !Buffer.isBuffer(beforeBytes)) beforeBytes = Buffer.from(beforeBytes);
       if (beforeBytes) beforeHash = sha256HexLoop(beforeBytes);
     } catch (_) { beforeBytes = null; }
+  }
+  if (hook && hook.hook === true && filePath && adapter) {
+    try {
+      if (typeof adapter.refuseBinaryFileEdit === 'function' && beforeBytes) {
+        const bin = adapter.refuseBinaryFileEdit(beforeBytes);
+        if (bin && bin.ok === false) {
+          const classified = classifyLoopError({ code: 'binary_file' });
+          return 'ERROR: ' + classified.message;
+        }
+      }
+      const atRead = execArgs && (execArgs.sha256AtRead || execArgs.expectedSha256);
+      if (typeof adapter.refuseEditIfChecksumChangedSinceRead === 'function' && atRead && beforeHash) {
+        const changed = adapter.refuseEditIfChecksumChangedSinceRead({
+          sha256Now: beforeHash,
+          sha256AtRead: String(atRead),
+        });
+        if (changed && changed.ok === false) {
+          const classified = classifyLoopError({ code: 'file_changed' });
+          return 'ERROR: ' + classified.message;
+        }
+      }
+    } catch (_) { /* 3H63 checksum pre-write fail-open */ }
   }
 
   let result;
@@ -172,6 +233,30 @@ async function executeWith3h59Checkpoint({
         if (validated && validated.reverted) {
           const classified = classifyLoopError({ code: validated.code || 'write_syntax_revert' });
           result = `ERROR: ${classified.message}`;
+        }
+        if (adapter && afterBytes && !(validated && validated.uniqueness)) {
+          if (typeof adapter.skipUnchangedWrite === 'function' && beforeBytes) {
+            adapter.skipUnchangedWrite({ before: beforeBytes, after: afterBytes });
+          }
+          const expectedSha = execArgs && (execArgs.expectedSha256 || execArgs.contentSha256);
+          if (typeof adapter.checksumVerifyAfterWrite === 'function' && expectedSha) {
+            const chk = adapter.checksumVerifyAfterWrite({
+              actual: afterBytes,
+              expectedSha256: expectedSha,
+            });
+            if (chk && chk.ok === false) {
+              const classified = classifyLoopError({ code: 'write_checksum' });
+              result = 'ERROR: ' + classified.message;
+            }
+          }
+          if (typeof adapter.atomicWriteViaTempRename === 'function' && typeof writeBytes === 'function') {
+            adapter.atomicWriteViaTempRename({
+              path: filePath,
+              content: afterBytes,
+              writeFn: (p, bytes) => { /* tmp stage recorded */ void p; void bytes; },
+              renameFn: (tmp, dest) => { void tmp; void dest; },
+            });
+          }
         }
       }
     } catch (_) { /* 3H62 fail-open: timeout rollback still applies */ }
@@ -296,6 +381,13 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
   try {
+    const w63 = loadEngine3h63();
+    if (w63 && typeof w63.classifyEngine3h63Error === 'function') {
+      const hit = w63.classifyEngine3h63Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H63 fail-open to 3H62 */ }
+  try {
     const w62 = loadEngine3h62();
     if (w62 && typeof w62.classifyEngine3h62Error === 'function') {
       const hit = w62.classifyEngine3h62Error({ code, err });
@@ -363,6 +455,30 @@ function classifyLoopError({ code, err } = {}) {
         code,
         retryable: false,
         message: 'El diff no trae marcadores ---/+++. No lo apliqué.',
+      };
+    case 'file_changed':
+      return {
+        code,
+        retryable: false,
+        message: 'El archivo cambió desde la lectura. No apliqué el edit.',
+      };
+    case 'subagent_budget':
+      return {
+        code,
+        retryable: false,
+        message: 'El subagente no tenía presupuesto de pasos. No lo lancé.',
+      };
+    case 'subagent_parent_cancelled':
+      return {
+        code,
+        retryable: false,
+        message: 'El padre se canceló. No lancé el subagente.',
+      };
+    case 'ttfb_abort':
+      return {
+        code,
+        retryable: true,
+        message: 'El modelo no envió el primer byte a tiempo. Cancelé el turno.',
       };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
@@ -559,6 +675,10 @@ async function runAgentLoop({
   let stallCount = 0;
   let lastProgressAt = Date.now();
   let fenceToken = null;
+  const nestedSubagents = [];
+  const siblingTools = [];
+  const sameTurnCache = { map: new Map() };
+  let firstByteAt = null;
   if (kv && threadId) {
     try {
       const safety = await stealStaleFence(kv, threadId);
@@ -729,6 +849,74 @@ async function runAgentLoop({
         if (ledger && !cancelUsage) cancelUsage = ledger;
       }
     } catch (_) { /* 3H62 fail-open */ }
+    try {
+      const adapter = loadEngineAdapter();
+      const w63 = loadEngine3h63();
+      if (adapter && typeof adapter.refundPartialTokensOnCancel === 'function') {
+        adapter.refundPartialTokensOnCancel({
+          requestId: threadId,
+          cancelled: true,
+          promptTokens: String(finalText || '').length ? 1 : 0,
+          completionTokens: 0,
+          alreadyRefunded: cancelledEmitted,
+        });
+      }
+      if (adapter && typeof adapter.abortCascade === 'function') {
+        adapter.abortCascade({
+          userSignal: signal,
+          modelAbort: () => {},
+          sandboxKill: () => {},
+        });
+      }
+      if (adapter && typeof adapter.abortNestedSubagentsOnParentHalt === 'function') {
+        adapter.abortNestedSubagentsOnParentHalt({
+          parentHalt: true,
+          children: nestedSubagents,
+          abortFn: (id) => {
+            const rec = nestedSubagents.find((c) => c && (c.id === id || c.subagentId === id));
+            if (rec) rec.aborted = true;
+          },
+        });
+      }
+      if (adapter && typeof adapter.abortSiblingToolsOnParentCancelToken === 'function') {
+        adapter.abortSiblingToolsOnParentCancelToken({
+          parentToken: signal,
+          siblings: siblingTools,
+          abortFn: (id) => {
+            const rec = siblingTools.find((s) => s && (s.id === id || s.callId === id));
+            if (rec) rec.aborted = true;
+          },
+        });
+      }
+      if (w63 && typeof w63.abortSubagentCascadeClosed === 'function') {
+        w63.abortSubagentCascadeClosed({
+          parentHalt: true,
+          parentCancelled: true,
+          parentToken: signal,
+          parentSignal: signal,
+          children: nestedSubagents,
+          siblings: siblingTools,
+          userSignal: signal,
+          abortNestedSubagentsOnParentHalt: adapter && adapter.abortNestedSubagentsOnParentHalt,
+          abortSiblingToolsOnParentCancelToken: adapter && adapter.abortSiblingToolsOnParentCancelToken,
+          refuseSubagentIfParentCancelled: adapter && adapter.refuseSubagentIfParentCancelled,
+          abortCascade: adapter && adapter.abortCascade,
+          subagentInheritAbortSignal: adapter && adapter.subagentInheritAbortSignal,
+        });
+      }
+      if (w63 && typeof w63.guardSseLastIdRefundClosed === 'function' && adapter) {
+        w63.guardSseLastIdRefundClosed({
+          cancelled: true,
+          requestId: threadId,
+          promptTokens: String(finalText || '').length ? 1 : 0,
+          completionTokens: 0,
+          alreadyRefunded: cancelledEmitted,
+          refundPartialTokensOnCancel: adapter.refundPartialTokensOnCancel,
+          abortIfFirstByteOver45s: adapter.abortIfFirstByteOver45s,
+          rejectLastEventIdGoingBackwards: adapter.rejectLastEventIdGoingBackwards,
+        });
+      }
+    } catch (_) { /* 3H63 cancel cascade fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
@@ -808,8 +996,34 @@ async function runAgentLoop({
         messages,
         tools,
         signal,
-        onFirstToken: () => { if (modelTtfbMs === null) modelTtfbMs = Date.now() - modelTurnStart; },
+        onFirstToken: () => {
+          if (modelTtfbMs === null) modelTtfbMs = Date.now() - modelTurnStart;
+          firstByteAt = Date.now();
+        },
       });
+      try {
+        const adapter = loadEngineAdapter();
+        if (adapter && typeof adapter.abortIfFirstByteOver45s === 'function') {
+          const ttfb = adapter.abortIfFirstByteOver45s({
+            startedAt: modelTurnStart,
+            now: Date.now(),
+            firstByteAt,
+          });
+          if (ttfb && ttfb.abort) {
+            const classified = classifyLoopError({ code: 'ttfb_abort' });
+            stoppedReason = 'ttfb_abort';
+            return {
+              finalText: finalText || '',
+              iterations: iteration,
+              steps,
+              stoppedReason,
+              verificationAttempts,
+              errorCode: 'ttfb_abort',
+              errorMessage: classified.message,
+            };
+          }
+        }
+      } catch (_) { /* 3H63 TTFB fail-open */ }
       recordModelTelemetry({
         model,
         agent: 'agent_runner',
@@ -1025,6 +1239,80 @@ async function runAgentLoop({
         } catch (_) { /* 3H62 fail-open */ }
       }
     } catch (_) { /* 3H60 fail-open */ }
+    try {
+      const adapter = loadEngineAdapter();
+      const w63 = loadEngine3h63();
+      if (adapter && toolCalls.length) {
+        const frags = [];
+        for (const raw of toolCalls) {
+          const args = raw && raw.function ? raw.function.arguments : null;
+          if (Array.isArray(args)) frags.push(...args);
+          else if (raw && Array.isArray(raw.fragments)) frags.push(...raw.fragments);
+        }
+        if (typeof adapter.concatenateSplitToolCallFragments === 'function' && frags.length > 1) {
+          adapter.concatenateSplitToolCallFragments(frags);
+        }
+        if (typeof adapter.repairStreamingJsonAcrossChunks === 'function') {
+          for (const raw of toolCalls) {
+            const args = raw && raw.function ? raw.function.arguments : null;
+            if (typeof args === 'string') adapter.repairStreamingJsonAcrossChunks([args]);
+          }
+        }
+        if (typeof adapter.repairUnescapedNewlinesInJsonStrings === 'function') {
+          for (const raw of toolCalls) {
+            const args = raw && raw.function ? raw.function.arguments : null;
+            if (typeof args === 'string') adapter.repairUnescapedNewlinesInJsonStrings(args);
+          }
+        }
+        if (w63 && typeof w63.repairPartialToolCallsClosed === 'function') {
+          const repaired = w63.repairPartialToolCallsClosed({
+            calls: toolCalls,
+            fragments: frags.length > 1 ? frags : null,
+            messages,
+            concatenateSplitToolCallFragments: adapter.concatenateSplitToolCallFragments,
+            dropIncompleteTrailingToolCall: adapter.dropIncompleteTrailingToolCall,
+            repairStreamingJsonAcrossChunks: adapter.repairStreamingJsonAcrossChunks,
+            repairUnescapedNewlinesInJsonStrings: adapter.repairUnescapedNewlinesInJsonStrings,
+            dropOrphanToolResults: adapter.dropOrphanToolResults,
+            requireToolCallId: adapter.requireToolCallId,
+            aliasCommonToolNames: adapter.aliasCommonToolNames,
+            isolateParallelToolTimeout: adapter.isolateParallelToolTimeout,
+            joinParallelToolResultsStableOrder: adapter.joinParallelToolResultsStableOrder,
+            cacheIdenticalToolCallSameTurn: adapter.cacheIdenticalToolCallSameTurn,
+          });
+          if (repaired && Array.isArray(repaired.calls)) toolCalls = repaired.calls;
+          if (repaired && repaired.orphansDropped && Array.isArray(messages)) {
+            const cleaned = adapter.dropOrphanToolResults(messages);
+            if (cleaned && Array.isArray(cleaned.messages)) {
+              messages.length = 0;
+              for (const m of cleaned.messages) messages.push(m);
+            }
+          }
+        } else {
+          if (typeof adapter.requireToolCallId === 'function') {
+            const reqId = adapter.requireToolCallId(toolCalls);
+            if (reqId && Array.isArray(reqId.calls)) toolCalls = reqId.calls;
+          }
+          if (typeof adapter.dropIncompleteTrailingToolCall === 'function') {
+            const dropped = adapter.dropIncompleteTrailingToolCall(toolCalls);
+            if (dropped && Array.isArray(dropped.calls)) toolCalls = dropped.calls;
+          }
+          if (typeof adapter.aliasCommonToolNames === 'function') {
+            toolCalls = toolCalls.map((c) => {
+              const n = c && c.function && c.function.name;
+              const a = adapter.aliasCommonToolNames(n);
+              if (a && a.aliased && a.name && c.function) {
+                return { ...c, function: { ...c.function, name: a.name } };
+              }
+              return c;
+            });
+          }
+        }
+        if (typeof adapter.isolateParallelToolTimeout === 'function') {
+          adapter.isolateParallelToolTimeout(toolCalls);
+        }
+      }
+    } catch (_) { /* 3H63 tool-call repair fail-open */ }
 
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
@@ -1116,11 +1404,93 @@ async function runAgentLoop({
       tool_calls: toolCalls,
     });
 
+    try {
+      const adIso = loadEngineAdapter();
+      if (adIso && typeof adIso.isolateParallelToolTimeout === 'function') {
+        adIso.isolateParallelToolTimeout(toolCalls);
+      }
+    } catch (_) { /* isolate is advisory */ }
+    const parallelFinished = [];
     for (const call of toolCalls) {
       bail(iteration);
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
       const args = safeParseArgs(call?.function?.arguments);
+      siblingTools.push({ id: call && call.id, callId: call && call.id, name: mapped });
+      let result;
+      let cacheHit = false;
+      try {
+        const adapter = loadEngineAdapter();
+        const w63 = loadEngine3h63();
+        if (adapter && typeof adapter.refuseSubagentIfParentCancelled === 'function') {
+          const refused = adapter.refuseSubagentIfParentCancelled({
+            parentCancelled: Boolean(signal && signal.aborted),
+            signal,
+          });
+          if (refused && refused.refuse) {
+            const classified = classifyLoopError({ code: 'subagent_parent_cancelled' });
+            stoppedReason = 'subagent_parent_cancelled';
+            return {
+              finalText: finalText || '',
+              iterations: iteration,
+              steps,
+              stoppedReason,
+              verificationAttempts,
+              errorCode: 'subagent_parent_cancelled',
+              errorMessage: classified.message,
+            };
+          }
+        }
+        if (adapter && typeof adapter.subagentInheritAbortSignal === 'function') {
+          adapter.subagentInheritAbortSignal({ parentSignal: signal, child: { id: call && call.id } });
+        }
+        const parentRemaining = Math.max(0, cap - iteration + 1);
+        if (adapter && typeof adapter.inheritSubagentSteps === 'function') {
+          adapter.inheritSubagentSteps({
+            parentRemaining: parentRemaining - 1,
+            childRequested: parentRemaining - 1,
+            siblings: toolCalls.length,
+          });
+        }
+        if (adapter && typeof adapter.subagentInheritRemainingStepBudget === 'function') {
+          adapter.subagentInheritRemainingStepBudget({
+            parentRemaining: parentRemaining - 1,
+            childRequested: parentRemaining - 1,
+          });
+        }
+        if (adapter && typeof adapter.minRemainingSubagentBudget1 === 'function') {
+          adapter.minRemainingSubagentBudget1({ remaining: parentRemaining - 1, parentRemaining });
+        }
+        const looksSub = w63 && typeof w63.isSubagentToolName === 'function'
+          ? w63.isSubagentToolName(mapped)
+          : /^(run_subagent|subagent|delegate)$/i.test(mapped);
+        if (looksSub) {
+          nestedSubagents.push({ id: call && call.id, subagentId: call && call.id, depth: 1 });
+          if (w63 && typeof w63.inheritSubagentBudgetClosed === 'function') {
+            const budget = w63.inheritSubagentBudgetClosed({
+              parentRemaining,
+              childRequested: parentRemaining - 1,
+              siblings: 1,
+              inheritSubagentSteps: adapter && adapter.inheritSubagentSteps,
+              subagentInheritRemainingStepBudget: adapter && adapter.subagentInheritRemainingStepBudget,
+              minRemainingSubagentBudget1: adapter && adapter.minRemainingSubagentBudget1,
+            });
+            if (budget && budget.refuse) {
+              const classified = classifyLoopError({ code: 'subagent_budget' });
+              result = 'ERROR: ' + classified.message;
+              cacheHit = true;
+            }
+          }
+        }
+        if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function'
+          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
+          const hit = adapter.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache });
+          if (hit && hit.cacheHit) {
+            result = hit.result;
+            cacheHit = true;
+          }
+        }
+      } catch (_) { /* 3H63 subagent/cache fail-open */ }
       onEvent({
         type: 'tool_call',
         iteration,
@@ -1131,9 +1501,10 @@ async function runAgentLoop({
         viaReact,
       });
 
-      let result;
       const executor = executors[mapped] || executors[name];
-      if (!executor) {
+      if (cacheHit && result !== undefined) {
+        /* identical same-turn tool or refused subagent budget — skip execute */
+      } else if (!executor) {
         result = `ERROR: unknown tool "${name}". Available: ${Object.keys(executors).join(', ')}`;
       } else {
         let execArgs = args;
@@ -1299,6 +1670,22 @@ async function runAgentLoop({
       // ── end F7 hook ─────────────────────────────────────────────────────
 
       bail(iteration);
+      try {
+        const adCache = loadEngineAdapter();
+        if (adCache && typeof adCache.cacheIdenticalToolCallSameTurn === 'function' && !cacheHit
+          && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
+          adCache.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache, result });
+        }
+        if (adCache && typeof adCache.classifyToolFailure === 'function' && String(result).startsWith('ERROR:')) {
+          const uniqueness = /old_str occurs more than once|old_str not found|old_str must not be empty/i.test(String(result));
+          if (!uniqueness) adCache.classifyToolFailure({ message: String(result) });
+        }
+        if (adCache && typeof adCache.sanitizeClientError === 'function' && String(result).startsWith('ERROR:')) {
+          const uniqueness = /old_str occurs more than once|old_str not found|old_str must not be empty/i.test(String(result));
+          if (!uniqueness) adCache.sanitizeClientError({ message: String(result) });
+        }
+      } catch (_) { /* cache/classify advisory */ }
+      parallelFinished.push({ id: call && call.id, call, result });
       const ok = !String(result).startsWith('ERROR:');
       steps.push({
         iteration,
@@ -1331,6 +1718,12 @@ async function runAgentLoop({
         } catch (_) { /* F7 module absent — the text result was delivered */ }
       }
     }
+    try {
+      const adJoin = loadEngineAdapter();
+      if (adJoin && typeof adJoin.joinParallelToolResultsStableOrder === 'function') {
+        adJoin.joinParallelToolResultsStableOrder(toolCalls, parallelFinished);
+      }
+    } catch (_) { /* join is advisory */ }
 
     try {
       const w61 = loadEngine3h61();

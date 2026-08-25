@@ -148,6 +148,36 @@ const RULES = [
     matches: (error) => String(error?.code || '') === 'credit_ledger_settle',
     message: 'Asenté el ledger de créditos del turno con error. No cobré de más.',
   },
+  {
+    code: 'queue_wait',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'queue_wait',
+    message: 'La cola de generate esperó más de 60 s. Reintenta en unos segundos.',
+  },
+  {
+    code: 'file_changed',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'file_changed',
+    message: 'El archivo cambió desde la lectura. No apliqué el edit.',
+  },
+  {
+    code: 'sse_id_backwards',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'sse_id_backwards',
+    message: 'Last-Event-ID va hacia atrás. Rechacé el cursor.',
+  },
+  {
+    code: 'ttfb_abort',
+    retryable: true,
+    matches: (error) => String(error?.code || '') === 'ttfb_abort',
+    message: 'El modelo no envió el primer byte a tiempo. Cancelé el turno.',
+  },
+  {
+    code: 'credit_ledger_complete',
+    retryable: false,
+    matches: (error) => String(error?.code || '') === 'credit_ledger_complete',
+    message: 'Cerré el ledger de créditos con el uso real. No cobré de más.',
+  },
 ];
 
 function classifyPublicStreamError(error) {

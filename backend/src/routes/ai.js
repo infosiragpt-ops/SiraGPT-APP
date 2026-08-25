@@ -1818,6 +1818,43 @@ function settleGenerateCancelUsageOnce(state, payload) {
   return null;
 }
 
+function applyGenerateFairQueue3h63(req, { sessionKey, producerId, requestId, waitedMs } = {}) {
+  const ad = require('../services/agent-runner/engine-adapter');
+  const w63 = require('../services/agent-runner/engine-3h63');
+  const sess = String(sessionKey || '');
+  const prod = String(producerId || '');
+  if (typeof ad.queueMaxWait60sThen503 === 'function') {
+    ad.queueMaxWait60sThen503({ waitedMs: Number(waitedMs) || 0, maxMs: 60000 });
+  }
+  if (typeof ad.sessionGenerateRateLimit === 'function') {
+    ad.sessionGenerateRateLimit(sess);
+  }
+  if (typeof ad.dropDuplicateInFlightGenerate === 'function') {
+    ad.dropDuplicateInFlightGenerate(sess, prod);
+  }
+  if (typeof ad.idempotentGenerateByRequestId === 'function' && requestId) {
+    ad.idempotentGenerateByRequestId(sess, String(requestId));
+  }
+  if (typeof ad.acquireFairGenerateLock === 'function') {
+    ad.acquireFairGenerateLock(sess, prod);
+  }
+  if (typeof w63.applyFairGenerateQueueClosed !== 'function') {
+    return { ok: true };
+  }
+  return w63.applyFairGenerateQueueClosed({
+    sessionKey: sess,
+    producerId: prod,
+    requestId,
+    waitedMs,
+    acquireFairGenerateLock: ad.acquireFairGenerateLock,
+    releaseFairGenerateLock: ad.releaseFairGenerateLock,
+    queueMaxWait60sThen503: ad.queueMaxWait60sThen503,
+    dropDuplicateInFlightGenerate: ad.dropDuplicateInFlightGenerate,
+    idempotentGenerateByRequestId: ad.idempotentGenerateByRequestId,
+    sessionGenerateRateLimit: ad.sessionGenerateRateLimit,
+  });
+}
+
 function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
   try {
     const { startCommentHeartbeat } = require('../services/agent-runner/engine-adapter');
@@ -1962,6 +1999,9 @@ router.post(
     let streamResumeFollower = false;
     let __streamControllerKey = null;
     let __ownsStreamController = false;
+    let __fairQueueRelease = null;
+    let __firstByteAt = null;
+    let __firstByteWatchdog = null;
 
     // A reconnect must never replace the original owner's stop controller.
     // The follower is attached to the in-process stream fanout below after
@@ -2074,6 +2114,40 @@ router.post(
           console.warn('[ai/generate] chat ownership pre-check failed (continuing):', ownerErr?.message || ownerErr);
         }
       }
+
+      try {
+        const adQ = require('../services/agent-runner/engine-adapter');
+        const sessionKey = String((streamId && String(streamId).trim()) || chatId || userId || 'anon');
+        const requestId = String((req.requestId || req.id || idempotencyKey || '') || '');
+        const producerId = String((streamId && String(streamId).trim()) || requestId || ('gen_' + String(__generateStartedAt)));
+        req._generateFairSession = sessionKey;
+        req._generateFairProducer = producerId;
+        req._generateFairRequestId = requestId;
+        const waitedMs = Number((req.headers && (req.headers['x-sira-queue-waited-ms'] || req.headers['x-queue-waited-ms'])) || 0);
+        const fair = applyGenerateFairQueue3h63(req, {
+          sessionKey: sessionKey,
+          producerId: producerId,
+          requestId: requestId || null,
+          waitedMs: waitedMs,
+        });
+        if (fair && fair.release) __fairQueueRelease = fair.release;
+        if (fair && fair.ok === false) {
+          controller.abort();
+          const status = Number(fair.status) || 503;
+          if (!res.headersSent) {
+            return res.status(status).json({
+              error: fair.code || 'queue_wait',
+              code: fair.code || 'queue_wait',
+              message: fair.code === 'duplicate_turn'
+                ? 'Ese generate ya está en vuelo. No lo dupliqué.'
+                : (fair.code === 'rate_limited'
+                  ? 'Demasiados generate en esta sesión. Espera un momento.'
+                  : 'La cola de generate esperó más de 60 s. Reintenta en unos segundos.'),
+            });
+          }
+        }
+        void adQ;
+      } catch (_) { /* 3H63 generate queue fail-open */ }
 
       const regenerationAttemptNumber = Math.floor(Number(regenerationAttempt));
       const normalizedRegenerationAttempt = regenerate
@@ -2468,6 +2542,17 @@ router.post(
                 resumeReplayPosition = durable.lastEventId;
               }
             }
+            if (typeof ad.rejectLastEventIdGoingBackwards === 'function' && Number.isFinite(parsed.position)) {
+              const storedCursor = Number(cursorStore && (cursorStore.cursor != null ? cursorStore.cursor : cursorStore.lastEventId));
+              const back = ad.rejectLastEventIdGoingBackwards({
+                lastEventId: parsed.position,
+                currentSeq: Number.isFinite(storedCursor) ? storedCursor : parsed.position,
+                stored: storedCursor,
+              });
+              if (back && back.ok === false && back.backwards) {
+                resumeReplayPosition = Number.isFinite(storedCursor) ? storedCursor : resumeReplayPosition;
+              }
+            }
           } catch (_) { /* 3H62 cursor hydrate is best-effort */ }
         } else {
           const rawStreamId = streamResume.generateStreamId();
@@ -2662,6 +2747,28 @@ router.post(
       // `: ping` 15s is a different path). 5s interval keeps proxy/edge
       // from timing out during enrichment. Cleared in the outer finally.
       keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal });
+      try {
+        const adTtfb = require('../services/agent-runner/engine-adapter');
+        if (typeof adTtfb.abortIfFirstByteOver45s === 'function') {
+          __firstByteWatchdog = setInterval(function () {
+            try {
+              const hit = adTtfb.abortIfFirstByteOver45s({
+                startedAt: __generateStartedAt,
+                now: Date.now(),
+                firstByteAt: __firstByteAt,
+              });
+              if (hit && hit.abort) {
+                controller.abort();
+                if (__firstByteWatchdog) {
+                  clearInterval(__firstByteWatchdog);
+                  __firstByteWatchdog = null;
+                }
+              }
+            } catch (_) { /* watchdog advisory */ }
+          }, 5000);
+          if (__firstByteWatchdog && typeof __firstByteWatchdog.unref === 'function') __firstByteWatchdog.unref();
+        }
+      } catch (_) { /* 3H63 TTFB fail-open */ }
 
       // Document-followup recovery (chat path): when a user asks about an
       // already-uploaded document WITHOUT re-attaching it, reattach the most
@@ -6137,6 +6244,11 @@ router.post(
                       }
                       if (!activeResume._firstTokenAt && obj.content) {
                         activeResume._firstTokenAt = Date.now();
+                        __firstByteAt = activeResume._firstTokenAt;
+                        if (__firstByteWatchdog) {
+                          try { clearInterval(__firstByteWatchdog); } catch (_) {}
+                          __firstByteWatchdog = null;
+                        }
                         if (typeof w62.recordFirstTokenLatencySampleP95 === 'function') {
                           w62.recordFirstTokenLatencySampleP95({
                             startedAt: __generateStartedAt,
@@ -7631,12 +7743,40 @@ router.post(
       if (streamResumeFollower) return;
 
       keepAlive = stopGenerateSseHeartbeat(keepAlive);
+      if (__firstByteWatchdog) {
+        try { clearInterval(__firstByteWatchdog); } catch (_) {}
+        __firstByteWatchdog = null;
+      }
       if (signal && signal.aborted) {
         try {
           settleGenerateCancelUsageOnce(cancelUsageState, {
             streamedChars: String(fullResponseContent || '').length,
           });
         } catch (_) { /* cancel settle is best-effort */ }
+        try {
+          const adCancel = require('../services/agent-runner/engine-adapter');
+          if (typeof adCancel.refundPartialTokensOnCancel === 'function') {
+            adCancel.refundPartialTokensOnCancel({
+              requestId: req._generateFairRequestId || req.requestId || req.id,
+              cancelled: true,
+              promptTokens: String(fullResponseContent || '').length ? 1 : 0,
+              completionTokens: 0,
+              alreadyRefunded: cancelUsageState.recorded === true,
+            });
+          }
+          if (typeof adCancel.abortCascade === 'function') {
+            adCancel.abortCascade({
+              userSignal: signal,
+              modelAbort: function () { try { controller.abort(); } catch (_) {} },
+            });
+          }
+          if (typeof adCancel.holdThenSettleCredits === 'function' && req._generateFairSession) {
+            adCancel.holdThenSettleCredits(req._generateFairSession, {
+              requestId: req._generateFairRequestId || req.requestId || req.id,
+              amount: 0,
+            });
+          }
+        } catch (_) { /* 3H63 cancel refund fail-open */ }
       }
       try {
         const w62 = require('../services/agent-runner/engine-3h62');
@@ -7658,6 +7798,34 @@ router.post(
             prisma: req && req.prisma,
             transaction: req && req._chargedCredits,
           });
+        }
+        const w63 = require('../services/agent-runner/engine-3h63');
+        if (typeof w63.completeLedgerOnSuccessClosed === 'function' && req && req._chargedCredits) {
+          const shouldComplete = streamCompleted === true || (signal && signal.aborted && String(fullResponseContent || '').length > 0);
+          if (shouldComplete) {
+            let completeLedgerTransaction = null;
+            try {
+              completeLedgerTransaction = require('../services/credit-ledger').completeLedgerTransaction;
+            } catch (_) { completeLedgerTransaction = null; }
+            w63.completeLedgerOnSuccessClosed({
+              completeLedgerTransaction: completeLedgerTransaction,
+              prisma: req.prisma || (typeof prisma !== 'undefined' ? prisma : null),
+              transaction: req._chargedCredits,
+              cancelled: Boolean(signal && signal.aborted),
+              streamedChars: String(fullResponseContent || '').length,
+              statusCode: streamCompleted ? 200 : 499,
+            });
+          }
+        }
+        if (typeof __fairQueueRelease === 'function') {
+          try { __fairQueueRelease(); } catch (_) {}
+        } else {
+          try {
+            const adRel = require('../services/agent-runner/engine-adapter');
+            if (typeof adRel.releaseFairGenerateLock === 'function' && req._generateFairSession) {
+              adRel.releaseFairGenerateLock(req._generateFairSession, req._generateFairProducer);
+            }
+          } catch (_) { /* release fail-open */ }
         }
         if (resumeSession && resumeSession.streamId && typeof w62.persistLastEventIdClosed === 'function') {
           const sid = resumeSession.streamId;
@@ -8185,6 +8353,15 @@ router.post('/stop-stream', authenticateToken, async (req, res) => {
     console.log(`>>> Aborting stream with ID: ${streamId}`);
     controller.abort();
     streamControllers.delete(`${req.user.id}:${streamId}`);
+    try {
+      const adStop = require('../services/agent-runner/engine-adapter');
+      if (typeof adStop.abortCascade === 'function') {
+        adStop.abortCascade({
+          userSignal: { aborted: true },
+          modelAbort: function () {},
+        });
+      }
+    } catch (_) { /* 3H63 stop cascade fail-open */ }
   }
 
   // A Cowork approval intentionally outlives the browser stream. Therefore an

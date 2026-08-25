@@ -5,7 +5,7 @@
  *
  * Returns the frontend (package.json at repo root) and backend
  * (backend/package.json) semver strings, the git commit (best-effort
- * via env var or `git rev-parse HEAD`), the boot wall-clock time
+ * via `git rev-parse HEAD` when `.git` is present, else env / build ARG), the boot wall-clock time
  * (ISO 8601), and the node runtime version.
  *
  * Useful for:
@@ -21,7 +21,10 @@
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const {
+  resolveCommit,
+  readDeployedTreeCommit,
+} = require('../utils/deployed-tree-commit');
 
 const router = express.Router();
 
@@ -69,40 +72,12 @@ function resolveBackendVersion() {
   return (pkg && typeof pkg.version === 'string') ? pkg.version : 'unknown';
 }
 
-function resolveCommit() {
-  // Prefer build-injected env vars (Docker / CI). These don't require
-  // .git to be present in the runtime image.
-  const candidates = [
-    process.env.GIT_COMMIT,
-    process.env.SOURCE_COMMIT,
-    process.env.COMMIT_SHA,
-    process.env.VERCEL_GIT_COMMIT_SHA,
-  ];
-  for (const candidate of candidates) {
-    const normalized = String(candidate || '').trim();
-    if (/^[0-9a-f]{40}$/i.test(normalized)) return normalized.toLowerCase();
-  }
-
-  // Best-effort `git rev-parse` — wrapped in try/catch because the
-  // production image usually doesn't ship `.git`. Short timeout so a
-  // stuck git invocation can't block module load.
-  try {
-    const sha = execSync('git rev-parse HEAD', {
-      cwd: path.resolve(__dirname, '..', '..', '..'),
-      timeout: 1000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).toString().trim();
-    if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha;
-  } catch (_) {
-    // ignore — fall through to 'unknown'
-  }
-  return 'unknown';
-}
-
 const VERSION_INFO = Object.freeze({
   version: resolveFrontendVersion(),
   backend: resolveBackendVersion(),
-  commit: resolveCommit(),
+  commit: resolveCommit(process.env, {
+    cwd: path.resolve(__dirname, '..', '..', '..'),
+  }),
   buildTime: BUILD_TIME,
   node: NODE_VERSION,
   featureFlags: Object.freeze(resolveFeatureFlags()),
@@ -117,3 +92,5 @@ router.get('/', (_req, res) => {
 
 module.exports = router;
 module.exports.VERSION_INFO = VERSION_INFO;
+module.exports.resolveCommit = resolveCommit;
+module.exports.readDeployedTreeCommit = readDeployedTreeCommit;
