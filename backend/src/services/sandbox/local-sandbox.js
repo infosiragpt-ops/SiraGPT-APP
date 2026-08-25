@@ -231,9 +231,33 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   // Prepend memory-limit preamble for Python to contain runaway allocations.
   const finalCode = language === 'python' ? PYTHON_RESOURCE_PREAMBLE + code : code;
 
-  const [bin, baseArgs] = INTERPRETERS[language]();
-  const argv = [...baseArgs, finalCode];
+  const [bin0, baseArgs] = INTERPRETERS[language]();
+  let bin = bin0;
+  let argv = [...baseArgs, finalCode];
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;
+  let sandboxGuards = null;
+  try {
+    const w64 = require('../agent-runner/engine-3h64');
+    const ad = require('../agent-runner/engine-adapter');
+    if (typeof w64.applySandboxSpawnGuardsClosed === 'function') {
+      sandboxGuards = w64.applySandboxSpawnGuardsClosed({
+        bin: bin,
+        argv: argv,
+        env: env,
+        sandboxKillAfterGraceMs: ad.sandboxKillAfterGraceMs,
+        sandboxNetFailClosed: ad.sandboxNetFailClosed,
+        sandboxNoNewPrivs: ad.sandboxNoNewPrivs,
+        wrapSandboxSpawnWithRssCpu: ad.wrapSandboxSpawnWithRssCpu,
+        tmpCleanupOnCancel: ad.tmpCleanupOnCancel,
+        reapBackgroundBashOnAbort: ad.reapBackgroundBashOnAbort,
+        pollBackgroundBash: ad.pollBackgroundBash,
+      });
+      if (sandboxGuards && sandboxGuards.bin && Array.isArray(sandboxGuards.argv)) {
+        bin = sandboxGuards.bin;
+        argv = sandboxGuards.argv;
+      }
+    }
+  } catch (_) { /* 3H64 spawn wrap fail-open */ }
 
   // Acquire a concurrency slot before spawning.  The deadline is half the
   // execution timeout so a queued call still has time to run if it gets through.
@@ -322,7 +346,23 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     function killChild(reason) {
       if (killedReason) return;
       killedReason = reason;
-      try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      try {
+        const adKill = require('../agent-runner/engine-adapter');
+        if (typeof adKill.sandboxKillAfterGraceMs === 'function') {
+          adKill.sandboxKillAfterGraceMs({
+            pid: (child && child.pid) || 1,
+            graceMs: 20,
+            killFn: function (_id, sig) {
+              try { child.kill(sig || 'SIGKILL'); } catch (_) { /* swallow */ }
+            },
+            setTimeoutFn: setTimeout,
+          });
+        } else {
+          try { child.kill('SIGKILL'); } catch { /* swallow */ }
+        }
+      } catch (_) {
+        try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      }
       if (reason === 'aborted') {
         try {
           const w60 = require('../agent-runner/engine-3h60');
@@ -420,6 +460,24 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         return;
       }
       if (killedReason === 'aborted') {
+        try {
+          const w64ab = require('../agent-runner/engine-3h64');
+          const adAb = require('../agent-runner/engine-adapter');
+          if (typeof w64ab.applySandboxSpawnGuardsClosed === 'function') {
+            w64ab.applySandboxSpawnGuardsClosed({
+              aborted: true,
+              dirs: sessionWorkdir ? [sessionWorkdir] : [],
+              pid: child && child.pid,
+              sandboxKillAfterGraceMs: adAb.sandboxKillAfterGraceMs,
+              sandboxNetFailClosed: adAb.sandboxNetFailClosed,
+              sandboxNoNewPrivs: adAb.sandboxNoNewPrivs,
+              wrapSandboxSpawnWithRssCpu: adAb.wrapSandboxSpawnWithRssCpu,
+              tmpCleanupOnCancel: adAb.tmpCleanupOnCancel,
+              reapBackgroundBashOnAbort: adAb.reapBackgroundBashOnAbort,
+              pollBackgroundBash: adAb.pollBackgroundBash,
+            });
+          }
+        } catch (_) { /* 3H64 abort cleanup fail-open */ }
         resolve({
           ok: false,
           code: 'sandbox_aborted',

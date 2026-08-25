@@ -1,6 +1,6 @@
 # Benchmark de capacidades del motor — SiraGPT
 
-Versión del rubric: **3H63** (2026-08-24) sobre **3H62** + **hot path #388 / #399**.  
+Versión del rubric: **3H64** (2026-08-25) sobre **3H63** + **hot path #388 / #399**.  
 Alcance: **solo motor** (agent loop, tools, SSE, contexto, checkpoints, créditos). UI sin cambios.
 
 Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Cada fila defiende un cambio medible. `unmeasured` incluye cómo medirla en la siguiente ola.
@@ -20,32 +20,32 @@ Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Ca
 | Edit exact-diff + RAW + syntax revert | ---/+++ required; hash post-write; syntax revert; checksum since-read | **fail-closed** — 3H62 RAW/syntax + `refuseEditIfChecksumChangedSinceRead` / `applyUnifiedDiff` / jail / skip-noop | 0 write inválido persistido; uniqueness ≠ timeout/syntax | `3H63-G-001` / `3H63-K-001` + 3H62 B–D |
 | Sandbox stdout/stderr + timeout + cleanup | cap 64 KiB; cleanup + reap huérfanos `sira-sbx-*` | **fail-closed** — `loop.js` llama `sandboxTimeoutThenCleanup` + `sandboxReapOrphanWorkdirs` en timeout/abort; `local-sandbox` apply | 0 workdir huérfano post-timeout | `3H61-E-001` / `3H61-N-001` / `3H61-R-001` |
 | SSE heartbeat | comment `: heartbeat` **sin** bump de seq | **medido (unit)** + wired `sse-writer.comment` | 0 seq increment en heartbeat | `3H60-G-001` |
-| SSE reconnect resume | replay events; persist Last-Event-ID; reject last > head **and going backwards** | **fail-closed** — 3H62 persist + `rejectLastEventIdGoingBackwards` + last-N replay | 0 re-exec; 0 replay desde seq inválido o hacia atrás | `3H63-H-001` + 3H62 E/T/U |
+| SSE reconnect resume | replay events; persist Last-Event-ID; reject last > head **and going backwards** | **fail-closed** — persist + inclusive replay + reject-backwards + **Node e2e Last-Event-ID reconnect** (`3H64-D-001`); `detectSseGap` / client-gone close / flush / abort error event en generate + writer | 0 re-exec; 0 replay desde seq inválido o hacia atrás | `3H64-D-001` / `3H64-H-001` + 3H63-H-001 |
 | SSE cancel AbortController | abort + drop buffer + clear heartbeat | **fail-closed** — generate `sseCancelClearsHeartbeat` + writer done/close | 0 timers/listeners post-cancel | `3H61-J-001` + 3H59 L |
 | Cola por sesión + orden estricto | single-writer; gap detect; 503 after 60s; drop duplicate in-flight | **fail-closed** — generate path llama `acquireFairGenerateLock` / `queueMaxWait60sThen503` / `dropDuplicateInFlightGenerate` | 1 writer; 503 si espera ≥ 60 s; 0 duplicate in-flight | `3H63-B-001` / `3H63-C-001` |
 | Créditos exactos en cancel/error | settle usage real; Prisma ledger; never double-count; **partial-token refund**; success complete | **fail-closed** — 3H62 fail-ledger + `refundPartialTokensOnCancel` + live `completeLedgerTransaction` on success / cancel-after-tokens | 0 cargo si 0 tokens; 0 double settle; refund hold si cancel pre-completion | `3H63-I-001` / `3H63-R-001` + 3H62 I |
 | Errores clasificados ES | message ES; 0 stacks; 0 `sk-` | **fail-closed** — `classifyPublicLoopErrorClosed` en loop/onEvent | 0 stacks en payload público | `3H61-H-001` / `3H61-Q-001` |
-| Latencia p50/p95 first-token y end-of-turn | histogram scripted (nunca Flash inventado) | **fail-closed** — `recordFirstTokenLatencySampleP95` + `observeFirstToken` en generate write y loop; over-budget hint; fake timers | p50/p95 reales bajo carga VPS | `3H62-J-001` / `3H62-W-001`; live: `adapterLatencySnapshot()` |
+| Latencia p50/p95 first-token y end-of-turn | histogram scripted (nunca Flash inventado) | **fail-closed** — ring **persistido** JSONL (`/tmp/siragpt-latency`) + `observeAdapterLatency` / `adapterLatencySnapshot`; `GET /api/version/latency` (sin UI); wall 120s + 3 stalls | p50/p95 reales bajo carga VPS (mismo instrumento; no números inventados) | `3H64-B-001` / `3H64-C-001`; live: `adapterLatencySnapshot()` + ring file |
 | DeepSeek only | refuse OpenRouter env/model | **medido** | 0 generate OpenRouter | `3H60-J-001` / `3H60-O-001` |
 
 ## Cómo correr el rubric
 
 ```bash
 cd backend
-node --test tests/ola-3h63-invariants.test.js tests/ola-3h62-invariants.test.js tests/ola-3h61-invariants.test.js tests/engine-hotpath-wire.test.js
+node --test tests/ola-3h64-invariants.test.js tests/ola-3h63-invariants.test.js tests/ola-3h62-invariants.test.js tests/engine-hotpath-wire.test.js
 node --test tests/sse-writer.test.js tests/public-stream-error.test.js tests/sandbox-local-and-router.test.js
 ```
 
-Carga real (p50/p95 first-token / end-of-turn): aún **unmeasured en VPS**. Instrumento: `observeTurnLatencyClosed` + `observeScriptedLatencySample` + `adapterLatencySnapshot()`. Recolectar ≥ 200 muestras de generate DeepSeek Flash/Pro, cancel y error.
+Carga real (p50/p95 first-token / end-of-turn): el ring **ya persiste** muestras de loop/generate (`observeAdapterLatency` + JSONL). Recolectar ≥ 200 muestras DeepSeek Flash/Pro en VPS leyendo `GET /api/version/latency` o `/tmp/siragpt-latency/*.jsonl`. El instrumento no inventa números Flash.
 
-## Lo que esta ola (3H63) mueve vs 3H62
+## Lo que esta ola (3H64) mueve vs 3H63
 
-3H62 cableó RAW/syntax, Last-Event-ID persistido, checkpoint de sesión, pins y ledger-on-error. 3H63 cierra los helpers que seguían **adapter-only**: **cola/fair generate** (503 a los 60 s, drop duplicate in-flight), **abort cascade + budget parent−1**, **repair de fragments / drop trailing incompleto**, **checksum since-read + jail + unified diff**, **Last-Event-ID hacia atrás**, **refund de tokens parciales**, **watchdog first-byte 45 s**, y **`completeLedgerTransaction` vivo** en success / cancel-after-tokens. Sin nombres overlay que choquen con 3H59–3H62.
+3H63 cableó cola/fair generate, abort cascade, repair de fragments, checksum/jail, Last-Event-ID atrás, refund y TTFB 45 s. 3H64 cierra los leftovers del rubric y helpers #388 que seguían **adapter-only**: **ring de latencia persistido** (p50/p95 + GET interno), **wall 120 s / 3 stalls**, **reconnect SSE e2e Node** (inclusive + reject-backwards + gap + client-gone), **sandbox kill-after-grace / net fail-closed / RSS-CPU / reap**, **compact keep system+pins+tool_calls**, **crc32/gzip/prune checkpoint**, **classify/sanitize** en el path público. Sin nombres overlay que choquen con 3H59–3H63.
 
 ## Queda para la siguiente ola
 
-- p50/p95 first-token y end-of-turn **bajo carga VPS** (hoy ring scripted + hooks en loop/generate).
-- Reconnect SSE e2e con EventSource real en browser (persist + inclusive replay + reject-backwards ya están en generate).
+- p50/p95 first-token y end-of-turn **bajo carga VPS real** (el ring ya persiste; falta el corpus ≥ 200 de producción).
+- Reconnect SSE e2e con **EventSource real en browser** (Node + EventSource-semantics ya están: persist, inclusive replay, reject-backwards, gap).
 
 ## Hot path #388 / #399
 

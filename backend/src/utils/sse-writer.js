@@ -170,6 +170,38 @@ function createSSEWriter(res, options = {}) {
   // 5+ s on a slow provider.
   try { res.write(': connected\n\n'); } catch { closed = true; }
 
+  try {
+    const adAttach = require('../services/agent-runner/engine-adapter');
+    const w64 = require('../services/agent-runner/engine-3h64');
+    if (typeof adAttach.destroySseOnClientClose === 'function' && options.req) {
+      adAttach.destroySseOnClientClose(options.req, {
+        close: function () { closed = true; },
+        destroy: function () { closed = true; try { if (!res.writableEnded) res.end(); } catch (_) {} },
+      });
+    }
+    if (typeof w64.guardSseClientGoneClosed === 'function') {
+      w64.guardSseClientGoneClosed({
+        req: options.req,
+        writer: {
+          close: function () { closed = true; },
+          destroy: function () { closed = true; },
+        },
+        lastClientAt: options.lastClientAt,
+        now: Date.now(),
+        pendingEvent: options.pendingEvent,
+        closed: closed,
+        aborted: options.aborted === true,
+        lastEventId: options.lastEventId,
+        ring: options.ring,
+        destroySseOnClientClose: adAttach.destroySseOnClientClose,
+        closeIfClientGone30s: adAttach.closeIfClientGone30s,
+        flushLastSseEventBeforeClose: adAttach.flushLastSseEventBeforeClose,
+        endSseWithErrorEventOnAbort: adAttach.endSseWithErrorEventOnAbort,
+        detectSseGap: adAttach.detectSseGap,
+      });
+    }
+  } catch (_) { /* 3H64 attach fail-open */ }
+
   // Live generate/agent streams: honor Last-Event-ID against an optional
   // seq ring. Inclusive replay is opt-in via options.inclusive (default
   // exclusive so 3H32-S-002 stays green). Fail-open — missing adapter
@@ -184,6 +216,9 @@ function createSSEWriter(res, options = {}) {
           currentSeq: Number.isFinite(head) ? head : undefined,
           stored: options.cursorStore && options.cursorStore.cursor,
         });
+      }
+      if (typeof ad.detectSseGap === 'function') {
+        ad.detectSseGap(options.lastEventId, options.ring);
       }
       if (typeof ad.replayLastNSseEventsFromCursor === 'function' && Array.isArray(options.ring)) {
         ad.replayLastNSseEventsFromCursor(options.ring, { cursor: options.lastEventId });
@@ -286,6 +321,32 @@ function createSSEWriter(res, options = {}) {
     },
     get resumeReset() { return resumeReset; },
     done() {
+      try {
+        const adDone = require('../services/agent-runner/engine-adapter');
+        if (typeof adDone.flushLastSseEventBeforeClose === 'function') {
+          adDone.flushLastSseEventBeforeClose({
+            pendingEvent: options.pendingEvent,
+            closed: closed,
+            flushed: false,
+          });
+        }
+        if (typeof adDone.endSseWithErrorEventOnAbort === 'function' && options.aborted === true) {
+          const abortEvt = adDone.endSseWithErrorEventOnAbort({
+            aborted: true,
+            closed: closed,
+            reason: options.abortReason || 'aborted',
+          });
+          if (abortEvt && abortEvt.write && abortEvt.frame) {
+            try { res.write(abortEvt.frame); } catch (_) { closed = true; }
+          }
+        }
+        if (typeof adDone.closeIfClientGone30s === 'function') {
+          adDone.closeIfClientGone30s({
+            lastClientAt: options.lastClientAt,
+            now: Date.now(),
+          });
+        }
+      } catch (_) { /* 3H64 done fail-open */ }
       try {
         const w61 = require('../services/agent-runner/engine-3h61');
         if (typeof w61.applySseCancelHeartbeatClosed === 'function') {

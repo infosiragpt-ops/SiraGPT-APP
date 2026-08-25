@@ -403,7 +403,7 @@ test('3H61-N-001 local sandbox timeout path calls cleanup helper', async () => {
 
 test('3H61-O-001 adapter snapshot and DeepSeek lock are 3H61', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H61' || s.wave === '3H62' || s.wave === '3H63');
+  assert.ok(s.wave === '3H61' || s.wave === '3H62' || s.wave === '3H63' || s.wave === '3H64');
   assert.equal(s.failClosed, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');
