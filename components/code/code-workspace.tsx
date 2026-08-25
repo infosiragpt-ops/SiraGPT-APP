@@ -92,6 +92,8 @@ export function CodeWorkspace() {
     resetWorkspace,
     focusChat,
     registerCommandPaletteHandler,
+    activeFolder,
+    activeCodeChatSessionId,
   } = useCodeWorkspace()
 
   const [chatOpen, setChatOpen] = React.useState(true)
@@ -524,6 +526,8 @@ export function CodeWorkspace() {
     registerAgentCompanyPreviewSlot(element)
   }, [])
 
+  const computerConversationId = String(activeCodeChatSessionId || activeFolder?.id || "").trim() || null
+
   const computerRoutines = computerOpen ? (
     <div
       className="absolute inset-0 z-20 flex min-h-0 flex-col overflow-hidden bg-[#1b1b1d]"
@@ -536,6 +540,7 @@ export function CodeWorkspace() {
           departmentId={departmentComputer?.id || "ceo-office"}
           projectId={departmentComputer?.projectId}
           computerRunId={departmentComputer?.id ? `dept-${departmentComputer.id}` : "dept-ceo-office"}
+          conversationId={computerConversationId}
           onClose={() => setComputerOpen(false)}
         />
       </div>
@@ -598,7 +603,7 @@ export function CodeWorkspace() {
           // code-hub / tool / launcher overlays). The panel tabs live in the
           // global header, so the pane starts directly with the preview.
           const mainArea = (
-            <AgentComputerShell>
+            <AgentComputerShell conversationId={computerConversationId}>
               <>
               <div className="absolute inset-0">
                 <ResizablePanelGroup direction="vertical">

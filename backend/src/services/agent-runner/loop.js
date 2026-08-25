@@ -625,6 +625,36 @@ function classifyLoopError({ code, err } = {}) {
         retryable: true,
         message: 'El modelo no envió el primer byte a tiempo. Cancelé el turno.',
       };
+    case 'computer_flag_off':
+      return {
+        code,
+        retryable: false,
+        message: 'La computadora no está habilitada. No ejecuté la herramienta.',
+      };
+    case 'computer_no_user':
+      return {
+        code,
+        retryable: false,
+        message: 'Falta el usuario de esta computadora. No ejecuté la herramienta.',
+      };
+    case 'computer_no_session':
+      return {
+        code,
+        retryable: false,
+        message: 'No hay sesión de computadora. No ejecuté la herramienta.',
+      };
+    case 'isolation_required':
+      return {
+        code,
+        retryable: false,
+        message: 'No se pudo aislar la computadora de esta conversación.',
+      };
+    case 'credit_screenshot':
+      return {
+        code,
+        retryable: false,
+        message: 'La captura de pantalla no cobra créditos.',
+      };
     default:
       return { code: code || 'loop_error', retryable: true, message: String(code || 'loop_error') };
   }
@@ -2128,7 +2158,41 @@ async function runAgentLoop({
             }
           }
         } catch (_) { /* 3H65 arg hygiene fail-open */ }
-        if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function'
+        try {
+          if (adapter && /^(computer_|host_bash)/i.test(String(mapped || name || ''))) {
+            const guard = require('../computer/computer-code-guard');
+            const refused = guard.applyRefuseComputerToolsClosed({
+              toolName: mapped,
+              userId: (executors && (executors.__userId || executors.userId)) || threadId,
+              sessionId: threadId || (executors && executors.__sessionId) || undefined,
+              session: threadId ? { id: threadId } : (executors && executors.__session) || undefined,
+              computerEnabled: !(executors && executors.__computerEnabled === false),
+              computerOnly: !!(executors && executors.__computerOnly),
+              refuseComputerToolsIfFlagOff: adapter.refuseComputerToolsIfFlagOff,
+              refuseComputerToolsIfNoUserId: adapter.refuseComputerToolsIfNoUserId,
+              refuseComputerToolsIfSessionMissing: adapter.refuseComputerToolsIfSessionMissing,
+              refuseHostBashIfComputerOnlyTurn: adapter.refuseHostBashIfComputerOnlyTurn,
+            });
+            if (refused && refused.ok === false) {
+              const classified = classifyLoopError({ code: refused.code });
+              result = 'ERROR: ' + classified.message;
+              cacheHit = true;
+            }
+            if (typeof adapter.screenshotOnlyNoCharge === 'function') {
+              adapter.screenshotOnlyNoCharge({
+                tools: [{ name: mapped }],
+                screenshotOnly: /screenshot/.test(String(mapped || '')),
+              });
+            }
+            if (typeof adapter.observeOnlyNoCharge === 'function') {
+              adapter.observeOnlyNoCharge({
+                tools: [{ name: mapped }],
+                observeOnly: /observe/.test(String(mapped || '')),
+              });
+            }
+          }
+        } catch (_) { /* computer refuse fail-closed only on explicit helper refuse */ }
+        if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function')
           && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
           const hit = adapter.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache });
           if (hit && hit.cacheHit) {
