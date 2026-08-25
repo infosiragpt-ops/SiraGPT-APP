@@ -131,6 +131,17 @@ import {
   type RecentChatStatusFilter,
   type RecentChatTypeFilter,
 } from "@/lib/sidebar-recent-chats-filters"
+import {
+  CHAT_FOLDER_NAMES_STORAGE_KEY,
+  CHAT_FOLDERS_STORAGE_KEY,
+  SUGGESTED_CHAT_FOLDERS,
+  deleteChatFolder,
+  listChatFolderNames,
+  normalizeChatFolderName,
+  parseChatFolderAssignments,
+  parseChatFolderNameList,
+  renameChatFolder,
+} from "@/lib/sidebar-chat-folders"
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
 // as module constants avoids allocating a new string on every render
@@ -238,6 +249,8 @@ const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
 const RECENT_TOOLBAR_ICON =
   "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const FOLDER_ADD_ICON =
+  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
 const FILTER_POPOVER =
   "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(15,23,42,0.14)]"
 const FILTER_ROW =
@@ -567,6 +580,11 @@ export function AppSidebar() {
   const [archivedChatIds, setArchivedChatIds] = React.useState<string[]>([])
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
   const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
+  const [namedChatFolders, setNamedChatFolders] = React.useState<string[]>([])
+  const [folderDialogOpen, setFolderDialogOpen] = React.useState(false)
+  const [folderDialogName, setFolderDialogName] = React.useState("")
+  const [folderDialogChat, setFolderDialogChat] = React.useState<any | null>(null)
+  const [folderDialogRenameFrom, setFolderDialogRenameFrom] = React.useState<string | null>(null)
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
   // Claude-style sidebar mode toggle (header segmented control): "chat"
   // shows the normal agentic-chat sidebar; "code" shows the APPS tree
@@ -663,13 +681,15 @@ export function AppSidebar() {
       setPinnedChatIds(readArray("sira:pinned-chat-ids"))
       setArchivedChatIds(readArray("sira:archived-chat-ids"))
       setHiddenChatIds(readArray("sira:hidden-chat-ids"))
-      setChatFolders(readRecord("sira:chat-folders"))
+      setChatFolders(parseChatFolderAssignments(readRecord(CHAT_FOLDERS_STORAGE_KEY)))
+      setNamedChatFolders(parseChatFolderNameList(JSON.parse(localStorage.getItem(CHAT_FOLDER_NAMES_STORAGE_KEY) || "[]")))
       setScheduledChats(readRecord("sira:scheduled-chats"))
     } catch {
       setPinnedChatIds([])
       setArchivedChatIds([])
       setHiddenChatIds([])
       setChatFolders({})
+      setNamedChatFolders([])
       setScheduledChats({})
     }
   }, [])
@@ -734,22 +754,98 @@ export function AppSidebar() {
     toast.success("Chat ocultado")
   }, [persistArrayState])
 
-  const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
-    setChatFolders((current) => {
-      const next = { ...(current || {}) }
-      if (folder) next[chat.id] = folder
-      else delete next[chat.id]
-      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
-      return next
-    })
-    toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
+  const persistChatFolders = React.useCallback((
+    assignments: Record<string, string>,
+    named: string[],
+  ) => {
+    const nextAssignments = parseChatFolderAssignments(assignments)
+    const nextNamed = listChatFolderNames(nextAssignments, named)
+    setChatFolders(nextAssignments)
+    setNamedChatFolders(nextNamed)
+    try {
+      localStorage.setItem(CHAT_FOLDERS_STORAGE_KEY, JSON.stringify(nextAssignments))
+      localStorage.setItem(CHAT_FOLDER_NAMES_STORAGE_KEY, JSON.stringify(nextNamed))
+    } catch (err) {
+      console.debug('storage unavailable', err)
+    }
+    return { assignments: nextAssignments, named: nextNamed }
   }, [])
 
-  const createFolderAndMove = React.useCallback((chat: any) => {
-    const folder = window.prompt("Nombre de la carpeta")
-    if (!folder?.trim()) return
-    moveChatToFolder(chat, folder.trim())
-  }, [moveChatToFolder])
+  const visibleChatFolders = React.useMemo(
+    () => listChatFolderNames(chatFolders, namedChatFolders),
+    [chatFolders, namedChatFolders],
+  )
+
+  const moveMenuFolders = React.useMemo(
+    () => listChatFolderNames(chatFolders, [...SUGGESTED_CHAT_FOLDERS, ...namedChatFolders]),
+    [chatFolders, namedChatFolders],
+  )
+
+  const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
+    const next = { ...(chatFolders || {}) }
+    if (folder) next[chat.id] = folder
+    else delete next[chat.id]
+    persistChatFolders(next, folder ? [...namedChatFolders, folder] : namedChatFolders)
+    toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
+  }, [chatFolders, namedChatFolders, persistChatFolders])
+
+  const openCreateFolderDialog = React.useCallback((chat?: any) => {
+    setFolderDialogChat(chat ?? null)
+    setFolderDialogRenameFrom(null)
+    setFolderDialogName("")
+    setFolderDialogOpen(true)
+  }, [])
+
+  const openRenameFolderDialog = React.useCallback((folder: string) => {
+    setFolderDialogChat(null)
+    setFolderDialogRenameFrom(folder)
+    setFolderDialogName(folder)
+    setFolderDialogOpen(true)
+  }, [])
+
+  const closeFolderDialog = React.useCallback(() => {
+    setFolderDialogOpen(false)
+    setFolderDialogName("")
+    setFolderDialogChat(null)
+    setFolderDialogRenameFrom(null)
+  }, [])
+
+  const submitFolderDialog = React.useCallback(() => {
+    const name = normalizeChatFolderName(folderDialogName)
+    if (!name) {
+      toast.error("Escribe un nombre de carpeta")
+      return
+    }
+    if (folderDialogRenameFrom) {
+      const next = renameChatFolder(chatFolders, namedChatFolders, folderDialogRenameFrom, name)
+      persistChatFolders(next.assignments, next.named)
+      toast.success(`Carpeta renombrada a ${name}`)
+      closeFolderDialog()
+      return
+    }
+    if (folderDialogChat?.id) {
+      moveChatToFolder(folderDialogChat, name)
+    } else {
+      persistChatFolders(chatFolders, [...namedChatFolders, name])
+      toast.success(`Carpeta "${name}" creada`)
+    }
+    closeFolderDialog()
+  }, [
+    chatFolders,
+    closeFolderDialog,
+    folderDialogChat,
+    folderDialogName,
+    folderDialogRenameFrom,
+    moveChatToFolder,
+    namedChatFolders,
+    persistChatFolders,
+  ])
+
+  const removeNamedFolder = React.useCallback((folder: string) => {
+    const next = deleteChatFolder(chatFolders, namedChatFolders, folder)
+    persistChatFolders(next.assignments, next.named)
+    toast.success(`Carpeta "${folder}" eliminada`)
+  }, [chatFolders, namedChatFolders, persistChatFolders])
 
   const downloadChatExport = React.useCallback(async (chat: any) => {
     try {
@@ -818,19 +914,17 @@ export function AppSidebar() {
     persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
     persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
     persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
-    setChatFolders((current) => {
-      const next = { ...(current || {}) }
-      delete next[chatId]
-      try { localStorage.setItem("sira:chat-folders", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
-      return next
-    })
+    persistChatFolders(
+      Object.fromEntries(Object.entries(chatFolders).filter(([id]) => id !== chatId)),
+      namedChatFolders,
+    )
     setScheduledChats((current) => {
       const next = { ...(current || {}) }
       delete next[chatId]
       try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
-  }, [persistArrayState])
+  }, [chatFolders, namedChatFolders, persistArrayState, persistChatFolders])
 
   const confirmDeleteChat = React.useCallback(async () => {
     const id = chatPendingDelete?.id
@@ -1417,6 +1511,75 @@ export function AppSidebar() {
         {sidebarMode === "chat" && selectedType === "Text Chat" && (
           <SidebarGroup>
             <div
+              id="sidebar-chat-folders-toolbar"
+              data-sidebar-folders-toolbar="1"
+              className={cn(
+                "flex items-center gap-1 px-0.5 pt-2 pb-0.5",
+                state === "closed" && "hidden",
+              )}
+            >
+              <span className="min-w-0 flex-1 truncate px-2.5 text-[13px] font-medium text-muted-foreground">
+                Carpetas
+              </span>
+              <button
+                type="button"
+                data-sidebar-folders-add="1"
+                onClick={() => openCreateFolderDialog()}
+                className={FOLDER_ADD_ICON}
+                aria-label="Nueva carpeta"
+                title="Nueva carpeta"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {visibleChatFolders.length > 0 && (
+              <div
+                id="sidebar-chat-folders-list"
+                data-sidebar-folders-list="1"
+                className={cn("space-y-0.5 px-0.5 pb-1", state === "closed" && "hidden")}
+              >
+                {visibleChatFolders.map((folder) => (
+                  <div key={folder} className="group flex w-full items-center gap-0.5">
+                    <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-foreground/85">
+                      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{folder}</span>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100"
+                          aria-label={`Acciones de la carpeta ${folder}`}
+                        >
+                          <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className={CHAT_ACTION_MENU}>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => openRenameFolderDialog(folder))}
+                          className={CHAT_ACTION_ITEM}
+                        >
+                          <Edit2 className={CHAT_ACTION_ICON} />
+                          Renombrar
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => removeNamedFolder(folder))}
+                          className={cn(
+                            CHAT_ACTION_ITEM,
+                            "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700",
+                          )}
+                        >
+                          <Trash2 className={CHAT_ACTION_ICON} />
+                          Eliminar
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div
               id="sidebar-recent-chats-toolbar"
               data-sidebar-recent-toolbar="1"
               className={cn(
@@ -1856,7 +2019,7 @@ export function AppSidebar() {
                                         </DropdownMenuSubTrigger>
                                         <DropdownMenuPortal>
                                           <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
-                                            {["Trabajo", "Empresa", "Personal"].map((folder) => (
+                                            {moveMenuFolders.map((folder) => (
                                               <DropdownMenuItem
                                                 key={folder}
                                                 onSelect={() => moveChatToFolder(chat, folder)}
@@ -1869,7 +2032,7 @@ export function AppSidebar() {
                                             ))}
                                             <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
                                             <DropdownMenuItem
-                                              onSelect={() => deferChatMenuAction(() => createFolderAndMove(chat))}
+                                              onSelect={() => deferChatMenuAction(() => openCreateFolderDialog(chat))}
                                               className={CHAT_ACTION_ITEM}
                                             >
                                               <Plus className={CHAT_ACTION_ICON} />
@@ -2340,6 +2503,56 @@ export function AppSidebar() {
               Programar
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={folderDialogOpen}
+        onOpenChange={(open) => {
+          if (open) setFolderDialogOpen(true)
+          else closeFolderDialog()
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>{folderDialogRenameFrom ? "Renombrar carpeta" : "Nueva carpeta"}</DialogTitle>
+            <DialogDescription>
+              {folderDialogRenameFrom
+                ? "El nombre se actualiza en todos los chats de esta carpeta."
+                : folderDialogChat
+                  ? `Mueve “${folderDialogChat.title || "este chat"}” a una carpeta nueva.`
+                  : "Organiza chats recientes en carpetas."}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              submitFolderDialog()
+            }}
+            className="space-y-3"
+          >
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="sidebar-new-folder-name">
+                Nombre de la carpeta
+              </label>
+              <Input
+                id="sidebar-new-folder-name"
+                value={folderDialogName}
+                onChange={(event) => setFolderDialogName(event.target.value)}
+                placeholder="Ej. Clientes"
+                autoFocus
+                maxLength={60}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeFolderDialog}>
+                Cancelar
+              </Button>
+              <Button type="submit">
+                {folderDialogRenameFrom ? "Guardar" : "Crear"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </Sidebar>

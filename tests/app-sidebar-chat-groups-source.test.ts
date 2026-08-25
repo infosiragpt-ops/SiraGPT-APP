@@ -49,6 +49,25 @@ describe("app sidebar recent-chats toolbar source contract", () => {
       "the collapsed icon-rail may keep a search affordance that opens the dialog")
   })
 
+  it("renders Carpetas above recent chats with a + aligned to the 3-dot column", () => {
+    const foldersStart = source.indexOf('id="sidebar-chat-folders-toolbar"')
+    const recentsStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
+    assert.ok(foldersStart > 0, "Carpetas toolbar must exist")
+    assert.ok(recentsStart > foldersStart, "Carpetas must sit above Chats recientes")
+    const folders = source.slice(foldersStart, recentsStart)
+    assert.match(folders, /data-sidebar-folders-toolbar="1"/)
+    assert.match(folders, /data-sidebar-folders-add="1"/)
+    assert.match(folders, />\s*Carpetas\s*</)
+    assert.match(folders, /aria-label="Nueva carpeta"/)
+    assert.match(folders, /<Plus className="h-3\.5 w-3\.5"/)
+    assert.match(folders, /FOLDER_ADD_ICON/)
+    assert.match(source, /const FOLDER_ADD_ICON =[\s\S]*h-8 w-8/)
+    assert.match(source, /flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0/)
+    assert.match(source, /openCreateFolderDialog/)
+    assert.doesNotMatch(source, /createFolderAndMove/)
+    assert.doesNotMatch(source, /window\.prompt\("Nombre de la carpeta"\)/)
+  })
+
   it("opens the centered ChatSearchDialog from the recent-chats lupa and ⌘K", () => {
     const toolbarStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
     assert.ok(toolbarStart > 0, "recent-chats toolbar id must exist")
