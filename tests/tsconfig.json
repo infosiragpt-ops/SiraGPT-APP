@@ -50,7 +50,8 @@
     "../lib/notifications/push.ts",
     "../lib/integrations/verify-webhook.ts",
     "../lib/format-schedule-es-pe.ts",
-    "../lib/thinking-loaders.ts"
+    "../lib/thinking-loaders.ts",
+    "../lib/sidebar-recent-chats-filters.ts"
   ],
   "exclude": [
     "../tests/lib"
