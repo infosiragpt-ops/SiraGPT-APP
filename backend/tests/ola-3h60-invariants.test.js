@@ -245,7 +245,7 @@ test('3H60-K-001 scripted p50/p95 never invented Flash', () => {
 
 test('3H60-L-001 adapter fail-open wires 3H60 helpers and wave', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H60' || s.wave === '3H61' || s.wave === '3H62' || s.wave === '3H63' || s.wave === '3H64');
+  assert.ok(s.wave === '3H60' || s.wave === '3H61' || s.wave === '3H62' || s.wave === '3H63' || s.wave === '3H64' || s.wave === '3H65');
   assert.equal(s.cutOscillatingToolPair, true);
   assert.equal(s.sseReplayFromLastEventId, true);
   assert.equal(s.settleCreditsOnError, true);
@@ -311,7 +311,7 @@ test('3H60-O-001 compose binds 3H60 tests and DeepSeek lock holds', () => {
   assert.ok(String(__filename || '').includes('ola-3h60-invariants.test.js'));
   assert.equal(w.WAVE, '3H60');
   assert.equal(w.HELPERS.length >= 28 && w.HELPERS.length <= 40, true);
-  assert.ok(ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61' || ad.adapterSnapshot().wave === '3H62' || ad.adapterSnapshot().wave === '3H63' || ad.adapterSnapshot().wave === '3H64');
+  assert.ok(ad.adapterSnapshot().wave === '3H60' || ad.adapterSnapshot().wave === '3H61' || ad.adapterSnapshot().wave === '3H62' || ad.adapterSnapshot().wave === '3H63' || ad.adapterSnapshot().wave === '3H64' || ad.adapterSnapshot().wave === '3H65');
   assert.equal(ad.adapterSnapshot().openrouterGenerate, false);
 });
 

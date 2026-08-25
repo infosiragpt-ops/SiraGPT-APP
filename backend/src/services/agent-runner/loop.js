@@ -49,6 +49,10 @@ function loadEngine3h64() {
   try { return require('./engine-3h64'); } catch (_) { return null; }
 }
 
+function loadEngine3h65() {
+  try { return require('./engine-3h65'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -81,9 +85,11 @@ async function executeWith3h59Checkpoint({
   execArgs,
   runExecutor,
   executors,
+  fileEditCkpt,
 }) {
   const filePath = execArgs && (execArgs.path || execArgs.filename);
   const diffText = execArgs && (execArgs.diff || execArgs.patch);
+  const ckpt = fileEditCkpt && typeof fileEditCkpt === 'object' ? fileEditCkpt : { edits: [] };
   if (diffText && /apply_patch|edit_file|apply_diff/i.test(String(mapped || ''))) {
     try {
       const w62 = loadEngine3h62();
@@ -178,6 +184,34 @@ async function executeWith3h59Checkpoint({
     } catch (_) { /* 3H63 checksum pre-write fail-open */ }
   }
 
+  try {
+    const w65pre = loadEngine3h65();
+    if (w65pre && typeof w65pre.applyFileEditGuardsClosed === 'function' && filePath && adapter) {
+      const pre = w65pre.applyFileEditGuardsClosed({
+        path: filePath,
+        existingBytes: beforeBytes && beforeBytes.length,
+        existingText: beforeBytes ? String(beforeBytes) : (execArgs && execArgs.before),
+        exists: beforeBytes != null,
+        backupPath: execArgs && execArgs.backupPath,
+        haystack: execArgs && (execArgs.haystack || (beforeBytes && String(beforeBytes)) || execArgs.before),
+        diff: diffText,
+        context: execArgs && execArgs.context,
+        actual: execArgs && (execArgs.actual || execArgs.before),
+        checkpoint: ckpt,
+        result: null,
+        createIfMissingOrRefuseLargeOverwrite: adapter.createIfMissingOrRefuseLargeOverwrite,
+        patchContextLinesMustMatch: adapter.patchContextLinesMustMatch,
+        rollbackLastFileEdit: adapter.rollbackLastFileEdit,
+        rollbackLastNFileEdits: adapter.rollbackLastNFileEdits,
+        afterWriteTestHint: adapter.afterWriteTestHint,
+      });
+      if (pre && pre.ok === false && !pre.uniqueness) {
+        const classified = classifyLoopError({ code: pre.code || 'file_too_large' });
+        return 'ERROR: ' + classified.message;
+      }
+    }
+  } catch (_) { /* 3H65 pre-write fail-open */ }
+
   let result;
   let thrown = null;
   try {
@@ -265,6 +299,44 @@ async function executeWith3h59Checkpoint({
       }
     } catch (_) { /* 3H62 fail-open: timeout rollback still applies */ }
   }
+
+  try {
+    const w65post = loadEngine3h65();
+    if (w65post && typeof w65post.applyFileEditGuardsClosed === 'function' && filePath && adapter) {
+      if (typeof adapter.rememberFileEdit === 'function' && beforeBytes != null) {
+        try {
+          let afterForCkpt = null;
+          try { afterForCkpt = await readBytes(filePath); } catch (_) { afterForCkpt = null; }
+          adapter.rememberFileEdit(ckpt, {
+            path: filePath,
+            before: beforeBytes,
+            after: afterForCkpt,
+          });
+        } catch (_) { /* remember is advisory */ }
+      }
+      const post = w65post.applyFileEditGuardsClosed({
+        path: filePath,
+        checkpoint: ckpt,
+        n: 1,
+        apply: (p, bytes) => writeBytes(p, bytes),
+        failed: flags.failed,
+        timedOut: flags.timedOut,
+        result: thrown || result,
+        hasRunner: Boolean(executors && (executors.run_tests || executors.__hasRunner)),
+        rollbackLastFileEdit: adapter.rollbackLastFileEdit,
+        rollbackLastNFileEdits: adapter.rollbackLastNFileEdits,
+        afterWriteTestHint: adapter.afterWriteTestHint,
+        createIfMissingOrRefuseLargeOverwrite: adapter.createIfMissingOrRefuseLargeOverwrite,
+        patchContextLinesMustMatch: adapter.patchContextLinesMustMatch,
+      });
+      if (post && post.reverted && flags.timedOut) {
+        const classified = classifyLoopError({ code: post.code || 'checkpoint_rollback' });
+        result = 'ERROR: ' + classified.message;
+      } else if (post && post.hint && post.hintText && !String(result).startsWith('ERROR:')) {
+        result = String(result) + '\n' + post.hintText;
+      }
+    }
+  } catch (_) { /* 3H65 post-write fail-open */ }
 
   if (flags.timedOut || /sandbox_timeout|timed?\s*out/i.test(String(result))) {
     const workdir = (executors && (executors.__sandboxWorkdir || executors.sandboxWorkdir))
@@ -384,6 +456,13 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
+  try {
+    const w65 = loadEngine3h65();
+    if (w65 && typeof w65.classifyEngine3h65Error === 'function') {
+      const hit = w65.classifyEngine3h65Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H65 fail-open to 3H64 */ }
   try {
     const w64 = loadEngine3h64();
     if (w64 && typeof w64.classifyEngine3h64Error === 'function') {
@@ -719,6 +798,10 @@ async function runAgentLoop({
   const nestedSubagents = [];
   const siblingTools = [];
   const sameTurnCache = { map: new Map() };
+  const fileEditCkpt = { edits: [] };
+  const webFetchTurnCache = {};
+  const observationHistory = [];
+  const deadLetterHistory = [];
   let firstByteAt = null;
   if (kv && threadId) {
     try {
@@ -983,6 +1066,22 @@ async function runAgentLoop({
         });
       }
     } catch (_) { /* 3H63 cancel cascade fail-open */ }
+    try {
+      const w65c = loadEngine3h65();
+      const adC = loadEngineAdapter();
+      if (w65c && typeof w65c.applyDeepSeekCreditGuardsClosed === 'function' && adC) {
+        w65c.applyDeepSeekCreditGuardsClosed({
+          cancelled: true,
+          firstToken: Boolean(firstByteAt),
+          firstByteAt,
+          tokens: String(finalText || '').length,
+          mapDeepSeekHttpError: adC.mapDeepSeekHttpError,
+          neverRetry402: adC.neverRetry402,
+          neverRetry413: adC.neverRetry413,
+          neverChargeIfCancelledBeforeFirstToken: adC.neverChargeIfCancelledBeforeFirstToken,
+        });
+      }
+    } catch (_) { /* 3H65 cancel charge fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
@@ -1025,6 +1124,37 @@ async function runAgentLoop({
         }
       }
     } catch (_) { /* 3H64 wall fail-open */ }
+    try {
+      const w65hint = loadEngine3h65();
+      const adapterHint = loadEngineAdapter();
+      if (w65hint && typeof w65hint.applyAntiLoopGuardsClosed === 'function' && adapterHint) {
+        const hinted = w65hint.applyAntiLoopGuardsClosed({
+          step: iteration,
+          remaining: Math.max(0, cap - iteration),
+          max: cap,
+          budgetHintEveryFiveSteps: adapterHint.budgetHintEveryFiveSteps,
+          remainingStepBudgetReminder: adapterHint.remainingStepBudgetReminder,
+          detectDagCycle: adapterHint.detectDagCycle,
+          rejectToolCallCycleAtoBtoA: adapterHint.rejectToolCallCycleAtoBtoA,
+          deadLetterSameToolAfterN: adapterHint.deadLetterSameToolAfterN,
+          identicalObservationLoopCut: adapterHint.identicalObservationLoopCut,
+          maxConcurrentSubagents: adapterHint.maxConcurrentSubagents,
+          maxSubagentDepth: adapterHint.maxSubagentDepth,
+          maxInflightToolsPerSession8: adapterHint.maxInflightToolsPerSession8,
+          perToolRateLimit: adapterHint.perToolRateLimit,
+        });
+        if (hinted && hinted.inject && hinted.text) {
+          // Advisory only: never rewrite system/user messages (F7 pins the
+          // original system contract verbatim). Helpers still ran above.
+          onEvent({
+            type: 'budget_hint',
+            iteration,
+            text: String(hinted.text),
+            code: hinted.code || 'plan_budget',
+          });
+        }
+      }
+    } catch (_) { /* 3H65 budget hint fail-open */ }
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
     void touchFence();
     try {
@@ -1166,6 +1296,47 @@ async function runAgentLoop({
         ttftMs: modelTtfbMs,
       });
       if (signal?.aborted) bail(iteration);
+      try {
+        const w65ds = loadEngine3h65();
+        const adDs = loadEngineAdapter();
+        if (w65ds && typeof w65ds.applyDeepSeekCreditGuardsClosed === 'function' && adDs) {
+          const ds = w65ds.applyDeepSeekCreditGuardsClosed({
+            err,
+            cancelled: Boolean(signal && signal.aborted),
+            firstToken: Boolean(firstByteAt),
+            firstByteAt,
+            tokens: 0,
+            mapDeepSeekHttpError: adDs.mapDeepSeekHttpError,
+            neverRetry402: adDs.neverRetry402,
+            neverRetry413: adDs.neverRetry413,
+            neverChargeIfCancelledBeforeFirstToken: adDs.neverChargeIfCancelledBeforeFirstToken,
+          });
+          if (ds && ds.code && (ds.retry === false || ds.charge === false)) {
+            const classifiedDs = classifyLoopError({ code: ds.code, err });
+            onEvent({
+              type: 'error',
+              code: classifiedDs.code,
+              message: classifiedDs.message,
+              retryable: classifiedDs.retryable,
+              iteration,
+            });
+            if (ds.retry === false && (ds.code === 'credit_ceiling' || ds.code === 'quota_exhausted' || ds.code === 'payload_too_large')) {
+              // Keep the pre-3H65 contract: HTTP 402 is always llm_402 so
+              // orchestrator / executeAgentRunnerTurn stay honest (not no_output).
+              const creditStop = ds.code === 'credit_ceiling' || ds.code === 'quota_exhausted';
+              return {
+                finalText: '',
+                iterations: iteration,
+                steps,
+                stoppedReason: creditStop ? 'llm_402' : ds.code,
+                verificationAttempts,
+                errorCode: ds.code,
+                errorMessage: classifiedDs.message,
+              };
+            }
+          }
+        }
+      } catch (_) { /* 3H65 DeepSeek map fail-open */ }
       const classifiedErr = classifyLoopError({ code: err?.code, err });
       onEvent({
         type: 'error',
@@ -1447,6 +1618,61 @@ async function runAgentLoop({
       }
     } catch (_) { /* 3H63 tool-call repair fail-open */ }
 
+    try {
+      const w65loop = loadEngine3h65();
+      const adLoop = loadEngineAdapter();
+      if (w65loop && typeof w65loop.applyAntiLoopGuardsClosed === 'function' && adLoop && toolCalls.length) {
+        const looksSubList = toolCalls.filter((c) => {
+          const n = (c && c.function && c.function.name) || '';
+          return /^(run_subagent|subagent|delegate)$/i.test(n);
+        });
+        const guarded = w65loop.applyAntiLoopGuardsClosed({
+          calls: toolCalls.map((c) => ({
+            name: c && c.function && c.function.name,
+            function: c && c.function,
+          })),
+          history: deadLetterHistory,
+          observations: observationHistory,
+          step: iteration,
+          remaining: Math.max(0, cap - iteration),
+          max: cap,
+          subagents: looksSubList,
+          depth: nestedSubagents.length,
+          inflight: toolCalls.length,
+          detectDagCycle: adLoop.detectDagCycle,
+          rejectToolCallCycleAtoBtoA: adLoop.rejectToolCallCycleAtoBtoA,
+          deadLetterSameToolAfterN: adLoop.deadLetterSameToolAfterN,
+          identicalObservationLoopCut: adLoop.identicalObservationLoopCut,
+          budgetHintEveryFiveSteps: adLoop.budgetHintEveryFiveSteps,
+          remainingStepBudgetReminder: adLoop.remainingStepBudgetReminder,
+          maxConcurrentSubagents: adLoop.maxConcurrentSubagents,
+          maxSubagentDepth: adLoop.maxSubagentDepth,
+          maxInflightToolsPerSession8: adLoop.maxInflightToolsPerSession8,
+          perToolRateLimit: adLoop.perToolRateLimit,
+        });
+        if (guarded && guarded.halt) {
+          const classified = classifyLoopError({ code: guarded.code || 'tool_cycle' });
+          onEvent({
+            type: 'error',
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+            iteration,
+          });
+          stoppedReason = guarded.code || 'tool_cycle';
+          return {
+            finalText: finalText || '',
+            iterations: iteration,
+            steps,
+            stoppedReason,
+            verificationAttempts,
+            errorCode: guarded.code || 'tool_cycle',
+            errorMessage: classified.message,
+          };
+        }
+      }
+    } catch (_) { /* 3H65 anti-loop fail-open */ }
+
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
       // "provider accepted the request but produced nothing" stall. Count it;
@@ -1615,6 +1841,45 @@ async function runAgentLoop({
             }
           }
         }
+        try {
+          const w65hy = loadEngine3h65();
+          if (w65hy && typeof w65hy.applyToolArgHygieneClosed === 'function' && adapter) {
+            if (typeof adapter.perToolRateLimit === 'function' && threadId) {
+              const rated = adapter.perToolRateLimit(threadId, mapped);
+              if (rated && rated.ok === false) {
+                const classified = classifyLoopError({ code: 'rate_limited' });
+                result = 'ERROR: ' + classified.message;
+                cacheHit = true;
+              }
+            }
+            const schema = (Array.isArray(tools) ? tools : []).map((t) => (
+              t && t.function && t.function.name === mapped ? (t.function.parameters || t.function.input_schema) : null
+            )).find(Boolean);
+            if (typeof adapter.enforceAdditionalPropertiesFalse === 'function' && schema) {
+              adapter.enforceAdditionalPropertiesFalse(schema);
+            }
+            const hyg = w65hy.applyToolArgHygieneClosed({
+              args,
+              schema,
+              name: mapped,
+              url: args && (args.url || args.href || args.uri),
+              turnCache: webFetchTurnCache,
+              capToolArgBytes: adapter.capToolArgBytes,
+              capToolArgBytes32KiB: adapter.capToolArgBytes32KiB,
+              enforceAdditionalPropertiesFalse: adapter.enforceAdditionalPropertiesFalse,
+              validateEnumArgs: adapter.validateEnumArgs,
+              skipDuplicateWebFetchSameUrlTurn: adapter.skipDuplicateWebFetchSameUrlTurn,
+            });
+            if (hyg && hyg.cacheHit && hyg.skipped && result === undefined) {
+              result = hyg.cachedResult;
+              cacheHit = true;
+            } else if (hyg && hyg.refuse) {
+              const classified = classifyLoopError({ code: hyg.code || 'tool_args_invalid' });
+              result = 'ERROR: ' + classified.message;
+              cacheHit = true;
+            }
+          }
+        } catch (_) { /* 3H65 arg hygiene fail-open */ }
         if (adapter && typeof adapter.cacheIdenticalToolCallSameTurn === 'function'
           && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
           const hit = adapter.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache });
@@ -1682,9 +1947,25 @@ async function runAgentLoop({
                 async () => executor(execArgs, { signal }),
                 {
                   maxAttempts: 3,
-                  isRetryable: typeof adapter.isRetryableToolFailure === 'function'
-                    ? adapter.isRetryableToolFailure
-                    : undefined,
+                  isRetryable: (err) => {
+                    try {
+                      const w65r = loadEngine3h65();
+                      if (w65r && typeof w65r.applyDeepSeekCreditGuardsClosed === 'function') {
+                        const g = w65r.applyDeepSeekCreditGuardsClosed({
+                          err,
+                          mapDeepSeekHttpError: adapter.mapDeepSeekHttpError,
+                          neverRetry402: adapter.neverRetry402,
+                          neverRetry413: adapter.neverRetry413,
+                          neverChargeIfCancelledBeforeFirstToken: adapter.neverChargeIfCancelledBeforeFirstToken,
+                        });
+                        if (g && g.retry === false) return false;
+                      }
+                    } catch (_) { /* 3H65 retry gate fail-open */ }
+                    if (typeof adapter.isRetryableToolFailure === 'function') {
+                      return adapter.isRetryableToolFailure(err);
+                    }
+                    return false;
+                  },
                   signal,
                   sleepFn: retrySleepFn,
                 },
@@ -1738,6 +2019,7 @@ async function runAgentLoop({
               execArgs,
               runExecutor,
               executors,
+              fileEditCkpt,
             });
           } catch (err) {
             if (err && err.stopLoop) {
@@ -1841,6 +2123,30 @@ async function runAgentLoop({
           }
         }
       } catch (_) { /* cache/classify advisory */ }
+      try {
+        const w65res = loadEngine3h65();
+        const adRes = loadEngineAdapter();
+        if (w65res && typeof w65res.applyToolResultHygieneClosed === 'function' && adRes && result !== undefined) {
+          const cleaned = w65res.applyToolResultHygieneClosed({
+            result,
+            validateToolResultShape: adRes.validateToolResultShape,
+            gzipToolResultOverSize: adRes.gzipToolResultOverSize,
+            clampToolResultWithHash: adRes.clampToolResultWithHash,
+            redactSecretsInToolResult: adRes.redactSecretsInToolResult,
+            redactAuthorizationBearerInToolResults: adRes.redactAuthorizationBearerInToolResults,
+          });
+          if (cleaned && cleaned.ok === false) {
+            const classified = classifyLoopError({ code: cleaned.code || 'bad_tool_result' });
+            result = 'ERROR: ' + classified.message;
+          } else if (cleaned && cleaned.text != null && !String(result).startsWith('ERROR:')) {
+            result = cleaned.text;
+          }
+        }
+      } catch (_) { /* 3H65 result hygiene fail-open */ }
+      observationHistory.push(result);
+      if (String(result).startsWith('ERROR:')) {
+        deadLetterHistory.push({ tool: mapped, name: mapped, code: 'tool_error' });
+      }
       parallelFinished.push({ id: call && call.id, call, result });
       const ok = !String(result).startsWith('ERROR:');
       steps.push({
