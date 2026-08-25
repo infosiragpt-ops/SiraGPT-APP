@@ -45,6 +45,10 @@ function loadEngine3h63() {
   try { return require('./engine-3h63'); } catch (_) { return null; }
 }
 
+function loadEngine3h64() {
+  try { return require('./engine-3h64'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -381,6 +385,26 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
   try {
+    const w64 = loadEngine3h64();
+    if (w64 && typeof w64.classifyEngine3h64Error === 'function') {
+      const hit = w64.classifyEngine3h64Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+    // classifyPublicGenerateErrorClosed always returns a message (tool_isolated
+    // for unknown codes). Only use it for uncoded tool failures so 3H59–3H63
+    // table codes (subtask_no_progress, credit_ledger_settle, ...) still fall
+    // through. Known `code` keeps its wave table + Spanish copy.
+    const adapter = loadEngineAdapter();
+    if (w64 && typeof w64.classifyPublicGenerateErrorClosed === 'function' && err && !code) {
+      const pub = w64.classifyPublicGenerateErrorClosed({
+        err,
+        classifyToolFailure: adapter && adapter.classifyToolFailure,
+        sanitizeClientError: adapter && adapter.sanitizeClientError,
+      });
+      if (pub && pub.message) return pub;
+    }
+  } catch (_) { /* 3H64 fail-open to 3H63 */ }
+  try {
     const w63 = loadEngine3h63();
     if (w63 && typeof w63.classifyEngine3h63Error === 'function') {
       const hit = w63.classifyEngine3h63Error({ code, err });
@@ -519,6 +543,23 @@ function compactMessagesInPlace(messages, opts = {}) {
     }
   } catch (_) { /* 3H59 fail-open */ }
   next = tryRestorePins(messages, next, opts) || next;
+  try {
+    const w64 = loadEngine3h64();
+    const adapter = loadEngineAdapter();
+    if (w64 && typeof w64.applyCompactKeepPinsClosed === 'function' && adapter) {
+      const kept = w64.applyCompactKeepPinsClosed({
+        messages,
+        compacted: next,
+        pins: opts.memoryHits,
+        skipCompactIfUnderBudget: adapter.skipCompactIfUnderBudget,
+        compactKeepPinnedFactsAndLast3UserTurns: adapter.compactKeepPinnedFactsAndLast3UserTurns,
+        compactNeverDropSystemPrompt: adapter.compactNeverDropSystemPrompt,
+        compactNeverDropLastAssistantToolCalls: adapter.compactNeverDropLastAssistantToolCalls,
+        pinLastToolErrorOnCompact: adapter.pinLastToolErrorOnCompact,
+      });
+      if (kept && Array.isArray(kept.messages)) next = kept.messages;
+    }
+  } catch (_) { /* 3H64 compact fail-open */ }
   if (next === messages) return Boolean(packed.compressed);
   messages.length = 0;
   for (const m of next) messages.push(m);
@@ -732,6 +773,31 @@ async function runAgentLoop({
       ) {
         for (const m of hydrated.state.messages) messages.push(m);
       }
+      try {
+        const w64 = loadEngine3h64();
+        const adapter = loadEngineAdapter();
+        if (w64 && typeof w64.applyCheckpointResumeClosed === 'function' && adapter && hydrated && hydrated.state) {
+          const resumed = w64.applyCheckpointResumeClosed({
+            resume: true,
+            persist: false,
+            state: hydrated.state,
+            payload: hydrated.state,
+            remaining: cap,
+            checkpointRemaining: hydrated.state.remaining,
+            messages: hydrated.state.messages,
+            store: new Map(),
+            replayToolResultsOnResume: adapter.replayToolResultsOnResume,
+            boundStepsOnCheckpointResume: adapter.boundStepsOnCheckpointResume,
+            crc32CheckOnCheckpointLoad: adapter.crc32CheckOnCheckpointLoad,
+            gzipCheckpointIfOver64KiB: adapter.gzipCheckpointIfOver64KiB,
+            pruneCheckpointsKeepLastN: adapter.pruneCheckpointsKeepLastN,
+            crc32StampOnCheckpointSave: adapter.crc32StampOnCheckpointSave,
+          });
+          if (resumed && resumed.ok === false) {
+            /* crc mismatch: keep live messages, do not trust ckpt bytes */
+          }
+        }
+      } catch (_) { /* 3H64 resume fail-open */ }
     }
     const lastUser = Array.isArray(messages)
       ? [...messages].reverse().find((m) => m && m.role === 'user')
@@ -932,6 +998,33 @@ async function runAgentLoop({
   try {
   for (let iteration = 1; iteration <= cap; iteration += 1) {
     bail(iteration);
+    try {
+      const w64 = loadEngine3h64();
+      const adapter = loadEngineAdapter();
+      if (w64 && typeof w64.applyTurnWallAndStallsClosed === 'function' && adapter) {
+        const wall = w64.applyTurnWallAndStallsClosed({
+          stallCount: 0,
+          startedAt: turnStartedAt,
+          now: Date.now(),
+          cancelIfThreeStreamStalls: adapter.cancelIfThreeStreamStalls,
+          enforceTotalTurnWall120s: adapter.enforceTotalTurnWall120s,
+          remainingWallClockCut: adapter.remainingWallClockCut,
+          resetStallCountOnToken: adapter.resetStallCountOnToken,
+        });
+        if (wall && (wall.wallHalt || wall.remainingHalt)) {
+          const classifiedWall = classifyLoopError({ code: wall.code || 'turn_wall' });
+          onEvent({
+            type: 'error',
+            code: classifiedWall.code,
+            message: classifiedWall.message,
+            retryable: classifiedWall.retryable,
+            iteration,
+          });
+          stoppedReason = wall.code || 'turn_wall';
+          return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: wall.code || 'turn_wall' };
+        }
+      }
+    } catch (_) { /* 3H64 wall fail-open */ }
     onEvent({ type: 'iteration_start', iteration, label: 'Pensando' });
     void touchFence();
     try {
@@ -970,6 +1063,34 @@ async function runAgentLoop({
     });
     if (stall.stalled && iteration > 1) {
       stallCount += 1;
+      try {
+        const w64 = loadEngine3h64();
+        const adapter = loadEngineAdapter();
+        if (w64 && typeof w64.applyTurnWallAndStallsClosed === 'function' && adapter) {
+          const cut = w64.applyTurnWallAndStallsClosed({
+            stallCount,
+            startedAt: turnStartedAt,
+            now: Date.now(),
+            cancelIfThreeStreamStalls: adapter.cancelIfThreeStreamStalls,
+            enforceTotalTurnWall120s: adapter.enforceTotalTurnWall120s,
+            remainingWallClockCut: adapter.remainingWallClockCut,
+            resetStallCountOnToken: adapter.resetStallCountOnToken,
+          });
+          if (cut && cut.cancel) stallCount = Math.max(stallCount, STREAM_STALL_CANCEL_AFTER);
+          if (cut && (cut.wallHalt || cut.remainingHalt)) {
+            const classifiedWall = classifyLoopError({ code: cut.code || 'turn_wall' });
+            onEvent({
+              type: 'error',
+              code: classifiedWall.code,
+              message: classifiedWall.message,
+              retryable: classifiedWall.retryable,
+              iteration,
+            });
+            stoppedReason = cut.code || 'turn_wall';
+            return { finalText: '', iterations: iteration, steps, stoppedReason, verificationAttempts, errorCode: cut.code || 'turn_wall' };
+          }
+        }
+      } catch (_) { /* 3H64 stall/wall fail-open */ }
       const classified = classifyLoopError({ code: stallCount >= STREAM_STALL_CANCEL_AFTER ? 'loop_stall' : 'stream_stall_retryable' });
       onEvent({
         type: 'error',
@@ -1236,6 +1357,18 @@ async function runAgentLoop({
               rel.observeFirstToken(modelTtfbMs);
             }
           } catch (_) { /* reliability optional */ }
+          try {
+            const w64 = loadEngine3h64();
+            const adapter = loadEngineAdapter();
+            if (w64 && typeof w64.persistLatencyRingClosed === 'function' && adapter && modelTtfbMs != null) {
+              w64.persistLatencyRingClosed({
+                kind: 'first_token',
+                ms: modelTtfbMs,
+                observeAdapterLatency: adapter.observeAdapterLatency,
+                adapterLatencySnapshot: adapter.adapterLatencySnapshot,
+              });
+            }
+          } catch (_) { /* 3H64 latency fail-open */ }
         } catch (_) { /* 3H62 fail-open */ }
       }
     } catch (_) { /* 3H60 fail-open */ }
@@ -1676,13 +1809,36 @@ async function runAgentLoop({
           && !/^(computer_|write_|str_replace|apply_patch|bash|run_|generate_|create_|edit_|delete_|screenshot|browser_)/i.test(String(mapped || name || ''))) {
           adCache.cacheIdenticalToolCallSameTurn(mapped, args, { turn: sameTurnCache, result });
         }
-        if (adCache && typeof adCache.classifyToolFailure === 'function' && String(result).startsWith('ERROR:')) {
+        if (String(result).startsWith('ERROR:')) {
           const uniqueness = /old_str occurs more than once|old_str not found|old_str must not be empty/i.test(String(result));
-          if (!uniqueness) adCache.classifyToolFailure({ message: String(result) });
-        }
-        if (adCache && typeof adCache.sanitizeClientError === 'function' && String(result).startsWith('ERROR:')) {
-          const uniqueness = /old_str occurs more than once|old_str not found|old_str must not be empty/i.test(String(result));
-          if (!uniqueness) adCache.sanitizeClientError({ message: String(result) });
+          if (!uniqueness) {
+            const w64 = loadEngine3h64();
+            let publicErr = null;
+            if (w64 && typeof w64.classifyPublicGenerateErrorClosed === 'function') {
+              publicErr = w64.classifyPublicGenerateErrorClosed({
+                err: { message: String(result) },
+                classifyToolFailure: adCache && adCache.classifyToolFailure,
+                sanitizeClientError: adCache && adCache.sanitizeClientError,
+              });
+            } else {
+              if (adCache && typeof adCache.classifyToolFailure === 'function') {
+                publicErr = adCache.classifyToolFailure({ message: String(result) });
+              }
+              if (adCache && typeof adCache.sanitizeClientError === 'function') {
+                publicErr = adCache.sanitizeClientError({ message: String(result) });
+              }
+            }
+            if (publicErr && publicErr.message) {
+              onEvent({
+                type: 'error',
+                iteration,
+                tool: mapped,
+                code: publicErr.code,
+                message: publicErr.message,
+                retryable: publicErr.retryable,
+              });
+            }
+          }
         }
       } catch (_) { /* cache/classify advisory */ }
       parallelFinished.push({ id: call && call.id, call, result });
@@ -1770,12 +1926,63 @@ async function runAgentLoop({
           now: Date.now(),
         });
       }
+      try {
+        const w64 = loadEngine3h64();
+        const adapter = loadEngineAdapter();
+        if (w64 && typeof w64.persistLatencyRingClosed === 'function' && adapter) {
+          w64.persistLatencyRingClosed({
+            kind: 'turn_end',
+            startedAt: turnStartedAt,
+            now: Date.now(),
+            observeAdapterLatency: adapter.observeAdapterLatency,
+            adapterLatencySnapshot: adapter.adapterLatencySnapshot,
+          });
+        }
+      } catch (_) { /* 3H64 turn latency fail-open */ }
       if (w62 && threadId && typeof w62.persistSessionCheckpointClosed === 'function') {
-        w62.persistSessionCheckpointClosed({
-          sessionKey: threadId,
-          state: { messages, steps, stoppedReason, finalText },
-          root: persistRoot,
-        });
+        const ckptState = { messages, steps, stoppedReason, finalText, remaining: Math.max(0, cap - steps.length) };
+        try {
+          const w64 = loadEngine3h64();
+          const adapter = loadEngineAdapter();
+          if (w64 && typeof w64.applyCheckpointResumeClosed === 'function' && adapter) {
+            w64.applyCheckpointResumeClosed({
+              persist: true,
+              resume: false,
+              state: ckptState,
+              payload: ckptState,
+              remaining: ckptState.remaining,
+              list: [ckptState],
+              replayToolResultsOnResume: adapter.replayToolResultsOnResume,
+              boundStepsOnCheckpointResume: adapter.boundStepsOnCheckpointResume,
+              crc32CheckOnCheckpointLoad: adapter.crc32CheckOnCheckpointLoad,
+              gzipCheckpointIfOver64KiB: adapter.gzipCheckpointIfOver64KiB,
+              pruneCheckpointsKeepLastN: adapter.pruneCheckpointsKeepLastN,
+              crc32StampOnCheckpointSave: adapter.crc32StampOnCheckpointSave,
+              persistFn: (packed) => {
+                w62.persistSessionCheckpointClosed({
+                  sessionKey: threadId,
+                  state: Object.assign({}, ckptState, {
+                    crc32: packed && packed.crc32,
+                    gzipped: packed && packed.gzipped,
+                  }),
+                  root: persistRoot,
+                });
+              },
+            });
+          } else {
+            w62.persistSessionCheckpointClosed({
+              sessionKey: threadId,
+              state: ckptState,
+              root: persistRoot,
+            });
+          }
+        } catch (_) {
+          w62.persistSessionCheckpointClosed({
+            sessionKey: threadId,
+            state: ckptState,
+            root: persistRoot,
+          });
+        }
       }
     } catch (_) { /* 3H62 fail-open */ }
   }

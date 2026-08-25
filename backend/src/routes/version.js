@@ -90,6 +90,30 @@ router.get('/', (_req, res) => {
   res.json(VERSION_INFO);
 });
 
+/**
+ * GET /api/version/latency — backend-only p50/p95 first-token / turn-end
+ * from the persisted JSONL ring + in-process adapter snapshot. No UI.
+ */
+router.get('/latency', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  let snapshot = null;
+  let ring = null;
+  try {
+    const ad = require('../services/agent-runner/engine-adapter');
+    if (typeof ad.adapterLatencySnapshot === 'function') snapshot = ad.adapterLatencySnapshot();
+  } catch (_) { snapshot = null; }
+  try {
+    const w64 = require('../services/agent-runner/engine-3h64');
+    if (typeof w64.readLatencyRingClosed === 'function') ring = w64.readLatencyRingClosed();
+  } catch (_) { ring = null; }
+  res.json({
+    wave: '3H64',
+    snapshot: snapshot,
+    ring: ring,
+    note: 'persisted p50/p95; never invented Flash',
+  });
+});
+
 module.exports = router;
 module.exports.VERSION_INFO = VERSION_INFO;
 module.exports.resolveCommit = resolveCommit;

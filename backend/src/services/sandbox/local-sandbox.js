@@ -231,9 +231,39 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
   // Prepend memory-limit preamble for Python to contain runaway allocations.
   const finalCode = language === 'python' ? PYTHON_RESOURCE_PREAMBLE + code : code;
 
-  const [bin, baseArgs] = INTERPRETERS[language]();
-  const argv = [...baseArgs, finalCode];
+  const [bin0, baseArgs] = INTERPRETERS[language]();
+  let bin = bin0;
+  let argv = [...baseArgs, finalCode];
   const spawnImpl = typeof opts.spawnImpl === 'function' ? opts.spawnImpl : spawn;
+  let sandboxGuards = null;
+  try {
+    const w64 = require('../agent-runner/engine-3h64');
+    const ad = require('../agent-runner/engine-adapter');
+    if (typeof w64.applySandboxSpawnGuardsClosed === 'function') {
+      sandboxGuards = w64.applySandboxSpawnGuardsClosed({
+        bin: bin,
+        argv: argv,
+        env: env,
+        sandboxKillAfterGraceMs: ad.sandboxKillAfterGraceMs,
+        sandboxNetFailClosed: ad.sandboxNetFailClosed,
+        sandboxNoNewPrivs: ad.sandboxNoNewPrivs,
+        wrapSandboxSpawnWithRssCpu: ad.wrapSandboxSpawnWithRssCpu,
+        tmpCleanupOnCancel: ad.tmpCleanupOnCancel,
+        reapBackgroundBashOnAbort: ad.reapBackgroundBashOnAbort,
+        pollBackgroundBash: ad.pollBackgroundBash,
+      });
+      // wrapSandboxSpawnWithRssCpu uses `ulimit -v` (virtual address
+      // space). V8 reserves multi-GB ranges, so applying the wrap to
+      // the node interpreter FatalOOMs. Still call the live helper;
+      // only apply bash+ulimit to python/bash.
+      const looksLikeNode = /node(\.exe)?$/i.test(String(bin0))
+        || bin0 === process.execPath;
+      if (sandboxGuards && sandboxGuards.bin && Array.isArray(sandboxGuards.argv) && !looksLikeNode) {
+        bin = sandboxGuards.bin;
+        argv = sandboxGuards.argv;
+      }
+    }
+  } catch (_) { /* 3H64 spawn wrap fail-open */ }
 
   // Acquire a concurrency slot before spawning.  The deadline is half the
   // execution timeout so a queued call still has time to run if it gets through.
@@ -319,10 +349,35 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       child.stderr.on('data', (chunk) => { stderrBuf = appendCapped(stderrBuf, chunk, 'stderr'); });
     }
 
+    function releaseChild() {
+      try { if (child.stdout) child.stdout.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stderr) child.stderr.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { child.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stdout && !child.stdout.destroyed) child.stdout.destroy(); } catch (_) { /* ignore */ }
+      try { if (child.stderr && !child.stderr.destroyed) child.stderr.destroy(); } catch (_) { /* ignore */ }
+      try { if (typeof child.unref === 'function') child.unref(); } catch (_) { /* ignore */ }
+    }
+
     function killChild(reason) {
       if (killedReason) return;
       killedReason = reason;
-      try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      try {
+        const adKill = require('../agent-runner/engine-adapter');
+        if (typeof adKill.sandboxKillAfterGraceMs === 'function') {
+          adKill.sandboxKillAfterGraceMs({
+            pid: (child && child.pid) || 1,
+            graceMs: 20,
+            killFn: function (_id, sig) {
+              try { child.kill(sig || 'SIGKILL'); } catch (_) { /* swallow */ }
+            },
+            setTimeoutFn: setTimeout,
+          });
+        } else {
+          try { child.kill('SIGKILL'); } catch { /* swallow */ }
+        }
+      } catch (_) {
+        try { child.kill('SIGKILL'); } catch { /* swallow */ }
+      }
       if (reason === 'aborted') {
         try {
           const w60 = require('../agent-runner/engine-3h60');
@@ -351,6 +406,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     child.on('error', (err) => {
       if (timer) clearTimeout(timer);
       sem.release();
+      releaseChild();
       if (externalAbortHandler && opts.signal) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
@@ -371,6 +427,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       let durationMs = elapsedMs();
       const stdout = stdoutBuf.toString('utf8');
       const stderr = stderrBuf.toString('utf8');
+      releaseChild();
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);
@@ -420,6 +477,24 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         return;
       }
       if (killedReason === 'aborted') {
+        try {
+          const w64ab = require('../agent-runner/engine-3h64');
+          const adAb = require('../agent-runner/engine-adapter');
+          if (typeof w64ab.applySandboxSpawnGuardsClosed === 'function') {
+            w64ab.applySandboxSpawnGuardsClosed({
+              aborted: true,
+              dirs: sessionWorkdir ? [sessionWorkdir] : [],
+              pid: child && child.pid,
+              sandboxKillAfterGraceMs: adAb.sandboxKillAfterGraceMs,
+              sandboxNetFailClosed: adAb.sandboxNetFailClosed,
+              sandboxNoNewPrivs: adAb.sandboxNoNewPrivs,
+              wrapSandboxSpawnWithRssCpu: adAb.wrapSandboxSpawnWithRssCpu,
+              tmpCleanupOnCancel: adAb.tmpCleanupOnCancel,
+              reapBackgroundBashOnAbort: adAb.reapBackgroundBashOnAbort,
+              pollBackgroundBash: adAb.pollBackgroundBash,
+            });
+          }
+        } catch (_) { /* 3H64 abort cleanup fail-open */ }
         resolve({
           ok: false,
           code: 'sandbox_aborted',

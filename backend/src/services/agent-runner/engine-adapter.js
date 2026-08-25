@@ -4854,12 +4854,18 @@ function adapterSnapshot() {
       snap = { ...snap, ...w63.waveSnapshot(), wave: w63.WAVE || '3H63' };
     }
   } catch (_) { /* fail-open: stay on 3H62 if 3H63 is absent */ }
+  try {
+    const w64 = require('./engine-3h64');
+    if (w64 && typeof w64.waveSnapshot === 'function') {
+      snap = { ...snap, ...w64.waveSnapshot(), wave: w64.WAVE || '3H64' };
+    }
+  } catch (_) { /* fail-open: stay on 3H63 if 3H64 is absent */ }
   return snap;
 }
 
 function loadOptionalEngineWave(name) {
   const file = String(name || '').trim();
-  if (!/^engine-3h(?:5[5-9]|6[0-3])$/.test(file)) return null;
+  if (!/^engine-3h(?:5[5-9]|6[0-4])$/.test(file)) return null;
   try {
     return require('./' + file);
   } catch (_) {
@@ -7682,7 +7688,7 @@ module.exports = {
 };
 
 function bindOptionalEngineWaves(target) {
-  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61', 'engine-3h62', 'engine-3h63']) {
+  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61', 'engine-3h62', 'engine-3h63', 'engine-3h64']) {
     const mod = loadOptionalEngineWave(name);
     if (!mod || typeof mod !== 'object') continue;
     for (const [k, v] of Object.entries(mod)) {

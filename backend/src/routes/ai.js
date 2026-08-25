@@ -1154,6 +1154,24 @@ function routeCanReachVision(provider, model) {
 }
 
 function sanitizeErrorForUser(error) {
+  try {
+    const raw = String((error && (error.stack || error.message)) || error || '');
+    if (raw.indexOf('sk-') >= 0 || /at\s+\S+\s+\(/.test(raw)) {
+      const w64 = require('../services/agent-runner/engine-3h64');
+      const ad = require('../services/agent-runner/engine-adapter');
+      if (typeof w64.classifyPublicGenerateErrorClosed === 'function') {
+        const pub = w64.classifyPublicGenerateErrorClosed({
+          err: error,
+          code: error && (error.code || error.name),
+          classifyToolFailure: ad.classifyToolFailure,
+          sanitizeClientError: ad.sanitizeClientError,
+        });
+        if (pub && pub.message && pub.message.indexOf('sk-') === -1) {
+          return pub.message;
+        }
+      }
+    }
+  } catch (_) { /* 3H64 fail-open to local table */ }
   const msg = String(error?.message || error || 'AI generation failed');
   if (/does not support image/i.test(msg)) {
     return 'El modelo seleccionado no admite imágenes. Intenta con un modelo compatible con visión o adjunta documentos en lugar de imágenes.';
@@ -2036,6 +2054,38 @@ router.post(
       clientGone = true;
       console.log(`Client request aborted for chat: ${req.body.chatId}. Run continues in background (detached).`);
     });
+    let __lastClientAt = Date.now();
+    let __pendingSseEvent = null;
+    try {
+      const adGone = require('../services/agent-runner/engine-adapter');
+      const w64gone = require('../services/agent-runner/engine-3h64');
+      if (typeof adGone.destroySseOnClientClose === 'function') {
+        adGone.destroySseOnClientClose(req, {
+          close: function () { clientGone = true; },
+          destroy: function () { clientGone = true; },
+        });
+      }
+      if (typeof w64gone.guardSseClientGoneClosed === 'function') {
+        w64gone.guardSseClientGoneClosed({
+          req: req,
+          writer: {
+            close: function () { clientGone = true; },
+            destroy: function () { clientGone = true; },
+          },
+          lastClientAt: __lastClientAt,
+          now: Date.now(),
+          aborted: false,
+          closed: false,
+          lastEventId: __lastEventIdHeader,
+          ring: [],
+          destroySseOnClientClose: adGone.destroySseOnClientClose,
+          closeIfClientGone30s: adGone.closeIfClientGone30s,
+          flushLastSseEventBeforeClose: adGone.flushLastSseEventBeforeClose,
+          endSseWithErrorEventOnAbort: adGone.endSseWithErrorEventOnAbort,
+          detectSseGap: adGone.detectSseGap,
+        });
+      }
+    } catch (_) { /* 3H64 client-gone attach fail-open */ }
     // Centralized mirror guard: once the client is gone, every res.write in
     // this handler becomes a silent no-op (writing to a destroyed socket would
     // emit stream errors), without touching each of the many call sites.
@@ -2552,6 +2602,12 @@ router.post(
               if (back && back.ok === false && back.backwards) {
                 resumeReplayPosition = Number.isFinite(storedCursor) ? storedCursor : resumeReplayPosition;
               }
+            }
+            if (typeof ad.detectSseGap === 'function') {
+              const ring = Array.isArray(resumeSession && resumeSession.record && resumeSession.record.chunks)
+                ? resumeSession.record.chunks.map(function (content, i) { return { seq: i + 1, content: content }; })
+                : [];
+              ad.detectSseGap(String(parsed.position), ring);
             }
           } catch (_) { /* 3H62 cursor hydrate is best-effort */ }
         } else {
@@ -6258,6 +6314,17 @@ router.post(
                         if (typeof ad.observeAdapterLatency === 'function') {
                           ad.observeAdapterLatency('first_token', activeResume._firstTokenAt - __generateStartedAt);
                         }
+                        try {
+                          const w64lat = require('../services/agent-runner/engine-3h64');
+                          if (typeof w64lat.persistLatencyRingClosed === 'function') {
+                            w64lat.persistLatencyRingClosed({
+                              kind: 'first_token',
+                              ms: activeResume._firstTokenAt - __generateStartedAt,
+                              observeAdapterLatency: ad.observeAdapterLatency,
+                              adapterLatencySnapshot: ad.adapterLatencySnapshot,
+                            });
+                          }
+                        } catch (_) { /* 3H64 persist fail-open */ }
                         if (typeof ad.firstTokenWatchdogMs === 'function') {
                           ad.firstTokenWatchdogMs({
                             firstTokenAt: activeResume._firstTokenAt,
@@ -7787,6 +7854,43 @@ router.post(
             now: Date.now(),
           });
         }
+        try {
+          const w64end = require('../services/agent-runner/engine-3h64');
+          const adEnd = require('../services/agent-runner/engine-adapter');
+          if (typeof w64end.persistLatencyRingClosed === 'function') {
+            w64end.persistLatencyRingClosed({
+              kind: 'turn_end',
+              startedAt: __generateStartedAt,
+              now: Date.now(),
+              observeAdapterLatency: adEnd.observeAdapterLatency,
+              adapterLatencySnapshot: adEnd.adapterLatencySnapshot,
+            });
+          }
+          if (typeof w64end.guardSseClientGoneClosed === 'function') {
+            const gone = w64end.guardSseClientGoneClosed({
+              req: req,
+              writer: res,
+              lastClientAt: __lastClientAt,
+              now: Date.now(),
+              pendingEvent: __pendingSseEvent,
+              closed: Boolean(res.writableEnded || clientGone),
+              aborted: Boolean(signal && signal.aborted),
+              reason: streamFailureMessage || 'aborted',
+              lastEventId: __lastEventIdHeader,
+              destroySseOnClientClose: adEnd.destroySseOnClientClose,
+              closeIfClientGone30s: adEnd.closeIfClientGone30s,
+              flushLastSseEventBeforeClose: adEnd.flushLastSseEventBeforeClose,
+              endSseWithErrorEventOnAbort: adEnd.endSseWithErrorEventOnAbort,
+              detectSseGap: adEnd.detectSseGap,
+            });
+            if (gone && gone.abortWrite && gone.frame && !res.writableEnded && !clientGone) {
+              try { res.write(gone.frame); } catch (_) { /* socket gone */ }
+            }
+            if (gone && gone.close && !res.writableEnded) {
+              try { res.end(); } catch (_) { /* already closed */ }
+            }
+          }
+        } catch (_) { /* 3H64 finally fail-open */ }
         const shouldSettle = Boolean(signal && signal.aborted) || Boolean(streamFailureMessage);
         if (shouldSettle && typeof w62.settleLedgerOnErrorClosed === 'function') {
           w62.settleLedgerOnErrorClosed({
