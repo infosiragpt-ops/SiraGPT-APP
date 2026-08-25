@@ -1,5 +1,5 @@
 /** `/agentes` is the authenticated agents home. `/` stays marketing for guests. */
-const CHAT_PAGES = ['/agentes', '/chat', '/gpts', '/parafraseo', '/projects', '/design', '/codex', '/code', '/apps', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents', '/descargas'] as const
+const CHAT_PAGES = ['/agentes', '/chat', '/gpts', '/conexiones', '/parafraseo', '/projects', '/design', '/codex', '/code', '/apps', '/plan', '/profile', '/library', '/billing', '/settings', '/thesis', '/documents', '/descargas'] as const
 const FULLSCREEN_CHAT_PAGES = ['/codex', '/apps'] as const
 // /admin owns its full layout (own SidebarProvider + AdminSidebar in
 // app/admin/layout.tsx), so AppWrapper must render children as-is.

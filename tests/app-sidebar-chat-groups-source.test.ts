@@ -79,13 +79,18 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(toolbar, /<input/)
   })
 
-  it("keeps Spanish collapse tooltips and the Agentes | Empresas header only", () => {
+  it("keeps Spanish collapse tooltips and Agentes | Apps | Empresas in the header", () => {
     assert.match(source, /Contraer barra lateral ⌘B/)
     assert.match(source, /Expandir barra lateral ⌘B/)
     const headerStart = source.indexOf('aria-label="Modo de la barra lateral"')
-    const header = source.slice(headerStart, headerStart + 2200)
+    const header = source.slice(headerStart, headerStart + 3200)
     assert.match(header, /aria-label="Agentes"/)
-    assert.match(header, /aria-label="Empresas"/)
+    assert.match(header, /data-testid="sidebar-apps-tab"/)
+    assert.match(header, /aria-label="Apps"/)
+    assert.match(header, /navigate\("\/conexiones", "Apps"\)/)
+    const appsAt = header.indexOf('aria-label="Apps"')
+    const empresasAt = header.indexOf('aria-label="Empresas"')
+    assert.ok(appsAt > 0 && empresasAt > appsAt, "Apps must sit before Empresas")
     assert.doesNotMatch(header, /aria-label="Chats"/)
     assert.doesNotMatch(header, /<Code2/)
     assert.doesNotMatch(header, /href=['"`]\/code/)

@@ -32,6 +32,7 @@ import {
   CalendarDays,
   FolderKanban,
   PenSquare,
+  Plug,
   Shield,
   Edit2,
   Check,
@@ -1125,6 +1126,7 @@ export function AppSidebar() {
   // Check if we're on GPTs page
   const isOnChatPage = isAgentsHomePath(activePathname)
   const isOnLibraryPage = activePathname.startsWith('/library')
+  const isOnConnectAppsPage = activePathname === '/conexiones' || activePathname.startsWith('/conexiones/')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnProjectsPage = activePathname.startsWith('/projects')
   return (
@@ -1153,17 +1155,38 @@ export function AppSidebar() {
               <button
                 type="button"
                 role="tab"
-                aria-selected={sidebarMode === "chat"}
+                aria-selected={sidebarMode === "chat" && !isOnConnectAppsPage}
                 aria-label="Agentes"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
                   SIDEBAR_TAB,
-                  "gap-1.5",
-                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
+                  "gap-1",
+                  sidebarMode === "chat" && !isOnConnectAppsPage ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0" />
                 <span>Agentes</span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                data-testid="sidebar-apps-tab"
+                aria-selected={isOnConnectAppsPage && sidebarMode !== "code"}
+                aria-label="Apps"
+                onClick={() => {
+                  setSidebarMode("chat")
+                  try { window.localStorage.setItem("sira:sidebar:mode", "chat") } catch { /* ignore */ }
+                  navigate("/conexiones", "Apps")
+                  closeMobileSidebar()
+                }}
+                className={cn(
+                  SIDEBAR_TAB,
+                  "gap-1",
+                  isOnConnectAppsPage && sidebarMode !== "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
+                )}
+              >
+                <Plug className="h-3.5 w-3.5 shrink-0" />
+                <span>Apps</span>
               </button>
               <button
                 type="button"
@@ -1173,6 +1196,7 @@ export function AppSidebar() {
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
                   SIDEBAR_TAB,
+                  "gap-1",
                   sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >

@@ -20,6 +20,9 @@ describe("GPTs Apps catalog", () => {
     assert.match(catalog, /id: "indeed"/)
     assert.match(catalog, /id: "linkedin"/)
     assert.match(catalog, /id: "gumtree"/)
+    assert.match(catalog, /domain: "indeed.com"/)
+    assert.match(catalog, /domain: "linkedin.com"/)
+    assert.match(catalog, /gptStoreAppLogoUrl/)
   })
 
   it("renders Apps at the foot of /gpts with a connect action", () => {
@@ -30,5 +33,14 @@ describe("GPTs Apps catalog", () => {
     assert.match(section, />Apps</)
     assert.match(section, /Conectar/)
     assert.match(section, /settings\.apps\[id\]\?\.connected === true/)
+    assert.match(section, /gptStoreAppLogoUrl/)
+    assert.match(section, /alt=\{\`\$\{app\.name\} logo\`\}/)
+  })
+
+  it("opens the full catalog from the sidebar Apps tab", () => {
+    const conexiones = fs.readFileSync(path.join(process.cwd(), "app", "conexiones", "page.tsx"), "utf8")
+    assert.match(conexiones, /data-testid="connect-apps-page"/)
+    assert.match(conexiones, /showAll/)
+    assert.match(conexiones, /hideHeading/)
   })
 })
