@@ -1143,8 +1143,15 @@ async function runAgentLoop({
           maxInflightToolsPerSession8: adapterHint.maxInflightToolsPerSession8,
           perToolRateLimit: adapterHint.perToolRateLimit,
         });
-        if (hinted && hinted.inject && hinted.text && Array.isArray(messages)) {
-          messages.push({ role: 'system', content: String(hinted.text), __budgetHint: true });
+        if (hinted && hinted.inject && hinted.text) {
+          // Advisory only: never rewrite system/user messages (F7 pins the
+          // original system contract verbatim). Helpers still ran above.
+          onEvent({
+            type: 'budget_hint',
+            iteration,
+            text: String(hinted.text),
+            code: hinted.code || 'plan_budget',
+          });
         }
       }
     } catch (_) { /* 3H65 budget hint fail-open */ }
@@ -1314,11 +1321,14 @@ async function runAgentLoop({
               iteration,
             });
             if (ds.retry === false && (ds.code === 'credit_ceiling' || ds.code === 'quota_exhausted' || ds.code === 'payload_too_large')) {
+              // Keep the pre-3H65 contract: HTTP 402 is always llm_402 so
+              // orchestrator / executeAgentRunnerTurn stay honest (not no_output).
+              const creditStop = ds.code === 'credit_ceiling' || ds.code === 'quota_exhausted';
               return {
                 finalText: '',
                 iterations: iteration,
                 steps,
-                stoppedReason: ds.code,
+                stoppedReason: creditStop ? 'llm_402' : ds.code,
                 verificationAttempts,
                 errorCode: ds.code,
                 errorMessage: classifiedDs.message,

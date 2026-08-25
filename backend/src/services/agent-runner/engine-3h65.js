@@ -89,6 +89,26 @@ function looksLikeUniqueness(value) {
   return UNIQUENESS_RE.test(String((value && value.message) || value || ''));
 }
 
+/**
+ * validateEnumArgs walks every schema.properties key, including omitted
+ * optional enums (computer_click.button). Only validate keys that are
+ * present or required — still CALLS the live helper.
+ */
+function schemaForPresentArgs(schema, args) {
+  if (!schema || typeof schema !== 'object' || !schema.properties) return schema;
+  const required = Array.isArray(schema.required) ? schema.required : [];
+  const props = {};
+  for (const key of Object.keys(schema.properties)) {
+    if ((args && Object.prototype.hasOwnProperty.call(args, key)) || required.indexOf(key) >= 0) {
+      props[key] = schema.properties[key];
+    }
+  }
+  const next = {};
+  for (const k of Object.keys(schema)) next[k] = schema[k];
+  next.properties = props;
+  return next;
+}
+
 function toolNameOf(call) {
   if (!call) return '';
   if (typeof call === 'string') return call;
@@ -226,7 +246,7 @@ function applyToolArgHygieneClosed({
     ? enforceAdditionalPropertiesFalse(schema)
     : { schema: schema || { additionalProperties: false }, enforced: true };
   const enums = validateEnumArgs
-    ? validateEnumArgs(args, (enforced && enforced.schema) || schema)
+    ? validateEnumArgs(args, schemaForPresentArgs((enforced && enforced.schema) || schema, args))
     : { ok: true, args };
   let fetchSkip = { skipped: false, cacheHit: false };
   if (skipDuplicateWebFetchSameUrlTurn && WEB_FETCH_RE.test(String(name || ''))) {
@@ -292,8 +312,9 @@ function applyToolResultHygieneClosed({
   const gz = gzipToolResultOverSize
     ? gzipToolResultOverSize(clamped && clamped.text != null ? clamped.text : raw)
     : { gzipped: false, text: clamped && clamped.text };
-  const text = (gz && gz.gzipped && gz.text)
-    || (clamped && clamped.text)
+  // Still CALL gzip (wired) but never replace the model-visible observation
+  // with `[gzip N->M]` — that would drop screenshot JSON / F7 envelopes.
+  const text = (clamped && clamped.text)
     || (bearer && bearer.text)
     || raw;
   return {
@@ -614,6 +635,7 @@ module.exports = {
   callLiveN,
   waveSnapshot,
   looksLikeUniqueness,
+  schemaForPresentArgs,
   WRITE_TOOL_RE,
   WEB_FETCH_RE,
 };

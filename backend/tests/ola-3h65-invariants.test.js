@@ -20,7 +20,7 @@ const w63 = require('../src/services/agent-runner/engine-3h63');
 const w64 = require('../src/services/agent-runner/engine-3h64');
 const w65 = require('../src/services/agent-runner/engine-3h65');
 const ad = require('../src/services/agent-runner/engine-adapter');
-const { classifyLoopError } = require('../src/services/agent-runner/loop');
+const { classifyLoopError, runAgentLoop } = require('../src/services/agent-runner/loop');
 const { createSSEWriter } = require('../src/utils/sse-writer');
 
 const LIVE_33 = Object.freeze([
@@ -253,6 +253,18 @@ test('3H65-C-001 tool arg/result hygiene + secret redaction', () => {
   });
   assert.equal(hyRes.ok, true);
   assert.equal(String(hyRes.text).indexOf('supersecret.token.value'), -1);
+  // gzip is called (wired) but must not replace the observation with `[gzip N->M]`
+  const bulky = w65.applyToolResultHygieneClosed({
+    result: JSON.stringify({ frame: 1, clicks: 0, blob: 'z'.repeat(6000) }),
+    validateToolResultShape: ad.validateToolResultShape,
+    gzipToolResultOverSize: ad.gzipToolResultOverSize,
+    clampToolResultWithHash: ad.clampToolResultWithHash,
+    redactSecretsInToolResult: ad.redactSecretsInToolResult,
+    redactAuthorizationBearerInToolResults: ad.redactAuthorizationBearerInToolResults,
+  });
+  assert.equal(bulky.ok, true);
+  assert.ok(String(bulky.text).includes('"frame":1'));
+  assert.equal(String(bulky.text).indexOf('[gzip '), -1);
 });
 
 test('3H65-D-001 file-edit leftover: refuse large overwrite, context, rollback', () => {
@@ -339,6 +351,67 @@ test('3H65-E-001 DeepSeek 402/413 never retry + never charge pre-token', () => {
     neverChargeIfCancelledBeforeFirstToken: ad.neverChargeIfCancelledBeforeFirstToken,
   });
   assert.equal(tooBig.retry, false);
+});
+
+test('3H65-E-002 loop maps 402 helpers to stoppedReason llm_402 (not no_output)', () => {
+  const loop = read('src/services/agent-runner/loop.js');
+  assert.ok(loop.includes("stoppedReason: creditStop ? 'llm_402' : ds.code"));
+  assert.ok(loop.includes("const creditStop = ds.code === 'credit_ceiling' || ds.code === 'quota_exhausted'"));
+  assert.ok(loop.includes("type: 'budget_hint'"));
+  assert.ok(!/messages\.push\(\{\s*role:\s*'system',\s*content:\s*String\(hinted\.text\)/.test(loop));
+  const clickOk = w65.applyToolArgHygieneClosed({
+    args: { x: 10, y: 20 },
+    schema: {
+      type: 'object',
+      properties: {
+        x: { type: 'integer' },
+        y: { type: 'integer' },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+      },
+      required: ['x', 'y'],
+    },
+    validateEnumArgs: ad.validateEnumArgs,
+    enforceAdditionalPropertiesFalse: ad.enforceAdditionalPropertiesFalse,
+  });
+  assert.equal(clickOk.refuse, false);
+  const badBtn = w65.applyToolArgHygieneClosed({
+    args: { x: 10, y: 20, button: 'diagonal' },
+    schema: {
+      type: 'object',
+      properties: {
+        x: { type: 'integer' },
+        y: { type: 'integer' },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+      },
+      required: ['x', 'y'],
+    },
+    validateEnumArgs: ad.validateEnumArgs,
+    enforceAdditionalPropertiesFalse: ad.enforceAdditionalPropertiesFalse,
+  });
+  assert.equal(badBtn.refuse, true);
+});
+
+test('3H65-E-003 runAgentLoop 402 stops as llm_402 (never no_output)', async () => {
+  const err = new Error('This request requires more credits (402)');
+  err.status = 402;
+  const client = {
+    chat: {
+      completions: {
+        create: async () => { throw err; },
+      },
+    },
+  };
+  const ran = await runAgentLoop({
+    client,
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: 'hola' }],
+    tools: [],
+    executors: {},
+    maxIterations: 3,
+  });
+  assert.equal(ran.stoppedReason, 'llm_402');
+  assert.notEqual(ran.stoppedReason, 'no_output');
+  assert.ok(ran.errorCode === 'quota_exhausted' || ran.errorCode === 'credit_ceiling' || ran.errorCode === 'llm_402');
 });
 
 test('3H65-F-001 generate queue cap 16 + starvation bound', () => {
