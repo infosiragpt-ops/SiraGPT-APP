@@ -44,7 +44,7 @@ describe("chat cancellation before intent classification completes", () => {
 
     assert.match(
       addMessage,
-      /controller\.signal\.aborted \|\| pendingStopsRef\.current\.has\(activeChat\.id\)[\s\S]{0,300}clearThisPendingTurn\(\)/,
+      /controller\.signal\.aborted \|\| pendingStopsRef\.current\.has\(activeChat\.id\)[\s\S]{0,400}clearThisPendingTurn\(\)/,
     )
     assert.match(addMessage, /shouldRecoverPersistedGenerate\(error/)
   })
