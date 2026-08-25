@@ -137,6 +137,17 @@ test('3H66-B-001 tool JSON coerce leftover', () => {
   });
   assert.equal(badEnum.ok, false);
   assert.equal(badEnum.refuse, true);
+  const noSchema = w66.applyToolJsonCoerceClosed({
+    args: { path: '.' },
+    coerceTrueFalseStringsToBool: ad.coerceTrueFalseStringsToBool,
+    coerceIntegerFromNumericString: ad.coerceIntegerFromNumericString,
+    repairEnumCaseInsensitive: ad.repairEnumCaseInsensitive,
+    repairMissingRequiredFromPriorTurn: ad.repairMissingRequiredFromPriorTurn,
+    repairSingleQuotesAndCommentsInToolJson: ad.repairSingleQuotesAndCommentsInToolJson,
+    repairUnquotedKeysInToolJson: ad.repairUnquotedKeysInToolJson,
+  });
+  assert.equal(noSchema.ok, true);
+  assert.equal(noSchema.args.path, '.');
 });
 
 test('3H66-C-001 path jail leftover', () => {
@@ -181,6 +192,20 @@ test('3H66-C-001 path jail leftover', () => {
   });
   assert.equal(uniqueness.uniqueness, true);
   assert.equal(uniqueness.ok, true);
+  const relativeNoRoot = w66.applyPathJailClosed({
+    path: '.',
+    kind: 'write',
+    nfcPath: ad.nfcPath,
+    rejectNulInPath: ad.rejectNulInPath,
+    rejectControlCharsInPaths: ad.rejectControlCharsInPaths,
+    rejectUncAndWindowsPaths: ad.rejectUncAndWindowsPaths,
+    rejectSymlinkEscape: ad.rejectSymlinkEscape,
+    refuseWriteThroughSymlink: ad.refuseWriteThroughSymlink,
+    refuseReadThroughSymlink: ad.refuseReadThroughSymlink,
+    refuseWriteOver2MiB: ad.refuseWriteOver2MiB,
+  });
+  assert.equal(relativeNoRoot.ok, true);
+  assert.equal(relativeNoRoot.refuse, false);
 });
 
 test('3H66-D-001 memory retrieve leftover', () => {
@@ -252,6 +277,20 @@ test('3H66-E-001 empty-model / parallel caps leftover', () => {
   });
   assert.equal(closed.halt, true);
   assert.equal(closed.code, 'too_many_tools');
+  const keepList = w66.applyEmptyModelAndParallelCapsClosed({
+    response: { choices: [{ message: { content: '', tool_calls: [] } }] },
+    state: {},
+    calls: [{ id: 'c1', name: 'list_files', arguments: { path: '.' } }],
+    emptyResponseRetryOnce: ad.emptyResponseRetryOnce,
+    circuitBreakerEmptyModelTwice: ad.circuitBreakerEmptyModelTwice,
+    allowParallelReads: ad.allowParallelReads,
+    maxToolsPerTurnHardCap: ad.maxToolsPerTurnHardCap,
+    maxUniqueToolsPerTurn16: ad.maxUniqueToolsPerTurn16,
+    maxToolCallsPerMessage: ad.maxToolCallsPerMessage,
+  });
+  assert.equal(keepList.emptyHalt, false);
+  assert.equal(keepList.calls.length, 1);
+  assert.equal(keepList.calls[0].name, 'list_files');
 });
 
 test('3H66-F-001 read hygiene + bash + idempotency leftover', () => {

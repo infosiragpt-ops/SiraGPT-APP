@@ -218,11 +218,18 @@ async function executeWith3h59Checkpoint({
 
   try {
     const w66pre = loadEngine3h66();
-    if (w66pre && typeof w66pre.applyPathJailClosed === 'function' && filePath && adapter) {
+    const writeKind = w66pre && w66pre.WRITE_TOOL_RE
+      ? w66pre.WRITE_TOOL_RE.test(String(mapped || ''))
+      : /^(write_|str_replace|apply_patch|apply_diff|edit_file|create_file|computer_write)/i.test(String(mapped || ''));
+    const root66 = (executors && (executors.__workspaceRoot || executors.workspaceRoot))
+      || (execArgs && execArgs.root)
+      || null;
+    if (w66pre && typeof w66pre.applyPathJailClosed === 'function' && filePath && adapter && writeKind) {
       const jail = w66pre.applyPathJailClosed({
         path: filePath,
         content: execArgs && (execArgs.content != null ? execArgs.content : execArgs.new_string),
         kind: 'write',
+        root: root66,
         result: null,
         nfcPath: adapter.nfcPath,
         rejectNulInPath: adapter.rejectNulInPath,
@@ -1785,7 +1792,9 @@ async function runAgentLoop({
           maxUniqueToolsPerTurn16: adCap.maxUniqueToolsPerTurn16,
           maxToolCallsPerMessage: adCap.maxToolCallsPerMessage,
         });
-        if (capped && Array.isArray(capped.calls)) toolCalls = capped.calls;
+        if (capped && Array.isArray(capped.calls) && (capped.calls.length || !toolCalls.length)) {
+          toolCalls = capped.calls;
+        }
         if (capped && capped.emptyHalt) emptyHaltThisTurn = true;
         if (capped && capped.halt) {
           const classified = classifyLoopError({ code: capped.code || 'too_many_tools' });
@@ -2020,10 +2029,14 @@ async function runAgentLoop({
                 ? 'write'
                 : ((w66hy.READ_TOOL_RE && w66hy.READ_TOOL_RE.test(mapped)) ? 'read' : null);
               if (kind) {
+                const root66hy = (executors && (executors.__workspaceRoot || executors.workspaceRoot))
+                  || (args && args.root)
+                  || null;
                 const jail = w66hy.applyPathJailClosed({
                   path: filePath66,
                   content: args && (args.content != null ? args.content : args.new_string),
                   kind,
+                  root: root66hy,
                   nfcPath: adapter.nfcPath,
                   rejectNulInPath: adapter.rejectNulInPath,
                   rejectControlCharsInPaths: adapter.rejectControlCharsInPaths,

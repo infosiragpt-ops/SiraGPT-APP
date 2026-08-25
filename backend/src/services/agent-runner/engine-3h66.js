@@ -156,27 +156,32 @@ function applyToolJsonCoerceClosed({
   if (value && value.__parse_error) {
     return { ok: false, refuse: true, args: value, code: 'json_parse' };
   }
+  // Live coerce helpers default missing schema to {type:'boolean'|'integer'}.
+  // Without a real schema (tools: []) that would refuse ordinary objects.
+  const sch = (schema && typeof schema === 'object' && !Array.isArray(schema))
+    ? schema
+    : { type: 'object' };
   const bools = coerceTrueFalseStringsToBool
-    ? coerceTrueFalseStringsToBool(value, schema)
+    ? coerceTrueFalseStringsToBool(value, sch)
     : { ok: true, value };
   if (bools && bools.ok === false) {
     return { ok: false, refuse: true, args: value, code: bools.code || 'coercion_rejected' };
   }
   const ints = coerceIntegerFromNumericString
-    ? coerceIntegerFromNumericString((bools && bools.value != null) ? bools.value : value, schema)
+    ? coerceIntegerFromNumericString((bools && bools.value != null) ? bools.value : value, sch)
     : { ok: true, value: (bools && bools.value) || value };
   if (ints && ints.ok === false) {
     return { ok: false, refuse: true, args: value, code: ints.code || 'coercion_rejected' };
   }
   const next = (ints && ints.value != null) ? ints.value : ((bools && bools.value != null) ? bools.value : value);
   const enums = repairEnumCaseInsensitive
-    ? repairEnumCaseInsensitive(next, schema)
+    ? repairEnumCaseInsensitive(next, sch)
     : { ok: true, value: next };
   if (enums && enums.ok === false) {
     return { ok: false, refuse: true, args: next, code: enums.code || 'enum_invalid' };
   }
   const filled = repairMissingRequiredFromPriorTurn
-    ? repairMissingRequiredFromPriorTurn((enums && enums.value != null) ? enums.value : next, schema, { prior })
+    ? repairMissingRequiredFromPriorTurn((enums && enums.value != null) ? enums.value : next, sch, { prior })
     : { ok: true, args: (enums && enums.value) || next };
   if (filled && filled.ok === false) {
     return { ok: false, refuse: true, args: filled.args, code: filled.code || 'missing_required' };
@@ -231,9 +236,12 @@ function applyPathJailClosed({
   if (unc && unc.ok === false) {
     return { ok: false, refuse: true, path: normalized, code: unc.code || 'bad_path' };
   }
-  const escape = rejectSymlinkEscape
+  // rejectSymlinkEscape → workspacePathJail, which fail-closes when root
+  // is missing. Relative tools (list_files path:'.') must still run.
+  const hasRoot = root != null && String(root).trim() !== '';
+  const escape = (hasRoot && rejectSymlinkEscape)
     ? rejectSymlinkEscape(normalized, root, { lstatSync, realpathSync })
-    : { ok: true, path: normalized };
+    : { ok: true, path: normalized, skipped: !hasRoot };
   if (escape && escape.ok === false) {
     return { ok: false, refuse: true, path: normalized, code: escape.code || 'symlink_rejected' };
   }
@@ -335,6 +343,7 @@ function applyEmptyModelAndParallelCapsClosed({
   response,
   state,
   calls,
+  toolCalls,
   emptyResponseRetryOnce,
   circuitBreakerEmptyModelTwice,
   allowParallelReads,
@@ -342,7 +351,7 @@ function applyEmptyModelAndParallelCapsClosed({
   maxUniqueToolsPerTurn16,
   maxToolCallsPerMessage,
 } = {}) {
-  const list = Array.isArray(calls) ? calls : [];
+  const list = Array.isArray(calls) ? calls : (Array.isArray(toolCalls) ? toolCalls : []);
   const rec = state && typeof state === 'object' ? state : {};
   const emptyOnce = emptyResponseRetryOnce
     ? emptyResponseRetryOnce(response, rec)
@@ -362,14 +371,17 @@ function applyEmptyModelAndParallelCapsClosed({
   const perMsg = maxToolCallsPerMessage
     ? maxToolCallsPerMessage((unique && unique.calls) || list)
     : { calls: (unique && unique.calls) || list, overflow: [] };
-  const emptyHalt = Boolean((emptyOnce && emptyOnce.stop) || (brk && brk.halt));
+  const emptyHalt = list.length === 0 && Boolean((emptyOnce && emptyOnce.stop) || (brk && brk.halt));
   const capHalt = Boolean(hard && hard.halt);
+  const nextCalls = (perMsg && Array.isArray(perMsg.calls))
+    ? perMsg.calls
+    : ((unique && Array.isArray(unique.calls)) ? unique.calls : list);
   return {
     ok: !capHalt,
     halt: capHalt,
     emptyHalt,
-    emptyRetry: Boolean(emptyOnce && emptyOnce.retry && !emptyHalt),
-    calls: (perMsg && perMsg.calls) || list,
+    emptyRetry: list.length === 0 && Boolean(emptyOnce && emptyOnce.retry && !emptyHalt),
+    calls: (nextCalls.length || !list.length) ? nextCalls : list,
     overflow: (perMsg && perMsg.overflow) || [],
     blockedReads: (parallel && parallel.blockedReads) || [],
     parallelReads: (parallel && parallel.parallelReads) || [],

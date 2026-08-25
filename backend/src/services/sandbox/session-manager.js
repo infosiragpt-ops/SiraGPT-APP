@@ -51,7 +51,7 @@ function rmSafe(p) {
   try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) { /* already gone */ }
 }
 
-function apply3h66SandboxPathJail(filePath, { kind, content } = {}) {
+function apply3h66SandboxPathJail(filePath, { kind, content, root } = {}) {
   try {
     const w66 = require('../agent-runner/engine-3h66');
     const ad = require('../agent-runner/engine-adapter');
@@ -60,6 +60,7 @@ function apply3h66SandboxPathJail(filePath, { kind, content } = {}) {
         path: filePath,
         content,
         kind: kind || 'read',
+        root: root || null,
         nfcPath: ad.nfcPath,
         rejectNulInPath: ad.rejectNulInPath,
         rejectControlCharsInPaths: ad.rejectControlCharsInPaths,
@@ -247,7 +248,7 @@ function readFile(sessionId, filePath, { maxBytes = 512 * 1024 } = {}) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'read' });
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'read', root: s.workdir });
     const abs = assertInsideWorkdir(s.workdir, jailed);
     const buf = fs.readFileSync(abs);
     const truncated = buf.length > maxBytes;
@@ -280,7 +281,7 @@ function writeFile(sessionId, filePath, content) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content });
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content, root: s.workdir });
     const abs = assertInsideWorkdir(s.workdir, jailed);
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_FILE_BYTES) return { ok: false, error: `file_too_large: ${bytes} bytes` };
@@ -300,7 +301,7 @@ function patchFile(sessionId, filePath, oldText, newText) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content: newText });
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content: newText, root: s.workdir });
     const abs = assertInsideWorkdir(s.workdir, jailed);
     const content = fs.readFileSync(abs, 'utf8');
     const occurrences = content.split(oldText).length - 1;
