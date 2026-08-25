@@ -649,7 +649,20 @@ describe('chat turn idempotency', () => {
     assert.match(activeSource, /claimStreamController\([\s\S]*?\{ replaceOwner: true \}/);
     assert.match(
       activeSource,
-      /duplicateTurn\?\.idempotencyConflict[\s\S]*?IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/,
+      /duplicateTurn\?\.idempotencyConflict[\s\S]*?continuing as new turn/,
+    );
+    assert.doesNotMatch(
+      activeSource,
+      /duplicateTurn\?\.idempotencyConflict[\s\S]*?respondGenerateTurnError/,
+    );
+    assert.doesNotMatch(activeSource, /IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/);
+    assert.match(
+      activeSource,
+      /in-memory idempotency mismatch — dropping stale turn/,
+    );
+    assert.match(
+      activeSource,
+      /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
     );
     assert.match(lookupSource, /findMessagesByTurnIdentity\(\{[\s\S]*?roles: \['USER', 'ASSISTANT'\]/);
     assert.doesNotMatch(lookupSource, /timestamp:\s*\{\s*gte:|take:\s*80/);

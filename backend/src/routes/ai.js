@@ -2389,17 +2389,17 @@ router.post(
         streamId,
       });
       if (!__hasResumeRequest && canPersist && activeGenerateTurnKey) {
-        const activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
-        if (activeTurn) {
-          if (activeTurn.requestFingerprint !== generateIdempotencyRequestHash) {
-            return respondGenerateTurnError(res, {
-              code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
-              message: 'La clave de idempotencia ya está asociada a otra solicitud.',
-              retryable: false,
-              actualModel: model,
-            });
+        let activeTurn = activeGenerateTurns.get(activeGenerateTurnKey);
+        if (activeTurn && activeTurn.requestFingerprint !== generateIdempotencyRequestHash) {
+          // Safari/Cloudflare can retry the same streamId with a new prompt.
+          // A 409 here used to mix JSON onto the next generate finally SSE write.
+          console.warn('[ai/generate] in-memory idempotency mismatch — dropping stale turn', { chatId });
+          if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
+            activeGenerateTurns.delete(activeGenerateTurnKey);
           }
-
+          activeTurn = null;
+        }
+        if (activeTurn) {
           const activeWait = await waitForActiveTurn(activeTurn);
           if (activeWait.outcome === 'replay') {
             fullResponseContent = activeWait.turn.assistantMessage.content || '';
@@ -2454,14 +2454,8 @@ router.post(
             allowAssistantOnly: regenerate,
           });
           if (duplicateTurn?.idempotencyConflict) {
-            return respondGenerateTurnError(res, {
-              code: 'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD',
-              message: 'La clave de idempotencia ya está asociada a otra solicitud.',
-              retryable: false,
-              actualModel: model,
-            });
-          }
-          if (duplicateTurn?.assistantMessage) {
+            console.warn('[ai/generate] idempotency payload conflict — continuing as new turn', { chatId });
+          } else if (duplicateTurn?.assistantMessage) {
             fullResponseContent = duplicateTurn.assistantMessage.content || '';
             if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
               req._activeGenerateTurn.resolve(duplicateTurn);
@@ -8055,6 +8049,12 @@ router.post(
         // replace-frame so the client sees the annotated reply.
         try {
           if (req._filterCtx && !req._filterCtx._postRan) {
+            if (res.headersSent && res.statusCode >= 400 && res.statusCode < 500) {
+              if (!res.writableEnded) {
+                try { res.end(); } catch (_) { /* already closing */ }
+              }
+              return;
+            }
             let __resp = '';
             try { __resp = typeof fullResponseContent === 'string' ? fullResponseContent : ''; } catch (_) { __resp = ''; }
             req._filterCtx.response = __resp;
