@@ -746,6 +746,7 @@ jobs:
           done
           # Pre-warm heavy routes so the first spec navigation is NOT a cold
           # compile that would exceed the 30s test timeout and flake the gate.
+          curl -s -o /dev/null --max-time 120 http://localhost:3005/agentes || true
           curl -s -o /dev/null --max-time 120 http://localhost:3005/chat || true
           curl -s -o /dev/null --max-time 30 http://localhost:3005/auth/login || true
           sleep 3
