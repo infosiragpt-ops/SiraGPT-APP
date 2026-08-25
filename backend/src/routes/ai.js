@@ -1856,6 +1856,24 @@ function applyGenerateFairQueue3h63(req, { sessionKey, producerId, requestId, wa
   if (typeof ad.acquireFairGenerateLock === 'function') {
     ad.acquireFairGenerateLock(sess, prod);
   }
+  try {
+    const w66lock = require('../services/agent-runner/engine-3h66');
+    if (typeof w66lock.applySseCreditLockClosed === 'function') {
+      w66lock.applySseCreditLockClosed({
+        holder: prod,
+        requester: prod,
+        acquiredAt: Date.now(),
+        heartbeatAt: Date.now(),
+        now: Date.now(),
+        sseClosed: false,
+        settled: false,
+        held: true,
+        closeSseThenSettleCredits: ad.closeSseThenSettleCredits,
+        sessionLockTtl90s: ad.sessionLockTtl90s,
+        stealLockIfHeartbeatExpired: ad.stealLockIfHeartbeatExpired,
+      });
+    }
+  } catch (_) { /* 3H66 session lock fail-open */ }
   if (typeof w63.applyFairGenerateQueueClosed !== 'function') {
     return { ok: true };
   }
@@ -7896,6 +7914,21 @@ router.post(
           }
         } catch (_) { /* 3H63 cancel refund fail-open */ }
       }
+      try {
+        const w66set = require('../services/agent-runner/engine-3h66');
+        const adSet = require('../services/agent-runner/engine-adapter');
+        if (typeof w66set.applySseCreditLockClosed === 'function') {
+          w66set.applySseCreditLockClosed({
+            sseClosed: true,
+            settled: false,
+            cancelled: Boolean(signal && signal.aborted),
+            held: true,
+            closeSseThenSettleCredits: adSet.closeSseThenSettleCredits,
+            sessionLockTtl90s: adSet.sessionLockTtl90s,
+            stealLockIfHeartbeatExpired: adSet.stealLockIfHeartbeatExpired,
+          });
+        }
+      } catch (_) { /* 3H66 sse settle order fail-open */ }
       try {
         const w62 = require('../services/agent-runner/engine-3h62');
         if (typeof w62.observeTurnLatencyClosed === 'function') {

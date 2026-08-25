@@ -415,6 +415,21 @@ function createSSEWriter(res, options = {}) {
         }
       } catch (_) { /* 3H64 done fail-open */ }
       try {
+        const w66c = require('../services/agent-runner/engine-3h66');
+        const adC = require('../services/agent-runner/engine-adapter');
+        if (typeof w66c.applySseCreditLockClosed === 'function') {
+          w66c.applySseCreditLockClosed({
+            sseClosed: true,
+            settled: false,
+            cancelled: options.aborted === true,
+            held: true,
+            closeSseThenSettleCredits: adC.closeSseThenSettleCredits,
+            sessionLockTtl90s: adC.sessionLockTtl90s,
+            stealLockIfHeartbeatExpired: adC.stealLockIfHeartbeatExpired,
+          });
+        }
+      } catch (_) { /* 3H66 close-then-settle fail-open */ }
+      try {
         const w61 = require('../services/agent-runner/engine-3h61');
         if (typeof w61.applySseCancelHeartbeatClosed === 'function') {
           w61.applySseCancelHeartbeatClosed({ cancelled: true, heartbeatTimer: cancelHeartbeat });

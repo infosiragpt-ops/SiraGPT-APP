@@ -440,7 +440,7 @@ test('3H63-N-001 runAgentLoop refunds and aborts nested on cancel', async () => 
 
 test('3H63-O-001 adapter snapshot and DeepSeek lock are 3H63', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H63' || s.wave === '3H64' || s.wave === '3H65');
+  assert.ok(s.wave === '3H63' || s.wave === '3H64' || s.wave === '3H65' || s.wave === '3H66');
   assert.equal(s.failClosed, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');

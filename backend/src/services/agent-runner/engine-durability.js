@@ -269,6 +269,28 @@ function memoryHitsToPins(hits) {
     .map((t) => t.slice(0, 400));
 }
 
+function apply3h66MemoryHits(list) {
+  const seed = Array.isArray(list) ? list : [];
+  try {
+    const w66 = require('./engine-3h66');
+    const ad = require('./engine-adapter');
+    if (w66 && typeof w66.applyMemoryRetrieveClosed === 'function') {
+      const out = w66.applyMemoryRetrieveClosed({
+        facts: seed,
+        hits: seed,
+        skipEmptyWhitespaceMemoryFacts: ad.skipEmptyWhitespaceMemoryFacts,
+        skipMemoryIfVectorAllZeros: ad.skipMemoryIfVectorAllZeros,
+        skipEmptyEmbeddingUpsert: ad.skipEmptyEmbeddingUpsert,
+        memoryRetrieveDedupeByHash: ad.memoryRetrieveDedupeByHash,
+        sortMemoryHitsByScoreDesc: ad.sortMemoryHitsByScoreDesc,
+        capMemoryHitsReturned8: ad.capMemoryHitsReturned8,
+      });
+      if (out && Array.isArray(out.hits)) return out.hits;
+    }
+  } catch (_) { /* 3H66 memory retrieve fail-open */ }
+  return seed;
+}
+
 async function retrieveMemoryForLoop({
   query,
   userId,
@@ -289,11 +311,11 @@ async function retrieveMemoryForLoop({
           const skipped = corr.retrieveSkipExpiredPins(acl);
           const namespaced = corr.filterMemoryAclNamespace(skipped.hits || acl, { userId, namespace: userId });
           const filtered = namespaced.hits || skipped.hits || acl;
-          try { return require('./engine-next').filterMemoryByScore(filtered); } catch (_) { return filtered; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(filtered)); } catch (_) { return apply3h66MemoryHits(filtered); }
         } catch (_) {
-          try { return require('./engine-next').filterMemoryByScore(acl); } catch (_) { return acl; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(acl)); } catch (_) { return apply3h66MemoryHits(acl); }
         }
-      } catch (_) { return list; }
+      } catch (_) { return apply3h66MemoryHits(list); }
     } catch (err) {
       try {
         if (require('./engine-layer').isPgvectorError(err)) {
@@ -318,11 +340,11 @@ async function retrieveMemoryForLoop({
           const skipped = corr.retrieveSkipExpiredPins(acl);
           const namespaced = corr.filterMemoryAclNamespace(skipped.hits || acl, { userId, namespace: userId });
           const filtered = namespaced.hits || skipped.hits || acl;
-          try { return require('./engine-next').filterMemoryByScore(filtered); } catch (_) { return filtered; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(filtered)); } catch (_) { return apply3h66MemoryHits(filtered); }
         } catch (_) {
-          try { return require('./engine-next').filterMemoryByScore(acl); } catch (_) { return acl; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(acl)); } catch (_) { return apply3h66MemoryHits(acl); }
         }
-      } catch (_) { return list; }
+      } catch (_) { return apply3h66MemoryHits(list); }
     } catch (err) {
       try {
         if (require('./engine-layer').isPgvectorError(err)) {
@@ -350,11 +372,11 @@ async function retrieveMemoryForLoop({
           const skipped = corr.retrieveSkipExpiredPins(acl);
           const namespaced = corr.filterMemoryAclNamespace(skipped.hits || acl, { userId, namespace: userId });
           const filtered = namespaced.hits || skipped.hits || acl;
-          try { return require('./engine-next').filterMemoryByScore(filtered); } catch (_) { return filtered; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(filtered)); } catch (_) { return apply3h66MemoryHits(filtered); }
         } catch (_) {
-          try { return require('./engine-next').filterMemoryByScore(acl); } catch (_) { return acl; }
+          try { return apply3h66MemoryHits(require('./engine-next').filterMemoryByScore(acl)); } catch (_) { return apply3h66MemoryHits(acl); }
         }
-      } catch (_) { return list; }
+      } catch (_) { return apply3h66MemoryHits(list); }
     }
   } catch (err) {
     try {
