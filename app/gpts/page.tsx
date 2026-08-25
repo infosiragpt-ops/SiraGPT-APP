@@ -347,7 +347,7 @@ export default function GPTsPage() {
       const chat = await gptsService.startChatWithGPT(gpt.id)
       localStorage.setItem("currentChatId", chat.id)
       selectChat(chat.id)
-      router.push(`/chat?id=${chat.id}`)
+      router.push(`/agentes?id=${chat.id}`)
       toast.success(`Chat iniciado con ${gpt.name}`)
     } catch (error: any) {
       toast.error(error?.message || "No se pudo iniciar el chat")

@@ -3,6 +3,7 @@
 import { useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context-integrated"
+import { AGENTS_HOME_PATH } from "@/lib/agents-home-path"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 function AuthCallbackContent() {
   const router = useRouter()
@@ -29,7 +30,7 @@ function AuthCallbackContent() {
       } else if (sso === 'success') {
         const hydration = await hydrateSession()
         if (hydration.status === 'authenticated') {
-          router.replace('/')
+          router.replace(AGENTS_HOME_PATH)
         } else if (hydration.status === 'unauthenticated') {
           router.replace('/auth/login?error=' + encodeURIComponent('La sesión es inválida o expiró'))
         } else {

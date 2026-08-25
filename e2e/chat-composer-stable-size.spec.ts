@@ -190,7 +190,7 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   const state = { hasConversation: false }
   await mockChatApi(page, state)
 
-  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
   const approved = await composerMetrics(page)
@@ -253,7 +253,7 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   await page.evaluate(() => {
     localStorage.setItem("currentChatId", "composer-size-chat")
   })
-  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
   const inConversation = await composerMetrics(page)
   expectSameComposerSize(inConversation, approved)
@@ -264,7 +264,7 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   const state = { hasConversation: false }
   await mockChatApi(page, state)
 
-  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
   const approved = await composerMetrics(page)
 
@@ -290,7 +290,7 @@ test("conversation content rail aligns with the composer on desktop, narrow pane
   const state = { hasConversation: true }
   await mockChatApi(page, state)
 
-  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
   const desktop = await conversationAlignmentMetrics(page)
@@ -311,7 +311,7 @@ test("conversation reaches the composer edge and the return pill reserves no row
   const state = { hasConversation: true }
   await mockChatApi(page, state)
 
-  await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
   const viewport = page.locator(".chat-message-scroll [data-radix-scroll-area-viewport]")
@@ -356,7 +356,7 @@ for (const viewport of [
     const state = { hasConversation: true }
     await mockChatApi(page, state)
 
-    await page.goto("/chat?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+    await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
     await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
     await page.getByRole("button", { name: "Adjuntar archivos y herramientas" }).press("Enter")

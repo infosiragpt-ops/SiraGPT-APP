@@ -279,7 +279,7 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
         title: 'Tarea programada completada',
         message: answer.slice(0, 3500),
         channels: ['in_app', task.deliver],
-        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/chat?id=${encodeURIComponent(chatId)}`,
+        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/agentes?id=${encodeURIComponent(chatId)}`,
         metadata: { taskId: task.id, runId: run.id, chatId },
       });
     } else if (terminalStatus !== 'completed') {
@@ -290,7 +290,7 @@ async function executeTask(prisma, task, { runAgentImpl = null } = {}) {
         message: `La tarea se detuvo: ${stoppedReason}`,
         severity: 'warning',
         channels: ['in_app', 'web_push'],
-        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/chat?id=${encodeURIComponent(chatId)}`,
+        actionUrl: `${String(process.env.FRONTEND_URL || 'https://siragpt.com').replace(/\/$/, '')}/agentes?id=${encodeURIComponent(chatId)}`,
         metadata: { taskId: task.id, runId: run.id, chatId, stoppedReason },
       });
     }

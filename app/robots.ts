@@ -20,6 +20,7 @@ export default function robots(): MetadataRoute.Robots {
           "/api",
           "/share",
           "/chat",
+          "/agentes",
           "/projects",
           "/settings",
           "/library",

@@ -18,7 +18,7 @@
  *      "project-prefill:<chatId>" so the chat page can pre-fill its
  *      composer on mount. Prefill, not auto-send — we let the user
  *      review/edit before sending to keep the UX unsurprising.
- *   4. Router.push to /chat?id=<chatId>. The chat context picks up
+ *   4. Router.push to /agentes/:id. The chat context picks up
  *      the new chat id, loads messages (none yet), and the user hits
  *      Send from the full-featured chat UI.
  *
@@ -177,7 +177,7 @@ export default function ProjectDetailPage() {
       } catch {
         /* private-mode / quota-exceeded — non-fatal, worst case is a lost draft */
       }
-      router.push(`/chat?id=${chat.id}`)
+      router.push(`/agentes?id=${chat.id}`)
     } catch (err: any) {
       toast.error(err?.message || t("launchFailed"))
       setLaunching(false)
@@ -185,7 +185,7 @@ export default function ProjectDetailPage() {
   }
 
   function openRecentChat(chatId: string) {
-    router.push(`/chat?id=${chatId}`)
+    router.push(`/agentes?id=${chatId}`)
   }
 
   async function handleComposerFiles(files: FileList | null) {

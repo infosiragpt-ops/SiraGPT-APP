@@ -97,7 +97,7 @@ async function mockChatApi(page: Page) {
 test("el mensaje corto del usuario se renderiza horizontalmente", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await mockChatApi(page)
-  await page.goto("/chat?id=hola-bubble-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto("/agentes?id=hola-bubble-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
 
   const bubble = page.getByTestId("user-message").filter({ hasText: "hola" }).last()
   await expect(bubble).toBeVisible({ timeout: 120_000 })

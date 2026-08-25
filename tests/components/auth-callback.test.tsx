@@ -54,7 +54,7 @@ describe('auth callback completion', () => {
     render(<AuthCallback />)
 
     await waitFor(() => {
-      expect(navigation.replace).toHaveBeenCalledWith('/')
+      expect(navigation.replace).toHaveBeenCalledWith('/agentes')
     })
 
     expect(auth.hydrateSession).toHaveBeenCalledTimes(1)

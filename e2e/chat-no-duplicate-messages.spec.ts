@@ -18,7 +18,7 @@ import { expect, test } from "@playwright/test"
  * require a seeded user + a live model), so it cannot flake.
  */
 test("no two chat bubbles share a data-message-id", async ({ page }) => {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),

@@ -1,8 +1,8 @@
 import { expect, test } from "@playwright/test"
 
 /**
- * Chat surface smoke — verifies the `/chat` route is reachable and
- * boots without a server error. Authenticated agents home is `/`;
+ * Chat surface smoke — verifies the `/agentes` route is reachable and
+ * boots without a server error. Authenticated agents home is `/agentes`;
  * `/chat` redirects there. We deliberately do *not* assert
  * specific UI elements (composer textarea, send button, model
  * picker) because:
@@ -19,7 +19,7 @@ import { expect, test } from "@playwright/test"
  *
  * Cold-start note
  * ---------------
- * In CI the first `page.goto("/chat")` triggers Next dev's first
+ * In CI the first `page.goto("/agentes")` triggers Next dev's first
  * compile of the chat surface, which can take >30s. We use
  * `waitUntil: "domcontentloaded"` (not the default `load`) so
  * navigation resolves as soon as the HTML is parsed — `load` waits
@@ -28,31 +28,31 @@ import { expect, test } from "@playwright/test"
  * is enough for a smoke that only cares the route resolved.
  */
 test("chat route resolves to either the chat page or a known auth page", async ({ page }) => {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),
     `chat route returned ${response!.status()}`,
   ).toBe(true)
 
-  // The middleware either lands on agents home `/` (or `/<locale>`),
-  // renders `/chat`, or redirects to /<locale>/login / /<locale>/auth.
+  // The middleware either lands on agents home `/agentes` (or `/<locale>/agentes`),
+  // or redirects to /<locale>/login / /<locale>/auth.
   // Any of those is acceptable for the smoke.
   // `domcontentloaded` again here (instead of `networkidle`) — the
   // chat page may keep WebSocket / SSE connections open which means
   // network never goes truly idle.
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
   const pathname = new URL(page.url()).pathname
-  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
+  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:agentes|chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
 })
 
 /**
- * Document title and first-paint shell — scoped to /chat so a
+ * Document title and first-paint shell — scoped to /agentes so a
  * regression that breaks the route surfaces as a CI failure without
  * requiring a seeded authenticated user.
  */
 test("chat surface paints a title and a stable shell", async ({ page }) => {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),
@@ -70,18 +70,13 @@ test("chat surface paints a title and a stable shell", async ({ page }) => {
 })
 
 /**
- * Locale negotiation — the same Accept-Language path home.spec
- * exercises, but also verifying `/chat` honors the locale prefix
- * the middleware injects. Agents home is `/` (or `/<locale>` /
- * `/<locale>/`), which is the expected destination after the
- * `/chat` redirect.
+ * Locale negotiation — `/chat` is a compatibility alias that must
+ * land on `/agentes` (or a known auth surface). Guests may be sent
+ * to login; signed-in users stay on the agents home.
  */
 test("locale prefix is preserved through the /chat redirect", async ({ page }) => {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded" })
+  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
-  // `/chat` now redirects to agents home. Valid landings: `/`,
-  // `/<locale>`, `/<locale>/`, `/chat`, `/<locale>/chat`, or a
-  // known auth surface. Do not require `/chat` in the final path.
   const pathname = new URL(page.url()).pathname
-  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
+  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:agentes|chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
 })

@@ -52,9 +52,9 @@ export default function RouteError({
             <RefreshCw className="mr-1.5 h-4 w-4" />
             {attempts >= 3 ? "Reintentar de nuevo" : "Reintentar"}
           </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => { window.location.href = "/chat" }}>
+          <Button type="button" variant="outline" size="sm" onClick={() => { window.location.href = "/agentes" }}>
             <Home className="mr-1.5 h-4 w-4" />
-            Ir a /chat
+            Ir a agentes
           </Button>
         </div>
       </div>

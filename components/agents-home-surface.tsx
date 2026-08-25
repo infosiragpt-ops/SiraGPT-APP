@@ -1,16 +1,16 @@
 "use client"
 
 /**
- * `/` is marketing for guests. Signed-in members are sent to `/agentes`
- * — the product noun is «agentes», not a silent `/` copy of chat.
+ * Canonical agents home surface — same ChatInterface chrome as the
+ * former /chat page. Product noun is «agentes», not «chat».
  */
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useRouter } from "next/navigation"
 
-import HomePage from "@/app/home-page"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
-import { chatSearchToAgentsHome } from "@/lib/agents-home-path"
+import { AGENTS_HOME_PATH } from "@/lib/agents-home-path"
 import { useAuth } from "@/lib/auth-context-integrated"
 
 function AgentsHomeLoading() {
@@ -35,20 +35,31 @@ function AgentsHomeLoading() {
   )
 }
 
-export function AgentsHomeGate() {
+const ChatInterface = dynamic(
+  () => import("@/components/chat-interface-enhanced"),
+  { ssr: false, loading: AgentsHomeLoading },
+)
+
+export function AgentsHomeSurface() {
   const { user, isLoading } = useAuth()
   const router = useRouter()
 
   React.useEffect(() => {
-    if (isLoading || !user) return
-    const search = typeof window !== "undefined" ? window.location.search : ""
-    const hash = typeof window !== "undefined" ? window.location.hash : ""
-    router.replace(chatSearchToAgentsHome(search, hash))
+    if (isLoading || user) return
+    const next = typeof window !== "undefined"
+      ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+      : AGENTS_HOME_PATH
+    router.replace(`/auth/login?next=${encodeURIComponent(next)}`)
   }, [isLoading, user, router])
 
   if (isLoading) return <AgentsHomeLoading />
-  if (user) return <AgentsHomeLoading />
-  return <HomePage />
+  if (!user) return <AgentsHomeLoading />
+
+  return (
+    <div className="relative h-full min-h-0" data-testid="agents-home">
+      <ChatInterface />
+    </div>
+  )
 }
 
-export default AgentsHomeGate
+export default AgentsHomeSurface

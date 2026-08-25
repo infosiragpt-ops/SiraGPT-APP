@@ -4,7 +4,7 @@
  * Chat computer overlay — Grok-bot-style desktop beside the existing
  * chat chrome. Reuses AgentComputerShell + DepartmentComputerPane /
  * noVNC. Bound to the open conversation id so chat A does not show
- * chat B's desktop.
+ * chat B's desktop. Fail-closed: never attach another chat's session.
  */
 
 import * as React from "react"
@@ -24,14 +24,16 @@ export default function ChatAgentComputerPanel({
   conversationId,
   onClose,
 }: ChatAgentComputerPanelProps) {
-  const chatId = String(conversationId || "").trim() || "pending"
+  const chatId = String(conversationId || "").trim()
   const enabled = isAgentComputerEnabled()
+  const canAttach = Boolean(chatId) && chatId !== "pending"
 
   return (
     <section
       className="flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/40 bg-[#e8e8ea] dark:bg-[#101012]"
       data-testid="chat-agent-computer-panel"
-      data-chat-computer-conversation={chatId}
+      data-chat-computer-conversation={canAttach ? chatId : ""}
+      data-chat-computer-fail-closed={canAttach ? "0" : "1"}
       aria-label="Computadora"
     >
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-black/10 bg-white/80 px-3 dark:border-white/10 dark:bg-[#1b1b1d]">
@@ -40,7 +42,7 @@ export default function ChatAgentComputerPanel({
             Computadora
           </h2>
           <p className="truncate text-[10px] text-zinc-500 dark:text-zinc-400" data-testid="chat-agent-computer-binding">
-            Conversación {chatId}
+            {canAttach ? `Conversación ${chatId}` : "Aislamiento por conversación obligatorio"}
           </p>
         </div>
         <Button
@@ -58,7 +60,17 @@ export default function ChatAgentComputerPanel({
       </header>
 
       <div className="relative min-h-0 min-w-0 flex-1">
-        {enabled ? (
+        {!canAttach ? (
+          <div
+            className="flex h-full min-h-0 items-center justify-center px-6 text-center"
+            data-testid="chat-computer-isolation-gap"
+            role="alert"
+          >
+            <p className="max-w-sm text-sm text-zinc-600 dark:text-zinc-300">
+              No se pudo aislar la computadora de esta conversación.
+            </p>
+          </div>
+        ) : enabled ? (
           <AgentComputerShell conversationId={chatId}>
             <DepartmentComputerPane
               departmentName="Computadora"

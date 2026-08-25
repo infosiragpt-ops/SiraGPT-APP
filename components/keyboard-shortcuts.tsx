@@ -8,7 +8,7 @@
  * Mounts a single global keydown listener on `window` that handles:
  *   · "?"               → open shortcuts help modal
  *   · Cmd/Ctrl+K        → open command palette (cmdk)
- *   · Cmd/Ctrl+N        → new chat (router.push("/"))
+   *   · Cmd/Ctrl+N        → new chat (router.push("/agentes"))
  *   · Cmd/Ctrl+/        → toggle theme (light ↔ dark)
  *   · Esc               → close any open shortcut UI we own
  *
@@ -141,7 +141,7 @@ export function KeyboardShortcutsProvider() {
 
   const newChat = React.useCallback(() => {
     // Same destination the sidebar "Nuevo chat" button uses.
-    router.push("/")
+    router.push("/agentes")
   }, [router])
 
   React.useEffect(() => {
@@ -242,7 +242,7 @@ export function KeyboardShortcutsProvider() {
               <Home className="mr-2 h-4 w-4" />
               <span>Inicio</span>
             </CommandItem>
-            <CommandItem onSelect={() => go("/chat")}>
+            <CommandItem onSelect={() => go("/agentes")}>
               <MessageSquarePlus className="mr-2 h-4 w-4" />
               <span>Chat</span>
             </CommandItem>

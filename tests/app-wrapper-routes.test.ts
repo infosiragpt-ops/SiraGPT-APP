@@ -8,6 +8,11 @@ describe("needsChatContext", () => {
     assert.equal(needsChatContext("/chat"), true)
   })
 
+  it("enables chat context on the agentes home", () => {
+    assert.equal(needsChatContext("/agentes"), true)
+    assert.equal(needsChatContext("/agentes/abc"), true)
+  })
+
   it("enables chat context on nested GPT routes", () => {
     assert.equal(needsChatContext("/gpts/create"), true)
   })
@@ -40,7 +45,7 @@ describe("needsChatContext", () => {
 
   it("enables chat context on every documented prefix", () => {
     for (const path of [
-      "/chat", "/gpts", "/parafraseo", "/projects", "/design",
+      "/agentes", "/chat", "/gpts", "/parafraseo", "/projects", "/design",
       "/codex", "/code", "/apps", "/plan", "/profile", "/library",
       "/billing", "/settings", "/thesis", "/documents",
     ]) {

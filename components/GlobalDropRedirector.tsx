@@ -68,7 +68,7 @@ export function GlobalDropRedirector() {
       // Files survive client-side navigation because window persists.
       ;(window as unknown as { __siraPendingFiles?: File[] }).__siraPendingFiles =
         Array.from(files)
-      router.push(user ? "/" : "/auth/login?next=/")
+      router.push(user ? "/agentes" : "/auth/login?next=/agentes")
     }
 
     window.addEventListener("dragenter", onEnter)

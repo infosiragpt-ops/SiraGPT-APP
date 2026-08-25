@@ -210,6 +210,7 @@ import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialA
 import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
+import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
 import { safeUUID } from "@/lib/safe-uuid"
 import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
 const VideoGenerationComponent = dynamic(
@@ -3866,7 +3867,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el chat");
     }
@@ -3876,7 +3877,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     const gpt = currentChat?.customGpt;
     const href = gpt?.shareId
       ? `${window.location.origin}/gpts/share/${gpt.shareId}`
-      : `${window.location.origin}/chat?id=${currentChat?.id || ""}`;
+      : `${window.location.origin}${agentsHomeHref(currentChat?.id ? `id=${currentChat.id}` : "")}`;
     const r = await copyTextSafe(href);
     if (r.ok) toast.success("Enlace copiado");
     else toast.error("No se pudo copiar el enlace. Cópialo manualmente.");
@@ -4079,7 +4080,7 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo crear el chat de la empresa");
       localStorage.setItem("currentChatId", data.chat.id);
-      window.location.href = `/chat?id=${data.chat.id}`;
+      window.location.href = agentsHomeHref(`id=${data.chat.id}`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear el chat de la empresa");
     }
@@ -8066,7 +8067,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     const urlChatId = typeof window !== 'undefined'
-      ? new URLSearchParams(window.location.search).get('id')
+      ? conversationIdFromLocation(window.location.pathname, window.location.search)
       : null;
     if (urlChatId && currentChat?.id !== urlChatId) {
       selectChat(urlChatId);
@@ -13374,7 +13375,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
               )}
               {computerPanelOpen && (
                 <ChatAgentComputerPanel
-                  conversationId={currentChat?.id || "pending"}
+                  key={currentChat?.id || "none"}
+                  conversationId={currentChat?.id || ""}
                   onClose={() => setComputerPanelOpen(false)}
                 />
               )}

@@ -141,7 +141,7 @@ test.describe("agent-runner live scenario evals (opt-in)", () => {
       page.on("pageerror", (err) => pageErrors.push(err))
 
       await tryLogin(page)
-      await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+      await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
       await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
 
       if (!isChatPage(page.url())) {
