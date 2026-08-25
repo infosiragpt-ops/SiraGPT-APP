@@ -8,6 +8,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- `/gpts` now has an Apps catalog under the GPT store so users can connect
+  third-party apps (Indeed, LinkedIn, and the rest of the pasted complementos
+  list) without leaving https://siragpt.com/gpts. Connection state is stored in
+  `settings.apps`.
 - Agent-loop hot path now calls the live #388 helpers: `retryToolWithBackoff`
   / `isRetryableToolFailure` on tool errors (timeout, ECONNRESET, 502),
   `repairTruncatedJson` re-invoke after a schema-repair miss, fail-closed
