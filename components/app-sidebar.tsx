@@ -249,8 +249,12 @@ const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
 const RECENT_TOOLBAR_ICON =
   "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-const FOLDER_ADD_ICON =
-  "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const CHAT_ROW_SLOT =
+  "flex h-8 w-8 shrink-0 items-center justify-center p-0"
+const FOLDER_ADD_ICON = cn(
+  CHAT_ROW_SLOT,
+  "rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
+)
 const FILTER_POPOVER =
   "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(15,23,42,0.14)]"
 const FILTER_ROW =
@@ -1514,11 +1518,11 @@ export function AppSidebar() {
               id="sidebar-chat-folders-toolbar"
               data-sidebar-folders-toolbar="1"
               className={cn(
-                "flex items-center gap-1 px-0.5 pt-2 pb-0.5",
+                "group flex w-full items-center gap-0.5 pt-1",
                 state === "closed" && "hidden",
               )}
             >
-              <span className="min-w-0 flex-1 truncate px-2.5 text-[13px] font-medium text-muted-foreground">
+              <span className="flex h-8 min-w-0 flex-1 items-center truncate px-2 text-[13px] font-medium leading-none text-muted-foreground">
                 Carpetas
               </span>
               <button
@@ -1536,7 +1540,7 @@ export function AppSidebar() {
               <div
                 id="sidebar-chat-folders-list"
                 data-sidebar-folders-list="1"
-                className={cn("space-y-0.5 px-0.5 pb-1", state === "closed" && "hidden")}
+                className={cn("pb-1", state === "closed" && "hidden")}
               >
                 {visibleChatFolders.map((folder) => (
                   <div key={folder} className="group flex w-full items-center gap-0.5">
@@ -1549,7 +1553,7 @@ export function AppSidebar() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100"
+                          className={cn(CHAT_ROW_SLOT, "text-muted-foreground hover:bg-muted/70 hover:text-foreground")}
                           aria-label={`Acciones de la carpeta ${folder}`}
                         >
                           <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1985,7 +1989,10 @@ export function AppSidebar() {
                                       <Button
                                         variant="ghost"
                                         size="sm"
-                                        className="flex h-8 w-8 shrink-0 items-center justify-center p-0 opacity-100 md:opacity-0 transition-opacity md:group-hover:opacity-100"
+                                        className={cn(
+                                          CHAT_ROW_SLOT,
+                                          "opacity-100 text-muted-foreground md:opacity-0 transition-opacity md:group-hover:opacity-100",
+                                        )}
                                         aria-label="Acciones del chat"
                                         onClick={(e) => e.stopPropagation()}
                                       >
