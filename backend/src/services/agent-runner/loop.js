@@ -2190,7 +2190,6 @@ async function runAgentLoop({
               const refused = w67hy.applyWriteRefuseClosed({
                 path: filePath67,
                 content: args && (args.content != null ? args.content : args.new_string),
-                existsSync: require('fs').existsSync,
                 refuseWriteIfDestDirMissing: ad67.refuseWriteIfDestDirMissing,
                 refuseWriteToEtcProcSys: ad67.refuseWriteToEtcProcSys,
                 refuseWriteToDevBoot: ad67.refuseWriteToDevBoot,

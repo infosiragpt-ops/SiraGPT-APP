@@ -356,9 +356,13 @@ function applySseReplayCloseClosed({
   let cursor = lastEventId;
   if (parsed && parsed.ok === true) cursor = parsed.lastEventId;
   else if (digitsOnly) cursor = 0;
+  // Clone so restoreLastSseIdOnResume cannot clobber the caller's
+  // cursorStore — that store is what rejectLastEventIdGoingBackwards
+  // reads. The live helper still runs; uniqueness ≠ timeout.
+  const storeCopy = (store && typeof store === 'object') ? Object.assign({}, store) : store;
   const restored = restoreLastSseIdOnResume
-    ? restoreLastSseIdOnResume({ lastEventId: cursor, store })
-    : { lastEventId: cursor, store };
+    ? restoreLastSseIdOnResume({ lastEventId: cursor, store: storeCopy })
+    : { lastEventId: cursor, store: storeCopy };
   let list = Array.isArray(events) ? events.slice() : [];
   const comments = dropSseCommentFramesFromReplay
     ? dropSseCommentFramesFromReplay(list)

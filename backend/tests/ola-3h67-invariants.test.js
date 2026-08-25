@@ -208,6 +208,26 @@ test('3H67-C-001 write refuse leftover', () => {
     refuseCheckpointOver1MiBUncompressed: ad.refuseCheckpointOver1MiBUncompressed,
   });
   assert.equal(relative.ok, true);
+  const virtualEdit = w67.applyWriteRefuseClosed({
+    path: '/workspace/outputs/informe.docx',
+    refuseWriteIfDestDirMissing: ad.refuseWriteIfDestDirMissing,
+    refuseWriteToEtcProcSys: ad.refuseWriteToEtcProcSys,
+    refuseWriteToDevBoot: ad.refuseWriteToDevBoot,
+    refuseWriteToRootMnt: ad.refuseWriteToRootMnt,
+    refuseCheckpointOver1MiBUncompressed: ad.refuseCheckpointOver1MiBUncompressed,
+  });
+  assert.equal(virtualEdit.ok, true, 'virtual edit_file paths must not use host existsSync');
+  const destClosed = w67.applyWriteRefuseClosed({
+    path: '/tmp/siragpt-no-such-dir-3h67/x.js',
+    existsSync: () => false,
+    refuseWriteIfDestDirMissing: ad.refuseWriteIfDestDirMissing,
+    refuseWriteToEtcProcSys: ad.refuseWriteToEtcProcSys,
+    refuseWriteToDevBoot: ad.refuseWriteToDevBoot,
+    refuseWriteToRootMnt: ad.refuseWriteToRootMnt,
+    refuseCheckpointOver1MiBUncompressed: ad.refuseCheckpointOver1MiBUncompressed,
+  });
+  assert.equal(destClosed.ok, false);
+  assert.equal(destClosed.code, 'dest_dir_missing');
 });
 
 test('3H67-D-001 SSE replay/close leftover', () => {
@@ -269,6 +289,27 @@ test('3H67-D-001 SSE replay/close leftover', () => {
   });
   assert.equal(composite.ok, true);
   assert.equal(composite.parseOk, true);
+  const callerStore = { cursor: 3, lastEventId: 3 };
+  w67.applySseReplayCloseClosed({
+    headerValue: '1',
+    events: [{ id: 1, event: 'delta', at: Date.now() }],
+    store: callerStore,
+    alreadyDone: true,
+    parseLastEventIdIntOnly: ad.parseLastEventIdIntOnly,
+    restoreLastSseIdOnResume: ad.restoreLastSseIdOnResume,
+    dropSseCommentFramesFromReplay: ad.dropSseCommentFramesFromReplay,
+    dropSseEventsOlderThan2min: ad.dropSseEventsOlderThan2min,
+    capReplayFrames64: ad.capReplayFrames64,
+    endSseWithEventDone: ad.endSseWithEventDone,
+  });
+  assert.equal(callerStore.cursor, 3, 'restore must not clobber caller cursorStore');
+  assert.equal(callerStore.lastEventId, 3);
+  const back = ad.rejectLastEventIdGoingBackwards({
+    lastEventId: 1,
+    stored: callerStore.cursor,
+    currentSeq: callerStore.cursor,
+  });
+  assert.equal(back.backwards, true);
 });
 
 test('3H67-E-001 plan leftover', () => {
@@ -458,6 +499,8 @@ test('3H67-K-001 live loop/generate/sse/sandbox/gateway import 3H67 + 36 helper 
   const local = read('src/services/sandbox/local-sandbox.js');
   assert.ok(loop.includes('applyToolNameArgsHygieneClosed'));
   assert.ok(loop.includes('applyWriteRefuseClosed'));
+  assert.equal(loop.includes('existsSync: require(\'fs\').existsSync'), false,
+    'loop must not pass host existsSync (virtual edit_file paths)');
   assert.ok(loop.includes('applyPlanGuardsClosed'));
   assert.ok(loop.includes('applySandboxOutCapClosed'));
   assert.ok(loop.includes('applyCreditErrorPathClosed'));
