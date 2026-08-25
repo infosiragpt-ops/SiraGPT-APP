@@ -49,7 +49,7 @@ describe("app sidebar recent-chats toolbar source contract", () => {
       "the collapsed icon-rail may keep a search affordance that opens the dialog")
   })
 
-  it("puts live search and the filter popover on the Chats recientes toolbar", () => {
+  it("opens the centered ChatSearchDialog from the recent-chats lupa and ⌘K", () => {
     const toolbarStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
     assert.ok(toolbarStart > 0, "recent-chats toolbar id must exist")
     const toolbar = source.slice(toolbarStart, source.indexOf('id="sidebar-recent-chats-content"'))
@@ -57,6 +57,7 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.match(toolbar, /data-sidebar-recent-search="1"/)
     assert.match(toolbar, /data-sidebar-recent-filter="1"/)
     assert.match(toolbar, /Buscar ⌘K/)
+    assert.match(toolbar, /onClick=\{handleSearchClick\}/)
     assert.match(toolbar, /SlidersHorizontal/)
     assert.match(toolbar, /Filtrar chats/)
     assert.match(toolbar, /label: "Tipo"/)
@@ -69,7 +70,13 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.match(source, /filterRecentChats/)
     assert.match(source, /groupChatsByTime/)
     assert.match(source, /ChatSearchDialog/)
-    assert.match(source, /Buscar en todo el historial/)
+    assert.match(source, /setSearchOpen\(\(current\) => !current\)/)
+    assert.match(source, /addEventListener\("keydown", onKeyDown, true\)/)
+    assert.doesNotMatch(source, /openInlineSearch/)
+    assert.doesNotMatch(source, /inlineSearchOpen/)
+    assert.doesNotMatch(source, /inlineSearchQuery/)
+    assert.doesNotMatch(source, /Buscar en todo el historial/)
+    assert.doesNotMatch(toolbar, /<input/)
   })
 
   it("keeps Spanish collapse tooltips and the Chats | Empresas header only", () => {

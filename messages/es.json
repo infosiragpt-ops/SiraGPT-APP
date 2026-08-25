@@ -683,13 +683,13 @@
     "description": "Plataforma multi-LLM con generación de texto, imagen, audio y video. GPT-4, Claude, Gemini y más en un solo lugar."
   },
   "chatSearch": {
-    "placeholder": "Buscar en tus chats…",
+    "placeholder": "Buscar chats y proyectos",
     "noResults": "Sin resultados",
-    "noResultsFor": "No encontramos chats para «{query}»",
+    "noResultsFor": "No encontramos chats ni proyectos para «{query}»",
     "serverFallback": "No se pudo buscar en el servidor; mostramos coincidencias de títulos locales.",
-    "emptyHistory": "Aún no tienes chats",
-    "emptyHistoryHint": "Empieza una conversación para verla aquí",
-    "resultCountOne": "{count} chat",
-    "resultCountMany": "{count} chats"
+    "emptyHistory": "Aún no tienes chats ni proyectos",
+    "emptyHistoryHint": "Empieza una conversación o crea un proyecto para verlos aquí",
+    "resultCountOne": "{count} resultado",
+    "resultCountMany": "{count} resultados"
   }
 }
