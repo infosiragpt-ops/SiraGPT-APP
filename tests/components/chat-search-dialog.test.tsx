@@ -194,7 +194,13 @@ describe('ChatSearchDialog full-text search wiring', () => {
     // (title contains the query, so it renders with a <mark> inside)
     // instead of a dead end.
     expect(
-      screen.getByText((_, element) => element?.textContent === 'Plan de tesis local')
+      screen.getByText((_, element) =>
+        element?.textContent === 'Plan de tesis local' &&
+        element.tagName === 'DIV' &&
+        element.className.includes('truncate')
+          ? true
+          : undefined
+      )
     ).toBeInTheDocument()
   })
 
