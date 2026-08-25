@@ -79,13 +79,14 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(toolbar, /<input/)
   })
 
-  it("keeps Spanish collapse tooltips and the Chats | Empresas header only", () => {
+  it("keeps Spanish collapse tooltips and the Agentes | Empresas header only", () => {
     assert.match(source, /Contraer barra lateral ⌘B/)
     assert.match(source, /Expandir barra lateral ⌘B/)
     const headerStart = source.indexOf('aria-label="Modo de la barra lateral"')
     const header = source.slice(headerStart, headerStart + 2200)
-    assert.match(header, /aria-label="Chats"/)
+    assert.match(header, /aria-label="Agentes"/)
     assert.match(header, /aria-label="Empresas"/)
+    assert.doesNotMatch(header, /aria-label="Chats"/)
     assert.doesNotMatch(header, /<Code2/)
     assert.doesNotMatch(header, /href=['"`]\/code/)
   })
