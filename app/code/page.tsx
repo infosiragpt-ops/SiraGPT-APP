@@ -1,6 +1,9 @@
 "use client"
 
 /**
+ * /code — thin alias for the Empresas workspace. Primary agent UX is
+ * chat at `/` (computer overlay). Keep this route for existing links.
+ *
  * /code — Cursor-inspired AI coding workspace.
  *
  * Layout: Cursor Chat (left), editor + terminal (center), Codex folders (right).

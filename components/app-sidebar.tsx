@@ -95,6 +95,7 @@ import {
 import { useAuth } from "@/lib/auth-context-integrated"
 import { useChatList, useModelsAndFiles } from "@/lib/chat-context-integrated"
 import { useRouter, usePathname } from "next/navigation"
+import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn, downloadBlob } from "@/lib/utils"
 import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
@@ -392,7 +393,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/chat', '/gpts', '/parafraseo', '/projects', '/code', '/library',
+      '/', '/gpts', '/parafraseo', '/projects', '/code', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -531,7 +532,7 @@ export function AppSidebar() {
     try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
     // The main view follows the toggle: Chats → the chat interface,
     // Code → the Apps IDE. navigate() dedupes if already on the route.
-    navigate(mode === "code" ? "/code" : "/chat")
+    navigate(mode === "code" ? "/code" : "/")
   }, [navigate])
   // …and the toggle follows the route: landing on /code (deep link, agent
   // click, reload) flips the sidebar into Code mode and vice versa, so the
@@ -540,7 +541,7 @@ export function AppSidebar() {
     if (!pathname) return
     const routeMode: "chat" | "code" | null = pathname.startsWith("/code")
       ? "code"
-      : pathname.startsWith("/chat") ? "chat" : null
+      : isAgentsHomePath(pathname) ? "chat" : null
     if (routeMode) {
       setSidebarMode((prev) => {
         if (prev === routeMode) return prev
@@ -840,8 +841,8 @@ export function AppSidebar() {
     }, 0);
 
     const hasQuery = typeof window !== "undefined" && window.location.search.length > 0
-    if (!pathname.startsWith('/chat') || hasQuery) {
-      startNavTransition(() => { router.replace('/chat', { scroll: false }) })
+    if (!isAgentsHomePath(pathname) || hasQuery) {
+      startNavTransition(() => { router.replace('/', { scroll: false }) })
     } else {
       window.setTimeout(clearNavigationIntent, 0)
     }
@@ -952,8 +953,8 @@ export function AppSidebar() {
       const data = await response.json().catch(() => ({}))
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo abrir el GPT")
       localStorage.setItem("currentChatId", data.chat.id)
-      markSharedNavigationIntent("/chat", data.chat?.title || "Chat")
-      router.push(`/chat?id=${data.chat.id}`, { scroll: false })
+      markSharedNavigationIntent("/", data.chat?.title || "Chat")
+      router.push(agentsHomeHref(`id=${data.chat.id}`), { scroll: false })
       if (isMobile) setOpenMobile(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo abrir el GPT")
@@ -961,11 +962,11 @@ export function AppSidebar() {
   }
 
   const handleChatClick = (chatId: string) => {
-    markSharedNavigationIntent("/chat", "Chat")
+    markSharedNavigationIntent("/", "Chat")
     selectChat(chatId)
-    // Navigate to chat page if not already there
-    if (!pathname.startsWith('/chat')) {
-      startNavTransition(() => { router.push(`/chat?id=${chatId}`, { scroll: false }) })
+    // Navigate to agents home if not already there
+    if (!isAgentsHomePath(pathname)) {
+      startNavTransition(() => { router.push(agentsHomeHref(`id=${chatId}`), { scroll: false }) })
     } else {
       window.setTimeout(clearNavigationIntent, 0)
     }
@@ -1107,7 +1108,7 @@ export function AppSidebar() {
   }, [hasMoreChats, isLoadingMore, loadMoreChats])
 
   // Check if we're on GPTs page
-  const isOnChatPage = activePathname.startsWith('/chat')
+  const isOnChatPage = isAgentsHomePath(activePathname)
   const isOnLibraryPage = activePathname.startsWith('/library')
   const isOnGPTsPage = activePathname.startsWith('/gpts')
   const isOnProjectsPage = activePathname.startsWith('/projects')
@@ -1569,8 +1570,8 @@ export function AppSidebar() {
                               ) : (
                                 <>
                                   <SidebarMenuButton
-                                        isActive={currentChatId === chat.id && pathname.startsWith('/chat')}
-                                        aria-current={currentChatId === chat.id && pathname.startsWith('/chat') ? 'page' : undefined}
+                                        isActive={currentChatId === chat.id && isAgentsHomePath(pathname)}
+                                        aria-current={currentChatId === chat.id && isAgentsHomePath(pathname) ? 'page' : undefined}
                                         title={isTruncated ? displayTitle : undefined}
                                         onClick={() => !isEditing && handleChatClick(chat.id)}
                                         className={cn(

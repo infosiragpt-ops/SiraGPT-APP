@@ -29,7 +29,7 @@ function AuthCallbackContent() {
       } else if (sso === 'success') {
         const hydration = await hydrateSession()
         if (hydration.status === 'authenticated') {
-          router.replace('/chat')
+          router.replace('/')
         } else if (hydration.status === 'unauthenticated') {
           router.replace('/auth/login?error=' + encodeURIComponent('La sesión es inválida o expiró'))
         } else {

@@ -20,13 +20,13 @@ import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
 function safeAuthRedirect(raw: string | null) {
   const value = String(raw || "").trim()
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/chat"
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/"
   try {
     const url = new URL(value, "https://siragpt.local")
-    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
-    return `${url.pathname}${url.search}${url.hash}` || "/chat"
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/"
+    return `${url.pathname}${url.search}${url.hash}` || "/"
   } catch (_error) {
-    return "/chat"
+    return "/"
   }
 }
 
@@ -47,7 +47,7 @@ function LoginPageContent() {
     () => safeAuthRedirect(searchParams.get("next")),
     [searchParams],
   )
-  const registerHref = postLoginRedirect === "/chat"
+  const registerHref = postLoginRedirect === "/"
     ? "/auth/register"
     : `/auth/register?next=${encodeURIComponent(postLoginRedirect)}`
 

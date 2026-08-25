@@ -21,6 +21,7 @@
     "../lib/auth/auth-guard-rules.ts",
     "../lib/next-api-cors.ts",
     "../lib/app-wrapper-routes.ts",
+    "../lib/agents-home-path.ts",
     "../lib/long-paste.ts",
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",
