@@ -50,18 +50,18 @@ export type SectionKey =
   | "general" | "models" | "notifications" | "personalization" | "apps"
   | "schedules" | "data" | "security" | "account"
   | "privacy" | "billing" | "usage" | "capabilities" | "connectors"
-  | "code" | "cowork"
+  | "cowork"
 
 // Section metadata; labels and descriptions come from next-intl at
 // render time so a language switch flips the nav instantly.
-const ALIAS: Record<string, SectionKey> = { privacy: "data", connectors: "apps" }
+const ALIAS: Record<string, SectionKey> = { privacy: "data", connectors: "apps", code: "cowork" }
 
 function resolveSection(s: SectionKey | string | undefined): SectionKey {
   const raw = (s || "general") as string
   if (raw in ALIAS) return ALIAS[raw]
   const known: SectionKey[] = [
     "general","models","notifications","personalization","apps","schedules",
-    "data","security","account","billing","usage","capabilities","code","cowork",
+    "data","security","account","billing","usage","capabilities","cowork",
   ]
   return (known as string[]).includes(raw) ? (raw as SectionKey) : "general"
 }
@@ -202,7 +202,6 @@ export function SettingsPanel({
       {section === "billing" && <BillingSection />}
       {section === "usage" && <UsageSection />}
       {section === "capabilities" && <CapabilitiesSection />}
-      {section === "code" && <CodeSection />}
       {section === "cowork" && <CoworkSection />}
     </>
   )
@@ -1650,20 +1649,6 @@ function UsageSection() {
         <Row title="Ver facturacion">
           <Link href="/billing" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
             Facturación <ExternalLink className="h-3.5 w-3.5" />
-          </Link>
-        </Row>
-      </SectionCard>
-    </>
-  )
-}
-
-function CodeSection() {
-  return (
-    <>
-      <SectionCard title="Code" desc="Espacio de Code de SiraGPT">
-        <Row title="Abrir Code" desc="Repositorios y agente de código">
-          <Link href="/code" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
-            Code <ExternalLink className="h-3.5 w-3.5" />
           </Link>
         </Row>
       </SectionCard>

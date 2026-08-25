@@ -359,11 +359,11 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       }
       if (opts.localId) params.set("local", opts.localId)
       const query = params.toString()
-      const target = query ? `/code?${query}` : "/code"
+      const target = query ? `/agentes?${query}` : "/agentes"
       router.push(target)
       if (typeof window !== "undefined") {
         window.setTimeout(() => {
-          if (!window.location.pathname.startsWith("/code")) {
+          if (!window.location.pathname.startsWith("/agentes")) {
             window.location.assign(target)
           }
         }, 450)
@@ -650,7 +650,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
     [handleOpenWorkspace],
   )
 
-  // Shared post-import routing: select the new folder, navigate to /code, and
+  // Shared post-import routing: select the new folder, stay on /agentes, and
   // surface a clear summary (including a hint when nothing was imported).
   const finishLocalImport = React.useCallback(
     (reg: LocalFolderRegistration) => {
@@ -659,7 +659,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
       if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("siragpt:collapse-sidebar"))
       }
-      router.push(`/code?local=${encodeURIComponent(reg.codexId)}`)
+      router.push(`/agentes?local=${encodeURIComponent(reg.codexId)}`)
       onMobileNavigate?.()
       if (reg.fileCount === 0) {
         toast.warning(

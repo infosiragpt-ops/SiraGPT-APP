@@ -65,6 +65,15 @@ describe("chat agent computer home", () => {
     assert.equal(conversationIdFromLocation("/agentes", "id=xyz"), "xyz")
     assert.equal(postAuthAgentsHref("/"), "/agentes")
     assert.equal(postAuthAgentsHref("/chat?id=q1"), "/agentes?id=q1")
+    assert.equal(postAuthAgentsHref("/code"), "/agentes")
+    assert.equal(postAuthAgentsHref("/code?folder=abc"), "/agentes?folder=abc")
+    assert.match(config, /source: '\/code'/)
+    assert.match(config, /source: '\/code\/:path\*'/)
+    assert.match(source("middleware.ts"), /pathname === '\/code' \|\| pathname\.startsWith\('\/code\/'\)/)
+    assert.match(source("middleware.ts"), /NextResponse\.redirect\(url, 307\)/)
+    assert.match(source("app/code/page.tsx"), /redirect\(/)
+    assert.match(source("app/code/page.tsx"), /chatSearchToAgentsHome/)
+    assert.doesNotMatch(source("app/code/page.tsx"), /CodeWorkspaceGate|CodeWorkspaceProvider/)
   })
 
   it("never shows Arrancando or Ejecutar in the new chat computer chrome", () => {

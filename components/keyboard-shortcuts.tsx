@@ -55,7 +55,6 @@ import {
   MessageSquarePlus,
   Image as ImageIcon,
   Video,
-  Code2,
   Folder,
   Settings,
   CreditCard,
@@ -249,10 +248,6 @@ export function KeyboardShortcutsProvider() {
             <CommandItem onSelect={() => go("/library")}>
               <Folder className="mr-2 h-4 w-4" />
               <span>Biblioteca</span>
-            </CommandItem>
-            <CommandItem onSelect={() => go("/code")}>
-              <Code2 className="mr-2 h-4 w-4" />
-              <span>Codex</span>
             </CommandItem>
             <CommandItem onSelect={() => go("/gpts")}>
               <ImageIcon className="mr-2 h-4 w-4" />

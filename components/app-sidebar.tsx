@@ -31,7 +31,6 @@ import {
   FolderKanban,
   PenSquare,
   Shield,
-  Code2,
   Edit2,
   Check,
   X,
@@ -393,7 +392,7 @@ export function AppSidebar() {
   // ────────────────────────────────────────────────────────────
   const SIDEBAR_ROUTES = React.useMemo(
     () => [
-      '/', '/gpts', '/parafraseo', '/projects', '/code', '/library',
+      '/', '/gpts', '/parafraseo', '/projects', '/library',
       '/billing', '/settings', '/profile',
     ],
     [],
@@ -526,31 +525,11 @@ export function AppSidebar() {
   }, [])
   const switchSidebarMode = React.useCallback((mode: "chat" | "code") => {
     setSidebarMode(mode)
-    // Entering Code mode always reveals the APPS tree — a collapsed
-    // section here would read as an empty sidebar.
+    // Empresas is the in-sidebar companies list — never a /code destination.
     if (mode === "code") setCodexCollapsed(false)
     try { window.localStorage.setItem("sira:sidebar:mode", mode) } catch { /* ignore */ }
-    // The main view follows the toggle: Chats → the chat interface,
-    // Code → the Apps IDE. navigate() dedupes if already on the route.
-    navigate(mode === "code" ? "/code" : "/")
+    if (mode === "chat") navigate("/")
   }, [navigate])
-  // …and the toggle follows the route: landing on /code (deep link, agent
-  // click, reload) flips the sidebar into Code mode and vice versa, so the
-  // header always reflects what the main view shows.
-  React.useEffect(() => {
-    if (!pathname) return
-    const routeMode: "chat" | "code" | null = pathname.startsWith("/code")
-      ? "code"
-      : isAgentsHomePath(pathname) ? "chat" : null
-    if (routeMode) {
-      setSidebarMode((prev) => {
-        if (prev === routeMode) return prev
-        if (routeMode === "code") setCodexCollapsed(false)
-        try { window.localStorage.setItem("sira:sidebar:mode", routeMode) } catch { /* ignore */ }
-        return routeMode
-      })
-    }
-  }, [pathname])
   // Lote F · #45 — Codex section collapsible with persistent state.
   // Defaults to expanded on first visit so users discover it; once
   // collapsed the choice is remembered across reloads via localStorage.
@@ -1169,7 +1148,6 @@ export function AppSidebar() {
                 )}
               >
                 <span className="text-xs font-medium">Empresas</span>
-                <Code2 className="h-4 w-4 shrink-0" aria-hidden="true" />
               </button>
             </div>
           </div>

@@ -149,6 +149,21 @@ const nextConfig = {
         destination: '/agentes/:id',
         permanent: false,
       },
+      {
+        source: '/code',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/code/:path*',
+        destination: '/agentes',
+        permanent: false,
+      },
     ]
   },
 
