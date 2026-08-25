@@ -319,9 +319,6 @@ function applyWriteRefuseClosed({
   if (dest && dest.ok === false) {
     return { ok: false, refuse: true, path: raw, dir: dest.dir, code: dest.code || 'dest_dir_missing' };
   }
-  if (payload !== undefined || (content != null && arguments.length && refuseCheckpointOver1MiBUncompressed && payload !== undefined)) {
-    /* payload-only check below */
-  }
   if (payload !== undefined && refuseCheckpointOver1MiBUncompressed) {
     const ckpt = refuseCheckpointOver1MiBUncompressed(payload);
     if (ckpt && ckpt.ok === false) {
