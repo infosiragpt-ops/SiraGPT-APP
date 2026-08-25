@@ -633,7 +633,11 @@ describe('chat turn idempotency', () => {
     assert.match(activeSource, /const activeWait = await waitForActiveTurn\(activeTurn\)/);
     assert.match(
       activeSource,
-      /return respondGenerateTurnError\(res, \{[\s\S]*?code: 'turn_in_progress'/,
+      /activeWait\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/,
+    );
+    assert.doesNotMatch(
+      activeSource,
+      /code: 'turn_in_progress'/,
     );
     assert.match(
       activeSource,

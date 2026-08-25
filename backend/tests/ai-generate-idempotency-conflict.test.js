@@ -82,6 +82,66 @@ test('in-memory idempotency mismatch drops the stale Map entry instead of 409', 
   );
 });
 
+test('waitForActiveTurn failure does not 409 turn_in_progress — retry claims ownership', () => {
+  const waitIdx = generateIdempotencySource.indexOf('const activeWait = await waitForActiveTurn(activeTurn)');
+  assert.ok(waitIdx >= 0, 'active wait must exist');
+  const waitBlock = generateIdempotencySource.slice(waitIdx, waitIdx + 1400);
+
+  assert.match(
+    waitBlock,
+    /activeWait\.outcome === 'replay'/,
+    'replay outcome must still stream the completed owner',
+  );
+  assert.match(
+    waitBlock,
+    /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
+    'non-replay wait must drop the stale Map entry when it still points at that turn',
+  );
+  assert.match(
+    waitBlock,
+    /createActiveGenerateTurn\(\s*activeGenerateTurnKey,\s*generateIdempotencyRequestHash/,
+    'non-replay wait must continue as the new owner',
+  );
+  assert.match(
+    waitBlock,
+    /claimStreamController\([\s\S]*?\{ replaceOwner: true \}/,
+    'new owner must claim the stream controller like the empty-slot branch',
+  );
+  assert.doesNotMatch(
+    waitBlock,
+    /turn_in_progress/,
+    'non-replay wait must not return turn_in_progress',
+  );
+  assert.doesNotMatch(
+    waitBlock,
+    /respondGenerateTurnError/,
+    'non-replay wait must not call respondGenerateTurnError',
+  );
+});
+
+test('aborted or closed request releases an incomplete activeGenerateTurns owner', () => {
+  assert.match(
+    src,
+    /function releaseIncompleteActiveGenerateTurn\(turn, reason\)/,
+    'incomplete-owner release helper must exist',
+  );
+  assert.match(
+    src,
+    /if \(!turn \|\| turn\.settled\) return false;/,
+    'completed owners must stay in the Map for replay',
+  );
+  assert.match(
+    src,
+    /Client response closed for chat:[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
+    'socket close before completion must drop a zombie owner',
+  );
+  assert.match(
+    src,
+    /Client request aborted for chat:[\s\S]{0,240}releaseIncompleteActiveGenerateTurn\(\s*req\._activeGenerateTurn,/,
+    'request abort before completion must drop a zombie owner',
+  );
+});
+
 test('generate finally skips SSE post-hook writes onto a JSON 4xx', () => {
   const hookIdx = src.indexOf('if (req._filterCtx && !req._filterCtx._postRan)');
   assert.ok(hookIdx >= 0, 'filter post-hook block must exist');
