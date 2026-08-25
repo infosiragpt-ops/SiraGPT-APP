@@ -2,11 +2,13 @@ import { expect, test } from "@playwright/test"
 
 /**
  * Chat surface smoke — verifies the `/chat` route is reachable and
- * boots without a server error. We deliberately do *not* assert
+ * boots without a server error. Authenticated agents home is `/`;
+ * `/chat` redirects there. We deliberately do *not* assert
  * specific UI elements (composer textarea, send button, model
  * picker) because:
  *   - the page is locale-prefixed by the i18n middleware, so the
- *     final URL after navigation is `/<locale>/chat`,
+ *     final URL after navigation may be `/`, `/<locale>`, or
+ *     `/<locale>/chat`,
  *   - depending on auth state, an anonymous visitor may be
  *     redirected to a login surface — that redirect is also a
  *     valid smoke result.
@@ -33,15 +35,15 @@ test("chat route resolves to either the chat page or a known auth page", async (
     `chat route returned ${response!.status()}`,
   ).toBe(true)
 
-  // The middleware either renders the chat surface (user is signed
-  // in or anonymous mode is allowed) or redirects to /<locale>/login
-  // / /<locale>/auth. Either is acceptable for the smoke.
+  // The middleware either lands on agents home `/` (or `/<locale>`),
+  // renders `/chat`, or redirects to /<locale>/login / /<locale>/auth.
+  // Any of those is acceptable for the smoke.
   // `domcontentloaded` again here (instead of `networkidle`) — the
   // chat page may keep WebSocket / SSE connections open which means
   // network never goes truly idle.
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
-  const url = page.url()
-  expect(url).toMatch(/\/(chat|login|auth|register|sign[-_]?in)/i)
+  const pathname = new URL(page.url()).pathname
+  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
 })
 
 /**
@@ -69,15 +71,17 @@ test("chat surface paints a title and a stable shell", async ({ page }) => {
 
 /**
  * Locale negotiation — the same Accept-Language path home.spec
- * exercises, but also verifying the chat route honors the locale
- * prefix the middleware injects. Catches regressions where the
- * locale rewriter accidentally strips `/chat` to `/`.
+ * exercises, but also verifying `/chat` honors the locale prefix
+ * the middleware injects. Agents home is `/` (or `/<locale>` /
+ * `/<locale>/`), which is the expected destination after the
+ * `/chat` redirect.
  */
 test("locale prefix is preserved through the /chat redirect", async ({ page }) => {
   const response = await page.goto("/chat", { waitUntil: "domcontentloaded" })
   expect(response, "navigation should resolve").not.toBeNull()
-  // Either we're still at /chat (ok), or we're at /<locale>/chat
-  // (also ok). What we never want is a hard drop to / on a request
-  // that explicitly named the chat route.
-  expect(page.url()).toMatch(/\/(?:[a-z]{2}\/)?(chat|login|auth|register|sign[-_]?in)/i)
+  // `/chat` now redirects to agents home. Valid landings: `/`,
+  // `/<locale>`, `/<locale>/`, `/chat`, `/<locale>/chat`, or a
+  // known auth surface. Do not require `/chat` in the final path.
+  const pathname = new URL(page.url()).pathname
+  expect(pathname).toMatch(/^(?:\/[a-z]{2})?(?:\/(?:chat|login|auth|register|sign[-_]?in).*)?\/?$/i)
 })

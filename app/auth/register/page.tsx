@@ -29,13 +29,13 @@ type FieldErrors = {
 
 function safeAuthRedirect(raw: string | null) {
   const value = String(raw || "").trim()
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/chat"
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/"
   try {
     const url = new URL(value, "https://siragpt.local")
-    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/chat"
-    return `${url.pathname}${url.search}${url.hash}` || "/chat"
+    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/"
+    return `${url.pathname}${url.search}${url.hash}` || "/"
   } catch (_error) {
-    return "/chat"
+    return "/"
   }
 }
 
@@ -61,7 +61,7 @@ function RegisterPageContent() {
     () => safeAuthRedirect(searchParams.get("next")),
     [searchParams],
   )
-  const loginHref = postRegisterRedirect === "/chat"
+  const loginHref = postRegisterRedirect === "/"
     ? "/auth/login"
     : `/auth/login?next=${encodeURIComponent(postRegisterRedirect)}`
 

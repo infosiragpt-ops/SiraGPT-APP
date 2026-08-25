@@ -1,5 +1,5 @@
 import type { Metadata } from "next"
-import HomePage from "./home-page"
+import { AgentsHomeGate } from "@/components/agents-home-gate"
 
 export const metadata: Metadata = {
   title: "SiraGPT — Plataforma de IA Multimodal",
@@ -42,5 +42,5 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic"
 
 export default function Page() {
-  return <HomePage />
+  return <AgentsHomeGate />
 }

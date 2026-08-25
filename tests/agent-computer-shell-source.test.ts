@@ -35,7 +35,8 @@ describe("agent computer shell · PensandoBars port", () => {
   it("keeps the agent-computer focus action contract", () => {
     const shell = source("components/code/agent-computer-shell.tsx")
     assert.match(shell, /agent-computer\/action/)
-    assert.match(shell, /JSON\.stringify\(\{ focus: app \}\)/)
+    assert.match(shell, /JSON\.stringify\(\{[\s\S]*focus: app[\s\S]*\}\)/)
+    assert.match(shell, /conversationId/)
     assert.match(shell, /authenticatedFetch/)
   })
 

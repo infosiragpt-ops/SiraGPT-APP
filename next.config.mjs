@@ -132,6 +132,21 @@ const nextConfig = {
   // NOTE: Next.js standalone may evaluate rewrites while loading .env.local.
   // Replit deployments must ignore stale localhost:5000 values from that file
   // and match scripts/start-all.cjs's BACKEND_PORT default (5050).
+  async redirects() {
+    return [
+      {
+        source: '/chat',
+        destination: '/',
+        permanent: false,
+      },
+      {
+        source: '/chat/',
+        destination: '/',
+        permanent: false,
+      },
+    ]
+  },
+
   async rewrites() {
     const backendBase = resolveBackendInternalUrl()
     return {

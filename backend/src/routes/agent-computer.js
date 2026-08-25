@@ -6,7 +6,7 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { agentComputerEnabled } = require('../services/computer/flags');
 const { orchFetch, rewriteUrls, resolveOrchConfig } = require('../services/computer/orch-client');
-const { memberKey } = require('../services/computer/member-key');
+const { memberKey, resolveSessionIdentity } = require('../services/computer/member-key');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -21,15 +21,40 @@ function memberId(req) {
   return req.user && req.user.id ? String(req.user.id) : '';
 }
 
+function readConversationId(req) {
+  const body = req.body || {};
+  const query = req.query || {};
+  return String(
+    body.conversationId || body.chatId || query.conversationId || query.chatId || '',
+  ).trim();
+}
+
+function identityFor(req) {
+  return resolveSessionIdentity({ id: memberId(req) }, readConversationId(req));
+}
+
+function withConversation(desktop, identity) {
+  const orchUser = String((desktop && desktop.userId) || identity.userId);
+  const bound = Boolean(identity.conversationId) && orchUser === identity.userId;
+  return {
+    ...desktop,
+    userId: orchUser,
+    conversationId: identity.conversationId,
+    conversationBound: bound,
+    sessionKey: identity.sessionKey,
+  };
+}
+
 async function ensureMemberDesktop(req) {
-  const userId = memberKey({ id: memberId(req) });
-  const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId } });
-  return rewriteUrls({ ...desktop, userId: desktop.userId || userId });
+  const identity = identityFor(req);
+  const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId } });
+  return rewriteUrls(withConversation({ ...desktop, userId: desktop.userId || identity.userId }, identity));
 }
 
 function ownedOrDeny(session, req, res) {
-  const want = memberKey({ id: memberId(req) });
-  if (!session || (session.userId && String(session.userId) !== String(want))) {
+  const identity = identityFor(req);
+  const want = identity.userId || memberKey({ id: memberId(req) });
+  if (!session || (session.userId && String(session.userId) !== String(want) && String(session.userId) !== String(identity.memberKey))) {
     res.status(403).json({ error: 'forbidden' });
     return false;
   }
@@ -38,7 +63,7 @@ function ownedOrDeny(session, req, res) {
 
 router.get('/health', requireFlag, (_req, res) => {
   const orch = resolveOrchConfig();
-  res.json({ ok: true, enabled: true, model: 'persistent-per-member', orchestrator: orch.enabled, viewer: 'novnc' });
+  res.json({ ok: true, enabled: true, model: 'persistent-per-conversation-or-member', orchestrator: orch.enabled, viewer: 'novnc' });
 });
 
 router.get('/embed-auth', requireFlag, authenticateToken, (req, res) => {
@@ -69,7 +94,7 @@ router.get('/sessions/:id', requireFlag, authenticateToken, async (req, res) => 
   try {
     const session = rewriteUrls(await orchFetch('/sessions/' + req.params.id));
     if (!ownedOrDeny(session, req, res)) return;
-    return res.json(session);
+    return res.json(withConversation(session, identityFor(req)));
   } catch (err) {
     return res.status(err.status || 500).json({ error: 'get_failed', message: err.message });
   }
@@ -98,14 +123,23 @@ async function handleAction(req, res, session) {
   const focus = String((req.body && (req.body.focus || req.body.app)) || '').trim().toLowerCase();
   if (focus && FOCUS_CMDS[focus]) {
     const out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus]);
-    return res.json({ ok: true, focus, sessionId: session.sessionId, ...out });
+    const identity = identityFor(req);
+    return res.json({
+      ok: true,
+      focus,
+      sessionId: session.sessionId,
+      conversationId: identity.conversationId,
+      conversationBound: identity.conversationBound,
+      sessionKey: identity.sessionKey,
+      ...out,
+    });
   }
   const action = (req.body && req.body.action) || req.body || {};
   const orch = resolveOrchConfig();
   const target = orch.url + '/sessions/' + session.sessionId + '/agent/action';
   const forwarded = await fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
   const data = await forwarded.json().catch(() => ({}));
-  return res.status(forwarded.status).json(data);
+  return res.status(forwarded.status).json(withConversation(data, identityFor(req)));
 }
 
 router.post('/action', requireFlag, authenticateToken, async (req, res) => {
@@ -124,4 +158,3 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
 });
 
 module.exports = router;
-

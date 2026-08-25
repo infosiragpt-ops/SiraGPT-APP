@@ -51,9 +51,11 @@ const IN_PROGRESS_PHASES = new Set(["starting", "loading", "building", "booting"
 export type AgentComputerShellProps = {
   /** The workspace main area (live preview + overlays) framed as one window. */
   children: React.ReactNode
+  /** Chat/conversation id so dock focus hits that chat's desktop, not another. */
+  conversationId?: string | null
 }
 
-export function AgentComputerShell({ children }: AgentComputerShellProps) {
+export function AgentComputerShell({ children, conversationId }: AgentComputerShellProps) {
   const t = useTranslations("codex.panel.agentComputer")
   const [preview, setPreview] = React.useState<CodePreviewState | null>(null)
   const [routinesOpen, setRoutinesOpen] = React.useState(true)
@@ -107,7 +109,10 @@ export function AgentComputerShell({ children }: AgentComputerShellProps) {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ focus: app }),
+          body: JSON.stringify({
+            focus: app,
+            ...(conversationId ? { conversationId } : {}),
+          }),
           signal: AbortSignal.timeout(20_000),
         })
         setFocusNote(app === "browser" ? t("dock.focusedBrowser") : t("dock.focusedOther", { app }))
@@ -115,7 +120,7 @@ export function AgentComputerShell({ children }: AgentComputerShellProps) {
         setFocusNote(t("dock.unavailable"))
       }
     },
-    [t],
+    [conversationId, t],
   )
 
   const addressPath = isLive && typeof window !== "undefined" && preview?.src
@@ -127,6 +132,7 @@ export function AgentComputerShell({ children }: AgentComputerShellProps) {
       className="flex h-full min-h-0 min-w-0 flex-col bg-[#e8e8ea] dark:bg-[#101012]"
       data-testid="agent-computer-shell"
       data-agent-computer-shell="1"
+      data-conversation-id={conversationId || undefined}
       aria-label={t("title")}
     >
       {/* Browser-style window chrome */}

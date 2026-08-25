@@ -2,6 +2,8 @@
 
 import * as React from "react"
 import { usePathname, useRouter } from "next/navigation"
+import { isAgentsHomePath } from "@/lib/agents-home-path"
+import { useAuth } from "@/lib/auth-context-integrated"
 
 /**
  * Global drag-and-drop catcher mounted at the app shell.
@@ -25,11 +27,12 @@ import { usePathname, useRouter } from "next/navigation"
 export function GlobalDropRedirector() {
   const pathname = usePathname() ?? "/"
   const router = useRouter()
+  const { user } = useAuth()
   const [active, setActive] = React.useState(false)
   const counter = React.useRef(0)
 
-  // Skip on /chat — the dedicated handler there owns the gesture.
-  const enabled = !pathname.startsWith("/chat")
+  // Skip when the agents/chat surface is already mounted (signed-in /).
+  const enabled = !(isAgentsHomePath(pathname) && Boolean(user))
 
   React.useEffect(() => {
     if (!enabled) return
@@ -65,7 +68,7 @@ export function GlobalDropRedirector() {
       // Files survive client-side navigation because window persists.
       ;(window as unknown as { __siraPendingFiles?: File[] }).__siraPendingFiles =
         Array.from(files)
-      router.push("/chat")
+      router.push(user ? "/" : "/auth/login?next=/")
     }
 
     window.addEventListener("dragenter", onEnter)
@@ -78,7 +81,7 @@ export function GlobalDropRedirector() {
       window.removeEventListener("dragleave", onLeave)
       window.removeEventListener("drop", onDrop)
     }
-  }, [enabled, router])
+  }, [enabled, router, user])
 
   if (!enabled || !active) return null
 

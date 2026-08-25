@@ -23,6 +23,7 @@ import { useChat } from "@/lib/chat-context-integrated"
 import { apiClient } from "@/lib/api"
 import { useTranslations } from "next-intl"
 import { useRouter, usePathname } from "next/navigation"
+import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -266,8 +267,8 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   const handleChatSelect = React.useCallback(
     (chatId: string) => {
       selectChat(chatId)
-      if (!pathname.startsWith("/chat")) {
-        router.push(`/chat?id=${chatId}`)
+      if (!isAgentsHomePath(pathname)) {
+        router.push(agentsHomeHref(`id=${chatId}`))
       }
       onOpenChange(false)
       setSearchQuery("")
