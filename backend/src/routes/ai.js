@@ -1856,21 +1856,10 @@ function applyGenerateFairQueue3h63(req, { sessionKey, producerId, requestId, wa
   const w63 = require('../services/agent-runner/engine-3h63');
   const sess = String(sessionKey || '');
   const prod = String(producerId || '');
-  if (typeof ad.queueMaxWait60sThen503 === 'function') {
-    ad.queueMaxWait60sThen503({ waitedMs: Number(waitedMs) || 0, maxMs: 60000 });
-  }
-  if (typeof ad.sessionGenerateRateLimit === 'function') {
-    ad.sessionGenerateRateLimit(sess);
-  }
-  if (typeof ad.dropDuplicateInFlightGenerate === 'function') {
-    ad.dropDuplicateInFlightGenerate(sess, prod);
-  }
-  if (typeof ad.idempotentGenerateByRequestId === 'function' && requestId) {
-    ad.idempotentGenerateByRequestId(sess, String(requestId));
-  }
-  if (typeof ad.acquireFairGenerateLock === 'function') {
-    ad.acquireFairGenerateLock(sess, prod);
-  }
+  // Do not pre-claim in-flight / request-id maps here. Those helpers are
+  // stateful: a leftover "touch live helper" call marked the turn pending,
+  // then applyFairGenerateQueueClosed saw duplicate_turn and every Safari
+  // POST /api/ai/generate returned 409 in ~50ms (UI stuck on Pensando).
   try {
     const w66lock = require('../services/agent-runner/engine-3h66');
     if (typeof w66lock.applySseCreditLockClosed === 'function') {
@@ -2280,13 +2269,26 @@ router.post(
         if (fair && fair.ok === false) {
           controller.abort();
           const status = Number(fair.status) || 503;
+          const fairCode = fair.code || 'queue_wait';
+          const fairRetryable = fairCode === 'duplicate_turn'
+            || fairCode === 'rate_limited'
+            || fairCode === 'queue_wait'
+            || fairCode === 'queue_fairness';
+          console.warn('[ai/generate] fair queue reject', {
+            chatId,
+            code: fairCode,
+            status,
+            retryable: fairRetryable,
+          });
           if (!res.headersSent) {
+            if (fairRetryable) res.setHeader('Retry-After', '2');
             return res.status(status).json({
-              error: fair.code || 'queue_wait',
-              code: fair.code || 'queue_wait',
-              message: fair.code === 'duplicate_turn'
+              error: fairCode,
+              code: fairCode,
+              retryable: fairRetryable,
+              message: fairCode === 'duplicate_turn'
                 ? 'Ese generate ya está en vuelo. No lo dupliqué.'
-                : (fair.code === 'rate_limited'
+                : (fairCode === 'rate_limited'
                   ? 'Demasiados generate en esta sesión. Espera un momento.'
                   : 'La cola de generate esperó más de 60 s. Reintenta en unos segundos.'),
             });
