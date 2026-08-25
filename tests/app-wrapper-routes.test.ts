@@ -45,7 +45,7 @@ describe("needsChatContext", () => {
 
   it("enables chat context on every documented prefix", () => {
     for (const path of [
-      "/agentes", "/chat", "/gpts", "/parafraseo", "/projects", "/design",
+      "/agentes", "/chat", "/gpts", "/conexiones", "/parafraseo", "/projects", "/design",
       "/codex", "/code", "/apps", "/plan", "/profile", "/library",
       "/billing", "/settings", "/thesis", "/documents",
     ]) {

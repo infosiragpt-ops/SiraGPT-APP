@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import {
   GPT_STORE_APP_CATEGORIES,
   GPT_STORE_APPS,
+  gptStoreAppLogoUrl,
   type GptStoreApp,
   type GptStoreAppCategory,
 } from "@/lib/gpts-apps-catalog"
@@ -37,6 +38,35 @@ function toneFor(id: string) {
   return AVATAR_TONES[hash % AVATAR_TONES.length]
 }
 
+function AppLogo({ app }: { app: GptStoreApp }) {
+  const [failed, setFailed] = useState(false)
+  const src = gptStoreAppLogoUrl(app)
+
+  if (!failed) {
+    return (
+      <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={`${app.name} logo`}
+          width={40}
+          height={40}
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+          className="h-10 w-10 object-contain"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className={cn("grid h-16 w-16 shrink-0 place-items-center rounded-2xl text-[0.92rem] font-semibold", toneFor(app.id))}>
+      {initials(app.name)}
+    </div>
+  )
+}
+
 function AppCard({
   app,
   connected,
@@ -53,9 +83,7 @@ function AppCard({
       data-testid={`gpts-app-card-${app.id}`}
       className="group relative flex min-h-[104px] items-center gap-4 rounded-2xl bg-[#f8f8f8] p-4 transition duration-200 hover:bg-[#f1f1f1] dark:bg-zinc-900 dark:hover:bg-zinc-800/80"
     >
-      <div className={cn("grid h-16 w-16 shrink-0 place-items-center rounded-full text-[0.92rem] font-semibold", toneFor(app.id))}>
-        {initials(app.name)}
-      </div>
+      <AppLogo app={app} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
           <h3 className="line-clamp-1 text-[1rem] font-semibold leading-tight tracking-[-0.025em] text-zinc-950 dark:text-zinc-50">
@@ -96,10 +124,18 @@ function AppCard({
   )
 }
 
-export function GptsAppsSection({ searchQuery }: { searchQuery: string }) {
+export function GptsAppsSection({
+  searchQuery,
+  showAll = false,
+  hideHeading = false,
+}: {
+  searchQuery: string
+  showAll?: boolean
+  hideHeading?: boolean
+}) {
   const { settings, update } = useSettings()
   const [category, setCategory] = useState<"All" | GptStoreAppCategory>("All")
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(showAll)
 
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -113,7 +149,7 @@ export function GptsAppsSection({ searchQuery }: { searchQuery: string }) {
     })
   }, [category, searchQuery])
 
-  const visible = expanded || searchQuery.trim() ? filtered : filtered.slice(0, INITIAL_VISIBLE)
+  const visible = showAll || expanded || searchQuery.trim() ? filtered : filtered.slice(0, INITIAL_VISIBLE)
   const hiddenCount = Math.max(0, filtered.length - visible.length)
 
   const isConnected = (id: string) => settings.apps[id]?.connected === true
@@ -129,13 +165,15 @@ export function GptsAppsSection({ searchQuery }: { searchQuery: string }) {
   }
 
   return (
-    <section data-testid="gpts-apps-section" className="mx-auto mt-10 w-full max-w-[640px] pb-12">
-      <div>
-        <h2 className="text-[1.35rem] font-semibold tracking-[-0.04em] text-zinc-950 dark:text-zinc-50 md:text-[1.55rem]">Apps</h2>
-        <p className="mt-0.5 text-[0.88rem] text-zinc-400 dark:text-zinc-500">
-          Conecta aplicaciones para usarlas en SiraGPT
-        </p>
-      </div>
+    <section data-testid="gpts-apps-section" className={cn("mx-auto w-full pb-12", hideHeading ? "max-w-[980px]" : "mt-10 max-w-[640px]")}>
+      {!hideHeading && (
+        <div>
+          <h2 className="text-[1.35rem] font-semibold tracking-[-0.04em] text-zinc-950 dark:text-zinc-50 md:text-[1.55rem]">Apps</h2>
+          <p className="mt-0.5 text-[0.88rem] text-zinc-400 dark:text-zinc-500">
+            Conecta aplicaciones para usarlas en SiraGPT
+          </p>
+        </div>
+      )}
 
       <div className="mt-4 flex items-center gap-4 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {GPT_STORE_APP_CATEGORIES.map((item) => {
