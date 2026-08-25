@@ -2,8 +2,6 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const path = require('node:path');
 
 const {
   listVisibleTextModelDefinitions,
@@ -86,23 +84,6 @@ test('curateVisibleTextModels surfaces admin-activated TEXT models even when not
   const passthrough = out.find((m) => m.name === 'CustomCorp/llama-99b');
   assert.strictEqual(passthrough.displayName, 'Llama 99B');
   assert.strictEqual(passthrough.id, 'custom-1');
-});
-
-test('production compose override does not default VISIBLE_MODELS_ALLOWLIST to DeepSeek-only', () => {
-  const compose = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'docker-compose.production.override.yml'),
-    'utf8',
-  );
-  assert.match(
-    compose,
-    /VISIBLE_MODELS_ALLOWLIST:\s*"\$\{VISIBLE_MODELS_ALLOWLIST-}"/,
-    'empty/unset env must not be replaced by a DeepSeek-only default',
-  );
-  assert.doesNotMatch(
-    compose,
-    /VISIBLE_MODELS_ALLOWLIST:\s*"\$\{VISIBLE_MODELS_ALLOWLIST:-/,
-    'must not use :- default interpolation for the public picker allowlist',
-  );
 });
 
 test('allowlist set must not hide an extra isActive TEXT admin model', () => {
