@@ -37,8 +37,13 @@ describe("GPTs Apps catalog", () => {
     assert.match(section, /alt=\{\`\$\{app\.name\} logo\`\}/)
   })
 
-  it("opens the full catalog from the sidebar Apps tab", () => {
+  it("opens the full catalog from the sidebar Apps nav item under GPTs", () => {
+    const sidebar = fs.readFileSync(path.join(process.cwd(), "components", "app-sidebar.tsx"), "utf8")
     const conexiones = fs.readFileSync(path.join(process.cwd(), "app", "conexiones", "page.tsx"), "utf8")
+    const gptsAt = sidebar.indexOf('href="/gpts"')
+    const appsAt = sidebar.indexOf('href="/conexiones"')
+    assert.ok(gptsAt > 0 && appsAt > gptsAt, "Apps nav item must sit after GPTs")
+    assert.match(sidebar, /label="Apps"/)
     assert.match(conexiones, /data-testid="connect-apps-page"/)
     assert.match(conexiones, /showAll/)
     assert.match(conexiones, /hideHeading/)
