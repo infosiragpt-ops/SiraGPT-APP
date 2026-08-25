@@ -31,6 +31,8 @@ describe("retired /code product surface", () => {
     const headerStart = sidebar.indexOf('aria-label="Modo de la barra lateral"')
     assert.ok(headerStart > 0, "missing sidebar mode tablist")
     const header = sidebar.slice(headerStart, headerStart + 1800)
+    assert.match(header, /aria-label="Agentes"/)
+    assert.match(header, />Agentes</)
     assert.match(header, /aria-label="Empresas"/)
     assert.match(header, />Empresas</)
     assert.doesNotMatch(header, /<Code2/)

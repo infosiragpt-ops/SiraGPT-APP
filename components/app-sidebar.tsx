@@ -1141,7 +1141,7 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Mode toggle: Chats ↔ Empresas. Replaces the
+          {/* Mode toggle: Agentes ↔ Empresas. Replaces the
               logo+name lockup in the open header (the collapsed rail
               keeps the logo button below). */}
           <div className="flex min-w-0 flex-1 items-center justify-center">
@@ -1154,7 +1154,7 @@ export function AppSidebar() {
                 type="button"
                 role="tab"
                 aria-selected={sidebarMode === "chat"}
-                aria-label="Chats"
+                aria-label="Agentes"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
                   SIDEBAR_TAB,
@@ -1163,7 +1163,7 @@ export function AppSidebar() {
                 )}
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                <span>Chats</span>
+                <span>Agentes</span>
               </button>
               <button
                 type="button"
