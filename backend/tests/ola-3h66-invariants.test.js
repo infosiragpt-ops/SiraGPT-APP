@@ -430,7 +430,7 @@ test('3H66-J-001 latency ring is live samples, never invented Flash', () => {
 
 test('3H66-K-001 adapter snapshot and DeepSeek lock are 3H66', () => {
   const s = ad.adapterSnapshot();
-  assert.equal(s.wave, '3H66');
+  assert.ok(s.wave === '3H66' || s.wave === '3H67');
   assert.equal(s.failClosed, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');
@@ -499,5 +499,5 @@ test('3H66-L-001 live loop/generate/sse/sandbox/memory import 3H66 + 36 helper n
   assert.ok(dur.includes('applyMemoryRetrieveClosed'));
   assert.ok(sbx.includes('refuseWriteOver2MiB') || sbx.includes('applyPathJailClosed'));
   assert.ok(local.includes('startBackgroundBash'));
-  assert.ok(ver.includes('3H66'));
+  assert.ok(ver.includes('3H66') || ver.includes('3H67'));
 });

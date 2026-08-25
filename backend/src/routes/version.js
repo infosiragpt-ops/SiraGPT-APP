@@ -107,7 +107,7 @@ router.get('/latency', (_req, res) => {
     if (typeof w64.readLatencyRingClosed === 'function') ring = w64.readLatencyRingClosed();
   } catch (_) { ring = null; }
   res.json({
-    wave: '3H66',
+    wave: '3H67',
     snapshot: snapshot,
     ring: ring,
     note: 'persisted p50/p95; never invented Flash; VPS corpus still unmeasured',

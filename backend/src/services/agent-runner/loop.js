@@ -57,6 +57,10 @@ function loadEngine3h66() {
   try { return require('./engine-3h66'); } catch (_) { return null; }
 }
 
+function loadEngine3h67() {
+  try { return require('./engine-3h67'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -491,6 +495,13 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
+  try {
+    const w67 = loadEngine3h67();
+    if (w67 && typeof w67.classifyEngine3h67Error === 'function') {
+      const hit = w67.classifyEngine3h67Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H67 fail-open to 3H66 */ }
   try {
     const w66 = loadEngine3h66();
     if (w66 && typeof w66.classifyEngine3h66Error === 'function') {
@@ -1856,6 +1867,30 @@ async function runAgentLoop({
       }
     } catch (_) { /* 3H66 empty/caps fail-open */ }
 
+    try {
+      const w67cap = loadEngine3h67();
+      const ad67cap = loadEngineAdapter();
+      if (w67cap && typeof w67cap.applyToolNameArgsHygieneClosed === 'function' && ad67cap) {
+        const hygList = w67cap.applyToolNameArgsHygieneClosed({
+          calls: toolCalls,
+          dropDuplicateToolCallIds: ad67cap.dropDuplicateToolCallIds,
+          rejectToolCallIfArgsIsArray: ad67cap.rejectToolCallIfArgsIsArray,
+          rejectPrototypePollutionKeys: ad67cap.rejectPrototypePollutionKeys,
+          rejectToolNameStartingWithHyphen: ad67cap.rejectToolNameStartingWithHyphen,
+          rejectToolNameStartingWithDigit: ad67cap.rejectToolNameStartingWithDigit,
+          rejectToolNameOutsideCharset: ad67cap.rejectToolNameOutsideCharset,
+          rejectToolNameWithWhitespace: ad67cap.rejectToolNameWithWhitespace,
+          rejectToolNameLongerThan64: ad67cap.rejectToolNameLongerThan64,
+          capToolArgKeys32: ad67cap.capToolArgKeys32,
+          stripBidiOverrideChars: ad67cap.stripBidiOverrideChars,
+          stripZeroWidthCharsFromArgs: ad67cap.stripZeroWidthCharsFromArgs,
+          dropNullBytesInToolArgs: ad67cap.dropNullBytesInToolArgs,
+          stripTagCharsUPlusE0000: ad67cap.stripTagCharsUPlusE0000,
+        });
+        if (hygList && Array.isArray(hygList.calls)) toolCalls = hygList.calls;
+      }
+    } catch (_) { /* 3H67 tool-name list fail-open */ }
+
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
       // "provider accepted the request but produced nothing" stall. Count it;
@@ -2119,6 +2154,79 @@ async function runAgentLoop({
             }
           }
         } catch (_) { /* 3H66 coerce/jail/bash fail-open */ }
+        try {
+          const w67hy = loadEngine3h67();
+          const ad67 = loadEngineAdapter();
+          if (w67hy && ad67 && result === undefined) {
+            if (typeof w67hy.applyToolNameArgsHygieneClosed === 'function') {
+              const hyg67 = w67hy.applyToolNameArgsHygieneClosed({
+                name: mapped,
+                args,
+                rejectPrototypePollutionKeys: ad67.rejectPrototypePollutionKeys,
+                dropDuplicateToolCallIds: ad67.dropDuplicateToolCallIds,
+                rejectToolNameStartingWithHyphen: ad67.rejectToolNameStartingWithHyphen,
+                rejectToolNameStartingWithDigit: ad67.rejectToolNameStartingWithDigit,
+                rejectToolNameOutsideCharset: ad67.rejectToolNameOutsideCharset,
+                rejectToolNameWithWhitespace: ad67.rejectToolNameWithWhitespace,
+                rejectToolNameLongerThan64: ad67.rejectToolNameLongerThan64,
+                capToolArgKeys32: ad67.capToolArgKeys32,
+                rejectToolCallIfArgsIsArray: ad67.rejectToolCallIfArgsIsArray,
+                stripBidiOverrideChars: ad67.stripBidiOverrideChars,
+                stripZeroWidthCharsFromArgs: ad67.stripZeroWidthCharsFromArgs,
+                dropNullBytesInToolArgs: ad67.dropNullBytesInToolArgs,
+                stripTagCharsUPlusE0000: ad67.stripTagCharsUPlusE0000,
+              });
+              if (hyg67 && hyg67.ok === false) {
+                const classified = classifyLoopError({ code: hyg67.code || 'tool_name_charset' });
+                result = 'ERROR: ' + classified.message;
+                cacheHit = true;
+              } else if (hyg67 && hyg67.args && typeof hyg67.args === 'object') {
+                args = hyg67.args;
+              }
+            }
+            const filePath67 = args && (args.path || args.file_path || args.target);
+            const writeKind67 = w67hy.WRITE_TOOL_RE && w67hy.WRITE_TOOL_RE.test(String(mapped || ''));
+            if (typeof w67hy.applyWriteRefuseClosed === 'function' && writeKind67 && filePath67 && result === undefined) {
+              const refused = w67hy.applyWriteRefuseClosed({
+                path: filePath67,
+                content: args && (args.content != null ? args.content : args.new_string),
+                existsSync: require('fs').existsSync,
+                refuseWriteIfDestDirMissing: ad67.refuseWriteIfDestDirMissing,
+                refuseWriteToEtcProcSys: ad67.refuseWriteToEtcProcSys,
+                refuseWriteToDevBoot: ad67.refuseWriteToDevBoot,
+                refuseWriteToRootMnt: ad67.refuseWriteToRootMnt,
+                refuseCheckpointOver1MiBUncompressed: ad67.refuseCheckpointOver1MiBUncompressed,
+              });
+              if (refused && refused.ok === false && !refused.uniqueness) {
+                const classified = classifyLoopError({ code: refused.code || 'path_system' });
+                result = 'ERROR: ' + classified.message;
+                cacheHit = true;
+              }
+            }
+            const planShaped = (w67hy.PLAN_TOOL_RE && w67hy.PLAN_TOOL_RE.test(String(mapped || '')))
+              || (args && Array.isArray(args.steps));
+            if (typeof w67hy.applyPlanGuardsClosed === 'function' && planShaped && result === undefined) {
+              const plan = w67hy.applyPlanGuardsClosed({
+                title: args && args.title,
+                steps: args && args.steps,
+                completedIds: args && args.completedIds,
+                capPlanTitle128Chars: ad67.capPlanTitle128Chars,
+                refuseDuplicatePlanStepIds: ad67.refuseDuplicatePlanStepIds,
+                refuseEmptyPlanTitle: ad67.refuseEmptyPlanTitle,
+                capPlanSteps24: ad67.capPlanSteps24,
+                skipCompletedPlanStepsOnResume: ad67.skipCompletedPlanStepsOnResume,
+              });
+              if (plan && plan.ok === false) {
+                const classified = classifyLoopError({ code: plan.code || 'plan_title_empty' });
+                result = 'ERROR: ' + classified.message;
+                cacheHit = true;
+              } else if (plan && args && typeof args === 'object') {
+                if (plan.title != null) args.title = plan.title;
+                if (Array.isArray(plan.steps)) args.steps = plan.steps;
+              }
+            }
+          }
+        } catch (_) { /* 3H67 name/write/plan fail-open */ }
         try {
           const w65hy = loadEngine3h65();
           if (w65hy && typeof w65hy.applyToolArgHygieneClosed === 'function' && adapter) {
@@ -2487,6 +2595,39 @@ async function runAgentLoop({
           }
         }
       } catch (_) { /* 3H66 read hygiene / remember fail-open */ }
+      try {
+        const w67res = loadEngine3h67();
+        const ad67res = loadEngineAdapter();
+        if (w67res && ad67res && result !== undefined) {
+          if (typeof w67res.applySandboxOutCapClosed === 'function'
+            && w67res.BASH_TOOL_RE && w67res.BASH_TOOL_RE.test(mapped)
+            && !String(result).startsWith('ERROR:')) {
+            const cappedOut = w67res.applySandboxOutCapClosed({
+              text: typeof result === 'string' ? result : String(result),
+              stdout: (result && typeof result === 'object' && result.stdout != null) ? result.stdout : (typeof result === 'string' ? result : String(result)),
+              stderr: (result && typeof result === 'object' && result.stderr != null) ? result.stderr : '',
+              stripAnsiFromSandboxOut: ad67res.stripAnsiFromSandboxOut,
+              stderrByteCapPerCommand: ad67res.stderrByteCapPerCommand,
+              stdoutByteCapPerCommand: ad67res.stdoutByteCapPerCommand,
+              combinedStdoutStderr96KiB: ad67res.combinedStdoutStderr96KiB,
+              capStdoutLine8KiB: ad67res.capStdoutLine8KiB,
+            });
+            if (cappedOut && cappedOut.text != null) result = cappedOut.text;
+          }
+          if (typeof w67res.applyCreditErrorPathClosed === 'function'
+            && String(result).startsWith('ERROR:')) {
+            w67res.applyCreditErrorPathClosed({
+              usage: (response && response.usage) || {},
+              error: { message: String(result) },
+              noCompletion: true,
+              aborted: Boolean(signal && signal.aborted),
+              buffer: '',
+              recordTokenUsageOnErrorPath: ad67res.recordTokenUsageOnErrorPath,
+              cancelDropsBufferedTokens: ad67res.cancelDropsBufferedTokens,
+            });
+          }
+        }
+      } catch (_) { /* 3H67 sandbox/credit fail-open */ }
       try {
         const w65res = loadEngine3h65();
         const adRes = loadEngineAdapter();

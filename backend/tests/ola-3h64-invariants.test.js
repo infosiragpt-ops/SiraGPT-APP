@@ -386,7 +386,7 @@ test('3H64-I-001 public errors are Spanish and never leak stacks or sk-', () => 
 
 test('3H64-J-001 adapter snapshot and DeepSeek lock are 3H64', () => {
   const s = ad.adapterSnapshot();
-  assert.ok(s.wave === '3H64' || s.wave === '3H65' || s.wave === '3H66');
+  assert.ok(s.wave === '3H64' || s.wave === '3H65' || s.wave === '3H66' || s.wave === '3H67');
   assert.equal(s.failClosed, true);
   assert.equal(s.openrouterGenerate, false);
   assert.equal(s.interpreter, 'local');
