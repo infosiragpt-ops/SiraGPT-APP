@@ -635,7 +635,7 @@
       "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
       "emptySelect": "Crea o selecciona un proyecto para empezar.",
       "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
-      "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
+      "webUnavailable": "El preview aún no está disponible. Ábrelo desde un checkpoint.",
       "openInTab": "Abrir en pestaña nueva",
       "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
       "defaultProjectName": "Proyecto {n}",
@@ -645,7 +645,36 @@
       "disabledTitle": "APPS aún no está activo",
       "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
       "forbiddenTitle": "Acceso restringido",
-      "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
+      "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist.",
+      "agentComputer": {
+        "title": "Computadora del agente",
+        "status": {
+          "live": "En vivo",
+          "starting": "Pensando…",
+          "error": "Error",
+          "idle": "En espera"
+        },
+        "dock": {
+          "browser": "Navegador",
+          "files": "Archivos",
+          "terminal": "Terminal",
+          "desktop": "Escritorio",
+          "openLabel": "Abrir {app}",
+          "focusedBrowser": "Chrome enfocado en la computadora del agente",
+          "focusedOther": "{app} enfocado",
+          "unavailable": "La computadora del agente no está disponible aquí"
+        },
+        "routines": {
+          "toggle": "Rutinas",
+          "active": "activa",
+          "mejoraConstanteName": "Mejora constante chat y code",
+          "mejoraConstanteSchedule": "cada 3 h",
+          "mejoraConstanteNext": "en curso",
+          "avisarTiendasName": "Avisar tiendas iPhone/Android",
+          "avisarTiendasSchedule": "9:32 / 15:32 días laborables",
+          "avisarTiendasNext": "programada"
+        }
+      }
     }
   },
   "meta": {
