@@ -44,7 +44,7 @@ describe('auth callback completion', () => {
     cleanup()
   })
 
-  it('awaits cookie-session hydration after SAML and redirects to chat', async () => {
+  it('awaits cookie-session hydration after SAML and redirects to agents home', async () => {
     navigation.params = new URLSearchParams('sso=success')
     auth.hydrateSession.mockResolvedValueOnce({
       status: 'authenticated',
@@ -54,7 +54,7 @@ describe('auth callback completion', () => {
     render(<AuthCallback />)
 
     await waitFor(() => {
-      expect(navigation.replace).toHaveBeenCalledWith('/chat')
+      expect(navigation.replace).toHaveBeenCalledWith('/')
     })
 
     expect(auth.hydrateSession).toHaveBeenCalledTimes(1)
