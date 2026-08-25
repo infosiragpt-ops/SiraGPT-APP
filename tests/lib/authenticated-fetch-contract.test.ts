@@ -146,6 +146,11 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(normalized)",
   },
   {
+    file: "lib/document-first-page.ts",
+    reason: "Data/blob first-page thumb branch after trusted Sira assets use authenticatedFetch.",
+    accepts: (text) => text === "fetch(normalized)",
+  },
+  {
     file: "components/download-buttons.tsx",
     reason: "Public or external generated-image download.",
     accepts: (text) => text === "fetch(content)",
