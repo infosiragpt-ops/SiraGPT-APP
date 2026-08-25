@@ -52,7 +52,8 @@
     "../lib/integrations/verify-webhook.ts",
     "../lib/format-schedule-es-pe.ts",
     "../lib/thinking-loaders.ts",
-    "../lib/sidebar-recent-chats-filters.ts"
+    "../lib/sidebar-recent-chats-filters.ts",
+    "../lib/sidebar-chat-folders.ts"
   ],
   "exclude": [
     "../tests/lib"
