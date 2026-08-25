@@ -614,6 +614,13 @@ function classifyAdapterError(code) {
     }
   } catch (_) { /* fail-open */ }
   try {
+    const w66 = require('./engine-3h66');
+    if (w66 && typeof w66.classifyEngine3h66Error === 'function') {
+      const extra = w66.classifyEngine3h66Error({ code: c });
+      if (extra && extra.code && extra.code === c) return extra;
+    }
+  } catch (_) { /* fail-open */ }
+  try {
     const w65 = require('./engine-3h65');
     if (w65 && typeof w65.classifyEngine3h65Error === 'function') {
       const extra = w65.classifyEngine3h65Error({ code: c });
@@ -4873,12 +4880,18 @@ function adapterSnapshot() {
       snap = { ...snap, ...w65.waveSnapshot(), wave: w65.WAVE || '3H65' };
     }
   } catch (_) { /* fail-open: stay on 3H64 if 3H65 is absent */ }
+  try {
+    const w66 = require('./engine-3h66');
+    if (w66 && typeof w66.waveSnapshot === 'function') {
+      snap = { ...snap, ...w66.waveSnapshot(), wave: w66.WAVE || '3H66' };
+    }
+  } catch (_) { /* fail-open: stay on 3H65 if 3H66 is absent */ }
   return snap;
 }
 
 function loadOptionalEngineWave(name) {
   const file = String(name || '').trim();
-  if (!/^engine-3h(?:5[5-9]|6[0-5])$/.test(file)) return null;
+  if (!/^engine-3h(?:5[5-9]|6[0-6])$/.test(file)) return null;
   try {
     return require('./' + file);
   } catch (_) {
@@ -7701,7 +7714,7 @@ module.exports = {
 };
 
 function bindOptionalEngineWaves(target) {
-  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61', 'engine-3h62', 'engine-3h63', 'engine-3h64', 'engine-3h65']) {
+  for (const name of ['engine-3h55', 'engine-3h56', 'engine-3h57', 'engine-3h58', 'engine-3h59', 'engine-3h60', 'engine-3h61', 'engine-3h62', 'engine-3h63', 'engine-3h64', 'engine-3h65', 'engine-3h66']) {
     const mod = loadOptionalEngineWave(name);
     if (!mod || typeof mod !== 'object') continue;
     for (const [k, v] of Object.entries(mod)) {

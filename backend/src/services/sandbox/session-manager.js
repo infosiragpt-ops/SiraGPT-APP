@@ -51,6 +51,39 @@ function rmSafe(p) {
   try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) { /* already gone */ }
 }
 
+function apply3h66SandboxPathJail(filePath, { kind, content, root } = {}) {
+  try {
+    const w66 = require('../agent-runner/engine-3h66');
+    const ad = require('../agent-runner/engine-adapter');
+    if (w66 && typeof w66.applyPathJailClosed === 'function') {
+      const jail = w66.applyPathJailClosed({
+        path: filePath,
+        content,
+        kind: kind || 'read',
+        root: root || null,
+        nfcPath: ad.nfcPath,
+        rejectNulInPath: ad.rejectNulInPath,
+        rejectControlCharsInPaths: ad.rejectControlCharsInPaths,
+        rejectUncAndWindowsPaths: ad.rejectUncAndWindowsPaths,
+        rejectSymlinkEscape: ad.rejectSymlinkEscape,
+        refuseWriteThroughSymlink: ad.refuseWriteThroughSymlink,
+        refuseReadThroughSymlink: ad.refuseReadThroughSymlink,
+        refuseWriteOver2MiB: ad.refuseWriteOver2MiB,
+        maxBytes: MAX_FILE_BYTES,
+      });
+      if (jail && jail.ok === false) {
+        throw Object.assign(new Error(jail.code || 'bad_path'), { code: jail.code || 'PATH_ESCAPE' });
+      }
+      return (jail && jail.path) || filePath;
+    }
+  } catch (err) {
+    if (err && (err.code === 'PATH_ESCAPE' || err.code === 'bad_path' || err.code === 'nul_path' || err.code === 'symlink_rejected' || err.code === 'symlink_write' || err.code === 'symlink_read' || err.code === 'write_too_large')) {
+      throw err;
+    }
+  }
+  return filePath;
+}
+
 function assertInsideWorkdir(workdir, filePath) {
   const real = path.resolve(workdir, filePath);
   if (!real.startsWith(path.resolve(workdir) + path.sep) && real !== path.resolve(workdir)) {
@@ -215,10 +248,27 @@ function readFile(sessionId, filePath, { maxBytes = 512 * 1024 } = {}) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const abs = assertInsideWorkdir(s.workdir, filePath);
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'read', root: s.workdir });
+    const abs = assertInsideWorkdir(s.workdir, jailed);
     const buf = fs.readFileSync(abs);
     const truncated = buf.length > maxBytes;
-    return { ok: true, content: buf.slice(0, maxBytes).toString('utf8'), truncated, bytes: buf.length };
+    let content = buf.slice(0, maxBytes).toString('utf8');
+    try {
+      const w66 = require('../agent-runner/engine-3h66');
+      const ad = require('../agent-runner/engine-adapter');
+      if (w66 && typeof w66.applyReadHygieneClosed === 'function') {
+        const hy = w66.applyReadHygieneClosed({
+          text: content,
+          stripUtf8BomOnRead: ad.stripUtf8BomOnRead,
+          sliceReadWindow: ad.sliceReadWindow,
+          formatReadWithLineNumbers: ad.formatReadWithLineNumbers,
+          startBackgroundBash: ad.startBackgroundBash,
+          resetBackgroundBash: ad.resetBackgroundBash,
+        });
+        if (hy && hy.text != null) content = hy.text;
+      }
+    } catch (_) { /* 3H66 read hygiene fail-open */ }
+    return { ok: true, content, truncated, bytes: buf.length };
   } catch (err) {
     return { ok: false, error: err.message };
   }
@@ -231,7 +281,8 @@ function writeFile(sessionId, filePath, content) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const abs = assertInsideWorkdir(s.workdir, filePath);
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content, root: s.workdir });
+    const abs = assertInsideWorkdir(s.workdir, jailed);
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_FILE_BYTES) return { ok: false, error: `file_too_large: ${bytes} bytes` };
     mkdirSafe(path.dirname(abs));
@@ -250,7 +301,8 @@ function patchFile(sessionId, filePath, oldText, newText) {
   const s = getSession(sessionId);
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
-    const abs = assertInsideWorkdir(s.workdir, filePath);
+    const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content: newText, root: s.workdir });
+    const abs = assertInsideWorkdir(s.workdir, jailed);
     const content = fs.readFileSync(abs, 'utf8');
     const occurrences = content.split(oldText).length - 1;
     if (occurrences === 0) return { ok: false, error: 'old_text_not_found' };

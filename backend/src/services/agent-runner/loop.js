@@ -53,6 +53,10 @@ function loadEngine3h65() {
   try { return require('./engine-3h65'); } catch (_) { return null; }
 }
 
+function loadEngine3h66() {
+  try { return require('./engine-3h66'); } catch (_) { return null; }
+}
+
 function looksLikeTimedOutOrFailedWrite(value) {
   if (value == null) return { timedOut: false, failed: false };
   const msg = String((value && value.message) || value || '');
@@ -211,6 +215,37 @@ async function executeWith3h59Checkpoint({
       }
     }
   } catch (_) { /* 3H65 pre-write fail-open */ }
+
+  try {
+    const w66pre = loadEngine3h66();
+    const writeKind = w66pre && w66pre.WRITE_TOOL_RE
+      ? w66pre.WRITE_TOOL_RE.test(String(mapped || ''))
+      : /^(write_|str_replace|apply_patch|apply_diff|edit_file|create_file|computer_write)/i.test(String(mapped || ''));
+    const root66 = (executors && (executors.__workspaceRoot || executors.workspaceRoot))
+      || (execArgs && execArgs.root)
+      || null;
+    if (w66pre && typeof w66pre.applyPathJailClosed === 'function' && filePath && adapter && writeKind) {
+      const jail = w66pre.applyPathJailClosed({
+        path: filePath,
+        content: execArgs && (execArgs.content != null ? execArgs.content : execArgs.new_string),
+        kind: 'write',
+        root: root66,
+        result: null,
+        nfcPath: adapter.nfcPath,
+        rejectNulInPath: adapter.rejectNulInPath,
+        rejectControlCharsInPaths: adapter.rejectControlCharsInPaths,
+        rejectUncAndWindowsPaths: adapter.rejectUncAndWindowsPaths,
+        rejectSymlinkEscape: adapter.rejectSymlinkEscape,
+        refuseWriteThroughSymlink: adapter.refuseWriteThroughSymlink,
+        refuseReadThroughSymlink: adapter.refuseReadThroughSymlink,
+        refuseWriteOver2MiB: adapter.refuseWriteOver2MiB,
+      });
+      if (jail && jail.ok === false && !jail.uniqueness) {
+        const classified = classifyLoopError({ code: jail.code || 'bad_path' });
+        return 'ERROR: ' + classified.message;
+      }
+    }
+  } catch (_) { /* 3H66 path jail pre-write fail-open */ }
 
   let result;
   let thrown = null;
@@ -457,6 +492,13 @@ async function stealStaleFence(kv, threadId, { now, ttlSec = 60 } = {}) {
 /** Classify a loop stop into a user-facing Spanish code + message (no stacks). */
 function classifyLoopError({ code, err } = {}) {
   try {
+    const w66 = loadEngine3h66();
+    if (w66 && typeof w66.classifyEngine3h66Error === 'function') {
+      const hit = w66.classifyEngine3h66Error({ code, err });
+      if (hit && hit.message) return hit;
+    }
+  } catch (_) { /* 3H66 fail-open to 3H65 */ }
+  try {
     const w65 = loadEngine3h65();
     if (w65 && typeof w65.classifyEngine3h65Error === 'function') {
       const hit = w65.classifyEngine3h65Error({ code, err });
@@ -669,6 +711,26 @@ function recoverParsedToolArgs(raw, call) {
     }
   }
   try {
+    const w66 = loadEngine3h66();
+    if (w66 && typeof w66.applyToolJsonCoerceClosed === 'function' && adapter) {
+      const coerced = w66.applyToolJsonCoerceClosed({
+        raw,
+        args: null,
+        schema: null,
+        prior: null,
+        repairSingleQuotesAndCommentsInToolJson: adapter.repairSingleQuotesAndCommentsInToolJson,
+        repairUnquotedKeysInToolJson: adapter.repairUnquotedKeysInToolJson,
+        coerceTrueFalseStringsToBool: adapter.coerceTrueFalseStringsToBool,
+        coerceIntegerFromNumericString: adapter.coerceIntegerFromNumericString,
+        repairEnumCaseInsensitive: adapter.repairEnumCaseInsensitive,
+        repairMissingRequiredFromPriorTurn: adapter.repairMissingRequiredFromPriorTurn,
+      });
+      if (coerced && coerced.ok && coerced.args && !coerced.args.__parse_error) {
+        return { ok: true, value: coerced.args, repaired: Boolean(coerced.repaired) };
+      }
+    }
+  } catch (_) { /* 3H66 json coerce fail-open */ }
+  try {
     const w = loadEngine3h59();
     if (w && typeof w.repairPartialToolCallSchema === 'function') {
       const repaired = w.repairPartialToolCallSchema({
@@ -727,6 +789,12 @@ function safeParseArgs(raw) {
   const repaired = repairToolArgs(raw);
   if (repaired.ok) return repaired.value;
   return { __parse_error: true, raw: String(raw).slice(0, 500) };
+}
+
+function kindIsReadBlocked(mapped, filePath, blocked) {
+  if (!filePath || !Array.isArray(blocked) || !blocked.length) return false;
+  if (!/^(read_file|read_|cat_file|sandbox_read)/i.test(String(mapped || ''))) return false;
+  return blocked.indexOf(String(filePath)) >= 0;
 }
 
 function asNativeCalls(calls, iteration) {
@@ -802,6 +870,11 @@ async function runAgentLoop({
   const webFetchTurnCache = {};
   const observationHistory = [];
   const deadLetterHistory = [];
+  const emptyModelState = {};
+  const callIdInflight = {};
+  const callResultStore = {};
+  const turnBlockedReadPaths = [];
+  const lastToolArgsByName = {};
   let firstByteAt = null;
   if (kv && threadId) {
     try {
@@ -913,6 +986,22 @@ async function runAgentLoop({
           const scored = adapter.minScoreMemoryRetrieve(pinHits);
           if (scored && Array.isArray(scored.facts)) pinHits = scored.facts;
         }
+        try {
+          const w66mem = loadEngine3h66();
+          if (w66mem && typeof w66mem.applyMemoryRetrieveClosed === 'function' && pinHits.length) {
+            const mem = w66mem.applyMemoryRetrieveClosed({
+              facts: pinHits,
+              hits: pinHits,
+              skipEmptyWhitespaceMemoryFacts: adapter.skipEmptyWhitespaceMemoryFacts,
+              skipMemoryIfVectorAllZeros: adapter.skipMemoryIfVectorAllZeros,
+              skipEmptyEmbeddingUpsert: adapter.skipEmptyEmbeddingUpsert,
+              memoryRetrieveDedupeByHash: adapter.memoryRetrieveDedupeByHash,
+              sortMemoryHitsByScoreDesc: adapter.sortMemoryHitsByScoreDesc,
+              capMemoryHitsReturned8: adapter.capMemoryHitsReturned8,
+            });
+            if (mem && Array.isArray(mem.hits)) pinHits = mem.hits;
+          }
+        } catch (_) { /* 3H66 memory retrieve fail-open */ }
         if (typeof recall !== 'function') {
           try {
             const dur = require('./engine-durability');
@@ -1082,6 +1171,20 @@ async function runAgentLoop({
         });
       }
     } catch (_) { /* 3H65 cancel charge fail-open */ }
+    try {
+      const w66bg = loadEngine3h66();
+      const adBg = loadEngineAdapter();
+      if (w66bg && typeof w66bg.applyReadHygieneClosed === 'function' && adBg) {
+        w66bg.applyReadHygieneClosed({
+          reset: true,
+          stripUtf8BomOnRead: adBg.stripUtf8BomOnRead,
+          sliceReadWindow: adBg.sliceReadWindow,
+          formatReadWithLineNumbers: adBg.formatReadWithLineNumbers,
+          startBackgroundBash: adBg.startBackgroundBash,
+          resetBackgroundBash: adBg.resetBackgroundBash,
+        });
+      }
+    } catch (_) { /* 3H66 bash reset fail-open */ }
     if (!cancelledEmitted) {
       cancelledEmitted = true;
       try { onEvent({ type: 'cancelled', iteration, label: 'Cancelado', usage: cancelUsage }); } catch (_) { /* trace only */ }
@@ -1673,6 +1776,56 @@ async function runAgentLoop({
       }
     } catch (_) { /* 3H65 anti-loop fail-open */ }
 
+    let emptyHaltThisTurn = false;
+    try {
+      const w66cap = loadEngine3h66();
+      const adCap = loadEngineAdapter();
+      if (w66cap && typeof w66cap.applyEmptyModelAndParallelCapsClosed === 'function' && adCap) {
+        const capped = w66cap.applyEmptyModelAndParallelCapsClosed({
+          response,
+          state: emptyModelState,
+          calls: toolCalls,
+          emptyResponseRetryOnce: adCap.emptyResponseRetryOnce,
+          circuitBreakerEmptyModelTwice: adCap.circuitBreakerEmptyModelTwice,
+          allowParallelReads: adCap.allowParallelReads,
+          maxToolsPerTurnHardCap: adCap.maxToolsPerTurnHardCap,
+          maxUniqueToolsPerTurn16: adCap.maxUniqueToolsPerTurn16,
+          maxToolCallsPerMessage: adCap.maxToolCallsPerMessage,
+        });
+        if (capped && Array.isArray(capped.calls) && (capped.calls.length || !toolCalls.length)) {
+          toolCalls = capped.calls;
+        }
+        if (capped && capped.emptyHalt) emptyHaltThisTurn = true;
+        if (capped && capped.halt) {
+          const classified = classifyLoopError({ code: capped.code || 'too_many_tools' });
+          onEvent({
+            type: 'error',
+            code: classified.code,
+            message: classified.message,
+            retryable: classified.retryable,
+            iteration,
+          });
+          stoppedReason = capped.code || 'too_many_tools';
+          return {
+            finalText: finalText || '',
+            iterations: iteration,
+            steps,
+            stoppedReason,
+            verificationAttempts,
+            errorCode: capped.code || 'too_many_tools',
+            errorMessage: classified.message,
+          };
+        }
+        if (capped && Array.isArray(capped.blockedReads) && capped.blockedReads.length) {
+          turnBlockedReadPaths.length = 0;
+          for (const br of capped.blockedReads) {
+            const p = br && (br.path || (br.args && (br.args.path || br.args.file_path)));
+            if (p) turnBlockedReadPaths.push(String(p));
+          }
+        }
+      }
+    } catch (_) { /* 3H66 empty/caps fail-open */ }
+
     if (!toolCalls.length) {
       // A model response with no tool calls and no content is the classic
       // "provider accepted the request but produced nothing" stall. Count it;
@@ -1680,6 +1833,7 @@ async function runAgentLoop({
       // instead of burning the remaining iterations.
       if (!String(msg.content || '').trim()) {
         stallCount += 1;
+        if (emptyHaltThisTurn) stallCount = Math.max(stallCount, STREAM_STALL_CANCEL_AFTER);
         recordModelTelemetry({
           model,
           agent: 'agent_runner',
@@ -1774,7 +1928,7 @@ async function runAgentLoop({
       bail(iteration);
       const name = call?.function?.name || 'unknown';
       const mapped = name === 'bash' ? 'execute_bash' : name;
-      const args = safeParseArgs(call?.function?.arguments);
+      let args = safeParseArgs(call?.function?.arguments);
       siblingTools.push({ id: call && call.id, callId: call && call.id, name: mapped });
       let result;
       let cacheHit = false;
@@ -1841,6 +1995,100 @@ async function runAgentLoop({
             }
           }
         }
+        try {
+          const w66hy = loadEngine3h66();
+          if (w66hy && adapter) {
+            const schema66 = (Array.isArray(tools) ? tools : []).map((t) => (
+              t && t.function && t.function.name === mapped ? (t.function.parameters || t.function.input_schema) : null
+            )).find(Boolean);
+            if (typeof w66hy.applyToolJsonCoerceClosed === 'function') {
+              const coerced = w66hy.applyToolJsonCoerceClosed({
+                raw: call && call.function && call.function.arguments,
+                args,
+                schema: schema66,
+                prior: lastToolArgsByName[mapped] || null,
+                repairSingleQuotesAndCommentsInToolJson: adapter.repairSingleQuotesAndCommentsInToolJson,
+                repairUnquotedKeysInToolJson: adapter.repairUnquotedKeysInToolJson,
+                coerceTrueFalseStringsToBool: adapter.coerceTrueFalseStringsToBool,
+                coerceIntegerFromNumericString: adapter.coerceIntegerFromNumericString,
+                repairEnumCaseInsensitive: adapter.repairEnumCaseInsensitive,
+                repairMissingRequiredFromPriorTurn: adapter.repairMissingRequiredFromPriorTurn,
+              });
+              if (coerced && coerced.ok === false && !(args && args.__parse_error)) {
+                const classified = classifyLoopError({ code: coerced.code || 'json_parse' });
+                result = 'ERROR: ' + classified.message;
+                cacheHit = true;
+              } else if (coerced && coerced.args && !coerced.args.__parse_error) {
+                args = coerced.args;
+                lastToolArgsByName[mapped] = args;
+              }
+            }
+            const filePath66 = args && (args.path || args.file_path || args.target);
+            if (typeof w66hy.applyPathJailClosed === 'function' && filePath66 && result === undefined) {
+              const kind = w66hy.WRITE_TOOL_RE && w66hy.WRITE_TOOL_RE.test(mapped)
+                ? 'write'
+                : ((w66hy.READ_TOOL_RE && w66hy.READ_TOOL_RE.test(mapped)) ? 'read' : null);
+              if (kind) {
+                const root66hy = (executors && (executors.__workspaceRoot || executors.workspaceRoot))
+                  || (args && args.root)
+                  || null;
+                const jail = w66hy.applyPathJailClosed({
+                  path: filePath66,
+                  content: args && (args.content != null ? args.content : args.new_string),
+                  kind,
+                  root: root66hy,
+                  nfcPath: adapter.nfcPath,
+                  rejectNulInPath: adapter.rejectNulInPath,
+                  rejectControlCharsInPaths: adapter.rejectControlCharsInPaths,
+                  rejectUncAndWindowsPaths: adapter.rejectUncAndWindowsPaths,
+                  rejectSymlinkEscape: adapter.rejectSymlinkEscape,
+                  refuseWriteThroughSymlink: adapter.refuseWriteThroughSymlink,
+                  refuseReadThroughSymlink: adapter.refuseReadThroughSymlink,
+                  refuseWriteOver2MiB: adapter.refuseWriteOver2MiB,
+                });
+                if (jail && jail.ok === false) {
+                  const classified = classifyLoopError({ code: jail.code || 'bad_path' });
+                  result = 'ERROR: ' + classified.message;
+                  cacheHit = true;
+                } else if (jail && jail.path) {
+                  if (args.path != null) args.path = jail.path;
+                  else if (args.file_path != null) args.file_path = jail.path;
+                }
+              }
+            }
+            if (kindIsReadBlocked(mapped, filePath66, turnBlockedReadPaths) && result === undefined) {
+              const classified = classifyLoopError({ code: 'bad_path' });
+              result = 'ERROR: ' + classified.message;
+              cacheHit = true;
+            }
+            if (w66hy.BASH_TOOL_RE && w66hy.BASH_TOOL_RE.test(mapped) && typeof w66hy.applyReadHygieneClosed === 'function') {
+              w66hy.applyReadHygieneClosed({
+                bashId: call && call.id,
+                cmd: args && (args.command || args.cmd || args.code),
+                stripUtf8BomOnRead: adapter.stripUtf8BomOnRead,
+                sliceReadWindow: adapter.sliceReadWindow,
+                formatReadWithLineNumbers: adapter.formatReadWithLineNumbers,
+                startBackgroundBash: adapter.startBackgroundBash,
+                resetBackgroundBash: adapter.resetBackgroundBash,
+              });
+            }
+            if (typeof w66hy.applyCallIdempotencyClosed === 'function' && call && call.id && result === undefined) {
+              const same = w66hy.applyCallIdempotencyClosed({
+                callId: call.id,
+                inflight: callIdInflight,
+                store: callResultStore,
+                args,
+                create: () => ({ id: call.id, pending: true }),
+                idempotentSameCallIdInflight: adapter.idempotentSameCallIdInflight,
+                rememberCallResult: adapter.rememberCallResult,
+              });
+              if (same && same.coalesced && same.promise && same.promise.result != null) {
+                result = same.promise.result;
+                cacheHit = true;
+              }
+            }
+          }
+        } catch (_) { /* 3H66 coerce/jail/bash fail-open */ }
         try {
           const w65hy = loadEngine3h65();
           if (w65hy && typeof w65hy.applyToolArgHygieneClosed === 'function' && adapter) {
@@ -2123,6 +2371,40 @@ async function runAgentLoop({
           }
         }
       } catch (_) { /* cache/classify advisory */ }
+      try {
+        const w66res = loadEngine3h66();
+        const ad66 = loadEngineAdapter();
+        if (w66res && ad66 && result !== undefined) {
+          if (typeof w66res.applyReadHygieneClosed === 'function'
+            && w66res.READ_TOOL_RE && w66res.READ_TOOL_RE.test(mapped)
+            && !String(result).startsWith('ERROR:')) {
+            const readHy = w66res.applyReadHygieneClosed({
+              text: typeof result === 'string' ? result : String(result),
+              offset: args && args.offset,
+              limit: args && args.limit,
+              windowed: Boolean(args && (args.offset != null || args.limit != null)),
+              stripUtf8BomOnRead: ad66.stripUtf8BomOnRead,
+              sliceReadWindow: ad66.sliceReadWindow,
+              formatReadWithLineNumbers: ad66.formatReadWithLineNumbers,
+              startBackgroundBash: ad66.startBackgroundBash,
+              resetBackgroundBash: ad66.resetBackgroundBash,
+            });
+            if (readHy && readHy.text != null) result = readHy.text;
+          }
+          if (typeof w66res.applyCallIdempotencyClosed === 'function' && call && call.id) {
+            w66res.applyCallIdempotencyClosed({
+              callId: call.id,
+              inflight: callIdInflight,
+              store: callResultStore,
+              args,
+              result,
+              remember: true,
+              idempotentSameCallIdInflight: ad66.idempotentSameCallIdInflight,
+              rememberCallResult: ad66.rememberCallResult,
+            });
+          }
+        }
+      } catch (_) { /* 3H66 read hygiene / remember fail-open */ }
       try {
         const w65res = loadEngine3h65();
         const adRes = loadEngineAdapter();

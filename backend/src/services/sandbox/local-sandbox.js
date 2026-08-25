@@ -299,6 +299,22 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     sem.release();
     return { ok: false, code: 'sandbox_spawn_failed', message: err && err.message };
   }
+  try {
+    const w66bg = require('../agent-runner/engine-3h66');
+    const adBg = require('../agent-runner/engine-adapter');
+    if (w66bg && typeof w66bg.applyReadHygieneClosed === 'function') {
+      w66bg.applyReadHygieneClosed({
+        bashId: child && child.pid,
+        cmd: String(language || 'bash'),
+        kill: function () { try { if (child) child.kill('SIGKILL'); } catch (_) { /* swallow */ } },
+        stripUtf8BomOnRead: adBg.stripUtf8BomOnRead,
+        sliceReadWindow: adBg.sliceReadWindow,
+        formatReadWithLineNumbers: adBg.formatReadWithLineNumbers,
+        startBackgroundBash: adBg.startBackgroundBash,
+        resetBackgroundBash: adBg.resetBackgroundBash,
+      });
+    }
+  } catch (_) { /* 3H66 bash track fail-open */ }
 
   return new Promise((resolve) => {
     let stdoutBuf = Buffer.alloc(0);
@@ -389,6 +405,20 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
             });
           }
         } catch (_) { /* 3H60 fail-open */ }
+        try {
+          const w66r = require('../agent-runner/engine-3h66');
+          const adR = require('../agent-runner/engine-adapter');
+          if (w66r && typeof w66r.applyReadHygieneClosed === 'function') {
+            w66r.applyReadHygieneClosed({
+              reset: true,
+              stripUtf8BomOnRead: adR.stripUtf8BomOnRead,
+              sliceReadWindow: adR.sliceReadWindow,
+              formatReadWithLineNumbers: adR.formatReadWithLineNumbers,
+              startBackgroundBash: adR.startBackgroundBash,
+              resetBackgroundBash: adR.resetBackgroundBash,
+            });
+          }
+        } catch (_) { /* 3H66 bash reset fail-open */ }
       }
     }
 
