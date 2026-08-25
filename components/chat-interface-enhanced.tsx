@@ -366,7 +366,6 @@ import {
   looksLikeTranscriptionRequest,
   recognizeImageWithRetry,
 } from "@/lib/chat/ocr-preprocess"
-import { CreditsBadge } from "@/components/CreditsBadge"
 
 type ComputerUseAppMode = "browser" | "chrome" | "computer"
 
@@ -12867,9 +12866,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                <CreditsBadge />
-                {/* Model selector moved to the composer (next to the mic),
-                    Claude-style. See renderComposerModelControls(). */}
+                {/* Credits live in the account menu, not the chat canvas.
+                    Model selector is in the composer. See renderComposerModelControls(). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {currentChat?.id && (

@@ -95,7 +95,7 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /\.chat-assistant-message :is\(p, li, td, blockquote\) \{\s*line-height: 1\.6;/)
     assert.match(sidebar, /chat-history-item/)
     assert.match(sidebar, /CreditsBadge/)
-    assert.match(chat, /CreditsBadge/)
+    assert.doesNotMatch(chat, /CreditsBadge/)
     assert.match(css, /content-visibility: auto;/)
   })
 
