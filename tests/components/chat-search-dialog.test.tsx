@@ -29,6 +29,7 @@ vi.mock('lucide-react', () => ({
   ArrowUp: IconStub('arrow-up'),
   ArrowDown: IconStub('arrow-down'),
   X: IconStub('x'),
+  List: IconStub('list'),
 }))
 
 function IconStub(name: string) {
@@ -41,7 +42,11 @@ vi.mock('@/components/ui/input', () => ({
 }))
 vi.mock('@/components/ui/dialog', () => ({
   Dialog: ({ children }: any) => <div>{children}</div>,
-  DialogContent: ({ children }: any) => <div>{children}</div>,
+  DialogContent: ({ children, position, className, ...props }: any) => (
+    <div data-position={position || 'center'} className={className} {...props}>
+      {children}
+    </div>
+  ),
   DialogHeader: ({ children }: any) => <div>{children}</div>,
   DialogTitle: ({ children }: any) => <div>{children}</div>,
 }))
@@ -50,9 +55,15 @@ vi.mock('@/components/ui/thinking-indicator', () => ({
 }))
 
 const searchChatsMock = vi.fn()
+const listProjectsMock = vi.fn()
 vi.mock('@/lib/api', () => ({
   apiClient: {
     searchChats: (...args: any[]) => searchChatsMock(...args),
+  },
+}))
+vi.mock('@/lib/projects-service', () => ({
+  projectsService: {
+    list: (...args: any[]) => listProjectsMock(...args),
   },
 }))
 
@@ -79,6 +90,8 @@ describe('ChatSearchDialog full-text search wiring', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     searchChatsMock.mockReset()
+    listProjectsMock.mockReset()
+    listProjectsMock.mockResolvedValue([])
     ;(HTMLElement.prototype as any).scrollIntoView = vi.fn()
   })
 
@@ -245,5 +258,45 @@ describe('ChatSearchDialog full-text search wiring', () => {
 
     expect(searchChatsMock).not.toHaveBeenCalled()
     expect(screen.getByText('Plan de tesis local')).toBeInTheDocument()
+  })
+
+  it('centers the command-palette dialog and always shows a close control', async () => {
+    const onOpenChange = vi.fn()
+    render(<ChatSearchDialog open onOpenChange={onOpenChange} />)
+
+    const dialog = document.querySelector('[data-chat-search-dialog="1"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog?.getAttribute('data-position')).toBe('center')
+    expect(screen.getByPlaceholderText('Buscar chats y proyectos')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cerrar' }))
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it('includes matching local projects from the existing projects list', async () => {
+    listProjectsMock.mockResolvedValue([
+      {
+        id: 'p-1',
+        name: 'Empresa Norte',
+        description: null,
+        isStarred: false,
+        createdAt: '2026-08-01T10:00:00Z',
+        updatedAt: '2026-08-21T10:00:00Z',
+      },
+    ])
+
+    render(<ChatSearchDialog open onOpenChange={vi.fn()} />)
+
+    await act(async () => {
+      vi.advanceTimersByTime(300)
+    })
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(listProjectsMock).toHaveBeenCalled()
+    expect(screen.getByText('Empresa Norte')).toBeInTheDocument()
+    expect(screen.getByTestId('icon-list')).toBeInTheDocument()
   })
 })

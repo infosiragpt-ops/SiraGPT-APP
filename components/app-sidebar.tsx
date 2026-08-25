@@ -521,27 +521,21 @@ export function AppSidebar() {
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
-  const [inlineSearchOpen, setInlineSearchOpen] = React.useState(false)
-  const [inlineSearchQuery, setInlineSearchQuery] = React.useState("")
   const [chatTypeFilter, setChatTypeFilter] = React.useState<RecentChatTypeFilter>("all")
   const [chatStatusFilter, setChatStatusFilter] = React.useState<RecentChatStatusFilter>("active")
   const [chatActivityFilter, setChatActivityFilter] = React.useState<RecentChatActivityFilter>("all")
   const [chatGroupBy, setChatGroupBy] = React.useState<RecentChatGroupBy>("date")
   const [filterMenuOpen, setFilterMenuOpen] = React.useState(false)
   const [filterOpenRow, setFilterOpenRow] = React.useState<"type" | "status" | "activity" | "group" | null>(null)
-  const inlineSearchRef = React.useRef<HTMLInputElement>(null)
   // Settings now open as a floating Claude-style modal (the /settings
   // route still exists for deep-links / command palette).
   const [settingsOpen, setSettingsOpen] = React.useState(false)
 
-  // ── Global keyboard shortcut: ⌘K / Ctrl+K focuses inline search ──
-  // When the sidebar is collapsed the inline field is hidden, so the
-  // same shortcut opens ChatSearchDialog (full-text jump-to-chat).
-  // A second ⌘K while the inline field is already focused also opens
-  // the richer dialog.
+  // ── Global keyboard shortcut: ⌘K / Ctrl+K toggles ChatSearchDialog ──
+  // Capture-phase so this wins over the global command-palette listener
+  // and never expands an inline toolbar field.
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null
       const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
       const isCmdComma = (event.metaKey || event.ctrlKey) && event.key === ","
       if (isCmdComma) {
@@ -551,17 +545,13 @@ export function AppSidebar() {
       }
       if (!isCmdK) return
       event.preventDefault()
-      const inlineFocused = target === inlineSearchRef.current
-      if (state === "closed" || inlineFocused) {
-        setSearchOpen((current) => !current)
-        return
-      }
-      setInlineSearchOpen(true)
-      window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      setSearchOpen((current) => !current)
     }
-    window.addEventListener("keydown", onKeyDown)
-    return () => window.removeEventListener("keydown", onKeyDown)
-  }, [state])
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [])
 
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
   // #44 — reemplaza window.confirm() por AlertDialog accesible.
@@ -627,12 +617,6 @@ export function AppSidebar() {
       return next
     })
   }, [])
-  React.useEffect(() => {
-    if (!inlineSearchOpen) return
-    setRecentChatsCollapsed(false)
-    try { window.localStorage.setItem("sira:sidebar:recent-collapsed", "0") } catch { /* ignore */ }
-    window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
-  }, [inlineSearchOpen])
   const [scheduleTarget, setScheduleTarget] = React.useState<any | null>(null)
   const [scheduleAt, setScheduleAt] = React.useState("")
   const [scheduleNote, setScheduleNote] = React.useState("")
@@ -1008,16 +992,6 @@ export function AppSidebar() {
 
   const handleSearchClick = React.useCallback(() => {
     setSearchOpen(true)
-  }, [])
-
-  const openInlineSearch = React.useCallback(() => {
-    setInlineSearchOpen(true)
-    window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
-  }, [])
-
-  const closeInlineSearch = React.useCallback(() => {
-    setInlineSearchOpen(false)
-    setInlineSearchQuery("")
   }, [])
 
 
@@ -1435,77 +1409,44 @@ export function AppSidebar() {
                 state === "closed" && "hidden",
               )}
             >
-              {inlineSearchOpen ? (
-                <div
-                  className="flex min-w-0 flex-1 items-center gap-1 rounded-full border border-sky-400/80 bg-white px-2.5 py-0.5 shadow-[0_0_0_3px_rgba(56,189,248,0.12)] dark:bg-zinc-950"
-                  data-sidebar-recent-search="1"
-                >
-                  <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <input
-                    ref={inlineSearchRef}
-                    value={inlineSearchQuery}
-                    onChange={(event) => setInlineSearchQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Escape") {
-                        event.preventDefault()
-                        closeInlineSearch()
-                      }
-                    }}
-                    placeholder={t("searchChats")}
-                    aria-label={t("searchChats")}
-                    className="h-7 min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/70"
+              <button
+                type="button"
+                onClick={toggleRecentChatsCollapsed}
+                aria-expanded={!recentChatsCollapsed}
+                aria-controls="sidebar-recent-chats-content"
+                className={cn(
+                  "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
+                  "hover:bg-muted/80 focus-visible:border-sky-400/80 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
+                  !recentChatsCollapsed && "border-sky-400/70 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.10)] dark:bg-zinc-950",
+                )}
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
+                    recentChatsCollapsed && "-rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{t("recentChats")}</span>
+                {isLoadingChats || isLoadingMore ? (
+                  <ThinkingIndicator
+                    size="xs"
+                    label="Cargando historial de chats"
+                    className="ml-auto text-muted-foreground/70"
                   />
-                  <button
-                    type="button"
-                    onClick={closeInlineSearch}
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted/70 hover:text-foreground"
-                    aria-label="Cerrar búsqueda"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : (
+                ) : null}
+              </button>
+              <SidebarChromeTooltip label="Buscar ⌘K">
                 <button
                   type="button"
-                  onClick={toggleRecentChatsCollapsed}
-                  aria-expanded={!recentChatsCollapsed}
-                  aria-controls="sidebar-recent-chats-content"
-                  className={cn(
-                    "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
-                    "hover:bg-muted/80 focus-visible:border-sky-400/80 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
-                    !recentChatsCollapsed && "border-sky-400/70 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.10)] dark:bg-zinc-950",
-                  )}
+                  data-sidebar-recent-search="1"
+                  onClick={handleSearchClick}
+                  className={RECENT_TOOLBAR_ICON}
+                  aria-label="Buscar ⌘K"
                 >
-                  <ChevronDown
-                    className={cn(
-                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
-                      recentChatsCollapsed && "-rotate-90",
-                    )}
-                    aria-hidden="true"
-                  />
-                  <span className="truncate">{t("recentChats")}</span>
-                  {isLoadingChats || isLoadingMore ? (
-                    <ThinkingIndicator
-                      size="xs"
-                      label="Cargando historial de chats"
-                      className="ml-auto text-muted-foreground/70"
-                    />
-                  ) : null}
+                  <Search className="h-3.5 w-3.5" />
                 </button>
-              )}
-              {!inlineSearchOpen && (
-                <SidebarChromeTooltip label="Buscar ⌘K">
-                  <button
-                    type="button"
-                    data-sidebar-recent-search="1"
-                    onClick={openInlineSearch}
-                    className={RECENT_TOOLBAR_ICON}
-                    aria-label="Buscar ⌘K"
-                  >
-                    <Search className="h-3.5 w-3.5" />
-                  </button>
-                </SidebarChromeTooltip>
-              )}
+              </SidebarChromeTooltip>
               <Popover
                 open={filterMenuOpen}
                 onOpenChange={(open) => {
@@ -1627,18 +1568,6 @@ export function AppSidebar() {
                 </PopoverContent>
               </Popover>
             </div>
-            {inlineSearchOpen && (
-              <button
-                type="button"
-                onClick={handleSearchClick}
-                className={cn(
-                  "mx-1 mb-1 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
-                  state === "closed" && "hidden",
-                )}
-              >
-                Buscar en todo el historial
-              </button>
-            )}
             <SidebarGroupContent
               id="sidebar-recent-chats-content"
               className={cn(state === "closed" && "hidden", recentChatsCollapsed && "hidden")}
@@ -1700,7 +1629,6 @@ export function AppSidebar() {
                         type: chatTypeFilter,
                         status: chatStatusFilter,
                         activity: chatActivityFilter,
-                        query: inlineSearchQuery,
                         archivedIds: archivedChatIds,
                         hiddenIds: hiddenChatIds,
                         scheduledIds: scheduledChats,
@@ -1712,7 +1640,7 @@ export function AppSidebar() {
                         .sort((a, b) => new Date((b as any).pinnedAt || b.updatedAt || 0).getTime() - new Date((a as any).pinnedAt || a.updatedAt || 0).getTime())
                         .map((chat) => chat.id)
                       const renderPinnedIds = Array.from(new Set([...serverPinnedIds, ...pinnedChatIds]))
-                      const showPinnedSection = chatStatusFilter === "active" && chatGroupBy === "date" && !inlineSearchQuery.trim()
+                      const showPinnedSection = chatStatusFilter === "active" && chatGroupBy === "date"
                       const pinnedChats = showPinnedSection
                         ? renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
                         : []

@@ -4,13 +4,13 @@ import * as React from "react"
 import {
   Search,
   History,
-  Clock,
   MessageSquare,
   MessageCircle,
   CornerDownLeft,
   ArrowUp,
   ArrowDown,
   X,
+  List,
 } from "lucide-react"
 import {
   Dialog,
@@ -26,6 +26,8 @@ import { useRouter, usePathname } from "next/navigation"
 import { isAgentsHomePath, agentsHomeHref } from "@/lib/agents-home-path"
 import { cn } from "@/lib/utils"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { projectsService, type Project } from "@/lib/projects-service"
+import { filterProjects } from "@/lib/projects-logic"
 
 interface ChatSearchDialogProps {
   open: boolean
@@ -36,6 +38,7 @@ interface SearchResult {
   id: string
   title: string
   updatedAt: string
+  kind: "chat" | "project"
   messageCount?: number
   /** Present when the hit comes from server-side full-text search. */
   snippet?: string
@@ -48,41 +51,24 @@ type FullTextHit = NonNullable<
 >[number]
 
 const SEARCH_LIMIT = 30
+const PROJECT_LIMIT = 20
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
-// Date bucket order matches the sidebar's ChatGPT/Claude-style grouping so the
-// search results feel consistent with the rest of the app.
-const BUCKET_ORDER = ["Hoy", "Ayer", "Últimos 7 días", "Anteriores"] as const
-type BucketLabel = (typeof BUCKET_ORDER)[number]
-
-function bucketFor(updatedAt: string): BucketLabel {
-  const now = new Date()
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const startOfYesterday = startOfToday - DAY_MS
-  const weekAgo = Date.now() - 7 * DAY_MS
-  const ts = new Date(updatedAt).getTime()
-  if (!Number.isFinite(ts)) return "Anteriores"
-  if (ts >= startOfToday) return "Hoy"
-  if (ts >= startOfYesterday) return "Ayer"
-  if (ts >= weekAgo) return "Últimos 7 días"
-  return "Anteriores"
-}
-
-function formatChatTime(dateString: string): string {
+function formatRelativeChip(dateString: string): string {
   const date = new Date(dateString)
   const ts = date.getTime()
   if (!Number.isFinite(ts)) return ""
-  const diffInMinutes = Math.max(0, Math.floor((Date.now() - ts) / (1000 * 60)))
-
-  if (diffInMinutes < 1) return "Ahora"
-  if (diffInMinutes < 60) return `hace ${diffInMinutes} min`
-  const diffInHours = Math.floor(diffInMinutes / 60)
-  if (diffInHours < 24) return `hace ${diffInHours} h`
-  if (diffInHours < 48) return "Ayer"
-  const diffInDays = Math.floor(diffInHours / 24)
+  const now = Date.now()
+  const diffInMinutes = Math.max(0, Math.floor((now - ts) / (1000 * 60)))
+  if (diffInMinutes < 60) return "Última hora"
+  const startOfToday = new Date(now)
+  startOfToday.setHours(0, 0, 0, 0)
+  if (ts >= startOfToday.getTime()) return "Hoy"
+  if (ts >= startOfToday.getTime() - DAY_MS) return "Ayer"
+  const diffInDays = Math.floor(diffInMinutes / (60 * 24))
   if (diffInDays < 30) return `hace ${diffInDays} d`
-  return date.toLocaleDateString("es", { day: "numeric", month: "short", year: "numeric" })
+  return date.toLocaleDateString("es", { day: "numeric", month: "short" })
 }
 
 // The backend builds snippets with ts_headline using <mark>/</mark> and
@@ -100,6 +86,31 @@ function sanitizeSnippetHtml(rawSnippet: string): string {
   return escaped
     .replace(/&lt;mark&gt;/g, "<mark>")
     .replace(/&lt;\/mark&gt;/g, "</mark>")
+}
+
+function mapProjectResults(projects: Project[], query: string): SearchResult[] {
+  return filterProjects(
+    projects.filter((project) => project?.id && !project.deletedAt),
+    query,
+  )
+    .slice(0, PROJECT_LIMIT)
+    .map((project) => ({
+      id: project.id,
+      title: project.name || "Proyecto sin título",
+      updatedAt: project.updatedAt || project.createdAt,
+      kind: "project" as const,
+    }))
+}
+
+function mergeSearchResults(
+  chats: SearchResult[],
+  projectItems: SearchResult[],
+  mode: "rank" | "recency",
+): SearchResult[] {
+  if (mode === "rank") return [...chats, ...projectItems]
+  return [...chats, ...projectItems].sort(
+    (a, b) => new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime(),
+  )
 }
 
 export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) {
@@ -122,12 +133,32 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   const itemRefs = React.useRef<Map<number, HTMLButtonElement | null>>(new Map())
   const searchAbortRef = React.useRef<AbortController | null>(null)
   const [serverSearchFailed, setServerSearchFailed] = React.useState(false)
+  const [projects, setProjects] = React.useState<Project[]>([])
 
   // Debounce search query
   React.useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(searchQuery), 250)
     return () => clearTimeout(timer)
   }, [searchQuery])
+
+  React.useEffect(() => {
+    if (!open) {
+      setProjects([])
+      return
+    }
+    let cancelled = false
+    projectsService
+      .list({ sort: "activity" })
+      .then((list) => {
+        if (!cancelled) setProjects(Array.isArray(list) ? list : [])
+      })
+      .catch(() => {
+        if (!cancelled) setProjects([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open])
 
   React.useEffect(() => {
     return () => searchAbortRef.current?.abort()
@@ -145,12 +176,17 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
       searchAbortRef.current = null
       setServerSearchFailed(false)
       setSearchResults(
-        chats.filter((chat) => chat && chat.id).map((chat) => ({
-          id: chat.id,
-          title: chat.title || "Chat sin título",
-          updatedAt: chat.updatedAt,
-          messageCount: chat.messages?.length || 0,
-        }))
+        mergeSearchResults(
+          chats.filter((chat) => chat && chat.id).map((chat) => ({
+            id: chat.id,
+            title: chat.title || "Chat sin título",
+            updatedAt: chat.updatedAt,
+            kind: "chat" as const,
+            messageCount: chat.messages?.length || 0,
+          })),
+          mapProjectResults(projects, ""),
+          "recency",
+        )
       )
       setIsSearching(false)
       return
@@ -169,6 +205,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
           id: chat.id,
           title: chat.title || "Chat sin título",
           updatedAt: chat.updatedAt,
+          kind: "chat" as const,
           messageCount: chat.messages?.length || 0,
         }))
 
@@ -191,13 +228,18 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
           if (hit?.chatId && !byChat.has(hit.chatId)) byChat.set(hit.chatId, hit)
         }
         setSearchResults(
-          Array.from(byChat.values()).map((hit) => ({
-            id: hit.chatId,
-            title: hit.chatTitle || "Chat sin título",
-            updatedAt: hit.timestamp,
-            snippet: hit.snippet || "",
-            messageId: hit.messageId,
-          }))
+          mergeSearchResults(
+            Array.from(byChat.values()).map((hit) => ({
+              id: hit.chatId,
+              title: hit.chatTitle || "Chat sin título",
+              updatedAt: hit.timestamp,
+              kind: "chat" as const,
+              snippet: hit.snippet || "",
+              messageId: hit.messageId,
+            })),
+            mapProjectResults(projects, query),
+            "rank",
+          )
         )
         setServerSearchFailed(false)
         setIsSearching(false)
@@ -205,7 +247,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
       .catch((error) => {
         if (cancelled || controller.signal.aborted) return
         console.error("Full-text chat search failed; falling back to local titles:", error)
-        setSearchResults(localFallback())
+        setSearchResults(mergeSearchResults(localFallback(), mapProjectResults(projects, query), "rank"))
         setServerSearchFailed(true)
         setIsSearching(false)
       })
@@ -213,7 +255,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     return () => {
       cancelled = true
     }
-  }, [debouncedQuery, chats])
+  }, [debouncedQuery, chats, projects])
 
   // While the user is typing (query differs from the settled debounced value)
   // show the inline spinner so the input feels responsive.
@@ -237,21 +279,6 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     el?.scrollIntoView({ block: "nearest" })
   }, [activeIndex, searchResults])
 
-  // Group results into date buckets while preserving the flat index used for
-  // keyboard navigation.
-  const groups = React.useMemo(() => {
-    const map = new Map<BucketLabel, { result: SearchResult; flatIndex: number }[]>()
-    searchResults.forEach((result, flatIndex) => {
-      const label = bucketFor(result.updatedAt)
-      if (!map.has(label)) map.set(label, [])
-      map.get(label)!.push({ result, flatIndex })
-    })
-    return BUCKET_ORDER.filter((label) => map.has(label)).map((label) => ({
-      label,
-      items: map.get(label)!,
-    }))
-  }, [searchResults])
-
   // Infinite scroll handler for recent chats (only when not actively searching).
   const handleScroll = React.useCallback(
     (e: React.UIEvent<HTMLDivElement>) => {
@@ -265,10 +292,16 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   )
 
   const handleChatSelect = React.useCallback(
-    (chatId: string) => {
-      selectChat(chatId)
+    (item: SearchResult) => {
+      if (item.kind === "project") {
+        router.push(`/projects/${item.id}`)
+        onOpenChange(false)
+        setSearchQuery("")
+        return
+      }
+      selectChat(item.id)
       if (!isAgentsHomePath(pathname)) {
-        router.push(agentsHomeHref(`id=${chatId}`))
+        router.push(agentsHomeHref(`id=${item.id}`))
       }
       onOpenChange(false)
       setSearchQuery("")
@@ -286,7 +319,7 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
     } else if (e.key === "Enter") {
       e.preventDefault()
       const chat = searchResults[activeIndex]
-      if (chat) handleChatSelect(chat.id)
+      if (chat) handleChatSelect(chat)
     }
   }
 
@@ -317,46 +350,39 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        position="top-start"
-        className="flex max-h-[70vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-[620px] bg-white dark:bg-[#0E131B] border-zinc-200 dark:border-zinc-800/80 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.55)] dark:shadow-[0_24px_70px_-36px_rgba(0,0,0,0.8)] text-zinc-900 dark:text-zinc-100"
+        data-chat-search-dialog="1"
+        overlayClassName="bg-black/50"
+        className="flex max-h-[min(72vh,640px)] w-[min(100vw-2rem,560px)] flex-col gap-0 overflow-hidden rounded-2xl border-zinc-200 bg-white p-0 text-zinc-900 shadow-[0_24px_80px_-20px_rgba(15,23,42,0.35)] dark:border-zinc-800/80 dark:bg-[#0E131B] dark:text-zinc-100 dark:shadow-[0_24px_80px_-20px_rgba(0,0,0,0.75)] sm:max-w-[560px]"
         showCloseButton={false}
       >
-        <DialogHeader className="shrink-0 space-y-0 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#0E131B] px-4 py-3 text-zinc-900 dark:text-zinc-100">
-          <DialogTitle className="sr-only">Buscar chats</DialogTitle>
+        <DialogHeader className="shrink-0 space-y-0 border-b border-zinc-200/80 bg-white px-4 py-3 text-zinc-900 dark:border-zinc-800/80 dark:bg-[#0E131B] dark:text-zinc-100">
+          <DialogTitle className="sr-only">Buscar chats y proyectos</DialogTitle>
           <div className="flex items-center gap-3">
             <Search className="h-[18px] w-[18px] shrink-0 text-zinc-400 dark:text-zinc-500" />
             <Input
               ref={inputRef}
-              placeholder={t("placeholder")}
+              placeholder="Buscar chats y proyectos"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleKeyDown}
-              className="h-9 flex-1 border-0 bg-transparent px-0 text-[15px] shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+              className="h-9 flex-1 border-0 bg-transparent px-0 text-[15px] text-zinc-900 shadow-none placeholder:text-zinc-400 focus-visible:ring-0 focus-visible:ring-offset-0 dark:text-zinc-100 dark:placeholder:text-zinc-500"
               autoFocus
             />
             {isSearching ? (
               <ThinkingIndicator size="sm" className="text-zinc-400 dark:text-zinc-500" />
-            ) : searchQuery ? (
-              <button
-                type="button"
-                aria-label="Limpiar búsqueda"
-                onClick={() => {
-                  setSearchQuery("")
-                  inputRef.current?.focus()
-                }}
-                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-zinc-400 dark:text-zinc-500 transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            ) : (
-              <kbd className="hidden shrink-0 items-center rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 px-1.5 py-0.5 font-mono text-[10.5px] font-medium tracking-wide text-zinc-400 dark:text-zinc-500 sm:inline-flex">
-                ⌘K
-              </kbd>
-            )}
+            ) : null}
+            <button
+              type="button"
+              aria-label="Cerrar"
+              data-chat-search-close="1"
+              onClick={() => onOpenChange(false)}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-500 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
         </DialogHeader>
 
-        {/* Results */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain bg-white dark:bg-[#0E131B]" onScroll={handleScroll}>
           <div className="px-2 py-2">
             {resultCount === 0 && !isSearching ? (
@@ -384,86 +410,63 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                 )}
               </div>
             ) : (
-              <div className="space-y-3">
-                {groups.map((group) => (
-                  <div key={group.label}>
-                    <div className="px-3 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                      {group.label}
-                    </div>
-                    <div className="space-y-0.5">
-                      {group.items.map(({ result: chat, flatIndex }) => {
-                        const isActive = flatIndex === activeIndex
-                        return (
-                          <button
-                            key={chat.id}
-                            type="button"
-                            ref={(el) => {
-                              itemRefs.current.set(flatIndex, el)
-                            }}
-                            onMouseMove={() => setActiveIndex(flatIndex)}
-                            onClick={() => handleChatSelect(chat.id)}
-                            className={cn(
-                              "group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
-                              isActive
-                                ? "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-900 dark:text-zinc-100"
-                                : "hover:bg-zinc-50 dark:hover:bg-zinc-800/30 text-zinc-700 dark:text-zinc-300"
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-zinc-200/50 dark:border-zinc-800/50 bg-zinc-50 dark:bg-zinc-800/40 transition-colors",
-                                isActive && "border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900"
-                              )}
-                            >
-                              <MessageCircle className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-sm font-medium text-zinc-950 dark:text-zinc-50">
-                                {searchQuery
-                                  ? highlightSearchTerm(chat.title, searchQuery)
-                                  : chat.title}
-                              </div>
-                              {chat.snippet ? (
-                                <div
-                                  className="mt-0.5 line-clamp-2 text-xs leading-snug text-zinc-500 dark:text-zinc-400 [&_mark]:rounded-[3px] [&_mark]:bg-primary/15 [&_mark]:px-0.5 [&_mark]:font-semibold [&_mark]:text-foreground"
-                                  dangerouslySetInnerHTML={{ __html: sanitizeSnippetHtml(chat.snippet) }}
-                                />
-                              ) : (
-                                <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
-                                  <span className="inline-flex items-center gap-1">
-                                    <Clock className="h-3 w-3" />
-                                    {formatChatTime(chat.updatedAt)}
-                                  </span>
-                                  {chat.messageCount ? (
-                                    <>
-                                      <span className="text-zinc-300 dark:text-zinc-700">·</span>
-                                      <span className="inline-flex items-center gap-1">
-                                        <MessageSquare className="h-3 w-3" />
-                                        {chat.messageCount}
-                                      </span>
-                                    </>
-                                  ) : null}
-                                </div>
-                              )}
-                              {chat.snippet && (
-                                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-400 dark:text-zinc-500">
-                                  <Clock className="h-3 w-3" />
-                                  {formatChatTime(chat.updatedAt)}
-                                </div>
-                              )}
-                            </div>
-                            <CornerDownLeft
-                              className={cn(
-                                "h-3.5 w-3.5 shrink-0 text-zinc-400 dark:text-zinc-500 transition-opacity",
-                                isActive ? "opacity-100" : "opacity-0"
-                              )}
-                            />
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-                ))}
+              <div className="space-y-0.5">
+                {searchResults.map((chat, flatIndex) => {
+                  const isActive = flatIndex === activeIndex
+                  const isProject = chat.kind === "project"
+                  return (
+                    <button
+                      key={`${chat.kind}:${chat.id}`}
+                      type="button"
+                      ref={(el) => {
+                        itemRefs.current.set(flatIndex, el)
+                      }}
+                      onMouseMove={() => setActiveIndex(flatIndex)}
+                      onClick={() => handleChatSelect(chat)}
+                      className={cn(
+                        "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors",
+                        isActive
+                          ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800/60 dark:text-zinc-100"
+                          : "text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/30",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-zinc-200/60 bg-zinc-50 transition-colors dark:border-zinc-800/50 dark:bg-zinc-800/40",
+                          isActive && "border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900",
+                        )}
+                      >
+                        {isProject ? (
+                          <List className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
+                        ) : (
+                          <MessageCircle className="h-4 w-4 text-zinc-400 dark:text-zinc-500" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-zinc-950 dark:text-zinc-50">
+                          {searchQuery
+                            ? highlightSearchTerm(chat.title, searchQuery)
+                            : chat.title}
+                        </div>
+                        {chat.snippet ? (
+                          <div
+                            className="mt-0.5 line-clamp-2 text-xs leading-snug text-zinc-500 dark:text-zinc-400 [&_mark]:rounded-[3px] [&_mark]:bg-primary/15 [&_mark]:px-0.5 [&_mark]:font-semibold [&_mark]:text-foreground"
+                            dangerouslySetInnerHTML={{ __html: sanitizeSnippetHtml(chat.snippet) }}
+                          />
+                        ) : null}
+                      </div>
+                      <span className="shrink-0 text-xs text-zinc-400 dark:text-zinc-500">
+                        {formatRelativeChip(chat.updatedAt)}
+                      </span>
+                      <CornerDownLeft
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0 text-zinc-400 transition-opacity dark:text-zinc-500",
+                          isActive ? "opacity-100" : "opacity-0",
+                        )}
+                      />
+                    </button>
+                  )
+                })}
 
                 {isLoadingMore && !searchQuery && (
                   <div className="flex items-center justify-center gap-2 py-3 text-sm text-zinc-500 dark:text-zinc-400">
@@ -471,44 +474,37 @@ export function ChatSearchDialog({ open, onOpenChange }: ChatSearchDialogProps) 
                     <span>Cargando más chats…</span>
                   </div>
                 )}
-
-                {!hasMoreChats && !searchQuery && resultCount > 10 && (
-                  <div className="py-3 text-center text-xs text-zinc-400 dark:text-zinc-500">
-                    Has llegado al final de tus chats
-                  </div>
-                )}
               </div>
             )}
           </div>
         </div>
 
-        {/* Footer with keyboard hints */}
-        <div className="flex shrink-0 items-center justify-between border-t border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-[#0E131B] px-4 py-2 text-[11px] text-zinc-400 dark:text-zinc-500">
+        <div className="flex shrink-0 items-center justify-between border-t border-zinc-200/80 bg-white px-4 py-2 text-[11px] text-zinc-400 dark:border-zinc-800/80 dark:bg-[#0E131B] dark:text-zinc-500">
           <span className="tabular-nums">
             {resultCount > 0
               ? resultCount === 1
-                ? t("resultCountOne", { count: resultCount })
-                : t("resultCountMany", { count: resultCount })
+                ? "1 resultado"
+                : `${resultCount} resultados`
               : ""}
           </span>
           <div className="hidden items-center gap-3 sm:flex">
             <span className="inline-flex items-center gap-1">
-              <kbd className="inline-flex h-4 w-4 items-center justify-center rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40">
+              <kbd className="inline-flex h-4 w-4 items-center justify-center rounded border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/40">
                 <ArrowUp className="h-2.5 w-2.5" />
               </kbd>
-              <kbd className="inline-flex h-4 w-4 items-center justify-center rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40">
+              <kbd className="inline-flex h-4 w-4 items-center justify-center rounded border border-zinc-200 bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-800/40">
                 <ArrowDown className="h-2.5 w-2.5" />
               </kbd>
               navegar
             </span>
             <span className="inline-flex items-center gap-1">
-              <kbd className="inline-flex h-4 items-center justify-center rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 px-1">
+              <kbd className="inline-flex h-4 items-center justify-center rounded border border-zinc-200 bg-zinc-50 px-1 dark:border-zinc-800 dark:bg-zinc-800/40">
                 <CornerDownLeft className="h-2.5 w-2.5" />
               </kbd>
               abrir
             </span>
             <span className="inline-flex items-center gap-1">
-              <kbd className="inline-flex h-4 items-center justify-center rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-800/40 px-1 font-mono text-[9px]">
+              <kbd className="inline-flex h-4 items-center justify-center rounded border border-zinc-200 bg-zinc-50 px-1 font-mono text-[9px] dark:border-zinc-800 dark:bg-zinc-800/40">
                 esc
               </kbd>
               cerrar
