@@ -18,7 +18,9 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
+  ChevronRight,
   Search,
+  SlidersHorizontal,
   Library,
   Images,
   LayoutGrid,
@@ -114,6 +116,20 @@ import { toast } from "sonner"
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { CreditsBadge } from "@/components/CreditsBadge"
 import NotificationCenter from "./notification-center"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  RECENT_CHAT_ACTIVITY_LABELS,
+  RECENT_CHAT_GROUP_LABELS,
+  RECENT_CHAT_STATUS_LABELS,
+  RECENT_CHAT_TYPE_LABELS,
+  filterRecentChats,
+  groupRecentChatsByDate,
+  sortChatsNewestFirst,
+  type RecentChatActivityFilter,
+  type RecentChatGroupBy,
+  type RecentChatStatusFilter,
+  type RecentChatTypeFilter,
+} from "@/lib/sidebar-recent-chats-filters"
 
 // Shared liquid-glass styles for the user menu dropdown. Keeping them
 // as module constants avoids allocating a new string on every render
@@ -209,6 +225,39 @@ const NAV_ROW =
 const NAV_ROW_ACTIVE =
   "bg-foreground/[0.055] text-foreground ring-1 ring-border/45 dark:bg-white/[0.08] dark:ring-white/10"
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
+const HEADER_ICON_BTN =
+  "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const SIDEBAR_TIP =
+  "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
+const RECENT_TOOLBAR_ICON =
+  "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const FILTER_POPOVER =
+  "w-[220px] rounded-xl border border-zinc-200/90 bg-white p-1 text-zinc-800 shadow-[0_12px_40px_rgba(15,23,42,0.14)]"
+const FILTER_ROW =
+  "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] font-medium text-zinc-800 transition-colors hover:bg-zinc-100"
+const FILTER_OPTION =
+  "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-zinc-100"
+
+function SidebarChromeTooltip({
+  label,
+  children,
+  side = "bottom",
+  hidden,
+}: {
+  label: string
+  children: React.ReactNode
+  side?: "top" | "bottom" | "left" | "right"
+  hidden?: boolean
+}) {
+  return (
+    <Tooltip delayDuration={250}>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side={side} className={cn(SIDEBAR_TIP, hidden && "hidden")}>
+        {label}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
 
 type SidebarNavItemProps = {
   href: string
@@ -466,20 +515,27 @@ export function AppSidebar() {
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
+  const [inlineSearchOpen, setInlineSearchOpen] = React.useState(false)
+  const [inlineSearchQuery, setInlineSearchQuery] = React.useState("")
+  const [chatTypeFilter, setChatTypeFilter] = React.useState<RecentChatTypeFilter>("all")
+  const [chatStatusFilter, setChatStatusFilter] = React.useState<RecentChatStatusFilter>("active")
+  const [chatActivityFilter, setChatActivityFilter] = React.useState<RecentChatActivityFilter>("all")
+  const [chatGroupBy, setChatGroupBy] = React.useState<RecentChatGroupBy>("date")
+  const [filterMenuOpen, setFilterMenuOpen] = React.useState(false)
+  const [filterOpenRow, setFilterOpenRow] = React.useState<"type" | "status" | "activity" | "group" | null>(null)
+  const inlineSearchRef = React.useRef<HTMLInputElement>(null)
   // Settings now open as a floating Claude-style modal (the /settings
   // route still exists for deep-links / command palette).
   const [settingsOpen, setSettingsOpen] = React.useState(false)
 
-  // ── Global keyboard shortcut: ⌘K / Ctrl+K opens chat search ──────
-  // Mirrors the affordance every Claude / Linear / Notion user
-  // already has in muscle memory. Skipped while focus is in an
-  // input/textarea/contenteditable so we don't hijack regular typing.
+  // ── Global keyboard shortcut: ⌘K / Ctrl+K focuses inline search ──
+  // When the sidebar is collapsed the inline field is hidden, so the
+  // same shortcut opens ChatSearchDialog (full-text jump-to-chat).
+  // A second ⌘K while the inline field is already focused also opens
+  // the richer dialog.
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
-      const tag = target?.tagName?.toLowerCase()
-      const isTyping =
-        tag === "input" || tag === "textarea" || target?.isContentEditable === true
       const isCmdK = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k"
       const isCmdComma = (event.metaKey || event.ctrlKey) && event.key === ","
       if (isCmdComma) {
@@ -488,17 +544,18 @@ export function AppSidebar() {
         return
       }
       if (!isCmdK) return
-      // ⌘K from anywhere — even mid-input — should still open search.
-      // This is the convention every productivity app follows, so the
-      // `isTyping` gate above only protects accidental letter shortcuts
-      // (none added here yet, just the gate skeleton for future ones).
-      if (isTyping && !isCmdK) return
       event.preventDefault()
-      setSearchOpen((current) => !current)
+      const inlineFocused = target === inlineSearchRef.current
+      if (state === "closed" || inlineFocused) {
+        setSearchOpen((current) => !current)
+        return
+      }
+      setInlineSearchOpen(true)
+      window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [])
+  }, [state])
 
   const [editingChatId, setEditingChatId] = React.useState<string | null>(null)
   // #44 — reemplaza window.confirm() por AlertDialog accesible.
@@ -564,6 +621,12 @@ export function AppSidebar() {
       return next
     })
   }, [])
+  React.useEffect(() => {
+    if (!inlineSearchOpen) return
+    setRecentChatsCollapsed(false)
+    try { window.localStorage.setItem("sira:sidebar:recent-collapsed", "0") } catch { /* ignore */ }
+    window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
+  }, [inlineSearchOpen])
   const [scheduleTarget, setScheduleTarget] = React.useState<any | null>(null)
   const [scheduleAt, setScheduleAt] = React.useState("")
   const [scheduleNote, setScheduleNote] = React.useState("")
@@ -883,24 +946,7 @@ export function AppSidebar() {
    * subtraction are converted consistently.
    */
   const groupChatsByTime = (items: Array<{ id: string; updatedAt: string } & Record<string, any>>) => {
-    const now = Date.now()
-    const DAY = 24 * 60 * 60 * 1000
-    const today = new Date()
-    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()
-    const startOfYesterday = startOfToday - DAY
-    const weekAgo = now - 7 * DAY
-
-    const buckets: Record<"today" | "yesterday" | "last7Days" | "older", typeof items> = {
-      today: [], yesterday: [], last7Days: [], older: [],
-    }
-    for (const chat of items) {
-      const ts = new Date(chat.updatedAt).getTime()
-      if (ts >= startOfToday) buckets.today.push(chat)
-      else if (ts >= startOfYesterday) buckets.yesterday.push(chat)
-      else if (ts >= weekAgo) buckets.last7Days.push(chat)
-      else buckets.older.push(chat)
-    }
-    return buckets
+    return groupRecentChatsByDate(items)
   }
 
   const isAnon = !user
@@ -956,6 +1002,16 @@ export function AppSidebar() {
 
   const handleSearchClick = React.useCallback(() => {
     setSearchOpen(true)
+  }, [])
+
+  const openInlineSearch = React.useCallback(() => {
+    setInlineSearchOpen(true)
+    window.requestAnimationFrame(() => inlineSearchRef.current?.focus())
+  }, [])
+
+  const closeInlineSearch = React.useCallback(() => {
+    setInlineSearchOpen(false)
+    setInlineSearchQuery("")
   }, [])
 
 
@@ -1112,64 +1168,61 @@ export function AppSidebar() {
             <div
               role="tablist"
               aria-label="Modo de la barra lateral"
-              className="flex shrink-0 items-center gap-0.5 rounded-lg bg-muted/60 p-0.5"
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-zinc-200/70 p-[3px] dark:bg-white/10"
             >
               <button
                 type="button"
                 role="tab"
                 aria-selected={sidebarMode === "chat"}
                 aria-label="Chats"
-                title="Chats"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
-                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
+                  "inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors",
                   sidebarMode === "chat"
-                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
-                    : "w-9 text-muted-foreground hover:text-foreground",
+                    ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
+                    : "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100",
                 )}
               >
-                <MessageSquare className="h-4 w-4 shrink-0" />
-                {sidebarMode === "chat" && (
-                  <span className="text-xs font-medium">Chats</span>
-                )}
+                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <span>Chats</span>
               </button>
               <button
                 type="button"
                 role="tab"
                 aria-selected={sidebarMode === "code"}
                 aria-label="Empresas"
-                title="Empresas"
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
-                  "flex h-7 items-center justify-center gap-1.5 rounded-md transition-colors",
+                  "inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors",
                   sidebarMode === "code"
-                    ? "bg-background px-2.5 text-foreground shadow-sm ring-1 ring-border/50"
-                    : "px-2 text-muted-foreground hover:text-foreground",
+                    ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
+                    : "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100",
                 )}
               >
-                <span className="text-xs font-medium">Empresas</span>
+                <span>Empresas</span>
               </button>
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-0.5">
             <NotificationCenter />
-            <SidebarTrigger
-              aria-label="Ocultar barra lateral"
-              title="Ocultar barra lateral"
-              className="h-7 w-7 shrink-0 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-            >
-              <SidebarOvalIcon className="h-4 w-4" />
-            </SidebarTrigger>
+            <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
+              <SidebarTrigger
+                aria-label="Contraer barra lateral ⌘B"
+                className={HEADER_ICON_BTN}
+              >
+                <SidebarOvalIcon className="h-4 w-4" />
+              </SidebarTrigger>
+            </SidebarChromeTooltip>
           </div>
         </div>
         {/* Collapsed state keeps a single, predictable affordance. */}
         <div className={cn("relative", state === "open" && "hidden")}>
+          <SidebarChromeTooltip label="Expandir barra lateral ⌘B" side="right">
           <button
             type="button"
-            className="group flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            className="group flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
             onClick={toggleSidebar}
-            aria-label="Mostrar barra lateral"
-            title="Mostrar barra lateral"
+            aria-label="Expandir barra lateral ⌘B"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -1179,6 +1232,7 @@ export function AppSidebar() {
             />
             <SidebarOvalIcon className="absolute h-4 w-4 opacity-0 transition-opacity group-hover:opacity-100" />
           </button>
+          </SidebarChromeTooltip>
         </div>
       </SidebarHeader>
 
@@ -1249,34 +1303,19 @@ export function AppSidebar() {
             </div>
           )}
 
-          <Tooltip delayDuration={300}>
-            <TooltipTrigger asChild>
-              <SidebarMenuButton
+          {state === "closed" && (
+            <SidebarChromeTooltip label="Buscar ⌘K" side="right">
+              <button
+                type="button"
+                data-sidebar-collapsed-search="1"
                 onClick={handleSearchClick}
-                onPointerDown={handleSearchClick}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    if (event.key === " ") event.preventDefault()
-                    handleSearchClick()
-                  }
-                }}
                 className={cn(NAV_ROW, "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2")}
-                variant="default"
+                aria-label="Buscar ⌘K"
               >
                 <Search className={cn(NAV_ICON, "text-muted-foreground")} />
-                <span className="group-data-[state=closed]:hidden truncate">{t("searchChats")}</span>
-              </SidebarMenuButton>
-            </TooltipTrigger>
-            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
-              {/* Pulido · muestra el atajo ⌘K en el tooltip. */}
-              <p className="flex items-center gap-2">
-                <span>{t("searchChats")}</span>
-                <kbd className="rounded border border-border/60 bg-muted px-1 text-[10px] font-medium text-muted-foreground">
-                  ⌘K
-                </kbd>
-              </p>
-            </TooltipContent>
-          </Tooltip>
+              </button>
+            </SidebarChromeTooltip>
+          )}
 
           <SidebarNavItem
             href="/library"
@@ -1385,38 +1424,218 @@ export function AppSidebar() {
         {/* Recent Chats - Only show for Text Chat, in chat mode */}
         {sidebarMode === "chat" && selectedType === "Text Chat" && (
           <SidebarGroup>
-            <button
-              type="button"
-              onClick={toggleRecentChatsCollapsed}
-              aria-expanded={!recentChatsCollapsed}
-              aria-controls="sidebar-recent-chats-content"
+            <div
+              id="sidebar-recent-chats-toolbar"
+              data-sidebar-recent-toolbar="1"
               className={cn(
-                "group flex w-full items-center gap-1 px-3 pt-4 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/60 transition-colors hover:text-foreground/80 select-none",
-                state === "closed" && "hidden"
+                "flex items-center gap-1 px-0.5 pt-2 pb-1",
+                state === "closed" && "hidden",
               )}
             >
-              <ChevronDown
-                className={cn(
-                  "h-3 w-3 transition-transform duration-150",
-                  recentChatsCollapsed && "-rotate-90"
-                )}
-                aria-hidden="true"
-              />
-              <span className="truncate">{t("recentChats")}</span>
-              {isLoadingChats || isLoadingMore ? (
-                <ThinkingIndicator
-                  size="xs"
-                  label="Cargando historial de chats"
-                  className="ml-auto text-muted-foreground/70"
-                />
+              {inlineSearchOpen ? (
+                <div
+                  className="flex min-w-0 flex-1 items-center gap-1 rounded-full border border-sky-400/80 bg-white px-2.5 py-0.5 shadow-[0_0_0_3px_rgba(56,189,248,0.12)] dark:bg-zinc-950"
+                  data-sidebar-recent-search="1"
+                >
+                  <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <input
+                    ref={inlineSearchRef}
+                    value={inlineSearchQuery}
+                    onChange={(event) => setInlineSearchQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault()
+                        closeInlineSearch()
+                      }
+                    }}
+                    placeholder={t("searchChats")}
+                    aria-label={t("searchChats")}
+                    className="h-7 min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground/70"
+                  />
+                  <button
+                    type="button"
+                    onClick={closeInlineSearch}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-muted/70 hover:text-foreground"
+                    aria-label="Cerrar búsqueda"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               ) : (
-                <span
-                  className="ml-auto h-1.5 w-1.5 rounded-full bg-sky-500/85 shadow-[0_0_0_3px_rgba(14,165,233,0.12)]"
-                  aria-label="Historial cargado"
-                  title="Historial cargado"
-                />
+                <button
+                  type="button"
+                  onClick={toggleRecentChatsCollapsed}
+                  aria-expanded={!recentChatsCollapsed}
+                  aria-controls="sidebar-recent-chats-content"
+                  className={cn(
+                    "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
+                    "hover:bg-muted/80 focus-visible:border-sky-400/80 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
+                    !recentChatsCollapsed && "border-sky-400/70 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.10)] dark:bg-zinc-950",
+                  )}
+                >
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
+                      recentChatsCollapsed && "-rotate-90",
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">{t("recentChats")}</span>
+                  {isLoadingChats || isLoadingMore ? (
+                    <ThinkingIndicator
+                      size="xs"
+                      label="Cargando historial de chats"
+                      className="ml-auto text-muted-foreground/70"
+                    />
+                  ) : null}
+                </button>
               )}
-            </button>
+              {!inlineSearchOpen && (
+                <SidebarChromeTooltip label="Buscar ⌘K">
+                  <button
+                    type="button"
+                    data-sidebar-recent-search="1"
+                    onClick={openInlineSearch}
+                    className={RECENT_TOOLBAR_ICON}
+                    aria-label="Buscar ⌘K"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </button>
+                </SidebarChromeTooltip>
+              )}
+              <Popover
+                open={filterMenuOpen}
+                onOpenChange={(open) => {
+                  setFilterMenuOpen(open)
+                  if (!open) setFilterOpenRow(null)
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-sidebar-recent-filter="1"
+                    className={cn(
+                      RECENT_TOOLBAR_ICON,
+                      filterMenuOpen && "bg-muted/80 text-foreground",
+                    )}
+                    aria-label="Filtrar chats"
+                    title="Filtrar chats"
+                  >
+                    <SlidersHorizontal className="h-3.5 w-3.5" />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent align="end" sideOffset={6} className={FILTER_POPOVER}>
+                  {([
+                    {
+                      key: "type" as const,
+                      label: "Tipo",
+                      value: RECENT_CHAT_TYPE_LABELS[chatTypeFilter],
+                      options: [
+                        ["all", "Todo"],
+                        ["chats", "Chats"],
+                        ["scheduled", "Programados"],
+                      ] as const,
+                      set: setChatTypeFilter,
+                    },
+                    {
+                      key: "status" as const,
+                      label: "Estado",
+                      value: RECENT_CHAT_STATUS_LABELS[chatStatusFilter],
+                      options: [
+                        ["active", "Activo"],
+                        ["archived", "Archivados"],
+                        ["pinned", "Fijados"],
+                      ] as const,
+                      set: setChatStatusFilter,
+                    },
+                    {
+                      key: "activity" as const,
+                      label: "Última actividad",
+                      value: RECENT_CHAT_ACTIVITY_LABELS[chatActivityFilter],
+                      options: [
+                        ["all", "Todo"],
+                        ["today", "Hoy"],
+                        ["yesterday", "Ayer"],
+                        ["last7Days", "Últimos 7 días"],
+                      ] as const,
+                      set: setChatActivityFilter,
+                    },
+                  ]).map((row) => (
+                    <div key={row.key}>
+                      <button
+                        type="button"
+                        className={FILTER_ROW}
+                        aria-expanded={filterOpenRow === row.key}
+                        onClick={() => setFilterOpenRow((current) => current === row.key ? null : row.key)}
+                      >
+                        <span>{row.label}</span>
+                        <span className="ml-auto text-[12px] font-normal text-muted-foreground">{row.value}</span>
+                        <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground/70 transition-transform", filterOpenRow === row.key && "rotate-90")} />
+                      </button>
+                      {filterOpenRow === row.key && (
+                        <div className="pb-1 pl-2">
+                          {row.options.map(([id, label]) => (
+                            <button
+                              key={id}
+                              type="button"
+                              className={cn(FILTER_OPTION, row.value === label && "bg-zinc-100 font-medium")}
+                              onClick={() => {
+                                row.set(id as never)
+                                setFilterOpenRow(null)
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <div className="mx-2 my-1 h-px bg-zinc-200" />
+                  <button
+                    type="button"
+                    className={FILTER_ROW}
+                    aria-expanded={filterOpenRow === "group"}
+                    onClick={() => setFilterOpenRow((current) => current === "group" ? null : "group")}
+                  >
+                    <span>Agrupar por</span>
+                    <span className="ml-auto text-[12px] font-normal text-muted-foreground">
+                      {RECENT_CHAT_GROUP_LABELS[chatGroupBy]}
+                    </span>
+                    <ChevronRight className={cn("h-3.5 w-3.5 text-muted-foreground/70 transition-transform", filterOpenRow === "group" && "rotate-90")} />
+                  </button>
+                  {filterOpenRow === "group" && (
+                    <div className="pb-1 pl-2">
+                      {([["date", "Fecha"], ["none", "Ninguno"]] as const).map(([id, label]) => (
+                        <button
+                          key={id}
+                          type="button"
+                          className={cn(FILTER_OPTION, chatGroupBy === id && "bg-zinc-100 font-medium")}
+                          onClick={() => {
+                            setChatGroupBy(id)
+                            setFilterOpenRow(null)
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </PopoverContent>
+              </Popover>
+            </div>
+            {inlineSearchOpen && (
+              <button
+                type="button"
+                onClick={handleSearchClick}
+                className={cn(
+                  "mx-1 mb-1 rounded-md px-2 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground",
+                  state === "closed" && "hidden",
+                )}
+              >
+                Buscar en todo el historial
+              </button>
+            )}
             <SidebarGroupContent
               id="sidebar-recent-chats-content"
               className={cn(state === "closed" && "hidden", recentChatsCollapsed && "hidden")}
@@ -1470,13 +1689,19 @@ export function AppSidebar() {
                       // inline timestamp stays compact so the group
                       // header provides the coarse context and the row
                       // just shows the fine offset ("3h", "2d").
-                      const seenChatIds = new Set<string>()
-                      const visibleChats = chats.filter((c) => {
-                        if (!c?.id || seenChatIds.has(c.id)) return false
-                        seenChatIds.add(c.id)
-                        const persistedState = c as any
-                        if (persistedState.deletedAt || persistedState.isArchived || hiddenChatIds.includes(c.id) || archivedChatIds.includes(c.id)) return false
-                        return true
+                      const titledChats = chats.map((chat) => ({
+                        ...chat,
+                        title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
+                      }))
+                      const visibleChats = filterRecentChats(titledChats, {
+                        type: chatTypeFilter,
+                        status: chatStatusFilter,
+                        activity: chatActivityFilter,
+                        query: inlineSearchQuery,
+                        archivedIds: archivedChatIds,
+                        hiddenIds: hiddenChatIds,
+                        scheduledIds: scheduledChats,
+                        isPinned: isChatPinned,
                       })
                       const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
                       const serverPinnedIds = visibleChats
@@ -1484,10 +1709,16 @@ export function AppSidebar() {
                         .sort((a, b) => new Date((b as any).pinnedAt || b.updatedAt || 0).getTime() - new Date((a as any).pinnedAt || a.updatedAt || 0).getTime())
                         .map((chat) => chat.id)
                       const renderPinnedIds = Array.from(new Set([...serverPinnedIds, ...pinnedChatIds]))
-                      const pinnedChats = renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                      const showPinnedSection = chatStatusFilter === "active" && chatGroupBy === "date" && !inlineSearchQuery.trim()
+                      const pinnedChats = showPinnedSection
+                        ? renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                        : []
                       const pinnedSet = new Set(pinnedChats.map((chat) => chat.id))
-                      const validChats = visibleChats.filter((chat) => !pinnedSet.has(chat.id))
+                      const validChats = sortChatsNewestFirst(
+                        visibleChats.filter((chat) => !pinnedSet.has(chat.id)),
+                      )
                       const buckets = groupChatsByTime(validChats)
+                      const hasVisibleChats = visibleChats.length > 0
                       const groupDefs: Array<[keyof typeof buckets, string]> = [
                         ["today", t("today")],
                         ["yesterday", t("yesterday")],
@@ -1772,6 +2003,19 @@ export function AppSidebar() {
                         </div>
                       )
 
+                      if (!hasVisibleChats) {
+                        return (
+                          <div className="px-3 py-5 text-center">
+                            <p className="text-sm font-medium text-foreground/80">
+                              Ningún chat coincide
+                            </p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Prueba otro filtro o busca en todo el historial.
+                            </p>
+                          </div>
+                        )
+                      }
+
                       return (
                         <>
                           {pinnedChats.length > 0 && (
@@ -1782,18 +2026,24 @@ export function AppSidebar() {
                               </div>
                             </React.Fragment>
                           )}
-                          {groupDefs.map(([key, label]) => {
-                            const items = buckets[key]
-                            if (items.length === 0) return null
-                            return (
-                              <React.Fragment key={key}>
-                                {renderChatGroupHeader(label, items.length)}
-                                <div>
-                                  {items.map(renderChatItem)}
-                                </div>
-                              </React.Fragment>
+                          {chatGroupBy === "none"
+                            ? (
+                              <div>
+                                {validChats.map(renderChatItem)}
+                              </div>
                             )
-                          })}
+                            : groupDefs.map(([key, label]) => {
+                              const items = buckets[key]
+                              if (items.length === 0) return null
+                              return (
+                                <React.Fragment key={key}>
+                                  {renderChatGroupHeader(label, items.length)}
+                                  <div>
+                                    {items.map(renderChatItem)}
+                                  </div>
+                                </React.Fragment>
+                              )
+                            })}
                         </>
                       )
                     })()}
