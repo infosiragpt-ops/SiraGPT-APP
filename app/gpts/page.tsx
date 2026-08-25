@@ -30,6 +30,7 @@ import { toast } from "sonner"
 import { gptsService, type CustomGPT, type GPTFilters } from "@/lib/gpts-service"
 import { useChat } from "@/lib/chat-context-integrated"
 import { resolveGptIconImageUrl } from "@/lib/gpt-icon-url"
+import { GptsAppsSection } from "@/components/gpts/gpts-apps-section"
 
 type VisibilityFilter = "all" | "mine" | "public"
 
@@ -429,7 +430,7 @@ export default function GPTsPage() {
             <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" />
             <Input
               data-testid="gpts-search"
-              placeholder="Buscar GPT"
+              placeholder="Buscar GPT y Apps"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               className="h-10 rounded-xl border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 pl-11 text-[0.94rem] text-zinc-900 dark:text-zinc-100 shadow-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus-visible:ring-1 focus-visible:ring-zinc-300 dark:focus-visible:ring-zinc-600"
@@ -522,7 +523,7 @@ export default function GPTsPage() {
         </section>
 
         {trendingCards.length > 0 && (
-          <section className="mx-auto mt-8 w-full max-w-[640px] pb-10">
+          <section className="mx-auto mt-8 w-full max-w-[640px]">
             <SectionHeader title="Más usados" subtitle="Asistentes activos de tu espacio" />
             <div className="mt-4 grid gap-x-6 gap-y-1 md:grid-cols-2">
               {trendingCards.map((card, index) => (
@@ -531,6 +532,8 @@ export default function GPTsPage() {
             </div>
           </section>
         )}
+
+        <GptsAppsSection searchQuery={debouncedSearchQuery} />
 
         <Dialog open={shareDialogOpen} onOpenChange={setShareDialogOpen}>
           <DialogContent className="rounded-3xl border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 sm:max-w-lg">
