@@ -10,6 +10,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, u
 import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
+import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds } from "./chat/composer-files"
@@ -2130,6 +2131,35 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           );
           throwIfTurnCancelled();
         }
+        const userStopped = controller.signal.aborted || pendingStopsRef.current.has(activeChat.id);
+        if (waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped) {
+          const recovered = await pollPersistedAssistantTurn({
+            getChat: (id) => apiClient.getChat(id),
+            chatId: activeChat.id,
+            pending: {
+              idempotencyKey: turnIdempotencyKey,
+              turnKey: turnIdempotencyKey,
+              streamId,
+            },
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+          });
+          if (recovered?.chat) {
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            terminalSucceeded = true;
+            streamFailed = false;
+            clearThisPendingTurn();
+            bg.complete(activeChat.id);
+            if (currentChatRef.current?.id === activeChat.id) {
+              setCurrentStreamId(null);
+            }
+          }
+        }
         // Synchronous intent endpoints are terminal when their awaited call
         // returns. The default SSE branch is terminal only after onClose.
         if (!waitsForDefaultStreamTerminal && !streamFailed) {
@@ -2140,7 +2170,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error: any) {
         streamFailed = true;
-        if (controller.signal.aborted || error?.name === 'AbortError') {
+        if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
           // Explicit Stop is terminal user intent, not a transport failure.
           // Remove the durable draft so online recovery cannot resurrect a
           // billable operation the user already cancelled.
@@ -2150,6 +2180,35 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             setCurrentStreamId(null);
           }
           return true;
+        }
+        if (shouldRecoverPersistedGenerate(error, { signal: controller.signal })) {
+          const recovered = await pollPersistedAssistantTurn({
+            getChat: (id) => apiClient.getChat(id),
+            chatId: activeChat.id,
+            pending: {
+              idempotencyKey: turnIdempotencyKey,
+              turnKey: turnIdempotencyKey,
+              streamId,
+            },
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+          });
+          if (recovered?.chat) {
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            terminalSucceeded = true;
+            streamFailed = false;
+            clearThisPendingTurn();
+            bg.complete(activeChat.id);
+            if (currentChatRef.current?.id === activeChat.id) {
+              setCurrentStreamId(null);
+            }
+            return true;
+          }
         }
         console.error("Failed to start AI stream:", error);
 
