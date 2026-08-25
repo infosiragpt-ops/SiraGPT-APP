@@ -249,8 +249,35 @@ function createSSEWriter(res, options = {}) {
     }
   } catch (_) { /* adapter fail-open */ }
 
+  let __lastSseSeq = Number(options.headSeq) || 0;
   const cancelHeartbeat = startSSEHeartbeat(res, {
     intervalMs: options.heartbeatMs,
+    shouldEmit: function () {
+      try {
+        const adHb = require('../services/agent-runner/engine-adapter');
+        const w65hb = require('../services/agent-runner/engine-3h65');
+        if (typeof w65hb.applySseSessionGuardsClosed === 'function') {
+          const g = w65hb.applySseSessionGuardsClosed({
+            lastSeq: __lastSseSeq,
+            nextSeq: __lastSseSeq + 1,
+            wouldBlock: Boolean(res.writableNeedDrain),
+            pendingBytes: res.writableLength,
+            writable: !(closed || res.writableEnded || res.destroyed),
+            requireSessionEventSeqIncrease: adHb.requireSessionEventSeqIncrease,
+            skipHeartbeatIfWriteWouldBlock: adHb.skipHeartbeatIfWriteWouldBlock,
+          });
+          if (g && g.skipHeartbeat) return false;
+        } else if (typeof adHb.skipHeartbeatIfWriteWouldBlock === 'function') {
+          const skip = adHb.skipHeartbeatIfWriteWouldBlock({
+            wouldBlock: Boolean(res.writableNeedDrain),
+            pendingBytes: res.writableLength,
+            writable: !(closed || res.writableEnded || res.destroyed),
+          });
+          if (skip && skip.skip) return false;
+        }
+      } catch (_) { /* 3H65 heartbeat skip fail-open */ }
+      return true;
+    },
   });
 
   /**
@@ -273,6 +300,24 @@ function createSSEWriter(res, options = {}) {
         const ad = require('../services/agent-runner/engine-adapter');
         const store = options.cursorStore || (options._cursorStore = {});
         const next = (Number(store.cursor) || 0) + 1;
+        try {
+          const w65seq = require('../services/agent-runner/engine-3h65');
+          if (typeof w65seq.applySseSessionGuardsClosed === 'function') {
+            const g = w65seq.applySseSessionGuardsClosed({
+              lastSeq: store.cursor,
+              nextSeq: next,
+              writable: !(closed || res.writableEnded || res.destroyed),
+              requireSessionEventSeqIncrease: ad.requireSessionEventSeqIncrease,
+              skipHeartbeatIfWriteWouldBlock: ad.skipHeartbeatIfWriteWouldBlock,
+            });
+            if (g && g.seqOk === false) {
+              return Promise.resolve(false);
+            }
+            if (g && Number.isFinite(g.lastSeq)) __lastSseSeq = g.lastSeq;
+          } else if (typeof ad.requireSessionEventSeqIncrease === 'function') {
+            ad.requireSessionEventSeqIncrease({ lastSeq: store.cursor, nextSeq: next });
+          }
+        } catch (_) { /* 3H65 seq fail-open */ }
         if (typeof ad.persistSseLastEventIdCursor === 'function') {
           ad.persistSseLastEventIdCursor({ lastEventId: next, seq: next, store });
         }
@@ -316,6 +361,28 @@ function createSSEWriter(res, options = {}) {
           w60.sseHeartbeatCommentNoSeq({ seq: options.headSeq, kind: 'heartbeat' });
         }
       } catch (_) { /* 3H60 fail-open */ }
+      try {
+        const adHb = require('../services/agent-runner/engine-adapter');
+        const w65c = require('../services/agent-runner/engine-3h65');
+        if (typeof w65c.applySseSessionGuardsClosed === 'function') {
+          const g = w65c.applySseSessionGuardsClosed({
+            lastSeq: 0,
+            nextSeq: 1,
+            wouldBlock: Boolean(res.writableNeedDrain),
+            pendingBytes: res.writableLength,
+            writable: !(closed || res.writableEnded || res.destroyed),
+            skipHeartbeatIfWriteWouldBlock: adHb.skipHeartbeatIfWriteWouldBlock,
+          });
+          if (g && g.skipHeartbeat) return Promise.resolve(false);
+        } else if (typeof adHb.skipHeartbeatIfWriteWouldBlock === 'function') {
+          const skip = adHb.skipHeartbeatIfWriteWouldBlock({
+            wouldBlock: Boolean(res.writableNeedDrain),
+            pendingBytes: res.writableLength,
+            writable: !(closed || res.writableEnded || res.destroyed),
+          });
+          if (skip && skip.skip) return Promise.resolve(false);
+        }
+      } catch (_) { /* 3H65 comment skip fail-open */ }
       const safe = String(text == null ? '' : text).replace(/\r?\n/g, ' ');
       return writeWithBackpressure(`: ${safe}\n\n`);
     },

@@ -1875,10 +1875,20 @@ function applyGenerateFairQueue3h63(req, { sessionKey, producerId, requestId, wa
 
 function startGenerateSseHeartbeat(res, { intervalMs = 5000, signal } = {}) {
   try {
-    const { startCommentHeartbeat } = require('../services/agent-runner/engine-adapter');
+    const { startCommentHeartbeat, skipHeartbeatIfWriteWouldBlock } = require('../services/agent-runner/engine-adapter');
     return startCommentHeartbeat({
       write: (chunk) => {
-        try { res.write(chunk); } catch (_) { /* socket gone */ }
+        try {
+          const skip = typeof skipHeartbeatIfWriteWouldBlock === 'function'
+            ? skipHeartbeatIfWriteWouldBlock({
+              wouldBlock: Boolean(res && res.writableNeedDrain),
+              pendingBytes: res && res.writableLength,
+              writable: !(res && (res.writableEnded || res.destroyed)),
+            })
+            : { skip: false };
+          if (skip && skip.skip) return;
+          res.write(chunk);
+        } catch (_) { /* socket gone */ }
       },
       intervalMs,
       signal,
@@ -2180,6 +2190,32 @@ router.post(
           requestId: requestId || null,
           waitedMs: waitedMs,
         });
+        try {
+          const w65q = require('../services/agent-runner/engine-3h65');
+          if (typeof w65q.applyGenerateQueueGuardsClosed === 'function') {
+            const waiters = waitedMs > 0
+              ? [{ id: producerId, waitedMs: waitedMs, enqueuedAt: Date.now() - waitedMs }]
+              : [];
+            const q65 = w65q.applyGenerateQueueGuardsClosed({
+              queued: waiters.length,
+              waiters: waiters,
+              now: Date.now(),
+              inFlight: producerId,
+              fairQueueStarvationBound: adQ.fairQueueStarvationBound,
+              maxQueuedGenerate16: adQ.maxQueuedGenerate16,
+            });
+            if (q65 && q65.reject) {
+              controller.abort();
+              if (!res.headersSent) {
+                return res.status(503).json({
+                  error: q65.code || 'queue_generate_cap',
+                  code: q65.code || 'queue_generate_cap',
+                  message: 'La cola de generate ya tiene 16 turnos. Rechacé el nuevo.',
+                });
+              }
+            }
+          }
+        } catch (_) { /* 3H65 queue fail-open */ }
         if (fair && fair.release) __fairQueueRelease = fair.release;
         if (fair && fair.ok === false) {
           controller.abort();
@@ -7831,6 +7867,21 @@ router.post(
               alreadyRefunded: cancelUsageState.recorded === true,
             });
           }
+          try {
+            const w65chg = require('../services/agent-runner/engine-3h65');
+            if (typeof w65chg.applyDeepSeekCreditGuardsClosed === 'function') {
+              w65chg.applyDeepSeekCreditGuardsClosed({
+                cancelled: true,
+                firstToken: Boolean(fullResponseContent),
+                firstByteAt: __firstByteAt,
+                tokens: String(fullResponseContent || '').length,
+                mapDeepSeekHttpError: adCancel.mapDeepSeekHttpError,
+                neverRetry402: adCancel.neverRetry402,
+                neverRetry413: adCancel.neverRetry413,
+                neverChargeIfCancelledBeforeFirstToken: adCancel.neverChargeIfCancelledBeforeFirstToken,
+              });
+            }
+          } catch (_) { /* 3H65 never-charge fail-open */ }
           if (typeof adCancel.abortCascade === 'function') {
             adCancel.abortCascade({
               userSignal: signal,
