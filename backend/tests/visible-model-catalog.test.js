@@ -2,6 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
   listVisibleTextModelDefinitions,
@@ -86,18 +88,37 @@ test('curateVisibleTextModels surfaces admin-activated TEXT models even when not
   assert.strictEqual(passthrough.id, 'custom-1');
 });
 
-test('passthrough still respects VISIBLE_MODELS_ALLOWLIST when set', () => {
+test('production compose override does not default VISIBLE_MODELS_ALLOWLIST to DeepSeek-only', () => {
+  const compose = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'docker-compose.production.override.yml'),
+    'utf8',
+  );
+  assert.match(
+    compose,
+    /VISIBLE_MODELS_ALLOWLIST:\s*"\$\{VISIBLE_MODELS_ALLOWLIST-}"/,
+    'empty/unset env must not be replaced by a DeepSeek-only default',
+  );
+  assert.doesNotMatch(
+    compose,
+    /VISIBLE_MODELS_ALLOWLIST:\s*"\$\{VISIBLE_MODELS_ALLOWLIST:-/,
+    'must not use :- default interpolation for the public picker allowlist',
+  );
+});
+
+test('allowlist set must not hide an extra isActive TEXT admin model', () => {
   const models = [
     { id: 'c1', name: 'CustomCorp/llama-99b', type: 'TEXT', isActive: true },
+    { id: 'ds-pro', name: 'deepseek-v4-pro', type: 'TEXT', isActive: true },
+    { id: 'claude', name: 'claude-sonnet-5', type: 'TEXT', isActive: true },
+    { id: 'off-1', name: 'CustomCorp/off', type: 'TEXT', isActive: false },
   ];
-  assert.deepStrictEqual(
-    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'gpt-4o' }).map((m) => m.name),
-    [],
-  );
-  assert.deepStrictEqual(
-    curateVisibleTextModels(models, { VISIBLE_MODELS_ALLOWLIST: 'customcorp/llama-99b' }).map((m) => m.name),
-    ['CustomCorp/llama-99b'],
-  );
+  const names = curateVisibleTextModels(models, {
+    VISIBLE_MODELS_ALLOWLIST: 'deepseek-v4-flash,deepseek-v4-pro',
+  }).map((m) => m.name);
+  assert.ok(names.includes('deepseek/deepseek-v4-pro'), 'allowlist may still filter the curated showcase');
+  assert.ok(names.includes('CustomCorp/llama-99b'), 'admin-activated TEXT model stays visible even when allowlist is set');
+  assert.ok(names.includes('claude-sonnet-5'), 'extra isActive TEXT admin model is not hidden by the allowlist');
+  assert.ok(!names.includes('CustomCorp/off'), 'inactive model stays hidden');
 });
 
 test('curateVisibleAdminMediaModels hides image rows that are inactive, virtual, or not allowed', () => {

@@ -271,11 +271,10 @@ function buildGemaVisibleModel(env = process.env) {
 
 /**
  * Optional deploy-scoped allowlist. When `VISIBLE_MODELS_ALLOWLIST` is set
- * (comma-separated model names or aliases), the visible picker is restricted
- * to ONLY those models. Unset/empty → no filtering (every deploy behaves as
- * before). This lets a single deploy (e.g. one without certain provider keys)
- * surface just the models it can actually serve, without editing this shared
- * catalog or affecting other deploys.
+ * (comma-separated model names or aliases), the static curated showcase is
+ * restricted to those models. Unset/empty → no curated filtering. Admin-
+ * activated TEXT rows still pass through regardless of this env — activar =
+ * visible.
  */
 function parseVisibleModelsAllowlist(env = process.env) {
   const raw = String(env.VISIBLE_MODELS_ALLOWLIST || '').trim();
@@ -338,17 +337,14 @@ function curateVisibleTextModels(models = [], env = process.env) {
 
   // Admin-authoritative pass-through: any TEXT model the admin explicitly
   // activated (isActive=true) that isn't already surfaced by a curated
-  // definition still appears in the picker — "activar = visible". This keeps
-  // curated models' rich metadata while letting operators expose new models
-  // by toggling them on, with no code edit to the static catalog. Still honors
-  // the deploy-scoped VISIBLE_MODELS_ALLOWLIST when that env is set.
-  const allow = parseVisibleModelsAllowlist(env);
+  // definition still appears in the picker — "activar = visible". The
+  // deploy-scoped VISIBLE_MODELS_ALLOWLIST may still filter the static
+  // curated showcase; leftover admin-activated TEXT rows always pass through.
   const passthrough = [];
   for (const [lowerName, model] of byName) {
     if (consumed.has(lowerName)) continue;
     const t = normalizeModelType(model?.type);
     if (t && t !== 'TEXT') continue; // only surface TEXT here
-    if (allow && !allow.has(lowerName)) continue;
     passthrough.push({
       ...model,
       displayName: model?.displayName || model?.name,

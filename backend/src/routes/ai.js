@@ -1416,6 +1416,21 @@ function createActiveGenerateTurn(key, requestFingerprint) {
   return turn;
 }
 
+// Safari/Cloudflare can abort the first POST before this request becomes a
+// completed owner. Drop the in-memory entry so a same-streamId retry is not
+// blocked by a zombie owner. Do not touch a settled turn — those stay for
+// the 120 s replay window.
+function releaseIncompleteActiveGenerateTurn(turn, reason) {
+  if (!turn || turn.settled) return false;
+  if (activeGenerateTurns.get(turn.key) === turn) {
+    activeGenerateTurns.delete(turn.key);
+  }
+  if (!turn.settled && typeof turn.reject === 'function') {
+    turn.reject(new Error(reason || 'generate turn owner disconnected before completion'));
+  }
+  return true;
+}
+
 function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
   const content = duplicateTurn?.assistantMessage?.content || '';
   res.setHeader('Content-Type', 'text/event-stream');
@@ -2095,11 +2110,19 @@ router.post(
       if (!res.writableEnded) {
         clientGone = true;
         console.log(`Client response closed for chat: ${req.body.chatId}. Run continues in background (detached).`);
+        releaseIncompleteActiveGenerateTurn(
+          req._activeGenerateTurn,
+          'generate turn owner socket closed before completion',
+        );
       }
     });
     req.on('aborted', () => {
       clientGone = true;
       console.log(`Client request aborted for chat: ${req.body.chatId}. Run continues in background (detached).`);
+      releaseIncompleteActiveGenerateTurn(
+        req._activeGenerateTurn,
+        'generate turn owner aborted before completion',
+      );
     });
     let __lastClientAt = Date.now();
     let __pendingSseEvent = null;
@@ -2428,16 +2451,25 @@ router.post(
           if (activeWait.error) {
             console.warn('[ai/generate] active duplicate turn wait failed:', activeWait.error.message);
           }
-          // A follower never becomes an owner after waiting. Falling through
-          // here used to execute the model a second time when the 55 s timer
-          // won or the owner failed just before persistence.
-          return respondGenerateTurnError(res, {
-            code: 'turn_in_progress',
-            message: 'El turno original sigue procesándose. Reintenta en unos segundos.',
-            retryable: true,
-            retryAfterSeconds: 3,
-            actualModel: model,
-          });
+          // Safari/Cloudflare abort the first POST then retry the same
+          // streamId. Returning 409 here left the UI stuck on Pensando.
+          // If the original owner finished we replayed above; otherwise
+          // drop the stale entry and continue as the new owner.
+          if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
+            activeGenerateTurns.delete(activeGenerateTurnKey);
+          }
+          req._activeGenerateTurn = createActiveGenerateTurn(
+            activeGenerateTurnKey,
+            generateIdempotencyRequestHash,
+          );
+          if (__streamControllerKey && !__ownsStreamController) {
+            __ownsStreamController = claimStreamController(
+              streamControllers,
+              __streamControllerKey,
+              controller,
+              { replaceOwner: true },
+            );
+          }
         } else {
           req._activeGenerateTurn = createActiveGenerateTurn(
             activeGenerateTurnKey,
