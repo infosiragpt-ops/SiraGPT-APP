@@ -390,11 +390,14 @@ function classifyLoopError({ code, err } = {}) {
       const hit = w64.classifyEngine3h64Error({ code, err });
       if (hit && hit.message) return hit;
     }
+    // classifyPublicGenerateErrorClosed always returns a message (tool_isolated
+    // for unknown codes). Only use it for uncoded tool failures so 3H59–3H63
+    // table codes (subtask_no_progress, credit_ledger_settle, ...) still fall
+    // through. Known `code` keeps its wave table + Spanish copy.
     const adapter = loadEngineAdapter();
-    if (w64 && typeof w64.classifyPublicGenerateErrorClosed === 'function' && err) {
+    if (w64 && typeof w64.classifyPublicGenerateErrorClosed === 'function' && err && !code) {
       const pub = w64.classifyPublicGenerateErrorClosed({
         err,
-        code,
         classifyToolFailure: adapter && adapter.classifyToolFailure,
         sanitizeClientError: adapter && adapter.sanitizeClientError,
       });

@@ -411,8 +411,11 @@ function applyCompactKeepPinsClosed({
     ? skipCompactIfUnderBudget(src)
     : { skipped: false };
   let next = Array.isArray(compacted) ? compacted.slice() : src.slice();
-  if (compactKeepPinnedFactsAndLast3UserTurns) {
-    const kept = compactKeepPinnedFactsAndLast3UserTurns(skip && skip.skipped ? src : next, { pins });
+  // Only apply last-3 trim when the skip helper says we are over budget.
+  // compactUntilTokenBudget may have already packed `compacted`; never
+  // re-trim the pre-compact original (drops system + 3H59 anchors).
+  if (compactKeepPinnedFactsAndLast3UserTurns && !(skip && skip.skipped)) {
+    const kept = compactKeepPinnedFactsAndLast3UserTurns(next, { pins });
     if (kept && Array.isArray(kept.messages)) next = kept.messages;
   }
   if (compactNeverDropSystemPrompt) {
@@ -424,7 +427,7 @@ function applyCompactKeepPinsClosed({
     if (tools && Array.isArray(tools.messages)) next = tools.messages;
   }
   const pinned = pinLastToolErrorOnCompact
-    ? pinLastToolErrorOnCompact(next, { pins })
+    ? pinLastToolErrorOnCompact(src, { pins })
     : { pins: Array.isArray(pins) ? pins : [], pinned: false };
   return {
     messages: next,

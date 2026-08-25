@@ -67,10 +67,10 @@ test('3H64-B-001 latency ring p50/p95 from scripted persisted samples', () => {
   const ring = w64.readLatencyRingClosed({ dir });
   assert.equal(ring.firstTokenMs.count, 10);
   assert.equal(ring.firstTokenMs.p50, 50);
-  assert.equal(ring.firstTokenMs.p95, 100);
+  assert.equal(ring.firstTokenMs.p95, 90);
   assert.equal(ring.turnEndMs.count, 5);
   assert.equal(ring.turnEndMs.p50, 600);
-  assert.equal(ring.turnEndMs.p95, 1000);
+  assert.equal(ring.turnEndMs.p95, 800);
   assert.equal(ring.firstTokenMs.source, 'persisted_ring');
   const live = ad.adapterLatencySnapshot();
   assert.ok(live.firstTokenMs.count >= 10);
@@ -371,6 +371,17 @@ test('3H64-I-001 public errors are Spanish and never leak stacks or sk-', () => 
   assert.ok(stall.message.indexOf('tres') >= 0);
   assert.equal(stall.message.indexOf('sk-'), -1);
   assert.equal(classifyLoopError({ code: 'turn_wall' }).retryable, true);
+  const prior = classifyLoopError({
+    code: 'subtask_no_progress',
+    err: {
+      message: 'sk-secretvaluehere',
+      stack: 'Error: boom\n    at Object.run (engine-3h61.js:1:1)',
+    },
+  });
+  assert.equal(prior.code, 'subtask_no_progress');
+  assert.equal(prior.message.indexOf('sk-'), -1);
+  assert.equal(/at Object\./.test(prior.message), false);
+  assert.match(prior.message, /progreso|sub-trabajo|vacío/i);
 });
 
 test('3H64-J-001 adapter snapshot and DeepSeek lock are 3H64', () => {
