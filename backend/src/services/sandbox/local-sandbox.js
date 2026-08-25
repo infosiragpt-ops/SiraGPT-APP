@@ -455,8 +455,31 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
       let durationMs = elapsedMs();
-      const stdout = stdoutBuf.toString('utf8');
-      const stderr = stderrBuf.toString('utf8');
+      let stdout = stdoutBuf.toString('utf8');
+      let stderr = stderrBuf.toString('utf8');
+      try {
+        const w67out = require('../agent-runner/engine-3h67');
+        const adOut = require('../agent-runner/engine-adapter');
+        if (typeof w67out.applySandboxOutCapClosed === 'function') {
+          const capped = w67out.applySandboxOutCapClosed({
+            stdout,
+            stderr,
+            stripAnsiFromSandboxOut: adOut.stripAnsiFromSandboxOut,
+            stderrByteCapPerCommand: adOut.stderrByteCapPerCommand,
+            stdoutByteCapPerCommand: adOut.stdoutByteCapPerCommand,
+            combinedStdoutStderr96KiB: adOut.combinedStdoutStderr96KiB,
+            capStdoutLine8KiB: adOut.capStdoutLine8KiB,
+          });
+          if (capped) {
+            if (capped.stdout != null) stdout = capped.stdout;
+            if (capped.stderr != null) stderr = capped.stderr;
+            if (capped.truncated) {
+              stdoutTruncated = true;
+              stderrTruncated = true;
+            }
+          }
+        }
+      } catch (_) { /* 3H67 sandbox out cap fail-open */ }
       releaseChild();
 
       if (killedReason === 'timeout') {

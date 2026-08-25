@@ -232,6 +232,28 @@ function createSSEWriter(res, options = {}) {
       if (typeof ad.dropDuplicateSseEventIds === 'function' && Array.isArray(options.ring)) {
         ad.dropDuplicateSseEventIds(options.ring);
       }
+      try {
+        const w67rep = require('../services/agent-runner/engine-3h67');
+        if (typeof w67rep.applySseReplayCloseClosed === 'function' && Array.isArray(options.ring)) {
+          const filtered = w67rep.applySseReplayCloseClosed({
+            headerValue: options.lastEventId,
+            lastEventId: options.lastEventId,
+            events: options.ring,
+            store: options.cursorStore,
+            closed: false,
+            alreadyDone: true,
+            parseLastEventIdIntOnly: ad.parseLastEventIdIntOnly,
+            restoreLastSseIdOnResume: ad.restoreLastSseIdOnResume,
+            dropSseCommentFramesFromReplay: ad.dropSseCommentFramesFromReplay,
+            dropSseEventsOlderThan2min: ad.dropSseEventsOlderThan2min,
+            capReplayFrames64: ad.capReplayFrames64,
+            endSseWithEventDone: ad.endSseWithEventDone,
+          });
+          if (filtered && Array.isArray(filtered.events)) {
+            options = Object.assign({}, options, { ring: filtered.events });
+          }
+        }
+      } catch (_) { /* 3H67 replay filter fail-open */ }
       if (typeof ad.honorLastEventId === 'function') {
         const honored = ad.honorLastEventId(options.lastEventId, options.ring, {
           inclusive: options.inclusive === true,
@@ -429,6 +451,29 @@ function createSSEWriter(res, options = {}) {
           });
         }
       } catch (_) { /* 3H66 close-then-settle fail-open */ }
+      try {
+        const w67d = require('../services/agent-runner/engine-3h67');
+        const ad67d = require('../services/agent-runner/engine-adapter');
+        if (typeof w67d.applySseReplayCloseClosed === 'function') {
+          const done67 = w67d.applySseReplayCloseClosed({
+            headerValue: options.lastEventId,
+            lastEventId: options.lastEventId,
+            events: Array.isArray(options.ring) ? options.ring : [],
+            store: options.cursorStore,
+            closed: closed,
+            alreadyDone: closed,
+            parseLastEventIdIntOnly: ad67d.parseLastEventIdIntOnly,
+            restoreLastSseIdOnResume: ad67d.restoreLastSseIdOnResume,
+            dropSseCommentFramesFromReplay: ad67d.dropSseCommentFramesFromReplay,
+            dropSseEventsOlderThan2min: ad67d.dropSseEventsOlderThan2min,
+            capReplayFrames64: ad67d.capReplayFrames64,
+            endSseWithEventDone: ad67d.endSseWithEventDone,
+          });
+          if (done67 && done67.writeDone && done67.frame && !closed) {
+            try { res.write(done67.frame); } catch (_) { closed = true; }
+          }
+        }
+      } catch (_) { /* 3H67 event-done fail-open */ }
       try {
         const w61 = require('../services/agent-runner/engine-3h61');
         if (typeof w61.applySseCancelHeartbeatClosed === 'function') {

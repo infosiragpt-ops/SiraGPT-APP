@@ -120,6 +120,25 @@ function createDurableCheckpointStore({ kv = null, pg = null, threadId = 'anon' 
       let stateOut = state && typeof state === 'object' ? state : {};
       let metaOut = metadata && typeof metadata === 'object' ? metadata : {};
       try {
+        const w67ckpt = require('./engine-3h67');
+        const adCkpt = require('./engine-adapter');
+        if (typeof w67ckpt.applyWriteRefuseClosed === 'function') {
+          const tooBig = w67ckpt.applyWriteRefuseClosed({
+            payload: stateOut,
+            refuseWriteIfDestDirMissing: adCkpt.refuseWriteIfDestDirMissing,
+            refuseWriteToEtcProcSys: adCkpt.refuseWriteToEtcProcSys,
+            refuseWriteToDevBoot: adCkpt.refuseWriteToDevBoot,
+            refuseWriteToRootMnt: adCkpt.refuseWriteToRootMnt,
+            refuseCheckpointOver1MiBUncompressed: adCkpt.refuseCheckpointOver1MiBUncompressed,
+          });
+          if (tooBig && tooBig.ok === false && tooBig.code === 'ckpt_too_large') {
+            return { ok: false, code: 'ckpt_too_large', checkpointId: id };
+          }
+        }
+      } catch (ckptErr) {
+        if (ckptErr && ckptErr.code === 'ckpt_too_large') return { ok: false, code: 'ckpt_too_large', checkpointId: id };
+      }
+      try {
         const packed = require('./engine-next').compactCheckpointBlobs(stateOut);
         stateOut = packed.state;
         if (packed.compacted) metaOut = { ...metaOut, blobCompacted: true, droppedBytes: packed.droppedBytes };

@@ -282,6 +282,28 @@ function writeFile(sessionId, filePath, content) {
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
     const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content, root: s.workdir });
+    try {
+      const w67w = require('../agent-runner/engine-3h67');
+      const adW = require('../agent-runner/engine-adapter');
+      if (typeof w67w.applyWriteRefuseClosed === 'function') {
+        const refused = w67w.applyWriteRefuseClosed({
+          path: jailed,
+          content,
+          refuseWriteIfDestDirMissing: adW.refuseWriteIfDestDirMissing,
+          refuseWriteToEtcProcSys: adW.refuseWriteToEtcProcSys,
+          refuseWriteToDevBoot: adW.refuseWriteToDevBoot,
+          refuseWriteToRootMnt: adW.refuseWriteToRootMnt,
+          refuseCheckpointOver1MiBUncompressed: adW.refuseCheckpointOver1MiBUncompressed,
+        });
+        if (refused && refused.ok === false && !refused.uniqueness) {
+          throw Object.assign(new Error(refused.code || 'path_system'), { code: refused.code || 'PATH_ESCAPE' });
+        }
+      }
+    } catch (refuseErr) {
+      if (refuseErr && (refuseErr.code === 'path_system' || refuseErr.code === 'path_dev_boot' || refuseErr.code === 'path_root_mnt' || refuseErr.code === 'dest_dir_missing' || refuseErr.code === 'ckpt_too_large' || refuseErr.code === 'PATH_ESCAPE')) {
+        throw refuseErr;
+      }
+    }
     const abs = assertInsideWorkdir(s.workdir, jailed);
     const bytes = Buffer.byteLength(content, 'utf8');
     if (bytes > MAX_FILE_BYTES) return { ok: false, error: `file_too_large: ${bytes} bytes` };
@@ -302,6 +324,29 @@ function patchFile(sessionId, filePath, oldText, newText) {
   if (!s) return { ok: false, error: 'session_not_found' };
   try {
     const jailed = apply3h66SandboxPathJail(filePath, { kind: 'write', content: newText, root: s.workdir });
+    try {
+      const w67p = require('../agent-runner/engine-3h67');
+      const adP = require('../agent-runner/engine-adapter');
+      if (typeof w67p.applyWriteRefuseClosed === 'function') {
+        const refused = w67p.applyWriteRefuseClosed({
+          path: jailed,
+          content: newText,
+          result: null,
+          refuseWriteIfDestDirMissing: adP.refuseWriteIfDestDirMissing,
+          refuseWriteToEtcProcSys: adP.refuseWriteToEtcProcSys,
+          refuseWriteToDevBoot: adP.refuseWriteToDevBoot,
+          refuseWriteToRootMnt: adP.refuseWriteToRootMnt,
+          refuseCheckpointOver1MiBUncompressed: adP.refuseCheckpointOver1MiBUncompressed,
+        });
+        if (refused && refused.ok === false && !refused.uniqueness) {
+          throw Object.assign(new Error(refused.code || 'path_system'), { code: refused.code || 'PATH_ESCAPE' });
+        }
+      }
+    } catch (refuseErr) {
+      if (refuseErr && (refuseErr.code === 'path_system' || refuseErr.code === 'path_dev_boot' || refuseErr.code === 'path_root_mnt' || refuseErr.code === 'dest_dir_missing' || refuseErr.code === 'ckpt_too_large' || refuseErr.code === 'PATH_ESCAPE')) {
+        throw refuseErr;
+      }
+    }
     const abs = assertInsideWorkdir(s.workdir, jailed);
     const content = fs.readFileSync(abs, 'utf8');
     const occurrences = content.split(oldText).length - 1;

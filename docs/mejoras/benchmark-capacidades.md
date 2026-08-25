@@ -1,6 +1,6 @@
 # Benchmark de capacidades del motor — SiraGPT
 
-Versión del rubric: **3H66** (2026-08-25) sobre **3H65** + **hot path #388 / #399**.  
+Versión del rubric: **3H67** (2026-08-25) sobre **3H66** + **hot path #388 / #399**.  
 Alcance: **solo motor** (agent loop, tools, SSE, contexto, checkpoints, créditos, sandbox, memory retrieve). UI sin cambios.
 
 Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Cada fila defiende un cambio medible. `unmeasured` incluye cómo medirla en la siguiente ola.
@@ -8,7 +8,7 @@ Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Ca
 | Capacidad | Métrica | Actual (3H63) | Target | Cómo medir |
 |---|---|---|---|---|
 | Multi-step loop sin intervención humana | `stoppedReason` ∈ {final, loop_oscillation_cut, loop_fingerprint_cut, max_iterations, loop_stall}; 0 prompts extra | **parcial / medido en tests** — `runAgentLoop` corre hasta 25 iteraciones; 3H60 corta A-B-A-B (`3H60-Q-001`) | 0 stalls silenciosos; corte < 4 oscilaciones | `node --test tests/ola-3h60-invariants.test.js tests/agent-runner.test.js` |
-| Tool-call schema estricto + repair | % llamadas reparadas vs drop; 400 nunca retry | **fail-closed** — 3H60 coerce + **3H66** `repairSingleQuotesAndCommentsInToolJson` / `repairUnquotedKeysInToolJson` / `coerceTrueFalseStringsToBool` / `coerceIntegerFromNumericString` / `repairEnumCaseInsensitive` / `repairMissingRequiredFromPriorTurn` en `loop.js` | 100 % args inválidos reparados o clasificados; 0 4xx retried | `3H66-B-001` / `3H60-A-001` |
+| Tool-call schema estricto + repair | % llamadas reparadas vs drop; 400 nunca retry | **fail-closed** — 3H60/3H66 coerce + **3H67** nombre/args (`rejectToolName*` / `rejectPrototypePollutionKeys` / `dropNullBytesInToolArgs` / `capToolArgKeys32`) en `loop.js` | 100 % args inválidos reparados o clasificados; 0 4xx retried | `3H67-B-001` / `3H66-B-001` / `3H60-A-001` |
 | Retry/backoff transitorio | delayMs determinista; cap 4 | **medido (unit)** — 503/429/timeout retry; 400 no | p95 retry ≤ 3.2 s; 0 retry en 4xx duro | `3H60-B-001` + logs `tool_transient_retry` |
 | Tolerancia partial/malformed | hold/drop de chunks incompletos | **fail-closed** — `concatenateSplitToolCallFragments` + `dropIncompleteTrailingToolCall` + repair JSON across chunks / newlines before execute | 0 JSON parcial ejecutado | `3H63-F-001` / `3H63-L-001` |
 | Planning + subtasks + step budget | steps heredados = parent−1, cap 12 | **fail-closed** — inherit + `minRemainingSubagentBudget1` + refuse si padre=0; abort nested/siblings on parent halt | 0 subagentes con budget 0 | `3H63-D-001` / `3H63-E-001` / `3H63-M-001` |
@@ -17,35 +17,37 @@ Comparación de referencia: Claude Code / Cowork en el *motor*, no en chrome. Ca
 | Relevance prune | Jaccard vs query; keepLast=4 | **medido (unit)** | prune solo overlap < 0.12 | `3H60-D-001` |
 | Memory recovery (pgvector pins) | facts `pin`/`score≥0.85` restaurados | **fail-closed** — 3H62 retrieve + **3H66** dedupe/sort/empty/zero-vector/cap-8 en loop + `retrieveMemoryForLoop` | 100 % pins recuperados post-compact; generate sin memoria si timeout | `3H66-D-001` / `3H62-H-001`; live: `retrieveMemoryForLoop` + compact |
 | Checkpoints + rollback real | snapshot bytes + restore on timeout/fail | **fail-closed** — 3H61 timeout rollback + 3H62 session persist/hydrate across restart | rollback restaura bytes previos; session ckpt sobrevive process restart | `3H61-B-001` / `3H62-G-001` / `3H62-M-001` |
-| Edit exact-diff + RAW + syntax revert | ---/+++ required; hash post-write; syntax revert; checksum since-read | **fail-closed** — 3H63 checksum + **3H66** NFC/NUL/control/UNC/symlink/2 MiB jail (uniqueness ≠ timeout) | 0 write inválido persistido; uniqueness ≠ timeout/syntax | `3H66-C-001` / `3H63-G-001` |
-| Sandbox stdout/stderr + timeout + cleanup | cap 64 KiB; cleanup + reap huérfanos `sira-sbx-*` | **fail-closed** — `loop.js` llama `sandboxTimeoutThenCleanup` + `sandboxReapOrphanWorkdirs` en timeout/abort; `local-sandbox` apply | 0 workdir huérfano post-timeout | `3H61-E-001` / `3H61-N-001` / `3H61-R-001` |
+| Edit exact-diff + RAW + syntax revert | ---/+++ required; hash post-write; syntax revert; checksum since-read | **fail-closed** — 3H63 checksum + 3H66 jail + **3H67** refuse `/etc` `/proc` `/sys` `/dev` `/boot` `/root` `/mnt` + dest dir missing + ckpt 1 MiB (uniqueness ≠ timeout) | 0 write inválido persistido; uniqueness ≠ timeout/syntax | `3H67-C-001` / `3H66-C-001` / `3H63-G-001` |
+| Sandbox stdout/stderr + timeout + cleanup | cap 64 KiB; cleanup + reap huérfanos `sira-sbx-*` | **fail-closed** — timeout/reap 3H61 + **3H67** ANSI strip + stdout/stderr/line/combined caps en loop + `local-sandbox` | 0 workdir huérfano post-timeout; stdio acotado | `3H67-F-001` / `3H61-E-001` / `3H61-N-001` |
 | SSE heartbeat | comment `: heartbeat` **sin** bump de seq | **medido (unit)** + wired `sse-writer.comment` | 0 seq increment en heartbeat | `3H60-G-001` |
-| SSE reconnect resume | replay events; persist Last-Event-ID; reject last > head **and going backwards** | **fail-closed** — persist + inclusive replay + reject-backwards + **Node e2e Last-Event-ID reconnect** (`3H64-D-001`) + **Node EventSource** contra mock generate (`3H65-H-001`); seq monotónico + skip heartbeat if write would block | 0 re-exec; 0 replay desde seq inválido o hacia atrás | `3H65-H-001` / `3H65-G-001` + 3H64-D-001 |
+| SSE reconnect resume | replay events; persist Last-Event-ID; reject last > head **and going backwards** | **fail-closed** — 3H64/3H65 + **3H67** drop comments / stale 2 min / cap 64 / restore cursor **sobre copia** (no clobber `cursorStore`) / parse int-only / `event: done` | 0 re-exec; 0 replay desde seq inválido o hacia atrás | `3H67-D-001` / `3H65-H-001` / `3H65-G-001` + 3H64-D-001 |
 | SSE cancel AbortController | abort + drop buffer + clear heartbeat | **fail-closed** — generate `sseCancelClearsHeartbeat` + writer done/close | 0 timers/listeners post-cancel | `3H61-J-001` + 3H59 L |
 | Cola por sesión + orden estricto | single-writer; gap detect; 503 after 60s; drop duplicate in-flight | **fail-closed** — generate path llama `acquireFairGenerateLock` / `queueMaxWait60sThen503` / `dropDuplicateInFlightGenerate` | 1 writer; 503 si espera ≥ 60 s; 0 duplicate in-flight | `3H63-B-001` / `3H63-C-001` |
 | Créditos exactos en cancel/error | settle usage real; Prisma ledger; never double-count; **partial-token refund**; success complete | **fail-closed** — 3H62 fail-ledger + `refundPartialTokensOnCancel` + live `completeLedgerTransaction` on success / cancel-after-tokens | 0 cargo si 0 tokens; 0 double settle; refund hold si cancel pre-completion | `3H63-I-001` / `3H63-R-001` + 3H62 I |
 | Errores clasificados ES | message ES; 0 stacks; 0 `sk-` | **fail-closed** — `classifyPublicLoopErrorClosed` en loop/onEvent | 0 stacks en payload público | `3H61-H-001` / `3H61-Q-001` |
-| Latencia p50/p95 first-token y end-of-turn | histogram scripted (nunca Flash inventado) | **fail-closed** — ring **persistido** JSONL + `observeAdapterLatency` / `adapterLatencySnapshot`; `GET /api/version/latency` (ola 3H66); test **lee** el ring (`3H66-J-001`) | p50/p95 reales bajo carga VPS ≥200 (mismo instrumento; **no medido como corpus**; no números inventados) | `3H66-J-001` / `3H65-I-001`; live: `adapterLatencySnapshot()` + ring file |
+| Latencia p50/p95 first-token y end-of-turn | histogram scripted (nunca Flash inventado) | **fail-closed** — ring **persistido** JSONL + `observeAdapterLatency` / `adapterLatencySnapshot`; `GET /api/version/latency` (ola 3H67); test **lee** el ring (`3H67-I-001`) | p50/p95 reales bajo carga VPS ≥200 (mismo instrumento; **no medido como corpus**; no números inventados) | `3H67-I-001` / `3H66-J-001` / `3H65-I-001`; live: `adapterLatencySnapshot()` + ring file |
 | DeepSeek only | refuse OpenRouter env/model | **medido** | 0 generate OpenRouter | `3H60-J-001` / `3H60-O-001` |
 
 ## Cómo correr el rubric
 
 ```bash
 cd backend
-node --test tests/ola-3h66-invariants.test.js tests/ola-3h65-invariants.test.js tests/ola-3h64-invariants.test.js tests/engine-hotpath-wire.test.js
+node --test tests/ola-3h67-invariants.test.js tests/ola-3h66-invariants.test.js tests/ola-3h65-invariants.test.js tests/engine-hotpath-wire.test.js
 node --test tests/sse-writer.test.js tests/public-stream-error.test.js tests/sandbox-local-and-router.test.js
 ```
 
 Carga real (p50/p95 first-token / end-of-turn): el ring **ya persiste** muestras de loop/generate (`observeAdapterLatency` + JSONL). Recolectar ≥ 200 muestras DeepSeek Flash/Pro en VPS leyendo `GET /api/version/latency` o `/tmp/siragpt-latency/*.jsonl`. El instrumento no inventa números Flash.
 
-## Lo que esta ola (3H66) mueve vs 3H65
+## Lo que esta ola (3H67) mueve vs 3H66
 
-3H65 cableó 33 helpers leftover (DAG/A-B-A, higiene args/result, rollback, 402/413, cola 16, SSE seq). 3H66 cablea **36 helpers #388** que seguían adapter-only: coerce/repair JSON, jail de path, retrieve de memoria, empty-model + caps, BOM/ventana/bash, idempotencia por call-id, close-SSE-then-settle + lock 90s. Sin nombres overlay que choquen con 3H59–3H65.
+3H66 cableó 36 helpers leftover (coerce JSON, jail de path, memory retrieve, empty/caps, BOM/bash, call-id, SSE lock). 3H67 cablea **36 helpers #388** que seguían adapter-only: higiene de nombre/args, refuse de writes a paths de sistema + dest dir + ckpt 1 MiB, replay SSE (comments/stale/64/restore/int-only/done), guards de plan, usage en error + drop de buffer, caps ANSI/stdio del sandbox. Sin nombres overlay que choquen con 3H59–3H66.
 
 ## Queda para la siguiente ola
 
 - p50/p95 first-token y end-of-turn **bajo carga VPS real** (el ring ya persiste y esta ola **lee** el ring en test; falta el corpus ≥ 200 de producción — no se inventaron números Flash).
 - Reconnect SSE e2e con **EventSource real en browser** (Node EventSource-semantics contra mock generate ya está: `3H65-H-001`).
+- Compact leftover aún adapter-only: `compactKeepLastUserAssistantPair` / `capCompactSummary2KiB` / `compactDropStaleImageBlocks` / `dropToolResultsOlderThan6Steps`.
+- Plan leftover no cableado: `markPlanStepFailedIfToolErrorTwice` / `refuseSubagentIfSameToolAsParent`.
 
 ## Hot path #388 / #399
 

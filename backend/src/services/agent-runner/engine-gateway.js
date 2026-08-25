@@ -843,6 +843,24 @@ async function governThen(input, run) {
         if (typeof ad.neverChargeIfCancelledBeforeFirstToken === 'function' && input) {
           ad.neverChargeIfCancelledBeforeFirstToken({ cancelled: input.cancelled, firstToken: input.firstToken, firstByteAt: input.firstByteAt, tokens: input.tokens });
         }
+        try {
+          const w67cr = require('./engine-3h67');
+          if (typeof w67cr.applyCreditErrorPathClosed === 'function') {
+            w67cr.applyCreditErrorPathClosed({
+              usage: {
+                promptTokens: input.promptTokens,
+                completionTokens: input.completionTokens,
+                totalTokens: input.totalTokens,
+              },
+              error: input.error || input,
+              noCompletion: Boolean(input.error || input.cancelled),
+              aborted: input.cancelled === true || input.aborted === true,
+              buffer: input.buffer || input.bufferedTokens,
+              recordTokenUsageOnErrorPath: ad.recordTokenUsageOnErrorPath,
+              cancelDropsBufferedTokens: ad.cancelDropsBufferedTokens,
+            });
+          }
+        } catch (_) { /* 3H67 credit error-path fail-open */ }
         if (typeof ad.accountPartialTokensOnCancel === 'function' && input && input.cancelled) {
           ad.accountPartialTokensOnCancel({
             cancelled: true,
