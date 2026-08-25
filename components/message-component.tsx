@@ -24,6 +24,8 @@ function prewarmUnifiedDocumentPreview(attachment: AttachmentLike): void {
     }).catch(() => { /* noop */ })
 }
 import { FileProcessingBadge } from "@/components/file-processing-badge"
+import { DocumentPageThumb } from "@/components/document-page-thumb"
+import { isPagePreviewDocument } from "@/lib/document-first-page"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -703,7 +705,9 @@ const MessageDocChipsInner = ({
 
     return (
         <div className="mb-2 flex w-full max-w-[min(92vw,36rem)] flex-wrap justify-end gap-2">
-            {attachments.map((att, i) => (
+            {attachments.map((att, i) => {
+                const showPage = isPagePreviewDocument(att.name, att.mimeType);
+                return (
                 <button
                     key={att.id || i}
                     type="button"
@@ -714,23 +718,38 @@ const MessageDocChipsInner = ({
                             setIdx(i);
                         }
                     }}
-                    className="group/chip inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60 sm:max-w-[360px]"
+                    className={cn(
+                        "group/chip text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:shadow-sm",
+                        showPage
+                            ? "w-[5.7rem] overflow-hidden rounded-[0.9rem] border border-gray-200 bg-background dark:border-border/60"
+                            : "inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-sm dark:border-border/60 sm:max-w-[360px]",
+                    )}
                     aria-label={`Abrir ${att.name}`}
                 >
-                    {getDocumentChipIcon(att.name)}
-                    <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
-                        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
-                            {/* Same state-machine badge the composer chip uses
-                                — kept here so that re-opening an old chat
-                                still reflects whether the document finished
-                                indexing (or failed loudly with the reason). */}
-                            <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
-                        </span>
-                    </span>
+                    {showPage ? (
+                        <>
+                            <span className="block h-[7.4rem] w-full">
+                                <DocumentPageThumb source={att} />
+                            </span>
+                            <span className="block truncate px-1.5 py-1 text-[10.5px] font-medium leading-tight text-foreground">
+                                {att.name}
+                            </span>
+                        </>
+                    ) : (
+                        <>
+                            {getDocumentChipIcon(att.name)}
+                            <span className="flex min-w-0 flex-col">
+                                <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
+                                <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                                    <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
+                                    <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
+                                </span>
+                            </span>
+                        </>
+                    )}
                 </button>
-            ))}
+                );
+            })}
             {!onAttachmentPreview && (
                 <UnifiedDocumentViewer
                     open={idx !== null}

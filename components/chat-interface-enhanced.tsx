@@ -117,6 +117,8 @@ import {
   shouldShowComposerExpandControl,
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
+import { DocumentPageThumb } from "@/components/document-page-thumb"
+import { isPagePreviewDocument } from "@/lib/document-first-page"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
 import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
@@ -1975,7 +1977,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
           const isAudio = (file.type || '').startsWith('audio/');
           const isVideo = (file.type || '').startsWith('video/');
+          const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
+            && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
+          const docBusy = isUploading || file.status === 'processing';
           const handleReorder = (delta: -1 | 1) => {
             if (!moveFile) return;
             const target = index + delta;
@@ -1998,7 +2003,9 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 isFailed ? "border-red-300 dark:border-red-700/50" : "border-border/70",
                 isImage
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
-                  : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
+                  : isDocPage
+                    ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                    : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
@@ -2069,6 +2076,36 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     )}
                   </div>
 
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isDocPage ? (
+                <>
+                  <DocumentPageThumb
+                    source={{
+                      id: file.id,
+                      name: file.name,
+                      mimeType: file.type || file.mimeType,
+                      size: file.size,
+                      file: getAttachmentLocalFile(file),
+                      url: file.url,
+                    }}
+                    busy={docBusy}
+                    progress={isUploading ? progress : null}
+                    label={isUploading
+                      ? `Subiendo · ${Math.round(progress)}%`
+                      : file.status === 'processing'
+                        ? INDEXING_STATUS_LABEL
+                        : undefined}
+                  />
                   <Button
                     variant="ghost"
                     size="sm"
