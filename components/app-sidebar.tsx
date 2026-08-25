@@ -227,6 +227,12 @@ const NAV_ROW_ACTIVE =
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
 const HEADER_ICON_BTN =
   "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
+const SIDEBAR_TAB =
+  "inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors"
+const SIDEBAR_TAB_ON =
+  "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
+const SIDEBAR_TAB_OFF =
+  "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
 const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
 const RECENT_TOOLBAR_ICON =
@@ -1177,10 +1183,9 @@ export function AppSidebar() {
                 aria-label="Chats"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
-                  "inline-flex h-7 items-center justify-center gap-1.5 rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors",
-                  sidebarMode === "chat"
-                    ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
-                    : "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100",
+                  SIDEBAR_TAB,
+                  "gap-1.5",
+                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0" />
@@ -1193,10 +1198,8 @@ export function AppSidebar() {
                 aria-label="Empresas"
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
-                  "inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors",
-                  sidebarMode === "code"
-                    ? "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
-                    : "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100",
+                  SIDEBAR_TAB,
+                  sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >
                 <span>Empresas</span>

@@ -52,7 +52,7 @@ describe("app sidebar recent-chats toolbar source contract", () => {
   it("puts live search and the filter popover on the Chats recientes toolbar", () => {
     const toolbarStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
     assert.ok(toolbarStart > 0, "recent-chats toolbar id must exist")
-    const toolbar = source.slice(toolbarStart, toolbarStart + 6500)
+    const toolbar = source.slice(toolbarStart, source.indexOf('id="sidebar-recent-chats-content"'))
     assert.match(toolbar, /data-sidebar-recent-toolbar="1"/)
     assert.match(toolbar, /data-sidebar-recent-search="1"/)
     assert.match(toolbar, /data-sidebar-recent-filter="1"/)
