@@ -1155,38 +1155,17 @@ export function AppSidebar() {
               <button
                 type="button"
                 role="tab"
-                aria-selected={sidebarMode === "chat" && !isOnConnectAppsPage}
+                aria-selected={sidebarMode === "chat"}
                 aria-label="Agentes"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
                   SIDEBAR_TAB,
-                  "gap-1",
-                  sidebarMode === "chat" && !isOnConnectAppsPage ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
+                  "gap-1.5",
+                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >
                 <MessageSquare className="h-3.5 w-3.5 shrink-0" />
                 <span>Agentes</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                data-testid="sidebar-apps-tab"
-                aria-selected={isOnConnectAppsPage && sidebarMode !== "code"}
-                aria-label="Apps"
-                onClick={() => {
-                  setSidebarMode("chat")
-                  try { window.localStorage.setItem("sira:sidebar:mode", "chat") } catch { /* ignore */ }
-                  navigate("/conexiones", "Apps")
-                  closeMobileSidebar()
-                }}
-                className={cn(
-                  SIDEBAR_TAB,
-                  "gap-1",
-                  isOnConnectAppsPage && sidebarMode !== "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
-                )}
-              >
-                <Plug className="h-3.5 w-3.5 shrink-0" />
-                <span>Apps</span>
               </button>
               <button
                 type="button"
@@ -1196,7 +1175,6 @@ export function AppSidebar() {
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
                   SIDEBAR_TAB,
-                  "gap-1",
                   sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
                 )}
               >
@@ -1346,6 +1324,19 @@ export function AppSidebar() {
             onNavigate={closeMobileSidebar}
           />
 
+          <SidebarNavItem
+            href="/conexiones"
+            label="Apps"
+            tooltip="Apps"
+            icon={Plug}
+            active={isOnConnectAppsPage}
+            pending={isPendingRoute("/conexiones")}
+            sidebarState={state}
+            markNavigationIntent={markNavigationIntent}
+            prefetchOnHover={prefetchOnHover}
+            navigate={navigate}
+            onNavigate={closeMobileSidebar}
+          />
 
           {/* Projects — file-bucket workspaces. Placed right after GPTs
               because both are "context-rich chat entry points": GPTs
