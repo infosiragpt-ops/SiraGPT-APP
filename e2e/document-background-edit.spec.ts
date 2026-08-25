@@ -331,7 +331,7 @@ test("recovers a persisted batch edit after reload and downloads both isolated D
   await page.setViewportSize({ width: 1440, height: 900 })
   const task = await installDocumentTaskApi(page)
 
-  await page.goto(`/chat?id=${CHAT_ID}`, { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.goto(`/agentes?id=${CHAT_ID}`, { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect.poll(task.evidence.pendingRequests, { timeout: 120_000 }).toBeGreaterThan(0)
   await expect.poll(task.evidence.eventRequests, { timeout: 120_000 }).toBeGreaterThan(0)
 

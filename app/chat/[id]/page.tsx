@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation"
 
-import { chatSearchToAgentsHome } from "@/lib/agents-home-path"
+import { agentsHomeHref } from "@/lib/agents-home-path"
 
 /**
- * `/chat` is a compatibility alias. The product noun is «agentes».
- * Query (including chat id) is preserved; the browser keeps the hash.
+ * `/chat/:id` is a compatibility alias of `/agentes/:id`.
+ * The product noun is «agentes», not «chat».
  */
 type Search = Record<string, string | string[] | undefined>
 
@@ -22,11 +22,14 @@ function flattenSearch(searchParams: Search | undefined): URLSearchParams {
   return params
 }
 
-export default async function ChatRedirectPage({
+export default async function ChatIdRedirectPage({
+  params,
   searchParams,
 }: {
+  params: Promise<{ id: string }> | { id: string }
   searchParams?: Promise<Search> | Search
 }) {
+  const resolved = await Promise.resolve(params)
   const sp = flattenSearch(await Promise.resolve(searchParams || {}))
-  redirect(chatSearchToAgentsHome(sp))
+  redirect(agentsHomeHref(sp, null, resolved.id))
 }

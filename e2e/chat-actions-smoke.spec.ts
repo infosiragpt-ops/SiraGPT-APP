@@ -27,7 +27,7 @@ function isChatPage(url: string): boolean {
 }
 
 async function settleOnChat(page: import("@playwright/test").Page): Promise<boolean> {
-  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
   await page.waitForTimeout(2500)
   if (!isChatPage(page.url())) {

@@ -10,7 +10,7 @@ export function ChatEmpresaFab({ className }: { className?: string }) {
   const router = useRouter()
   const onEmpresa = pathname === "/code" || pathname.startsWith("/code/")
   const label = onEmpresa ? "Chat" : "Empresa"
-  const href = onEmpresa ? "/chat" : "/code"
+  const href = onEmpresa ? "/agentes" : "/code"
   const Icon = onEmpresa ? MessageSquareText : Building2
 
   return (

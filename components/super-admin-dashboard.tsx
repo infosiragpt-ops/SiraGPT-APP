@@ -162,7 +162,7 @@ export function SuperAdminDashboard() {
         if (loginSuccess) {
           toast.success(`Successfully logged in as ${targetUser.name}`)
           // Redirect to chat interface as that user
-          router.push('/chat')
+          router.push('/agentes')
         } else {
           toast.error('Failed to access user account')
         }

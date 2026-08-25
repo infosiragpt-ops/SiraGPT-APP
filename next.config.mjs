@@ -136,12 +136,17 @@ const nextConfig = {
     return [
       {
         source: '/chat',
-        destination: '/',
+        destination: '/agentes',
         permanent: false,
       },
       {
         source: '/chat/',
-        destination: '/',
+        destination: '/agentes',
+        permanent: false,
+      },
+      {
+        source: '/chat/:id',
+        destination: '/agentes/:id',
         permanent: false,
       },
     ]

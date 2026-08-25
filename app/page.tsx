@@ -1,6 +1,8 @@
 import type { Metadata } from "next"
 import { AgentsHomeGate } from "@/components/agents-home-gate"
 
+/** `/` is marketing for guests. Authenticated members redirect to `/agentes`. */
+
 export const metadata: Metadata = {
   title: "SiraGPT — Plataforma de IA Multimodal",
   description:

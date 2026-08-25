@@ -28,6 +28,7 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- Canonical product URL is `/agentes` (https://siragpt.com/agentes). Authenticated `/` redirects to `/agentes` so guests still see marketing on `/`; `/chat` and `/chat/:id` keep query/hash/id and land on `/agentes`. Same chat chrome; per-conversation computer overlay fail-closes if isolation is missing.
 - Engine 3H60 (no UI): 32 fail-open helpers after 3H59 — tool-arg coerce/fence/enum
   + transient retry, A-B-A-B oscillation cut, faithful compact + query prune +
   pinned-memory recover, file-byte checkpoint / read-after-write hash / syntax

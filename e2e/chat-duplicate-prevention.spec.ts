@@ -14,7 +14,7 @@ test.describe("duplicate message prevention", () => {
     // Note: This test assumes an authenticated session or test user.
     // In CI it may need to be skipped or use a seeded test account.
 
-    await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 });
 
     // Wait for the chat interface to be ready
     const composer = page.locator('textarea[placeholder*="Escribe"], textarea[aria-label*="mensaje"], [data-testid="chat-composer"]').first();

@@ -239,7 +239,7 @@ function ProfileContent() {
       <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 px-4 pb-28 pt-5 sm:px-6 sm:pb-6 lg:px-8 lg:py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <Button asChild variant="ghost" size="sm" className="h-10 rounded-md px-3 text-neutral-600 hover:bg-white hover:text-neutral-950">
-            <Link href="/chat">
+            <Link href="/agentes">
               <ArrowLeft className="h-4 w-4" />
               {tset("backToChat")}
             </Link>

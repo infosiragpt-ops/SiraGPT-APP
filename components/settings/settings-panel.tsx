@@ -320,7 +320,7 @@ export function SettingsPanel({
       <div className="max-w-[1240px] mx-auto px-4 py-6">
         {/* Top bar — back + save indicator */}
         <div className="flex items-center justify-between mb-6">
-          <Link href="/chat">
+          <Link href="/agentes">
             <Button variant="ghost" size="sm" className="gap-2 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="h-4 w-4" />
               {t("backToChat")}
@@ -1676,7 +1676,7 @@ function CoworkSection() {
     <>
       <SectionCard title="Cowork" desc="Workspace, archivos y tareas del agente">
         <Row title="Abrir en el chat">
-          <Link href="/chat" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
+          <Link href="/agentes" className="text-sm text-primary hover:underline inline-flex items-center gap-1">
             Chat <ExternalLink className="h-3.5 w-3.5" />
           </Link>
         </Row>

@@ -163,7 +163,7 @@ async function openMobileChat(
 
   page.on("pageerror", onPageError)
   try {
-    await page.goto("/chat?id=mobile-chat", { waitUntil: "commit", timeout: 120_000 })
+    await page.goto("/agentes?id=mobile-chat", { waitUntil: "commit", timeout: 120_000 })
     try {
       await waitForMobileChatShell(page, 60_000)
     } catch (error) {

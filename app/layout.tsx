@@ -31,6 +31,7 @@ const NON_CANONICAL_PREFIXES = [
   "/billing",
   "/share",
   "/chat",
+  "/agentes",
   "/projects",
   "/settings",
   "/library",

@@ -32,7 +32,7 @@ function PaymentCancelContent() {
   // Stripe en vez de dejarlo en un callejón sin salida. Si no, a los planes.
   const handleRetry = async () => {
     if (!plan) {
-      router.push('/chat')
+      router.push('/agentes')
       return
     }
     try {
@@ -47,7 +47,7 @@ function PaymentCancelContent() {
         router.push('/auth/login')
       } else {
         toast.error('No pudimos reabrir el pago. Vuelve a intentarlo desde la app.')
-        router.push('/chat')
+        router.push('/agentes')
       }
     } finally {
       setRetrying(false)
@@ -116,7 +116,7 @@ function PaymentCancelContent() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => router.push('/chat')}
+            onClick={() => router.push('/agentes')}
             className={`h-11 w-full rounded-md ${styles.secondaryButton}`}
           >
             Seguir en el plan gratis

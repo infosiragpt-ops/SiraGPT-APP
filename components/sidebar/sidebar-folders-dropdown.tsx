@@ -447,7 +447,7 @@ export function SidebarFoldersDropdown({ collapsed, onMobileNavigate }: Props) {
   const handleOpenChat = React.useCallback(
     (chatId: string) => {
       selectChat(chatId)
-      router.push(`/chat?id=${encodeURIComponent(chatId)}`)
+      router.push(`/agentes?id=${encodeURIComponent(chatId)}`)
       onMobileNavigate?.()
     },
     [onMobileNavigate, router, selectChat],

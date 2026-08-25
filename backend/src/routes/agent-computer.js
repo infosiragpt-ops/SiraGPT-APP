@@ -7,6 +7,13 @@ const { authenticateToken } = require('../middleware/auth');
 const { agentComputerEnabled } = require('../services/computer/flags');
 const { orchFetch, rewriteUrls, resolveOrchConfig } = require('../services/computer/orch-client');
 const { memberKey, resolveSessionIdentity } = require('../services/computer/member-key');
+const {
+  ISOLATION_REFUSED_ES,
+  OPEN_FAILED_ES,
+  publicComputerError,
+  isolationError,
+  sessionMatchesConversation,
+} = require('../services/computer/conversation-isolation');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -47,15 +54,29 @@ function withConversation(desktop, identity) {
 
 async function ensureMemberDesktop(req) {
   const identity = identityFor(req);
+  if (identity.conversationId && !identity.conversationBound) {
+    throw isolationError();
+  }
   const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId } });
+  const orchUser = String((desktop && desktop.userId) || identity.userId);
+  if (identity.conversationBound && orchUser !== String(identity.userId)) {
+    throw isolationError();
+  }
   return rewriteUrls(withConversation({ ...desktop, userId: desktop.userId || identity.userId }, identity));
 }
 
 function ownedOrDeny(session, req, res) {
   const identity = identityFor(req);
+  if (identity.conversationBound) {
+    if (!sessionMatchesConversation(session, identity)) {
+      res.status(403).json({ error: 'isolation_required', message: ISOLATION_REFUSED_ES });
+      return false;
+    }
+    return true;
+  }
   const want = identity.userId || memberKey({ id: memberId(req) });
-  if (!session || (session.userId && String(session.userId) !== String(want) && String(session.userId) !== String(identity.memberKey))) {
-    res.status(403).json({ error: 'forbidden' });
+  if (!session || (session.userId && String(session.userId) !== String(want))) {
+    res.status(403).json({ error: 'forbidden', message: OPEN_FAILED_ES });
     return false;
   }
   return true;
@@ -76,18 +97,28 @@ router.post('/sessions', requireFlag, authenticateToken, async (req, res) => {
     const desktop = await ensureMemberDesktop(req);
     return res.status(desktop.reused ? 200 : 201).json(desktop);
   } catch (err) {
-    return res.status(err.status || 500).json({ error: err.code || 'create_failed', message: err.message });
+    return res.status(err.status || 500).json({
+      error: err.code || 'create_failed',
+      message: publicComputerError(err, err.code === 'isolation_required' ? ISOLATION_REFUSED_ES : OPEN_FAILED_ES),
+    });
   }
 });
 
+function failComputer(res, err, fallbackCode) {
+  return res.status(err.status || 500).json({
+    error: err.code || fallbackCode,
+    message: publicComputerError(err, err.code === 'isolation_required' ? ISOLATION_REFUSED_ES : OPEN_FAILED_ES),
+  });
+}
+
 router.get('/desktop', requireFlag, authenticateToken, async (req, res) => {
   try { return res.json(await ensureMemberDesktop(req)); }
-  catch (err) { return res.status(err.status || 500).json({ error: 'get_failed', message: err.message }); }
+  catch (err) { return failComputer(res, err, 'get_failed'); }
 });
 
 router.get('/sessions/me', requireFlag, authenticateToken, async (req, res) => {
   try { return res.json(await ensureMemberDesktop(req)); }
-  catch (err) { return res.status(err.status || 500).json({ error: 'get_failed', message: err.message }); }
+  catch (err) { return failComputer(res, err, 'get_failed'); }
 });
 
 router.get('/sessions/:id', requireFlag, authenticateToken, async (req, res) => {
@@ -96,7 +127,10 @@ router.get('/sessions/:id', requireFlag, authenticateToken, async (req, res) => 
     if (!ownedOrDeny(session, req, res)) return;
     return res.json(withConversation(session, identityFor(req)));
   } catch (err) {
-    return res.status(err.status || 500).json({ error: 'get_failed', message: err.message });
+    return res.status(err.status || 500).json({
+      error: err.code || 'get_failed',
+      message: publicComputerError(err, err.code === 'isolation_required' ? ISOLATION_REFUSED_ES : OPEN_FAILED_ES),
+    });
   }
 });
 
@@ -120,10 +154,13 @@ function sessionContainer(session) {
 }
 
 async function handleAction(req, res, session) {
+  const identity = identityFor(req);
+  if (identity.conversationBound && !sessionMatchesConversation(session, identity)) {
+    throw isolationError();
+  }
   const focus = String((req.body && (req.body.focus || req.body.app)) || '').trim().toLowerCase();
   if (focus && FOCUS_CMDS[focus]) {
     const out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus]);
-    const identity = identityFor(req);
     return res.json({
       ok: true,
       focus,
@@ -144,7 +181,7 @@ async function handleAction(req, res, session) {
 
 router.post('/action', requireFlag, authenticateToken, async (req, res) => {
   try { return await handleAction(req, res, await ensureMemberDesktop(req)); }
-  catch (err) { return res.status(err.status || 500).json({ error: 'action_failed', message: err.message }); }
+  catch (err) { return failComputer(res, err, 'action_failed'); }
 });
 
 router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, res) => {
@@ -153,7 +190,7 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
     if (!ownedOrDeny(session, req, res)) return;
     return await handleAction(req, res, session);
   } catch (err) {
-    return res.status(err.status || 500).json({ error: 'action_failed', message: err.message });
+    return failComputer(res, err, 'action_failed');
   }
 });
 

@@ -146,7 +146,7 @@ export function PublishPipeline({
     } catch {
       /* ignore blocked storage; navigation still works */
     }
-    window.location.assign("/chat")
+    window.location.assign("/agentes")
   }
 
   return (

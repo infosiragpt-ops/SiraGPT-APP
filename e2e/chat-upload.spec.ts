@@ -9,7 +9,7 @@ function isBootstrapOrAuthText(text: string) {
 }
 
 test("chat upload picker accepts .xlsx and excludes legacy .xls when the composer is mounted", async ({ page }) => {
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
     response!.ok() || (response!.status() >= 300 && response!.status() < 400),
@@ -45,7 +45,7 @@ test("chat route does not throw browser page errors during first paint", async (
   const pageErrors: string[] = []
   page.on("pageerror", (error) => pageErrors.push(error.message))
 
-  await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
   await page.waitForTimeout(500)
 

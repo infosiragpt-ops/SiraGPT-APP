@@ -87,6 +87,12 @@ async function ensureMemberDesktop(conversationId?: string | null): Promise<Agen
     )
   }
   const session = body as AgentSession
+  if (chatId && session.conversationBound === false) {
+    throw Object.assign(
+      new Error("No se pudo aislar la computadora de esta conversación."),
+      { status: 409, body, isolationRequired: true },
+    )
+  }
   sessionCache.set(key, session)
   return session
 }
@@ -143,8 +149,10 @@ export function DepartmentComputerPane({
     let cancelled = false
     setError(null)
     const cached = sessionCache.get(cacheKey(chatId || null)) ?? null
-    if (!cached) setLoading(true)
-    else {
+    if (!cached) {
+      setSession(null)
+      setLoading(true)
+    } else {
       setSession(cached)
       setLoading(false)
     }
@@ -175,10 +183,11 @@ export function DepartmentComputerPane({
   }, [chatId])
 
   const isolationNote = missingSessionKey
-    ? "Aislamiento por chat pendiente · falta session key en el backend · escritorio del miembro"
+    ? "No se pudo aislar la computadora de esta conversación."
     : bound
       ? `Conversación ${chatId}`
       : "una máquina por miembro · noVNC"
+  const attachUrl = bound || !chatId ? embedUrl : ""
 
   return (
     <section
@@ -223,17 +232,17 @@ export function DepartmentComputerPane({
 
       {missingSessionKey ? (
         <p
-          className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[10px] text-amber-100"
+          className="shrink-0 border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[10px] text-red-100"
           data-testid="chat-computer-isolation-gap"
-          role="status"
+          role="alert"
         >
-          Aislamiento por chat pendiente · falta session key en el backend
+          No se pudo aislar la computadora de esta conversación.
         </p>
       ) : null}
 
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
-        {embedUrl ? (
-          <ComputerViewer url={embedUrl} className="absolute inset-0 h-full w-full min-h-0" />
+        {attachUrl ? (
+          <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div className="flex flex-col items-center gap-2">

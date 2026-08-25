@@ -177,7 +177,7 @@ export default function ProjectDetailPage() {
       } catch {
         /* private-mode / quota-exceeded — non-fatal, worst case is a lost draft */
       }
-      router.push(`/chat?id=${chat.id}`)
+      router.push(`/agentes?id=${chat.id}`)
     } catch (err: any) {
       toast.error(err?.message || t("launchFailed"))
       setLaunching(false)
@@ -185,7 +185,7 @@ export default function ProjectDetailPage() {
   }
 
   function openRecentChat(chatId: string) {
-    router.push(`/chat?id=${chatId}`)
+    router.push(`/agentes?id=${chatId}`)
   }
 
   async function handleComposerFiles(files: FileList | null) {

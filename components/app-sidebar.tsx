@@ -463,7 +463,7 @@ export function AppSidebar() {
   }, [isMobile, setOpenMobile])
   const markNewChatIntent = React.useCallback(() => {
     setNewChatPending(true)
-    markSharedNavigationIntent("/chat", t("newChat"))
+    markSharedNavigationIntent("/agentes", t("newChat"))
   }, [markSharedNavigationIntent, t])
   const [upgradeOpen, setUpgradeOpen] = React.useState(false)
   const [searchOpen, setSearchOpen] = React.useState(false)
@@ -842,7 +842,7 @@ export function AppSidebar() {
 
     const hasQuery = typeof window !== "undefined" && window.location.search.length > 0
     if (!isAgentsHomePath(pathname) || hasQuery) {
-      startNavTransition(() => { router.replace('/', { scroll: false }) })
+      startNavTransition(() => { router.replace('/agentes', { scroll: false }) })
     } else {
       window.setTimeout(clearNavigationIntent, 0)
     }
@@ -953,7 +953,7 @@ export function AppSidebar() {
       const data = await response.json().catch(() => ({}))
       if (!response.ok || !data?.chat?.id) throw new Error(data?.error || "No se pudo abrir el GPT")
       localStorage.setItem("currentChatId", data.chat.id)
-      markSharedNavigationIntent("/", data.chat?.title || "Chat")
+      markSharedNavigationIntent("/agentes", data.chat?.title || "Chat")
       router.push(agentsHomeHref(`id=${data.chat.id}`), { scroll: false })
       if (isMobile) setOpenMobile(false)
     } catch (error) {
@@ -962,7 +962,7 @@ export function AppSidebar() {
   }
 
   const handleChatClick = (chatId: string) => {
-    markSharedNavigationIntent("/", "Chat")
+    markSharedNavigationIntent("/agentes", "Chat")
     selectChat(chatId)
     // Navigate to agents home if not already there
     if (!isAgentsHomePath(pathname)) {

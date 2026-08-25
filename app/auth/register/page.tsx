@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Separator } from "@/components/ui/separator"
+import { AGENTS_HOME_PATH, postAuthAgentsHref } from "@/lib/agents-home-path"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { getNormalizedApiBaseUrl } from "@/lib/api"
 import { useBackendReady } from "@/lib/use-backend-ready"
@@ -28,15 +29,7 @@ type FieldErrors = {
 }
 
 function safeAuthRedirect(raw: string | null) {
-  const value = String(raw || "").trim()
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/"
-  try {
-    const url = new URL(value, "https://siragpt.local")
-    if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return "/"
-    return `${url.pathname}${url.search}${url.hash}` || "/"
-  } catch (_error) {
-    return "/"
-  }
+  return postAuthAgentsHref(raw)
 }
 
 function RegisterPageContent() {
@@ -61,7 +54,7 @@ function RegisterPageContent() {
     () => safeAuthRedirect(searchParams.get("next")),
     [searchParams],
   )
-  const loginHref = postRegisterRedirect === "/"
+  const loginHref = postRegisterRedirect === AGENTS_HOME_PATH
     ? "/auth/login"
     : `/auth/login?next=${encodeURIComponent(postRegisterRedirect)}`
 
