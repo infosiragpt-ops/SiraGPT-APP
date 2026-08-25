@@ -24,6 +24,12 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { throwIfAborted } = require('../../../utils/abort-signals');
+const { clampComputerPoint, normalizeComputerButton, throwIfComputerActionAborted } = require('../../computer-use-action-mapper');
+const {
+  applyRefuseComputerToolsClosed,
+  applyScreenshotNoChargeClosed,
+  applySandboxAbortCleanupClosed,
+} = require('../../computer/computer-code-guard');
 
 const pexecFile = promisify(execFile);
 
@@ -171,7 +177,11 @@ async function createComputerDriver({ env = process.env, signal, kind } = {}) {
  * Xvfb. The first computer_* call materialises the driver; the F7 cleanup
  * destroys it.
  */
-function makeComputerExecutors({ env = process.env, driver = null } = {}) {
+function loadAdapter() {
+  try { return require('../engine-adapter'); } catch (_) { return null; }
+}
+
+function makeComputerExecutors({ env = process.env, driver = null, userId, sessionId, session, computerEnabled } = {}) {
   let instance = driver;
   let creating = null;
   const getDriver = async (signal) => {
@@ -183,9 +193,61 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
     return creating;
   };
 
+  function refuseOrThrow(toolName, extra = {}) {
+    const ad = loadAdapter();
+    const uid = extra.userId != null ? extra.userId : userId;
+    const sid = extra.sessionId != null ? extra.sessionId : sessionId;
+    const sess = extra.session || session;
+    if (ad && typeof ad.refuseComputerToolsIfNoUserId === 'function') {
+      ad.refuseComputerToolsIfNoUserId({ toolName, userId: uid });
+    }
+    if (ad && typeof ad.refuseComputerToolsIfSessionMissing === 'function') {
+      ad.refuseComputerToolsIfSessionMissing({ toolName, sessionId: sid, session: sess });
+    }
+    const guard = applyRefuseComputerToolsClosed({
+      toolName,
+      userId: uid,
+      sessionId: sid,
+      session: sess,
+      computerEnabled: computerEnabled !== false,
+      refuseComputerToolsIfFlagOff: ad && ad.refuseComputerToolsIfFlagOff,
+      refuseComputerToolsIfNoUserId: uid ? ad && ad.refuseComputerToolsIfNoUserId : undefined,
+      refuseComputerToolsIfSessionMissing: (sid || sess)
+        ? ad && ad.refuseComputerToolsIfSessionMissing
+        : undefined,
+    });
+    if (guard && guard.ok === false) {
+      const err = new Error(guard.message || guard.code);
+      err.code = guard.code;
+      throw err;
+    }
+    return guard;
+  }
+
+  function cleanupOnAbort(signal, started, timeoutMs) {
+    const ad = loadAdapter();
+    applySandboxAbortCleanupClosed({
+      aborted: !!(signal && signal.aborted),
+      elapsedMs: Date.now() - started,
+      timeoutMs,
+      sandboxTimeoutThenCleanup: ad && ad.sandboxTimeoutThenCleanup,
+      sandboxFinallyCleanupOnAbort: ad && ad.sandboxFinallyCleanupOnAbort,
+      sandboxTmpCleanupOnTimeout: ad && ad.sandboxTmpCleanupOnTimeout,
+    });
+  }
+
   const executors = {
     async computer_screenshot(args = {}, { signal } = {}) {
       throwIfAborted(signal);
+      throwIfComputerActionAborted(signal);
+      refuseOrThrow('computer_screenshot', args);
+      const ad = loadAdapter();
+      applyScreenshotNoChargeClosed({
+        tools: [{ name: 'computer_screenshot' }],
+        screenshotOnly: true,
+        screenshotOnlyNoCharge: ad && ad.screenshotOnlyNoCharge,
+      });
+      const started = Date.now();
       let drv;
       try {
         drv = await getDriver(signal);
@@ -202,10 +264,20 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
       } catch (err) {
         if (signal?.aborted) throw err;
         return `ERROR: captura de pantalla falló: ${err?.message || err}`;
+      } finally {
+        cleanupOnAbort(signal, started, 15_000);
       }
     },
     async computer_click(args = {}, { signal } = {}) {
       throwIfAborted(signal);
+      throwIfComputerActionAborted(signal);
+      refuseOrThrow('computer_click', args);
+      const btn = normalizeComputerButton(args.button);
+      if (!btn.ok && args.button != null && String(args.button).trim()) {
+        return `ERROR: computer_button_invalid`;
+      }
+      const pt = clampComputerPoint(args.x, args.y);
+      const started = Date.now();
       let drv;
       try {
         drv = await getDriver(signal);
@@ -214,16 +286,21 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
         return `ERROR: ${err?.message || err}`;
       }
       try {
-        const res = await drv.click(args, { signal });
+        const res = await drv.click({ ...args, x: pt.x, y: pt.y, button: btn.button }, { signal });
         return JSON.stringify(res);
       } catch (err) {
         if (signal?.aborted) throw err;
         return `ERROR: click falló: ${err?.message || err}`;
+      } finally {
+        cleanupOnAbort(signal, started, 10_000);
       }
     },
     async computer_type(args = {}, { signal } = {}) {
       throwIfAborted(signal);
+      throwIfComputerActionAborted(signal);
+      refuseOrThrow('computer_type', args);
       if (!String(args.text || '').length) return 'ERROR: computer_type requiere `text`.';
+      const started = Date.now();
       let drv;
       try {
         drv = await getDriver(signal);
@@ -232,11 +309,13 @@ function makeComputerExecutors({ env = process.env, driver = null } = {}) {
         return `ERROR: ${err?.message || err}`;
       }
       try {
-        const res = await drv.type(args, { signal });
+        const res = await drv.type({ ...args, text: String(args.text || '').slice(0, MAX_TYPE_CHARS) }, { signal });
         return JSON.stringify(res);
       } catch (err) {
         if (signal?.aborted) throw err;
         return `ERROR: escritura falló: ${err?.message || err}`;
+      } finally {
+        cleanupOnAbort(signal, started, 30_000);
       }
     },
   };

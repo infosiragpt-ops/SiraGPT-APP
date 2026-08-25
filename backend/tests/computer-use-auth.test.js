@@ -461,3 +461,38 @@ describe('Computer Use WebSocket active-session authentication', { concurrency: 
     assert.equal(closed.reason, 'account_deleted');
   });
 });
+
+describe('code computer isolation + no-charge + refuse-if-no-session', () => {
+  const guard = require('../src/services/computer/computer-code-guard');
+  const ad = require('../src/services/agent-runner/engine-adapter');
+  const { resolveSessionIdentity } = require('../src/services/computer/member-key');
+
+  test('refuse attach when isolation cannot be proven (Spanish, no sk-)', () => {
+    assert.throws(
+      () => guard.applyIsolationClosed({ user: { id: 'u1' }, conversationId: '' }),
+      (err) => {
+        assert.equal(err.code, 'isolation_required');
+        assert.match(err.publicMessage, /aislar/);
+        assert.doesNotMatch(err.publicMessage, /sk-/);
+        assert.doesNotMatch(String(err.stack || ''), /sk-/);
+        return true;
+      },
+    );
+  });
+
+  test('screenshot-only no-charge and refuse-if-no-session', () => {
+    const shot = ad.screenshotOnlyNoCharge({ tools: [{ name: 'computer_screenshot' }] });
+    assert.equal(shot.charge, false);
+    const applied = guard.applyScreenshotNoChargeClosed({
+      tools: [{ name: 'computer_screenshot' }],
+      screenshotOnlyNoCharge: ad.screenshotOnlyNoCharge,
+    });
+    assert.equal(applied.charge, false);
+    const missing = ad.refuseComputerToolsIfSessionMissing({ toolName: 'computer_click', sessionId: '' });
+    assert.equal(missing.ok, false);
+    assert.equal(missing.code, 'computer_no_session');
+    const identity = resolveSessionIdentity({ id: 'u1' }, 'code-chat-1');
+    const attached = guard.applyAttachClosed({ session: { userId: identity.userId }, identity });
+    assert.equal(attached.conversationBound, true);
+  });
+});

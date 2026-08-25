@@ -12,6 +12,10 @@ const SUPPORTED_COMPUTER_ACTIONS = Object.freeze([
   'screenshot',
 ]);
 
+const COMPUTER_BUTTONS = Object.freeze(['left', 'middle', 'right']);
+const DEFAULT_VIEWPORT = Object.freeze({ width: 1920, height: 1080 });
+const MAX_TYPE_CHARS = 2000;
+
 const KEY_MAP = Object.freeze({
   ENTER: 'Enter',
   RETURN: 'Enter',
@@ -109,17 +113,104 @@ function getActionLabel(action) {
   }
 }
 
-async function executePlaywrightComputerActions(page, actions, options = {}) {
+function isSupportedComputerAction(type) {
+  return SUPPORTED_COMPUTER_ACTIONS.includes(String(type || '').trim().toLowerCase());
+}
+
+function clampComputerPoint(x, y, bounds = DEFAULT_VIEWPORT) {
+  const w = Math.max(1, Number(bounds && bounds.width) || DEFAULT_VIEWPORT.width);
+  const h = Math.max(1, Number(bounds && bounds.height) || DEFAULT_VIEWPORT.height);
+  const rawX = Number(x);
+  const rawY = Number(y);
+  const px = Math.max(0, Math.min(w - 1, Math.floor(Number.isFinite(rawX) ? rawX : 0)));
+  const py = Math.max(0, Math.min(h - 1, Math.floor(Number.isFinite(rawY) ? rawY : 0)));
+  return {
+    x: px,
+    y: py,
+    clamped: px !== rawX || py !== rawY,
+    width: w,
+    height: h,
+  };
+}
+
+function normalizeComputerButton(button) {
+  const raw = String(button == null ? 'left' : button).trim().toLowerCase();
+  if (COMPUTER_BUTTONS.includes(raw)) return { ok: true, button: raw, code: null };
+  return { ok: false, button: 'left', code: 'computer_button_invalid' };
+}
+
+function throwIfComputerActionAborted(signal) {
+  if (signal && signal.aborted === true) {
+    const err = new Error('computer_action_aborted');
+    err.code = 'computer_action_aborted';
+    throw err;
+  }
+}
+
+function normalizeComputerAction(action, options = {}) {
+  throwIfComputerActionAborted(options.signal);
+  if (!action || typeof action !== 'object') {
+    return { ok: false, action: null, code: 'computer_action_invalid' };
+  }
+  const type = String(action.type || action.action || action.kind || '').trim().toLowerCase();
+  if (!isSupportedComputerAction(type)) {
+    return { ok: false, action: null, code: 'computer_action_unsupported' };
+  }
+  const next = { ...action, type };
+  if (type === 'click' || type === 'double_click' || type === 'move' || type === 'scroll' || 'x' in action || 'y' in action) {
+    const pt = clampComputerPoint(action.x, action.y, options.bounds || DEFAULT_VIEWPORT);
+    next.x = pt.x;
+    next.y = pt.y;
+  }
+  if (type === 'click' || type === 'double_click') {
+    const btn = normalizeComputerButton(action.button);
+    if (!btn.ok && action.button != null && String(action.button).trim() !== '') {
+      return { ok: false, action: null, code: btn.code };
+    }
+    next.button = btn.button;
+  }
+  if (type === 'type') {
+    next.text = String(action.text || '').slice(0, MAX_TYPE_CHARS);
+  }
+  if (type === 'scroll') {
+    next.scrollX = Number(action.scrollX || 0) || 0;
+    next.scrollY = Number(action.scrollY || 0) || 0;
+  }
+  return { ok: true, action: next, code: null };
+}
+
+function mapComputerActions(actions, options = {}) {
+  throwIfComputerActionAborted(options.signal);
   const list = Array.isArray(actions) ? actions : [actions].filter(Boolean);
+  const out = [];
+  for (const raw of list) {
+    throwIfComputerActionAborted(options.signal);
+    const mapped = normalizeComputerAction(raw, options);
+    if (!mapped.ok) return mapped;
+    out.push(mapped.action);
+  }
+  return { ok: true, actions: out, code: null };
+}
+
+async function executePlaywrightComputerActions(page, actions, options = {}) {
+  const mapped = mapComputerActions(actions, options);
+  if (!mapped.ok) {
+    const err = new Error(mapped.code || 'computer_action_invalid');
+    err.code = mapped.code || 'computer_action_invalid';
+    throw err;
+  }
+  const list = mapped.actions;
   const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 1200;
 
   for (const action of list) {
+    throwIfComputerActionAborted(options.signal);
     if (!action || typeof action !== 'object') continue;
     options.onAction?.(action);
 
     switch (action.type) {
       case 'click':
         await withModifiers(page, action.keys, async () => {
+          throwIfComputerActionAborted(options.signal);
           await page.mouse.click(Number(action.x), Number(action.y), {
             button: action.button || 'left',
           });
@@ -128,6 +219,7 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
 
       case 'double_click':
         await withModifiers(page, action.keys, async () => {
+          throwIfComputerActionAborted(options.signal);
           await page.mouse.dblclick(Number(action.x), Number(action.y), {
             button: action.button || 'left',
           });
@@ -140,10 +232,12 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
           throw new Error('drag action requires at least two path points');
         }
         await withModifiers(page, action.keys, async () => {
+          throwIfComputerActionAborted(options.signal);
           const [[startX, startY], ...rest] = path;
           await page.mouse.move(startX, startY);
           await page.mouse.down();
           for (const [x, y] of rest) {
+            throwIfComputerActionAborted(options.signal);
             await page.mouse.move(x, y);
           }
           await page.mouse.up();
@@ -153,12 +247,14 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
 
       case 'move':
         await withModifiers(page, action.keys, async () => {
+          throwIfComputerActionAborted(options.signal);
           await page.mouse.move(Number(action.x), Number(action.y));
         });
         break;
 
       case 'scroll':
         await withModifiers(page, action.keys, async () => {
+          throwIfComputerActionAborted(options.signal);
           await page.mouse.move(Number(action.x || 0), Number(action.y || 0));
           await page.mouse.wheel(Number(action.scrollX || 0), Number(action.scrollY || 0));
         });
@@ -166,15 +262,18 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
 
       case 'keypress':
         for (const key of action.keys || []) {
+          throwIfComputerActionAborted(options.signal);
           await page.keyboard.press(normalizeKey(key));
         }
         break;
 
       case 'type':
+        throwIfComputerActionAborted(options.signal);
         await page.keyboard.type(String(action.text || ''));
         break;
 
       case 'wait':
+        throwIfComputerActionAborted(options.signal);
         await page.waitForTimeout(Number(action.ms || waitMs));
         break;
 
@@ -189,9 +288,18 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
 
 module.exports = {
   SUPPORTED_COMPUTER_ACTIONS,
+  COMPUTER_BUTTONS,
+  DEFAULT_VIEWPORT,
+  MAX_TYPE_CHARS,
   executePlaywrightComputerActions,
   getActionLabel,
   normalizeDragPath,
   normalizeKey,
   withModifiers,
+  isSupportedComputerAction,
+  clampComputerPoint,
+  normalizeComputerButton,
+  throwIfComputerActionAborted,
+  normalizeComputerAction,
+  mapComputerActions,
 };

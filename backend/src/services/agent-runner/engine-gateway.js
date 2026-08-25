@@ -792,7 +792,12 @@ async function governThen(input, run) {
           ad.sessionLockTtl90s({ acquiredAt: input.lock.acquiredAt || input.lock.at, now: Date.now(), ttlMs: 90000 });
         }
         if (typeof ad.screenshotOnlyNoCharge === 'function' && input && (input.tools || input.screenshotOnly)) {
-          ad.screenshotOnlyNoCharge({ tools: input.tools, screenshotOnly: input.screenshotOnly });
+          const shot = ad.screenshotOnlyNoCharge({ tools: input.tools, screenshotOnly: input.screenshotOnly });
+          if (shot && shot.charge === false) {
+            input.charge = false;
+            input.skipCharge = true;
+            input.screenshotOnly = true;
+          }
         }
         if (typeof ad.neverRetry413 === 'function' && input && (input.status === 413 || input.code === '413')) {
           ad.neverRetry413(input);
@@ -813,7 +818,12 @@ async function governThen(input, run) {
           ad.sessionLockHeartbeatEvery20s({ lastBeatAt: input.lock.heartbeatAt || input.lock.lastBeatAt, now: Date.now(), intervalMs: 20000 });
         }
         if (typeof ad.observeOnlyNoCharge === 'function' && input && (input.tools || input.observeOnly)) {
-          ad.observeOnlyNoCharge({ tools: input.tools, observeOnly: input.observeOnly });
+          const obs = ad.observeOnlyNoCharge({ tools: input.tools, observeOnly: input.observeOnly });
+          if (obs && obs.charge === false) {
+            input.charge = false;
+            input.skipCharge = true;
+            input.observeOnly = true;
+          }
         }
         if (typeof ad.neverRetry410Gone === 'function' && input && (input.status === 410 || input.code === '410')) {
           ad.neverRetry410Gone(input);
@@ -941,11 +951,34 @@ async function governThen(input, run) {
         if (typeof ad.skipEmptyEmbeddingUpsert === 'function' && input && input.embedding != null) {
           ad.skipEmptyEmbeddingUpsert(input.embedding, { fact: input.fact });
         }
-        if (typeof ad.refuseComputerToolsIfFlagOff === 'function' && input && input.toolName) {
-          const off = ad.refuseComputerToolsIfFlagOff(input.toolName, { computerEnabled: input.computerEnabled });
+        if (typeof ad.refuseComputerToolsIfFlagOff === 'function' && input && (input.toolName || input.tool)) {
+          const off = ad.refuseComputerToolsIfFlagOff(input.toolName || input.tool, { computerEnabled: input.computerEnabled });
           if (off && off.refused) {
             const err = new Error('computer_flag_off');
             err.code = 'computer_flag_off';
+            throw err;
+          }
+        }
+        if (typeof ad.refuseComputerToolsIfNoUserId === 'function' && input && (input.toolName || input.tool)) {
+          const noUser = ad.refuseComputerToolsIfNoUserId({
+            toolName: input.toolName || input.tool,
+            userId: input.userId || input.actorId,
+          });
+          if (noUser && noUser.ok === false) {
+            const err = new Error('computer_no_user');
+            err.code = 'computer_no_user';
+            throw err;
+          }
+        }
+        if (typeof ad.refuseComputerToolsIfSessionMissing === 'function' && input && (input.toolName || input.tool)) {
+          const noSess = ad.refuseComputerToolsIfSessionMissing({
+            toolName: input.toolName || input.tool,
+            sessionId: input.sessionId || input.threadId || input.computerId,
+            session: input.session,
+          });
+          if (noSess && noSess.ok === false) {
+            const err = new Error('computer_no_session');
+            err.code = 'computer_no_session';
             throw err;
           }
         }
@@ -1107,6 +1140,33 @@ function wrapExecutors(executors, meta = {}) {
         return `ERROR: action_refused: ${decision.reason} [${decision.rule}]`;
       }
       try {
+        const ad = require('./engine-adapter');
+        const { agentComputerEnabled } = require('../computer/flags');
+        const computerEnabled = ctx && Object.prototype.hasOwnProperty.call(ctx, 'computerEnabled')
+          ? ctx.computerEnabled === true
+          : agentComputerEnabled();
+        if (typeof ad.refuseComputerToolsIfFlagOff === 'function') {
+          const off = ad.refuseComputerToolsIfFlagOff(name, { computerEnabled });
+          if (off && off.refused) return `ERROR: computer_flag_off`;
+        }
+        if (typeof ad.refuseComputerToolsIfNoUserId === 'function') {
+          const noUser = ad.refuseComputerToolsIfNoUserId({
+            toolName: name,
+            userId: (ctx && (ctx.userId || ctx.actorId)) || meta.actorId,
+          });
+          if (noUser && noUser.ok === false) return `ERROR: computer_no_user`;
+        }
+        if (typeof ad.refuseComputerToolsIfSessionMissing === 'function') {
+          const noSess = ad.refuseComputerToolsIfSessionMissing({
+            toolName: name,
+            sessionId: (ctx && (ctx.sessionId || ctx.threadId)) || computerId,
+            session: ctx && ctx.session,
+          });
+          if (noSess && noSess.ok === false) return `ERROR: computer_no_session`;
+        }
+        if (typeof ad.screenshotOnlyNoCharge === 'function' && /screenshot/.test(name)) {
+          ad.screenshotOnlyNoCharge({ tools: [{ name }], screenshotOnly: true });
+        }
         return await orig.call(this, args, ctx);
       } catch (error) {
         appendAudit({

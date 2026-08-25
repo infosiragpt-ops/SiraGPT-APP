@@ -2,9 +2,17 @@
 
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const { memberKey } = require('./member-key');
+const { memberKey, resolveSessionIdentity } = require('./member-key');
 const { orchFetch, resolveOrchConfig } = require('./orch-client');
 const { agentComputerEnabled, resolveObservationMode } = require('./flags');
+const { requireProvenIsolation } = require('./conversation-isolation');
+const {
+  applyIsolationClosed,
+  applySandboxAbortCleanupClosed,
+  applyComputerTimeoutClosed,
+  applyRefuseComputerToolsClosed,
+  applyScreenshotNoChargeClosed,
+} = require('./computer-code-guard');
 
 const pexec = promisify(execFile);
 
@@ -25,15 +33,43 @@ function isConfigured(env = process.env) {
   return resolveOrchConfig(env).enabled;
 }
 
+function loadAdapter() {
+  try { return require('../agent-runner/engine-adapter'); } catch (_) { return null; }
+}
+
 function computerToolsAvailable({ userId, env = process.env } = {}) {
   if (!userId) return false;
+  const ad = loadAdapter();
+  const refused = applyRefuseComputerToolsClosed({
+    toolName: 'computer_observe',
+    userId,
+    computerEnabled: agentComputerEnabled(env) || isConfigured(env),
+    refuseComputerToolsIfFlagOff: ad && ad.refuseComputerToolsIfFlagOff,
+    refuseComputerToolsIfNoUserId: ad && ad.refuseComputerToolsIfNoUserId,
+  });
+  if (refused && refused.ok === false) return false;
   return agentComputerEnabled(env) || isConfigured(env);
 }
 
-async function ensureSession(userId, env = process.env) {
-  const key = memberKey({ id: userId }, env);
-  const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: key }, env });
-  return { ...desktop, userId: desktop.userId || key };
+async function ensureSession(userId, env = process.env, extra = {}) {
+  const opts = (userId && typeof userId === 'object') ? userId : { userId, ...extra };
+  const id = String((opts.userId || opts.id || (typeof userId === 'string' ? userId : '')) || '').trim();
+  const conversationId = String(opts.conversationId || opts.workspaceId || extra.conversationId || '').trim();
+  const identity = applyIsolationClosed({
+    user: { id },
+    conversationId,
+    identity: resolveSessionIdentity({ id }, conversationId, opts.env || env),
+  });
+  requireProvenIsolation(identity);
+  const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId }, env: opts.env || env });
+  return {
+    ...desktop,
+    userId: desktop.userId || identity.userId,
+    conversationId: identity.conversationId,
+    conversationBound: identity.conversationBound,
+    sessionKey: identity.sessionKey,
+    memberKey: identity.memberKey || memberKey({ id }, opts.env || env),
+  };
 }
 
 function agentUrl(session, suffix, env = process.env) {
@@ -87,13 +123,34 @@ function containerName(session) {
   return 'sira-ac-user-' + slug;
 }
 
-async function dockerExec(session, command) {
-  const { stdout, stderr } = await pexec(
-    'docker',
-    ['exec', '-u', 'compuser', '-e', 'DISPLAY=:1', containerName(session), 'bash', '-lc', String(command || '')],
-    { timeout: 25_000 },
-  );
-  return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || ''), container: containerName(session) };
+async function dockerExec(session, command, { signal, timeoutMs } = {}) {
+  const ad = loadAdapter();
+  const timed = applyComputerTimeoutClosed({
+    timeoutMs: timeoutMs || 25_000,
+    defaultToolTimeout30sIfMissing: ad && ad.defaultToolTimeout30sIfMissing,
+    hardCapToolTimeout120s: ad && ad.hardCapToolTimeout120s,
+    perToolRemainingWallClock: ad && ad.perToolRemainingWallClock,
+  });
+  const started = Date.now();
+  try {
+    const { stdout, stderr } = await pexec(
+      'docker',
+      ['exec', '-u', 'compuser', '-e', 'DISPLAY=:1', containerName(session), 'bash', '-lc', String(command || '')],
+      { timeout: timed.timeoutMs, signal },
+    );
+    return { ok: true, stdout: String(stdout || ''), stderr: String(stderr || ''), container: containerName(session) };
+  } finally {
+    applySandboxAbortCleanupClosed({
+      aborted: !!(signal && signal.aborted),
+      timedOut: (Date.now() - started) >= timed.timeoutMs,
+      elapsedMs: Date.now() - started,
+      timeoutMs: timed.timeoutMs,
+      workdir: containerName(session),
+      sandboxTimeoutThenCleanup: ad && ad.sandboxTimeoutThenCleanup,
+      sandboxFinallyCleanupOnAbort: ad && ad.sandboxFinallyCleanupOnAbort,
+      sandboxTmpCleanupOnTimeout: ad && ad.sandboxTmpCleanupOnTimeout,
+    });
+  }
 }
 
 function logStep(payload) {
@@ -180,6 +237,13 @@ async function observe(sessionOrUserId, opts = {}) {
       };
     }
     const shot = await agentGet(session, '/screenshot', env);
+    const ad = loadAdapter();
+    const charge = applyScreenshotNoChargeClosed({
+      tools: [{ name: 'computer_screenshot' }],
+      screenshotOnly: true,
+      screenshotOnlyNoCharge: ad && ad.screenshotOnlyNoCharge,
+      observeOnlyNoCharge: ad && ad.observeOnlyNoCharge,
+    });
     return {
       mode: 'screenshot',
       backend: 'persistent',
@@ -188,6 +252,8 @@ async function observe(sessionOrUserId, opts = {}) {
       png: shot.pngBase64,
       mediaType: shot.mime || 'image/png',
       bytes: shot.bytes,
+      charge: charge.charge,
+      screenshotOnly: true,
       ok: true,
     };
   } catch (err) {

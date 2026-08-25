@@ -6,14 +6,27 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const { agentComputerEnabled } = require('../services/computer/flags');
 const { orchFetch, rewriteUrls, resolveOrchConfig } = require('../services/computer/orch-client');
-const { memberKey, resolveSessionIdentity } = require('../services/computer/member-key');
+const { resolveSessionIdentity } = require('../services/computer/member-key');
 const {
   ISOLATION_REFUSED_ES,
   OPEN_FAILED_ES,
   publicComputerError,
-  isolationError,
   sessionMatchesConversation,
+  readIsolationKey,
+  requireProvenIsolation,
+  attachIsolationOrRefuse,
 } = require('../services/computer/conversation-isolation');
+const {
+  applyIsolationClosed,
+  applyAttachClosed,
+  applyActionMapClosed,
+  applyRefuseComputerToolsClosed,
+  applyScreenshotNoChargeClosed,
+  applySandboxAbortCleanupClosed,
+  applyComputerTimeoutClosed,
+  requestAbortSignal,
+  refuseOpenRouterComputerModel,
+} = require('../services/computer/computer-code-guard');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -29,15 +42,27 @@ function memberId(req) {
 }
 
 function readConversationId(req) {
-  const body = req.body || {};
-  const query = req.query || {};
-  return String(
-    body.conversationId || body.chatId || query.conversationId || query.chatId || '',
-  ).trim();
+  return readIsolationKey({ body: req.body || {}, query: req.query || {} });
 }
 
 function identityFor(req) {
-  return resolveSessionIdentity({ id: memberId(req) }, readConversationId(req));
+  return applyIsolationClosed({
+    user: { id: memberId(req) },
+    conversationId: readConversationId(req),
+    identity: resolveSessionIdentity({ id: memberId(req) }, readConversationId(req)),
+  });
+}
+
+function loadAdapter() {
+  try { return require('../services/agent-runner/engine-adapter'); } catch (_) { return null; }
+}
+
+function loadSandboxAbort() {
+  try { return require('../services/agent-runner/engine-3h60'); } catch (_) { return null; }
+}
+
+function loadSandboxTimeout() {
+  try { return require('../services/agent-runner/engine-3h59'); } catch (_) { return null; }
 }
 
 function withConversation(desktop, identity) {
@@ -52,34 +77,53 @@ function withConversation(desktop, identity) {
   };
 }
 
+function refuseLiveComputer(req, toolName, session) {
+  const ad = loadAdapter();
+  const guard = applyRefuseComputerToolsClosed({
+    toolName,
+    userId: memberId(req),
+    sessionId: session && (session.sessionId || session.id),
+    session,
+    computerEnabled: agentComputerEnabled(),
+    refuseComputerToolsIfFlagOff: ad && ad.refuseComputerToolsIfFlagOff,
+    refuseComputerToolsIfNoUserId: ad && ad.refuseComputerToolsIfNoUserId,
+    refuseComputerToolsIfSessionMissing: ad && ad.refuseComputerToolsIfSessionMissing,
+    refuseHostBashIfComputerOnlyTurn: ad && ad.refuseHostBashIfComputerOnlyTurn,
+  });
+  if (guard && guard.ok === false) {
+    const err = new Error(guard.message || ISOLATION_REFUSED_ES);
+    err.status = 409;
+    err.code = guard.code;
+    err.publicMessage = publicComputerError(err, guard.message || ISOLATION_REFUSED_ES);
+    throw err;
+  }
+  return guard;
+}
+
 async function ensureMemberDesktop(req) {
   const identity = identityFor(req);
-  if (identity.conversationId && !identity.conversationBound) {
-    throw isolationError();
-  }
+  requireProvenIsolation(identity);
   const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId } });
-  const orchUser = String((desktop && desktop.userId) || identity.userId);
-  if (identity.conversationBound && orchUser !== String(identity.userId)) {
-    throw isolationError();
-  }
+  applyAttachClosed({ session: desktop, identity });
   return rewriteUrls(withConversation({ ...desktop, userId: desktop.userId || identity.userId }, identity));
 }
 
 function ownedOrDeny(session, req, res) {
-  const identity = identityFor(req);
-  if (identity.conversationBound) {
+  try {
+    const identity = identityFor(req);
+    attachIsolationOrRefuse(session, identity);
     if (!sessionMatchesConversation(session, identity)) {
       res.status(403).json({ error: 'isolation_required', message: ISOLATION_REFUSED_ES });
       return false;
     }
     return true;
-  }
-  const want = identity.userId || memberKey({ id: memberId(req) });
-  if (!session || (session.userId && String(session.userId) !== String(want))) {
-    res.status(403).json({ error: 'forbidden', message: OPEN_FAILED_ES });
+  } catch (err) {
+    res.status(err.status || 409).json({
+      error: err.code || 'isolation_required',
+      message: publicComputerError(err, ISOLATION_REFUSED_ES),
+    });
     return false;
   }
-  return true;
 }
 
 router.get('/health', requireFlag, (_req, res) => {
@@ -143,9 +187,36 @@ const FOCUS_CMDS = {
   desktop: XD + ' search --onlyvisible --class xfdesktop windowactivate || true',
 };
 
-async function dockerExec(container, command) {
-  const { stdout, stderr } = await pexec('docker', ['exec', '-u', 'compuser', '-e', 'DISPLAY=:1', container, 'bash', '-lc', command], { timeout: 20_000 });
-  return { stdout: String(stdout || ''), stderr: String(stderr || '') };
+async function dockerExec(container, command, { signal, timeoutMs } = {}) {
+  const ad = loadAdapter();
+  const w59 = loadSandboxTimeout();
+  const w60 = loadSandboxAbort();
+  const timed = applyComputerTimeoutClosed({
+    timeoutMs: timeoutMs || 20_000,
+    defaultToolTimeout30sIfMissing: ad && ad.defaultToolTimeout30sIfMissing,
+    hardCapToolTimeout120s: ad && ad.hardCapToolTimeout120s,
+    perToolRemainingWallClock: ad && ad.perToolRemainingWallClock,
+  });
+  const started = Date.now();
+  try {
+    const { stdout, stderr } = await pexec(
+      'docker',
+      ['exec', '-u', 'compuser', '-e', 'DISPLAY=:1', container, 'bash', '-lc', command],
+      { timeout: timed.timeoutMs, signal },
+    );
+    return { stdout: String(stdout || ''), stderr: String(stderr || '') };
+  } finally {
+    applySandboxAbortCleanupClosed({
+      aborted: !!(signal && signal.aborted),
+      timedOut: (Date.now() - started) >= timed.timeoutMs,
+      elapsedMs: Date.now() - started,
+      timeoutMs: timed.timeoutMs,
+      workdir: container,
+      sandboxTimeoutThenCleanup: (ad && ad.sandboxTimeoutThenCleanup) || (w59 && w59.sandboxTimeoutThenCleanup),
+      sandboxFinallyCleanupOnAbort: (ad && ad.sandboxFinallyCleanupOnAbort) || (w60 && w60.sandboxFinallyCleanupOnAbort),
+      sandboxTmpCleanupOnTimeout: ad && ad.sandboxTmpCleanupOnTimeout,
+    });
+  }
 }
 
 function sessionContainer(session) {
@@ -155,12 +226,21 @@ function sessionContainer(session) {
 
 async function handleAction(req, res, session) {
   const identity = identityFor(req);
-  if (identity.conversationBound && !sessionMatchesConversation(session, identity)) {
-    throw isolationError();
-  }
+  attachIsolationOrRefuse(session, identity);
+  refuseLiveComputer(req, (req.body && (req.body.tool || req.body.toolName)) || 'computer_action', session);
+  refuseOpenRouterComputerModel(req.body && req.body.model);
+  const signal = requestAbortSignal(req);
+  const ad = loadAdapter();
+  const charge = applyScreenshotNoChargeClosed({
+    tools: (req.body && req.body.tools) || [{ name: (req.body && req.body.action && req.body.action.type) || (req.body && req.body.type) || '' }],
+    screenshotOnly: req.body && req.body.screenshotOnly,
+    observeOnly: req.body && req.body.observeOnly,
+    screenshotOnlyNoCharge: ad && ad.screenshotOnlyNoCharge,
+    observeOnlyNoCharge: ad && ad.observeOnlyNoCharge,
+  });
   const focus = String((req.body && (req.body.focus || req.body.app)) || '').trim().toLowerCase();
   if (focus && FOCUS_CMDS[focus]) {
-    const out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus]);
+    const out = await dockerExec(sessionContainer(session), FOCUS_CMDS[focus], { signal });
     return res.json({
       ok: true,
       focus,
@@ -168,15 +248,26 @@ async function handleAction(req, res, session) {
       conversationId: identity.conversationId,
       conversationBound: identity.conversationBound,
       sessionKey: identity.sessionKey,
+      charge: charge.charge,
       ...out,
     });
   }
-  const action = (req.body && req.body.action) || req.body || {};
+  const rawAction = (req.body && req.body.action) || req.body || {};
+  const mapped = applyActionMapClosed({
+    action: rawAction.type || rawAction.action ? rawAction : null,
+    actions: Array.isArray(rawAction.actions) ? rawAction.actions : (rawAction.type || rawAction.action ? [rawAction] : []),
+    signal,
+  });
+  const action = (mapped.actions && mapped.actions[0]) || rawAction;
   const orch = resolveOrchConfig();
   const target = orch.url + '/sessions/' + session.sessionId + '/agent/action';
   const forwarded = await fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) });
   const data = await forwarded.json().catch(() => ({}));
-  return res.status(forwarded.status).json(withConversation(data, identityFor(req)));
+  return res.status(forwarded.status).json(withConversation({
+    ...data,
+    charge: charge.charge,
+    screenshotOnly: charge.screenshotOnly,
+  }, identityFor(req)));
 }
 
 router.post('/action', requireFlag, authenticateToken, async (req, res) => {
