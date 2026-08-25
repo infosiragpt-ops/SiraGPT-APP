@@ -1244,7 +1244,7 @@ export function AppSidebar() {
             <div
               role="tablist"
               aria-label="Modo de la barra lateral"
-              className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-zinc-200/70 p-[3px] dark:bg-white/10"
+              className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-zinc-100 p-1 border border-zinc-200/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] dark:bg-zinc-800/80 dark:border-white/[0.06] dark:shadow-none"
             >
               <button
                 type="button"
@@ -1253,12 +1253,13 @@ export function AppSidebar() {
                 aria-label="Agentes"
                 onClick={() => switchSidebarMode("chat")}
                 className={cn(
-                  SIDEBAR_TAB,
-                  "gap-1.5",
-                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
+                  "inline-flex h-8 items-center justify-center gap-1.5 rounded-lg px-3.5 text-[13px] leading-none transition-all duration-200",
+                  sidebarMode === "chat"
+                    ? "bg-white text-zinc-900 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-zinc-900/[0.06] font-semibold dark:bg-zinc-700 dark:text-white dark:ring-white/10"
+                    : "text-zinc-500 hover:text-zinc-700 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-white/10",
                 )}
               >
-                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
+                <MessageSquare className="h-4 w-4 shrink-0" strokeWidth={1.8} />
                 <span>Agentes</span>
               </button>
               <button
@@ -1268,8 +1269,10 @@ export function AppSidebar() {
                 aria-label="Empresas"
                 onClick={() => switchSidebarMode("code")}
                 className={cn(
-                  SIDEBAR_TAB,
-                  sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
+                  "inline-flex h-8 items-center justify-center rounded-lg px-3.5 text-[13px] leading-none transition-all duration-200",
+                  sidebarMode === "code"
+                    ? "bg-white text-zinc-900 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-zinc-900/[0.06] font-semibold dark:bg-zinc-700 dark:text-white dark:ring-white/10"
+                    : "text-zinc-500 hover:text-zinc-700 hover:bg-white/60 dark:text-zinc-400 dark:hover:text-zinc-200 dark:hover:bg-white/10",
                 )}
               >
                 <span>Empresas</span>
