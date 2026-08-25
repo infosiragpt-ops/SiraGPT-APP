@@ -195,15 +195,26 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
 
   function refuseOrThrow(toolName, extra = {}) {
     const ad = loadAdapter();
+    const uid = extra.userId != null ? extra.userId : userId;
+    const sid = extra.sessionId != null ? extra.sessionId : sessionId;
+    const sess = extra.session || session;
+    if (ad && typeof ad.refuseComputerToolsIfNoUserId === 'function') {
+      ad.refuseComputerToolsIfNoUserId({ toolName, userId: uid });
+    }
+    if (ad && typeof ad.refuseComputerToolsIfSessionMissing === 'function') {
+      ad.refuseComputerToolsIfSessionMissing({ toolName, sessionId: sid, session: sess });
+    }
     const guard = applyRefuseComputerToolsClosed({
       toolName,
-      userId: extra.userId != null ? extra.userId : userId,
-      sessionId: extra.sessionId != null ? extra.sessionId : sessionId,
-      session: extra.session || session,
+      userId: uid,
+      sessionId: sid,
+      session: sess,
       computerEnabled: computerEnabled !== false,
       refuseComputerToolsIfFlagOff: ad && ad.refuseComputerToolsIfFlagOff,
-      refuseComputerToolsIfNoUserId: ad && ad.refuseComputerToolsIfNoUserId,
-      refuseComputerToolsIfSessionMissing: ad && ad.refuseComputerToolsIfSessionMissing,
+      refuseComputerToolsIfNoUserId: uid ? ad && ad.refuseComputerToolsIfNoUserId : undefined,
+      refuseComputerToolsIfSessionMissing: (sid || sess)
+        ? ad && ad.refuseComputerToolsIfSessionMissing
+        : undefined,
     });
     if (guard && guard.ok === false) {
       const err = new Error(guard.message || guard.code);

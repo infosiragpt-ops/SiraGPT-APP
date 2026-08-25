@@ -16,7 +16,9 @@ No toca chrome de AgentComputerShell, dock, PensandoBars ni el layout de 3 colum
 4. **Screenshot-only no cobra** — `screenshotOnlyNoCharge` / `observeOnlyNoCharge` en gateway,
    loop y `/action`.
 5. **Refuse tools** — `refuseComputerToolsIfFlagOff` / `refuseComputerToolsIfNoUserId` /
-   `refuseComputerToolsIfSessionMissing` en loop, gateway `wrapExecutors` y `/action`.
+   `refuseComputerToolsIfSessionMissing` en loop (por nombre), gateway `wrapExecutors` y `/action`.
+   El driver F7 (fake/xvfb) arranca su propio escritorio: no-session/no-user solo bloquean
+   cuando ya hay identidad viva o `__requireComputerSession`.
 6. **DeepSeek Flash/Pro only** — `refuseOpenRouterComputerModel`. Nunca OpenRouter.
 
 Orquestador: `backend/src/services/computer/computer-code-guard.js` (15+ callsites vivos).

@@ -16,7 +16,7 @@ describe("agent computer shell · PensandoBars port", () => {
     assert.match(shell, /data-testid="agent-computer-dock-os"/)
     assert.match(shell, /data-testid="agent-computer-routines"/)
     assert.match(workspace, /import \{ AgentComputerShell \} from "\.\/agent-computer-shell"/)
-    assert.match(workspace, /<AgentComputerShell>/)
+    assert.match(workspace, /<AgentComputerShell(?:\s[^>]*)?>/)
     assert.match(workspace, /<\/AgentComputerShell>/)
   })
 

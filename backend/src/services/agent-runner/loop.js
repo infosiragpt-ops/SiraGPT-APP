@@ -2161,16 +2161,34 @@ async function runAgentLoop({
         try {
           if (adapter && /^(computer_|host_bash)/i.test(String(mapped || name || ''))) {
             const guard = require('../computer/computer-code-guard');
+            const liveUser = (executors && (executors.__userId || executors.userId)) || threadId;
+            const liveSession = threadId || (executors && executors.__sessionId) || undefined;
+            const liveSessionObj = threadId ? { id: threadId } : (executors && executors.__session) || undefined;
+            const requireIdentity = !!(executors && executors.__requireComputerSession);
+            if (typeof adapter.refuseComputerToolsIfNoUserId === 'function') {
+              adapter.refuseComputerToolsIfNoUserId({ toolName: mapped, userId: liveUser });
+            }
+            if (typeof adapter.refuseComputerToolsIfSessionMissing === 'function') {
+              adapter.refuseComputerToolsIfSessionMissing({
+                toolName: mapped,
+                sessionId: liveSession,
+                session: liveSessionObj,
+              });
+            }
             const refused = guard.applyRefuseComputerToolsClosed({
               toolName: mapped,
-              userId: (executors && (executors.__userId || executors.userId)) || threadId,
-              sessionId: threadId || (executors && executors.__sessionId) || undefined,
-              session: threadId ? { id: threadId } : (executors && executors.__session) || undefined,
+              userId: liveUser,
+              sessionId: liveSession,
+              session: liveSessionObj,
               computerEnabled: !(executors && executors.__computerEnabled === false),
               computerOnly: !!(executors && executors.__computerOnly),
               refuseComputerToolsIfFlagOff: adapter.refuseComputerToolsIfFlagOff,
-              refuseComputerToolsIfNoUserId: adapter.refuseComputerToolsIfNoUserId,
-              refuseComputerToolsIfSessionMissing: adapter.refuseComputerToolsIfSessionMissing,
+              refuseComputerToolsIfNoUserId: (requireIdentity || liveUser)
+                ? adapter.refuseComputerToolsIfNoUserId
+                : undefined,
+              refuseComputerToolsIfSessionMissing: (requireIdentity || liveSession)
+                ? adapter.refuseComputerToolsIfSessionMissing
+                : undefined,
               refuseHostBashIfComputerOnlyTurn: adapter.refuseHostBashIfComputerOnlyTurn,
             });
             if (refused && refused.ok === false) {

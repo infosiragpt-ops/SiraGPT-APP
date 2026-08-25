@@ -142,6 +142,26 @@ describe('agent-computer conversation session key', () => {
     assert.doesNotMatch(String(out.code || ''), /sk-/);
   });
 
+  test('F7 bootstrap (no live identity) does not refuse screenshot', () => {
+    const boot = guard.applyRefuseComputerToolsClosed({
+      toolName: 'computer_screenshot',
+      computerEnabled: true,
+      refuseComputerToolsIfFlagOff: ad.refuseComputerToolsIfFlagOff,
+    });
+    assert.equal(boot.ok, true);
+    const scoped = guard.applyRefuseComputerToolsClosed({
+      toolName: 'computer_screenshot',
+      userId: '',
+      sessionId: '',
+      computerEnabled: true,
+      refuseComputerToolsIfFlagOff: ad.refuseComputerToolsIfFlagOff,
+      refuseComputerToolsIfNoUserId: ad.refuseComputerToolsIfNoUserId,
+      refuseComputerToolsIfSessionMissing: ad.refuseComputerToolsIfSessionMissing,
+    });
+    assert.equal(scoped.ok, false);
+    assert.ok(scoped.code === 'computer_no_user' || scoped.code === 'computer_no_session');
+  });
+
   test('OpenRouter computer model is refused; DeepSeek Flash wins', () => {
     const denied = guard.refuseOpenRouterComputerModel('openrouter/gpt-4o');
     assert.equal(denied.ok, false);
