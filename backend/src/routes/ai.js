@@ -2014,6 +2014,25 @@ router.post(
       __lastEventIdCookie = rawCookies.sira_last_event_id || null;
     } catch (_) { __lastEventIdCookie = null; }
     const __hasResumeRequest = typeof __lastEventIdHeader === 'string' && __lastEventIdHeader.trim().length > 0;
+    try {
+      const w67hdr = require('../services/agent-runner/engine-3h67');
+      const adHdr = require('../services/agent-runner/engine-adapter');
+      if (typeof w67hdr.applySseReplayCloseClosed === 'function') {
+        w67hdr.applySseReplayCloseClosed({
+          headerValue: __lastEventIdHeader,
+          lastEventId: __lastEventIdHeader,
+          events: [],
+          closed: false,
+          alreadyDone: true,
+          parseLastEventIdIntOnly: adHdr.parseLastEventIdIntOnly,
+          restoreLastSseIdOnResume: adHdr.restoreLastSseIdOnResume,
+          dropSseCommentFramesFromReplay: adHdr.dropSseCommentFramesFromReplay,
+          dropSseEventsOlderThan2min: adHdr.dropSseEventsOlderThan2min,
+          capReplayFrames64: adHdr.capReplayFrames64,
+          endSseWithEventDone: adHdr.endSseWithEventDone,
+        });
+      }
+    } catch (_) { /* 3H67 Last-Event-ID parse fail-open */ }
     // Wall-clock anchor for the end-to-end streaming duration metric
     // (siragpt_ai_request_duration_seconds). Sampled at handler entry
     // so retries, preflight, model dispatch and the actual stream are
@@ -2657,6 +2676,30 @@ router.post(
                 : [];
               ad.detectSseGap(String(parsed.position), ring);
             }
+            try {
+              const w67rep = require('../services/agent-runner/engine-3h67');
+              if (typeof w67rep.applySseReplayCloseClosed === 'function') {
+                const ring67 = Array.isArray(resumeSession && resumeSession.record && resumeSession.record.chunks)
+                  ? resumeSession.record.chunks.map(function (content, i) {
+                    return { seq: i + 1, id: i + 1, content: content, at: Date.now() };
+                  })
+                  : [];
+                w67rep.applySseReplayCloseClosed({
+                  headerValue: String(parsed.position),
+                  lastEventId: parsed.position,
+                  events: ring67,
+                  store: cursorStore,
+                  closed: false,
+                  alreadyDone: true,
+                  parseLastEventIdIntOnly: ad.parseLastEventIdIntOnly,
+                  restoreLastSseIdOnResume: ad.restoreLastSseIdOnResume,
+                  dropSseCommentFramesFromReplay: ad.dropSseCommentFramesFromReplay,
+                  dropSseEventsOlderThan2min: ad.dropSseEventsOlderThan2min,
+                  capReplayFrames64: ad.capReplayFrames64,
+                  endSseWithEventDone: ad.endSseWithEventDone,
+                });
+              }
+            } catch (_) { /* 3H67 replay filter fail-open */ }
           } catch (_) { /* 3H62 cursor hydrate is best-effort */ }
         } else {
           const rawStreamId = streamResume.generateStreamId();
@@ -7923,6 +7966,39 @@ router.post(
           });
         }
       } catch (_) { /* 3H66 sse settle order fail-open */ }
+      try {
+        const w67set = require('../services/agent-runner/engine-3h67');
+        const ad67set = require('../services/agent-runner/engine-adapter');
+        if (typeof w67set.applySseReplayCloseClosed === 'function') {
+          const done67 = w67set.applySseReplayCloseClosed({
+            headerValue: __lastEventIdHeader,
+            lastEventId: __lastEventIdHeader,
+            events: [],
+            closed: Boolean(res.writableEnded),
+            alreadyDone: Boolean(res.writableEnded),
+            parseLastEventIdIntOnly: ad67set.parseLastEventIdIntOnly,
+            restoreLastSseIdOnResume: ad67set.restoreLastSseIdOnResume,
+            dropSseCommentFramesFromReplay: ad67set.dropSseCommentFramesFromReplay,
+            dropSseEventsOlderThan2min: ad67set.dropSseEventsOlderThan2min,
+            capReplayFrames64: ad67set.capReplayFrames64,
+            endSseWithEventDone: ad67set.endSseWithEventDone,
+          });
+          if (done67 && done67.writeDone && done67.frame && !res.writableEnded) {
+            try { res.write(done67.frame); } catch (_) { /* socket gone */ }
+          }
+        }
+        if (typeof w67set.applyCreditErrorPathClosed === 'function') {
+          w67set.applyCreditErrorPathClosed({
+            usage: {},
+            error: streamFailureMessage ? { message: streamFailureMessage } : null,
+            noCompletion: Boolean(signal && signal.aborted),
+            aborted: Boolean(signal && signal.aborted),
+            buffer: '',
+            recordTokenUsageOnErrorPath: ad67set.recordTokenUsageOnErrorPath,
+            cancelDropsBufferedTokens: ad67set.cancelDropsBufferedTokens,
+          });
+        }
+      } catch (_) { /* 3H67 sse done / credit error-path fail-open */ }
       try {
         const w62 = require('../services/agent-runner/engine-3h62');
         if (typeof w62.observeTurnLatencyClosed === 'function') {
