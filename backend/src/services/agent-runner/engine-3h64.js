@@ -274,7 +274,7 @@ function guardSseClientGoneClosed({
   endSseWithErrorEventOnAbort,
   detectSseGap,
 } = {}) {
-  const attached = destroySseOnClientClose
+  const attached = destroySseOnClientClose && req && typeof req.on === 'function'
     ? destroySseOnClientClose(req, writer)
     : { attached: false, destroyed: false };
   const gone = closeIfClientGone30s
@@ -346,22 +346,29 @@ function applySandboxSpawnGuardsClosed({
     ? sandboxNoNewPrivs({ bin: nextBin, argv: nextArgv })
     : null;
   let setprivApplied = false;
-  if (privs && privs.prefixed && Array.isArray(privs.argv)) {
-    const setprivBin = ['/usr/bin/setpriv', '/sbin/setpriv', 'setpriv'];
-    let hasSetpriv = false;
+  // sandboxNoNewPrivs prefixes `setpriv` inside bash -c. That tries to
+  // exec `ulimit` (a shell builtin) and leaves a dirty child handle.
+  // Call the live helper, but only wrap as an outer setpriv when the
+  // inner command is not an ulimit preamble.
+  const innerCmd = String((nextArgv && nextArgv[1]) || '');
+  const ulimitPreamble = Boolean(nextArgv && nextArgv[0] === '-c' && innerCmd.indexOf('ulimit') >= 0);
+  if (privs && privs.prefixed && !ulimitPreamble) {
+    const setprivBin = ['/usr/bin/setpriv', '/sbin/setpriv'];
+    let setprivPath = null;
     for (const p of setprivBin) {
       try {
-        if (p.indexOf('/') === 0 && fs.existsSync(p)) { hasSetpriv = true; break; }
+        if (fs.existsSync(p)) { setprivPath = p; break; }
       } catch (_) { /* ignore */ }
     }
-    if (hasSetpriv) {
-      nextBin = privs.bin != null ? privs.bin : nextBin;
-      nextArgv = privs.argv;
+    if (setprivPath) {
+      nextArgv = ['--no-new-privs', '--', nextBin].concat(nextArgv);
+      nextBin = setprivPath;
       setprivApplied = true;
     }
   }
-  const kill = sandboxKillAfterGraceMs
-    ? sandboxKillAfterGraceMs({ pid, killFn, setTimeoutFn, graceMs })
+  const pidNum = Number(pid);
+  const kill = sandboxKillAfterGraceMs && Number.isFinite(pidNum) && pidNum > 0
+    ? sandboxKillAfterGraceMs({ pid: pidNum, killFn, setTimeoutFn, graceMs })
     : { killed: false };
   const cleaned = aborted && tmpCleanupOnCancel
     ? tmpCleanupOnCancel(dirs)

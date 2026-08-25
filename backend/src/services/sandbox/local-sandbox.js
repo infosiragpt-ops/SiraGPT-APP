@@ -252,7 +252,13 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
         reapBackgroundBashOnAbort: ad.reapBackgroundBashOnAbort,
         pollBackgroundBash: ad.pollBackgroundBash,
       });
-      if (sandboxGuards && sandboxGuards.bin && Array.isArray(sandboxGuards.argv)) {
+      // wrapSandboxSpawnWithRssCpu uses `ulimit -v` (virtual address
+      // space). V8 reserves multi-GB ranges, so applying the wrap to
+      // the node interpreter FatalOOMs. Still call the live helper;
+      // only apply bash+ulimit to python/bash.
+      const looksLikeNode = /node(\.exe)?$/i.test(String(bin0))
+        || bin0 === process.execPath;
+      if (sandboxGuards && sandboxGuards.bin && Array.isArray(sandboxGuards.argv) && !looksLikeNode) {
         bin = sandboxGuards.bin;
         argv = sandboxGuards.argv;
       }
@@ -343,6 +349,15 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       child.stderr.on('data', (chunk) => { stderrBuf = appendCapped(stderrBuf, chunk, 'stderr'); });
     }
 
+    function releaseChild() {
+      try { if (child.stdout) child.stdout.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stderr) child.stderr.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { child.removeAllListeners(); } catch (_) { /* ignore */ }
+      try { if (child.stdout && !child.stdout.destroyed) child.stdout.destroy(); } catch (_) { /* ignore */ }
+      try { if (child.stderr && !child.stderr.destroyed) child.stderr.destroy(); } catch (_) { /* ignore */ }
+      try { if (typeof child.unref === 'function') child.unref(); } catch (_) { /* ignore */ }
+    }
+
     function killChild(reason) {
       if (killedReason) return;
       killedReason = reason;
@@ -391,6 +406,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
     child.on('error', (err) => {
       if (timer) clearTimeout(timer);
       sem.release();
+      releaseChild();
       if (externalAbortHandler && opts.signal) {
         try { opts.signal.removeEventListener('abort', externalAbortHandler); } catch { /* ignore */ }
       }
@@ -411,6 +427,7 @@ async function executeLocal(args = {}, env = process.env, opts = {}) {
       let durationMs = elapsedMs();
       const stdout = stdoutBuf.toString('utf8');
       const stderr = stderrBuf.toString('utf8');
+      releaseChild();
 
       if (killedReason === 'timeout') {
         durationMs = Math.max(durationMs, timeoutMs);
