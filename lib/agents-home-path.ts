@@ -95,6 +95,9 @@ export function postAuthAgentsHref(next?: string | null): string {
   try {
     const url = new URL(value, "https://siragpt.local")
     if (url.pathname.startsWith("/api") || url.pathname.startsWith("/auth")) return AGENTS_HOME_PATH
+    if (url.pathname === "/code" || url.pathname.startsWith("/code/")) {
+      return chatSearchToAgentsHome(url.search, url.hash)
+    }
     if (url.pathname === "/" || isAgentsHomePath(url.pathname)) {
       return chatSearchToAgentsHome(url.search, url.hash, url.pathname)
     }

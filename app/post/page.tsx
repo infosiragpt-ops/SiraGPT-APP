@@ -201,7 +201,7 @@ export default function PostPage() {
     }
     const cleanPrompt = normalized.value.trim()
     if (!cleanPrompt) return toast.error("Escribe la idea del post")
-    if (!workspaceId) return toast.error("Abre primero una empresa activa desde /code")
+    if (!workspaceId) return toast.error("Abre primero una empresa activa desde Agentes")
     if (platforms.length === 0) return toast.error("Selecciona al menos una red social")
     if (platforms.some((platform) => !allowedPlatforms.has(platform))) {
       return toast.error("Marketing solo puede usar recursos asignados a esta empresa")
@@ -264,7 +264,7 @@ export default function PostPage() {
         </p>
         {!workspaceId ? (
           <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
-            Abre una empresa desde /code antes de programar contenido.
+            Abre una empresa desde Agentes antes de programar contenido.
           </p>
         ) : null}
       </header>

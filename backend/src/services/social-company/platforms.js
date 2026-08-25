@@ -24,7 +24,7 @@ function callbackUrl(platform, env = process.env) {
 }
 
 function postCallbackUrl(platform, status, env = process.env) {
-  const url = new URL('/code', getFrontendUrl(env));
+  const url = new URL('/agentes', getFrontendUrl(env));
   url.searchParams.set('companyView', 'resources');
   url.searchParams.set('social', String(status || 'error'));
   url.searchParams.set('platform', platform);
