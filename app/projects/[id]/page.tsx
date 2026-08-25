@@ -18,7 +18,7 @@
  *      "project-prefill:<chatId>" so the chat page can pre-fill its
  *      composer on mount. Prefill, not auto-send — we let the user
  *      review/edit before sending to keep the UX unsurprising.
- *   4. Router.push to /chat?id=<chatId>. The chat context picks up
+ *   4. Router.push to /agentes/:id. The chat context picks up
  *      the new chat id, loads messages (none yet), and the user hits
  *      Send from the full-featured chat UI.
  *
