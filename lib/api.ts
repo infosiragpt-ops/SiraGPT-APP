@@ -1701,7 +1701,8 @@ class ApiClient {
     //  - Honor Retry-After header on 429 if provided
     //  - Never retry after content without a cursor; cursor retries replay
     //    only the missing tail and therefore do not duplicate rendered text
-    //  - Never retry on AbortError (user clicked stop)
+    //  - Never retry AbortError when our Stop controller aborted
+    //  - Safari/Cloudflare AbortError without that signal is a transport cut
     //  - Per-attempt timing is logged so we can audit recovery cost
     const MAX_CONNECT_ATTEMPTS = 5;
     const BASE_RECONNECT_DELAY_MS = 1000;
@@ -2037,7 +2038,7 @@ class ApiClient {
         }
       } catch (error: any) {
         lastError = error;
-        if (error?.name === 'AbortError' || signal?.aborted) {
+        if (signal?.aborted) {
           deliverStreamError(error);
           return;
         }
@@ -2047,8 +2048,12 @@ class ApiClient {
         // fetch" (TypeError) is the most common one — happens when the
         // backend SSE socket drops mid-handshake, the wifi/network
         // hiccups, or a reverse proxy returns nothing.
-        const isNetworkError = error?.name === 'TypeError'
-          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream/i.test(error?.message || '');
+        // Safari/Cloudflare also abort the fetch as AbortError without
+        // aborting our Stop controller — retry that, don't freeze Pensando.
+        const isBrowserAbort = error?.name === 'AbortError';
+        const isNetworkError = isBrowserAbort
+          || error?.name === 'TypeError'
+          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520/i.test(error?.message || '');
         const canResume = Boolean(lastEventId);
         if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);

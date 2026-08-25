@@ -8241,6 +8241,18 @@ router.post(
         }
       } catch (_) { /* never throw from finally */ }
 
+      // Safari/Cloudflare can drop the socket after persist. If we still
+      // have a writable response, emit [DONE] so the client leaves Pensando.
+      // If the client is already gone, persist-then-poll recovers the row.
+      if (
+        !streamResumeFollower
+        && (streamCompleted || (typeof fullResponseContent === 'string' && fullResponseContent.trim()))
+        && !res.writableEnded
+        && !clientGone
+      ) {
+        try { res.write('data: [DONE]\n\n'); } catch { /* socket gone */ }
+      }
+
       // ✅ Only end response if not already ended
       if (!res.writableEnded) {
         res.end();
