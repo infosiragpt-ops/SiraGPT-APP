@@ -1,15 +1,7 @@
 "use client"
 
-/**
- * Upgrade console — strict monochrome edition.
- *
- * Design contract: black & white ONLY (grayscale surfaces, no brand or
- * accent hues), futurist-minimal typography, and the whole console fits
- * one viewport — the dialog is a fixed-height flex column and nothing
- * inside it scrolls.
- */
-
 import * as React from "react"
+import { motion, useReducedMotion } from "framer-motion"
 import {
   ArrowUpRight,
   Building2,
@@ -56,6 +48,8 @@ type UpgradePlan = {
   featured?: boolean
   badge?: string
   cta: string
+  accent: string
+  accentRgb: string
   capacity: string
   accessLine: string
   features: PlanFeature[]
@@ -73,7 +67,7 @@ const POSITIONING = {
   eyebrow: "Todos los modelos. Todas las capacidades. Una cuenta.",
   headline: "Toda la IA de frontera, por una fracción del precio de una sola.",
   subhead:
-    "GPT, Claude, Gemini, Grok y más con imagen, voz, video, documentos, código y agentes integrados desde $5/mes.",
+    "GPT, Claude, Gemini, Grok y más con imagen, voz, video, documentos, código y agentes integrados. SiraGPT reúne todo en una experiencia simple desde $5/mes.",
 }
 
 const TRUST_ROW = [
@@ -96,15 +90,17 @@ const upgradePlans: UpgradePlan[] = [
     name: "Gratis",
     eyebrow: "Para probar SiraGPT",
     price: "Gratis",
-    subtitle: "Acceso básico y FlashGPT gratis e ilimitado.",
+    subtitle: "Sigue usando SiraGPT con acceso básico y FlashGPT gratis e ilimitado.",
     icon: Sparkles,
     cta: "Seguir con Gratis",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Acceso inicial",
     accessLine: "FlashGPT gratis e ilimitado, siempre.",
     features: [
-      { icon: Zap, title: "FlashGPT sin costo", desc: "Preguntas rápidas y uso diario básico." },
-      { icon: MessageCircle, title: "Tus chats se conservan", desc: "Sube de plan cuando lo necesites." },
-      { icon: ShieldCheck, title: "Sin permanencia", desc: "Cambia de plan en cualquier momento." },
+      { icon: Zap, title: "FlashGPT sin costo", desc: "Para preguntas rápidas y uso diario básico." },
+      { icon: MessageCircle, title: "Tus chats se conservan", desc: "Mantén tu cuenta y sube cuando lo necesites." },
+      { icon: ShieldCheck, title: "Sin permanencia", desc: "Puedes cambiar de plan en cualquier momento." },
     ],
   },
   {
@@ -113,18 +109,20 @@ const upgradePlans: UpgradePlan[] = [
     eyebrow: "El que la mayoría elige",
     price: "$5",
     priceSuffix: "/mes",
-    subtitle: "Toda la IA de SiraGPT en una cuenta.",
+    subtitle: "Toda la IA de SiraGPT en una cuenta. El punto de partida perfecto.",
     icon: Crown,
     featured: true,
     badge: "Más popular",
     cta: "Empezar con Pro",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Todos los modelos",
     accessLine: "GPT, Claude, Gemini, Grok y más en un solo chat.",
     features: [
-      { icon: Sparkles, title: "Cambia de modelo sin cambiar de app", desc: "Todos los modelos líderes en una cuenta." },
-      { icon: ImageIcon, title: "Crea en cualquier formato", desc: "Imagen, voz, video, documentos y código." },
-      { icon: FileText, title: "Ideas convertidas en entregables", desc: "34 herramientas visuales en segundos." },
-      { icon: Rocket, title: "Agentes que trabajan por ti", desc: "Tareas multi-paso que se ejecutan solas." },
+      { icon: Sparkles, title: "Cambia de modelo sin cambiar de app", desc: "Todos los modelos líderes en una sola cuenta." },
+      { icon: ImageIcon, title: "Crea en cualquier formato", desc: "Imagen, voz, video, música, documentos y código." },
+      { icon: FileText, title: "Convierte ideas en entregables", desc: "34 herramientas visuales en segundos." },
+      { icon: Rocket, title: "Agentes que trabajan por ti", desc: "Investigación y tareas multi-paso que se ejecutan solas." },
     ],
   },
   {
@@ -133,15 +131,17 @@ const upgradePlans: UpgradePlan[] = [
     eyebrow: "Para uso intensivo a diario",
     price: "$10",
     priceSuffix: "/mes",
-    subtitle: "Todo lo de Pro con el doble de volumen.",
+    subtitle: "Todo lo de Pro con el doble de volumen para producir sin frenar.",
     icon: Rocket,
     cta: "Elegir Pro Extendido",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Doble capacidad",
-    accessLine: "Para quien usa IA todos los días sin recortar.",
+    accessLine: "Para quien usa IA todos los días sin recortar herramientas.",
     features: [
       { icon: Globe, title: "El doble de capacidad mensual", desc: "Más volumen para tareas largas y frecuentes." },
       { icon: Crown, title: "Todo Pro, sin recortes", desc: "Cada modelo, herramienta y agente, igual." },
-      { icon: Sparkles, title: "La mitad de una sola rival", desc: "$10 vs los $20 de ChatGPT o Claude." },
+      { icon: Sparkles, title: "La mitad de una sola rival", desc: "$10 vs los $20 de ChatGPT, Claude o Gemini." },
       { icon: ShieldCheck, title: "Prioridad y soporte reforzados", desc: "Continuidad superior para proyectos frecuentes." },
     ],
   },
@@ -150,16 +150,18 @@ const upgradePlans: UpgradePlan[] = [
     name: "Enterprise",
     eyebrow: "A la medida de tu equipo",
     price: "Hablemos",
-    subtitle: "Para equipos con necesidades específicas.",
+    subtitle: "Para equipos y empresas con necesidades específicas.",
     icon: Building2,
     cta: "Comunícate al WhatsApp",
+    accent: "#111827",
+    accentRgb: "17,24,39",
     capacity: "Equipo y seguridad",
     accessLine: "Configuración, soporte e integraciones a la medida.",
     features: [
       { icon: Building2, title: "Espacios de equipo compartidos", desc: "Contexto común y trabajo multi-usuario." },
       { icon: ShieldCheck, title: "Seguridad de nivel empresa", desc: "SSO, listas de IP y accesos por rol." },
       { icon: Globe, title: "Integraciones a tu flujo", desc: "Slack, GitHub y tus APIs internas." },
-      { icon: MessageCircle, title: "Onboarding y soporte directo", desc: "WhatsApp y SLA a medida." },
+      { icon: MessageCircle, title: "Onboarding y soporte directo", desc: "Acompañamiento por WhatsApp y SLA a medida." },
     ],
   },
 ]
@@ -168,22 +170,27 @@ function isPaidPlan(plan: Plan): plan is Exclude<Plan, "FREE"> {
   return plan !== "FREE"
 }
 
-function FeatureRow({ icon: Icon, title, desc, active }: PlanFeature & { active?: boolean }) {
+function FeatureRow({
+  icon: Icon,
+  title,
+  desc,
+  active,
+}: PlanFeature & { active?: boolean }) {
   return (
-    <div className="flex min-h-0 gap-2 py-[3px]">
+    <div className="flex gap-2.5 py-1.5">
       <div
-        className={
-          "mt-[1px] flex h-5 w-5 shrink-0 items-center justify-center rounded-full border " +
-          (active
-            ? "border-white/40 bg-white/15 text-white"
-            : "border-white/15 bg-white/[0.06] text-white/70")
-        }
+        className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border"
+        style={{
+          borderColor: active ? "rgba(17,24,39,0.22)" : "rgba(0,0,0,0.10)",
+          background: active ? "rgba(17,24,39,0.08)" : "#f4f4f5",
+          color: active ? "#111827" : "#52525b",
+        } as React.CSSProperties}
       >
-        <Icon className="h-2.5 w-2.5" />
+        <Icon className="h-3 w-3" />
       </div>
       <div className="min-w-0">
-        <div className="truncate text-[11.5px] font-semibold leading-4 text-white">{title}</div>
-        <div className="truncate text-[10px] leading-[13px] text-white/[0.52]">{desc}</div>
+        <div className="text-[13px] font-semibold leading-4 text-zinc-900">{title}</div>
+        <div className="text-[11px] leading-4 text-zinc-600">{desc}</div>
       </div>
     </div>
   )
@@ -193,6 +200,7 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   const [loadingPlan, setLoadingPlan] = React.useState<Plan | null>(null)
   const [hoveredPlan, setHoveredPlan] = React.useState<Plan | null>(null)
   const { user: authUser } = useAuth()
+  const reduceMotion = useReducedMotion()
   const currentUser = authUser || user
   const currentPlan = (currentUser?.plan || "FREE") as Plan
   const apiUsage = currentUser?.apiUsage ?? 0
@@ -253,193 +261,217 @@ export default function UpgradeModal({ open, onOpenChange, user, onSubscribe, is
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="flex h-[94vh] w-[97vw] max-w-[1440px] flex-col overflow-hidden border border-white/[0.14] bg-[#0a0a0a] p-0 text-white shadow-[0_40px_140px_-28px_rgba(0,0,0,0.9)] [&>button]:right-4 [&>button]:top-4 [&>button]:rounded-full [&>button]:border [&>button]:border-white/[0.16] [&>button]:bg-white/[0.06] [&>button]:p-2 [&>button]:text-white/70 [&>button]:transition-colors [&>button]:hover:bg-white/[0.14] [&>button]:hover:text-white"
-        style={{ borderRadius: 24 }}
+        className="w-[96vw] max-w-[1320px] overflow-hidden border border-zinc-200 bg-white p-0 text-zinc-900 shadow-[0_32px_80px_-20px_rgba(0,0,0,0.25)] [&>button]:right-5 [&>button]:top-3 [&>button]:rounded-full [&>button]:border [&>button]:border-zinc-200 [&>button]:bg-white [&>button]:p-2 [&>button]:text-zinc-600 [&>button]:transition-colors [&>button]:hover:bg-zinc-50 [&>button]:hover:text-zinc-900"
+        style={{ maxHeight: "92vh", borderRadius: 28 }}
       >
-        <div className="flex min-h-0 flex-1 flex-col px-6 pb-4 pt-5 lg:px-8">
-          {/* Header — one compact band. */}
-          <DialogHeader className="shrink-0 space-y-0">
-            <div className="flex items-start justify-between gap-4 pr-12">
-              <div className="min-w-0">
-                <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/[0.16] bg-white/[0.05] px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.18em] text-white/[0.65]">
-                  <Sparkles className="h-3 w-3 text-white" />
-                  {POSITIONING.eyebrow}
+        <style>{`
+          .siragpt-upgrade-scroll::-webkit-scrollbar { width: 10px; }
+          .siragpt-upgrade-scroll::-webkit-scrollbar-track { background: #f4f4f5; border-radius: 999px; }
+          .siragpt-upgrade-scroll::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 999px; border: 2px solid #ffffff; }
+          .siragpt-plan-card {
+            background: #ffffff;
+            border: 1px solid #e4e4e7;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.04);
+          }
+          .siragpt-plan-card--featured {
+            border-color: #18181b;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.06);
+          }
+        `}</style>
+
+        <div className="relative overflow-hidden bg-white" style={{ borderRadius: 28 }}>
+          <div className="siragpt-upgrade-scroll relative max-h-[92vh] overflow-y-auto bg-white px-5 py-6 sm:px-7 lg:px-8">
+            <DialogHeader className="relative pt-7 sm:pt-0">
+              <div className="mb-3 inline-flex w-fit max-w-[calc(100%-4.5rem)] items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-600 sm:max-w-none">
+                <Sparkles className="h-3.5 w-3.5 text-zinc-900" />
+                {POSITIONING.eyebrow}
+              </div>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <DialogTitle className="max-w-4xl text-balance text-2xl font-semibold tracking-[-0.03em] text-zinc-900 sm:text-[34px] sm:leading-[1.06]">
+                    {POSITIONING.headline}
+                  </DialogTitle>
+                  <p className="mt-3 max-w-3xl text-[13px] leading-5 text-zinc-600 sm:text-sm">
+                    {POSITIONING.subhead}
+                  </p>
+                  <DialogDescription className="sr-only">
+                    {POSITIONING.subhead}
+                  </DialogDescription>
                 </div>
-                <DialogTitle className="mt-2 truncate text-[22px] font-semibold tracking-[-0.03em] text-white xl:text-[26px]">
-                  {POSITIONING.headline}
-                </DialogTitle>
-                <p className="mt-1 truncate text-[12px] leading-5 text-white/[0.6]">
-                  {POSITIONING.subhead}
-                </p>
-                <DialogDescription className="sr-only">{POSITIONING.subhead}</DialogDescription>
+                <div className="flex shrink-0 items-center gap-2 rounded-full border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600">
+                  <span>Plan actual:</span>
+                  <span className="font-semibold text-zinc-900">{currentPlan}</span>
+                </div>
               </div>
-              <div className="mt-1 flex shrink-0 items-center gap-2 rounded-full border border-white/[0.16] bg-white/[0.05] px-3 py-1.5 text-[11px] text-white/[0.65]">
-                <span>Plan actual:</span>
-                <span className="font-semibold text-white">{currentPlan}</span>
+            </DialogHeader>
+
+            <div className="mt-5 grid gap-3 lg:grid-cols-[1.35fr_.9fr]">
+              <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-[13px] leading-5 text-zinc-700">
+                Una sola suscripción de ChatGPT, Claude o Gemini cuesta{" "}
+                <span className="font-bold text-zinc-900">$20/mes</span>. SiraGPT te da{" "}
+                <span className="font-bold text-zinc-900">todos los modelos líderes</span>, formatos creativos, documentos, código y agentes{" "}
+                <span className="font-bold text-zinc-900">desde $5/mes</span>.
               </div>
+              {usageRatio >= 0.7 ? (
+                <div className="flex items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-zinc-700">
+                  <span className="h-2 w-2 rounded-full bg-amber-500" />
+                  <span>
+                    Has usado <strong className="text-zinc-900">{usagePct}%</strong> de tu actividad este mes. Mejora tu plan para seguir sin interrupciones.
+                  </span>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-[13px] leading-5 text-zinc-600">
+                  Todos los planes mantienen tu cuenta, historial y acceso a las capacidades de SiraGPT.
+                </div>
+              )}
             </div>
-          </DialogHeader>
 
-          {/* Value strip + usage — one thin monochrome line. */}
-          <div className="mt-3 grid shrink-0 gap-2 lg:grid-cols-[1.4fr_.9fr]">
-            <div className="truncate rounded-xl border border-white/[0.12] bg-white/[0.04] px-3.5 py-2 text-[11.5px] leading-5 text-white/[0.62]">
-              Una sola suscripción rival cuesta <span className="font-bold text-white">$20/mes</span>. SiraGPT te da{" "}
-              <span className="font-bold text-white">todos los modelos líderes</span>, formatos, código y agentes{" "}
-              <span className="font-bold text-white underline underline-offset-2">desde $5/mes</span>.
-            </div>
-            {usageRatio >= 0.7 ? (
-              <div className="flex items-center gap-2 truncate rounded-xl border border-white/[0.3] bg-white/[0.08] px-3.5 py-2 text-[11.5px] text-white/[0.75]">
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-white" />
-                <span className="truncate">
-                  Has usado <strong className="text-white">{usagePct}%</strong> de tu actividad este mes. Mejora tu plan para continuar.
-                </span>
-              </div>
-            ) : (
-              <div className="truncate rounded-xl border border-white/[0.12] bg-white/[0.03] px-3.5 py-2 text-[11.5px] leading-5 text-white/[0.55]">
-                Todos los planes mantienen tu cuenta, historial y capacidades.
-              </div>
-            )}
-          </div>
+            <div className="mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {upgradePlans.map((plan, idx) => {
+                const Icon = plan.icon
+                const isCurrent = currentPlan === plan.id
+                const isHovered = hoveredPlan === plan.id
+                const isLoading = loadingPlan === plan.id || isSubscribing
+                const isEnterprise = plan.id === "ENTERPRISE"
+                const isFree = plan.id === "FREE"
+                const isActive = isCurrent || isHovered || plan.featured
+                const topLabel = isCurrent ? "plan actual" : isHovered ? "seleccionar este plan" : plan.badge
 
-          {/* Plans — the grid absorbs all remaining height; nothing scrolls. */}
-          <div className="mt-3 grid min-h-0 flex-1 grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-4">
-            {upgradePlans.map((plan) => {
-              const Icon = plan.icon
-              const isCurrent = currentPlan === plan.id
-              const isHovered = hoveredPlan === plan.id
-              const isLoading = loadingPlan === plan.id || isSubscribing
-              const isEnterprise = plan.id === "ENTERPRISE"
-              const isFree = plan.id === "FREE"
-              const isActive = isCurrent || isHovered || plan.featured
-              const topLabel = isCurrent ? "plan actual" : isHovered ? "seleccionar este plan" : plan.badge
-
-              return (
-                <article
-                  key={plan.id}
-                  onMouseEnter={() => setHoveredPlan(plan.id)}
-                  onMouseLeave={() => setHoveredPlan(null)}
-                  onFocus={() => setHoveredPlan(plan.id)}
-                  onBlur={() => setHoveredPlan(null)}
-                  className={
-                    "group relative flex min-h-0 flex-col overflow-hidden rounded-2xl border bg-white/[0.035] transition-colors duration-150 " +
-                    (isCurrent || isHovered ? "border-white/[0.75]" : plan.featured ? "border-white/[0.4]" : "border-white/[0.16]")
-                  }
-                >
-                  {/* Status band — white on black, monochrome only. */}
-                  <div
-                    className={
-                      "flex h-6 shrink-0 items-center justify-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.1em] transition-opacity duration-150 " +
-                      (isCurrent || isHovered ? "bg-white text-black" : "bg-white/[0.1] text-white/85") +
-                      (topLabel ? " opacity-100" : " opacity-0")
-                    }
+                return (
+                  <motion.article
+                    key={plan.id}
+                    initial={reduceMotion ? false : { opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.28, delay: reduceMotion ? 0 : idx * 0.055, ease: [0.22, 1, 0.36, 1] }}
+                    onMouseEnter={() => setHoveredPlan(plan.id)}
+                    onMouseLeave={() => setHoveredPlan(null)}
+                    onFocus={() => setHoveredPlan(plan.id)}
+                    onBlur={() => setHoveredPlan(null)}
+                    className={`group relative flex min-h-[610px] overflow-hidden rounded-[22px] ${plan.featured ? "siragpt-plan-card siragpt-plan-card--featured" : "siragpt-plan-card"}`}
+                    style={{
+                      borderColor: isCurrent ? "#18181b" : isHovered ? "#a1a1aa" : undefined,
+                    } as React.CSSProperties}
                   >
-                    {topLabel ? <Check className="h-3 w-3" /> : null}
-                    {topLabel}
-                  </div>
-
-                  <div className="flex min-h-0 flex-1 flex-col px-4 pb-3.5 pt-3">
-                    <div className="flex shrink-0 items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-[9.5px] font-semibold uppercase tracking-[0.16em] text-white/[0.45]">{plan.eyebrow}</div>
-                        <h3 className="mt-1 truncate text-[17px] font-semibold tracking-[-0.02em] text-white">{plan.name}</h3>
-                      </div>
-                      <div
-                        className={
-                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border " +
-                          (isActive ? "border-white/[0.4] bg-white/[0.12] text-white" : "border-white/[0.16] bg-white/[0.06] text-white/70")
-                        }
-                      >
-                        <Icon className="h-4 w-4" />
-                      </div>
-                    </div>
-
-                    <div className="mt-2 flex shrink-0 items-baseline gap-1.5">
-                      <span className="text-[30px] font-semibold leading-none tracking-[-0.05em] text-white xl:text-[34px]">{plan.price}</span>
-                      {plan.priceSuffix ? <span className="text-[11px] font-semibold text-white/[0.55]">{plan.priceSuffix}</span> : null}
-                    </div>
-                    <p className="mt-1.5 shrink-0 truncate text-[11px] leading-4 text-white/[0.6]">{plan.subtitle}</p>
-
-                    <Button
-                      size="sm"
-                      disabled={isCurrent || !!isLoading}
-                      onClick={() => handlePlanAction(plan.id)}
-                      className={
-                        "mt-2.5 h-9 w-full shrink-0 rounded-full border-0 px-4 text-[12px] font-semibold transition-colors " +
-                        (isCurrent
-                          ? "bg-white/[0.14] text-white/[0.7] hover:bg-white/[0.14]"
-                          : isActive
-                            ? "bg-white text-black hover:bg-white/90"
-                            : "bg-white/[0.1] text-white hover:bg-white/[0.2]")
-                      }
+                    <div
+                      className="absolute inset-x-0 top-0 flex h-7 items-center justify-center text-[10px] font-bold uppercase tracking-[0.08em] transition-opacity duration-200"
+                      style={{
+                        background: isCurrent || isHovered ? "#18181b" : plan.featured ? "#18181b" : "#f4f4f5",
+                        color: isCurrent || isHovered || plan.featured ? "#ffffff" : "#52525b",
+                        opacity: topLabel ? 1 : 0,
+                      }}
                     >
-                      {isCurrent ? (
-                        <>
-                          <Check className="mr-2 h-4 w-4" />
-                          Plan actual
-                        </>
-                      ) : isEnterprise ? (
-                        <>
-                          <MessageCircle className="mr-2 h-4 w-4" />
-                          {plan.cta}
-                        </>
-                      ) : isFree ? (
-                        plan.cta
-                      ) : (
-                        <>
-                          {plan.cta}
-                          <ArrowUpRight className="ml-auto h-4 w-4" />
-                        </>
-                      )}
-                    </Button>
-
-                    <div className="mt-2.5 shrink-0 border-t border-white/[0.12] pt-2">
-                      <div className="text-[9px] font-semibold uppercase tracking-[0.16em] text-white/[0.4]">Capacidad operativa</div>
-                      <div className="mt-1 flex items-center gap-1.5 text-[12px] font-semibold text-white">
-                        <Zap className="h-3.5 w-3.5 text-white/80" />
-                        {plan.capacity}
-                      </div>
-                      <p className="mt-0.5 truncate text-[10px] leading-[14px] text-white/[0.5]">{plan.accessLine}</p>
+                      {topLabel ? <Check className="mr-1.5 h-3 w-3" /> : null}
+                      {topLabel}
                     </div>
 
-                    <div className="mt-2 shrink-0 border-t border-white/[0.12] pt-2">
-                      <div className="mb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-white/[0.4]">Modelos incluidos</div>
-                      <div className="space-y-[3px]">
-                        {MODEL_STACK.map((model) => (
-                          <div key={model} className="flex items-center gap-1.5 text-[10.5px] font-semibold text-white/[0.65]">
-                            <Layers3 className="h-3 w-3 text-white/60" />
-                            {model}
-                          </div>
+                    <div className="relative flex min-w-0 flex-1 flex-col bg-white px-4 pb-4 pt-12 sm:px-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">{plan.eyebrow}</div>
+                          <h3 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-zinc-900">{plan.name}</h3>
+                        </div>
+                        <div
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border ${isActive ? "border-zinc-900 bg-zinc-900 text-white" : "border-zinc-200 bg-zinc-50 text-zinc-700"}`}
+                        >
+                          <Icon className="h-[18px] w-[18px]" />
+                        </div>
+                      </div>
+
+                      <div className="mt-6">
+                        <div className="flex min-h-[48px] items-baseline gap-1.5">
+                          <span className="text-[40px] font-semibold leading-none tracking-[-0.05em] text-zinc-900 sm:text-[43px]">
+                            {plan.price}
+                          </span>
+                          {plan.priceSuffix ? <span className="text-xs font-semibold text-zinc-600">{plan.priceSuffix}</span> : null}
+                        </div>
+                        <p className="mt-4 min-h-[40px] text-[12px] leading-5 text-zinc-600">{plan.subtitle}</p>
+                      </div>
+
+                      <Button
+                        size="sm"
+                        disabled={isCurrent || !!isLoading}
+                        onClick={() => handlePlanAction(plan.id)}
+                        className="mt-5 h-10 w-full rounded-full border px-4 text-[13px] font-semibold transition-all"
+                        style={{
+                          background: isCurrent
+                            ? "#f4f4f5"
+                            : isActive
+                              ? "#18181b"
+                              : "#ffffff",
+                          color: isCurrent ? "#71717a" : isActive ? "#ffffff" : "#18181b",
+                          borderColor: isCurrent ? "#e4e4e7" : isActive ? "#18181b" : "#e4e4e7",
+                        }}
+                      >
+                        {isCurrent ? (
+                          <>
+                            <Check className="mr-2 h-4 w-4" />
+                            Plan actual
+                          </>
+                        ) : isEnterprise ? (
+                          <>
+                            <MessageCircle className="mr-2 h-4 w-4" />
+                            {plan.cta}
+                          </>
+                        ) : isFree ? (
+                          plan.cta
+                        ) : (
+                          <>
+                            {plan.cta}
+                            <ArrowUpRight className="ml-auto h-4 w-4" />
+                          </>
+                        )}
+                      </Button>
+
+                      <div className="mt-5 border-t border-zinc-200 pt-4">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Capacidad operativa</div>
+                        <div className="mt-2 flex items-center gap-2 text-[13px] font-semibold text-zinc-900">
+                          <Zap className="h-4 w-4 text-zinc-900" />
+                          {plan.capacity}
+                        </div>
+                        <p className="mt-2 text-[11px] leading-4 text-zinc-600">{plan.accessLine}</p>
+                      </div>
+
+                      <div className="mt-5 border-t border-zinc-200 pt-4">
+                        <div className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Modelos incluidos</div>
+                        <div className="space-y-1.5">
+                          {MODEL_STACK.map((model) => (
+                            <div key={model} className="flex items-center gap-2 text-[11px] font-semibold text-zinc-700">
+                              <Layers3 className="h-3.5 w-3.5 text-zinc-900" />
+                              {model}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="mt-5 flex-1 border-t border-zinc-200 pt-4">
+                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Lo que desbloqueas</div>
+                        {plan.features.map((feature) => (
+                          <FeatureRow key={feature.title} {...feature} active={isActive} />
                         ))}
                       </div>
                     </div>
+                  </motion.article>
+                )
+              })}
+            </div>
 
-                    <div className="mt-2 min-h-0 flex-1 overflow-hidden border-t border-white/[0.12] pt-1.5">
-                      <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-white/[0.4]">Lo que desbloqueas</div>
-                      {plan.features.map((feature) => (
-                        <FeatureRow key={feature.title} {...feature} active={isActive} />
-                      ))}
-                    </div>
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-
-          {/* Trust footer — one thin line. */}
-          <div className="mt-2.5 flex shrink-0 flex-wrap items-center justify-center gap-x-4 gap-y-1 border-t border-white/[0.1] pt-2 text-center">
-            {TRUST_ROW.map((t, i) => (
-              <span key={t} className="inline-flex items-center gap-1.5 text-[10px] text-white/[0.5]">
-                {i === 0 ? <ShieldCheck className="h-3 w-3 text-white/70" /> : <Check className="h-2.5 w-2.5 text-white/[0.4]" />}
-                {t}
-              </span>
-            ))}
-            <button
-              type="button"
-              onClick={() => onOpenChange(false)}
-              className="text-[10.5px] text-white/[0.5] underline-offset-4 transition-colors hover:text-white hover:underline"
-            >
-              Seguir con el plan gratis. FlashGPT es gratis e ilimitado, siempre.
-            </button>
+            <div className="mt-5 flex flex-col items-center gap-3 border-t border-zinc-200 pt-4 text-center">
+              <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+                {TRUST_ROW.map((t, i) => (
+                  <span key={t} className="inline-flex items-center gap-1.5 text-[11px] text-zinc-600">
+                    {i === 0 ? <ShieldCheck className="h-3.5 w-3.5 text-zinc-900" /> : <Check className="h-3 w-3 text-zinc-400" />}
+                    {t}
+                  </span>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenChange(false)}
+                className="text-[12px] text-zinc-600 underline-offset-4 transition-colors hover:text-zinc-900 hover:underline"
+              >
+                Seguir con el plan gratis. FlashGPT es gratis e ilimitado, siempre.
+              </button>
+            </div>
           </div>
         </div>
       </DialogContent>
