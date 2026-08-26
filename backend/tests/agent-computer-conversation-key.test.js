@@ -15,6 +15,7 @@ const {
   publicComputerError,
   sessionMatchesConversation,
   readIsolationKey,
+  identityFromParts,
   requireProvenIsolation,
   attachIsolationOrRefuse,
 } = require('../src/services/computer/conversation-isolation');
@@ -57,11 +58,10 @@ describe('agent-computer conversation session key', () => {
   });
 
   test('agentes empty conversationId no longer 409s sessions create', () => {
-    const { identityFor } = require('../src/routes/agent-computer');
-    const identity = identityFor({ user: { id: 'u1' }, body: {}, query: {} });
+    const identity = identityFromParts({ userId: 'u1', body: {}, query: {} });
     assert.equal(identity.conversationBound, false);
     assert.equal(identity.conversationId, null);
-    assert.doesNotThrow(() => identityFor({ user: { id: 'u1' }, body: undefined, query: {} }));
+    assert.doesNotThrow(() => identityFromParts({ userId: 'u1', body: undefined, query: {} }));
     // /code still fail-closes; /agentes must not call this on an empty home.
     assert.throws(() => requireProvenIsolation(identity), (err) => err.code === 'isolation_required');
     const route = fs.readFileSync(path.join(__dirname, '../src/routes/agent-computer.js'), 'utf8');
@@ -82,14 +82,13 @@ describe('agent-computer conversation session key', () => {
   });
 
   test('agentes conversationId keeps the session conversationBound (body and query)', () => {
-    const { identityFor } = require('../src/routes/agent-computer');
-    const fromBody = identityFor({
-      user: { id: 'u1' },
+    const fromBody = identityFromParts({
+      userId: 'u1',
       body: { conversationId: 'chat-aaa' },
       query: {},
     });
-    const fromQuery = identityFor({
-      user: { id: 'u1' },
+    const fromQuery = identityFromParts({
+      userId: 'u1',
       body: {},
       query: { conversationId: 'chat-bbb' },
     });
