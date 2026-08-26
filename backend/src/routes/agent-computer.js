@@ -66,13 +66,10 @@ function loadSandboxTimeout() {
 }
 
 function withConversation(desktop, identity) {
-  const orchUser = String((desktop && desktop.userId) || identity.userId);
-  const bound = Boolean(identity.conversationId) && orchUser === identity.userId;
   return {
     ...desktop,
-    userId: orchUser,
     conversationId: identity.conversationId,
-    conversationBound: bound,
+    conversationBound: identity.conversationBound,
     sessionKey: identity.sessionKey,
   };
 }
