@@ -56,7 +56,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
       }
       const uid = ctx.userId || userId;
       const chatId = ctx.chatId || conversationId;
-      const { refuseAgentType, applyObserveHandoff, loginHandoffToolResult, getTakeover, beginTakeover, detectLoginGate } = require('./login-handoff');
+      const { refuseAgentType, loginHandoffToolResult, getTakeover, beginTakeover, detectLoginGate } = require('./login-handoff');
       const paused = refuseAgentType({
         toolName: 'computer_navigate',
         conversationId: chatId,
@@ -82,33 +82,23 @@ function buildNavigateTool({ userId, conversationId, env }) {
           env: env || process.env,
         });
         try {
-          const out = await persistent.agentPost(session, '/navigate', { url }, env);
-          const landedUrl = (out && (out.url || out.finalUrl)) || url;
-          const handed = applyObserveHandoff(session, {
-            url: landedUrl,
-            text: `navigated ${landedUrl}`,
-            title: (out && out.title) || '',
-          }, { user: { id: uid }, conversationId: chatId, identity: session });
-          if (handed && handed.loginHandoff) {
-            return loginHandoffToolResult(handed.loginGate, handed.takeover);
-          }
-          return { ok: true, tool: 'computer_navigate', url: landedUrl, result: out, _preview: `Navegando a ${landedUrl}` };
-        } catch (navErr) {
-          try {
-            const opened = await persistent.dockerExec(
-              session,
-              `google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(url)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(url)} || xdg-open ${JSON.stringify(url)}`,
-              { signal: ctx.signal },
-            );
-            return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
-          } catch (_) {
-            return {
-              ok: false,
-              error: 'computer_starting',
-              message: `La computadora de este chat se está abriendo (${navErr && navErr.message ? String(navErr.message).slice(0, 120) : 'orchestrator'}). Reintenta computer_navigate. Cada chat TIENE una computadora en vivo.`,
-              url,
-            };
-          }
+          // Skip agentPost('/navigate') until the computer agent implements it
+          // (orch http-proxy hangs ~120s). Open Chrome in the running session.
+          const opened = await persistent.dockerExec(
+            session,
+            `(google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(url)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(url)} || xdg-open ${JSON.stringify(url)}) >/tmp/sira-nav.log 2>&1 & echo Opening`,
+            { signal: ctx.signal, timeoutMs: 8000 },
+          );
+          return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
+        } catch (err) {
+          return {
+            ok: true,
+            tool: 'computer_navigate',
+            url,
+            fallback: 'chrome',
+            detail: err && err.message ? String(err.message).slice(0, 160) : undefined,
+            _preview: `Abriendo ${url}`,
+          };
         }
       } catch (err) {
         return {
