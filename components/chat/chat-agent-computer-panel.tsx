@@ -5,10 +5,13 @@
  *
  * Default view: a light panel with the live screen as a thumbnail card
  * («Pantalla de Siragpt»), gear + collapse controls on top, and the
- * Rutinas block underneath (recurring scheduled tasks for this chat's
- * workspace, with inline creation). Clicking the thumbnail or the gear
- * expands to the full OS window (AgentComputerShell) — same session,
- * same isolation per conversation.
+ * Rutinas block underneath. Clicking the thumbnail or the gear expands
+ * to the full OS window (AgentComputerShell) — same session, same
+ * isolation per conversation.
+ *
+ * Login handoff: when a login/2FA/captcha/payment wall is detected the
+ * panel auto-expands so the USER types on this desktop. SiraGPT never
+ * sees those keystrokes. On a phone the expanded view is full-screen.
  */
 
 import * as React from "react"
@@ -18,14 +21,23 @@ import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { AgentComputerShell } from "@/components/code/agent-computer-shell"
 import { DepartmentComputerPane } from "@/components/code/department-computer-pane"
+import { ComputerLoginHandoffBanner } from "@/components/chat/computer-login-handoff-banner"
 import { coworkApi, type ScheduledCoworkTask } from "@/lib/cowork-api"
 import { formatScheduleEsPE } from "@/lib/format-schedule-es-pe"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import {
+  LOGIN_HANDOFF_WINDOW_EVENT,
+  overlayLayoutContract,
+  type LoginHandoffDetail,
+} from "@/lib/computer-login-handoff"
 
 export type ChatAgentComputerPanelProps = {
   conversationId: string
   onClose: () => void
+  loginHandoff?: boolean
+  loginHandoffSite?: string | null
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
@@ -39,13 +51,30 @@ const SCHEDULE_PRESETS: Array<{ id: string; label: string; cron: string }> = [
   { id: "hourly", label: "Cada hora", cron: "0 * * * *" },
 ]
 
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
+
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
 export default function ChatAgentComputerPanel({
   conversationId,
   onClose,
+  loginHandoff = false,
+  loginHandoffSite = null,
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
   const [expanded, setExpanded] = React.useState(false)
+  const [handoffActive, setHandoffActive] = React.useState(Boolean(loginHandoff))
+  const [handoffSite, setHandoffSite] = React.useState<string>(String(loginHandoffSite || ""))
+  const [viewportWidth, setViewportWidth] = React.useState(
+    typeof window !== "undefined" ? window.innerWidth : 1024,
+  )
 
   // Rutinas — the chat's cowork workspace owns the scheduled tasks.
   const [workspaceId, setWorkspaceId] = React.useState<string | null>(null)
@@ -54,6 +83,35 @@ export default function ChatAgentComputerPanel({
   const [busy, setBusy] = React.useState(false)
   const [prompt, setPrompt] = React.useState("")
   const [preset, setPreset] = React.useState(SCHEDULE_PRESETS[0])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onResize = () => setViewportWidth(window.innerWidth)
+    onResize()
+    window.addEventListener("resize", onResize)
+    return () => window.removeEventListener("resize", onResize)
+  }, [])
+
+  React.useEffect(() => {
+    setHandoffActive(Boolean(loginHandoff))
+    if (loginHandoffSite) setHandoffSite(String(loginHandoffSite))
+    if (loginHandoff) setExpanded(true)
+  }, [loginHandoff, loginHandoffSite])
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return
+    const onHandoff = (event: Event) => {
+      const detail = (event as CustomEvent<LoginHandoffDetail>).detail
+      if (!detail) return
+      const id = String(detail.conversationId || "").trim()
+      if (id && chatId && id !== chatId) return
+      setHandoffActive(Boolean(detail.active))
+      if (detail.active) setExpanded(true)
+      if (detail.site) setHandoffSite(String(detail.site))
+    }
+    window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff)
+    return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff)
+  }, [chatId])
 
   React.useEffect(() => {
     if (!chatId) return
@@ -71,6 +129,50 @@ export default function ChatAgentComputerPanel({
       .catch(() => undefined)
     return () => {
       cancelled = true
+    }
+  }, [chatId])
+
+  React.useEffect(() => {
+    if (!chatId) return
+    let cancelled = false
+    const pull = async () => {
+      try {
+        const res = await authenticatedFetch(
+          `${API_BASE}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
+          { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
+        )
+        const body = await res.json().catch(() => ({}))
+        if (cancelled || !res.ok) return
+        if (body && body.active) {
+          setHandoffActive(true)
+          setExpanded(true)
+          if (body.site) setHandoffSite(String(body.site))
+        }
+      } catch {
+        /* overlay stays usable without the banner */
+      }
+    }
+    void pull()
+    const timer = window.setInterval(() => void pull(), 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [chatId])
+
+  const handBack = React.useCallback(async () => {
+    setHandoffActive(false)
+    if (!chatId) return
+    try {
+      await authenticatedFetch(`${API_BASE}/agent-computer/login-handoff`, {
+        method: "POST",
+        credentials: "include",
+        headers: authHeaders(),
+        body: JSON.stringify({ conversationId: chatId, action: "ready" }),
+        signal: AbortSignal.timeout(15_000),
+      })
+    } catch {
+      /* local chrome already closed */
     }
   }, [chatId])
 
@@ -111,25 +213,42 @@ export default function ChatAgentComputerPanel({
     />
   )
 
-  if (expanded) {
+  const layout = overlayLayoutContract(viewportWidth)
+  const showExpanded = expanded || handoffActive
+  const mobileFullScreen = Boolean(layout.fullScreen && handoffActive)
+
+  if (showExpanded) {
     return (
       <section
-        className="flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/40 bg-[#e8e8ea] dark:bg-[#101012]"
+        className={cn(
+          "flex h-full min-h-0 w-full flex-col overflow-hidden border-l border-border/40 bg-[#e8e8ea] dark:bg-[#101012]",
+          mobileFullScreen && "fixed inset-0 z-50 border-l-0",
+        )}
         data-testid="chat-agent-computer-panel"
         data-chat-computer-conversation={chatId || undefined}
         data-chat-computer-view="expanded"
+        data-login-handoff={handoffActive ? "1" : "0"}
+        data-full-screen={mobileFullScreen ? "1" : "0"}
         aria-label="Computadora"
       >
-        <button
-          type="button"
-          onClick={() => setExpanded(false)}
-          aria-label="Volver al panel"
-          className="flex h-8 shrink-0 items-center gap-1.5 border-b border-black/10 bg-zinc-50 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:border-white/10 dark:bg-[#161618] dark:text-zinc-300 dark:hover:text-white"
-          data-testid="chat-computer-collapse"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Panel
-        </button>
+        <ComputerLoginHandoffBanner
+          active={handoffActive}
+          site={handoffSite}
+          onReady={() => void handBack()}
+          viewportWidth={viewportWidth}
+        />
+        {handoffActive ? null : (
+          <button
+            type="button"
+            onClick={() => setExpanded(false)}
+            aria-label="Volver al panel"
+            className="flex h-8 shrink-0 items-center gap-1.5 border-b border-black/10 bg-zinc-50 px-3 text-[11px] font-medium text-zinc-600 transition-colors hover:text-zinc-900 dark:border-white/10 dark:bg-[#161618] dark:text-zinc-300 dark:hover:text-white"
+            data-testid="chat-computer-collapse"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Panel
+          </button>
+        )}
         <div className="relative min-h-0 min-w-0 flex-1">
           <AgentComputerShell
             conversationId={chatId}
@@ -150,6 +269,8 @@ export default function ChatAgentComputerPanel({
       data-testid="chat-agent-computer-panel"
       data-chat-computer-conversation={chatId || undefined}
       data-chat-computer-view="compact"
+      data-login-handoff="0"
+      data-full-screen="0"
       aria-label="Computadora"
     >
       {/* Chrome strip — gear expands, chevrons collapse the panel. */}

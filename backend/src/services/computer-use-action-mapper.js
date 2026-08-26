@@ -1,3 +1,4 @@
+const loginHandoff = require('./computer/login-handoff');
 'use strict';
 
 const SUPPORTED_COMPUTER_ACTIONS = Object.freeze([
@@ -170,6 +171,16 @@ function normalizeComputerAction(action, options = {}) {
     next.button = btn.button;
   }
   if (type === 'type') {
+    const blocked = loginHandoff.refuseAgentType({
+      toolName: 'type',
+      text: action.text,
+      focused: options.focused || action.focused,
+      gate: options.gate,
+      takeover: options.takeover,
+    });
+    if (blocked.refuse) {
+      return { ok: false, action: null, code: blocked.code, loginHandoff: true, message: blocked.message };
+    }
     next.text = String(action.text || '').slice(0, MAX_TYPE_CHARS);
   }
   if (type === 'scroll') {
@@ -267,10 +278,24 @@ async function executePlaywrightComputerActions(page, actions, options = {}) {
         }
         break;
 
-      case 'type':
+      case 'type': {
         throwIfComputerActionAborted(options.signal);
+        const blocked = loginHandoff.refuseAgentType({
+          toolName: 'type',
+          text: action.text,
+          focused: options.focused || action.focused,
+          gate: options.gate,
+          takeover: options.takeover,
+        });
+        if (blocked.refuse) {
+          const err = new Error(blocked.message);
+          err.code = blocked.code;
+          err.loginHandoff = true;
+          throw err;
+        }
         await page.keyboard.type(String(action.text || ''));
         break;
+      }
 
       case 'wait':
         throwIfComputerActionAborted(options.signal);

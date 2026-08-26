@@ -27,6 +27,7 @@ const {
   requestAbortSignal,
   refuseOpenRouterComputerModel,
 } = require('../services/computer/computer-code-guard');
+const loginHandoff = require('../services/computer/login-handoff');
 
 const pexec = promisify(execFile);
 const router = express.Router();
@@ -250,6 +251,34 @@ async function handleAction(req, res, session) {
     });
   }
   const rawAction = (req.body && req.body.action) || req.body || {};
+  const typeName = String(rawAction.type || rawAction.action || rawAction.tool || '').toLowerCase();
+  const blocked = loginHandoff.refuseAgentType({
+    toolName: typeName || 'computer_action',
+    text: rawAction.text,
+    focused: rawAction.focused || rawAction.focusedField,
+    conversationId: identity.conversationId,
+    identity,
+    user: { id: memberId(req) },
+  });
+  if (blocked.refuse) {
+    const gate = loginHandoff.detectLoginGate(rawAction);
+    const takeover = loginHandoff.beginTakeover({
+      identity,
+      conversationId: identity.conversationId,
+      site: gate.site,
+      kind: gate.kind || 'password',
+      reason: blocked.reason,
+    });
+    return res.status(409).json({
+      ok: false,
+      error: blocked.code,
+      loginHandoff: true,
+      message: blocked.message,
+      takeover,
+      conversationId: identity.conversationId,
+      conversationBound: identity.conversationBound,
+    });
+  }
   const mapped = applyActionMapClosed({
     action: rawAction.type || rawAction.action ? rawAction : null,
     actions: Array.isArray(rawAction.actions) ? rawAction.actions : (rawAction.type || rawAction.action ? [rawAction] : []),
@@ -279,6 +308,40 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
     return await handleAction(req, res, session);
   } catch (err) {
     return failComputer(res, err, 'action_failed');
+  }
+});
+
+
+router.get('/login-handoff', requireFlag, authenticateToken, (req, res) => {
+  try {
+    const identity = identityFor(req);
+    requireProvenIsolation(identity);
+    const state = loginHandoff.getTakeover({ identity, conversationId: identity.conversationId });
+    return res.json(state);
+  } catch (err) {
+    return failComputer(res, err, 'handoff_failed');
+  }
+});
+
+router.post('/login-handoff', requireFlag, authenticateToken, (req, res) => {
+  try {
+    const identity = identityFor(req);
+    requireProvenIsolation(identity);
+    const action = String((req.body && req.body.action) || '').trim().toLowerCase();
+    if (action === 'ready' || action === 'release' || action === 'listo') {
+      return res.json(loginHandoff.endTakeover({ identity, conversationId: identity.conversationId }));
+    }
+    const gate = loginHandoff.detectLoginGate(req.body || {});
+    const state = loginHandoff.beginTakeover({
+      identity,
+      conversationId: identity.conversationId,
+      site: (req.body && req.body.site) || gate.site,
+      kind: (req.body && req.body.kind) || gate.kind || 'password',
+      reason: (req.body && req.body.reason) || gate.reason || 'login_form',
+    });
+    return res.status(201).json(state);
+  } catch (err) {
+    return failComputer(res, err, 'handoff_failed');
   }
 });
 
