@@ -32,4 +32,13 @@ describe("agentes sidebar chrome", () => {
     assert.doesNotMatch(chat, /AgentsHistoryNav/)
     assert.doesNotMatch(chat, /agents-history-nav/)
   })
+
+  it("never prefixes chat titles with literal braces", () => {
+    const chat = source("components/chat-interface-enhanced.tsx")
+    assert.doesNotMatch(
+      chat,
+      /title: `\{\}/,
+      "agent-task chats must not create titles like «{} transcribir»",
+    )
+  })
 })
