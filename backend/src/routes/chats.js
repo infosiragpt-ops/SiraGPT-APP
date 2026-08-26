@@ -303,9 +303,21 @@ router.get('/', authenticateToken, requireScope('chats:read'), async (req, res) 
       })
     ]);
 
-    // Serialize BigInt fields before sending response
+    // Serialize BigInt fields before sending response.
+    // The single preview message is trimmed to what a list row can show:
+    // agent reasoning blobs (agent-task-state JSON) and file snapshots ran
+    // to tens of KB per chat and were shipped 20x per page for nothing.
     const serializedChats = chats.map((chat) => {
       const row = serializeChat(chat);
+      if (Array.isArray(row.messages)) {
+        row.messages = row.messages.map((m) => ({
+          id: m.id,
+          chatId: m.chatId,
+          role: m.role,
+          timestamp: m.timestamp,
+          content: String(m.content || '').slice(0, 240),
+        }));
+      }
       const activeTasks = taskStore.listActiveTasksForChat(chat.id, req.user.id, { limit: 1 });
       row.activeTask = activeTasks[0] ? {
         taskId: activeTasks[0].taskId,
