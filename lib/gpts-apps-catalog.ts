@@ -41,6 +41,9 @@ export const GPT_STORE_APP_CATEGORIES: { value: "All" | GptStoreAppCategory; lab
 export const GPT_STORE_APPS: GptStoreApp[] = [
   { id: "indeed", name: "Indeed", description: "Find jobs tailored for you", category: "Empleo", domain: "indeed.com" },
   { id: "linkedin", name: "LinkedIn", description: "Find the right professional", category: "Empleo", domain: "linkedin.com" },
+  { id: "github", name: "GitHub", description: "Code, repos and collaboration", category: "Otros", domain: "github.com" },
+  { id: "x", name: "X", description: "Posts and public conversation", category: "Noticias", domain: "x.com" },
+  { id: "facebook", name: "Facebook", description: "Pages and social publishing", category: "Otros", domain: "facebook.com" },
   { id: "tarot", name: "Tarot", description: "Tarot Reading & Divination", category: "Astrología", domain: "labyrinthos.co" },
   { id: "idealista", name: "idealista", description: "Find properties to buy or rent", category: "Inmuebles", domain: "idealista.com" },
   { id: "ask-tarot-cards", name: "Ask Tarot Cards", description: "Tarot card readings", category: "Astrología", domain: "labyrinthos.co" },
