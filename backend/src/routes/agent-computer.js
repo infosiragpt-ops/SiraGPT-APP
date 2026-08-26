@@ -256,12 +256,20 @@ async function handleAction(req, res, session) {
     toolName: typeName || 'computer_action',
     text: rawAction.text,
     focused: rawAction.focused || rawAction.focusedField,
+    url: rawAction.url,
+    title: rawAction.title,
+    dom: rawAction.dom || rawAction.pageText || rawAction.a11y,
     conversationId: identity.conversationId,
     identity,
     user: { id: memberId(req) },
   });
   if (blocked.refuse) {
-    const gate = loginHandoff.detectLoginGate(rawAction);
+    const gate = loginHandoff.detectLoginGate({
+      url: rawAction.url,
+      title: rawAction.title,
+      text: rawAction.dom || rawAction.pageText || rawAction.a11y || '',
+      focused: rawAction.focused || rawAction.focusedField,
+    });
     const takeover = loginHandoff.beginTakeover({
       identity,
       conversationId: identity.conversationId,
@@ -275,6 +283,7 @@ async function handleAction(req, res, session) {
       loginHandoff: true,
       message: blocked.message,
       takeover,
+      event: takeover.event,
       conversationId: identity.conversationId,
       conversationBound: identity.conversationBound,
     });

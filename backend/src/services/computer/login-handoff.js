@@ -13,6 +13,7 @@
  * landlord, vet, …) can continue after the user logs in on THAT chat's VM.
  */
 
+const { EventEmitter } = require('events');
 const { resolveSessionIdentity } = require('./member-key');
 
 const REDACTED = '[redacted]';
@@ -68,7 +69,16 @@ const EXAMPLE_AUTHENTICATED_TASKS = Object.freeze([
   'analiza la campaña de anuncios en el panel del anunciante',
 ]);
 
+const HAS_COMPUTER_POLICY_ES = [
+  'POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):',
+  '- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.',
+  '- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.',
+  '- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.',
+  '- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.',
+].join('\n');
+
 const POLICY_ES = [
+  HAS_COMPUTER_POLICY_ES,
   'POLÍTICA DE LOGIN EN LA COMPUTADORA (obligatoria):',
   '- NUNCA pidas al usuario que pegue una contraseña, usuario, código OTP/2FA o número de tarjeta en el chat.',
   '- NUNCA uses computer_type / type / keypress para escribir secretos. Si hay un campo password, OTP, 2FA, CVV o captcha, PAUSA y pide toma de control.',
@@ -79,6 +89,10 @@ const POLICY_ES = [
 
 /** In-memory takeover per conversation session key. Never stores secrets. */
 const takeoverByKey = new Map();
+const lastObserveByKey = new Map();
+const waitersByKey = new Map();
+const takeoverBus = new EventEmitter();
+takeoverBus.setMaxListeners(80);
 
 function fieldBits(field) {
   if (!field || typeof field !== 'object') {
@@ -351,6 +365,128 @@ function redactMessageMetadata(meta) {
   return out;
 }
 
+function rememberObserve(identityOrConversationId, payload = {}, user) {
+  const key = takeoverKey(identityOrConversationId, user);
+  lastObserveByKey.set(key, {
+    text: String(payload.text || payload.dom || payload.a11y || ''),
+    url: String(payload.url || ''),
+    title: String(payload.title || ''),
+    loginHandoff: Boolean(payload.loginHandoff || (payload.loginGate && payload.loginGate.kind)),
+    loginGate: payload.loginGate || null,
+    at: Date.now(),
+  });
+}
+
+function getLastObserve(identityOrConversationId, user) {
+  const key = takeoverKey(identityOrConversationId, user);
+  return lastObserveByKey.get(key) || null;
+}
+
+function pageContextForGate(input = {}) {
+  const typed = input.text != null ? String(input.text) : '';
+  const hasPage = Boolean(input.dom || input.a11y || input.pageText || input.url || input.title);
+  if (hasPage) {
+    return {
+      text: String(input.dom || input.a11y || input.pageText || ''),
+      url: String(input.url || ''),
+      title: String(input.title || ''),
+      focused: input.focused || input.focusedField || null,
+    };
+  }
+  const cached = getLastObserve(input.identity || input.conversationId, input.user);
+  if (cached) {
+    return {
+      text: cached.text || '',
+      url: cached.url || '',
+      title: cached.title || '',
+      focused: input.focused || input.focusedField || null,
+    };
+  }
+  // Never treat the characters being typed as the page DOM.
+  return {
+    text: '',
+    url: String(input.url || ''),
+    title: String(input.title || ''),
+    focused: input.focused || input.focusedField || null,
+    typed,
+  };
+}
+
+function emitTakeoverChange(payload) {
+  try {
+    takeoverBus.emit(LOGIN_HANDOFF_EVENT, payload);
+  } catch (_) { /* listeners must not break takeover */ }
+}
+
+function subscribeTakeover(listener) {
+  if (typeof listener !== 'function') return () => {};
+  takeoverBus.on(LOGIN_HANDOFF_EVENT, listener);
+  return () => {
+    try { takeoverBus.off(LOGIN_HANDOFF_EVENT, listener); } catch (_) { /* noop */ }
+  };
+}
+
+function addWaiter(key, entry) {
+  let set = waitersByKey.get(key);
+  if (!set) {
+    set = new Set();
+    waitersByKey.set(key, set);
+  }
+  set.add(entry);
+}
+
+function flushWaiters(key, result) {
+  const set = waitersByKey.get(key);
+  if (!set) return;
+  waitersByKey.delete(key);
+  for (const entry of set) {
+    try { if (typeof entry.cleanup === 'function') entry.cleanup(); } catch (_) { /* noop */ }
+    try { entry.resolve(result); } catch (_) { /* noop */ }
+  }
+}
+
+function waitUntilReleased({ conversationId, user, identity, timeoutMs, signal } = {}) {
+  const key = takeoverKey(identity || conversationId, user);
+  const current = takeoverByKey.get(key);
+  const timeout = Number.isFinite(Number(timeoutMs))
+    ? Math.max(0, Number(timeoutMs))
+    : (process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test' ? 0 : 10 * 60 * 1000);
+  if (!current || !current.active) {
+    return Promise.resolve({ active: false, released: true, waited: false });
+  }
+  if (timeout <= 0) {
+    return Promise.resolve({ active: true, released: false, timedOut: true, waited: false });
+  }
+  return new Promise((resolve) => {
+    let timer = null;
+    const entry = {
+      resolve,
+      cleanup() {
+        if (timer) clearTimeout(timer);
+        timer = null;
+        if (signal && typeof signal.removeEventListener === 'function') {
+          signal.removeEventListener('abort', onAbort);
+        }
+      },
+    };
+    const finish = (result) => {
+      const set = waitersByKey.get(key);
+      if (set) set.delete(entry);
+      entry.cleanup();
+      resolve(result);
+    };
+    const onAbort = () => finish({ active: true, released: false, aborted: true, waited: true });
+    timer = setTimeout(() => finish({ active: true, released: false, timedOut: true, waited: true }), timeout);
+    if (signal) {
+      if (signal.aborted) return onAbort();
+      if (typeof signal.addEventListener === 'function') {
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
+    }
+    addWaiter(key, entry);
+  });
+}
+
 function takeoverKey(identityOrConversationId, user) {
   if (identityOrConversationId && typeof identityOrConversationId === 'object' && identityOrConversationId.sessionKey) {
     return String(identityOrConversationId.sessionKey);
@@ -384,7 +520,9 @@ function beginTakeover({ conversationId, user, site, kind, reason, identity } = 
       actorId: 'user',
     });
   } catch (_) { /* gateway optional */ }
-  return publicTakeover(row);
+  const published = publicTakeover(row);
+  emitTakeoverChange(published);
+  return published;
 }
 
 function endTakeover({ conversationId, user, identity } = {}) {
@@ -395,7 +533,10 @@ function endTakeover({ conversationId, user, identity } = {}) {
     const gw = require('../agent-runner/engine-gateway');
     gw.releaseControl({ computerId: 'chat:' + ((prev && prev.conversationId) || key), actorId: 'user' });
   } catch (_) { /* gateway optional */ }
-  return { active: false, conversationId: (prev && prev.conversationId) || null, released: true };
+  const released = { active: false, conversationId: (prev && prev.conversationId) || null, released: true, event: LOGIN_HANDOFF_EVENT };
+  flushWaiters(key, { active: false, released: true, waited: true, conversationId: released.conversationId });
+  emitTakeoverChange(released);
+  return released;
 }
 
 function getTakeover({ conversationId, user, identity } = {}) {
@@ -423,12 +564,18 @@ function publicTakeover(row) {
 
 function resetTakeoverForTests() {
   takeoverByKey.clear();
+  lastObserveByKey.clear();
+  for (const key of [...waitersByKey.keys()]) {
+    flushWaiters(key, { active: false, released: true, waited: false, reset: true });
+  }
+  takeoverBus.removeAllListeners(LOGIN_HANDOFF_EVENT);
 }
 
 function refuseAgentType(input = {}) {
   const takeover = input.takeover != null ? input.takeover : getTakeover(input);
   const focused = input.focused || input.focusedField || null;
-  const gate = input.gate || detectLoginGate(input);
+  const page = pageContextForGate(input);
+  const gate = input.gate || detectLoginGate({ ...page, focused });
   const text = input.text != null ? String(input.text) : (input.args && input.args.text != null ? String(input.args.text) : '');
   const toolName = String(input.toolName || input.tool || 'computer_type');
   const isTypeTool = /computer_type|computer_key|type|keypress|key_press/i.test(toolName);
@@ -509,6 +656,13 @@ function isPasswordPasteRequest(text) {
   return !modelMustNotAskPasswordInChat(text);
 }
 
+const OPEN_COMPUTER_RE = /\b(abre|abrir|enciende|usa|usar|abre(?:me|la)?)\b.{0,48}\b(?:tu |la |el |mi )?(computadora|ordenador|navegador|browser|overlay)\b/i;
+const LIVE_BROWSE_RE = /\b(busca(?:r|me|le)? en vivo|buscar en vivo|en el navegador|live (?:search|browse)|navega(?:r)? (?:a|en|por)|en tu computadora)\b/i;
+const SHOPPING_RE = /\b(ofertas?|prendas? de vestir|shopping|comprar ropa|tienda de ropa|ropa de (?:mujer|hombre|ni[nñ][oa]s?))\b/i;
+const BOOKING_RE = /\b(reserva(?:r)?(?: un[oa]?| el| la)? (?:vuelo|hotel|mesa|cita|restaurante|turno)|hacer una reserva|booking)\b/i;
+const APPOINTMENT_RE = /\b(agend(?:a|ar)(?: una| la)? cita|pedir cita|saca(?:r)? una cita|cita (?:m[eé]dica|en el|para|del|de ))\b/i;
+const PORTAL_ALWAYS_RE = /\b(dmv|pasaporte|passport)\b/i;
+
 function isAuthenticatedComputerTask(prompt) {
   const t = String(prompt || '').toLowerCase();
   if (!t.trim()) return false;
@@ -520,6 +674,18 @@ function isAuthenticatedComputerTask(prompt) {
   return portal && action;
 }
 
+function isLiveComputerUsePrompt(prompt) {
+  const t = String(prompt || '');
+  if (!t.trim()) return false;
+  if (OPEN_COMPUTER_RE.test(t)) return true;
+  if (LIVE_BROWSE_RE.test(t)) return true;
+  if (SHOPPING_RE.test(t)) return true;
+  if (BOOKING_RE.test(t)) return true;
+  if (APPOINTMENT_RE.test(t)) return true;
+  if (PORTAL_ALWAYS_RE.test(t)) return true;
+  return isAuthenticatedComputerTask(t);
+}
+
 function fuzzyIncludes(hay, needle) {
   const n = String(needle || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (n.length < 12) return hay.includes(n);
@@ -528,13 +694,15 @@ function fuzzyIncludes(hay, needle) {
 }
 
 function routeAuthenticatedComputerTask(prompt) {
+  const live = isLiveComputerUsePrompt(prompt);
   const authenticated = isAuthenticatedComputerTask(prompt);
   return {
-    useComputer: authenticated,
+    useComputer: live,
     loginHandoff: authenticated,
     askPasswordInChat: false,
     openComputerInstead: true,
     policy: POLICY_ES,
+    replyClass: live ? 'computer_use' : 'text',
   };
 }
 
@@ -573,8 +741,9 @@ function loginHandoffToolResult(gate, takeover) {
 
 function applyObserveHandoff(session, observeResult, { user, conversationId, identity } = {}) {
   const redacted = redactObservePayload(observeResult || {});
+  const id = identity || resolveSessionIdentity(user || { id: session && session.memberKey }, conversationId || (session && session.conversationId));
+  rememberObserve(id, redacted, user);
   if (redacted.loginHandoff) {
-    const id = identity || resolveSessionIdentity(user || { id: session && session.memberKey }, conversationId || (session && session.conversationId));
     const takeover = beginTakeover({
       identity: id,
       conversationId: id.conversationId,
@@ -586,6 +755,54 @@ function applyObserveHandoff(session, observeResult, { user, conversationId, ide
     redacted.event = LOGIN_HANDOFF_EVENT;
   }
   return redacted;
+}
+
+function filterModelPasswordPaste(text) {
+  const raw = text == null ? '' : String(text);
+  if (!raw) return raw;
+  if (!isPasswordPasteRequest(raw)) return raw;
+  return COPY.refuseType;
+}
+
+function sanitizeChatPayload(payload) {
+  if (payload == null) return payload;
+  if (typeof payload === 'string') return redactSecretsFromText(payload, { inLoginForm: true });
+  if (Array.isArray(payload)) return payload.map((item) => sanitizeChatPayload(item));
+  if (typeof payload !== 'object') return payload;
+  return redactLogPayload(redactMessageMetadata(payload));
+}
+
+function loginHandoffResumeResult(gate, released) {
+  if (released) {
+    return JSON.stringify({
+      ok: true,
+      resumed: true,
+      loginHandoff: false,
+      message: 'El usuario inició sesión. Continúa en esta computadora. No pidas la contraseña en el chat. SiraGPT no ve tu contraseña.',
+    });
+  }
+  return loginHandoffToolResult(gate, { active: true });
+}
+
+function overlayOpenFromTakeover(state) {
+  const active = Boolean(state && state.active);
+  return { openPanel: active, expand: active, banner: active, fullScreenMobile: active };
+}
+
+function ssePayloadFromTakeover(state) {
+  const active = Boolean(state && state.active);
+  return {
+    type: LOGIN_HANDOFF_EVENT,
+    active,
+    conversationId: (state && state.conversationId) || null,
+    site: (state && state.site) || '',
+    kind: (state && state.kind) || null,
+    reason: (state && state.reason) || null,
+    title: COPY.title,
+    instruction: (state && state.instruction) || COPY.instruction,
+    neverSees: COPY.neverSees,
+    ready: COPY.ready,
+  };
 }
 
 function overlayLayoutContract(viewportWidth) {
@@ -607,6 +824,8 @@ module.exports = {
   LOGIN_HANDOFF_EVENT,
   COPY,
   POLICY_ES,
+  HAS_COMPUTER_POLICY_ES,
+  isLiveComputerUsePrompt,
   EXAMPLE_AUTHENTICATED_TASKS,
   SECRET_NAME_RE,
   isPasswordField,
@@ -628,6 +847,7 @@ module.exports = {
   getTakeover,
   resetTakeoverForTests,
   isAuthenticatedComputerTask,
+  isLiveComputerUsePrompt,
   routeAuthenticatedComputerTask,
   modelMustNotAskPasswordInChat,
   isPasswordPasteRequest,
@@ -637,4 +857,14 @@ module.exports = {
   applyObserveHandoff,
   overlayLayoutContract,
   siteNameFromUrl,
+  rememberObserve,
+  getLastObserve,
+  subscribeTakeover,
+  waitUntilReleased,
+  emitTakeoverChange,
+  filterModelPasswordPaste,
+  sanitizeChatPayload,
+  loginHandoffResumeResult,
+  overlayOpenFromTakeover,
+  ssePayloadFromTakeover,
 };

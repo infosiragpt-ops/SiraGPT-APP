@@ -411,6 +411,12 @@ const TASK_EVENT_LIMIT = 600;
 
 const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude Code: plan briefly, then call tools to reach a deliverable answer.
 
+POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):
+- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.
+- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.
+- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.
+- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.
+
 Rules:
 - When the user needs data, call web_search (Web of Science / Scopus / OpenAlex / SciELO / Semantic Scholar / Crossref / PubMed / DOAJ) instead of guessing. Do not fabricate citations.
 - When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos":
@@ -2798,6 +2804,10 @@ function buildAgentSystemPrompt(
   agentGoal = ''
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
+  try {
+    const { POLICY_ES } = require('../services/computer/login-handoff');
+    if (POLICY_ES) parts.push(POLICY_ES);
+  } catch (_) { /* computer policy is best-effort */ }
   if (universalTaskContract) {
     parts.push(buildUniversalContractPrompt(universalTaskContract));
   }

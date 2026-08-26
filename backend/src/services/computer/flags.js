@@ -23,7 +23,10 @@ function agentComputerEnabled(env = process.env) {
   const next = parseSwitch(env.NEXT_PUBLIC_AGENT_COMPUTER);
   if (next !== null) return next;
   const server = parseSwitch(env.SIRAGPT_AGENT_COMPUTER);
-  return server === true;
+  if (server !== null) return server;
+  // Unset → ON in production/dev (each chat has a live overlay computer).
+  // OFF under NODE_ENV=test so existing suites stay flag-off unless they opt in.
+  return env.NODE_ENV !== 'test';
 }
 
 const PUBLIC_HOST = 'computer.siragpt.com';
