@@ -9,6 +9,7 @@ import { toast } from "sonner"
 import {
   GPT_STORE_APP_CATEGORIES,
   GPT_STORE_APPS,
+  gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
   type GptStoreApp,
   type GptStoreAppCategory,
@@ -39,22 +40,23 @@ function toneFor(id: string) {
 }
 
 function AppLogo({ app }: { app: GptStoreApp }) {
-  const [failed, setFailed] = useState(false)
-  const src = gptStoreAppLogoUrl(app)
+  const sources = gptStoreAppLogoSources(app)
+  const [sourceIndex, setSourceIndex] = useState(0)
+  const src = sources[sourceIndex] ?? gptStoreAppLogoUrl(app)
 
-  if (!failed) {
+  if (src && sourceIndex < sources.length) {
     return (
-      <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-white ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
+      <div className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-2xl bg-white p-2 ring-1 ring-zinc-200 dark:bg-zinc-800 dark:ring-zinc-700">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
           alt={`${app.name} logo`}
-          width={40}
-          height={40}
+          width={64}
+          height={64}
           loading="lazy"
           decoding="async"
-          onError={() => setFailed(true)}
-          className="h-10 w-10 object-contain"
+          onError={() => setSourceIndex((index) => index + 1)}
+          className="h-full w-full object-contain"
         />
       </div>
     )

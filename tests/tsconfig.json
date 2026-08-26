@@ -57,7 +57,9 @@
     "../lib/format-schedule-es-pe.ts",
     "../lib/thinking-loaders.ts",
     "../lib/sidebar-recent-chats-filters.ts",
-    "../lib/sidebar-chat-folders.ts"
+    "../lib/sidebar-chat-folders.ts",
+    "../lib/gpts-app-logos.ts",
+    "../lib/gpts-apps-catalog.ts"
   ],
   "exclude": [
     "../tests/lib"

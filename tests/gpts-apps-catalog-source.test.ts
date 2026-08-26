@@ -23,6 +23,7 @@ describe("GPTs Apps catalog", () => {
     assert.match(catalog, /domain: "indeed.com"/)
     assert.match(catalog, /domain: "linkedin.com"/)
     assert.match(catalog, /gptStoreAppLogoUrl/)
+    assert.doesNotMatch(catalog, /google\.com\/s2\/favicons\?sz=128/)
   })
 
   it("renders Apps at the foot of /gpts with a connect action", () => {
@@ -34,6 +35,9 @@ describe("GPTs Apps catalog", () => {
     assert.match(section, /Conectar/)
     assert.match(section, /settings\.apps\[id\]\?\.connected === true/)
     assert.match(section, /gptStoreAppLogoUrl/)
+    assert.match(section, /gptStoreAppLogoSources/)
+    assert.match(section, /<img/)
+    assert.match(section, /onError/)
     assert.match(section, /alt=\{\`\$\{app\.name\} logo\`\}/)
   })
 

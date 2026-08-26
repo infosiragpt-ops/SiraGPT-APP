@@ -21,9 +21,10 @@ export type GptStoreApp = {
   domain: string
 }
 
-export function gptStoreAppLogoUrl(app: GptStoreApp): string {
-  return `https://www.google.com/s2/favicons?sz=128&domain=${encodeURIComponent(app.domain)}`
-}
+export {
+  gptStoreAppLogoSources,
+  gptStoreAppLogoUrl,
+} from "./gpts-app-logos"
 
 export const GPT_STORE_APP_CATEGORIES: { value: "All" | GptStoreAppCategory; label: string }[] = [
   { value: "All", label: "Todas" },
