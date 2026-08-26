@@ -153,6 +153,75 @@ test("overlay auto-opens when login-handoff takeover becomes active (no login qu
   expect(captured.chatBodies.join("\n")).not.toMatch(/password\s*[:=]\s*\S+/i)
 })
 
+test("captcha handoff expands overlay with Spanish captcha banner", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await page.addInitScript(() => {
+    localStorage.setItem("auth-token", "login-handoff-token")
+    localStorage.setItem("currentChatId", "login-handoff-chat")
+  })
+  await page.route("**/api/**", async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname.replace(/^\/api(?=\/|$)/, "")
+    if (path === "/auth/me") return fulfillJson(route, { user })
+    if (path === "/health") return fulfillJson(route, { status: "healthy" })
+    if (path === "/ai/models") {
+      return fulfillJson(route, {
+        models: [{ id: "m1", name: "deepseek-v4-flash", displayName: "Sira Rápido", provider: "DeepSeek", type: "TEXT", isActive: true }],
+      })
+    }
+    if (path === "/payments/subscription") {
+      return fulfillJson(route, { plan: "PRO", status: "active", subscription: null, apiUsage: 0, monthlyLimit: 100000 })
+    }
+    if (path === "/chats" && request.method() === "GET") {
+      return fulfillJson(route, { chats: [{ ...chat, messages: [] }], pagination: { page: 1, limit: 20, total: 1, pages: 1 } })
+    }
+    if (path === `/chats/${chat.id}`) return fulfillJson(route, { chat })
+    if (path === "/agent-computer/login-handoff" && request.method() === "GET") {
+      return fulfillJson(route, {
+        active: true,
+        conversationId: chat.id,
+        site: "google.com",
+        kind: "captcha",
+        reason: "google_sorry",
+        title: "Completa el captcha en el equipo",
+        instruction: "Hay un captcha. Tómalo tú.",
+        neverSees: "SiraGPT no ve tu contraseña",
+        ready: "Listo",
+        chatMessage: "Apareció un captcha (tráfico inusual / no soy un robot). Toma el control de la computadora, resuélvelo ahí y pulsa Listo. SiraGPT no ve tu contraseña.",
+        expand: true,
+        openPanel: true,
+      })
+    }
+    if (path === "/agent-computer/sessions" && request.method() === "POST") {
+      return fulfillJson(route, { sessionId: "sess-captcha", conversationId: chat.id, embedUrl: "/novnc" }, 201)
+    }
+    return fulfillJson(route, {})
+  })
+  await page.route("http://localhost:5000/**", async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname.includes("/login-handoff")) {
+      return fulfillJson(route, {
+        active: true,
+        conversationId: chat.id,
+        site: "google.com",
+        kind: "captcha",
+        title: "Completa el captcha en el equipo",
+        chatMessage: "Apareció un captcha (tráfico inusual / no soy un robot). Toma el control de la computadora, resuélvelo ahí y pulsa Listo. SiraGPT no ve tu contraseña.",
+        expand: true,
+      })
+    }
+    return fulfillJson(route, {})
+  })
+  await page.goto("/agentes?id=login-handoff-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  const banner = page.getByTestId("computer-login-handoff-banner")
+  await expect(banner).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId("computer-login-handoff-title")).toContainText("Completa el captcha en el equipo")
+  await expect(page.getByTestId("computer-login-handoff-privacy")).toContainText("SiraGPT no ve tu contraseña")
+  await expect(page.getByTestId("chat-agent-computer-panel")).toHaveAttribute("data-chat-computer-view", "expanded")
+  await expect(page.getByText(/Apareció un captcha|Toma el control/)).toBeVisible({ timeout: 10_000 })
+})
+
 test("typed password is not posted to /api/chat after Listo", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
   const captured: string[] = []

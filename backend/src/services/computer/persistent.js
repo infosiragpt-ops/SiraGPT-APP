@@ -245,6 +245,8 @@ async function observe(sessionOrUserId, opts = {}) {
       screenshotOnlyNoCharge: ad && ad.screenshotOnlyNoCharge,
       observeOnlyNoCharge: ad && ad.observeOnlyNoCharge,
     });
+    let peek = { url: null, title: '', text: '' };
+    try { peek = await peekPage(session, env); } catch (_) { /* URL peek is best-effort */ }
     return loginHandoff.applyObserveHandoff(session, {
       mode: 'screenshot',
       backend: 'persistent',
@@ -255,10 +257,36 @@ async function observe(sessionOrUserId, opts = {}) {
       bytes: shot.bytes,
       charge: charge.charge,
       screenshotOnly: true,
+      url: peek.url || null,
+      title: peek.title || '',
+      text: capObserveText(peek.text || ''),
       ok: true,
     }, { conversationId: session.conversationId, identity: session });
   } catch (err) {
     return observeErrorResult(err, session);
+  }
+}
+
+async function peekPage(session, env = process.env) {
+  const cdp = require('./cdp-client');
+  try {
+    return await cdp.peekPageContext(cdpUrl(session, env), { timeoutMs: 4000 });
+  } catch (_) {
+    try {
+      return await cdp.peekViaDocker(containerName(session));
+    } catch (__) {
+      return { url: null, title: '', text: '' };
+    }
+  }
+}
+
+async function peekExisting(identity, env = process.env) {
+  if (!identity) return { url: null, title: '', text: '' };
+  try {
+    const cdp = require('./cdp-client');
+    return await cdp.peekViaDocker(containerName({ userId: identity.userId || identity.memberKey }));
+  } catch (_) {
+    return loginHandoff.getLastObserve(identity) || { url: null, title: '', text: '' };
   }
 }
 
@@ -273,6 +301,8 @@ module.exports = {
   containerName,
   cdpUrl,
   observe,
+  peekPage,
+  peekExisting,
   logStep,
   capObserveText,
   OBSERVE_TEXT_CAP,

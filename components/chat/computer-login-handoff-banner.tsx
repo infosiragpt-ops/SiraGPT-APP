@@ -12,7 +12,7 @@ import { Lock } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import {
-  instructionForSite,
+  copyForKind,
   LOGIN_HANDOFF_COPY,
   overlayLayoutContract,
 } from "@/lib/computer-login-handoff"
@@ -20,6 +20,7 @@ import {
 export type ComputerLoginHandoffBannerProps = {
   active: boolean
   site?: string | null
+  kind?: string | null
   onReady: () => void
   viewportWidth?: number
 }
@@ -27,6 +28,7 @@ export type ComputerLoginHandoffBannerProps = {
 export function ComputerLoginHandoffBanner({
   active,
   site,
+  kind,
   onReady,
   viewportWidth,
 }: ComputerLoginHandoffBannerProps) {
@@ -54,12 +56,13 @@ export function ComputerLoginHandoffBanner({
   const layout = overlayLayoutContract(width)
   if (!active) return null
 
-  const title = safeLabel(t, "title", LOGIN_HANDOFF_COPY.title)
+  const copy = copyForKind(kind, site)
+  const titleKey = kind === "captcha" ? "captchaTitle" : kind === "otp" ? "otpTitle" : kind === "payment" ? "paymentTitle" : "title"
+  const instructionKey = kind === "captcha" ? "captchaInstruction" : kind === "otp" ? "otpInstruction" : kind === "payment" ? "paymentInstruction" : "instruction"
+  const title = site || kind ? copy.title : safeLabel(t, titleKey, copy.title)
   const neverSees = safeLabel(t, "neverSees", LOGIN_HANDOFF_COPY.neverSees)
   const ready = safeLabel(t, "ready", LOGIN_HANDOFF_COPY.ready)
-  const instruction = site
-    ? instructionForSite(site)
-    : safeLabel(t, "instruction", LOGIN_HANDOFF_COPY.instruction)
+  const instruction = site || kind ? copy.instruction : safeLabel(t, instructionKey, copy.instruction)
 
   return (
     <div
@@ -69,6 +72,7 @@ export function ComputerLoginHandoffBanner({
       )}
       data-testid="computer-login-handoff-banner"
       data-login-handoff="1"
+      data-login-handoff-kind={kind || "password"}
       data-layout={layout.overlayPosition}
       data-full-screen={layout.fullScreen ? "1" : "0"}
       data-min-tap={String(layout.minTapPx)}

@@ -346,12 +346,29 @@ router.post('/sessions/:id/action', requireFlag, authenticateToken, async (req, 
 });
 
 
-router.get('/login-handoff', requireFlag, authenticateToken, (req, res) => {
+router.get('/login-handoff', requireFlag, authenticateToken, async (req, res) => {
   try {
     const identity = identityFor(req);
     requireProvenIsolation(identity);
-    const state = loginHandoff.getTakeover({ identity, conversationId: identity.conversationId });
-    return res.json(state);
+    const persistent = require('../services/computer/persistent');
+    const state = await loginHandoff.ensureTakeoverFromLivePage({
+      identity,
+      conversationId: identity.conversationId,
+      user: { id: memberId(req) },
+      forceProbe: String((req.query && req.query.probe) || '') === '1',
+      observe: async () => {
+        try {
+          const peek = await persistent.peekExisting(identity);
+          if (peek && (peek.url || peek.text || peek.title)) return peek;
+        } catch (_) { /* container may not be running */ }
+        return loginHandoff.getLastObserve(identity, { id: memberId(req) }) || {};
+      },
+    });
+    return res.json({
+      ...state,
+      ...loginHandoff.overlayOpenFromTakeover(state),
+      chatMessage: loginHandoff.chatMessageForTakeover(state),
+    });
   } catch (err) {
     return failComputer(res, err, 'handoff_failed');
   }

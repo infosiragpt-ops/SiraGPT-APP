@@ -14,6 +14,11 @@ import {
   overlayLayoutContract,
   overlayOpenFromTakeover,
   routeAuthenticatedComputerTask,
+  copyForKind,
+  chatMessageFromDetail,
+  shouldPostHandoffChatMessage,
+  buildHandoffAssistantMessage,
+  isCaptchaHandoffUrl,
 } from "../lib/computer-login-handoff"
 
 const cjsRequire = createRequire(path.join(process.cwd(), "package.json"))
@@ -23,7 +28,11 @@ const handoff = cjsRequire("./backend/src/services/computer/login-handoff") as {
   POLICY_ES: string
   isSecretField: (field: object, opts?: object) => boolean
   redactSecretsFromText: (text: string, opts?: object) => string
-  detectLoginGate: (input: object) => { gated: boolean; code: string | null }
+  detectLoginGate: (input: object) => { gated: boolean; code: string | null; kind?: string | null; reason?: string | null; chatMessage?: string }
+  isCaptchaUrl: (url: string) => boolean
+  copyForKind: (kind: string, site?: string) => { title: string; instruction: string; chat: string }
+  chatMessageForTakeover: (state: object) => string | null
+  ensureTakeoverFromLivePage: (input: object) => Promise<{ active: boolean; kind?: string }>
   refuseAgentType: (input: object) => { refuse: boolean; ok: boolean; code?: string; text?: string; message?: string }
   resetTakeoverForTests: () => void
   beginTakeover: (input: object) => object
@@ -40,12 +49,12 @@ const handoff = cjsRequire("./backend/src/services/computer/login-handoff") as {
   isAuthenticatedComputerTask: (prompt: string) => boolean
   modelMustNotAskPasswordInChat: (text: string) => boolean
   applyObserveHandoff: (session: object, payload: object, opts?: object) => { loginHandoff: boolean; event?: string }
+  ssePayloadFromTakeover: (state: object) => { type: string; active: boolean; chatMessage?: string | null }
   waitUntilReleased: (input: object) => Promise<{ released: boolean; timedOut?: boolean; waited?: boolean }>
   subscribeTakeover: (listener: (evt: Record<string, unknown>) => void) => () => void
   filterModelPasswordPaste: (text: string) => string
   sanitizeChatPayload: (payload: unknown) => unknown
   overlayOpenFromTakeover: (state: { active?: boolean } | null) => { openPanel: boolean; expand: boolean; banner: boolean }
-  ssePayloadFromTakeover: (state: object) => { type: string; active: boolean }
   getTakeover: (input: object) => { active: boolean }
 }
 const { resolveSessionIdentity } = cjsRequire("./backend/src/services/computer/member-key") as {
@@ -352,6 +361,7 @@ describe("computer login handoff · overlay opens when takeover becomes active",
     const panel = source("components/chat/chat-agent-computer-panel.tsx")
     const api = source("lib/api.ts")
     const stream = source("backend/src/services/agentic-chat-stream.js")
+    const route = source("backend/src/routes/agent-computer.js")
     const dept = source("components/code/department-computer-pane.tsx")
     assert.match(chat, /void pull\(\);/)
     assert.match(chat, /emitLoginHandoff/)
@@ -362,6 +372,9 @@ describe("computer login handoff · overlay opens when takeover becomes active",
     assert.match(stream, /subscribeTakeover/)
     assert.match(stream, /ssePayloadFromTakeover/)
     assert.match(stream, /filterModelPasswordPaste/)
+    assert.match(stream, /chatMessage/)
+    assert.match(route, /ensureTakeoverFromLivePage/)
+    assert.match(panel, /probe=1/)
     assert.match(dept, /login_handoff_required|loginHandoff/)
     const consumed = consumeLoginHandoffSse({
       type: LOGIN_HANDOFF_EVENT,
@@ -371,6 +384,52 @@ describe("computer login handoff · overlay opens when takeover becomes active",
     })
     assert.equal(consumed?.active, true)
     assert.equal(consumed?.conversationId, "chat-sse")
+  })
+})
+
+describe("computer login handoff · google sorry captcha + visible chat", () => {
+  it("detects google.com/sorry URL alone as captcha and never asks password in chat", () => {
+    handoff.resetTakeoverForTests()
+    assert.equal(handoff.isCaptchaUrl("https://www.google.com/sorry/index?continue=/search"), true)
+    assert.equal(isCaptchaHandoffUrl("https://www.google.com/sorry/index"), true)
+    const gate = handoff.detectLoginGate({
+      url: "https://www.google.com/sorry/index?q=recaptcha",
+      text: "",
+      title: "",
+    })
+    assert.equal(gate.gated, true)
+    assert.equal(gate.kind, "captcha")
+    assert.match(String(gate.chatMessage), /captcha/i)
+    assert.doesNotMatch(String(gate.chatMessage), /pega.{0,30}contrase/i)
+    const copy = copyForKind("captcha", "google.com")
+    assert.equal(copy.title, LOGIN_HANDOFF_COPY.captchaTitle)
+    assert.match(copy.instruction, /captcha/)
+    assert.equal(chatMessageFromDetail({ active: true, kind: "captcha" }), LOGIN_HANDOFF_COPY.captchaChat)
+    const msg = buildHandoffAssistantMessage("chat-1", copy.chat, { active: true, kind: "captcha" })
+    assert.equal(msg.role, "ASSISTANT")
+    assert.equal(shouldPostHandoffChatMessage([msg], copy.chat), false)
+    assert.equal(shouldPostHandoffChatMessage([], copy.chat), true)
+  })
+
+  it("pauses all computer tools and expands overlay when captcha takeover starts", async () => {
+    handoff.resetTakeoverForTests()
+    const identity = resolveSessionIdentity({ id: "user_captcha" }, "chat-captcha")
+    const started = await handoff.ensureTakeoverFromLivePage({
+      identity,
+      conversationId: "chat-captcha",
+      forceProbe: true,
+      observe: async () => ({ url: "https://www.google.com/sorry/index", text: "unusual traffic", title: "Sorry" }),
+    })
+    assert.equal(started.active, true)
+    assert.equal(started.kind, "captcha")
+    assert.equal(handoff.overlayOpenFromTakeover(started).expand, true)
+    const sse = handoff.ssePayloadFromTakeover(started)
+    assert.equal(sse.active, true)
+    assert.match(String(sse.chatMessage), /Toma el control/)
+    for (const tool of ["computer_screenshot", "computer_click", "computer_navigate", "computer_type"]) {
+      const refused = handoff.refuseAgentType({ toolName: tool, identity, conversationId: "chat-captcha" })
+      assert.equal(refused.refuse, true, tool)
+    }
   })
 })
 
@@ -410,10 +469,17 @@ describe("computer login handoff · source & Spanish chrome", () => {
     assert.match(computer, /loginHandoff.refuseAgentType/)
     assert.match(computer, /NUNCA escribas contraseñas/)
     assert.match(stream, /login-handoff/)
+    assert.match(stream, /chatMessage/)
     assert.match(route, /login-handoff/)
+    assert.match(route, /ensureTakeoverFromLivePage/)
+    assert.match(panel, /probe=1/)
     assert.equal(es.codex.panel.agentComputer.loginHandoff.title, LOGIN_HANDOFF_COPY.title)
     assert.equal(es.codex.panel.agentComputer.loginHandoff.neverSees, LOGIN_HANDOFF_COPY.neverSees)
     assert.equal(es.codex.panel.agentComputer.loginHandoff.ready, LOGIN_HANDOFF_COPY.ready)
+    assert.equal(es.codex.panel.agentComputer.loginHandoff.captchaTitle, LOGIN_HANDOFF_COPY.captchaTitle)
+    assert.match(chat, /injectHandoffChat/)
+    assert.match(banner, /copyForKind|captchaTitle/)
+    assert.match(computer, /peekPage/)
     assert.equal(LOGIN_HANDOFF_WINDOW_EVENT, "siragpt:computer-login-handoff")
   })
 

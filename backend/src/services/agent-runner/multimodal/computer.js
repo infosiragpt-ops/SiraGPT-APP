@@ -242,6 +242,18 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
       throwIfAborted(signal);
       throwIfComputerActionAborted(signal);
       refuseOrThrow('computer_screenshot', args);
+      const paused = loginHandoff.refuseAgentType({
+        toolName: 'computer_screenshot',
+        conversationId: args.conversationId || (session && session.conversationId),
+        user: { id: userId },
+        identity: session,
+      });
+      if (paused.refuse) {
+        return loginHandoff.loginHandoffToolResult(
+          { kind: (paused.kind || 'password'), reason: paused.reason },
+          loginHandoff.getTakeover({ identity: session, conversationId: args.conversationId, user: { id: userId } }),
+        );
+      }
       const ad = loadAdapter();
       applyScreenshotNoChargeClosed({
         tools: [{ name: 'computer_screenshot' }],
@@ -258,11 +270,23 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
       }
       try {
         const shot = await drv.screenshot({ signal });
-        const observeText = `computer_screenshot ok (${drv.kind}): ${shot.text}`;
+        let url = args.url || (session && session.url) || '';
+        let title = args.title || '';
+        let pageText = String(shot.text || '');
+        try {
+          const persistent = require('../../computer/persistent');
+          if (session && typeof persistent.peekPage === 'function') {
+            const peek = await persistent.peekPage(session);
+            url = url || (peek && peek.url) || '';
+            title = title || (peek && peek.title) || '';
+            if (peek && peek.text) pageText = `${pageText}\n${peek.text}`;
+          }
+        } catch (_) { /* peek is best-effort */ }
+        const observeText = `computer_screenshot ok (${drv.kind}): ${pageText}`;
         const handed = loginHandoff.applyObserveHandoff(session, {
           text: observeText,
-          url: args.url || (session && session.url) || '',
-          title: args.title || '',
+          url,
+          title,
           focused: args.focused || args.focusedField || null,
         }, {
           user: { id: userId },
@@ -290,6 +314,35 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
       throwIfAborted(signal);
       throwIfComputerActionAborted(signal);
       refuseOrThrow('computer_click', args);
+      const paused = loginHandoff.refuseAgentType({
+        toolName: 'computer_click',
+        conversationId: args.conversationId || (session && session.conversationId),
+        user: { id: userId },
+        identity: session,
+        url: args.url,
+        title: args.title,
+        dom: args.dom || args.pageText || args.a11y,
+      });
+      if (paused.refuse) {
+        const gate = loginHandoff.detectLoginGate({
+          url: args.url,
+          title: args.title,
+          text: args.dom || args.pageText || args.a11y || '',
+        });
+        loginHandoff.beginTakeover({
+          conversationId: args.conversationId || (session && session.conversationId),
+          user: { id: userId },
+          identity: session,
+          site: gate.site,
+          kind: gate.kind || 'password',
+          reason: paused.reason,
+        });
+        return loginHandoff.loginHandoffToolResult(gate, loginHandoff.getTakeover({
+          identity: session,
+          conversationId: args.conversationId,
+          user: { id: userId },
+        }));
+      }
       const btn = normalizeComputerButton(args.button);
       if (!btn.ok && args.button != null && String(args.button).trim()) {
         return `ERROR: computer_button_invalid`;

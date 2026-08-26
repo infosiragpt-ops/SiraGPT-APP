@@ -183,7 +183,13 @@ const ES = {
         "title": "Inicia sesión en el equipo",
         "instruction": "Inicia sesión en este sitio",
         "neverSees": "SiraGPT no ve tu contraseña",
-        "ready": "Listo"
+        "ready": "Listo",
+        "captchaTitle": "Completa el captcha en el equipo",
+        "captchaInstruction": "Hay un captcha. Tómalo tú.",
+        "otpTitle": "Completa la verificación en el equipo",
+        "otpInstruction": "Ingresa el código 2FA en esta computadora",
+        "paymentTitle": "Completa el pago en el equipo",
+        "paymentInstruction": "Paga en esta computadora. SiraGPT no ve tus datos."
       }
     }
   }
@@ -351,7 +357,13 @@ const EN = {
         "title": "Sign in on the computer",
         "instruction": "Sign in to this site",
         "neverSees": "SiraGPT cannot see your password",
-        "ready": "Done"
+        "ready": "Done",
+        "captchaTitle": "Complete the captcha on the computer",
+        "captchaInstruction": "There is a captcha. Take it yourself.",
+        "otpTitle": "Complete verification on the computer",
+        "otpInstruction": "Enter the 2FA code on this computer",
+        "paymentTitle": "Complete payment on the computer",
+        "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
       }
     }
   }
