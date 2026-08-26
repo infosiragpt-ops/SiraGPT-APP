@@ -11,6 +11,7 @@ import {
 import { parseMessageFilesForRender } from "../lib/chat/message-rendering"
 import {
   dedupeMessages,
+  mergeChatPreservingUserMessages,
   mergeMessagesPreservingUserContent,
 } from "../lib/message-preservation"
 
@@ -145,5 +146,113 @@ describe("chat audio attachment source contract", () => {
     assert.match(source, /isAudioComposerFile/)
     assert.match(source, /getAudioMediaMeta/)
     assert.match(source, /parseMessageFilesForRender\(message\.files\)/)
+  })
+})
+
+describe("mergeChatPreservingUserMessages adopts temp-chat audio onto a real id", () => {
+  it("merges temp-chat USER + audio onto an empty real incoming chat", () => {
+    const local = {
+      id: "temp-chat-1700000000000",
+      title: "transcribir",
+      messages: [
+        {
+          id: "msg-user-1",
+          role: "USER",
+          content: "transcribir",
+          files: snapshotComposerFilesForMessage([audioFile]),
+        },
+      ],
+    }
+    const incoming = {
+      id: "clx_real_chat",
+      title: "Nuevo chat",
+      messages: [],
+    }
+    const merged = mergeChatPreservingUserMessages(incoming as any, local as any)
+    assert.equal(merged.id, "clx_real_chat")
+    assert.equal(merged.title, "Nuevo chat")
+    const users = (merged.messages || []).filter(
+      (message: { role?: string }) => String(message.role).toUpperCase() === "USER",
+    )
+    assert.equal(users.length, 1)
+    const files = (users[0] as { files?: unknown[] }).files || []
+    assert.equal(files.length, 1)
+    assert.equal(isAudioComposerFile(files[0]), true)
+  })
+
+  it("returns incoming when two different real ids would otherwise steal messages", () => {
+    const local = {
+      id: "chat_alpha",
+      messages: [
+        {
+          id: "u-local",
+          role: "USER",
+          content: "mine",
+          files: snapshotComposerFilesForMessage([audioFile]),
+        },
+      ],
+    }
+    const incoming = {
+      id: "chat_beta",
+      title: "other",
+      messages: [{ id: "u-incoming", role: "USER", content: "theirs" }],
+    }
+    const merged = mergeChatPreservingUserMessages(incoming as any, local as any)
+    assert.equal(merged.id, "chat_beta")
+    assert.equal(merged, incoming)
+    assert.equal((merged.messages || [])[0]?.content, "theirs")
+    assert.equal((merged.messages || []).length, 1)
+  })
+
+  it("same-id merge still preserves optimistic audio files", () => {
+    const local = {
+      id: "chat_real",
+      messages: [
+        {
+          id: "msg-user-1",
+          role: "USER",
+          content: "transcribir",
+          files: snapshotComposerFilesForMessage([audioFile]),
+        },
+      ],
+    }
+    const incoming = {
+      id: "chat_real",
+      messages: [
+        { id: "msg-user-1", role: "USER", content: "transcribir", files: [] },
+      ],
+    }
+    const merged = mergeChatPreservingUserMessages(incoming as any, local as any)
+    assert.equal(merged.id, "chat_real")
+    const files = ((merged.messages || [])[0] as { files?: unknown[] }).files || []
+    assert.equal(files.length, 1)
+    assert.equal((files[0] as { name?: string }).name, "nota.m4a")
+    assert.equal(isAudioComposerFile(files[0]), true)
+  })
+})
+
+describe("handleAgentTask keeps a USER file row after createChat", () => {
+  it("grafts USER files even when userMessageAlreadyAdded is true and the list has no USER row", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "components", "chat-interface-enhanced.tsx"),
+      "utf8",
+    )
+    const start = source.indexOf("const handleAgentTask = async (")
+    assert.notEqual(start, -1, "missing handleAgentTask")
+    const end = source.indexOf("function FeatureRow(", start)
+    assert.notEqual(end, -1, "missing FeatureRow after handleAgentTask")
+    const handler = source.slice(start, end)
+
+    assert.match(handler, /let activeChat = currentChatRef\.current/)
+    assert.doesNotMatch(handler, /let activeChat = currentChat;/)
+    assert.match(handler, /userMessageAlreadyAdded/)
+    assert.match(handler, /!userMessageAlreadyAdded \|\| !liveHasUserTurn/)
+    assert.match(handler, /snapshotComposerFilesForMessage\(filesToSend\)/)
+    assert.match(handler, /role: 'USER' as const/)
+    assert.match(handler, /temp-chat-/)
+    assert.doesNotMatch(
+      handler,
+      /if \(!prev\) return \{ \.\.\.activeChat, messages: \[aiMessage\] \}/,
+    )
   })
 })
