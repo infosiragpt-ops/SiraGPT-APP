@@ -29,6 +29,23 @@ const COPY = Object.freeze({
   refuseType: 'No escribo contraseñas ni códigos. Abre la computadora e inicia sesión tú. SiraGPT no ve tu contraseña.',
   refuseChatPassword:
     'NUNCA pidas al usuario que pegue una contraseña, usuario, OTP o tarjeta en el chat. Abre la computadora del agente y pide que inicie sesión ahí.',
+  captchaTitle: 'Completa el captcha en el equipo',
+  captchaInstruction: 'Hay un captcha. Tómalo tú.',
+  captchaPaused: 'La computadora espera a que completes el captcha. SiraGPT no ve tu contraseña.',
+  captchaChat:
+    'Apareció un captcha (tráfico inusual / no soy un robot). Toma el control de la computadora, resuélvelo ahí y pulsa Listo. SiraGPT no ve tu contraseña.',
+  otpTitle: 'Completa la verificación en el equipo',
+  otpInstruction: 'Ingresa el código 2FA en esta computadora',
+  otpPaused: 'La computadora espera a que ingreses el código. SiraGPT no ve tu contraseña.',
+  otpChat:
+    'Hay una verificación en dos pasos. Toma el control de la computadora, ingresa el código ahí y pulsa Listo. SiraGPT no ve tu contraseña.',
+  paymentTitle: 'Completa el pago en el equipo',
+  paymentInstruction: 'Paga en esta computadora. SiraGPT no ve tus datos.',
+  paymentPaused: 'La computadora espera a que completes el pago. SiraGPT no ve tu contraseña ni tu tarjeta.',
+  paymentChat:
+    'Hay un muro de pago. Toma el control de la computadora, completa el pago ahí y pulsa Listo. SiraGPT no ve tu contraseña ni tu tarjeta.',
+  loginChat:
+    'Inicia sesión en el equipo. Toma el control de la computadora y pulsa Listo. SiraGPT no ve tu contraseña.',
 });
 
 const SECRET_NAME_RE = /password|passwd|pwd|passcode|passphrase|otp|2fa|mfa|totp|one[-_]?time|cvv|cvc|csc|cid|card[-_]?number|ccnum|cc-number|pin\b|ssn|secret|security[-_]?code/i;
@@ -38,7 +55,9 @@ const OTP_AUTOCOMPLETE_RE = /one-time-code|one-time|otp|totp|sms-otp/i;
 const CC_AUTOCOMPLETE_RE = /cc-csc|cc-number|cc-exp|cc-name|cc-type/i;
 const PASSWORD_AUTOCOMPLETE_RE = /current-password|new-password|password/i;
 const USERNAME_AUTOCOMPLETE_RE = /username|email|nickname/i;
-const CAPTCHA_RE = /captcha|recaptcha|hcaptcha|turnstile|i['’]?m not a robot|no soy un robot|verify you(?:'re| are) human|verifica que (?:no )?eres (?:un )?robot|unusual traffic/i;
+const CAPTCHA_RE = /captcha|recaptcha|hcaptcha|turnstile|i['’]?m not a robot|no soy un robot|verify you(?:'re| are) human|verifica que (?:no )?eres (?:un )?robot|unusual traffic|tráfico inusual/i;
+const GOOGLE_SORRY_RE = /(?:^|[/.])google(?:apis)?\.[a-z.]+\/sorry(?:\/|\?|$)|\/sorry\/index\b|ipv[46]\.google\.[a-z.]+\/sorry\b/i;
+const CAPTCHA_URL_RE = /recaptcha(?:\/|$|\.)|\/recaptcha\//i;
 const SSO_RE = /sign in with (google|apple|microsoft|facebook|github|okta)|continuar con (google|apple|microsoft|facebook)|iniciar sesi[oó]n con (google|apple|microsoft)|single sign[- ]on|\bsso\b|\boauth\b/i;
 const LOGIN_URL_RE = /\/(login|signin|sign-in|log-in|auth|sso|oauth|account\/login|session\/new|accounts\/servicelogin)(\b|\/|$|\?)/i;
 const TWOFA_RE = /two[- ]factor|2fa|authenticator|verification code|c[oó]digo de (verificaci[oó]n|seguridad)|one[- ]time (code|password)|\botp\b|ingresa el c[oó]digo/i;
@@ -90,9 +109,82 @@ const POLICY_ES = [
 /** In-memory takeover per conversation session key. Never stores secrets. */
 const takeoverByKey = new Map();
 const lastObserveByKey = new Map();
+const lastProbeByKey = new Map();
 const waitersByKey = new Map();
 const takeoverBus = new EventEmitter();
 takeoverBus.setMaxListeners(80);
+
+function copyForKind(kind, site) {
+  const host = String(site || '').trim();
+  const k = String(kind || 'password');
+  if (k === 'captcha') {
+    return {
+      title: COPY.captchaTitle,
+      instruction: host ? `Completa el captcha en ${host}` : COPY.captchaInstruction,
+      neverSees: COPY.neverSees,
+      ready: COPY.ready,
+      paused: COPY.captchaPaused,
+      chat: COPY.captchaChat,
+    };
+  }
+  if (k === 'otp') {
+    return {
+      title: COPY.otpTitle,
+      instruction: host ? `Ingresa el código 2FA en ${host}` : COPY.otpInstruction,
+      neverSees: COPY.neverSees,
+      ready: COPY.ready,
+      paused: COPY.otpPaused,
+      chat: COPY.otpChat,
+    };
+  }
+  if (k === 'payment') {
+    return {
+      title: COPY.paymentTitle,
+      instruction: host ? `Completa el pago en ${host}` : COPY.paymentInstruction,
+      neverSees: COPY.neverSees,
+      ready: COPY.ready,
+      paused: COPY.paymentPaused,
+      chat: COPY.paymentChat,
+    };
+  }
+  return {
+    title: COPY.title,
+    instruction: host ? `Inicia sesión en ${host}` : COPY.instruction,
+    neverSees: COPY.neverSees,
+    ready: COPY.ready,
+    paused: COPY.paused,
+    chat: COPY.loginChat,
+  };
+}
+
+function chatMessageForTakeover(state) {
+  if (!state || !state.active) return null;
+  return copyForKind(state.kind, state.site).chat;
+}
+
+function isCaptchaUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return false;
+  if (GOOGLE_SORRY_RE.test(raw) || CAPTCHA_URL_RE.test(raw)) return true;
+  try {
+    const parsed = new URL(raw);
+    const host = String(parsed.hostname || '').replace(/^www\./, '');
+    const path = String(parsed.pathname || '');
+    if (/google\./i.test(host) && /\/sorry\b/i.test(path)) return true;
+    if (/recaptcha/i.test(host) || /recaptcha/i.test(path)) return true;
+  } catch {
+    /* not an absolute URL — regex above still applies */
+  }
+  return false;
+}
+
+function isComputerToolName(toolName) {
+  return /computer_|type|keypress|key_press|click|navigate|screenshot|observe/i.test(String(toolName || ''));
+}
+
+function isObserveToolName(toolName) {
+  return /screenshot|observe/i.test(String(toolName || ''));
+}
 
 function fieldBits(field) {
   if (!field || typeof field !== 'object') {
@@ -179,9 +271,28 @@ function detectLoginGate(input = {}) {
   const site = siteNameFromUrl(url) || String(input.site || '').trim();
   const inLoginForm = looksLikeLoginForm(text, url, title);
   const hasLoginTitle = /log\s*in|sign\s*in|iniciar sesi[oó]n|acceder/i.test(title);
+  const captchaUrl = isCaptchaUrl(url);
+
+  if (captchaUrl || CAPTCHA_RE.test(blob)) {
+    const copy = copyForKind('captcha', site);
+    return {
+      gated: true,
+      kind: 'captcha',
+      reason: captchaUrl ? 'google_sorry' : 'captcha',
+      site: site || (captchaUrl ? 'google.com' : ''),
+      focusedSecret: false,
+      inLoginForm,
+      code: LOGIN_HANDOFF_CODE,
+      message: copy.paused,
+      title: copy.title,
+      instruction: copy.instruction,
+      chatMessage: copy.chat,
+    };
+  }
 
   if (focused && isSecretField(focused, { inLoginForm: true })) {
     const kind = isPasswordField(focused) ? 'password' : isOtpField(focused) ? 'otp' : isCvvField(focused) ? 'payment' : 'username';
+    const copy = copyForKind(kind, site);
     return {
       gated: true,
       kind,
@@ -190,29 +301,33 @@ function detectLoginGate(input = {}) {
       focusedSecret: true,
       inLoginForm: true,
       code: LOGIN_HANDOFF_CODE,
-      message: COPY.paused,
+      message: copy.paused,
+      title: copy.title,
+      instruction: copy.instruction,
+      chatMessage: copy.chat,
     };
   }
-
-  if (CAPTCHA_RE.test(blob)) {
-    return { gated: true, kind: 'captcha', reason: 'captcha', site, focusedSecret: false, inLoginForm, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
-  }
   if (TWOFA_RE.test(blob) && (inLoginForm || /code|c[oó]digo|authenticator/i.test(blob))) {
-    return { gated: true, kind: 'otp', reason: '2fa', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
+    const copy = copyForKind('otp', site);
+    return { gated: true, kind: 'otp', reason: '2fa', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: copy.paused, title: copy.title, instruction: copy.instruction, chatMessage: copy.chat };
   }
   if (PAYMENT_RE.test(blob) && /cvv|cvc|card number|n[uú]mero de tarjeta|checkout/i.test(blob)) {
-    return { gated: true, kind: 'payment', reason: 'payment_wall', site, focusedSecret: false, inLoginForm, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
+    const copy = copyForKind('payment', site);
+    return { gated: true, kind: 'payment', reason: 'payment_wall', site, focusedSecret: false, inLoginForm, code: LOGIN_HANDOFF_CODE, message: copy.paused, title: copy.title, instruction: copy.instruction, chatMessage: copy.chat };
   }
   if (SSO_RE.test(blob)) {
-    return { gated: true, kind: 'sso', reason: 'sso', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
+    const copy = copyForKind('sso', site);
+    return { gated: true, kind: 'sso', reason: 'sso', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: copy.paused, title: copy.title, instruction: copy.instruction, chatMessage: copy.chat };
   }
   if (/type\s*=\s*["']password["']/i.test(text) || /name\s*=\s*["'][^"']*(?:password|passwd|pwd|otp|2fa|totp|cvv|cvc|csc)[^"']*["']/i.test(text)) {
     const kind = /otp|2fa|totp/i.test(text) ? 'otp' : /cvv|cvc|csc/i.test(text) ? 'payment' : 'password';
-    return { gated: true, kind, reason: kind === 'otp' ? '2fa' : 'login_form', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
+    const copy = copyForKind(kind, site);
+    return { gated: true, kind, reason: kind === 'otp' ? '2fa' : 'login_form', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: copy.paused, title: copy.title, instruction: copy.instruction, chatMessage: copy.chat };
   }
   if (inLoginForm) {
     if (PASSWORD_PROMPT_RE.test(blob) || LOGIN_URL_RE.test(url) || hasLoginTitle) {
-      return { gated: true, kind: 'password', reason: 'login_form', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: COPY.paused };
+      const copy = copyForKind('password', site);
+      return { gated: true, kind: 'password', reason: 'login_form', site, focusedSecret: false, inLoginForm: true, code: LOGIN_HANDOFF_CODE, message: copy.paused, title: copy.title, instruction: copy.instruction, chatMessage: copy.chat };
     }
   }
   return { gated: false, kind: null, reason: null, site, focusedSecret: false, inLoginForm, code: null, message: null };
@@ -502,14 +617,19 @@ function takeoverKey(identityOrConversationId, user) {
 
 function beginTakeover({ conversationId, user, site, kind, reason, identity } = {}) {
   const key = takeoverKey(identity || conversationId, user);
+  const prev = takeoverByKey.get(key);
+  const nextKind = kind || (prev && prev.kind) || 'password';
+  const kindChanged = Boolean(prev && prev.active && prev.kind !== nextKind);
   const row = {
     active: true,
     conversationId: String((identity && identity.conversationId) || conversationId || '').trim() || null,
     sessionKey: key,
-    site: site || '',
-    kind: kind || 'password',
-    reason: reason || 'login_form',
-    at: new Date().toISOString(),
+    site: site || (prev && prev.site) || '',
+    kind: nextKind,
+    reason: reason || (prev && prev.reason) || 'login_form',
+    at: (prev && prev.active && prev.at) || new Date().toISOString(),
+    chatPosted: Boolean(prev && prev.active && prev.chatPosted && !kindChanged),
+    isNew: !(prev && prev.active),
   };
   takeoverByKey.set(key, row);
   try {
@@ -547,6 +667,7 @@ function getTakeover({ conversationId, user, identity } = {}) {
 }
 
 function publicTakeover(row) {
+  const copy = copyForKind(row.kind, row.site);
   return {
     active: true,
     conversationId: row.conversationId,
@@ -554,10 +675,13 @@ function publicTakeover(row) {
     kind: row.kind,
     reason: row.reason,
     at: row.at,
-    title: COPY.title,
-    instruction: row.site ? `${COPY.instruction.replace(/este sitio/, row.site)}` : COPY.instruction,
-    neverSees: COPY.neverSees,
-    ready: COPY.ready,
+    title: copy.title,
+    instruction: copy.instruction,
+    neverSees: copy.neverSees,
+    ready: copy.ready,
+    chatMessage: copy.chat,
+    paused: copy.paused,
+    isNew: row.isNew === true,
     event: LOGIN_HANDOFF_EVENT,
   };
 }
@@ -565,6 +689,7 @@ function publicTakeover(row) {
 function resetTakeoverForTests() {
   takeoverByKey.clear();
   lastObserveByKey.clear();
+  lastProbeByKey.clear();
   for (const key of [...waitersByKey.keys()]) {
     flushWaiters(key, { active: false, released: true, waited: false, reset: true });
   }
@@ -579,13 +704,26 @@ function refuseAgentType(input = {}) {
   const text = input.text != null ? String(input.text) : (input.args && input.args.text != null ? String(input.args.text) : '');
   const toolName = String(input.toolName || input.tool || 'computer_type');
   const isTypeTool = /computer_type|computer_key|type|keypress|key_press/i.test(toolName);
+  const isComputerTool = isComputerToolName(toolName);
 
-  if (!isTypeTool && !input.force) {
+  if (takeover && takeover.active && (isComputerTool || input.force || isTypeTool)) {
+    return refuseResult('user_takeover');
+  }
+
+  if (!isTypeTool && !input.force && !isComputerTool) {
     return { refuse: false, ok: true, code: null };
   }
 
-  if (takeover && takeover.active) {
-    return refuseResult('user_takeover');
+  if (isObserveToolName(toolName) && !(takeover && takeover.active) && !input.force) {
+    return { refuse: false, ok: true, code: null, typed: text };
+  }
+
+  if (gate && gate.gated && isComputerTool && !isObserveToolName(toolName)) {
+    return refuseResult(gate.reason || 'login_gate');
+  }
+
+  if (!isTypeTool && !input.force) {
+    return { refuse: false, ok: true, code: null };
   }
   if (focused && isSecretField(focused, { inLoginForm: true })) {
     return refuseResult('secret_field_focused');
@@ -727,15 +865,20 @@ function assertCookiesIsolated(jarA, jarB, identityA, identityB) {
 }
 
 function loginHandoffToolResult(gate, takeover) {
+  const copy = copyForKind((takeover && takeover.kind) || (gate && gate.kind), (takeover && takeover.site) || (gate && gate.site));
   return JSON.stringify({
     ok: false,
     error: LOGIN_HANDOFF_CODE,
     loginHandoff: true,
-    kind: gate && gate.kind,
-    reason: gate && gate.reason,
-    site: (gate && gate.site) || '',
-    takeover: takeover ? { active: takeover.active, title: COPY.title } : { active: true, title: COPY.title },
-    message: COPY.refuseType,
+    paused: true,
+    kind: (gate && gate.kind) || (takeover && takeover.kind),
+    reason: (gate && gate.reason) || (takeover && takeover.reason),
+    site: (gate && gate.site) || (takeover && takeover.site) || '',
+        takeover: takeover
+      ? { active: takeover.active, title: takeover.title || copy.title, kind: takeover.kind }
+      : { active: true, title: copy.title },
+    message: copy.chat,
+    chatMessage: copy.chat,
   });
 }
 
@@ -791,6 +934,7 @@ function overlayOpenFromTakeover(state) {
 
 function ssePayloadFromTakeover(state) {
   const active = Boolean(state && state.active);
+  const copy = copyForKind(state && state.kind, state && state.site);
   return {
     type: LOGIN_HANDOFF_EVENT,
     active,
@@ -798,11 +942,63 @@ function ssePayloadFromTakeover(state) {
     site: (state && state.site) || '',
     kind: (state && state.kind) || null,
     reason: (state && state.reason) || null,
-    title: COPY.title,
-    instruction: (state && state.instruction) || COPY.instruction,
+    title: (state && state.title) || copy.title,
+    instruction: (state && state.instruction) || copy.instruction,
     neverSees: COPY.neverSees,
     ready: COPY.ready,
+    chatMessage: active ? ((state && state.chatMessage) || copy.chat) : null,
+    isNew: Boolean(state && state.isNew),
+    expand: active,
+    openPanel: active,
   };
+}
+
+function shouldProbeLivePage(identityOrConversationId, user, minMs = 8000) {
+  const key = takeoverKey(identityOrConversationId, user);
+  const prev = lastProbeByKey.get(key) || 0;
+  if (Date.now() - prev < minMs) return false;
+  lastProbeByKey.set(key, Date.now());
+  return true;
+}
+
+async function ensureTakeoverFromLivePage({
+  conversationId,
+  user,
+  identity,
+  observe,
+  forceProbe = false,
+} = {}) {
+  const id = identity || conversationId;
+  const current = getTakeover({ identity, conversationId, user });
+  if (current && current.active) return current;
+
+  const cached = getLastObserve(id, user);
+  if (cached) {
+    const gate = detectLoginGate(cached);
+    if (gate.gated) {
+      return beginTakeover({
+        identity,
+        conversationId: (identity && identity.conversationId) || conversationId,
+        user,
+        site: gate.site,
+        kind: gate.kind,
+        reason: gate.reason,
+      });
+    }
+  }
+
+  if (typeof observe !== 'function') return current;
+  if (!forceProbe && !shouldProbeLivePage(id, user)) return current;
+
+  try {
+    const snap = await observe();
+    if (!snap || !(snap.url || snap.text || snap.title)) return current;
+    const handed = applyObserveHandoff(null, snap, { identity, conversationId, user });
+    if (handed && handed.loginHandoff) {
+      return handed.takeover || getTakeover({ identity, conversationId, user });
+    }
+  } catch (_) { /* live probe is best-effort */ }
+  return getTakeover({ identity, conversationId, user });
 }
 
 function overlayLayoutContract(viewportWidth) {
@@ -825,6 +1021,11 @@ module.exports = {
   COPY,
   POLICY_ES,
   HAS_COMPUTER_POLICY_ES,
+  CAPTCHA_RE,
+  GOOGLE_SORRY_RE,
+  copyForKind,
+  chatMessageForTakeover,
+  isCaptchaUrl,
   isLiveComputerUsePrompt,
   EXAMPLE_AUTHENTICATED_TASKS,
   SECRET_NAME_RE,
@@ -867,4 +1068,6 @@ module.exports = {
   loginHandoffResumeResult,
   overlayOpenFromTakeover,
   ssePayloadFromTakeover,
+  ensureTakeoverFromLivePage,
+  shouldProbeLivePage,
 };

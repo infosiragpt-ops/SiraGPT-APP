@@ -39,6 +39,7 @@ export type ChatAgentComputerPanelProps = {
   onClose: () => void
   loginHandoff?: boolean
   loginHandoffSite?: string | null
+  loginHandoffKind?: string | null
 }
 
 type LiveStatus = "starting" | "live" | "error" | "idle"
@@ -67,12 +68,14 @@ export default function ChatAgentComputerPanel({
   onClose,
   loginHandoff = false,
   loginHandoffSite = null,
+  loginHandoffKind = null,
 }: ChatAgentComputerPanelProps) {
   const chatId = String(conversationId || "").trim()
   const [liveStatus, setLiveStatus] = React.useState<LiveStatus>("starting")
   const [expanded, setExpanded] = React.useState(false)
   const [handoffActive, setHandoffActive] = React.useState(Boolean(loginHandoff))
   const [handoffSite, setHandoffSite] = React.useState<string>(String(loginHandoffSite || ""))
+  const [handoffKind, setHandoffKind] = React.useState<string>(String(loginHandoffKind || ""))
   const [viewportWidth, setViewportWidth] = React.useState(
     typeof window !== "undefined" ? window.innerWidth : 1024,
   )
@@ -96,8 +99,9 @@ export default function ChatAgentComputerPanel({
   React.useEffect(() => {
     setHandoffActive(Boolean(loginHandoff))
     if (loginHandoffSite) setHandoffSite(String(loginHandoffSite))
+    if (loginHandoffKind) setHandoffKind(String(loginHandoffKind))
     if (loginHandoff) setExpanded(true)
-  }, [loginHandoff, loginHandoffSite])
+  }, [loginHandoff, loginHandoffSite, loginHandoffKind])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -109,6 +113,7 @@ export default function ChatAgentComputerPanel({
       setHandoffActive(Boolean(detail.active))
       if (detail.active) setExpanded(true)
       if (detail.site) setHandoffSite(String(detail.site))
+      if (detail.kind) setHandoffKind(String(detail.kind))
     }
     window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff)
     return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff)
@@ -139,7 +144,7 @@ export default function ChatAgentComputerPanel({
     const pull = async () => {
       try {
         const res = await authenticatedFetch(
-          `${API_BASE}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
+          `${API_BASE}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}&probe=1`,
           { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
         )
         const body = await res.json().catch(() => ({}))
@@ -148,12 +153,14 @@ export default function ChatAgentComputerPanel({
           setHandoffActive(true)
           setExpanded(true)
           if (body.site) setHandoffSite(String(body.site))
+          if (body.kind) setHandoffKind(String(body.kind))
           emitLoginHandoff({
             active: true,
             conversationId: chatId,
             site: body.site ? String(body.site) : undefined,
             kind: body.kind ? String(body.kind) : undefined,
             reason: body.reason ? String(body.reason) : undefined,
+            chatMessage: body.chatMessage ? String(body.chatMessage) : undefined,
           })
         }
       } catch {
@@ -243,6 +250,7 @@ export default function ChatAgentComputerPanel({
         <ComputerLoginHandoffBanner
           active={handoffActive}
           site={handoffSite}
+          kind={handoffKind}
           onReady={() => void handBack()}
           viewportWidth={viewportWidth}
         />

@@ -59,6 +59,9 @@ import {
   LOGIN_HANDOFF_WINDOW_EVENT,
   emitLoginHandoff,
   isLiveComputerUsePrompt,
+  chatMessageFromDetail,
+  shouldPostHandoffChatMessage,
+  buildHandoffAssistantMessage,
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
 import {
@@ -6055,6 +6058,7 @@ function ChatInterfaceContent() {
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
   const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
   const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
+  const [loginHandoffKind, setLoginHandoffKind] = React.useState("");
 
   // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -11710,6 +11714,27 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     activeArtifact,
   ]);
 
+  const injectHandoffChat = React.useCallback((detail: LoginHandoffDetail) => {
+    const chatId = String(detail.conversationId || currentChatIdRef.current || "").trim();
+    if (!detail.active || !chatId) return;
+    const chatMessage = chatMessageFromDetail(detail);
+    if (!chatMessage) return;
+    setCurrentChat((prev) => {
+      if (!prev || String(prev.id) !== chatId) return prev;
+      if (!shouldPostHandoffChatMessage(prev.messages || [], chatMessage)) return prev;
+      return {
+        ...prev,
+        messages: [...(prev.messages || []), buildHandoffAssistantMessage(chatId, chatMessage, detail)],
+      };
+    });
+    void apiClient.addMessage(chatId, {
+      role: "ASSISTANT",
+      content: chatMessage,
+      metadata: { type: "computer_login_handoff", kind: detail.kind, site: detail.site },
+      idempotencyKey: `login-handoff:${chatId}:${detail.kind || "gate"}`,
+    }).catch(() => undefined);
+  }, [setCurrentChat]);
+
   const openComputerPanel = React.useCallback(() => {
     setShowAudioPanel(false);
     setActiveSearchActivityId(null);
@@ -11748,14 +11773,16 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (detail.active) {
         setLoginHandoffActive(true);
         if (detail.site) setLoginHandoffSite(String(detail.site));
+        if (detail.kind) setLoginHandoffKind(String(detail.kind));
         openComputerPanel();
+        injectHandoffChat(detail);
       } else {
         setLoginHandoffActive(false);
       }
     };
     window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
     return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
-  }, [openComputerPanel, currentChat?.id]);
+  }, [openComputerPanel, currentChat?.id, injectHandoffChat]);
 
   React.useEffect(() => {
     const chatId = String(currentChat?.id || "").trim();
@@ -11765,7 +11792,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       try {
         const api = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "");
         const res = await authenticatedFetch(
-          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen ? "&probe=1" : ""}`,
           { credentials: "include", signal: AbortSignal.timeout(12_000) },
         );
         const body = await res.json().catch(() => ({}));
@@ -11773,8 +11800,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         if (body && body.active) {
           setLoginHandoffActive(true);
           if (body.site) setLoginHandoffSite(String(body.site));
+          if (body.kind) setLoginHandoffKind(String(body.kind));
           openComputerPanel();
-          emitLoginHandoff({
+          const detail = {
             active: true,
             conversationId: chatId,
             site: body.site ? String(body.site) : undefined,
@@ -11782,7 +11810,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             reason: body.reason ? String(body.reason) : undefined,
             title: body.title ? String(body.title) : undefined,
             instruction: body.instruction ? String(body.instruction) : undefined,
-          });
+            chatMessage: body.chatMessage ? String(body.chatMessage) : undefined,
+          };
+          emitLoginHandoff(detail);
+          injectHandoffChat(detail);
         }
       } catch {
         /* handoff poll is best-effort */
@@ -11794,7 +11825,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [currentChat?.id, openComputerPanel]);
+  }, [currentChat?.id, openComputerPanel, computerPanelOpen, injectHandoffChat]);
 
   const openGrokVoicePanel = React.useCallback(() => {
     setCoworkPanelOpen(false);
@@ -13584,6 +13615,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   conversationId={currentChat?.id || ""}
                   loginHandoff={loginHandoffActive}
                   loginHandoffSite={loginHandoffSite}
+                  loginHandoffKind={loginHandoffKind}
                   onClose={() => {
                     setComputerPanelOpen(false)
                     setLoginHandoffActive(false)

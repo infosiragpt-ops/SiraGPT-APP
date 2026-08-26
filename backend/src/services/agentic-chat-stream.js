@@ -1524,7 +1524,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         const chatId = String((toolContext && toolContext.chatId) || '');
         const evtId = String((evt && evt.conversationId) || '');
         if (evtId && chatId && evtId !== chatId) return;
-        writeSse(res, loginHandoffMod.ssePayloadFromTakeover(evt));
+        const payload = loginHandoffMod.ssePayloadFromTakeover(evt);
+        writeSse(res, payload);
+        if (evt && evt.active && payload.chatMessage && evt.isNew) {
+          writeSse(res, { content: `\n\n${payload.chatMessage}` });
+        }
       } catch (_) { /* overlay event is best-effort */ }
     });
     const stopLoginHandoff = () => {

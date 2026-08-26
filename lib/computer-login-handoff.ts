@@ -14,6 +14,20 @@ export const LOGIN_HANDOFF_COPY = {
   neverSees: "SiraGPT no ve tu contraseña",
   ready: "Listo",
   paused: "La computadora espera a que inicies sesión. SiraGPT no ve tu contraseña.",
+  captchaTitle: "Completa el captcha en el equipo",
+  captchaInstruction: "Hay un captcha. Tómalo tú.",
+  captchaChat:
+    "Apareció un captcha (tráfico inusual / no soy un robot). Toma el control de la computadora, resuélvelo ahí y pulsa Listo. SiraGPT no ve tu contraseña.",
+  otpTitle: "Completa la verificación en el equipo",
+  otpInstruction: "Ingresa el código 2FA en esta computadora",
+  otpChat:
+    "Hay una verificación en dos pasos. Toma el control de la computadora, ingresa el código ahí y pulsa Listo. SiraGPT no ve tu contraseña.",
+  paymentTitle: "Completa el pago en el equipo",
+  paymentInstruction: "Paga en esta computadora. SiraGPT no ve tus datos.",
+  paymentChat:
+    "Hay un muro de pago. Toma el control de la computadora, completa el pago ahí y pulsa Listo. SiraGPT no ve tu contraseña ni tu tarjeta.",
+  loginChat:
+    "Inicia sesión en el equipo. Toma el control de la computadora y pulsa Listo. SiraGPT no ve tu contraseña.",
 } as const
 
 export const HAS_COMPUTER_POLICY_ES = [
@@ -64,6 +78,7 @@ export type LoginHandoffDetail = {
   reason?: string
   title?: string
   instruction?: string
+  chatMessage?: string | null
 }
 
 export type OverlayLayoutContract = {
@@ -88,10 +103,108 @@ export function overlayLayoutContract(viewportWidth: number): OverlayLayoutContr
   }
 }
 
-export function instructionForSite(site?: string | null): string {
+export function copyForKind(kind?: string | null, site?: string | null): {
+  title: string
+  instruction: string
+  chat: string
+} {
   const host = String(site || "").trim()
-  if (!host) return LOGIN_HANDOFF_COPY.instruction
-  return `Inicia sesión en ${host}`
+  const k = String(kind || "password")
+  if (k === "captcha") {
+    return {
+      title: LOGIN_HANDOFF_COPY.captchaTitle,
+      instruction: host ? `Completa el captcha en ${host}` : LOGIN_HANDOFF_COPY.captchaInstruction,
+      chat: LOGIN_HANDOFF_COPY.captchaChat,
+    }
+  }
+  if (k === "otp") {
+    return {
+      title: LOGIN_HANDOFF_COPY.otpTitle,
+      instruction: host ? `Ingresa el código 2FA en ${host}` : LOGIN_HANDOFF_COPY.otpInstruction,
+      chat: LOGIN_HANDOFF_COPY.otpChat,
+    }
+  }
+  if (k === "payment") {
+    return {
+      title: LOGIN_HANDOFF_COPY.paymentTitle,
+      instruction: host ? `Completa el pago en ${host}` : LOGIN_HANDOFF_COPY.paymentInstruction,
+      chat: LOGIN_HANDOFF_COPY.paymentChat,
+    }
+  }
+  return {
+    title: LOGIN_HANDOFF_COPY.title,
+    instruction: host ? `Inicia sesión en ${host}` : LOGIN_HANDOFF_COPY.instruction,
+    chat: LOGIN_HANDOFF_COPY.loginChat,
+  }
+}
+
+export function instructionForSite(site?: string | null, kind?: string | null): string {
+  return copyForKind(kind, site).instruction
+}
+
+export function chatMessageFromDetail(detail: LoginHandoffDetail | null | undefined): string {
+  if (!detail || !detail.active) return ""
+  if (detail.chatMessage) return String(detail.chatMessage)
+  return copyForKind(detail.kind, detail.site).chat
+}
+
+export function shouldPostHandoffChatMessage(
+  messages: Array<{ role?: string; content?: string }> | null | undefined,
+  chatMessage: string,
+): boolean {
+  const needle = String(chatMessage || "").trim()
+  if (!needle) return false
+  const head = needle.slice(0, 48)
+  return !(messages || []).some((msg) => {
+    const role = String(msg?.role || "").toUpperCase()
+    if (role !== "ASSISTANT") return false
+    return String(msg?.content || "").includes(head)
+  })
+}
+
+export function buildHandoffAssistantMessage(
+  chatId: string,
+  chatMessage: string,
+  detail?: LoginHandoffDetail | null,
+): {
+  id: string
+  chatId: string
+  role: "ASSISTANT"
+  content: string
+  timestamp: string
+  metadata: { type: string; kind?: string; site?: string }
+} {
+  return {
+    id: `login-handoff-${chatId}-${detail?.kind || "gate"}`,
+    chatId,
+    role: "ASSISTANT",
+    content: chatMessage,
+    timestamp: new Date().toISOString(),
+    metadata: {
+      type: LOGIN_HANDOFF_EVENT,
+      kind: detail?.kind,
+      site: detail?.site,
+    },
+  }
+}
+
+export function isCaptchaHandoffUrl(url?: string | null): boolean {
+  const raw = String(url || "").trim()
+  if (!raw) return false
+  if (/(?:^|[/.])google(?:apis)?\.[a-z.]+\/sorry(?:\/|\?|$)|\/sorry\/index\b|ipv[46]\.google\.[a-z.]+\/sorry\b/i.test(raw)) {
+    return true
+  }
+  if (/recaptcha(?:\/|$|\.)|\/recaptcha\//i.test(raw)) return true
+  try {
+    const parsed = new URL(raw)
+    const host = String(parsed.hostname || "").replace(/^www\./, "")
+    const path = String(parsed.pathname || "")
+    if (/google\./i.test(host) && /\/sorry\b/i.test(path)) return true
+    if (/recaptcha/i.test(host) || /recaptcha/i.test(path)) return true
+  } catch {
+    /* relative */
+  }
+  return false
 }
 
 export function overlayOpenFromTakeover(state: { active?: boolean } | null | undefined): {
@@ -122,6 +235,7 @@ export function consumeLoginHandoffSse(payload: Record<string, unknown> | null |
     reason: payload.reason == null ? undefined : String(payload.reason),
     title: payload.title == null ? undefined : String(payload.title),
     instruction: payload.instruction == null ? undefined : String(payload.instruction),
+    chatMessage: payload.chatMessage == null ? undefined : String(payload.chatMessage),
   }
   emitLoginHandoff(detail)
   return detail
