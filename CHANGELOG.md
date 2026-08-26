@@ -9,9 +9,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 ### Fixed
 
 - App cards on `/conexiones` and `/gpts` use professional brand marks
-  (local Simple Icons under `public/conexiones-logos/` plus Clearbit /
-  DuckDuckGo domain logos) instead of blurry Google `sz=128` favicons.
-  Initials remain only after every image source fails.
+  (local Simple Icons under `public/conexiones-logos/`, Clearbit /
+  DuckDuckGo for real domains, and a generated monogram SVG for
+  invented GPT-store hosts) instead of blurry Google `sz=128` favicons
+  or blank tiles. Initials remain only after every image source fails.
 
 ### Added
 
