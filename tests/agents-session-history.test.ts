@@ -55,4 +55,36 @@ describe("agents session history", () => {
     assert.equal(goAgentsHistory(-1), "")
     assert.equal(goAgentsHistory(-1), null)
   })
+
+  it("returns the same snapshot object when nothing changed", () => {
+    recordAgentsVisit("a")
+    const first = snapshotAgentsHistory()
+    const second = snapshotAgentsHistory()
+    assert.equal(first, second)
+    assert.equal(first.current, "a")
+    assert.equal(first.canBack, false)
+    assert.equal(first.canForward, false)
+  })
+
+  it("allocates a new snapshot after visiting a different chat", () => {
+    recordAgentsVisit("a")
+    const first = snapshotAgentsHistory()
+    recordAgentsVisit("b")
+    const second = snapshotAgentsHistory()
+    assert.notEqual(first, second)
+    assert.equal(second.current, "b")
+    assert.equal(second.canBack, true)
+    assert.equal(second.canForward, false)
+    assert.equal(first.current, "a")
+  })
+
+  it("keeps the snapshot reference after a duplicate visit of the current chat", () => {
+    recordAgentsVisit("a")
+    const first = snapshotAgentsHistory()
+    recordAgentsVisit("a")
+    const second = snapshotAgentsHistory()
+    assert.equal(first, second)
+    assert.equal(second.current, "a")
+    assert.equal(second.canBack, false)
+  })
 })
