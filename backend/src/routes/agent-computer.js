@@ -196,8 +196,8 @@ async function navigateMemberDesktop(session, url) {
   } catch (navErr) {
     const opened = await persistent.dockerExec(
       session,
-      'google-chrome --new-window ' + JSON.stringify(url)
-        + ' || chromium --new-window ' + JSON.stringify(url)
+      'google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ' + JSON.stringify(url)
+        + ' || chromium --no-sandbox --disable-dev-shm-usage --new-window ' + JSON.stringify(url)
         + ' || xdg-open ' + JSON.stringify(url),
     );
     return {

@@ -97,7 +97,7 @@ function buildNavigateTool({ userId, conversationId, env }) {
           try {
             const opened = await persistent.dockerExec(
               session,
-              `google-chrome --new-window ${JSON.stringify(url)} || chromium --new-window ${JSON.stringify(url)} || xdg-open ${JSON.stringify(url)}`,
+              `google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(url)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(url)} || xdg-open ${JSON.stringify(url)}`,
               { signal: ctx.signal },
             );
             return { ok: true, tool: 'computer_navigate', url, result: opened, _preview: `Abriendo ${url}` };
