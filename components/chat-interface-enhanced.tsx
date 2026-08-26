@@ -58,6 +58,7 @@ import { cn } from "@/lib/utils"
 import {
   LOGIN_HANDOFF_WINDOW_EVENT,
   emitLoginHandoff,
+  isLiveComputerUsePrompt,
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
 import {
@@ -10027,6 +10028,7 @@ REWRITTEN TEXT:`;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
+        if (isLiveComputerUsePrompt(msg)) openComputerPanel();
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
         markQueuedSendSucceeded();
       } finally {
@@ -12740,6 +12742,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
+    if (isLiveComputerUsePrompt(goalText)) openComputerPanel();
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
     let activeChat = currentChatRef.current;

@@ -3,6 +3,7 @@
 
 import { authenticatedFetch } from "./authenticated-fetch"
 import { devLog } from "./dev-log"
+import { isLiveComputerUsePrompt } from "./computer-login-handoff"
 
 export interface IntentAnalysis {
   type: "search_tracks" | "search_artists" | "search_playlists" | "get_recommendations" | "general"
@@ -653,6 +654,7 @@ const signalIntentFromText = (text: string): ChatIntent | null => {
   const asksForLongRunningAgent = ROUTING_PATTERNS.longRunningAgent.test(normalized)
 
   if (ROUTING_PATTERNS.gmail.test(normalized)) return 'gmail'
+  if (isLiveComputerUsePrompt(text)) return 'agent_task'
   if (ROUTING_PATTERNS.googleServices.test(normalized)) return 'google_services'
 
   if (
@@ -968,6 +970,10 @@ export function shouldRouteTextPromptThroughAgenticRuntime(prompt: string, files
     }
     return true
   }
+  // Live computer-use (shop / book / DMV / "abre tu computadora") must run
+  // the durable agent-task loop so F7 computer_* tools and the overlay fire.
+  if (isLiveComputerUsePrompt(prompt)) return true
+
   if (isLightweightConversationalPrompt(normalized)) return false
 
   // Word / PPT / Excel creation must use the durable agent-task (BullMQ)
@@ -1101,9 +1107,14 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   // through to the lightweight chat path below.
   if (isAmbiguousPrompt(prompt)) return 'ambiguous'
 
+  // Live computer / overlay browser (shop, book, DMV, "abre tu computadora").
+  // Must beat lightweight chat, google_services ("agenda") and web_search cop-outs.
+  if (isLiveComputerUsePrompt(prompt)) return 'agent_task'
+
   if (isLightweightConversationalPrompt(lc)) return 'text'
 
   if (ROUTING_PATTERNS.gmail.test(lc)) return 'gmail'
+
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
@@ -1212,6 +1223,10 @@ export class AIService {
     conversationHistory: any[] = [],
     signal?: AbortSignal
   ): Promise<ChatIntent> {
+
+    if (isLiveComputerUsePrompt(prompt)) {
+      return 'agent_task';
+    }
 
     if (shouldEditExistingDocument(prompt, conversationHistory)) {
       return 'agent_task';

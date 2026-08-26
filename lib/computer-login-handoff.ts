@@ -16,7 +16,16 @@ export const LOGIN_HANDOFF_COPY = {
   paused: "La computadora espera a que inicies sesión. SiraGPT no ve tu contraseña.",
 } as const
 
+export const HAS_COMPUTER_POLICY_ES = [
+  "POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):",
+  "- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.",
+  "- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.",
+  "- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.",
+  "- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.",
+].join("\n")
+
 export const LOGIN_HANDOFF_POLICY_ES = [
+  HAS_COMPUTER_POLICY_ES,
   "NUNCA pidas al usuario que pegue una contraseña, usuario, código OTP/2FA o número de tarjeta en el chat.",
   "Abre la computadora del agente de ESTE chat. El usuario inicia sesión en el overlay. SiraGPT no ve tu contraseña.",
   "No inventes integraciones por sitio. Usa el navegador real de la computadora.",
@@ -124,13 +133,16 @@ export function isPasswordPasteRequest(text: string): boolean {
   )
 }
 
-export function routeAuthenticatedComputerTask(prompt: string): {
-  useComputer: boolean
-  loginHandoff: boolean
-  askPasswordInChat: false
-  openComputerInstead: true
-} {
+const OPEN_COMPUTER_RE = /\b(abre|abrir|enciende|usa|usar|abre(?:me|la)?)\b.{0,48}\b(?:tu |la |el |mi )?(computadora|ordenador|navegador|browser|overlay)\b/i
+const LIVE_BROWSE_RE = /\b(busca(?:r|me|le)? en vivo|buscar en vivo|en el navegador|live (?:search|browse)|navega(?:r)? (?:a|en|por)|en tu computadora)\b/i
+const SHOPPING_RE = /\b(ofertas?|prendas? de vestir|shopping|comprar ropa|tienda de ropa|ropa de (?:mujer|hombre|ni[nñ][oa]s?))\b/i
+const BOOKING_RE = /\b(reserva(?:r)?(?: un[oa]?| el| la)? (?:vuelo|hotel|mesa|cita|restaurante|turno)|hacer una reserva|booking)\b/i
+const APPOINTMENT_RE = /\b(agend(?:a|ar)(?: una| la)? cita|pedir cita|saca(?:r)? una cita|cita (?:m[eé]dica|en el|para|del|de ))\b/i
+const PORTAL_ALWAYS_RE = /\b(dmv|pasaporte|passport)\b/i
+
+export function isAuthenticatedComputerTask(prompt: string): boolean {
   const t = String(prompt || "").toLowerCase()
+  if (!t.trim()) return false
   const matched = EXAMPLE_AUTHENTICATED_TASKS.some((ex) => t.includes(ex.slice(0, 18).toLowerCase()))
   const portal =
     /\b(dmv|pasaporte|passport|seguro|insurance|reembolso|landlord|arrendador|veterinari|vet\b|departamento|apartamento|utilities|luz|agua|internet|registro del auto|in-network|m[eé]dico|boletos|tickets|permiso|proveedor|vendor|campa[nñ]a|anuncios|ads manager|hiring|candidatos|facturas|contabilidad|reventa|drop)\b/i.test(
@@ -140,11 +152,35 @@ export function routeAuthenticatedComputerTask(prompt: string): {
     /\b(renueva|agenda|tramita|reclama|activa|cancela|coordina|escribe|filtra|reordena|manda|eval[uú]a|analiza|compra|cierra|avisa|busca|contacta)\b/i.test(
       t,
     )
-  const authenticated = matched || (portal && action)
+  return matched || (portal && action)
+}
+
+export function isLiveComputerUsePrompt(prompt: string): boolean {
+  const t = String(prompt || "")
+  if (!t.trim()) return false
+  if (OPEN_COMPUTER_RE.test(t)) return true
+  if (LIVE_BROWSE_RE.test(t)) return true
+  if (SHOPPING_RE.test(t)) return true
+  if (BOOKING_RE.test(t)) return true
+  if (APPOINTMENT_RE.test(t)) return true
+  if (PORTAL_ALWAYS_RE.test(t)) return true
+  return isAuthenticatedComputerTask(t)
+}
+
+export function routeAuthenticatedComputerTask(prompt: string): {
+  useComputer: boolean
+  loginHandoff: boolean
+  askPasswordInChat: false
+  openComputerInstead: true
+  replyClass: "computer_use" | "text"
+} {
+  const live = isLiveComputerUsePrompt(prompt)
+  const authenticated = isAuthenticatedComputerTask(prompt)
   return {
-    useComputer: authenticated,
+    useComputer: live,
     loginHandoff: authenticated,
     askPasswordInChat: false,
     openComputerInstead: true,
+    replyClass: live ? "computer_use" : "text",
   }
 }

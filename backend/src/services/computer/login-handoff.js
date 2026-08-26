@@ -69,7 +69,16 @@ const EXAMPLE_AUTHENTICATED_TASKS = Object.freeze([
   'analiza la campaña de anuncios en el panel del anunciante',
 ]);
 
+const HAS_COMPUTER_POLICY_ES = [
+  'POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):',
+  '- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.',
+  '- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.',
+  '- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.',
+  '- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.',
+].join('\n');
+
 const POLICY_ES = [
+  HAS_COMPUTER_POLICY_ES,
   'POLÍTICA DE LOGIN EN LA COMPUTADORA (obligatoria):',
   '- NUNCA pidas al usuario que pegue una contraseña, usuario, código OTP/2FA o número de tarjeta en el chat.',
   '- NUNCA uses computer_type / type / keypress para escribir secretos. Si hay un campo password, OTP, 2FA, CVV o captcha, PAUSA y pide toma de control.',
@@ -647,6 +656,13 @@ function isPasswordPasteRequest(text) {
   return !modelMustNotAskPasswordInChat(text);
 }
 
+const OPEN_COMPUTER_RE = /\b(abre|abrir|enciende|usa|usar|abre(?:me|la)?)\b.{0,48}\b(?:tu |la |el |mi )?(computadora|ordenador|navegador|browser|overlay)\b/i;
+const LIVE_BROWSE_RE = /\b(busca(?:r|me|le)? en vivo|buscar en vivo|en el navegador|live (?:search|browse)|navega(?:r)? (?:a|en|por)|en tu computadora)\b/i;
+const SHOPPING_RE = /\b(ofertas?|prendas? de vestir|shopping|comprar ropa|tienda de ropa|ropa de (?:mujer|hombre|ni[nñ][oa]s?))\b/i;
+const BOOKING_RE = /\b(reserva(?:r)?(?: un[oa]?| el| la)? (?:vuelo|hotel|mesa|cita|restaurante|turno)|hacer una reserva|booking)\b/i;
+const APPOINTMENT_RE = /\b(agend(?:a|ar)(?: una| la)? cita|pedir cita|saca(?:r)? una cita|cita (?:m[eé]dica|en el|para|del|de ))\b/i;
+const PORTAL_ALWAYS_RE = /\b(dmv|pasaporte|passport)\b/i;
+
 function isAuthenticatedComputerTask(prompt) {
   const t = String(prompt || '').toLowerCase();
   if (!t.trim()) return false;
@@ -658,6 +674,18 @@ function isAuthenticatedComputerTask(prompt) {
   return portal && action;
 }
 
+function isLiveComputerUsePrompt(prompt) {
+  const t = String(prompt || '');
+  if (!t.trim()) return false;
+  if (OPEN_COMPUTER_RE.test(t)) return true;
+  if (LIVE_BROWSE_RE.test(t)) return true;
+  if (SHOPPING_RE.test(t)) return true;
+  if (BOOKING_RE.test(t)) return true;
+  if (APPOINTMENT_RE.test(t)) return true;
+  if (PORTAL_ALWAYS_RE.test(t)) return true;
+  return isAuthenticatedComputerTask(t);
+}
+
 function fuzzyIncludes(hay, needle) {
   const n = String(needle || '').toLowerCase().replace(/\s+/g, ' ').trim();
   if (n.length < 12) return hay.includes(n);
@@ -666,13 +694,15 @@ function fuzzyIncludes(hay, needle) {
 }
 
 function routeAuthenticatedComputerTask(prompt) {
+  const live = isLiveComputerUsePrompt(prompt);
   const authenticated = isAuthenticatedComputerTask(prompt);
   return {
-    useComputer: authenticated,
+    useComputer: live,
     loginHandoff: authenticated,
     askPasswordInChat: false,
     openComputerInstead: true,
     policy: POLICY_ES,
+    replyClass: live ? 'computer_use' : 'text',
   };
 }
 
@@ -794,6 +824,8 @@ module.exports = {
   LOGIN_HANDOFF_EVENT,
   COPY,
   POLICY_ES,
+  HAS_COMPUTER_POLICY_ES,
+  isLiveComputerUsePrompt,
   EXAMPLE_AUTHENTICATED_TASKS,
   SECRET_NAME_RE,
   isPasswordField,
@@ -815,6 +847,7 @@ module.exports = {
   getTakeover,
   resetTakeoverForTests,
   isAuthenticatedComputerTask,
+  isLiveComputerUsePrompt,
   routeAuthenticatedComputerTask,
   modelMustNotAskPasswordInChat,
   isPasswordPasteRequest,
