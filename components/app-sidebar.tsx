@@ -18,7 +18,10 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  MessageSquarePlus,
+  Briefcase,
   Search,
   SlidersHorizontal,
   Library,
@@ -239,12 +242,6 @@ const NAV_ROW_ACTIVE =
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
 const HEADER_ICON_BTN =
   "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-const SIDEBAR_TAB =
-  "inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors"
-const SIDEBAR_TAB_ON =
-  "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
-const SIDEBAR_TAB_OFF =
-  "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
 const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
 const RECENT_TOOLBAR_ICON =
@@ -637,6 +634,21 @@ export function AppSidebar() {
     setRecentChatsCollapsed((prev) => {
       const next = !prev
       try { window.localStorage.setItem("sira:sidebar:recent-collapsed", next ? "1" : "0") } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+  // Carpetas folds the same way as Recent chats: one quiet header toggle.
+  const [foldersCollapsed, setFoldersCollapsed] = React.useState<boolean>(false)
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("sira:sidebar:folders-collapsed")
+      if (raw === "1") setFoldersCollapsed(true)
+    } catch { /* ignore */ }
+  }, [])
+  const toggleFoldersCollapsed = React.useCallback(() => {
+    setFoldersCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem("sira:sidebar:folders-collapsed", next ? "1" : "0") } catch { /* ignore */ }
       return next
     })
   }, [])
@@ -1241,47 +1253,10 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Mode toggle: Agentes ↔ Empresas. Replaces the
-              logo+name lockup in the open header (the collapsed rail
-              keeps the logo button below). */}
-          <div className="flex min-w-0 flex-1 items-center justify-center">
-            <div
-              role="tablist"
-              aria-label="Modo de la barra lateral"
-              className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-zinc-200/70 p-[3px] dark:bg-white/10"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidebarMode === "chat"}
-                aria-label="Agentes"
-                onClick={() => switchSidebarMode("chat")}
-                className={cn(
-                  SIDEBAR_TAB,
-                  "gap-1.5",
-                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
-                )}
-              >
-                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                <span>Agentes</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidebarMode === "code"}
-                aria-label="Empresas"
-                onClick={() => switchSidebarMode("code")}
-                className={cn(
-                  SIDEBAR_TAB,
-                  sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
-                )}
-              >
-                <span>Empresas</span>
-              </button>
-            </div>
-          </div>
+          {/* Claude-style chrome strip: collapse + browser history on the
+              left, notifications + the primary new-chat disc on the right.
+              The Agentes ↔ Empresas switch lives as a nav row below. */}
           <div className="flex shrink-0 items-center gap-0.5">
-            <NotificationCenter />
             <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
               <SidebarTrigger
                 aria-label="Contraer barra lateral ⌘B"
@@ -1289,6 +1264,40 @@ export function AppSidebar() {
               >
                 <SidebarOvalIcon className="h-4 w-4" />
               </SidebarTrigger>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Atrás">
+              <button
+                type="button"
+                aria-label="Atrás"
+                onClick={() => window.history.back()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
+              >
+                <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Adelante">
+              <button
+                type="button"
+                aria-label="Adelante"
+                onClick={() => window.history.forward()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </SidebarChromeTooltip>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <NotificationCenter />
+            <SidebarChromeTooltip label="Nuevo chat ⌘N">
+              <button
+                type="button"
+                onPointerDown={markNewChatIntent}
+                onClick={handleNewChat}
+                aria-label="Nuevo chat ⌘N"
+                className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <MessageSquarePlus className="h-4 w-4" strokeWidth={1.9} />
+              </button>
             </SidebarChromeTooltip>
           </div>
         </div>
@@ -1459,6 +1468,42 @@ export function AppSidebar() {
 
       </div>
 
+      {/* Empresas — mode switch presented as a regular nav row (the old
+          header tablist moved here). Visible in BOTH modes: it is the only
+          way back to Agentes once the chat nav block above hides in code
+          mode. */}
+      <div
+        className={cn(
+          "flex flex-col transition-all",
+          state === "open" ? "gap-0.5 px-2 pb-2" : "px-2 pb-2",
+        )}
+      >
+        <TooltipProvider>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Empresas"
+                aria-pressed={sidebarMode === "code"}
+                onClick={() => switchSidebarMode(sidebarMode === "code" ? "chat" : "code")}
+                data-sidebar="menu-button"
+                className={cn(
+                  NAV_ROW,
+                  sidebarMode === "code" && NAV_ROW_ACTIVE,
+                  "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
+                )}
+              >
+                <Briefcase className={cn(NAV_ICON, sidebarMode === "code" ? "text-foreground" : "text-muted-foreground")} />
+                <span className="group-data-[state=closed]:hidden truncate">Empresas</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Empresas</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+
       <SidebarContent
         className={cn(
           "custom-scrollbar flex-1 px-2",
@@ -1522,9 +1567,22 @@ export function AppSidebar() {
                 state === "closed" && "hidden",
               )}
             >
-              <span className="flex h-8 min-w-0 flex-1 items-center truncate px-2 text-[13px] font-medium leading-none text-muted-foreground">
-                Carpetas
-              </span>
+              <button
+                type="button"
+                onClick={toggleFoldersCollapsed}
+                aria-expanded={!foldersCollapsed}
+                aria-controls="sidebar-chat-folders-list"
+                className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-lg px-2 text-left text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform duration-150",
+                    foldersCollapsed && "-rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">Carpetas</span>
+              </button>
               <button
                 type="button"
                 data-sidebar-folders-add="1"
@@ -1540,7 +1598,7 @@ export function AppSidebar() {
               <div
                 id="sidebar-chat-folders-list"
                 data-sidebar-folders-list="1"
-                className={cn("pb-1", state === "closed" && "hidden")}
+                className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
               >
                 {visibleChatFolders.map((folder) => (
                   <div key={folder} className="group flex w-full items-center gap-0.5">
@@ -1598,8 +1656,7 @@ export function AppSidebar() {
                 aria-controls="sidebar-recent-chats-content"
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
-                  "hover:bg-muted/80 focus-visible:border-sky-400/80 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
-                  !recentChatsCollapsed && "border-sky-400/70 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.10)] dark:bg-zinc-950",
+                  "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                 )}
               >
                 <ChevronDown
