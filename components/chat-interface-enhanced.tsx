@@ -12625,7 +12625,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     if (needsRealChat) {
       try {
         const response = await apiClient.createChat({
-          title: `{} ${displayGoal.substring(0, 30)}`,
+          title: displayGoal.substring(0, 30),
           model: selectedModel,
         });
         activeChat = response.chat;
