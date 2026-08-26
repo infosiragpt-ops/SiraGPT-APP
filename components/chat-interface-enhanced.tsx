@@ -57,6 +57,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
   LOGIN_HANDOFF_WINDOW_EVENT,
+  emitLoginHandoff,
+  isLiveComputerUsePrompt,
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
 import {
@@ -10026,6 +10028,7 @@ REWRITTEN TEXT:`;
 
     if (shouldStartAgenticLoopForCurrentMessage) {
       try {
+        if (isLiveComputerUsePrompt(msg)) openComputerPanel();
         await handleAgentTask(msg, filesToSend, { userMessageAlreadyAdded: false });
         markQueuedSendSucceeded();
       } finally {
@@ -11771,12 +11774,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           setLoginHandoffActive(true);
           if (body.site) setLoginHandoffSite(String(body.site));
           openComputerPanel();
+          emitLoginHandoff({
+            active: true,
+            conversationId: chatId,
+            site: body.site ? String(body.site) : undefined,
+            kind: body.kind ? String(body.kind) : undefined,
+            reason: body.reason ? String(body.reason) : undefined,
+            title: body.title ? String(body.title) : undefined,
+            instruction: body.instruction ? String(body.instruction) : undefined,
+          });
         }
       } catch {
         /* handoff poll is best-effort */
       }
     };
-    const timer = window.setInterval(() => void pull(), 5000);
+    void pull();
+    const timer = window.setInterval(() => void pull(), 2500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -12729,6 +12742,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Please enter a task');
       return;
     }
+    if (isLiveComputerUsePrompt(goalText)) openComputerPanel();
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
 

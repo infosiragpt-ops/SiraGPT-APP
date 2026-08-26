@@ -231,6 +231,8 @@ services:
       # configuration starts the backend with MCP deny-all/degraded.
       SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
       SIRAGPT_MCP_ALLOW_HTTP: "0"
+      NEXT_PUBLIC_AGENT_COMPUTER: ${NEXT_PUBLIC_AGENT_COMPUTER:-1}
+      SIRAGPT_AGENT_COMPUTER: ${SIRAGPT_AGENT_COMPUTER:-1}
       # Keep explicit runtime/direct roles untouched. POSTGRES-only deployments
       # are synthesized by the shared pure resolver after all URL roles are
       # confirmed absent, so a remote runtime can never silently target `db`.

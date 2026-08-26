@@ -258,9 +258,26 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
       }
       try {
         const shot = await drv.screenshot({ signal });
+        const observeText = `computer_screenshot ok (${drv.kind}): ${shot.text}`;
+        const handed = loginHandoff.applyObserveHandoff(session, {
+          text: observeText,
+          url: args.url || (session && session.url) || '',
+          title: args.title || '',
+          focused: args.focused || args.focusedField || null,
+        }, {
+          user: { id: userId },
+          conversationId: args.conversationId || (session && session.conversationId),
+          identity: session,
+        });
+        if (handed.loginHandoff) {
+          return {
+            __f7Image: handed.screenshotBlocked ? undefined : { base64: shot.base64, mediaType: shot.mediaType },
+            text: loginHandoff.loginHandoffToolResult(handed.loginGate, handed.takeover),
+          };
+        }
         return {
           __f7Image: { base64: shot.base64, mediaType: shot.mediaType },
-          text: `computer_screenshot ok (${drv.kind}): ${shot.text}`,
+          text: observeText,
         };
       } catch (err) {
         if (signal?.aborted) throw err;
@@ -311,7 +328,12 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
         identity: session,
       });
       if (blocked.refuse) {
-        const gate = loginHandoff.detectLoginGate(args);
+        const gate = loginHandoff.detectLoginGate({
+          url: args.url,
+          title: args.title,
+          text: args.dom || args.pageText || args.a11y || '',
+          focused: args.focused || args.focusedField,
+        });
         loginHandoff.beginTakeover({
           conversationId: args.conversationId || (session && session.conversationId),
           user: { id: userId },
@@ -320,7 +342,13 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
           kind: gate.kind || 'password',
           reason: blocked.reason,
         });
-        return loginHandoff.loginHandoffToolResult(gate, { active: true });
+        const waited = await loginHandoff.waitUntilReleased({
+          conversationId: args.conversationId || (session && session.conversationId),
+          user: { id: userId },
+          identity: session,
+          signal,
+        });
+        return loginHandoff.loginHandoffResumeResult(gate, Boolean(waited && waited.released));
       }
       const started = Date.now();
       let drv;

@@ -103,7 +103,7 @@ async function runBrowserAction(action, args = {}, ctx = {}) {
         ok: false,
         action,
         error: 'browser_driver_required',
-        message: 'No active browser driver/session is available for browser automation.',
+        message: 'Usa computer_navigate en la computadora de este chat. Cada chat TIENE una computadora en vivo.',
       };
     }
     const out = await browserAgent.run(action, args);
@@ -1358,7 +1358,7 @@ const session_spawn = {
 
 const browser_navigate = {
   name: 'browser_navigate',
-  description: 'Navigate the active browser session to an absolute http(s) URL. Requires ctx.browserAgent, ctx.browserDriver, ctx.browserAdapter, or ctx.browser to be injected by the caller.',
+  description: 'Navigate the live browser of THIS chat computer to an absolute http(s) URL. Cada chat TIENE una computadora en vivo. Prefer computer_navigate when shopping, booking, or checking a site.',
   schema: {
     url: 'string (required — absolute http(s) URL)',
   },

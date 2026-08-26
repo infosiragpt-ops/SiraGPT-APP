@@ -88,6 +88,7 @@
     'create_document', 'verify_artifact', 'document_edit',
     'run_skill', 'run_skill_pipeline',
     'session_search', 'session_list', 'session_history',
+    'computer_screenshot', 'computer_click', 'computer_type', 'computer_navigate',
   ];
 
 const STAGE_LABELS = {
@@ -105,6 +106,10 @@ const STAGE_LABELS = {
     browser_click: (args) => `Click en ${truncate(args?.selector, 48)}`,
     browser_type: (args) => `Escribiendo en ${truncate(args?.selector, 48)}`,
     browser_scroll: () => 'Desplazando navegador',
+    computer_screenshot: () => 'Capturando la computadora',
+    computer_click: () => 'Clic en la computadora',
+    computer_type: () => 'Escribiendo en la computadora',
+    computer_navigate: (args) => `Abriendo ${prettyDomain(args?.url) || 'sitio'} en la computadora`,
     memory_recall: (args) => `Recordando contexto sobre "${truncate(args?.query, 48)}"`,
     clone_project: (args) => `Clonando ${truncate(args?.url, 60)}`,
     host_bash: (args) => `Ejecutando ${truncate(args?.command, 60)}`,
@@ -1025,6 +1030,8 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       clearance: toolContext && toolContext.clearance,
       capabilities: customGptCapabilities,
       skillPolicy: runtimeSkillPolicy,
+      chatId: toolContext && toolContext.chatId,
+      userId: toolContext && toolContext.userId,
     });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
@@ -1492,7 +1499,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       'Usa `memory_recall` cuando el pedido dependa de preferencias o contexto persistente del usuario.',
       'Para continuidad entre conversaciones (el usuario dice "lo que hablamos antes", "retoma", "¿en qué quedamos?", "mis chats", "la sesión de ayer"): usa `session_list` para ver sus sesiones recientes, `session_search` para encontrar un tema concreto, y `session_history` para abrir una sesión por su id y leer el hilo completo antes de continuar. Solo accedes a sesiones del propio usuario.',
       'Usa `rag_retrieve`, `self_rag_answer` o `docintel_*` cuando el usuario mencione archivos, documentos, PDFs, tablas o conocimiento privado.',
-      'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar `web_search` (y luego `web_extract` o `read_url` sobre las mejores fuentes) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero `web_search`. Cita las fuentes con enlaces markdown.',
+      'Si la respuesta depende de hechos que pueden haber cambiado, datos en tiempo real, cifras, fechas, precios, noticias, o de cualquier cosa que no sepas con certeza absoluta, DEBES usar la computadora en vivo (`computer_navigate` / `computer_screenshot`) o `web_search` (y luego `web_extract` o `read_url`) ANTES de responder. Nunca respondas "no tengo información", "no tengo acceso a internet" o "mis datos llegan hasta cierta fecha" sin haber ejecutado primero una herramienta. Cada chat TIENE una computadora en vivo. Cita las fuentes con enlaces markdown.',
       'Para calculos, transformaciones de datos o verificacion deterministica, usa `python_exec`. Cuando generes codigo no trivial, usa `run_tests` antes de finalizar.',
       'Cuando el usuario pida uno o varios archivos descargables, usa `create_document` para cada entregable y despues `verify_artifact` para cada id devuelto; no finalices si alguna verificacion muestra un archivo vacio o incorrecto. No finalices con solo texto si pidio crear, descargar, exportar o convertir un Word/Excel/PPT/PDF/SVG/CSV/Markdown.',
       'Cuando el usuario pida editar su Word/Excel/PPT/PDF subido, usa `document_edit` cuando este disponible. Pasa una sola instruccion completa con TODOS los cambios pedidos (corregir, mejorar, agregar, borrar, reemplazar, completar, formatear o convertir), trata el archivo original como solo lectura, crea una nueva copia en el mismo formato salvo que pida otro, conserva estructura/logos/tablas/formulas/hojas/encabezados/diseno tanto como sea posible, y modifica solo lo solicitado. No finalices con recomendaciones o una lista de cambios sin entregar archivo.',
@@ -1511,6 +1518,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // state.artifacts). Tools emit `file_artifact` via ctx.onEvent.
     const seenArtifactIds = new Set();
     const upstreamOnEvent = typeof toolContext.onEvent === 'function' ? toolContext.onEvent : null;
+    const loginHandoffMod = require('./computer/login-handoff');
+    const unsubLoginHandoff = loginHandoffMod.subscribeTakeover((evt) => {
+      try {
+        const chatId = String((toolContext && toolContext.chatId) || '');
+        const evtId = String((evt && evt.conversationId) || '');
+        if (evtId && chatId && evtId !== chatId) return;
+        writeSse(res, loginHandoffMod.ssePayloadFromTakeover(evt));
+      } catch (_) { /* overlay event is best-effort */ }
+    });
+    const stopLoginHandoff = () => {
+      try { unsubLoginHandoff(); } catch (_) { /* noop */ }
+    };
+    try {
+      res.once('close', stopLoginHandoff);
+      res.once('finish', stopLoginHandoff);
+    } catch (_) { /* res may be a stub in tests */ }
     function onEvent(evt) {
       if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
       try {
@@ -1861,8 +1884,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     for (const s of state.steps) if (s.status === 'running') s.status = 'done';
     state.done = true;
 
-    const finalAnswer = (result?.finalAnswer || '').trim()
+    let finalAnswer = (result?.finalAnswer || '').trim()
       || 'No pude generar una respuesta verificable. Intenta reformular la pregunta.';
+    try {
+      finalAnswer = require('./computer/login-handoff').filterModelPasswordPaste(finalAnswer);
+    } catch (_) { /* never block the answer on a filter miss */ }
     state.finalText = finalAnswer;
 
     // Non-blocking honesty check: flag completion claims in the answer that
@@ -2283,6 +2309,20 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // un diagrama de eso" must work even when the opening turn had no media
     // intent. The per-turn tool selector below keeps the effective set small.
     // SIRAGPT_MEDIA_TOOLS_ALWAYS=0 restores the legacy intent-gated loading.
+    try {
+      const chatComputer = require('./computer/chat-computer-tools');
+      if (chatComputer.shouldOfferComputerTools(process.env)) {
+        const computerTools = chatComputer.buildChatComputerTools({
+          userId: (opts && opts.userId) || (opts && opts.clearance && opts.clearance.userId),
+          conversationId: opts && opts.chatId,
+          env: process.env,
+        });
+        if (Array.isArray(computerTools) && computerTools.length) base.push(...computerTools);
+      }
+    } catch (computerErr) {
+      try { console.warn('[agentic-chat] computer tools unavailable:', computerErr && computerErr.message); } catch (_) {}
+    }
+
     const mediaAlways = envFlagEnabled(process.env.SIRAGPT_MEDIA_TOOLS_ALWAYS, true);
     const wantsMedia = mediaAlways
       || (!!userQuery && (isAgenticActionRequest(userQuery) || !!detectMediaIntent(userQuery).kind));

@@ -80,6 +80,41 @@ describe('computer login handoff backend', () => {
     assert.match(persist, /applyObserveHandoff/);
   });
 
+  it('overlay opens (event) when takeover becomes active and Listo ends it', async () => {
+    const events = [];
+    const stop = handoff.subscribeTakeover((evt) => events.push(evt));
+    const identity = resolveSessionIdentity({ id: 'u-overlay' }, 'chat-ov');
+    const started = handoff.beginTakeover({ identity, conversationId: 'chat-ov', site: 'portal.example' });
+    assert.equal(started.active, true);
+    assert.equal(started.event, 'computer_login_handoff');
+    assert.equal(handoff.overlayOpenFromTakeover(started).openPanel, true);
+    assert.equal(events.some((e) => e.active === true), true);
+    const pending = handoff.waitUntilReleased({ identity, conversationId: 'chat-ov', timeoutMs: 2000 });
+    const ended = handoff.endTakeover({ identity, conversationId: 'chat-ov' });
+    assert.equal(ended.active, false);
+    const waited = await pending;
+    assert.equal(waited.released, true);
+    stop();
+  });
+
+  it('computer_type on password field returns refuse with no secret text', async () => {
+    const { executors } = makeComputerExecutors({
+      env: { SIRAGPT_AGENT_COMPUTER_DRIVER: 'fake' },
+      userId: 'u1',
+      sessionId: 's1',
+      session: resolveSessionIdentity({ id: 'u1' }, 'chat-1'),
+      computerEnabled: true,
+    });
+    const out = await executors.computer_type({
+      text: SECRET,
+      focused: { type: 'password', name: 'password', focused: true },
+      conversationId: 'chat-1',
+    });
+    const dumped = typeof out === 'string' ? out : JSON.stringify(out);
+    assert.match(dumped, /login_handoff_required|El usuario inició sesión/);
+    assert.doesNotMatch(dumped, new RegExp(SECRET));
+  });
+
   it('example tasks never ask the user to paste a password in chat', () => {
     for (const prompt of handoff.EXAMPLE_AUTHENTICATED_TASKS) {
       const routed = handoff.routeAuthenticatedComputerTask(prompt);
