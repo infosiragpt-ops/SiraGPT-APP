@@ -13,3 +13,7 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   The complete OpenClaw copyright and MIT license text is retained at
   `docs/upstream/OPENCLAW-LICENSE`.
   Further ports are governed by docs/code/openclaw-port-charter.md.
+
+- **Simple Icons** (https://simpleicons.org/, CC0 1.0) — brand-colored SVGs
+  under `public/conexiones-logos/` used as official marks on `/conexiones`
+  and `/gpts` app cards.
