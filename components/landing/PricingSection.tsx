@@ -81,8 +81,7 @@ const plans: Plan[] = [
 
 export function PricingSection() {
   return (
-    <section id="pricing" className="relative overflow-hidden border-y border-border/60 bg-background py-20 sm:py-28">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(124,58,237,0.07),transparent_38%)]" />
+    <section id="pricing" className="relative overflow-hidden border-y border-zinc-200 bg-white py-20 sm:py-28">
       <div className="relative mx-auto w-full max-w-6xl px-6 lg:px-8">
         <motion.div
           initial={{ opacity: 0, y: 14 }}
@@ -91,14 +90,14 @@ export function PricingSection() {
           transition={{ duration: 0.45 }}
           className="mx-auto max-w-2xl text-center"
         >
-          <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/70 px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground shadow-sm backdrop-blur">
-            <Sparkles className="h-3.5 w-3.5 text-violet-500" />
+          <div className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1 text-[11px] font-medium uppercase tracking-[0.18em] text-zinc-600 shadow-sm">
+            <Sparkles className="h-3.5 w-3.5 text-zinc-900" />
             Planes simples. Sin fricción.
           </div>
-          <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-foreground sm:text-5xl">
+          <h2 className="text-balance text-3xl font-semibold tracking-[-0.04em] text-zinc-900 sm:text-5xl">
             Una experiencia profesional para trabajar mejor con IA.
           </h2>
-          <p className="mx-auto mt-5 max-w-xl text-pretty text-sm leading-6 text-muted-foreground sm:text-base">
+          <p className="mx-auto mt-5 max-w-xl text-pretty text-sm leading-6 text-zinc-600 sm:text-base">
             Modelos, agentes y herramientas en una interfaz limpia: clara para empezar, potente para producir.
           </p>
         </motion.div>
@@ -107,13 +106,14 @@ export function PricingSection() {
           {plans.map((plan, index) => {
             const Icon = plan.icon
             const cardClass = plan.featured
-              ? "border-foreground/15 bg-card text-foreground shadow-xl shadow-foreground/5 ring-1 ring-foreground/10"
-              : "border-border/70 bg-card/45 text-foreground shadow-sm hover:border-foreground/20 hover:bg-card/70"
-            const mutedClass = "text-muted-foreground"
-            const checkClass = plan.featured ? "text-foreground" : "text-violet-600 dark:text-violet-400"
+              ? "border-zinc-900 bg-white text-zinc-900 shadow-xl shadow-zinc-900/10 ring-1 ring-zinc-900"
+              : "border-zinc-200 bg-white text-zinc-900 shadow-sm hover:border-zinc-300 hover:shadow-md"
+            const mutedClass = "text-zinc-600"
+            const titleClass = "text-zinc-900"
+            const checkClass = plan.featured ? "text-zinc-900" : "text-zinc-900"
             const buttonClass = plan.featured
-              ? "bg-foreground text-background hover:bg-foreground/90"
-              : "border border-border bg-background text-foreground hover:border-foreground/25 hover:bg-muted/40"
+              ? "bg-zinc-900 text-white hover:bg-black"
+              : "border border-zinc-300 bg-white text-zinc-900 hover:border-zinc-900 hover:bg-zinc-50"
 
             return (
               <motion.article
@@ -122,27 +122,27 @@ export function PricingSection() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.45, delay: index * 0.06 }}
-                className={`group relative flex min-h-[500px] flex-col rounded-[26px] p-6 transition-all duration-300 hover:-translate-y-1 ${cardClass}`}
+                className={`group relative flex min-h-[500px] flex-col rounded-[26px] border p-6 transition-all duration-300 hover:-translate-y-1 ${cardClass}`}
               >
                 {plan.featured ? (
-                  <div className="absolute right-5 top-5 rounded-full border border-border/60 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm">
+                  <div className="absolute right-5 top-5 rounded-full border border-zinc-200 bg-zinc-900 px-2.5 py-1 text-[11px] font-medium text-white shadow-sm">
                     Recomendado
                   </div>
                 ) : null}
 
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-current/10 bg-current/[0.04]">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-zinc-200 bg-zinc-50 text-zinc-900">
                   <Icon className="h-5 w-5" />
                 </div>
 
                 <div className="mt-7">
                   <p className={`text-xs font-medium uppercase tracking-[0.16em] ${mutedClass}`}>{plan.eyebrow}</p>
-                  <h3 className="mt-3 text-2xl font-semibold tracking-[-0.03em]">{plan.name}</h3>
+                  <h3 className={`mt-3 text-2xl font-semibold tracking-[-0.03em] ${titleClass}`}>{plan.name}</h3>
                   <p className={`mt-3 min-h-[48px] text-sm leading-6 ${mutedClass}`}>{plan.description}</p>
                 </div>
 
-                <div className="mt-7 border-t border-current/10 pt-7">
+                <div className="mt-7 border-t border-zinc-200 pt-7">
                   <div className="flex items-end gap-1">
-                    <span className="text-4xl font-semibold tracking-[-0.05em]">{plan.price}</span>
+                    <span className={`text-4xl font-semibold tracking-[-0.05em] ${titleClass}`}>{plan.price}</span>
                     {plan.period ? <span className={`pb-1 text-sm ${mutedClass}`}>{plan.period}</span> : null}
                   </div>
                   {plan.note ? <p className={`mt-2 text-xs leading-5 ${mutedClass}`}>{plan.note}</p> : null}
