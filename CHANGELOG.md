@@ -6,6 +6,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Next production release] — 2026-07-22
 
+### Fixed
+
+- App cards on `/conexiones` and `/gpts` use professional brand marks
+  (local Simple Icons under `public/conexiones-logos/` plus Clearbit /
+  DuckDuckGo domain logos) instead of blurry Google `sz=128` favicons.
+  Initials remain only after every image source fails.
+
 ### Added
 
 - Sidebar nav lists **Apps** under GPTs (not in the Agentes/Empresas header).
