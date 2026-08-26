@@ -11748,7 +11748,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     closeArtifactPanel();
     setCoworkPanelOpen(false);
     setComputerPanelOpen(true);
-  }, [closeArtifactPanel]);
+    if (!currentChatIdRef.current) {
+      void createNewChat("text", undefined, undefined, { skipInitialProcessing: true });
+    }
+  }, [closeArtifactPanel, createNewChat]);
 
   React.useEffect(() => {
     if (typeof window === "undefined") return;

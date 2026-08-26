@@ -466,6 +466,46 @@ test('runAgenticChat injects a media-intent directive naming the tool + specs', 
   assert.match(system, /180/);
 });
 
+test('runAgenticChat forces generate_speech and forbids HTML speechSynthesis for audio', async () => {
+  let firstArgs = null;
+  let calls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (a) => {
+          calls += 1;
+          if (!firstArgs) firstArgs = a;
+          if (calls === 1) return toolCallMessage('generate_speech', { text: 'Juan vende papas en el mercado' });
+          return finalizeMessage('Audio listo.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'créame un audio: Juan vende papas en el mercado',
+    history: [],
+    res,
+    toolsOverride: [{
+      name: 'generate_speech',
+      description: 'generate speech',
+      parameters: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+      execute: async () => ({ ok: true, downloadUrl: '/api/agent/artifact/x', mime: 'audio/mpeg' }),
+    }],
+  });
+  const system = firstArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /generate_speech/);
+  assert.match(system, /speechSynthesis|Web Speech API/);
+  assert.match(system, /PROHIBIDO/);
+});
+
 test('runAgenticChat auto-selects generate_video first for "crea un video"', async () => {
   let firstCreateArgs = null;
   let createCalls = 0;
