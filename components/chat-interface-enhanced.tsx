@@ -12621,10 +12621,11 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
-    let activeChat = currentChat;
-    const isNewChat = !activeChat;
+    let activeChat = currentChatRef.current;
+    const liveChatId = activeChat?.id != null ? String(activeChat.id) : '';
+    const needsRealChat = !activeChat || liveChatId.startsWith('temp-chat-');
 
-    if (!activeChat) {
+    if (needsRealChat) {
       try {
         const response = await apiClient.createChat({
           title: `{} ${displayGoal.substring(0, 30)}`,
@@ -12645,8 +12646,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     setIsWebSearching(true); // reuse the busy flag — Stop button is wired the same way
     markLocalJobBusy(activeChat.id);
 
+    const isUserRole = (m: any) => String(m?.role || '').toUpperCase() === 'USER';
+    const isTempChatId = (id: unknown) => typeof id === 'string' && id.startsWith('temp-chat-');
+    const shouldAdoptTempOntoReal = (prev: any) => Boolean(
+      prev &&
+      isTempChatId(prev.id) &&
+      activeChat?.id &&
+      !isTempChatId(activeChat.id) &&
+      prev.id !== activeChat.id,
+    );
+    const liveHasUserTurn = (currentChatRef.current?.messages || []).some(isUserRole);
+
     try {
-      if (!userMessageAlreadyAdded) {
+      // Graft a USER turn with files after createChat/selectChat even when the
+      // optimistic path set userMessageAlreadyAdded: true — that flag is stale
+      // if the temp-chat row was dropped while the real id was selected.
+      if (!userMessageAlreadyAdded || !liveHasUserTurn) {
         const userMessage = {
           id: `msg-user-${Date.now()}`,
           chatId: activeChat.id,
@@ -12656,9 +12671,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: snapshotComposerFilesForMessage(filesToSend),
         };
         setCurrentChat(prev => {
+          const adoptingTemp = shouldAdoptTempOntoReal(prev);
           if (!prev) return { ...activeChat, messages: [userMessage] } as any;
-          if (prev.id !== activeChat.id) return prev;
-          return { ...prev, messages: [...(prev.messages || []), userMessage] };
+          if (prev.id !== activeChat.id && !adoptingTemp) return prev;
+          const baseMessages = prev.messages || [];
+          const nextChat = adoptingTemp ? { ...activeChat, messages: baseMessages } : prev;
+          if (baseMessages.some(isUserRole)) return nextChat;
+          return { ...nextChat, messages: [...baseMessages, userMessage] };
         });
       }
 
@@ -12704,12 +12723,26 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         timestamp: new Date().toISOString(),
       };
       setCurrentChat(prev => {
-        if (!prev) return { ...activeChat, messages: [aiMessage] } as any;
-        if (prev.id !== activeChat.id) return prev;
+        const adoptingTemp = shouldAdoptTempOntoReal(prev);
+        if (!prev) {
+          const seeded = (currentChatRef.current?.messages || []).filter(Boolean);
+          const withUser = seeded.some(isUserRole)
+            ? seeded
+            : [...seeded, {
+                id: `msg-user-${Date.now()}`,
+                chatId: activeChat.id,
+                role: 'USER' as const,
+                content: displayGoal,
+                timestamp: new Date().toISOString(),
+                files: snapshotComposerFilesForMessage(filesToSend),
+              }];
+          return { ...activeChat, messages: [...withUser, aiMessage] } as any;
+        }
+        if (prev.id !== activeChat.id && !adoptingTemp) return prev;
         const messages = prev.messages || [];
         const replaced = messages.some(m => m.id === aiMessage.id);
         return {
-          ...prev,
+          ...(adoptingTemp ? { ...activeChat } : prev),
           messages: replaced
             ? messages.map(m => m.id === aiMessage.id ? { ...m, ...aiMessage, error: undefined, progressStage: undefined, progressPct: undefined } : m)
             : [...messages, aiMessage],
@@ -12745,7 +12778,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           files: fileIds,
           fileMetadata,
           chatId: activeChat.id,
-          lastArtifactId: pickLastArtifactId(currentChat?.messages || activeChat?.messages),
+          lastArtifactId: pickLastArtifactId(currentChatRef.current?.messages || activeChat?.messages),
           model: selectedModel,
           maxSteps: 80,
           maxRuntimeMs: 2 * 60 * 60 * 1000,
@@ -12894,20 +12927,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className={cn("shrink-0", sidebarOpen && "md:hidden")}>
-                  <SidebarTrigger
-                    className={cn(
-                      "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
-                      "hover:bg-transparent focus-visible:bg-transparent"
-                    )}
-                    aria-label={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
-                    title={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
-                  >
-                    <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
-                  </SidebarTrigger>
-                </div>
-                {/* Credits live in the account menu, not the chat canvas.
-                    Model selector is in the composer. See renderComposerModelControls(). */}
+                {/* Hamburger menu removed — sidebar toggles via sidebar header (⌘B / oval icon). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {currentChat?.id && (
