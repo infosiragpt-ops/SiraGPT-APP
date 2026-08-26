@@ -132,8 +132,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: var\(--brand, #5b4dff\) !important;[\s\S]{0,80}color: #ffffff !important;/,
-      "the send disc uses the brand token when the composer has text"
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button\s*\{[\s\S]{0,180}background-color: #0d0d0d !important;[\s\S]{0,80}color: #ffffff !important;/,
+      "the send disc uses the professional black surface when the composer has text"
     )
   })
 

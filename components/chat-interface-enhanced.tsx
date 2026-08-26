@@ -7758,7 +7758,7 @@ But first, you need to connect your Spotify account securely using the button be
 
   const renderChatComposer = () => (
     <ChatComposerSurface
-      layout={shouldInlineActiveTools || composerExpanded ? "stacked" : "row"}
+      layout="stacked"
       expanded={composerExpanded}
       overlayVisible={pasteCapture.overlayVisible}
       overlay={pasteCapture.Overlay}
@@ -7914,6 +7914,8 @@ But first, you need to connect your Spotify account securely using the button be
             isCurrentChatStreaming={isCurrentChatStreaming}
             onSend={handleSend}
             onStop={stopActiveGeneration}
+            onVoice={isSpeechSupported && !isDictationTranscribing ? handleMicClick : undefined}
+            voiceRecording={isRecording}
           />
         </div>
       }
