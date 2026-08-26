@@ -223,10 +223,7 @@ import UpgradeModal from "./UpgradeModal"
 import KeyboardShortcutsModal from "./KeyboardShortcutsModal"
 import { IconProvider } from "./icon-provider"
 import GoogleServicesConnectionCard from "./GoogleServicesConnectionCard"
-import {
-  SidebarTrigger,
-  useSidebar,
-} from "@/components/ui/sidebar"
+import { useSidebar } from "@/components/ui/sidebar"
 import { useTranslations } from "next-intl"
 import { useArtifactPanel } from "@/lib/artifact-panel-context"
 import { ArtifactPanel } from "@/components/chat/ArtifactPanel"
@@ -8977,7 +8974,7 @@ But first, you need to connect your Spotify account securely using the button be
   // we collapse the left rail for a cleaner workspace. Never auto-
   // reopen; the user restores it via the floating PanelLeftOpen chip.
   // ────────────────────────────────────────────────────────────
-  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile } = useSidebar();
+  const { open: sidebarOpen, setOpen: setSidebarOpen, isMobile: isSidebarMobile, openMobile: sidebarOpenMobile, setOpenMobile: setSidebarOpenMobile } = useSidebar();
 
   // ────────────────────────────────────────────────────────────
   // Tool activation → auto-collapse the OUTER (visible) sidebar.
@@ -12860,10 +12857,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           is collapsed (we auto-collapse on Word/Excel/image/video to
           reclaim horizontal real estate). Pinned to the viewport edge
           so the user can always pop the sidebar back with one click. */}
-      {!sidebarOpen && !isSidebarMobile && (
+      {(isSidebarMobile ? !sidebarOpenMobile : !sidebarOpen) && (
         <button
           type="button"
-          onClick={() => setSidebarOpen(true)}
+          onClick={() => (isSidebarMobile ? setSidebarOpenMobile(true) : setSidebarOpen(true))}
           title="Mostrar sidebar"
           aria-label="Mostrar sidebar"
           className="fixed left-0 top-1/2 -translate-y-1/2 z-50 flex h-10 w-6 items-center justify-center rounded-r-md border border-l-0 border-border/60 bg-background/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-all duration-200 hover:w-8 hover:bg-background hover:text-foreground"
