@@ -13,7 +13,7 @@ import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recov
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
-import { collectMessageFileIds } from "./chat/composer-files"
+import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { resolveCatalogModel } from "./chat/catalog-model"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -109,44 +109,9 @@ const resolveAttachmentId = (file: any): string | null => {
 
 const normalizeMessageAttachment = (file: any) => {
   if (!file || typeof file === 'string') return file;
-  const name = file.originalName || file.name || file.filename || 'archivo';
-  const mimeType = file.mimeType || file.type || file.contentType || null;
-  const longPasteMeta =
-    file.longPasteMeta ||
-    file.longPasteMetadata ||
-    file.__siraLongPaste ||
-    file.file?.__siraLongPaste ||
-    null;
-  const longPasteTitle = file.longPasteTitle || longPasteMeta?.title || null;
-  return {
-    id: resolveAttachmentId(file),
-    name: longPasteTitle || name,
-    originalName: longPasteTitle || file.originalName || name,
-    filename: file.filename || name,
-    mimeType,
-    type: typeof mimeType === 'string' && mimeType.startsWith('image/') ? mimeType : (file.type || mimeType),
-    size: file.size ?? null,
-    url: file.url || file.imageUrl || null,
-    preview: file.preview || file.objectUrl || null,
-    thumbnailUrl: file.thumbnailUrl || null,
-    path: file.path || null,
-    extractedText: file.extractedText || null,
-    openaiFileId: file.openaiFileId || null,
-    sourceChannel: file.sourceChannel || null,
-    isLongPasteDocument: Boolean(file.isLongPasteDocument || longPasteTitle),
-    longPasteTitle,
-    longPastePreview: file.longPastePreview || longPasteMeta?.preview || null,
-    longPasteMeta: longPasteMeta ? {
-      kind: 'long_paste_document',
-      title: longPasteMeta.title,
-      filename: longPasteMeta.filename,
-      preview: longPasteMeta.preview,
-      originalCharCount: longPasteMeta.originalCharCount,
-      originalWordCount: longPasteMeta.originalWordCount,
-      originalLineCount: longPasteMeta.originalLineCount,
-      createdAt: longPasteMeta.createdAt,
-    } : null,
-  };
+  const [snapshot] = snapshotComposerFilesForMessage([file]);
+  return snapshot || file;
+
 };
 
 const DOCUMENT_CONTEXT_EXT_RE = /\.(?:docx?|pdf|xlsx?|csv|pptx?|txt|md)$/i;

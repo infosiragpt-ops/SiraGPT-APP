@@ -36,4 +36,14 @@ describe("chat message rendering", () => {
     assert.equal(shouldRenderChatMessage(assistant, true), true)
     assert.equal(isAssistantMessage({ role: "user" }), false)
   })
+
+  it("keeps audio attachments when parsing optimistic and persisted file lists", () => {
+    const audio = [{ id: "a1", name: "clip.wav", mimeType: "audio/wav" }]
+    assert.equal(parseMessageFilesForRender(audio), audio)
+    assert.deepEqual(parseMessageFilesForRender(JSON.stringify(audio)), audio)
+    assert.equal(
+      shouldRenderChatMessage({ role: "USER", content: "", files: audio }),
+      true,
+    )
+  })
 })

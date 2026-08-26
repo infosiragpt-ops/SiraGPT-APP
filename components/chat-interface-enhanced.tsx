@@ -308,6 +308,7 @@ import {
   isComposerFileUploadPending,
   previewAttachmentKey,
   resolveUploadFileId,
+  snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
 import {
   adoptUnboundComposerQueueItems,
@@ -9661,7 +9662,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         // Update chat with user message
@@ -9766,7 +9767,7 @@ REWRITTEN TEXT:`;
           role: 'USER' as const,
           content: msg,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
 
         setCurrentChat(prevChat => {
@@ -9988,7 +9989,7 @@ REWRITTEN TEXT:`;
       role: 'USER' as const,
       content: msg,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
       metadata: JSON.stringify({ idempotencyKey }),
     };
     const assistantPlaceholder = {
@@ -12253,7 +12254,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: narration,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -12512,7 +12513,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       role: 'USER' as const,
       content: description,
       timestamp: new Date().toISOString(),
-      files: filesToSend,
+      files: snapshotComposerFilesForMessage(filesToSend),
     };
     setCurrentChat(prev => {
       if (!prev || prev.id !== activeChat!.id) return prev;
@@ -12651,7 +12652,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           role: 'USER' as const,
           content: displayGoal,
           timestamp: new Date().toISOString(),
-          files: filesToSend,
+          files: snapshotComposerFilesForMessage(filesToSend),
         };
         setCurrentChat(prev => {
           if (!prev) return { ...activeChat, messages: [userMessage] } as any;
