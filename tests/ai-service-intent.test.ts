@@ -643,3 +643,12 @@ describe("ai-service · computer request and shopping lookups", () => {
     assert.equal(classifyIntentFastPath("cuánto cuesta el iPhone 17 en Perú"), "web_search")
   })
 })
+
+describe("ai-service · computer request helper", () => {
+  it("detects explicit computer requests for the auto-open panel", async () => {
+    const { isComputerRequestPrompt } = await import("../lib/ai-service")
+    assert.equal(isComputerRequestPrompt("abre tu computadora y búscame ofertas"), true)
+    assert.equal(isComputerRequestPrompt("usa el navegador y entra a mi tienda"), true)
+    assert.equal(isComputerRequestPrompt("hazme un resumen de este pdf"), false)
+  })
+})
