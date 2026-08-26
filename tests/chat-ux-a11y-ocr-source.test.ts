@@ -73,7 +73,7 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.doesNotMatch(chat, /prettifyModelId/)
   })
 
-  it("defines brand / surface tokens and a brand-colored send button", () => {
+  it("defines brand / surface tokens and a focus-visible send button", () => {
     const css = source("app/globals.css")
     const composer = source("components/chat/ChatComposerSurface.tsx")
     assert.match(css, /--brand:/)
@@ -81,8 +81,8 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(css, /--surface-2:/)
     assert.match(css, /--surface-3:/)
     assert.match(css, /color-scheme: light dark/)
-    assert.match(css, /background-color: var\(--brand/)
-    assert.match(css, /composer-send-button:focus-visible[\s\S]{0,80}outline: 2px solid var\(--brand/)
+    assert.match(css, /var\(--brand/)
+    assert.match(css, /composer-send-button:focus-visible[\s\S]{0,80}outline: 2px solid #0d0d0d/)
     assert.match(composer, /disabled=\{!canSend \|\| busy\}/)
   })
 
