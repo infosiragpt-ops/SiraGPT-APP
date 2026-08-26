@@ -1091,6 +1091,11 @@ export function isAmbiguousPrompt(prompt: string): boolean {
   return false
 }
 
+/** True when the user explicitly asks the agent to use its computer/browser. */
+export function isComputerRequestPrompt(prompt: string): boolean {
+  return ROUTING_PATTERNS.computerRequest.test(normalizePrompt(prompt))
+}
+
 export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   const lc = normalizePrompt(prompt)
 

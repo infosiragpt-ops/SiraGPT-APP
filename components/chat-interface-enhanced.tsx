@@ -144,7 +144,7 @@ import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { clampDeepSeekModel } from "@/lib/sse-client"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
-import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
 import { resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toast } from "sonner"
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -12731,6 +12731,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     }
     const { userMessageAlreadyAdded = false, assistantMessageId, displayGoal = goalText } = options;
     const systemContract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || '';
+
+    // «Abre tu computadora y …» — show the live screen without asking for a
+    // second click: the right-hand computer panel opens with the run.
+    if (isComputerRequestPrompt(goalText)) {
+      openComputerPanel();
+    }
     let activeChat = currentChatRef.current;
     const liveChatId = activeChat?.id != null ? String(activeChat.id) : '';
     const needsRealChat = !activeChat || liveChatId.startsWith('temp-chat-');
