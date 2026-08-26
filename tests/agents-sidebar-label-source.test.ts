@@ -6,17 +6,25 @@ import { describe, it } from "node:test"
 const source = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
 
 describe("agentes sidebar chrome", () => {
-  it("labels the sidebar mode tab as Agentes instead of Chats", () => {
+  it("uses the Claude-style header strip instead of the mode tablist", () => {
     const sidebar = source("components/app-sidebar.tsx")
-    const headerStart = sidebar.indexOf('aria-label="Modo de la barra lateral"')
-    assert.ok(headerStart > 0, "missing sidebar mode tablist")
-    const header = sidebar.slice(headerStart, headerStart + 2200)
-    assert.match(header, /aria-label="Agentes"/)
-    assert.match(header, />Agentes</)
-    assert.doesNotMatch(header, /aria-label="Chats"/)
-    assert.doesNotMatch(header, />Chats</)
-    assert.match(header, /aria-label="Empresas"/)
-    assert.match(header, />Empresas</)
+    assert.doesNotMatch(sidebar, /Modo de la barra lateral/)
+    assert.doesNotMatch(sidebar, /role="tablist"/)
+    assert.match(sidebar, /aria-label="Atrás"/)
+    assert.match(sidebar, /aria-label="Adelante"/)
+    assert.match(sidebar, /aria-label="Nuevo chat ⌘N"/)
+    assert.doesNotMatch(sidebar, /aria-label="Chats"/)
+    assert.doesNotMatch(sidebar, />Chats</)
+  })
+
+  it("keeps Empresas reachable as a nav-row mode toggle in both modes", () => {
+    const sidebar = source("components/app-sidebar.tsx")
+    assert.match(
+      sidebar,
+      /aria-label="Empresas"[\s\S]{0,260}switchSidebarMode\(sidebarMode === "code" \? "chat" : "code"\)/,
+      "the Empresas row must toggle the sidebar mode",
+    )
+    assert.match(sidebar, /aria-pressed=\{sidebarMode === "code"\}/)
   })
 
   it("keeps the history back/forward arrows off the agents canvas header", () => {
