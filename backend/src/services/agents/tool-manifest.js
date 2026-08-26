@@ -822,13 +822,13 @@ function getVisualMediaManifests() {
     },
     generate_speech: {
       name: "generate_speech",
-      purpose: "Convert text into natural spoken audio (text-to-speech) via ElevenLabs and save it as a downloadable, playable MP3 artifact.",
+      purpose: "Convert text into a real downloadable MP3/WAV artifact (text-to-speech). Never produce an HTML speechSynthesis page.",
       inputs: {
         type: "object", required: ["text"],
         properties: {
           text: { type: "string", description: "Exact text to speak (up to ~5000 chars)." },
-          voiceId: { type: "string", description: "Optional ElevenLabs voice id." },
-          modelId: { type: "string", description: "Optional ElevenLabs model id (default eleven_multilingual_v2)." },
+          voiceId: { type: "string", description: "Optional voice id or neural name (es-PE-CamilaNeural)." },
+          modelId: { type: "string", description: "Optional paid-provider model id." },
         },
       },
       outputs: { type: "object", properties: {
@@ -837,14 +837,13 @@ function getVisualMediaManifests() {
         filename: { type: "string" },
         message: { type: "string" },
       } },
-      allowed_formats: ["mp3"],
-      forbidden_formats: [],
+      allowed_formats: ["mp3", "wav"],
+      forbidden_formats: ["html", "htm"],
       expected_errors: [
-        { code: "no_api_configured", description: "ELEVENLABS_API_KEY not set.", repair_hint: "Configure the ElevenLabs key." },
         { code: "empty_text", description: "No text provided to narrate." },
         { code: "no_audio", description: "The voice service returned no audio.", repair_hint: "Retry with shorter text." },
       ],
-      acceptance_tests: ["returns ok:true with an mp3 artifact when ELEVENLABS_API_KEY is configured"],
+      acceptance_tests: ["returns ok:true with an mp3 artifact without a paid vendor key (Edge neural fallback)"],
       usage_limits: { timeout_ms_default: 30000, timeout_ms_max: 120000, max_calls_per_task: 5, requires_auth: true, requires_network: true },
       examples_positive: [{ when: "user asks for a voiceover", call: { text: "Bienvenido a SiraGPT." } }],
       examples_negative: [{ when: "user wants background music", why: "use generate_music instead." }],
