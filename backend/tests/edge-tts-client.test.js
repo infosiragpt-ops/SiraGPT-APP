@@ -37,8 +37,10 @@ class FakeWebSocket extends EventEmitter {
   }
 
   pushAudio(bytes) {
-    const header = Buffer.from('Content-Type:audio/mpeg\r\nPath:audio\r\n\r\n');
-    this.emit('message', Buffer.concat([header, Buffer.from(bytes)]), true);
+    const header = Buffer.from('X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nPath:audio');
+    const prefix = Buffer.alloc(2);
+    prefix.writeUInt16BE(header.length, 0);
+    this.emit('message', Buffer.concat([prefix, header, Buffer.from(bytes)]), true);
   }
 
   finish() {
@@ -56,6 +58,19 @@ test('empty text is refused before opening a socket', async () => {
   } finally {
     _internal.resetTestSeams();
   }
+});
+
+test('synthesizeEdgeSpeech accepts text frames delivered as Buffer (real ws)', async () => {
+  FakeWebSocket.instances = [];
+  _internal.setWebSocketFactory(() => FakeWebSocket);
+  const pending = synthesizeEdgeSpeech('Hola');
+  await new Promise((resolve) => setImmediate(resolve));
+  const ws = FakeWebSocket.instances[0];
+  ws.pushAudio('ID3REALWS');
+  ws.emit('message', Buffer.from('X-RequestId:abc\r\nPath:turn.end\r\n\r\n'), false);
+  const result = await pending;
+  assert.equal(result.buffer.toString(), 'ID3REALWS');
+  _internal.resetTestSeams();
 });
 
 test('synthesizeEdgeSpeech writes an mp3 buffer from Edge frames', async () => {
@@ -99,11 +114,16 @@ test('buildSsml escapes user text and extractAudioFromBinary splits headers', ()
   const ssml = buildSsml('Juan & María <hola>', 'es-PE-CamilaNeural');
   assert.match(ssml, /Juan &amp; María &lt;hola&gt;/);
   assert.doesNotMatch(ssml, /<hola>/);
-  const raw = Buffer.concat([
-    Buffer.from('Path:audio\r\nContent-Type:audio/mpeg\r\n\r\n'),
-    Buffer.from('BYTES'),
-  ]);
+  const header = Buffer.from('X-RequestId:abc\r\nContent-Type:audio/mpeg\r\nPath:audio');
+  const prefix = Buffer.alloc(2);
+  prefix.writeUInt16BE(header.length, 0);
+  const raw = Buffer.concat([prefix, header, Buffer.from('BYTES')]);
   assert.equal(extractAudioFromBinary(raw).toString(), 'BYTES');
+  const blank = Buffer.concat([
+    Buffer.from('Path:audio\r\nContent-Type:audio/mpeg\r\n\r\n'),
+    Buffer.from('LEGACY'),
+  ]);
+  assert.equal(extractAudioFromBinary(blank).toString(), 'LEGACY');
 });
 
 test('chunkText splits long narration without dropping the tail', () => {

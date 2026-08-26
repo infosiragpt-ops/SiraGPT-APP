@@ -132,6 +132,18 @@ function dateToString(now = new Date()) {
 function extractAudioFromBinary(raw) {
   if (!raw) return Buffer.alloc(0);
   const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+  if (buf.length >= 2) {
+    const headerLength = buf.readUInt16BE(0);
+    const headerEnd = 2 + headerLength;
+    if (headerEnd <= buf.length) {
+      const header = buf.subarray(2, headerEnd).toString('utf8');
+      if (/Path:\s*audio/i.test(header)) {
+        const body = buf.subarray(headerEnd);
+        if (!/Content-Type:\s*audio\//i.test(header)) return Buffer.alloc(0);
+        return body;
+      }
+    }
+  }
   const sep = Buffer.from('\r\n\r\n');
   const idx = buf.indexOf(sep);
   if (idx === -1) return Buffer.alloc(0);
@@ -221,21 +233,25 @@ function synthesizeChunk({ text, voice, timeoutMs, skewSec, signal }) {
     });
 
     ws.on('message', (data, isBinary) => {
-      const binary = isBinary === true || Buffer.isBuffer(data);
-      if (binary) {
-        const audio = extractAudioFromBinary(data);
-        if (audio.length) chunks.push(audio);
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      // `ws` delivers text frames as Buffer with isBinary=false. Treating every
+      // Buffer as audio would swallow Path:turn.end and hang until timeout.
+      const preview = buf.subarray(0, Math.min(buf.length, 240)).toString('utf8');
+      const looksLikeControl = /Path:\s*(turn\.end|turn\.start|response|audio\.metadata|speech\.config)/i.test(preview);
+      const treatAsText = isBinary === false || (isBinary !== true && looksLikeControl);
+      if (treatAsText) {
+        if (headerPath(buf.toString('utf8')) === 'turn.end') {
+          const buffer = Buffer.concat(chunks);
+          if (!buffer.length) {
+            finish(new Error('El servicio de voz no devolvió audio.'));
+            return;
+          }
+          finish(null, buffer);
+        }
         return;
       }
-      const textMsg = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
-      if (headerPath(textMsg) === 'turn.end') {
-        const buffer = Buffer.concat(chunks);
-        if (!buffer.length) {
-          finish(new Error('El servicio de voz no devolvió audio.'));
-          return;
-        }
-        finish(null, buffer);
-      }
+      const audio = extractAudioFromBinary(buf);
+      if (audio.length) chunks.push(audio);
     });
 
     ws.on('close', () => {
