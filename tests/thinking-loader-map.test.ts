@@ -67,17 +67,16 @@ describe("thinking-loaders · kit catalog", () => {
     assert.equal(loaderLabel("pensando", "   "), "Pensando…")
   })
 
-  it("uses Luis bounce geometry for the live pensando glyph (y=50, viewBox 10 40 45 50)", () => {
+  it("uses the 3×3 dot-matrix ripple for the live pensando glyph (dotm-3x3-15)", () => {
     const live = readFileSync(join(loadersDir, "pensando.svg"), "utf8")
-    assert.match(live, /viewBox="10 40 45 50"/)
-    assert.match(live, /<rect x="20" y="50" width="4" height="10" fill="#38BDF8">/)
-    assert.match(live, /<rect x="30" y="50" width="4" height="10" fill="#38BDF8">/)
-    assert.match(live, /<rect x="40" y="50" width="4" height="10" fill="#38BDF8">/)
-    assert.match(live, /values="0 0; 0 20; 0 0"/)
-    assert.match(live, /begin="0"/)
-    assert.match(live, /begin="0.2s"/)
-    assert.match(live, /begin="0.4s"/)
-    assert.match(live, /dur="0.6s"/)
+    assert.match(live, /viewBox="0 0 36 36"/)
+    assert.equal((live.match(/<circle /g) || []).length, 9)
+    assert.match(live, /fill="#38BDF8"/)
+    assert.match(live, /values="0.22;1;0.22"/)
+    assert.match(live, /begin="0s"/)
+    assert.match(live, /begin="0.15s"/)
+    assert.match(live, /begin="0.3s"/)
+    assert.match(live, /dur="0.9s"/)
     assert.doesNotMatch(live, /currentColor/)
 
     for (const name of KIT_SVG_FILES) {
@@ -89,7 +88,12 @@ describe("thinking-loaders · kit catalog", () => {
         assert.match(svg, /<animate /)
         continue
       }
-      if (name === "pensando" || name === "pensando-original") {
+      if (name === "pensando") {
+        assert.match(svg, /viewBox="0 0 36 36"/)
+        assert.equal((svg.match(/<circle /g) || []).length, 9)
+        continue
+      }
+      if (name === "pensando-original") {
         assert.match(svg, /viewBox="10 40 45 50"/)
         assert.match(svg, /<rect x="20" y="50" width="4" height="10" fill="#38BDF8">/)
         continue
@@ -101,12 +105,12 @@ describe("thinking-loaders · kit catalog", () => {
     }
   })
 
-  it("keeps pensando as bars-only and document states as seals + bars", () => {
+  it("keeps pensando as dots-only and document states as seals + bars", () => {
     const pensando = readFileSync(join(loadersDir, "pensando.svg"), "utf8")
     assert.doesNotMatch(pensando, /<path /)
-    assert.doesNotMatch(pensando, /<circle /)
+    assert.doesNotMatch(pensando, /<rect /)
     assert.doesNotMatch(pensando, /<text /)
-    assert.equal((pensando.match(/<rect /g) || []).length, 3)
+    assert.equal((pensando.match(/<circle /g) || []).length, 9)
 
     const word = readFileSync(join(loadersDir, "generando-word.svg"), "utf8")
     assert.match(word, /rx="4.5"/)

@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="10 40 45 50" width="64" height="64" fill="none" color="#38BDF8" role="img" aria-label="pensando">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="64" height="64" role="img" aria-label="pensando">
   <title>SiraGPT loader · pensando</title>
-<rect x="20" y="50" width="4" height="10" fill="#38BDF8"/>
-<rect x="30" y="50" width="4" height="10" fill="#38BDF8"/>
-<rect x="40" y="50" width="4" height="10" fill="#38BDF8"/>
+  <circle cx="6" cy="6" r="3.4" fill="#38BDF8" opacity="0.28"/>
+  <circle cx="18" cy="6" r="3.4" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="30" cy="6" r="3.4" fill="#38BDF8" opacity="0.28"/>
+  <circle cx="6" cy="18" r="3.4" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="18" cy="18" r="3.4" fill="#38BDF8" opacity="1"/>
+  <circle cx="30" cy="18" r="3.4" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="6" cy="30" r="3.4" fill="#38BDF8" opacity="0.28"/>
+  <circle cx="18" cy="30" r="3.4" fill="#38BDF8" opacity="0.6"/>
+  <circle cx="30" cy="30" r="3.4" fill="#38BDF8" opacity="0.28"/>
 </svg>
