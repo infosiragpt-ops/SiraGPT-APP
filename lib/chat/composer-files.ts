@@ -7,6 +7,11 @@ type ComposerFileRecord = {
   attachmentId?: unknown
   file?: unknown
   url?: unknown
+  preview?: unknown
+  objectUrl?: unknown
+  imageUrl?: unknown
+  path?: unknown
+  thumbnailUrl?: unknown
   extractedText?: unknown
   status?: unknown
   processingStage?: unknown
@@ -23,6 +28,8 @@ type ComposerFileRecord = {
   isLongPasteDocument?: unknown
   longPasteTitle?: unknown
   longPastePreview?: unknown
+  tempId?: unknown
+  mediaMeta?: unknown
 }
 
 export type AgentFileMetadata = {
@@ -192,4 +199,219 @@ export function buildAgentFileMetadata(files: readonly unknown[] = []): AgentFil
       longPasteMeta: safeLongPasteMeta,
     }]
   })
+}
+
+const AUDIO_EXT_RE = /\.(?:mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/i
+
+export type AttachmentMediaMeta = {
+  durationSeconds?: number
+  peaks?: number[]
+  thumbnailDataUrl?: string | null
+}
+
+export type MessageFileSnapshot = {
+  id: string | null
+  tempId: string | null
+  name: string
+  originalName: string
+  filename: string
+  mimeType: string | null
+  type: string | null
+  size: number | null
+  url: string | null
+  preview: string | null
+  thumbnailUrl: string | null
+  path: string | null
+  extractedText: string | null
+  mediaMeta: AttachmentMediaMeta | null
+  sourceChannel: unknown
+  isLongPasteDocument: boolean
+  longPasteTitle: string | null
+  longPastePreview: string | null
+  longPasteMeta: SafeLongPasteMetadata | null
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+function isDurableUrl(value: unknown): boolean {
+  const url = optionalString(value)
+  return Boolean(url && !url.startsWith("blob:"))
+}
+
+function snapshotMediaMeta(value: unknown): AttachmentMediaMeta | null {
+  const record = asRecord(value)
+  if (!record) return null
+  const durationSeconds = optionalNumber(record.durationSeconds)
+  const peaks = Array.isArray(record.peaks)
+    ? record.peaks.filter((peak): peak is number => typeof peak === "number" && Number.isFinite(peak))
+    : []
+  const thumbnailDataUrl = optionalString(record.thumbnailDataUrl)
+  if (durationSeconds == null && peaks.length === 0 && !thumbnailDataUrl) return null
+  return {
+    ...(durationSeconds != null ? { durationSeconds } : {}),
+    ...(peaks.length > 0 ? { peaks } : {}),
+    ...(thumbnailDataUrl ? { thumbnailDataUrl } : {}),
+  }
+}
+
+function attachmentDisplayName(file: ComposerFileRecord, fallback = "archivo"): string {
+  return String(
+    file.longPasteTitle
+    || file.originalName
+    || file.name
+    || file.filename
+    || fallback,
+  )
+}
+
+function attachmentMime(file: ComposerFileRecord): string {
+  return String(file.mimeType || file.type || file.contentType || "").toLowerCase()
+}
+
+export function isAudioComposerFile(file: unknown): boolean {
+  const candidate = asComposerFile(file)
+  if (!candidate) return false
+  const mime = attachmentMime(candidate)
+  if (mime.startsWith("audio/")) return true
+  if (mime.startsWith("video/")) return false
+  return AUDIO_EXT_RE.test(attachmentDisplayName(candidate, ""))
+}
+
+export function getAudioMediaMeta(file: unknown): AttachmentMediaMeta | null {
+  const record = asRecord(file)
+  return snapshotMediaMeta(record?.mediaMeta)
+}
+
+/**
+ * Plain JSON snapshot of composer attachments for the optimistic user bubble.
+ * Drops the native File/blob handle (JSON.stringify throws or {}s it) while
+ * keeping name, mime, url, and already-computed audio waveform/duration.
+ */
+export function snapshotComposerFilesForMessage(files: readonly unknown[] = []): MessageFileSnapshot[] {
+  return files.flatMap((file) => {
+    if (typeof file === "string") {
+      const id = optionalString(file)
+      if (!id) return []
+      return [{
+        id,
+        tempId: null,
+        name: "archivo",
+        originalName: "archivo",
+        filename: "archivo",
+        mimeType: null,
+        type: null,
+        size: null,
+        url: null,
+        preview: null,
+        thumbnailUrl: null,
+        path: null,
+        extractedText: null,
+        mediaMeta: null,
+        sourceChannel: null,
+        isLongPasteDocument: false,
+        longPasteTitle: null,
+        longPastePreview: null,
+        longPasteMeta: null,
+      }]
+    }
+
+    const candidate = asComposerFile(file)
+    if (!candidate) return []
+    const record = asRecord(file) || {}
+    const safeLongPasteMeta = sanitizeLongPasteMetaForMessage(getLongPasteMetadata(file))
+    const displayName = attachmentDisplayName({
+      ...candidate,
+      longPasteTitle: candidate.longPasteTitle || safeLongPasteMeta?.title,
+    })
+    const mimeType = optionalString(attachmentMime(candidate))
+    const extracted = optionalString(candidate.extractedText)
+
+    return [{
+      id: resolveUploadFileId(candidate),
+      tempId: optionalString(candidate.tempId),
+      name: displayName,
+      originalName: String(candidate.originalName || displayName),
+      filename: String(candidate.filename || candidate.name || displayName),
+      mimeType,
+      type: mimeType || optionalString(typeof candidate.type === "string" ? candidate.type : null),
+      size: optionalNumber(candidate.size),
+      url: optionalString(candidate.url) || optionalString(candidate.imageUrl),
+      preview: optionalString(candidate.preview) || optionalString(candidate.objectUrl),
+      thumbnailUrl: optionalString(candidate.thumbnailUrl),
+      path: optionalString(candidate.path),
+      extractedText: extracted && extracted.length <= 4000 ? extracted : null,
+      mediaMeta: snapshotMediaMeta(record.mediaMeta),
+      sourceChannel: candidate.sourceChannel || null,
+      isLongPasteDocument: Boolean(candidate.isLongPasteDocument || safeLongPasteMeta),
+      longPasteTitle: safeLongPasteMeta?.title || optionalString(candidate.longPasteTitle),
+      longPastePreview: safeLongPasteMeta?.preview || optionalString(candidate.longPastePreview),
+      longPasteMeta: safeLongPasteMeta,
+    }]
+  })
+}
+
+function mergeOneMessageFile(incoming: unknown, local: unknown): unknown {
+  if (!local || typeof local !== "object") return incoming
+  if (!incoming || typeof incoming !== "object") return local
+  const incomingRecord = incoming as Record<string, unknown>
+  const localRecord = local as Record<string, unknown>
+  const incomingUrl = optionalString(incomingRecord.url) || optionalString(incomingRecord.path)
+  const localUrl = optionalString(localRecord.url) || optionalString(localRecord.preview)
+  const url = isDurableUrl(incomingUrl) ? incomingUrl : (isDurableUrl(localUrl) ? localUrl : incomingUrl || localUrl)
+  const incomingMeta = snapshotMediaMeta(incomingRecord.mediaMeta)
+  const localMeta = snapshotMediaMeta(localRecord.mediaMeta)
+  return {
+    ...localRecord,
+    ...incomingRecord,
+    id: resolveUploadFileId(incoming) || resolveUploadFileId(local) || incomingRecord.id || localRecord.id || null,
+    name: incomingRecord.name || localRecord.name,
+    originalName: incomingRecord.originalName || localRecord.originalName,
+    filename: incomingRecord.filename || localRecord.filename,
+    mimeType: incomingRecord.mimeType || localRecord.mimeType || incomingRecord.type || localRecord.type || null,
+    type: incomingRecord.type || localRecord.type || incomingRecord.mimeType || localRecord.mimeType || null,
+    size: incomingRecord.size ?? localRecord.size ?? null,
+    url,
+    preview: isDurableUrl(incomingRecord.preview) ? incomingRecord.preview : (localRecord.preview || incomingRecord.preview || null),
+    thumbnailUrl: incomingRecord.thumbnailUrl || localRecord.thumbnailUrl || null,
+    path: incomingRecord.path || localRecord.path || null,
+    mediaMeta: incomingMeta || localMeta,
+    extractedText: incomingRecord.extractedText || localRecord.extractedText || null,
+  }
+}
+
+/**
+ * Graft the locally visible attachment records onto a later server payload.
+ * Canonical URLs from the server replace blob previews without dropping
+ * name / duration / waveform that the optimistic chip already showed.
+ */
+export function mergeMessageFileLists(incoming: unknown, local: unknown): unknown[] {
+  const incomingFiles = parseMessageFiles(incoming)
+  const localFiles = parseMessageFiles(local)
+  if (localFiles.length === 0) return incomingFiles
+  if (incomingFiles.length === 0) return localFiles
+
+  const localById = new Map<string, unknown>()
+  for (const file of localFiles) {
+    const id = resolveUploadFileId(file)
+    if (id && !localById.has(id)) localById.set(id, file)
+  }
+
+  const usedLocalIds = new Set<string>()
+  const merged = incomingFiles.map((incomingFile, index) => {
+    const id = resolveUploadFileId(incomingFile)
+    const localMatch = (id && localById.get(id)) || localFiles[index]
+    if (id) usedLocalIds.add(id)
+    return mergeOneMessageFile(incomingFile, localMatch)
+  })
+
+  for (const [id, file] of localById) {
+    if (!usedLocalIds.has(id)) merged.push(file)
+  }
+  return merged
 }

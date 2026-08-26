@@ -1,3 +1,5 @@
+import { mergeMessageFileLists, parseMessageFiles } from './chat/composer-files';
+
 export type ChatMessageLike = {
   id?: string;
   role?: string;
@@ -147,46 +149,6 @@ const hasFiles = (value: unknown) => {
   }
 };
 
-const parseFilesArray = (value: unknown): unknown[] => {
-  if (Array.isArray(value)) return value;
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-};
-
-const hasRichFileMetadata = (value: unknown) =>
-  parseFilesArray(value).some((file) => {
-    if (!file || typeof file !== 'object') return false;
-    const f = file as Record<string, unknown>;
-    return Boolean(
-      f.name ||
-      f.originalName ||
-      f.filename ||
-      f.mimeType ||
-      f.contentType ||
-      f.type ||
-      f.url ||
-      f.path ||
-      f.preview ||
-      f.thumbnailUrl ||
-      f.extractedText
-    );
-  });
-
-const shouldPreserveLocalFiles = (incomingFiles: unknown, localFiles: unknown) => {
-  if (!hasFiles(localFiles)) return false;
-  if (!hasFiles(incomingFiles)) return true;
-
-  // Some backend refreshes return only file ids after upload. That is enough
-  // for model context, but not enough for the UI to render image thumbnails,
-  // document chips, previews, or extracted text. Keep the richest version that
-  // was already visible in the local optimistic message.
-  return hasRichFileMetadata(localFiles) && !hasRichFileMetadata(incomingFiles);
-};
 
 /**
  * Backend refreshes can race with optimistic UI updates or return partial
@@ -262,8 +224,8 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
         next.content = localText as TMessage['content'];
       }
 
-      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
-        next.files = localMatch.files as TMessage['files'];
+      if (parseMessageFiles(localMatch.files).length > 0 || parseMessageFiles(next.files).length > 0) {
+        next.files = mergeMessageFileLists(next.files, localMatch.files) as TMessage['files'];
       }
 
       return next;
@@ -289,8 +251,8 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       if (shouldPreserveLocalAssistantContent(incomingText, localText)) {
         next.content = localText as TMessage['content'];
       }
-      if (shouldPreserveLocalFiles(next.files, localMatch.files)) {
-        next.files = localMatch.files as TMessage['files'];
+      if (parseMessageFiles(localMatch.files).length > 0 || parseMessageFiles(next.files).length > 0) {
+        next.files = mergeMessageFileLists(next.files, localMatch.files) as TMessage['files'];
       }
       return next;
     }
@@ -389,6 +351,7 @@ type DedupeMessageLike = {
   content?: unknown;
   timestamp?: unknown;
   createdAt?: unknown;
+  files?: unknown;
 };
 
 const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
@@ -402,14 +365,26 @@ const sameContentNormalized = (a: DedupeMessageLike, b: DedupeMessageLike) => {
 const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
   // Prefer the copy with more content; on a tie prefer the stable
   // (non-optimistic) id because that's the server's source-of-truth record.
+  // Files are merged onto the winner so an optimistic audio chip is not
+  // dropped when the server twin has the same text but empty/id-only files.
   const la = asText(a?.content).length;
   const lb = asText(b?.content).length;
-  if (lb > la) return b;
-  if (la > lb) return a;
-  const aOptimistic = a?.id ? OPTIMISTIC_ID_RE.test(String(a.id)) : true;
-  const bOptimistic = b?.id ? OPTIMISTIC_ID_RE.test(String(b.id)) : true;
-  if (aOptimistic && !bOptimistic) return b;
-  return a;
+  let winner: T
+  if (lb > la) winner = b;
+  else if (la > lb) winner = a;
+  else {
+    const aOptimistic = a?.id ? OPTIMISTIC_ID_RE.test(String(a.id)) : true;
+    const bOptimistic = b?.id ? OPTIMISTIC_ID_RE.test(String(b.id)) : true;
+    winner = aOptimistic && !bOptimistic ? b : a;
+  }
+  const other = winner === a ? b : a
+  if (parseMessageFiles(a?.files).length === 0 && parseMessageFiles(b?.files).length === 0) {
+    return winner
+  }
+  return {
+    ...winner,
+    files: mergeMessageFileLists(winner.files, other.files),
+  } as T
 };
 
 const isStableMessage = (message?: DedupeMessageLike) => {
@@ -468,21 +443,33 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   }
 
   // Pass B — drop optimistic twins whose stable-id sibling is already present.
-  const hasStableTwin = (candidate: TMessage, selfIndex: number) =>
-    collapsed.some((other, j) => {
-      if (j === selfIndex) return false;
-      if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
-      if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
-      return sameContentNormalized(other, candidate);
-    });
+  // Graft files from the optimistic copy onto the surviving server row first
+  // so an audio attachment that only existed locally does not vanish.
+  const isStableTwinOf = (candidate: TMessage, other: TMessage) => {
+    if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
+    if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
+    return sameContentNormalized(other, candidate);
+  };
 
-  const deduped = collapsed.filter((message, index) => {
+  const optimisticTwinIndexes = new Map<number, number>();
+  collapsed.forEach((message, index) => {
     const id = message?.id ? String(message.id) : '';
-    if (id && OPTIMISTIC_ID_RE.test(id) && hasStableTwin(message, index)) {
-      return false;
-    }
-    return true;
+    if (!id || !OPTIMISTIC_ID_RE.test(id)) return;
+    const twinIndex = collapsed.findIndex((other, j) => j !== index && isStableTwinOf(message, other));
+    if (twinIndex >= 0) optimisticTwinIndexes.set(index, twinIndex);
   });
+  for (const [optimisticIndex, stableIndex] of optimisticTwinIndexes) {
+    const optimistic = collapsed[optimisticIndex];
+    const stable = collapsed[stableIndex];
+    if (parseMessageFiles(optimistic.files).length > 0 || parseMessageFiles(stable.files).length > 0) {
+      collapsed[stableIndex] = {
+        ...stable,
+        files: mergeMessageFileLists(stable.files, optimistic.files),
+      } as TMessage;
+    }
+  }
+
+  const deduped = collapsed.filter((_, index) => !optimisticTwinIndexes.has(index));
 
   // Pass C — collapse ADJACENT same-role twins where BOTH carry a stable
   // (non-optimistic) server id and identical visible content. This closes the

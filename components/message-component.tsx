@@ -98,6 +98,8 @@ import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
+import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
+import { getAudioMediaMeta, isAudioComposerFile } from "@/lib/chat/composer-files"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
 import { brandModelLabel } from "@/lib/chat/brand-label"
 import {
@@ -277,9 +279,33 @@ const isRenderableImageAttachment = (file: any) => {
 const isDocumentLikeAttachment = (file: any) => {
     if (!file) return false;
     if (isRenderableImageAttachment(file)) return false;
+    if (isAudioComposerFile(file)) return false;
     if (['gmail_emails', 'gmail_search_results', 'chart'].includes(file?.type)) return false;
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
 };
+
+const formatUserAudioDuration = (seconds: number | null | undefined): string => {
+    if (!Number.isFinite(seconds as number) || (seconds as number) <= 0) return "";
+    const total = Math.round(seconds as number);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h > 0
+        ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+        : `${m}:${String(s).padStart(2, "0")}`;
+};
+
+const UserAudioWaveform = ({ peaks }: { peaks: number[] }) => (
+    <span aria-hidden className="flex h-[16px] items-end gap-[1.5px]">
+        {peaks.slice(0, 36).map((p, i) => (
+            <span
+                key={i}
+                className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+                style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
+            />
+        ))}
+    </span>
+);
 
 const resolveSameOriginUploadUrl = (pathOrUrl: string) => {
     const raw = String(pathOrUrl || "").trim();
@@ -666,6 +692,10 @@ const MessageDocChipsInner = ({
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
 }) => {
     const [idx, setIdx] = React.useState<number | null>(null);
+    const audioFiles = React.useMemo(() => {
+        if (!Array.isArray(parsedFiles)) return [];
+        return parsedFiles.filter(isAudioComposerFile);
+    }, [parsedFiles]);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
         return parsedFiles.filter(isDocumentLikeAttachment);
@@ -701,10 +731,34 @@ const MessageDocChipsInner = ({
         };
     }, [attachments]);
 
-    if (chips.length === 0) return null;
+    if (chips.length === 0 && audioFiles.length === 0) return null;
 
     return (
         <div className="mb-2 flex w-full max-w-[min(92vw,36rem)] flex-wrap justify-end gap-2">
+            {audioFiles.map((file: any, i: number) => {
+                const meta = getAudioMediaMeta(file);
+                const peaks = Array.isArray(meta?.peaks) ? meta.peaks : [];
+                const duration = formatUserAudioDuration(meta?.durationSeconds);
+                const name = getAttachmentName(file) || file?.name || "audio";
+                return (
+                    <div
+                        key={file.id || file.tempId || `audio-${i}`}
+                        className="inline-flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl border border-gray-200 bg-background px-3 py-2 text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-border/60"
+                        aria-label={name}
+                    >
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-pink-500/10 text-pink-600 dark:text-pink-400">
+                            <Volume2 className="h-4 w-4" />
+                        </span>
+                        <span className="flex min-w-0 flex-col">
+                            <span className="truncate text-[13px] font-medium leading-tight">{name}</span>
+                            <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] leading-tight text-muted-foreground">
+                                {peaks.length > 0 && <UserAudioWaveform peaks={peaks} />}
+                                {duration && <span className="tabular-nums">{duration}</span>}
+                            </span>
+                        </span>
+                    </div>
+                );
+            })}
             {attachments.map((att, i) => {
                 const showPage = isPagePreviewDocument(att.name, att.mimeType);
                 return (
@@ -1505,15 +1559,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     };
 
     const parsedFiles: any[] = useMemo(() => {
-        if (!message.files) return []
-        try {
-            const parsed = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
-            // Ensure we always return an array
-            return Array.isArray(parsed) ? parsed : []
-        } catch (e) {
-            console.error("Failed to parse files:", e)
-            return []
-        }
+        return parseMessageFilesForRender(message.files)
     }, [message.files])
 
     const hasRenderableUserFiles = useMemo(() => {
@@ -3538,9 +3584,19 @@ const areMessagePropsEqual = (prev: any, next: any) => {
     if (a.id !== b.id) return false
     if (a.content !== b.content) return false
 
-    const af = typeof a.files === 'string' ? a.files : JSON.stringify(a.files || [])
-    const bf = typeof b.files === 'string' ? b.files : JSON.stringify(b.files || [])
-    if (af !== bf) return false
+    const fileKey = (files: unknown) => {
+        if (!files) return ""
+        if (typeof files === "string") return files
+        try {
+            return JSON.stringify(files, (key, value) => {
+                if (key === "file" || key === "originalFile" || key === "blob" || key === "nativeFile") return undefined
+                return value
+            })
+        } catch {
+            return Array.isArray(files) ? String(files.length) : "1"
+        }
+    }
+    if (fileKey(a.files) !== fileKey(b.files)) return false
 
     // Ignore parent re-renders from user, callbacks (they’re stable from context)
     return true

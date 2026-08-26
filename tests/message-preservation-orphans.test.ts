@@ -302,9 +302,12 @@ describe("mergeMessagesPreservingUserContent - assistant content / orphan preser
       { id: "a1", role: "ASSISTANT", content: "Listo", files: [{ id: "art_1" }] },
     ]
     const merged = mergeMessagesPreservingUserContent(incoming, local)
-    assert.deepEqual(merged[1].files, [
-      { id: "art_1", name: "chart.png", url: "/blob/x", mimeType: "image/png" },
-    ])
+    const files = (merged[1] as { files?: Array<Record<string, unknown>> }).files || []
+    assert.equal(files.length, 1)
+    assert.equal(files[0].id, "art_1")
+    assert.equal(files[0].name, "chart.png")
+    assert.equal(files[0].url, "/blob/x")
+    assert.equal(files[0].mimeType, "image/png")
   })
 
   it("Pass 3 - re-appends local orphan assistant tail the server hasn't persisted yet", () => {
