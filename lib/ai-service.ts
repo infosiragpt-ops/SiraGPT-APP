@@ -530,8 +530,9 @@ const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
   urlReference: /\bhttps?:\/\/\S+|\bwww\.\S+/i,
-  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
-  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r)?|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
+  realtimeLookup: /\b(clima|tiempo actual|pron[oó]stico|temperatura|weather|forecast)\b|\b(resultados?|marcador|score|partidos?|fixture|estad[ií]sticas?)\b.*\b(nba|nfl|mlb|nhl|f[uú]tbol|soccer|epl|champions|liga|deporte|sports?)\b|\b(ofertas?|descuentos?|rebajas?|promociones?|precios?|cu[aá]nto cuesta|d[oó]nde comprar)\b|\b(restaurantes?|hoteles?|lugares?|atracciones?|direcci[oó]n|mapa|ruta|itinerario|cerca de mi|google places)\b/i,
+  computerRequest: /\b(abre|abrir|usa|usar|enciende|prende|entra a|abre me)\b[\s\S]{0,40}\b(tu\s+)?(computadora|ordenador|pc|navegador|browser|escritorio virtual)\b|\btu computadora\b/i,
+  externalResearch: /\b(investiga(r|cion)?|investigate|research|busca(r|me|nos)?|b[uú]sca(me|nos)|find|recopila(r)?|fuentes|citas|referencias|articulos?|papers?|literatura|academicos?|cientificos?|mercado|benchmark|competidores|estado del arte|revision sistematica|metaanalisis|meta analisis|scielo|redalyc|dialnet|openalex|crossref|pubmed|doi|semantic scholar|doaj|scopus|web of science|wos)\b/i,
   deliverableFile: /\b(docx|xlsx|pptx|word|excel|power\s*point|powerpoint|pdf\b|svg|informe|reporte|presentacion|diapositivas|slides|hoja de calculo|spreadsheet|archivo|documento|matriz narrativa|matriz de consistencia|base de datos)\b/i,
   dataWork: /\b(calcula(r)?|analiza(r)?|procesa(r)?|limpia(r)?|extrae(r)?|clasifica(r)?|regresion|estadistica|csv|datos|dataset|cronbach|spearman|anova|correlacion|likert)\b/i,
   codeWork: /\b(codigo|code|programa|script|web|website|landing|sitio|frontend|backend|software|app|aplicacion|aplicaci[oó]n|runtime|debug|bug|corrige(r)?|arregla(r)?|fix|prueba(s)?|test(s)?|autocorrige(r)?|auto corrige(r)?|revisando y corrigiendo)\b/i,
@@ -1116,6 +1117,11 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.gmail.test(lc)) return 'gmail'
 
   if (ROUTING_PATTERNS.googleServices.test(lc)) return 'google_services'
+
+  // "Abre tu computadora y …" — the user is explicitly asking for the
+  // agent computer. Route to the agentic runtime (tools + steps) instead
+  // of the plain model, which would truthfully answer it has no browser.
+  if (ROUTING_PATTERNS.computerRequest.test(lc)) return 'agent_task'
 
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(lc)
