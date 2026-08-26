@@ -1,5 +1,7 @@
 'use strict';
 
+const { resolveSessionIdentity } = require('./member-key');
+
 const ISOLATION_REFUSED_ES =
   'No se pudo aislar la computadora de esta conversación.';
 const OPEN_FAILED_ES = 'No se pudo abrir la computadora de esta conversación.';
@@ -53,6 +55,13 @@ function readIsolationKey(input) {
   ).trim();
 }
 
+function identityFromParts({ userId, body, query } = {}) {
+  const conversationId = readIsolationKey({ body: body || {}, query: query || {} });
+  const identity = resolveSessionIdentity({ id: userId }, conversationId);
+  if (!conversationId) return identity;
+  return requireProvenIsolation(identity);
+}
+
 function requireProvenIsolation(identity) {
   if (
     !identity
@@ -82,6 +91,7 @@ module.exports = {
   isolationError,
   sessionMatchesConversation,
   readIsolationKey,
+  identityFromParts,
   requireProvenIsolation,
   attachIsolationOrRefuse,
 };

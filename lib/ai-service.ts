@@ -183,6 +183,7 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'For uploaded document editing, never mutate the source file. Copy/reconstruct into a new artifact, apply only requested edits, and preserve document structure, logos, tables, formulas, sheet names, headers, footers, slide layouts, and visual hierarchy whenever possible.',
     'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
     'Audio y canciones: si el usuario ya dio el texto («créame un audio con lo siguiente: …»), genera el audio de inmediato con generate_speech — sin preguntar. Si pide una canción o audio SIN dar la letra/el texto, haz UNA sola pregunta corta antes de crear (por ejemplo: «¿Escribo yo la letra sobre ese tema, o me pasas el texto exacto? ¿Algún estilo o voz?») y luego créala.',
+    'El entregable de voz es SIEMPRE un archivo MP3/WAV descargable. PROHIBIDO inventar una página HTML con speechSynthesis / Web Speech API o un reproductor en el navegador.',
     'Ediciones iterativas de audio/canción: cuando el usuario pida cambios («hazla más alegre», «cambia el final», «más corta»), edita la pieza ANTERIOR de esta conversación — conserva letra, voz y estilo salvo lo que pida cambiar — y vuelve a generar el audio con la versión revisada. Nunca respondas que no puedes generar audio: cada chat tiene generate_speech disponible.',
   ].join('\n'),
   web_search: [

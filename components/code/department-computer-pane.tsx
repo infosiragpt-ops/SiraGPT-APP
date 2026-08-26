@@ -79,10 +79,9 @@ function embedFrom(session: AgentSession): string {
   return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=agent-computer/sessions/${id}/novnc/websockify`
 }
 
-async function ensureMemberDesktop(conversationId?: string | null): Promise<AgentSession> {
-  const key = cacheKey(conversationId)
-  const chatId = String(conversationId || "").trim()
-  const res = await authenticatedFetch(`${API_BASE}/agent-computer/sessions`, {
+async function postMemberDesktop(chatId: string, useQuery: boolean) {
+  const qs = chatId && useQuery ? `?conversationId=${encodeURIComponent(chatId)}` : ""
+  const res = await authenticatedFetch(`${API_BASE}/agent-computer/sessions${qs}`, {
     method: "POST",
     credentials: "include",
     headers: authHeaders(),
@@ -90,7 +89,28 @@ async function ensureMemberDesktop(conversationId?: string | null): Promise<Agen
     signal: AbortSignal.timeout(60_000),
   })
   const body = await res.json().catch(() => ({}))
+  return { res, body }
+}
+
+async function ensureMemberDesktop(conversationId?: string | null): Promise<AgentSession> {
+  const key = cacheKey(conversationId)
+  const chatId = String(conversationId || "").trim()
+  let { res, body } = await postMemberDesktop(chatId, Boolean(chatId))
+  if (res.status === 409) {
+    ({ res, body } = await postMemberDesktop(chatId, true))
+  }
   if (!res.ok) {
+    const isolation = res.status === 409 && (
+      (body as { error?: string; message?: string }).error === "isolation_required"
+      || /aislar/.test(String((body as { message?: string }).message || ""))
+    )
+    if (isolation && !chatId) {
+      throw Object.assign(new Error("Pensando…"), {
+        status: res.status,
+        body,
+        emptyChat: true,
+      })
+    }
     throw Object.assign(
       new Error((body as any)?.message || (body as any)?.error || "No se pudo abrir la computadora."),
       { status: res.status, body },
@@ -185,6 +205,12 @@ export function DepartmentComputerPane({
       })
       .catch((err) => {
         if (cancelled) return
+        if (err?.emptyChat) {
+          setError(null)
+          setStatusLine("Pensando…")
+          setLoading(true)
+          return
+        }
         setError(userFacingComputerError(err?.message))
         setStatusLine(userFacingComputerError(err?.message))
         setLoading(false)
