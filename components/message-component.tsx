@@ -99,7 +99,8 @@ import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachme
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
 import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
-import { getAudioMediaMeta, isAudioComposerFile } from "@/lib/chat/composer-files"
+import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
 import { brandModelLabel } from "@/lib/chat/brand-label"
 import {
@@ -280,6 +281,7 @@ const isDocumentLikeAttachment = (file: any) => {
     if (!file) return false;
     if (isRenderableImageAttachment(file)) return false;
     if (isAudioComposerFile(file)) return false;
+    if (isVideoComposerFile(file)) return false;
     if (['gmail_emails', 'gmail_search_results', 'chart'].includes(file?.type)) return false;
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
 };
@@ -300,7 +302,7 @@ const UserAudioWaveform = ({ peaks }: { peaks: number[] }) => (
         {peaks.slice(0, 36).map((p, i) => (
             <span
                 key={i}
-                className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+                className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
                 style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
             />
         ))}
@@ -696,6 +698,10 @@ const MessageDocChipsInner = ({
         if (!Array.isArray(parsedFiles)) return [];
         return parsedFiles.filter(isAudioComposerFile);
     }, [parsedFiles]);
+    const videoFiles = React.useMemo(() => {
+        if (!Array.isArray(parsedFiles)) return [];
+        return parsedFiles.filter(isVideoComposerFile);
+    }, [parsedFiles]);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
         return parsedFiles.filter(isDocumentLikeAttachment);
@@ -731,32 +737,36 @@ const MessageDocChipsInner = ({
         };
     }, [attachments]);
 
-    if (chips.length === 0 && audioFiles.length === 0) return null;
+    if (chips.length === 0 && audioFiles.length === 0 && videoFiles.length === 0) return null;
 
     return (
         <div className="mb-2 flex w-full max-w-[min(92vw,36rem)] flex-wrap justify-end gap-2">
+            {videoFiles.map((file: any, i: number) => {
+                const meta = getAudioMediaMeta(file);
+                const name = getAttachmentName(file) || file?.name || "video";
+                return (
+                    <ChatVideoPlayer
+                        key={file.id || file.tempId || `video-${i}`}
+                        src={resolveComposerMediaSrc(file)}
+                        poster={meta?.thumbnailDataUrl || file?.thumbnailUrl || null}
+                        title={name}
+                        durationSeconds={meta?.durationSeconds}
+                        variant="bubble"
+                    />
+                );
+            })}
             {audioFiles.map((file: any, i: number) => {
                 const meta = getAudioMediaMeta(file);
-                const peaks = Array.isArray(meta?.peaks) ? meta.peaks : [];
-                const duration = formatUserAudioDuration(meta?.durationSeconds);
                 const name = getAttachmentName(file) || file?.name || "audio";
                 return (
-                    <div
+                    <ChatAudioPlayer
                         key={file.id || file.tempId || `audio-${i}`}
-                        className="inline-flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl border border-gray-200 bg-background px-3 py-2 text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] dark:border-border/60"
-                        aria-label={name}
-                    >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-pink-500/10 text-pink-600 dark:text-pink-400">
-                            <Volume2 className="h-4 w-4" />
-                        </span>
-                        <span className="flex min-w-0 flex-col">
-                            <span className="truncate text-[13px] font-medium leading-tight">{name}</span>
-                            <span className="mt-0.5 flex items-center gap-1.5 text-[10.5px] leading-tight text-muted-foreground">
-                                {peaks.length > 0 && <UserAudioWaveform peaks={peaks} />}
-                                {duration && <span className="tabular-nums">{duration}</span>}
-                            </span>
-                        </span>
-                    </div>
+                        src={resolveComposerMediaSrc(file)}
+                        title={name}
+                        durationSeconds={meta?.durationSeconds}
+                        peaks={Array.isArray(meta?.peaks) ? meta.peaks : []}
+                        variant="bubble"
+                    />
                 );
             })}
             {attachments.map((att, i) => {
@@ -2443,22 +2453,22 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             <VideoIcon className="h-4 w-4" />
                         </span>
                         <div className="min-w-0">
-                            <div className="truncate text-[13px] font-semibold text-emerald-950 dark:text-emerald-50">
+                            <div className="truncate text-[13px] font-semibold text-zinc-950 dark:text-zinc-50">
                                 {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : isCancelled ? 'Video detenido' : 'Video'}
                             </div>
-                            <div className="truncate text-[11px] font-medium text-emerald-800/70 dark:text-emerald-100/62">
+                            <div className="truncate text-[11px] font-medium text-zinc-600 dark:text-zinc-300/80">
                                 {modelLabel}
                             </div>
                         </div>
                     </div>
                     {imageCount > 0 ? (
-                        <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-1 text-[10.5px] font-semibold text-emerald-800 dark:text-emerald-100/78">
+                        <span className="rounded-full border border-zinc-900/12 bg-zinc-900/5 px-2 py-1 text-[10.5px] font-semibold text-zinc-800 dark:border-white/15 dark:bg-white/8 dark:text-zinc-100">
                             {imageCount} img
                         </span>
                     ) : null}
                 </div>
 
-                <div className="mt-2 text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/50">
+                <div className="mt-2 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                     {metaLine}
                 </div>
 
@@ -2476,8 +2486,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         </div>
                         <div className="mt-3 flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                                <div className="text-[12px] font-semibold text-emerald-950 dark:text-emerald-50">Render en progreso</div>
-                                <div className="mt-0.5 truncate text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/52">
+                                <div className="text-[12px] font-semibold text-zinc-950 dark:text-zinc-50">Render en progreso</div>
+                                <div className="mt-0.5 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                                     {sourceImageUrls.length > 1 ? 'Componiendo referencias e indicaciones' : sourceImageUrls.length === 1 ? 'Animando la imagen y el prompt' : 'Interpretando el prompt'}
                                 </div>
                             </div>
@@ -2511,20 +2521,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
                 {status === 'completed' && filename ? (
                     <div className="mt-3 space-y-2">
-                        <video
-                            key={filename}             // don’t remount unless the file changes
-                            ref={videoRef}
-                            className="video-liquid-player"
-                            data-aspect={previewAspect}
-                            controls
-                            preload="auto"
-                            playsInline
+                        <ChatVideoPlayer
+                            key={filename}
                             src={getWatchUrl(filename)}
-                            // Removed onTimeUpdate/onLoadedMetadata to avoid frequent re-renders
-                            onError={(e) => {
-                                console.error('Video error', e)
-                                toast.error('Failed to play video inline. Try “Open in new tab”.')
-                            }}
+                            poster={sourceImageUrls[0] || null}
+                            title={filename}
+                            aspect={previewAspect}
+                            variant="generated"
+                            className="video-liquid-player max-w-none"
                         />
                         <div className="flex flex-wrap gap-2">
                             <Button size="sm" variant="outline" onClick={() => downloadVideo(filename)} className="video-liquid-action">

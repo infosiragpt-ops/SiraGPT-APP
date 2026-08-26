@@ -298,14 +298,19 @@ import {
   attachmentHasPreviewSource,
   buildAgentFileMetadata,
   collectUploadFileIds,
+  getAudioMediaMeta,
   getFileProcessingStage,
+  isAudioComposerFile,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
   isComposerFileUploadPending,
+  isVideoComposerFile,
   previewAttachmentKey,
+  resolveComposerMediaSrc,
   resolveUploadFileId,
   snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import {
   adoptUnboundComposerQueueItems,
   createPersistedComposerQueueItem,
@@ -1854,7 +1859,7 @@ const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
     {peaks.slice(0, 36).map((p, i) => (
       <span
         key={i}
-        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
         style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
       />
     ))}
@@ -1981,8 +1986,8 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
-          const isAudio = (file.type || '').startsWith('audio/');
-          const isVideo = (file.type || '').startsWith('video/');
+          const isAudio = isAudioComposerFile(file);
+          const isVideo = isVideoComposerFile(file);
           const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
             && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
@@ -2011,6 +2016,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
                   : isDocPage
                     ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                    : isVideo
+                      ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
+                      : isAudio
+                        ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
                     : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
@@ -2123,20 +2132,51 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                   </Button>
                 </>
+              ) : isVideo ? (
+                <>
+                  <ChatVideoPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    poster={file.mediaMeta?.thumbnailDataUrl || file.thumbnailUrl || null}
+                    title={file.name || "video"}
+                    durationSeconds={file.mediaMeta?.durationSeconds}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isAudio ? (
+                <>
+                  <ChatAudioPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    title={file.name || "audio"}
+                    durationSeconds={getAudioMediaMeta(file)?.durationSeconds}
+                    peaks={getAudioMediaMeta(file)?.peaks}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
               ) : (
                 <>
-                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
-                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
-                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
-                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
-                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
-                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
-                        </span>
-                      )}
-                    </span>
-                  ) : (
-                    getFileIcon(file)
-                  )}
+                  {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
                       {longPasteMeta && (
@@ -8239,7 +8279,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Build temp objects with stable IDs we can map to per-file progress.
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const preview = /^(image|audio|video)\//.test(file.type) ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
       const contentHash = batchHashes?.get(file) || null;
       if (contentHash) {

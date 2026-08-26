@@ -112,7 +112,13 @@ export function collectMessageFileIds(files: unknown): string[] {
 
 export function attachmentHasPreviewSource(attachment: unknown): boolean {
   const candidate = asComposerFile(attachment)
-  return Boolean(candidate?.file || candidate?.url || candidate?.extractedText)
+  return Boolean(
+    candidate?.file
+    || candidate?.url
+    || candidate?.extractedText
+    || candidate?.preview
+    || candidate?.objectUrl,
+  )
 }
 
 export function previewAttachmentKey(attachment: unknown): string {
@@ -202,6 +208,7 @@ export function buildAgentFileMetadata(files: readonly unknown[] = []): AgentFil
 }
 
 const AUDIO_EXT_RE = /\.(?:mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/i
+const VIDEO_EXT_RE = /\.(?:mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv|3gp)$/i
 
 export type AttachmentMediaMeta = {
   durationSeconds?: number
@@ -286,6 +293,26 @@ export function isAudioComposerFile(file: unknown): boolean {
 export function getAudioMediaMeta(file: unknown): AttachmentMediaMeta | null {
   const record = asRecord(file)
   return snapshotMediaMeta(record?.mediaMeta)
+}
+
+export function isVideoComposerFile(file: unknown): boolean {
+  const candidate = asComposerFile(file)
+  if (!candidate) return false
+  const mime = attachmentMime(candidate)
+  if (mime.startsWith("video/")) return true
+  if (mime.startsWith("audio/") || mime.startsWith("image/")) return false
+  return VIDEO_EXT_RE.test(attachmentDisplayName(candidate, ""))
+}
+
+export function resolveComposerMediaSrc(file: unknown): string {
+  const candidate = asComposerFile(file)
+  if (!candidate) return ""
+  return optionalString(candidate.preview)
+    || optionalString(candidate.objectUrl)
+    || optionalString(candidate.url)
+    || optionalString(candidate.path)
+    || optionalString(candidate.imageUrl)
+    || ""
 }
 
 /**

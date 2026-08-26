@@ -565,8 +565,8 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
 
   return (
-    <div className="my-2 w-full max-w-[460px]">
-      <div className="relative flex flex-col gap-2 rounded-2xl border border-border/70 bg-background px-4 pb-3 pt-3 shadow-sm">
+    <div className="my-2 w-full max-w-[460px]" data-testid="chat-audio-player" data-variant="generated">
+      <div className="relative flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 pb-3 pt-3 shadow-sm dark:border-white/12 dark:bg-zinc-900">
         {/* Header: label (+ engine) + share / download */}
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium leading-5 text-muted-foreground">
@@ -581,7 +581,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             <button
               type="button"
               onClick={share}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
               aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
               title={copied ? "Enlace copiado" : "Compartir"}
             >
@@ -591,7 +591,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
               type="button"
               onClick={download}
               disabled={isDownloading}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 dark:text-zinc-100 dark:hover:bg-white/10"
               aria-label={`Descargar ${generatedMediaLabel}`}
               title="Descargar"
             >
@@ -625,10 +625,10 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           }}
           className="group relative flex h-4 cursor-pointer touch-none select-none items-center focus-visible:outline-none"
         >
-          <div className="relative h-1.5 w-full rounded-full bg-blue-500/15">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-blue-500" style={{ width: `${progress * 100}%` }} />
+          <div className="relative h-1.5 w-full rounded-full bg-zinc-900/15 dark:bg-white/15">
+            <div className="absolute inset-y-0 left-0 rounded-full bg-zinc-950 dark:bg-white" style={{ width: `${progress * 100}%` }} />
             <div
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-950 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-white"
               style={{ left: `${progress * 100}%`, opacity: isSeeking ? 1 : undefined }}
             />
           </div>
@@ -653,7 +653,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
                 key={`${height}-${index}`}
                 className={cn(
                   "w-[3px] shrink-0 rounded-full transition-colors duration-200",
-                  played ? "bg-blue-500" : "bg-foreground/20 group-hover/wave:bg-foreground/30",
+                  played ? "bg-zinc-950 dark:bg-white" : "bg-foreground/20 group-hover/wave:bg-foreground/30",
                 )}
                 style={{ height }}
               />
@@ -666,7 +666,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={() => skipBy(-10)}
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Retroceder 10 segundos"
             title="Retroceder 10s"
           >
@@ -676,7 +676,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={restart}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Reiniciar"
             title="Reiniciar"
           >
@@ -686,7 +686,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             type="button"
             onClick={togglePlayback}
             disabled={isLoadingAudio}
-            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-blue-500 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75 dark:text-zinc-100"
             aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
             title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
           >
@@ -701,7 +701,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={() => skipBy(10)}
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Adelantar 10 segundos"
             title="Adelantar 10s"
           >
@@ -714,7 +714,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             aria-pressed={isLooping}
             className={cn(
               "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isLooping ? "bg-blue-500 text-white" : "text-blue-500 hover:bg-blue-500/10",
+              isLooping ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-900 hover:bg-zinc-900/10 dark:text-zinc-100 dark:hover:bg-white/10",
             )}
             aria-label={isLooping ? "Desactivar repetición" : "Repetir"}
             title={isLooping ? "Repetición activada" : "Repetir"}
