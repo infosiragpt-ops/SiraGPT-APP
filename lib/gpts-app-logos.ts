@@ -10,6 +10,8 @@
 export type GptStoreAppLogoInput = {
   id: string
   domain: string
+  name?: string
+  category?: string
 }
 
 const LOCAL_LOGO_DIR = "/conexiones-logos"
@@ -312,19 +314,90 @@ export function duckduckgoLogoUrl(domain: string): string {
   return `https://icons.duckduckgo.com/ip3/${normalizeLogoDomain(domain)}.ico`
 }
 
+const TILE_PALETTE = [
+  ["#1D4ED8", "#EFF6FF"],
+  ["#0F766E", "#F0FDFA"],
+  ["#7C3AED", "#F5F3FF"],
+  ["#B45309", "#FFFBEB"],
+  ["#BE123C", "#FFF1F2"],
+  ["#334155", "#F8FAFC"],
+  ["#0369A1", "#F0F9FF"],
+  ["#166534", "#F0FDF4"],
+] as const
+
+function hashId(id: string): number {
+  let hash = 0
+  for (const char of id) hash = (hash * 31 + char.charCodeAt(0)) >>> 0
+  return hash
+}
+
+function tileInitials(name: string): string {
+  const parts = name.replace(/[^\p{L}\p{N}\s]/gu, " ").trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return "A"
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+}
+
+/**
+ * Fabricated GPT-store hostnames (astro-scope-destiny-matrix.com, …)
+ * never resolve on Clearbit / favicon CDNs. Those cards need a local SVG.
+ */
+export function isLikelyInventedDomain(domain: string): boolean {
+  const host = normalizeLogoDomain(domain)
+  const label = host.split(".")[0] || ""
+  const hyphens = (label.match(/-/g) || []).length
+  if (hyphens >= 2) return true
+  if (label.length >= 24) return true
+  if (/^\d/.test(label) && hyphens >= 1) return true
+  return false
+}
+
+/** Deterministic professional monogram tile — always a real SVG, never a blank box. */
+export function generatedBrandTileSvg(app: GptStoreAppLogoInput): string {
+  const label = (app.name || app.id || "App").trim()
+  const [bg, fg] = TILE_PALETTE[hashId(app.id || label) % TILE_PALETTE.length]
+  const letters = escapeXml(tileInitials(label))
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">`,
+    `<rect width="64" height="64" rx="16" fill="${bg}"/>`,
+    `<rect x="3" y="3" width="58" height="58" rx="14" fill="none" stroke="${fg}" stroke-opacity="0.22" stroke-width="2"/>`,
+    `<text x="32" y="39" text-anchor="middle" font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif" font-size="22" font-weight="700" fill="${fg}">${letters}</text>`,
+    `</svg>`,
+  ].join("")
+}
+
+export function generatedBrandTileUrl(app: GptStoreAppLogoInput): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(generatedBrandTileSvg(app))}`
+}
+
 export function gptStoreAppLogoSources(app: GptStoreAppLogoInput): string[] {
   const domain = normalizeLogoDomain(app.domain)
   const sources: string[] = []
   const local = officialMarkPath(app)
-  if (local) sources.push(local)
-  if (domain) {
+  const generated = generatedBrandTileUrl(app)
+  if (local) {
+    sources.push(local)
+    if (domain) sources.push(clearbitLogoUrl(domain))
+    sources.push(generated)
+    return [...new Set(sources)]
+  }
+  if (domain && !isLikelyInventedDomain(domain)) {
     sources.push(clearbitLogoUrl(domain))
     sources.push(duckduckgoLogoUrl(domain))
   }
+  sources.push(generated)
   return [...new Set(sources)]
 }
 
-/** Primary logo URL (local mark or first high-res domain endpoint). */
+/** Primary logo URL (local mark, high-res domain logo, or generated SVG tile). */
 export function gptStoreAppLogoUrl(app: GptStoreAppLogoInput): string {
-  return gptStoreAppLogoSources(app)[0] || ""
+  return gptStoreAppLogoSources(app)[0] || generatedBrandTileUrl(app)
 }

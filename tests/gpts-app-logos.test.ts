@@ -7,8 +7,10 @@ import { GPT_STORE_APPS } from "../lib/gpts-apps-catalog"
 import {
   apexLogoDomain,
   duckduckgoLogoUrl,
+  generatedBrandTileUrl,
   gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
+  isLikelyInventedDomain,
   officialMarkPath,
 } from "../lib/gpts-app-logos"
 
@@ -27,6 +29,7 @@ function isGoogleFavicon128(url: string) {
 function isProfessionalLogoUrl(url: string) {
   return (
     url.startsWith("/conexiones-logos/")
+    || url.startsWith("data:image/svg+xml")
     || url.includes("logo.clearbit.com/")
     || url.includes("icons.duckduckgo.com/ip3/")
   )
@@ -60,6 +63,23 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
     assert.equal(sources[0], "https://logo.clearbit.com/steerastro.com")
     assert.equal(sources[1], duckduckgoLogoUrl("steerastro.com"))
     assert.match(sources[1], /icons\.duckduckgo\.com\/ip3\/steerastro\.com\.ico/)
+    assert.equal(sources[2], generatedBrandTileUrl(obscure))
+  })
+
+  it("uses a generated local SVG for invented GPT-store domains so tiles are never blank", () => {
+    const invented = {
+      id: "astro-scope-destiny-matrix",
+      domain: "astro-scope-destiny-matrix.com",
+      name: "Astro Scope Destiny Matrix",
+    }
+    assert.equal(isLikelyInventedDomain(invented.domain), true)
+    assert.equal(isLikelyInventedDomain("idealista.com"), false)
+    const sources = gptStoreAppLogoSources(invented)
+    assert.equal(sources[0], generatedBrandTileUrl(invented))
+    assert.match(sources[0], /^data:image\/svg\+xml/)
+    assert.match(decodeURIComponent(sources[0]), /<svg /)
+    assert.match(decodeURIComponent(sources[0]), />AS</)
+    assert.equal(sources.some((url) => url.includes("clearbit") || url.includes("duckduckgo")), false)
   })
 
   it("maps well-known brand domains and regional Amazon/Google apexes", () => {
@@ -80,9 +100,17 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
     assert.ok(GPT_STORE_APPS.length >= 300)
     for (const app of GPT_STORE_APPS) {
       const sources = gptStoreAppLogoSources(app)
-      assert.ok(sources.length >= 2, `${app.id} needs a fallback src`)
-      assert.ok(isProfessionalLogoUrl(gptStoreAppLogoUrl(app)), `${app.id} primary ${gptStoreAppLogoUrl(app)}`)
+      const primary = gptStoreAppLogoUrl(app)
+      assert.ok(isProfessionalLogoUrl(primary), `${app.id} primary ${primary}`)
       assert.ok(sources.every((url) => !isGoogleFavicon128(url)))
+      // Invented GPT-store hosts only get the generated SVG (it never 404s).
+      // Real or official-mark apps keep a second src for AppLogo onError.
+      if (!isLikelyInventedDomain(app.domain) || officialMarkPath(app)) {
+        assert.ok(sources.length >= 2, `${app.id} needs a fallback src`)
+      } else {
+        assert.equal(sources.length, 1)
+        assert.match(sources[0], /^data:image\/svg\+xml/)
+      }
     }
   })
 })
