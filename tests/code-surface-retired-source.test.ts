@@ -26,18 +26,15 @@ describe("retired /code product surface", () => {
     }
   })
 
-  it("keeps Empresas in the sidebar header and drops the code icon plus sidebar.code control", () => {
+  it("keeps Empresas as a sidebar mode toggle and drops the code icon plus sidebar.code control", () => {
     const sidebar = source("components/app-sidebar.tsx")
-    const headerStart = sidebar.indexOf('aria-label="Modo de la barra lateral"')
-    assert.ok(headerStart > 0, "missing sidebar mode tablist")
-    const header = sidebar.slice(headerStart, headerStart + 1800)
-    assert.match(header, /aria-label="Agentes"/)
-    assert.match(header, />Agentes</)
-    assert.match(header, /aria-label="Empresas"/)
-    assert.match(header, />Empresas</)
-    assert.doesNotMatch(header, /aria-label="Apps"/)
-    assert.doesNotMatch(header, /<Code2/)
-    assert.doesNotMatch(header, /href=['"`]\/code/)
+    const rowStart = sidebar.indexOf('aria-label="Empresas"')
+    assert.ok(rowStart > 0, "missing Empresas mode-toggle nav row")
+    const row = sidebar.slice(rowStart, rowStart + 1200)
+    assert.match(row, /switchSidebarMode\(sidebarMode === "code" \? "chat" : "code"\)/)
+    assert.match(row, />Empresas</)
+    assert.doesNotMatch(sidebar, /<Code2/)
+    assert.doesNotMatch(sidebar, /href=['"`]\/code['"`]/)
     assert.doesNotMatch(sidebar, /t\(["']code["']\)/)
     assert.doesNotMatch(sidebar, /navigate\(mode === "code" \? "\/code"/)
     assert.doesNotMatch(sidebar, /['"]\/code['"]/)

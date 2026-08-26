@@ -100,18 +100,19 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(toolbar, /<input/)
   })
 
-  it("keeps Spanish collapse tooltips and the Agentes | Empresas header only", () => {
+  it("keeps Spanish collapse tooltips and the Claude-style header strip", () => {
     assert.match(source, /Contraer barra lateral ⌘B/)
     assert.match(source, /Expandir barra lateral ⌘B/)
-    const headerStart = source.indexOf('aria-label="Modo de la barra lateral"')
-    const header = source.slice(headerStart, headerStart + 2200)
-    assert.match(header, /aria-label="Agentes"/)
-    assert.match(header, /aria-label="Empresas"/)
-    assert.doesNotMatch(header, /data-testid="sidebar-apps-tab"/)
-    assert.doesNotMatch(header, /aria-label="Apps"/)
-    assert.doesNotMatch(header, /aria-label="Chats"/)
-    assert.doesNotMatch(header, /<Code2/)
-    assert.doesNotMatch(header, /href=['"`]\/code/)
+    // The old Agentes|Empresas tablist moved out of the header; Empresas is
+    // now a nav-row mode toggle and the strip carries history + new chat.
+    assert.doesNotMatch(source, /Modo de la barra lateral/)
+    assert.match(source, /aria-label="Atrás"/)
+    assert.match(source, /aria-label="Adelante"/)
+    assert.match(source, /aria-label="Nuevo chat ⌘N"/)
+    assert.match(source, /aria-label="Empresas"/)
+    assert.doesNotMatch(source, /data-testid="sidebar-apps-tab"/)
+    assert.doesNotMatch(source, /aria-label="Chats"/)
+    assert.doesNotMatch(source, /<Code2/)
     assert.match(source, /href="\/conexiones"/)
     assert.match(source, /label="Apps"/)
   })

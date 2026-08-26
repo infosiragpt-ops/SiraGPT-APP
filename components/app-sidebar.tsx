@@ -18,7 +18,10 @@ import {
   Trash2,
   MoreHorizontal,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  MessageSquarePlus,
+  Briefcase,
   Search,
   SlidersHorizontal,
   Library,
@@ -239,12 +242,6 @@ const NAV_ROW_ACTIVE =
 const NAV_ICON = "h-5 w-5 shrink-0 stroke-[1.85]"
 const HEADER_ICON_BTN =
   "h-7 w-7 shrink-0 rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-const SIDEBAR_TAB =
-  "inline-flex h-7 items-center justify-center rounded-md px-2.5 text-[12px] font-medium leading-none transition-colors"
-const SIDEBAR_TAB_ON =
-  "bg-white text-zinc-900 shadow-[0_1px_2px_rgba(15,23,42,0.12)] ring-1 ring-black/[0.04] dark:bg-zinc-900 dark:text-zinc-50 dark:ring-white/10"
-const SIDEBAR_TAB_OFF =
-  "text-zinc-500 hover:bg-white/55 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
 const SIDEBAR_TIP =
   "rounded-lg border-0 bg-zinc-950 px-2.5 py-1.5 text-[12px] font-medium text-white shadow-[0_8px_20px_rgba(0,0,0,0.28)]"
 const RECENT_TOOLBAR_ICON =
@@ -1241,47 +1238,10 @@ export function AppSidebar() {
             state === "closed" && "hidden",
           )}
         >
-          {/* Mode toggle: Agentes ↔ Empresas. Replaces the
-              logo+name lockup in the open header (the collapsed rail
-              keeps the logo button below). */}
-          <div className="flex min-w-0 flex-1 items-center justify-center">
-            <div
-              role="tablist"
-              aria-label="Modo de la barra lateral"
-              className="inline-flex shrink-0 items-center gap-0.5 rounded-lg bg-zinc-200/70 p-[3px] dark:bg-white/10"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidebarMode === "chat"}
-                aria-label="Agentes"
-                onClick={() => switchSidebarMode("chat")}
-                className={cn(
-                  SIDEBAR_TAB,
-                  "gap-1.5",
-                  sidebarMode === "chat" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
-                )}
-              >
-                <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                <span>Agentes</span>
-              </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidebarMode === "code"}
-                aria-label="Empresas"
-                onClick={() => switchSidebarMode("code")}
-                className={cn(
-                  SIDEBAR_TAB,
-                  sidebarMode === "code" ? SIDEBAR_TAB_ON : SIDEBAR_TAB_OFF,
-                )}
-              >
-                <span>Empresas</span>
-              </button>
-            </div>
-          </div>
+          {/* Claude-style chrome strip: collapse + browser history on the
+              left, notifications + the primary new-chat disc on the right.
+              The Agentes ↔ Empresas switch lives as a nav row below. */}
           <div className="flex shrink-0 items-center gap-0.5">
-            <NotificationCenter />
             <SidebarChromeTooltip label="Contraer barra lateral ⌘B">
               <SidebarTrigger
                 aria-label="Contraer barra lateral ⌘B"
@@ -1289,6 +1249,40 @@ export function AppSidebar() {
               >
                 <SidebarOvalIcon className="h-4 w-4" />
               </SidebarTrigger>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Atrás">
+              <button
+                type="button"
+                aria-label="Atrás"
+                onClick={() => window.history.back()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
+              >
+                <ChevronLeft className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </SidebarChromeTooltip>
+            <SidebarChromeTooltip label="Adelante">
+              <button
+                type="button"
+                aria-label="Adelante"
+                onClick={() => window.history.forward()}
+                className={cn(HEADER_ICON_BTN, "flex items-center justify-center")}
+              >
+                <ChevronRight className="h-4 w-4" strokeWidth={1.9} />
+              </button>
+            </SidebarChromeTooltip>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <NotificationCenter />
+            <SidebarChromeTooltip label="Nuevo chat ⌘N">
+              <button
+                type="button"
+                onPointerDown={markNewChatIntent}
+                onClick={handleNewChat}
+                aria-label="Nuevo chat ⌘N"
+                className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <MessageSquarePlus className="h-4 w-4" strokeWidth={1.9} />
+              </button>
             </SidebarChromeTooltip>
           </div>
         </div>
@@ -1457,6 +1451,42 @@ export function AppSidebar() {
 
         </TooltipProvider>
 
+      </div>
+
+      {/* Empresas — mode switch presented as a regular nav row (the old
+          header tablist moved here). Visible in BOTH modes: it is the only
+          way back to Agentes once the chat nav block above hides in code
+          mode. */}
+      <div
+        className={cn(
+          "flex flex-col transition-all",
+          state === "open" ? "gap-0.5 px-2 pb-2" : "px-2 pb-2",
+        )}
+      >
+        <TooltipProvider>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="Empresas"
+                aria-pressed={sidebarMode === "code"}
+                onClick={() => switchSidebarMode(sidebarMode === "code" ? "chat" : "code")}
+                data-sidebar="menu-button"
+                className={cn(
+                  NAV_ROW,
+                  sidebarMode === "code" && NAV_ROW_ACTIVE,
+                  "group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2",
+                )}
+              >
+                <Briefcase className={cn(NAV_ICON, sidebarMode === "code" ? "text-foreground" : "text-muted-foreground")} />
+                <span className="group-data-[state=closed]:hidden truncate">Empresas</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right" className={state === "open" ? "hidden" : ""}>
+              <p>Empresas</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <SidebarContent
