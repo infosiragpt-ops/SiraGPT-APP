@@ -8,6 +8,7 @@ import {
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { resolveCatalogModel } from "./chat/catalog-model"
+import { consumeLoginHandoffSse } from "./computer-login-handoff"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -1954,6 +1955,9 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+              } else if (jsonData.type === 'computer_login_handoff') {
+                consumeLoginHandoffSse(jsonData)
+                lastProcessTime = Date.now();
               } else if ((jsonData.type === 'activity' || jsonData.type === 'stage') && (jsonData.text || jsonData.label)) {
                 if (options.onActivity) {
                   options.onActivity(String(jsonData.text || jsonData.label), jsonData);

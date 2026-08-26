@@ -1961,6 +1961,23 @@ function buildTaskTools(options = {}) {
     ...visualMediaTools,
   ];
 
+  const computerEnv = options.env || process.env;
+  try {
+    const chatComputer = require('../computer/chat-computer-tools');
+    if (options.includeComputer !== false && chatComputer.shouldOfferComputerTools(computerEnv)) {
+      const computerTools = chatComputer.buildChatComputerTools({
+        userId: options.skillContext && options.skillContext.userId,
+        conversationId: options.skillContext && options.skillContext.chatId,
+        env: computerEnv,
+      });
+      if (Array.isArray(computerTools) && computerTools.length) tools.push(...computerTools);
+    }
+  } catch (computerErr) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.warn('[task-tools] computer tools unavailable:', computerErr && computerErr.message);
+    }
+  }
+
   if (options.includeSkills !== false) {
     try {
       const skillRunner = require('./skill-runner');
