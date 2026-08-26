@@ -2,6 +2,8 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 
 const {
   memberKey,
@@ -52,6 +54,52 @@ describe('agent-computer conversation session key', () => {
     assert.equal(sessionMatchesConversation({ userId: 'other-chat-key' }, identity), false);
     assert.match(ISOLATION_REFUSED_ES, /aislar/);
     assert.doesNotMatch(ISOLATION_REFUSED_ES, /sk-/);
+  });
+
+  test('agentes empty conversationId no longer 409s sessions create', () => {
+    const { identityFor } = require('../src/routes/agent-computer');
+    const identity = identityFor({ user: { id: 'u1' }, body: {}, query: {} });
+    assert.equal(identity.conversationBound, false);
+    assert.equal(identity.conversationId, null);
+    assert.doesNotThrow(() => identityFor({ user: { id: 'u1' }, body: undefined, query: {} }));
+    // /code still fail-closes; /agentes must not call this on an empty home.
+    assert.throws(() => requireProvenIsolation(identity), (err) => err.code === 'isolation_required');
+    const route = fs.readFileSync(path.join(__dirname, '../src/routes/agent-computer.js'), 'utf8');
+    const start = route.indexOf('async function ensureMemberDesktop');
+    const end = route.indexOf('function ownedOrDeny');
+    const ensure = route.slice(start, end);
+    assert.match(ensure, /orchFetch\('\/sessions'/);
+    assert.match(ensure, /if \(identity.conversationBound\)/);
+    assert.ok(
+      ensure.indexOf("orchFetch('/sessions'") < ensure.indexOf('requireProvenIsolation'),
+      'orchFetch must run before isolation when a chat id is missing',
+    );
+    assert.ok(
+      ensure.indexOf('if (identity.conversationBound)') < ensure.indexOf('requireProvenIsolation'),
+      'requireProvenIsolation only after conversationBound',
+    );
+    assert.match(route, /if \(!conversationId\) return identity/);
+  });
+
+  test('agentes conversationId keeps the session conversationBound (body and query)', () => {
+    const { identityFor } = require('../src/routes/agent-computer');
+    const fromBody = identityFor({
+      user: { id: 'u1' },
+      body: { conversationId: 'chat-aaa' },
+      query: {},
+    });
+    const fromQuery = identityFor({
+      user: { id: 'u1' },
+      body: {},
+      query: { conversationId: 'chat-bbb' },
+    });
+    assert.equal(fromBody.conversationBound, true);
+    assert.equal(fromQuery.conversationBound, true);
+    assert.equal(fromBody.conversationId, 'chat-aaa');
+    assert.equal(fromQuery.conversationId, 'chat-bbb');
+    assert.notEqual(fromBody.userId, fromQuery.userId);
+    requireProvenIsolation(fromBody);
+    requireProvenIsolation(fromQuery);
   });
 
   test('unbound identity cannot attach — fail-closed for /code', () => {

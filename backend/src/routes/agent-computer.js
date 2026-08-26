@@ -11,6 +11,7 @@ const {
   ISOLATION_REFUSED_ES,
   OPEN_FAILED_ES,
   publicComputerError,
+  isolationError,
   sessionMatchesConversation,
   readIsolationKey,
   requireProvenIsolation,
@@ -47,11 +48,22 @@ function readConversationId(req) {
 }
 
 function identityFor(req) {
+  const conversationId = readConversationId(req);
+  const identity = resolveSessionIdentity({ id: memberId(req) }, conversationId);
+  // /agentes home and Nuevo chat have no conversationId yet. Return a
+  // member desktop instead of throwing isolation_required (409).
+  if (!conversationId) return identity;
   return applyIsolationClosed({
     user: { id: memberId(req) },
-    conversationId: readConversationId(req),
-    identity: resolveSessionIdentity({ id: memberId(req) }, readConversationId(req)),
+    conversationId,
+    identity,
   });
+}
+
+function sessionOwnedByMember(session, identity) {
+  const orchUser = String((session && session.userId) || '');
+  if (!orchUser || !identity) return false;
+  return orchUser === String(identity.userId) || orchUser === String(identity.memberKey || '');
 }
 
 function loadAdapter() {
@@ -100,17 +112,26 @@ function refuseLiveComputer(req, toolName, session) {
 
 async function ensureMemberDesktop(req) {
   const identity = identityFor(req);
-  requireProvenIsolation(identity);
   const desktop = await orchFetch('/sessions', { method: 'POST', body: { userId: identity.userId } });
-  applyAttachClosed({ session: desktop, identity });
+  if (identity.conversationBound) {
+    requireProvenIsolation(identity);
+    applyAttachClosed({ session: desktop, identity });
+  }
   return rewriteUrls(withConversation({ ...desktop, userId: desktop.userId || identity.userId }, identity));
 }
 
 function ownedOrDeny(session, req, res) {
   try {
     const identity = identityFor(req);
-    attachIsolationOrRefuse(session, identity);
-    if (!sessionMatchesConversation(session, identity)) {
+    if (identity.conversationBound) {
+      attachIsolationOrRefuse(session, identity);
+      if (!sessionMatchesConversation(session, identity)) {
+        res.status(403).json({ error: 'isolation_required', message: ISOLATION_REFUSED_ES });
+        return false;
+      }
+      return true;
+    }
+    if (!sessionOwnedByMember(session, identity)) {
       res.status(403).json({ error: 'isolation_required', message: ISOLATION_REFUSED_ES });
       return false;
     }
@@ -224,7 +245,11 @@ function sessionContainer(session) {
 
 async function handleAction(req, res, session) {
   const identity = identityFor(req);
-  attachIsolationOrRefuse(session, identity);
+  if (identity.conversationBound) {
+    attachIsolationOrRefuse(session, identity);
+  } else if (!sessionOwnedByMember(session, identity)) {
+    throw isolationError();
+  }
   refuseLiveComputer(req, (req.body && (req.body.tool || req.body.toolName)) || 'computer_action', session);
   refuseOpenRouterComputerModel(req.body && req.body.model);
   const signal = requestAbortSignal(req);
@@ -355,3 +380,5 @@ router.post('/login-handoff', requireFlag, authenticateToken, (req, res) => {
 });
 
 module.exports = router;
+module.exports.identityFor = identityFor;
+module.exports.ensureMemberDesktop = ensureMemberDesktop;
