@@ -19,6 +19,12 @@ test('needsFreshWebContext detects time-sensitive queries', () => {
   assert.equal(needsFreshWebContext('noticias actuales de IA'), true);
   assert.equal(needsFreshWebContext('precio del bitcoin ahora'), true);
   assert.equal(needsFreshWebContext('últimos avances en medicina'), true);
+  assert.equal(needsFreshWebContext('búscame ofertas de prendas de vestir de mujer'), true);
+  assert.equal(needsFreshWebContext('¿cuánto cuesta un iPhone?'), true);
+  assert.equal(needsFreshWebContext('consulta los precios actualizados del dólar'), true);
+  assert.equal(needsFreshWebContext('busca descuentos en tiendas online'), true);
+  assert.equal(needsFreshWebContext('hoy hay remates en Gamarra'), true);
+  assert.equal(needsFreshWebContext('where can I find the best deals'), true);
   assert.equal(needsFreshWebContext('explica el teorema de Pitágoras'), false);
   assert.equal(needsFreshWebContext('cómo hacer una tesis'), false);
 });
