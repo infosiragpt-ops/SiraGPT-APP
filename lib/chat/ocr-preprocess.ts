@@ -38,15 +38,24 @@ export function usefulOcrCharCount(text: string): number {
   return matches ? matches.length : 0
 }
 
+export function redactSecretsFromOcr(text: string): string {
+  return String(text || "").replace(
+    /(\b(?:password|passwd|pwd|otp|2fa|mfa|totp|cvv|cvc|csc|pin|secret|contrase(?:ñ|n)a|username|usuario)\b\s*[:=]\s*)([^\s,;|"'<>]{1,256})/gi,
+    "$1[redacted]",
+  )
+}
+
 export function normalizeOcrText(text: string): string {
-  return String(text || "")
-    .replace(/\u0000/g, "")
-    .split(/\r?\n/)
-    .map((line) => line.replace(/[ \t]+/g, " ").trim())
-    .join("\n")
-    .replace(/[ \t]+\n/g, "\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
+  return redactSecretsFromOcr(
+    String(text || "")
+      .replace(/\u0000/g, "")
+      .split(/\r?\n/)
+      .map((line) => line.replace(/[ \t]+/g, " ").trim())
+      .join("\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+  )
 }
 
 export function isWeakOcrText(text: unknown, confidence?: number): boolean {

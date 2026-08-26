@@ -30,6 +30,7 @@ const {
   applyScreenshotNoChargeClosed,
   applySandboxAbortCleanupClosed,
 } = require('../../computer/computer-code-guard');
+const loginHandoff = require('../../computer/login-handoff');
 
 const pexecFile = promisify(execFile);
 
@@ -300,6 +301,27 @@ function makeComputerExecutors({ env = process.env, driver = null, userId, sessi
       throwIfComputerActionAborted(signal);
       refuseOrThrow('computer_type', args);
       if (!String(args.text || '').length) return 'ERROR: computer_type requiere `text`.';
+      const blocked = loginHandoff.refuseAgentType({
+        toolName: 'computer_type',
+        args,
+        text: args.text,
+        focused: args.focused || args.focusedField,
+        conversationId: args.conversationId || userId,
+        user: { id: userId },
+        identity: session,
+      });
+      if (blocked.refuse) {
+        const gate = loginHandoff.detectLoginGate(args);
+        loginHandoff.beginTakeover({
+          conversationId: args.conversationId || (session && session.conversationId),
+          user: { id: userId },
+          identity: session,
+          site: gate.site,
+          kind: gate.kind || 'password',
+          reason: blocked.reason,
+        });
+        return loginHandoff.loginHandoffToolResult(gate, { active: true });
+      }
       const started = Date.now();
       let drv;
       try {
@@ -364,7 +386,7 @@ const COMPUTER_TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'computer_type',
-      description: 'Escribe texto en el elemento enfocado del escritorio controlado.',
+      description: 'Escribe texto en el elemento enfocado del escritorio controlado. NUNCA escribas contraseñas, OTP, 2FA, CVV ni usuario de un formulario de login: si aparece un muro de login, PAUSA y pide toma de control. El usuario inicia sesión en la computadora; SiraGPT no ve la contraseña.',
       parameters: {
         type: 'object',
         properties: {

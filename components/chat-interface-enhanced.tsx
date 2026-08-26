@@ -56,6 +56,10 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
+  LOGIN_HANDOFF_WINDOW_EVENT,
+  type LoginHandoffDetail,
+} from "@/lib/computer-login-handoff"
+import {
   getSpeechRecognitionCtor,
   isIgnorableSpeechError,
   isSpeechPermissionError,
@@ -6047,6 +6051,8 @@ function ChatInterfaceContent() {
   const [audioTab, setAudioTab] = React.useState<'tts' | 'stt' | 'music' | 'video'>("tts");
   const [coworkPanelOpen, setCoworkPanelOpen] = React.useState(false);
   const [computerPanelOpen, setComputerPanelOpen] = React.useState(false);
+  const [loginHandoffActive, setLoginHandoffActive] = React.useState(false);
+  const [loginHandoffSite, setLoginHandoffSite] = React.useState("");
 
   // Speech-to-Text states
   const [isSpeechSupported, setIsSpeechSupported] = React.useState(false);
@@ -11716,7 +11722,61 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const params = new URLSearchParams(window.location.search);
     const computer = params.get("computer");
     if (computer === "1" || computer === "true") openComputerPanel();
+    const login = params.get("login");
+    if (login === "1" || login === "true") {
+      setLoginHandoffActive(true);
+      openComputerPanel();
+    }
   }, [openComputerPanel]);
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onHandoff = (event: Event) => {
+      const detail = (event as CustomEvent<LoginHandoffDetail>).detail;
+      if (!detail) return;
+      const id = String(detail.conversationId || "").trim();
+      const openId = String(currentChat?.id || "").trim();
+      if (id && openId && id !== openId) return;
+      if (detail.active) {
+        setLoginHandoffActive(true);
+        if (detail.site) setLoginHandoffSite(String(detail.site));
+        openComputerPanel();
+      } else {
+        setLoginHandoffActive(false);
+      }
+    };
+    window.addEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+    return () => window.removeEventListener(LOGIN_HANDOFF_WINDOW_EVENT, onHandoff);
+  }, [openComputerPanel, currentChat?.id]);
+
+  React.useEffect(() => {
+    const chatId = String(currentChat?.id || "").trim();
+    if (!chatId || typeof window === "undefined") return;
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const api = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "");
+        const res = await authenticatedFetch(
+          `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}`,
+          { credentials: "include", signal: AbortSignal.timeout(12_000) },
+        );
+        const body = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+        if (body && body.active) {
+          setLoginHandoffActive(true);
+          if (body.site) setLoginHandoffSite(String(body.site));
+          openComputerPanel();
+        }
+      } catch {
+        /* handoff poll is best-effort */
+      }
+    };
+    const timer = window.setInterval(() => void pull(), 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [currentChat?.id, openComputerPanel]);
 
   const openGrokVoicePanel = React.useCallback(() => {
     setCoworkPanelOpen(false);
@@ -13480,7 +13540,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 <ChatAgentComputerPanel
                   key={currentChat?.id || "none"}
                   conversationId={currentChat?.id || ""}
-                  onClose={() => setComputerPanelOpen(false)}
+                  loginHandoff={loginHandoffActive}
+                  loginHandoffSite={loginHandoffSite}
+                  onClose={() => {
+                    setComputerPanelOpen(false)
+                    setLoginHandoffActive(false)
+                  }}
                 />
               )}
               {showAudioPanel && audioTab === 'stt' && (
