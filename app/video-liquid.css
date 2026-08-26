@@ -19,65 +19,56 @@
   50% { transform: scale(1); opacity: 0.9; }
 }
 
-.media-model-trigger[data-media-tool="video"],
-.video-settings-trigger,
-.video-mode-chip {
-  border-color: hsl(150 58% 42% / 0.4) !important;
-  color: hsl(154 76% 20%) !important;
+.video-settings-trigger {
+  border-color: hsl(220 14% 88% / 0.78) !important;
+  color: hsl(222 18% 10%) !important;
   background:
-    linear-gradient(145deg, hsl(142 76% 96% / 0.94), hsl(0 0% 100% / 0.78)),
-    linear-gradient(115deg, hsl(151 76% 42% / 0.16), transparent 42%, hsl(166 70% 42% / 0.1)) !important;
+    linear-gradient(145deg, hsl(0 0% 100% / 0.94), hsl(0 0% 100% / 0.78)) !important;
   box-shadow:
     inset 0 1px 0 hsl(0 0% 100% / 0.86),
-    inset 0 0 0 1px hsl(150 72% 82% / 0.24),
-    0 12px 28px -24px hsl(150 58% 22% / 0.58) !important;
+    0 12px 28px -24px hsl(220 38% 16% / 0.36) !important;
 }
 
-.media-model-trigger[data-media-tool="video"]:hover,
-.video-settings-trigger:hover,
-.video-mode-chip:hover {
-  border-color: hsl(150 62% 38% / 0.52) !important;
-  color: hsl(154 80% 16%) !important;
+.video-settings-trigger:hover {
+  border-color: hsl(220 12% 78% / 0.9) !important;
+  color: hsl(222 18% 10%) !important;
 }
 
 .video-mode-chip-flow {
-  background: conic-gradient(from 90deg, transparent 0deg, hsl(150 78% 46% / 0) 70deg, hsl(150 78% 46% / 0.32) 135deg, hsl(166 72% 43% / 0.18) 198deg, transparent 280deg);
+  background: conic-gradient(from 90deg, transparent 0deg, rgba(255,255,255,0) 70deg, rgba(255,255,255,0.28) 135deg, rgba(255,255,255,0.10) 198deg, transparent 280deg);
 }
 
 .video-mode-chip .lucide-video,
 .video-settings-trigger .lucide-settings {
-  filter: drop-shadow(0 0 8px hsl(150 74% 34% / 0.28));
+  filter: none;
 }
 
 .media-model-menu[data-media-tool="video"] .media-model-item:hover,
 .media-model-menu[data-media-tool="video"] .media-model-item[data-highlighted],
 .media-model-menu[data-media-tool="video"] .media-model-item[data-selected="true"] {
-  color: hsl(154 78% 16%) !important;
+  color: hsl(222 18% 10%) !important;
   background:
-    linear-gradient(145deg, hsl(142 76% 94% / 0.86), hsl(0 0% 100% / 0.58)),
-    linear-gradient(115deg, hsl(150 76% 42% / 0.16), transparent 62%) !important;
+    linear-gradient(145deg, hsl(220 14% 96% / 0.86), hsl(0 0% 100% / 0.58)) !important;
 }
 
 .video-settings-menu {
-  border-color: hsl(150 50% 40% / 0.2) !important;
-  background:
-    linear-gradient(145deg, hsl(0 0% 100% / 0.92), hsl(142 76% 97% / 0.72)),
-    linear-gradient(115deg, transparent 50%, hsl(150 70% 42% / 0.08)) !important;
+  border-color: hsl(220 13% 88% / 0.9) !important;
+  background: #fff !important;
 }
 
 .video-settings-menu [data-state="checked"] {
-  background-color: hsl(150 70% 34%) !important;
+  background-color: #111111 !important;
 }
 
 .video-setting-pill.is-selected,
 .video-ratio-option.is-selected {
-  color: hsl(154 80% 14%) !important;
-  background: linear-gradient(145deg, hsl(142 76% 94% / 0.96), hsl(0 0% 100% / 0.68)) !important;
+  color: hsl(222 18% 10%) !important;
+  background: hsl(220 14% 96%) !important;
   box-shadow:
-    inset 0 1px 0 hsl(0 0% 100% / 0.88),
-    inset 0 0 0 1px hsl(150 62% 42% / 0.12),
-    0 10px 20px -18px hsl(150 58% 22% / 0.42) !important;
+    inset 0 0 0 1px hsl(220 12% 10% / 0.08),
+    0 10px 22px -20px hsl(220 38% 16% / 0.34) !important;
 }
+
 
 .video-liquid-card {
   position: relative;
@@ -313,14 +304,11 @@
   background: hsl(142 76% 96% / 0.58) !important;
 }
 
-.dark .media-model-trigger[data-media-tool="video"],
-.dark .video-settings-trigger,
-.dark .video-mode-chip {
-  border-color: hsl(150 72% 48% / 0.3) !important;
-  color: hsl(150 78% 78%) !important;
+.dark .video-settings-trigger {
+  border-color: hsl(0 0% 100% / 0.14) !important;
+  color: hsl(0 0% 100% / 0.9) !important;
   background:
-    linear-gradient(145deg, hsl(154 34% 12% / 0.88), hsl(160 28% 8% / 0.78)),
-    linear-gradient(115deg, hsl(150 76% 48% / 0.16), transparent 44%, hsl(166 70% 42% / 0.09)) !important;
+    linear-gradient(145deg, hsl(222 16% 13% / 0.86), hsl(222 16% 8% / 0.78)) !important;
 }
 
 .dark .video-liquid-card {
