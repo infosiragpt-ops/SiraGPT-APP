@@ -12894,20 +12894,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                <div className={cn("shrink-0", sidebarOpen && "md:hidden")}>
-                  <SidebarTrigger
-                    className={cn(
-                      "chat-mobile-menu-liquid-button h-11 w-11 rounded-full p-0 text-foreground",
-                      "hover:bg-transparent focus-visible:bg-transparent"
-                    )}
-                    aria-label={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
-                    title={sidebarOpen ? "Cerrar el menú lateral" : "Abrir el menú lateral"}
-                  >
-                    <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
-                  </SidebarTrigger>
-                </div>
-                {/* Credits live in the account menu, not the chat canvas.
-                    Model selector is in the composer. See renderComposerModelControls(). */}
+                {/* Hamburger menu removed — sidebar toggles via sidebar header (⌘B / oval icon). */}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {currentChat?.id && (
