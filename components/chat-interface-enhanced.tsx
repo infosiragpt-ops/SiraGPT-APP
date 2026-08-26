@@ -13023,10 +13023,12 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           is collapsed (we auto-collapse on Word/Excel/image/video to
           reclaim horizontal real estate). Pinned to the viewport edge
           so the user can always pop the sidebar back with one click. */}
-      {(isSidebarMobile ? !sidebarOpenMobile : !sidebarOpen) && (
+      {/* Desktop only: mobile reopens the sheet from the header button,
+          so the mid-screen tab never floats over message text on phones. */}
+      {!sidebarOpen && !isSidebarMobile && (
         <button
           type="button"
-          onClick={() => (isSidebarMobile ? setSidebarOpenMobile(true) : setSidebarOpen(true))}
+          onClick={() => setSidebarOpen(true)}
           title="Mostrar sidebar"
           aria-label="Mostrar sidebar"
           className="fixed left-0 top-1/2 -translate-y-1/2 z-50 flex h-10 w-6 items-center justify-center rounded-r-md border border-l-0 border-border/60 bg-background/90 text-muted-foreground shadow-sm backdrop-blur-sm transition-all duration-200 hover:w-8 hover:bg-background hover:text-foreground"
@@ -13057,7 +13059,21 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           <div ref={chatHeaderRef} className="chat-mobile-header absolute top-0 left-0 right-0 z-10">
             <div className="chat-header-row flex items-center justify-between">
               <div className="chat-header-left flex min-w-0 items-center gap-2">
-                {/* Hamburger menu removed — sidebar toggles via sidebar header (⌘B / oval icon). */}
+                {/* Desktop toggles the sidebar from its own header; on mobile
+                    the sheet needs an opener here — a quiet 40px ghost icon,
+                    not the old prominent hamburger disc. */}
+                {isSidebarMobile && !sidebarOpenMobile ? (
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpenMobile(true)}
+                    aria-label="Abrir el menú lateral"
+                    title="Abrir el menú"
+                    data-testid="chat-mobile-sidebar-open"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 md:hidden"
+                  >
+                    <SidebarOvalIcon className="h-[18px] w-[18px]" />
+                  </button>
+                ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
                 {currentChat?.id && (
@@ -13428,6 +13444,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                           isAtBottom
                             ? "pointer-events-none translate-y-2 opacity-0"
                             : "translate-y-0 opacity-100",
+                          queuedCount > 0 && "!-top-[5.25rem]",
                         )}
                       >
                         <button
