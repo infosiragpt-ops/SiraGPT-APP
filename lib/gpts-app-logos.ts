@@ -3,7 +3,9 @@
  *
  * Priority:
  *   1. Local official mark under /conexiones-logos/ (Simple Icons / owned SVG)
- *   2. High-res domain logo (Clearbit, then DuckDuckGo ip3)
+ *   2. Generated professional SVG tile (category glyph + monogram) for
+ *      invented GPT-store hosts and any app without an official mark —
+ *      never a blank box or a generic globe favicon
  *   3. Initials fallback is handled by AppLogo after every src errors
  */
 
@@ -107,6 +109,10 @@ const FILE_BY_SLUG: Record<string, string> = {
   glassdoor: "glassdoor.svg",
   deliveroo: "deliveroo.svg",
   justeat: "justeat.svg",
+  idealista: "idealista.svg",
+  redfin: "redfin.svg",
+  autoscout24: "autoscout24.svg",
+  autotrader: "autotrader.svg",
 }
 
 /** App id → local mark (covers catalog ids and well-known aliases). */
@@ -147,6 +153,10 @@ const FILE_BY_ID: Record<string, string> = {
   youtube: "youtube.svg",
   spotify: "spotify.svg",
   amazon: "amazon.svg",
+  idealista: "idealista.svg",
+  redfin: "redfin.svg",
+  autoscout24: "autoscout24.svg",
+  autotrader: "autotrader.svg",
 }
 
 /**
@@ -240,6 +250,10 @@ const FILE_BY_DOMAIN: Record<string, string> = {
   "deliveroo.com": "deliveroo.svg",
   "just-eat.com": "justeat.svg",
   "justeat.com": "justeat.svg",
+  "idealista.com": "idealista.svg",
+  "redfin.com": "redfin.svg",
+  "autoscout24.com": "autoscout24.svg",
+  "autotrader.com": "autotrader.svg",
 }
 
 const GOOGLE_APEX = /^google\.[a-z]{2,3}(?:\.[a-z]{2})?$/
@@ -360,7 +374,28 @@ export function isLikelyInventedDomain(domain: string): boolean {
   return false
 }
 
-/** Deterministic professional monogram tile — always a real SVG, never a blank box. */
+function categoryGlyph(category: string | undefined, fill: string): string {
+  switch (category) {
+    case "Empleo":
+      return `<rect x="18" y="28" width="28" height="18" rx="3" fill="none" stroke="${fill}" stroke-width="2.4"/><path d="M26 28v-3a6 6 0 0 1 12 0v3" fill="none" stroke="${fill}" stroke-width="2.4"/>`
+    case "Inmuebles":
+      return `<path d="M12 30 32 14 52 30v22H12z" fill="none" stroke="${fill}" stroke-width="2.4"/><rect x="28" y="36" width="8" height="16" fill="none" stroke="${fill}" stroke-width="2.2"/>`
+    case "Autos":
+      return `<path d="M14 38h36l-5-12H19z" fill="none" stroke="${fill}" stroke-width="2.4"/><circle cx="22" cy="40" r="3.2" fill="${fill}"/><circle cx="42" cy="40" r="3.2" fill="${fill}"/>`
+    case "Compras":
+      return `<path d="M20 26h24l2 22H18z" fill="none" stroke="${fill}" stroke-width="2.4"/><path d="M24 26a8 8 0 0 1 16 0" fill="none" stroke="${fill}" stroke-width="2.4"/>`
+    case "Astrología":
+      return `<path d="M32 14l3.2 9.8H46l-8.4 6.2 3.2 9.8L32 33.6 23.2 39.8l3.2-9.8L18 23.8h10.8z" fill="${fill}"/>`
+    case "Comida":
+      return `<path d="M22 16v20a10 10 0 0 0 20 0V16" fill="none" stroke="${fill}" stroke-width="2.4"/><path d="M22 22h20" fill="none" stroke="${fill}" stroke-width="2.4"/>`
+    case "Noticias":
+      return `<rect x="16" y="16" width="32" height="32" rx="4" fill="none" stroke="${fill}" stroke-width="2.4"/><path d="M22 26h20M22 34h14" fill="none" stroke="${fill}" stroke-width="2.4"/>`
+    default:
+      return `<circle cx="32" cy="32" r="11" fill="none" stroke="${fill}" stroke-width="2.4"/><circle cx="32" cy="32" r="4" fill="${fill}"/>`
+  }
+}
+
+/** Deterministic professional tile — category glyph + monogram, never a blank box. */
 export function generatedBrandTileSvg(app: GptStoreAppLogoInput): string {
   const label = (app.name || app.id || "App").trim()
   const [bg, fg] = TILE_PALETTE[hashId(app.id || label) % TILE_PALETTE.length]
@@ -368,8 +403,8 @@ export function generatedBrandTileSvg(app: GptStoreAppLogoInput): string {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img">`,
     `<rect width="64" height="64" rx="16" fill="${bg}"/>`,
-    `<rect x="3" y="3" width="58" height="58" rx="14" fill="none" stroke="${fg}" stroke-opacity="0.22" stroke-width="2"/>`,
-    `<text x="32" y="39" text-anchor="middle" font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif" font-size="22" font-weight="700" fill="${fg}">${letters}</text>`,
+    `<g opacity="0.28">${categoryGlyph(app.category, fg)}</g>`,
+    `<text x="32" y="40" text-anchor="middle" font-family="ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif" font-size="18" font-weight="700" fill="${fg}">${letters}</text>`,
     `</svg>`,
   ].join("")
 }
@@ -379,22 +414,12 @@ export function generatedBrandTileUrl(app: GptStoreAppLogoInput): string {
 }
 
 export function gptStoreAppLogoSources(app: GptStoreAppLogoInput): string[] {
-  const domain = normalizeLogoDomain(app.domain)
-  const sources: string[] = []
-  const local = officialMarkPath(app)
   const generated = generatedBrandTileUrl(app)
-  if (local) {
-    sources.push(local)
-    if (domain) sources.push(clearbitLogoUrl(domain))
-    sources.push(generated)
-    return [...new Set(sources)]
-  }
-  if (domain && !isLikelyInventedDomain(domain)) {
-    sources.push(clearbitLogoUrl(domain))
-    sources.push(duckduckgoLogoUrl(domain))
-  }
-  sources.push(generated)
-  return [...new Set(sources)]
+  const local = officialMarkPath(app)
+  if (local) return [local, generated]
+  // Unmapped + invented hosts: a real local SVG so the tile is never a blank
+  // box or a generic globe from a failed favicon/Clearbit lookup.
+  return [generated]
 }
 
 /** Primary logo URL (local mark, high-res domain logo, or generated SVG tile). */

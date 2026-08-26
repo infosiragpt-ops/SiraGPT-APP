@@ -6,7 +6,6 @@ import path from "node:path"
 import { GPT_STORE_APPS } from "../lib/gpts-apps-catalog"
 import {
   apexLogoDomain,
-  duckduckgoLogoUrl,
   generatedBrandTileUrl,
   gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
@@ -52,18 +51,17 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
       const sources = gptStoreAppLogoSources(app)
       assert.ok(isProfessionalLogoUrl(primary), `primary for ${app.id} should be professional, got ${primary}`)
       assert.equal(isGoogleFavicon128(primary), false)
-      assert.ok(sources.length >= 2, `${app.id} should expose a fallback src`)
+      assert.ok(sources.length >= 1, `${app.id} should expose a logo src`)
       assert.ok(sources.every((url) => !isGoogleFavicon128(url)))
       assert.ok(sources.every(isProfessionalLogoUrl))
     }
   })
 
-  it("falls back to Clearbit then DuckDuckGo ip3 when no local mark exists", () => {
-    const sources = gptStoreAppLogoSources(obscure)
-    assert.equal(sources[0], "https://logo.clearbit.com/steerastro.com")
-    assert.equal(sources[1], duckduckgoLogoUrl("steerastro.com"))
-    assert.match(sources[1], /icons\.duckduckgo\.com\/ip3\/steerastro\.com\.ico/)
-    assert.equal(sources[2], generatedBrandTileUrl(obscure))
+  it("uses a generated SVG — not Clearbit or a favicon — when no official mark exists", () => {
+    const sources = gptStoreAppLogoSources({ ...obscure, name: "Steer Astro", category: "Astrología" })
+    assert.equal(sources[0], generatedBrandTileUrl({ ...obscure, name: "Steer Astro", category: "Astrología" }))
+    assert.match(sources[0], /^data:image\/svg\+xml/)
+    assert.equal(sources.some((url) => url.includes("clearbit") || url.includes("s2/favicons")), false)
   })
 
   it("uses a generated local SVG for invented GPT-store domains so tiles are never blank", () => {
@@ -74,6 +72,7 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
     }
     assert.equal(isLikelyInventedDomain(invented.domain), true)
     assert.equal(isLikelyInventedDomain("idealista.com"), false)
+    assert.equal(gptStoreAppLogoUrl({ id: "idealista", domain: "idealista.com" }), "/conexiones-logos/idealista.svg")
     const sources = gptStoreAppLogoSources(invented)
     assert.equal(sources[0], generatedBrandTileUrl(invented))
     assert.match(sources[0], /^data:image\/svg\+xml/)
@@ -91,7 +90,7 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
   })
 
   it("keeps the local SVG files for catalog and requested brands", () => {
-    for (const file of ["linkedin.svg", "indeed.svg", "gmail.svg", "google.svg", "etsy.svg"]) {
+    for (const file of ["linkedin.svg", "indeed.svg", "gmail.svg", "google.svg", "etsy.svg", "idealista.svg", "redfin.svg", "autoscout24.svg", "autotrader.svg"]) {
       assert.ok(fs.existsSync(path.join(logosDir, file)), `missing ${file}`)
     }
   })
@@ -105,10 +104,10 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
       assert.ok(sources.every((url) => !isGoogleFavicon128(url)))
       // Invented GPT-store hosts only get the generated SVG (it never 404s).
       // Real or official-mark apps keep a second src for AppLogo onError.
-      if (!isLikelyInventedDomain(app.domain) || officialMarkPath(app)) {
+      if (officialMarkPath(app)) {
         assert.ok(sources.length >= 2, `${app.id} needs a fallback src`)
+        assert.match(sources[0], /^\/conexiones-logos\//)
       } else {
-        assert.equal(sources.length, 1)
         assert.match(sources[0], /^data:image\/svg\+xml/)
       }
     }
