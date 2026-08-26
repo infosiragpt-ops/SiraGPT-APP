@@ -15,20 +15,41 @@ let stack: string[] = []
 let index = -1
 const listeners = new Set<Listener>()
 
+// useSyncExternalStore requires Object.is-stable getSnapshot. A fresh
+// object every read causes React 185 (Maximum update depth exceeded).
+let cachedSnapshot: AgentsHistorySnapshot = {
+  canBack: false,
+  canForward: false,
+  current: "",
+}
+
 function keyOf(chatId: string | null | undefined): string {
   return String(chatId || "")
 }
 
+function refreshCachedSnapshot(): boolean {
+  const canBack = index > 0
+  const canForward = index >= 0 && index < stack.length - 1
+  const current = index >= 0 ? stack[index] : ""
+  if (
+    cachedSnapshot.canBack === canBack &&
+    cachedSnapshot.canForward === canForward &&
+    cachedSnapshot.current === current
+  ) {
+    return false
+  }
+  cachedSnapshot = { canBack, canForward, current }
+  return true
+}
+
 function emit() {
+  refreshCachedSnapshot()
   for (const listener of listeners) listener()
 }
 
 export function snapshotAgentsHistory(): AgentsHistorySnapshot {
-  return {
-    canBack: index > 0,
-    canForward: index >= 0 && index < stack.length - 1,
-    current: index >= 0 ? stack[index] : "",
-  }
+  refreshCachedSnapshot()
+  return cachedSnapshot
 }
 
 export function subscribeAgentsHistory(listener: Listener): () => void {
