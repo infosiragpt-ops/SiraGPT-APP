@@ -174,6 +174,54 @@ function failComputer(res, err, fallbackCode) {
   });
 }
 
+function sanitizeNavigateUrl(raw) {
+  const value = String(raw || '').trim();
+  let parsed;
+  try { parsed = new URL(value); } catch (_) { parsed = null; }
+  if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+    const err = new Error('La URL debe ser http(s).');
+    err.status = 400;
+    err.code = 'invalid_url';
+    err.publicMessage = 'La URL debe ser http(s).';
+    throw err;
+  }
+  return parsed.toString();
+}
+
+async function navigateMemberDesktop(session, url) {
+  const persistent = require('../services/computer/persistent');
+  try {
+    const out = await persistent.agentPost(session, '/navigate', { url });
+    return { ok: true, url, result: out, sessionId: session.sessionId };
+  } catch (navErr) {
+    const opened = await persistent.dockerExec(
+      session,
+      'google-chrome --new-window ' + JSON.stringify(url)
+        + ' || chromium --new-window ' + JSON.stringify(url)
+        + ' || xdg-open ' + JSON.stringify(url),
+    );
+    return {
+      ok: true,
+      url,
+      result: opened,
+      sessionId: session.sessionId,
+      fallback: 'chrome',
+      detail: navErr && navErr.message ? String(navErr.message).slice(0, 120) : undefined,
+    };
+  }
+}
+
+router.post('/navigate', requireFlag, authenticateToken, async (req, res) => {
+  try {
+    const url = sanitizeNavigateUrl(req.body && (req.body.url || req.body.href));
+    const desktop = await ensureMemberDesktop(req);
+    const out = await navigateMemberDesktop(desktop, url);
+    return res.json(withConversation(out, identityFor(req)));
+  } catch (err) {
+    return failComputer(res, err, 'navigate_failed');
+  }
+});
+
 router.get('/desktop', requireFlag, authenticateToken, async (req, res) => {
   try { return res.json(await ensureMemberDesktop(req)); }
   catch (err) { return failComputer(res, err, 'get_failed'); }

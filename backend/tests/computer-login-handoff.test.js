@@ -128,6 +128,9 @@ describe('computer login handoff backend', () => {
     const persist = fs.readFileSync(path.join(__dirname, '../src/services/computer/persistent.js'), 'utf8');
     assert.match(route, /login-handoff/);
     assert.match(route, /ensureTakeoverFromLivePage/);
+    assert.match(route, /router\.post\('\/navigate'/);
+    assert.match(route, /sanitizeNavigateUrl/);
+    assert.match(route, /agentPost\(session, '\/navigate'/);
     assert.match(stream, /POLICY_ES/);
     assert.match(stream, /chatMessage/);
     assert.match(persist, /applyObserveHandoff/);
