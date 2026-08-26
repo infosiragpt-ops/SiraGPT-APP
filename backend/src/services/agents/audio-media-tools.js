@@ -24,13 +24,18 @@
  *   - TTS:   ElevenLabs SDK  client.textToSpeech.convert(voiceId, {...})
  *   - Music: ElevenLabs Music REST  POST https://api.elevenlabs.io/v1/music
  *
- * Graceful degradation: when ELEVENLABS_API_KEY is absent the tools return
- * a clear { ok:false, error } instead of throwing, so the agent can tell
- * the user the capability is not configured and continue.
+ * TTS ladder (first success wins):
+ *   1. ElevenLabs, when ELEVENLABS_API_KEY is set
+ *   2. OpenAI TTS, when OPENAI_API_KEY is set
+ *   3. Microsoft Edge neural TTS (no key — default path on the VPS)
+ *
+ * The default path MUST produce a real MP3 artifact. Never fall back to an
+ * HTML page that uses speechSynthesis / Web Speech API.
  */
 
 const crypto = require('crypto');
 const { saveArtifact } = require('./task-tools');
+const { synthesizeEdgeSpeech, isEdgeVoiceId, pickVoice } = require('./edge-tts-client');
 
 const ELEVEN_API_BASE = process.env.ELEVENLABS_API_BASE || 'https://api.elevenlabs.io/v1';
 // "Rachel" — a default ElevenLabs voice available to every account. Override
@@ -56,6 +61,7 @@ const MUSIC_MAX_SECONDS = clampInt(process.env.SIRAGPT_MUSIC_MAX_SECONDS, 300, 3
 // ── Test seams (overridable so unit tests never hit the network) ─────────
 let _clientFactory = null;
 let _fetchImpl = null;
+let _edgeTtsImpl = null;
 
 function getElevenClient() {
   if (_clientFactory) return _clientFactory();
@@ -158,6 +164,16 @@ function emitFileArtifact(ctx, artifact, format, mime, extra = {}) {
   });
 }
 
+async function generateEdgeSpeechBuffer(text, opts = {}) {
+  const impl = _edgeTtsImpl || synthesizeEdgeSpeech;
+  const result = await impl(text, opts);
+  if (result && Buffer.isBuffer(result.buffer)) return result;
+  if (Buffer.isBuffer(result)) {
+    return { buffer: result, voice: pickVoice(opts.voice), provider: 'edge' };
+  }
+  return null;
+}
+
 async function generateOpenAiSpeechBuffer(text) {
   const key = process.env.OPENAI_API_KEY;
   const doFetch = getFetch();
@@ -219,13 +235,19 @@ async function saveSpeechResult({ buffer, ctx, clean, voiceId, provider }) {
 
 const generateSpeech = {
   name: 'generate_speech',
-  description: 'Convert text into natural spoken audio (text-to-speech) with ElevenLabs and save it as a downloadable, playable MP3 artifact in the chat. Use when the user asks for an "audio", "voz", "narración", "locución", "voiceover", "podcast" or "léeme/dilo en voz alta". Provide the exact text to speak.',
+  description: [
+    'Convierte texto en un archivo de audio MP3 descargable (texto a voz) y lo adjunta al chat.',
+    'OBLIGATORIO cuando el usuario pide audio, voz, narración, locución, mp3, wav, voiceover, podcast o «léeme/dilo en voz alta».',
+    'Pasa en `text` el texto EXACTO a narrar (p. ej. «Juan vende papas en el mercado»).',
+    'PROHIBIDO inventar una página HTML, un reproductor con speechSynthesis / Web Speech API, o decirle al usuario que pulse reproducir en el navegador.',
+    'El único entregable válido es un archivo MP3/WAV real con downloadUrl.',
+  ].join(' '),
   parameters: {
     type: 'object',
     properties: {
-      text: { type: 'string', description: 'The exact text to speak aloud (required). Up to ~5000 characters.' },
-      voiceId: { type: 'string', description: 'Optional ElevenLabs voice id. Defaults to a multilingual voice.' },
-      modelId: { type: 'string', description: 'Optional ElevenLabs model id. Default: eleven_multilingual_v2 (works in Spanish + 28 languages).' },
+      text: { type: 'string', description: 'El texto exacto a narrar (obligatorio). Hasta ~5000 caracteres.' },
+      voiceId: { type: 'string', description: 'Voz opcional. Puede ser un id de voz o un nombre neural (p. ej. es-PE-CamilaNeural, es-ES-ElviraNeural).' },
+      modelId: { type: 'string', description: 'Modelo opcional del proveedor de voz de pago, si está configurado.' },
     },
     required: ['text'],
     additionalProperties: false,
@@ -235,16 +257,14 @@ const generateSpeech = {
     const clean = String(text || '').trim();
     if (!clean) return { ok: false, error: 'El texto a narrar está vacío.' };
 
-    const client = getElevenClient();
-    if (!client && !process.env.OPENAI_API_KEY) {
-      const msg = 'La generación de voz no está disponible (falta configurar ELEVENLABS_API_KEY u OPENAI_API_KEY).';
-      emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
-      return { ok: false, error: msg };
-    }
+    emitEvent(ctx, 'tool_output', { tool: 'generate_speech', preview: 'Generando audio…', partial: true });
 
-    try {
-      emitEvent(ctx, 'tool_output', { tool: 'generate_speech', preview: 'Generando audio…', partial: true });
-      if (client) {
+    const client = getElevenClient();
+    const preferEdgeVoice = isEdgeVoiceId(voiceId);
+    const errors = [];
+
+    if (client && !preferEdgeVoice) {
+      try {
         const stream = await client.textToSpeech.convert(voiceId || DEFAULT_VOICE_ID, {
           text: clean.slice(0, TTS_MAX_CHARS),
           model_id: modelId || DEFAULT_TTS_MODEL,
@@ -258,39 +278,60 @@ const generateSpeech = {
           voiceId: voiceId || DEFAULT_VOICE_ID,
           provider: 'elevenlabs',
         });
+      } catch (err) {
+        errors.push((err && err.message) || String(err));
+        emitEvent(ctx, 'tool_output', {
+          tool: 'generate_speech',
+          preview: 'Reintentando con otra voz…',
+          partial: true,
+        });
       }
-    } catch (err) {
-      const msg = (err && err.message) || String(err);
-      if (!process.env.OPENAI_API_KEY) {
-        emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: `Error: ${msg}` });
-        return { ok: false, error: msg };
+    }
+
+    if (process.env.OPENAI_API_KEY && !preferEdgeVoice) {
+      try {
+        const buffer = await generateOpenAiSpeechBuffer(clean);
+        if (buffer && buffer.length) {
+          return saveSpeechResult({
+            buffer,
+            ctx,
+            clean,
+            voiceId: DEFAULT_OPENAI_TTS_VOICE,
+            provider: 'openai',
+          });
+        }
+      } catch (err) {
+        errors.push((err && err.message) || String(err));
+        emitEvent(ctx, 'tool_output', {
+          tool: 'generate_speech',
+          preview: 'Reintentando con la voz predeterminada…',
+          partial: true,
+        });
       }
-      emitEvent(ctx, 'tool_output', {
-        tool: 'generate_speech',
-        preview: 'ElevenLabs no respondió correctamente; usando OpenAI TTS como respaldo…',
-        partial: true,
-      });
     }
 
     try {
-      const buffer = await generateOpenAiSpeechBuffer(clean);
-      if (!buffer) {
-        const msg = 'La generación de voz no está disponible (falta configurar OPENAI_API_KEY).';
-        emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
-        return { ok: false, error: msg };
-      }
-      return saveSpeechResult({
-        buffer,
-        ctx,
-        clean,
-        voiceId: DEFAULT_OPENAI_TTS_VOICE,
-        provider: 'openai',
+      const edge = await generateEdgeSpeechBuffer(clean.slice(0, TTS_MAX_CHARS), {
+        voice: voiceId,
+        signal: ctx && ctx.signal,
       });
+      if (edge && edge.buffer && edge.buffer.length) {
+        return saveSpeechResult({
+          buffer: edge.buffer,
+          ctx,
+          clean,
+          voiceId: edge.voice || pickVoice(voiceId),
+          provider: edge.provider || 'edge',
+        });
+      }
+      errors.push('El servicio de voz no devolvió audio.');
     } catch (err) {
-      const msg = (err && err.message) || String(err);
-      emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: `Error: ${msg}` });
-      return { ok: false, error: msg };
+      errors.push((err && err.message) || String(err));
     }
+
+    const msg = 'No se pudo generar el archivo de audio. Reintenta con un texto más corto.';
+    emitEvent(ctx, 'tool_output', { tool: 'generate_speech', ok: false, preview: msg });
+    return { ok: false, error: msg, detail: errors.filter(Boolean).slice(0, 3).join(' | ') };
   },
 };
 
@@ -418,7 +459,8 @@ module.exports = {
     getElevenClient,
     setElevenLabsClientFactory: (fn) => { _clientFactory = fn; },
     setFetchImpl: (fn) => { _fetchImpl = fn; },
-    resetTestSeams: () => { _clientFactory = null; _fetchImpl = null; },
+    setEdgeTtsImpl: (fn) => { _edgeTtsImpl = fn; },
+    resetTestSeams: () => { _clientFactory = null; _fetchImpl = null; _edgeTtsImpl = null; },
     DEFAULT_VOICE_ID,
     DEFAULT_TTS_MODEL,
     DEFAULT_OPENAI_TTS_MODEL,
