@@ -1,15 +1,16 @@
 # LOADERS CELESTE — one glyph for every in-progress state
 
 Professional thinking states for `/chat` (DeepSeek). **Every in-progress
-state shares the same bouncing three-bar SVG.** Phase meaning lives in
+state shares the same 3×3 dot-matrix ripple (dotm-3x3-15).** Phase meaning lives in
 the Spanish label next to it — never in a lupa, W, PDF seal, or sunburst.
 
 ## Live glyph (authoritative)
 
 `public/loaders/pensando.svg` and the inline `PensandoBars` component
-render Luis's exact geometry:
+render the shadcn `@dotmatrix/dotm-3x3-15` ripple (celeste #38BDF8):
 
-- `viewBox="10 40 45 50"`
+- `viewBox="0 0 36 36"` — 9 dots, ring-staggered opacity pulse. The
+  bouncing three-bar SVG is **retired** (kept as `pensando-original`).
 - rects at `x=20/30/40`, `y=50`, `width=4`, `height=10`
 - bounce `values="0 0; 0 20; 0 0"`, `dur="0.6s"`
 - begins `0` / `0.2s` / `0.4s`
