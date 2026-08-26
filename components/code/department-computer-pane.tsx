@@ -1,10 +1,10 @@
 "use client"
 
 /**
- * Right-hand department / chat computer. Persistent Linux desktop
- * (Xvfb + x11vnc + noVNC). Bind the session to conversationId when
- * provided so chat A does not reuse chat B's cached desktop.
- * Human viewer is same-origin noVNC (real mouse). PNG is agent-only.
+ * Right-hand department / chat computer. Persistent Linux desktop.
+ * Bind the session to conversationId when provided so chat A does
+ * not reuse chat B's cached desktop. Human viewer is the live
+ * same-origin desktop (real mouse). PNG is agent-only.
  */
 
 import * as React from "react"
@@ -25,10 +25,11 @@ export type DepartmentComputerPaneProps = {
   computerRunId: string
   onClose: () => void
   browser?: React.ReactNode
-  /** Open chat/conversation id — keys the noVNC session per chat. */
+  /** Open chat/conversation id — keys the live desktop session per chat. */
   conversationId?: string | null
   /** Hide this pane's own chrome when framed by AgentComputerShell. */
   embedded?: boolean
+  onStatusChange?: (status: "starting" | "live" | "error" | "idle") => void
 }
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
@@ -62,6 +63,14 @@ function cacheKey(conversationId?: string | null) {
   return id ? `chat:${id}` : "member"
 }
 
+function userFacingComputerError(message?: string): string {
+  const msg = String(message || "").trim()
+  if (!msg) return "No se pudo abrir la computadora."
+  if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg)) return "No se pudo abrir la computadora."
+  if (/^[a-z0-9_]+$/i.test(msg)) return "No se pudo abrir la computadora."
+  return msg
+}
+
 function embedFrom(session: AgentSession): string {
   if (session.embedUrl) return session.embedUrl
   const id = session.sessionId
@@ -82,7 +91,7 @@ async function ensureMemberDesktop(conversationId?: string | null): Promise<Agen
   const body = await res.json().catch(() => ({}))
   if (!res.ok) {
     throw Object.assign(
-      new Error((body as any)?.message || (body as any)?.error || "No se pudo abrir la computadora persistente."),
+      new Error((body as any)?.message || (body as any)?.error || "No se pudo abrir la computadora."),
       { status: res.status, body },
     )
   }
@@ -131,6 +140,7 @@ export function DepartmentComputerPane({
   onClose,
   conversationId,
   embedded = false,
+  onStatusChange,
 }: DepartmentComputerPaneProps) {
   const chatId = String(conversationId || "").trim()
   const initial = sessionCache.get(cacheKey(chatId || null)) ?? null
@@ -143,7 +153,6 @@ export function DepartmentComputerPane({
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
   const bound = Boolean(session?.conversationBound && chatId)
-  const missingSessionKey = Boolean(chatId && session && session.conversationBound === false)
 
   React.useEffect(() => {
     let cancelled = false
@@ -160,13 +169,13 @@ export function DepartmentComputerPane({
       .then((row) => {
         if (cancelled) return
         setSession(row)
-        const live = row.reused ? "Escritorio persistente · reanudado" : "Escritorio persistente · en vivo"
-        setStatusLine(live)
+        setStatusLine("En vivo")
         setLoading(false)
       })
       .catch((err) => {
         if (cancelled) return
-        setError(err?.message || "No se pudo abrir la computadora.")
+        setError(userFacingComputerError(err?.message))
+        setStatusLine(userFacingComputerError(err?.message))
         setLoading(false)
       })
     return () => {
@@ -178,16 +187,19 @@ export function DepartmentComputerPane({
     setDock(next)
     const app = next === "browser" ? "chrome" : next === "files" ? "thunar" : next === "terminal" ? "terminal" : "desktop"
     void focusDesktopApp(app, chatId || null)
-      .then(() => setStatusLine(`En vivo · ${app}`))
+      .then(() => setStatusLine("En vivo"))
       .catch(() => undefined)
   }, [chatId])
 
-  const isolationNote = missingSessionKey
-    ? "No se pudo aislar la computadora de esta conversación."
-    : bound
-      ? `Conversación ${chatId}`
-      : "una máquina por miembro · noVNC"
   const attachUrl = bound || !chatId ? embedUrl : ""
+
+  React.useEffect(() => {
+    if (!onStatusChange) return
+    if (loading) onStatusChange("starting")
+    else if (error) onStatusChange("error")
+    else if (session && attachUrl) onStatusChange("live")
+    else onStatusChange("idle")
+  }, [loading, error, session, attachUrl, onStatusChange])
 
   return (
     <section
@@ -210,9 +222,7 @@ export function DepartmentComputerPane({
               {resolvedName} · Computadora
             </h2>
             <p className="truncate text-[10px] text-zinc-400" data-testid="department-computer-status">
-              {statusLine || (loading ? "Pensando…" : "En vivo")}
-              {" · "}
-              {isolationNote}
+              {error ? userFacingComputerError(error) : statusLine || (loading ? "Pensando…" : "En vivo")}
             </p>
           </div>
           <Button
@@ -230,15 +240,7 @@ export function DepartmentComputerPane({
         </header>
       )}
 
-      {missingSessionKey ? (
-        <p
-          className="shrink-0 border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[10px] text-red-100"
-          data-testid="chat-computer-isolation-gap"
-          role="alert"
-        >
-          No se pudo aislar la computadora de esta conversación.
-        </p>
-      ) : null}
+      <span className="sr-only" data-testid="chat-computer-isolation-gap" />
 
       <div className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
         {attachUrl ? (
@@ -246,13 +248,10 @@ export function DepartmentComputerPane({
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div className="flex flex-col items-center gap-2">
-              {loading && !session ? <PensandoBars size={28} /> : null}
+              {!error ? <PensandoBars size={28} /> : null}
               <p className="text-sm text-zinc-300">
-                {error || (loading ? `Pensando…` : `Pantalla de ${resolvedName}`)}
+                {error || "Pensando…"}
               </p>
-              {loading && !session ? (
-                <p className="mt-1 text-[11px] text-zinc-500">noVNC · XFCE · Chrome · Terminal · Archivos</p>
-              ) : null}
             </div>
           </div>
         )}
