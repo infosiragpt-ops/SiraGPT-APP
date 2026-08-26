@@ -637,6 +637,21 @@ export function AppSidebar() {
       return next
     })
   }, [])
+  // Carpetas folds the same way as Recent chats: one quiet header toggle.
+  const [foldersCollapsed, setFoldersCollapsed] = React.useState<boolean>(false)
+  React.useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("sira:sidebar:folders-collapsed")
+      if (raw === "1") setFoldersCollapsed(true)
+    } catch { /* ignore */ }
+  }, [])
+  const toggleFoldersCollapsed = React.useCallback(() => {
+    setFoldersCollapsed((prev) => {
+      const next = !prev
+      try { window.localStorage.setItem("sira:sidebar:folders-collapsed", next ? "1" : "0") } catch { /* ignore */ }
+      return next
+    })
+  }, [])
   const [scheduleTarget, setScheduleTarget] = React.useState<any | null>(null)
   const [scheduleAt, setScheduleAt] = React.useState("")
   const [scheduleNote, setScheduleNote] = React.useState("")
@@ -1552,9 +1567,22 @@ export function AppSidebar() {
                 state === "closed" && "hidden",
               )}
             >
-              <span className="flex h-8 min-w-0 flex-1 items-center truncate px-2 text-[13px] font-medium leading-none text-muted-foreground">
-                Carpetas
-              </span>
+              <button
+                type="button"
+                onClick={toggleFoldersCollapsed}
+                aria-expanded={!foldersCollapsed}
+                aria-controls="sidebar-chat-folders-list"
+                className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-lg px-2 text-left text-[13px] font-medium leading-none text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              >
+                <ChevronDown
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform duration-150",
+                    foldersCollapsed && "-rotate-90",
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="truncate">Carpetas</span>
+              </button>
               <button
                 type="button"
                 data-sidebar-folders-add="1"
@@ -1570,7 +1598,7 @@ export function AppSidebar() {
               <div
                 id="sidebar-chat-folders-list"
                 data-sidebar-folders-list="1"
-                className={cn("pb-1", state === "closed" && "hidden")}
+                className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
               >
                 {visibleChatFolders.map((folder) => (
                   <div key={folder} className="group flex w-full items-center gap-0.5">
@@ -1628,8 +1656,7 @@ export function AppSidebar() {
                 aria-controls="sidebar-recent-chats-content"
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1 rounded-full border border-transparent bg-muted/50 px-2.5 py-1 text-left text-[13px] font-medium text-foreground transition-colors",
-                  "hover:bg-muted/80 focus-visible:border-sky-400/80 focus-visible:outline-none focus-visible:shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
-                  !recentChatsCollapsed && "border-sky-400/70 bg-white shadow-[0_0_0_3px_rgba(56,189,248,0.10)] dark:bg-zinc-950",
+                  "hover:bg-muted/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
                 )}
               >
                 <ChevronDown
