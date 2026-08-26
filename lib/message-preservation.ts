@@ -546,11 +546,28 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   return collapsedPairs.length === messages.length ? messages : collapsedPairs;
 }
 
+function shouldAdoptTempLocalChat<TChat extends ChatLike>(
+  incomingChat: TChat | null | undefined,
+  localChat: TChat | null | undefined,
+): boolean {
+  return Boolean(
+    incomingChat &&
+    localChat &&
+    incomingChat.id !== localChat.id &&
+    String(localChat.id).startsWith('temp-chat-') &&
+    !String(incomingChat.id).startsWith('temp-chat-'),
+  );
+}
+
 export function mergeChatPreservingUserMessages<TChat extends ChatLike>(
   incomingChat: TChat,
   localChat: TChat | null | undefined,
 ): TChat {
-  if (!incomingChat || !localChat || incomingChat.id !== localChat.id) {
+  if (!incomingChat || !localChat) {
+    return incomingChat;
+  }
+  const idsMatch = incomingChat.id === localChat.id;
+  if (!idsMatch && !shouldAdoptTempLocalChat(incomingChat, localChat)) {
     return incomingChat;
   }
 
