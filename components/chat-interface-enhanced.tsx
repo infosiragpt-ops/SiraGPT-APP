@@ -6200,6 +6200,7 @@ function ChatInterfaceContent() {
     setSelectedWordText(null);
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
     setUploadProgress({});
     setInput('');
     setSelectedImageModel(DEFAULT_IMAGE_MODEL);
@@ -9560,6 +9561,7 @@ But first, you need to connect your Spotify account securely using the button be
       chatDraft.clear();
       uploadedFilesRef.current = [];
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const now = Date.now();
       queueBurstTimestampsRef.current = queueBurstTimestampsRef.current.filter(t => now - t < 5000);
       queueBurstTimestampsRef.current.push(now);
@@ -9683,6 +9685,7 @@ REWRITTEN TEXT:`;
     chatDraft.clear();
     uploadedFilesRef.current = [];
     setUploadedFiles([]);
+    attachmentHashesRef.current.clear();
 
     let isNewChat = !currentChat;
     let chatToUpdate = currentChat;
@@ -10798,6 +10801,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         payload.fileId = files[0];
       }
       setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
       const imageRequestStartedAt = Date.now();
       try {
         await apiClient.generateImage(payload, { signal: controller.signal });
@@ -11049,7 +11053,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     // Use dedicated webdev streaming API endpoint
     const filesToSend = [...uploadedFiles];
     const professionalPrompt = buildProfessionalCapabilityPrompt('webdev', prompt);
-    setUploadedFiles([]); // Clear UI immediately
+    setUploadedFiles([]);
+    attachmentHashesRef.current.clear(); // Clear UI immediately
 
     try {
       let newChat = currentChat;
