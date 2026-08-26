@@ -73,7 +73,6 @@ import { useAuth } from "@/lib/auth-context-integrated"
 import WhatsAppButton from "@/components/WhatsAppButton"
 import { PremiumCardIcon } from "@/components/icons/premium-card-icon"
 import { SidebarOvalIcon } from "@/components/icons/sidebar-oval-icon"
-import { AgentsHistoryNav } from "@/components/agents-history-nav"
 // Visor de documentos: pesado (PDF.js, mammoth, xlsx, etc.). Solo se
 // monta cuando el usuario abre un adjunto, así que lo cargamos por
 // demanda. SSR desactivado porque el visor depende de APIs del
@@ -12904,7 +12903,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                     <MenuIcon className="chat-mobile-menu-liquid-button__icon h-5 w-5" />
                   </SidebarTrigger>
                 </div>
-                <AgentsHistoryNav />
                 {/* Credits live in the account menu, not the chat canvas.
                     Model selector is in the composer. See renderComposerModelControls(). */}
               </div>
