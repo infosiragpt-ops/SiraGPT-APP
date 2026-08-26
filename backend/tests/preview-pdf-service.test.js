@@ -56,8 +56,8 @@ describe('preview-pdf-service generation', () => {
 
   it('converts DOCX with isolated profile + writer_pdf_Export', async () => {
     const seen = [];
-    __setExecFileForTests(async (bin, args) => {
-      seen.push({ bin, args });
+    __setExecFileForTests(async (bin, args, opts) => {
+      seen.push({ bin, args, opts });
       if (args && args[0] === '--version') return { stdout: 'LibreOffice 24.2' };
       const outDirIdx = args.indexOf('--outdir');
       const outDir = args[outDirIdx + 1];
@@ -70,7 +70,8 @@ describe('preview-pdf-service generation', () => {
     assert.ok(seen.length >= 2, 'version check + convert');
     const convert = seen.find((c) => c.args && c.args.includes('--convert-to'));
     assert.ok(convert);
-    assert.ok(convert.args[0].startsWith('-env:UserInstallation=file://'));
+    assert.ok(!convert.args.some((a) => a.startsWith('-env:UserInstallation')));
+    assert.ok(convert.opts && convert.opts.env && convert.opts.env.HOME, 'convert must run with an isolated HOME');
     const filter = convert.args[convert.args.indexOf('--convert-to') + 1];
     assert.equal(filter, 'pdf:writer_pdf_Export');
     assert.equal(fs.readFileSync(out).toString(), '%PDF-1.4 converted');

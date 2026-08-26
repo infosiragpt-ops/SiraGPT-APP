@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   pdfExportFilterFor,
   buildSofficeConvertArgs,
+  sofficeSpawnEnv,
   isNativePdfFilename,
 } = require('../src/services/document-pipeline/soffice-pdf-export');
 
@@ -26,14 +27,19 @@ describe('soffice-pdf-export filters', () => {
     assert.equal(pdfExportFilterFor('datos.csv'), 'pdf:calc_pdf_Export');
   });
 
-  it('buildSofficeConvertArgs isolates the profile and keeps page geometry', () => {
+  it('buildSofficeConvertArgs keeps page geometry and delegates isolation to env', () => {
     const args = buildSofficeConvertArgs({
       sourcePath: '/tmp/in/tesis.docx',
       outDir: '/tmp/out',
       profileDir: '/tmp/profile',
     });
-    assert.ok(args[0].startsWith('-env:UserInstallation=file://'));
-    assert.ok(args.includes('--headless'));
+    // LO 25.x + fresh -env:UserInstallation exits 0 but writes no output;
+    // isolation now lives in sofficeSpawnEnv (per-run HOME).
+    assert.ok(!args.some((a) => a.startsWith('-env:UserInstallation')));
+    assert.equal(args[0], '--headless');
+    const env = sofficeSpawnEnv('/tmp/profile');
+    assert.equal(env.HOME, path.resolve('/tmp/profile'));
+    assert.ok(env.XDG_CONFIG_HOME.endsWith('.config'));
     assert.ok(args.includes('--nolockcheck'));
     const convertAt = args.indexOf('--convert-to');
     assert.ok(convertAt >= 0);
