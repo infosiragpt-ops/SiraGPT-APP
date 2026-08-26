@@ -55,6 +55,16 @@ describe("chat agentic loop routing source contract", () => {
     )
     assert.match(helper, /userMessageAlreadyAdded: true/)
     assert.match(helper, /assistantMessageId: assistantPlaceholder\.id/)
+    const handler = sliceBetween(
+      "const handleAgentTask = async (",
+      "function FeatureRow(",
+    )
+    assert.match(
+      handler,
+      /!userMessageAlreadyAdded \|\| !liveHasUserTurn/,
+      "createChat/selectChat must still graft a USER row with files when the live list has none",
+    )
+    assert.match(handler, /snapshotComposerFilesForMessage\(filesToSend\)/)
     assert.match(
       source,
       /const updatedMessages = \[\.\.\.\(prevChat\.messages \|\| \[\]\), userMessage, assistantPlaceholder\]/,
