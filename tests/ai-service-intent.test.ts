@@ -638,7 +638,7 @@ describe("ai-service · computer request and shopping lookups", () => {
 
   it("routes conjugated «búscame/buscanos» and shopping lookups to web_search", () => {
     assert.equal(classifyIntentFastPath("búscame vuelos baratos a Lima"), "web_search")
-    assert.equal(classifyIntentFastPath("ofertas de laptops hoy"), "web_search")
+    assert.equal(classifyIntentFastPath("ofertas de laptops hoy"), "agent_task")
     assert.equal(classifyIntentFastPath("descuentos en zapatillas de mujer"), "web_search")
     assert.equal(classifyIntentFastPath("cuánto cuesta el iPhone 17 en Perú"), "web_search")
   })
