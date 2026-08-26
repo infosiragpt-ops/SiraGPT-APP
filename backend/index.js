@@ -419,6 +419,7 @@ const apiProxyRoutes = require('./src/routes/api');
 const gmailRoutes = require('./src/routes/gmail');
 const spotifyRoutes = require('./src/routes/spotify');
 const figmaRoutes = require('./src/routes/figma');
+const agentComputerRoutes = require('./src/routes/agent-computer');
 const {
     router: computerUseRoutes,
     initializeWebSocketServer,
@@ -1267,6 +1268,7 @@ app.use('/api/gmail', gmailRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/figma', figmaRoutes);
 app.use('/api/computer-use', computerUseRoutes);
+app.use('/api/agent-computer', agentComputerRoutes);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
