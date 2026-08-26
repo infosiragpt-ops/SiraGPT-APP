@@ -298,14 +298,19 @@ import {
   attachmentHasPreviewSource,
   buildAgentFileMetadata,
   collectUploadFileIds,
+  getAudioMediaMeta,
   getFileProcessingStage,
+  isAudioComposerFile,
   isComposerFileProcessingPending,
   isComposerFileUploadFailed,
   isComposerFileUploadPending,
+  isVideoComposerFile,
   previewAttachmentKey,
+  resolveComposerMediaSrc,
   resolveUploadFileId,
   snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import {
   adoptUnboundComposerQueueItems,
   createPersistedComposerQueueItem,
@@ -353,6 +358,14 @@ import {
   type VoiceLanguage,
   type VoiceModel,
 } from "@/lib/chat/media-composer-config"
+import {
+  MEDIA_MENU_DOT_CLASS,
+  MEDIA_MENU_ICON_GLYPH_CLASS,
+  MEDIA_MENU_ICON_WRAP_CLASS,
+  MEDIA_MODE_CHIP_CLOSE_CLASS,
+  VOICE_STABILITY_SLIDER_CLASS,
+  mediaModeChipChrome,
+} from "@/lib/chat/media-mode-chips"
 import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from "@/lib/chat/video-duration"
 // Never-throwing clipboard (Capacitor → navigator.clipboard → execCommand fallback).
 // Direct navigator.clipboard.writeText() throws NotAllowedError in restrictive
@@ -1657,8 +1670,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-violet-100 dark:bg-violet-900/20 flex items-center justify-center">
-                <Palette className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Palette className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1669,7 +1682,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {(isImageGenerationActive || isGeneratingImage) && (
-                <div className={cn("w-2 h-2 shrink-0 bg-violet-500 rounded-full", isGeneratingImage && "animate-pulse")} />
+                <div className={cn(MEDIA_MENU_DOT_CLASS, isGeneratingImage && "animate-pulse")} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1684,8 +1697,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-cyan-100 dark:bg-cyan-900/20 flex items-center justify-center">
-                <AudioLines className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <AudioLines className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">{isVoiceGenerationActive ? 'Voz activa' : 'Voz'}</div>
@@ -1694,7 +1707,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVoiceGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-cyan-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1709,8 +1722,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-emerald-100 dark:bg-emerald-900/20 flex items-center justify-center">
-                <Video className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Video className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1721,7 +1734,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isVideoGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-emerald-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1736,8 +1749,8 @@ const ActionsDropdown = ({
             disabled={isPremiumPreviewSwitchDisabled}
           >
             <div className="flex items-center gap-3 w-full">
-              <div className="liquid-icon w-8 h-8 shrink-0 rounded-full bg-fuchsia-100 dark:bg-fuchsia-900/20 flex items-center justify-center">
-                <Music className="h-4 w-4 text-fuchsia-600 dark:text-fuchsia-400" />
+              <div className={MEDIA_MENU_ICON_WRAP_CLASS}>
+                <Music className={MEDIA_MENU_ICON_GLYPH_CLASS} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">
@@ -1748,7 +1761,7 @@ const ActionsDropdown = ({
                 </div>
               </div>
               {isMusicGenerationActive && (
-                <div className="w-2 h-2 shrink-0 bg-fuchsia-500 rounded-full" />
+                <div className={MEDIA_MENU_DOT_CLASS} />
               )}
               {isFreePlan && (
                 <Badge variant="secondary" className="text-xs">Pro</Badge>
@@ -1846,7 +1859,7 @@ const ChipWaveform = ({ peaks }: { peaks: number[] }) => (
     {peaks.slice(0, 36).map((p, i) => (
       <span
         key={i}
-        className="w-[2px] rounded-full bg-pink-500/70 dark:bg-pink-400/70"
+        className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
         style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
       />
     ))}
@@ -1973,8 +1986,8 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           };
 
           const chipKey = String(file.tempId || file.id || `${file.name}-${index}`);
-          const isAudio = (file.type || '').startsWith('audio/');
-          const isVideo = (file.type || '').startsWith('video/');
+          const isAudio = isAudioComposerFile(file);
+          const isVideo = isVideoComposerFile(file);
           const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
             && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
@@ -2003,6 +2016,10 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                   ? `${imageSizeClass} overflow-hidden rounded-[0.9rem] p-0 shadow-sm`
                   : isDocPage
                     ? "h-[7.75rem] w-[5.7rem] overflow-hidden rounded-[0.9rem] p-0 shadow-sm"
+                    : isVideo
+                      ? "w-[16.5rem] overflow-hidden rounded-[0.95rem] border-0 bg-transparent p-0 shadow-none"
+                      : isAudio
+                        ? "min-w-[14.5rem] max-w-[22rem] overflow-hidden rounded-2xl border-0 bg-transparent p-0 shadow-none"
                     : "flex min-h-[3.25rem] min-w-[12.5rem] max-w-[20rem] items-center gap-2.5 rounded-2xl px-3 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
                 // Clickable chip — opens the unified high-fidelity viewer.
                 canPreview && "cursor-pointer hover:border-foreground/35 hover:shadow-md transition-all",
@@ -2115,20 +2132,51 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
                   </Button>
                 </>
+              ) : isVideo ? (
+                <>
+                  <ChatVideoPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    poster={file.mediaMeta?.thumbnailDataUrl || file.thumbnailUrl || null}
+                    title={file.name || "video"}
+                    durationSeconds={file.mediaMeta?.durationSeconds}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
+              ) : isAudio ? (
+                <>
+                  <ChatAudioPlayer
+                    src={resolveComposerMediaSrc(file)}
+                    file={getAttachmentLocalFile(file)}
+                    title={file.name || "audio"}
+                    durationSeconds={getAudioMediaMeta(file)?.durationSeconds}
+                    peaks={getAudioMediaMeta(file)?.peaks}
+                    variant="composer"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="absolute top-1 right-1 z-30 h-6 w-6 p-0 bg-white dark:bg-background rounded-full shadow-md flex items-center justify-center hover:bg-gray-100"
+                    onClick={(e) => { e.stopPropagation(); removeFile(index); }}
+                    title={isUploading ? "Cancelar subida" : "Quitar"}
+                    aria-label={isUploading ? "Cancelar subida" : "Quitar archivo"}
+                  >
+                    <X className="h-4 w-4 text-gray-600 dark:text-foreground" />
+                  </Button>
+                </>
               ) : (
                 <>
-                  {isVideo && file.mediaMeta?.thumbnailDataUrl ? (
-                    <span className="relative h-9 w-12 shrink-0 overflow-hidden rounded-md bg-black/80">
-                      <img src={file.mediaMeta.thumbnailDataUrl} alt="" className="h-full w-full object-cover" />
-                      {formatChipDuration(file.mediaMeta?.durationSeconds) && (
-                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white tabular-nums">
-                          {formatChipDuration(file.mediaMeta?.durationSeconds)}
-                        </span>
-                      )}
-                    </span>
-                  ) : (
-                    getFileIcon(file)
-                  )}
+                  {getFileIcon(file)}
                   <div className="flex flex-col flex-1 min-w-0">
                     <span className={`truncate font-medium text-[13px] ${isFailed ? 'text-red-600 dark:text-red-400' : ''}`}>
                       {longPasteMeta && (
@@ -2891,8 +2939,8 @@ const ActiveToolsDisplay = ({
       {isImageGenerationActive && (
         <>
           <div
-            className="image-liquid-chip group/image-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]"
-            style={{ "--image-liquid-red": "#7C3AED" } as React.CSSProperties}
+            data-testid="imagenes-mode-chip"
+            className={mediaModeChipChrome("image").className}
           >
             <span className="image-liquid-chip__wave" />
             <span className="image-liquid-chip__gloss" />
@@ -2905,10 +2953,10 @@ const ActiveToolsDisplay = ({
               variant="ghost"
               size="sm"
               className={cn(
-                "image-liquid-chip__close relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0",
+                MEDIA_MODE_CHIP_CLOSE_CLASS,
                 isGeneratingImage
                   ? "opacity-45 cursor-not-allowed"
-                  : "hover:bg-[rgba(124,58,237,0.10)] dark:hover:bg-[rgba(124,58,237,0.18)]"
+                  : ""
               )}
               onClick={handleImageGenerationClose}
               disabled={isGeneratingImage}
@@ -3049,16 +3097,16 @@ const ActiveToolsDisplay = ({
 
       {isVoiceGenerationActive && (
         <>
-          <div className="group/voice-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-cyan-300/70 bg-cyan-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-cyan-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(8,145,178,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-cyan-400/80 dark:border-cyan-500/40 dark:bg-cyan-900/25 dark:text-cyan-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(34,211,238,0.0)_70deg,rgba(34,211,238,0.50)_135deg,rgba(6,182,212,0.24)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/25" />
-            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(8,145,178,0.35)]" />
+          <div data-testid="voz-mode-chip" className={mediaModeChipChrome("voice").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/voice-liquid:translate-x-[155%] dark:via-white/20" />
+            <AudioLines className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Voz</span>
-            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-cyan-500 motion-safe:animate-pulse" />}
+            {isGeneratingVoice && <span className="relative z-10 h-1.5 w-1.5 rounded-full bg-white motion-safe:animate-pulse" />}
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-cyan-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVoiceGenerationClose}
               disabled={isGeneratingVoice}
               title={isGeneratingVoice ? "La herramienta sigue activa durante la generación" : "Cerrar voz"}
@@ -3080,7 +3128,7 @@ const ActiveToolsDisplay = ({
             onClick={() => onOpenVoiceCatalog()}
             title="Abrir catálogo de voces"
             aria-label="Abrir catálogo de voces"
-            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-violet-200/80 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-violet-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(124,58,237,0.5)] backdrop-blur-xl transition-all duration-200 hover:border-violet-300 hover:bg-white dark:border-violet-400/30 dark:bg-zinc-900/82 dark:text-violet-200 dark:hover:bg-zinc-800/92"
+            className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
           >
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
@@ -3107,7 +3155,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="w-[min(calc(100vw-1rem),15.5rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(34,211,238,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 py-1">
                 <DropdownMenuSub>
                   <DropdownMenuSubTrigger className="chat-active-apps-menu-item flex h-9 cursor-pointer items-center justify-between px-2.5 text-[12px] font-medium text-zinc-800 dark:text-white/90">
@@ -3174,7 +3222,7 @@ const ActiveToolsDisplay = ({
                     min={0}
                     max={100}
                     step={1}
-                    className="mt-2"
+                    className={VOICE_STABILITY_SLIDER_CLASS}
                   />
                 </div>
 
@@ -3206,15 +3254,15 @@ const ActiveToolsDisplay = ({
 
       {isMusicGenerationActive && (
         <>
-          <div className="group/music-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full border border-fuchsia-300/70 bg-fuchsia-100/88 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-fuchsia-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.82),0_10px_28px_-22px_rgba(192,38,211,0.75)] backdrop-blur-xl transition-all duration-300 hover:scale-[1.01] hover:border-fuchsia-400/80 dark:border-fuchsia-500/40 dark:bg-fuchsia-900/25 dark:text-fuchsia-200">
-            <span className="pointer-events-none absolute -inset-8 -z-10 rounded-full bg-[conic-gradient(from_90deg,transparent_0deg,rgba(232,121,249,0.0)_70deg,rgba(232,121,249,0.48)_135deg,rgba(217,70,239,0.22)_198deg,transparent_280deg)] opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/25" />
-            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 drop-shadow-[0_0_8px_rgba(192,38,211,0.35)]" />
+          <div data-testid="musica-mode-chip" className={mediaModeChipChrome("music").className}>
+            <span className="media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/music-liquid:translate-x-[155%] dark:via-white/20" />
+            <Music className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Música</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-fuchsia-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleMusicGenerationClose}
               title="Cerrar música"
             >
@@ -3248,7 +3296,7 @@ const ActiveToolsDisplay = ({
               collisionPadding={12}
               className="chat-active-apps-menu w-[min(calc(100vw-1rem),17rem)] overflow-hidden rounded-[14px] border border-zinc-200/70 bg-white/92 p-0 text-zinc-950 shadow-[0_16px_48px_-32px_rgba(15,23,42,0.55),inset_0_1px_0_rgba(255,255,255,0.9)] backdrop-blur-2xl dark:border-white/18 dark:bg-[#08090c]/96 dark:text-white dark:shadow-[0_22px_70px_-38px_rgba(0,0,0,1),inset_0_1px_0_rgba(255,255,255,0.14)]"
             >
-              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.12),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(232,121,249,0.16),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
+              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_22%_10%,rgba(255,255,255,0.92),transparent_28%),radial-gradient(circle_at_82%_36%,rgba(15,23,42,0.06),transparent_30%),linear-gradient(135deg,rgba(255,255,255,0.78),rgba(255,255,255,0.32)_45%,rgba(255,255,255,0.62))] dark:bg-[radial-gradient(circle_at_18%_8%,rgba(255,255,255,0.13),transparent_26%),radial-gradient(circle_at_82%_36%,rgba(255,255,255,0.08),transparent_32%),linear-gradient(135deg,rgba(255,255,255,0.08),rgba(255,255,255,0.025)_45%,rgba(255,255,255,0.055))]" />
               <div className="relative z-10 p-1.5">
                 <div className="px-2 pb-2 pt-1.5">
                   <div className="flex items-center justify-between gap-3">
@@ -3256,7 +3304,7 @@ const ActiveToolsDisplay = ({
                       <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-zinc-500 dark:text-white/58">Producción musical</p>
                       <p className="mt-1 text-[12px] leading-4 text-zinc-700 dark:text-white/78">Define el estilo, energia y acabado antes de generar.</p>
                     </div>
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-fuchsia-200/80 bg-fuchsia-50 text-fuchsia-600 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-fuchsia-400/20 dark:bg-fuchsia-400/10 dark:text-fuchsia-200">
+                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full border border-zinc-200/80 bg-zinc-50 text-zinc-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.9)] dark:border-white/20 dark:bg-white/10 dark:text-white">
                       <Music className="h-4 w-4" />
                     </span>
                   </div>
@@ -3311,7 +3359,7 @@ const ActiveToolsDisplay = ({
                             <span className="min-w-0 flex-1">
                               <span className="flex items-center justify-between gap-2">
                                 <span className="text-[12.5px] font-semibold leading-4">{profile.label}</span>
-                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-fuchsia-600 dark:text-fuchsia-300" />}
+                                {selected && <Check className="h-3.5 w-3.5 shrink-0 text-zinc-900 dark:text-white" />}
                               </span>
                               <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500 dark:text-white/62">{profile.description}</span>
                             </span>
@@ -3400,15 +3448,15 @@ const ActiveToolsDisplay = ({
 
       {isVideoGenerationActive && (
         <>
-          <div className="video-mode-chip group/video-liquid relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold backdrop-blur-xl transition-all duration-300 hover:scale-[1.01]">
-            <span className="video-mode-chip-flow pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
-            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/75 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/25" />
+          <div data-testid="video-mode-chip" className={mediaModeChipChrome("video").className}>
+            <span className="video-mode-chip-flow media-mode-chip__wave pointer-events-none absolute -inset-8 -z-10 rounded-full opacity-70 blur-md motion-safe:animate-[spin_8s_linear_infinite]" />
+            <span className="pointer-events-none absolute inset-y-[-45%] left-[-35%] -z-10 w-2/3 rotate-12 bg-gradient-to-r from-transparent via-white/35 to-transparent opacity-70 blur-sm transition-transform duration-700 group-hover/video-liquid:translate-x-[155%] dark:via-white/20" />
             <Video className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
             <span className="relative z-10 text-[12px] sm:text-[14px]">Video</span>
             <Button
               variant="ghost"
               size="sm"
-              className="relative z-10 ml-0.5 sm:ml-1 h-4 sm:h-5 w-4 sm:w-5 rounded-full p-0 hover:bg-white/50 dark:hover:bg-emerald-800/30"
+              className={MEDIA_MODE_CHIP_CLOSE_CLASS}
               onClick={handleVideoGenerationClose}
               title="Cerrar video"
             >
@@ -8231,7 +8279,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Build temp objects with stable IDs we can map to per-file progress.
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const preview = file.type.startsWith('image/') ? URL.createObjectURL(file) : null;
+      const preview = /^(image|audio|video)\//.test(file.type) ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
       const contentHash = batchHashes?.get(file) || null;
       if (contentHash) {

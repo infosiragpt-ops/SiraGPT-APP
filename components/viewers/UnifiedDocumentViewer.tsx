@@ -48,6 +48,8 @@ import {
   Presentation,
   File as FileIcon,
   Image as ImageIcon,
+  Video,
+  Volume2,
   X,
   ChevronLeft,
   ChevronRight,
@@ -60,6 +62,7 @@ import {
   Reply,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { normalizeBackendAssetUrl } from "@/lib/attachment-url"
 import {
   createAuthenticatedFetch,
@@ -145,6 +148,7 @@ if (typeof window !== "undefined") {
 type Kind =
   | "image" | "pdf" | "docx" | "doc" | "xlsx" | "csv" | "pptx"
   | "md" | "html" | "xml" | "json" | "text" | "code"
+  | "audio" | "video"
   | "unknown"
 
 const CODE_EXTENSIONS: Record<string, string> = {
@@ -160,6 +164,8 @@ function detectKind(file: AttachmentLike): Kind {
   const ext = extOf(file.name).toLowerCase()
   const mt = (file.mimeType || "").toLowerCase()
   if (mt.startsWith("image/") || /^(jpe?g|png|gif|webp|bmp|tiff?|heic|heif|svg)$/.test(ext)) return "image"
+  if (mt.startsWith("video/") || /^(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg|ogv|3gp)$/.test(ext)) return "video"
+  if (mt.startsWith("audio/") || /^(mp3|wav|m4a|aac|ogg|oga|flac|opus|wma|aiff?)$/.test(ext)) return "audio"
   if (mt === "application/pdf" || ext === "pdf") return "pdf"
   // Legacy binary .doc → "doc" (needs server-side conversion); modern
   // .docx (OOXML) → "docx" (handled client-side by docx-preview).
@@ -186,6 +192,8 @@ function extOf(name: string | undefined | null): string {
 function iconForKind(kind: Kind) {
   switch (kind) {
     case "image": return ImageIcon
+    case "video": return Video
+    case "audio": return Volume2
     case "pdf":
     case "docx":
     case "doc":
@@ -591,6 +599,8 @@ function RendererDispatch({
   }
   switch (kind) {
     case "image":    return <ImageRenderer a={attachment} />
+    case "video":    return <VideoRenderer a={attachment} />
+    case "audio":    return <AudioRenderer a={attachment} />
     case "pdf":      return <PdfRenderer a={attachment} />
     case "csv":      return <CsvRenderer a={attachment} />
     case "xlsx":     return (
@@ -2686,6 +2696,41 @@ function escapeHtml(value: unknown): string {
 }
 
 // ─── Fallback ────────────────────────────────────────────────────────
+
+function mediaSrcFromAttachment(a: AttachmentLike): string {
+  if (a.url) return absUrl(a.url)
+  return ""
+}
+
+function VideoRenderer({ a }: { a: AttachmentLike }) {
+  const src = mediaSrcFromAttachment(a)
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-zinc-950/95 p-4">
+      <ChatVideoPlayer
+        src={src || undefined}
+        file={a.file}
+        title={a.name || "video"}
+        variant="viewer"
+        className="max-h-full w-full max-w-4xl"
+      />
+    </div>
+  )
+}
+
+function AudioRenderer({ a }: { a: AttachmentLike }) {
+  const src = mediaSrcFromAttachment(a)
+  return (
+    <div className="flex h-full w-full items-center justify-center bg-zinc-50 p-6 dark:bg-zinc-950">
+      <ChatAudioPlayer
+        src={src || undefined}
+        file={a.file}
+        title={a.name || "audio"}
+        variant="viewer"
+        className="w-full max-w-xl"
+      />
+    </div>
+  )
+}
 
 function FallbackRenderer({ a }: { a: AttachmentLike }) {
   const url = a.url ? absUrl(a.url) : null
