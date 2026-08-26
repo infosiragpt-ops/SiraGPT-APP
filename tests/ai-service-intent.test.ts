@@ -669,5 +669,6 @@ describe("ai-service · audio and song generation routing", () => {
     assert.match(contract, /generate_speech/)
     assert.match(contract, /UNA sola pregunta corta/)
     assert.match(contract, /pieza ANTERIOR/)
+    assert.match(contract, /speechSynthesis|Web Speech API/)
   })
 })
