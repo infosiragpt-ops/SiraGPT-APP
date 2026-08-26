@@ -1,11 +1,23 @@
 "use client"
 
 import { useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Check, Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { useSettings } from "@/lib/settings-context"
+import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
+import { apiClient } from "@/lib/api"
+import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
+import { agentsHomeHref } from "@/lib/agents-home-path"
+import {
+  CONNECT_COPY,
+  connectButtonLabel,
+  connectGptStoreApp,
+  type ConnectGptStoreAppDeps,
+} from "@/lib/gpts-apps-connect"
 import {
   GPT_STORE_APP_CATEGORIES,
   GPT_STORE_APPS,
@@ -72,11 +84,13 @@ function AppLogo({ app }: { app: GptStoreApp }) {
 function AppCard({
   app,
   connected,
+  connecting,
   onConnect,
   onDisconnect,
 }: {
   app: GptStoreApp
   connected: boolean
+  connecting: boolean
   onConnect: (app: GptStoreApp) => void
   onDisconnect: (app: GptStoreApp) => void
 }) {
@@ -95,8 +109,17 @@ function AppCard({
             <div className="flex shrink-0 items-center gap-1">
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[0.68rem] font-semibold text-emerald-700 dark:text-emerald-400">
                 <Check className="h-3 w-3" />
-                Conectada
+                {CONNECT_COPY.connected}
               </span>
+              <button
+                type="button"
+                data-testid={`gpts-app-reconnect-${app.id}`}
+                disabled={connecting}
+                onClick={() => onConnect(app)}
+                className="rounded-full px-2 py-1 text-[0.72rem] font-medium text-zinc-500 hover:text-zinc-900 disabled:opacity-60 dark:hover:text-zinc-100"
+              >
+                {connecting ? CONNECT_COPY.connecting : CONNECT_COPY.reconnect}
+              </button>
               <button
                 type="button"
                 onClick={() => onDisconnect(app)}
@@ -110,10 +133,11 @@ function AppCard({
               type="button"
               size="sm"
               data-testid={`gpts-app-connect-${app.id}`}
+              disabled={connecting}
               onClick={() => onConnect(app)}
-              className="h-8 shrink-0 rounded-full bg-black px-3 text-[0.78rem] font-semibold text-white hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
+              className="h-8 shrink-0 rounded-full bg-black px-3 text-[0.78rem] font-semibold text-white hover:bg-zinc-800 disabled:opacity-70 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
             >
-              Conectar
+              {connectButtonLabel({ connected: false, connecting })}
             </Button>
           )}
         </div>
@@ -126,6 +150,73 @@ function AppCard({
   )
 }
 
+function storedConversationId(): string | null {
+  if (typeof window === "undefined") return null
+  const id = String(window.localStorage.getItem("currentChatId") || "").trim()
+  return id && id !== "pending" ? id : null
+}
+
+function storedAuthToken(): string | null {
+  if (typeof window === "undefined") return null
+  try {
+    return window.localStorage.getItem("auth-token")
+  } catch {
+    return null
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = storedAuthToken()
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+async function fetchConnectJson(requestPath: string): Promise<{ ok: boolean; status: number; body: Record<string, unknown> }> {
+  const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}${requestPath}`, {
+    credentials: "include",
+    headers: authHeaders(),
+    signal: AbortSignal.timeout(20_000),
+  })
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  return { ok: res.ok, status: res.status, body }
+}
+
+async function ensureComputerSession(conversationId: string) {
+  const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/agent-computer/sessions`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: JSON.stringify({ conversationId }),
+    signal: AbortSignal.timeout(60_000),
+  })
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  if (!res.ok) {
+    throw new Error(String(body.message || body.error || CONNECT_COPY.computerFailed))
+  }
+  return {
+    sessionId: body.sessionId ? String(body.sessionId) : undefined,
+    conversationId: body.conversationId ? String(body.conversationId) : conversationId,
+    conversationBound: body.conversationBound !== false,
+  }
+}
+
+async function navigateComputerSession(conversationId: string, url: string) {
+  const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/agent-computer/navigate`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: JSON.stringify({ conversationId, url }),
+    signal: AbortSignal.timeout(30_000),
+  })
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  if (!res.ok) {
+    throw new Error(String(body.message || body.error || CONNECT_COPY.navigateFailed(url)))
+  }
+  return body
+}
+
 export function GptsAppsSection({
   searchQuery,
   showAll = false,
@@ -136,8 +227,11 @@ export function GptsAppsSection({
   hideHeading?: boolean
 }) {
   const { settings, update } = useSettings()
+  const { isAuthenticated } = useAuth()
+  const router = useRouter()
   const [category, setCategory] = useState<"All" | GptStoreAppCategory>("All")
   const [expanded, setExpanded] = useState(showAll)
+  const [connectingId, setConnectingId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -156,9 +250,60 @@ export function GptsAppsSection({
 
   const isConnected = (id: string) => settings.apps[id]?.connected === true
 
-  const connect = (app: GptStoreApp) => {
-    update({ apps: { [app.id]: { connected: true } } })
-    toast.success(`${app.name} conectada`)
+  const connect = async (app: GptStoreApp) => {
+    if (connectingId) return
+    setConnectingId(app.id)
+    const loginNext = typeof window !== "undefined"
+      ? `${window.location.pathname}${window.location.search || ""}` || "/conexiones"
+      : "/conexiones"
+    const deps: ConnectGptStoreAppDeps = {
+      isAuthenticated: Boolean(isAuthenticated || storedAuthToken()),
+      defaultModel: settings.defaultModel,
+      currentConversationId: storedConversationId(),
+      loginNext,
+      requireLogin: (next) => {
+        router.push(`/auth/login?next=${encodeURIComponent(next || "/conexiones")}`)
+      },
+      fetchJson: fetchConnectJson,
+      ensureComputer: ensureComputerSession,
+      navigateComputer: navigateComputerSession,
+      createConversation: async (title, model) => {
+        const response = await apiClient.createChat({ title, model })
+        const id = String(response?.chat?.id || response?.id || "").trim()
+        if (!id) throw new Error(CONNECT_COPY.computerFailed)
+        try { window.localStorage.setItem("currentChatId", id) } catch { /* ignore */ }
+        return { id }
+      },
+      openComputerOverlay: (conversationId) => {
+        router.push(agentsHomeHref(new URLSearchParams({ computer: "1" }), null, conversationId))
+      },
+    }
+    try {
+      const result = await connectGptStoreApp(app, deps)
+      if (result.status === "login_required") {
+        toast.error(result.message)
+        return
+      }
+      if (!result.markConnected) {
+        toast.error(result.message || CONNECT_COPY.computerFailed)
+        return
+      }
+      update({ apps: { [app.id]: { connected: true } } })
+      if (result.redirectUrl) {
+        window.location.href = result.redirectUrl
+        return
+      }
+      if (result.status === "computer_opened") {
+        toast.success(`${app.name} ${CONNECT_COPY.connected.toLowerCase()}`)
+      }
+    } catch (error) {
+      const message = error instanceof Error && error.message
+        ? error.message
+        : CONNECT_COPY.computerFailed
+      toast.error(message)
+    } finally {
+      setConnectingId(null)
+    }
   }
 
   const disconnect = (app: GptStoreApp) => {
@@ -213,6 +358,7 @@ export function GptsAppsSection({
               key={app.id}
               app={app}
               connected={isConnected(app.id)}
+              connecting={connectingId === app.id}
               onConnect={connect}
               onDisconnect={disconnect}
             />
