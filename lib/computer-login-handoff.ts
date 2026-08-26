@@ -85,9 +85,37 @@ export function instructionForSite(site?: string | null): string {
   return `Inicia sesión en ${host}`
 }
 
+export function overlayOpenFromTakeover(state: { active?: boolean } | null | undefined): {
+  openPanel: boolean
+  expand: boolean
+  banner: boolean
+} {
+  const active = Boolean(state && state.active)
+  return { openPanel: active, expand: active, banner: active }
+}
+
 export function emitLoginHandoff(detail: LoginHandoffDetail): void {
   if (typeof window === "undefined") return
   window.dispatchEvent(new CustomEvent(LOGIN_HANDOFF_WINDOW_EVENT, { detail }))
+}
+
+export function consumeLoginHandoffSse(payload: Record<string, unknown> | null | undefined): LoginHandoffDetail | null {
+  if (!payload || typeof payload !== "object") return null
+  const typed = String(payload.type || "")
+  const isHandoffEvent = typed === LOGIN_HANDOFF_EVENT || typed === "computer_login_handoff"
+  if (!isHandoffEvent && typeof payload.active !== "boolean") return null
+  if (!isHandoffEvent && payload.active !== true) return null
+  const detail: LoginHandoffDetail = {
+    active: Boolean(payload.active),
+    conversationId: payload.conversationId == null ? null : String(payload.conversationId),
+    site: payload.site == null ? undefined : String(payload.site),
+    kind: payload.kind == null ? undefined : String(payload.kind),
+    reason: payload.reason == null ? undefined : String(payload.reason),
+    title: payload.title == null ? undefined : String(payload.title),
+    instruction: payload.instruction == null ? undefined : String(payload.instruction),
+  }
+  emitLoginHandoff(detail)
+  return detail
 }
 
 export function isPasswordPasteRequest(text: string): boolean {

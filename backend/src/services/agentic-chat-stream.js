@@ -1511,6 +1511,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // state.artifacts). Tools emit `file_artifact` via ctx.onEvent.
     const seenArtifactIds = new Set();
     const upstreamOnEvent = typeof toolContext.onEvent === 'function' ? toolContext.onEvent : null;
+    const loginHandoffMod = require('./computer/login-handoff');
+    const unsubLoginHandoff = loginHandoffMod.subscribeTakeover((evt) => {
+      try {
+        const chatId = String((toolContext && toolContext.chatId) || '');
+        const evtId = String((evt && evt.conversationId) || '');
+        if (evtId && chatId && evtId !== chatId) return;
+        writeSse(res, loginHandoffMod.ssePayloadFromTakeover(evt));
+      } catch (_) { /* overlay event is best-effort */ }
+    });
+    const stopLoginHandoff = () => {
+      try { unsubLoginHandoff(); } catch (_) { /* noop */ }
+    };
+    try {
+      res.once('close', stopLoginHandoff);
+      res.once('finish', stopLoginHandoff);
+    } catch (_) { /* res may be a stub in tests */ }
     function onEvent(evt) {
       if (upstreamOnEvent) { try { upstreamOnEvent(evt); } catch (_) { /* best-effort */ } }
       try {
@@ -1861,8 +1877,11 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     for (const s of state.steps) if (s.status === 'running') s.status = 'done';
     state.done = true;
 
-    const finalAnswer = (result?.finalAnswer || '').trim()
+    let finalAnswer = (result?.finalAnswer || '').trim()
       || 'No pude generar una respuesta verificable. Intenta reformular la pregunta.';
+    try {
+      finalAnswer = require('./computer/login-handoff').filterModelPasswordPaste(finalAnswer);
+    } catch (_) { /* never block the answer on a filter miss */ }
     state.finalText = finalAnswer;
 
     // Non-blocking honesty check: flag completion claims in the answer that

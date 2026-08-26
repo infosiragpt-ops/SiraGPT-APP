@@ -6,10 +6,13 @@ import { describe, it } from "node:test"
 
 import {
   EXAMPLE_AUTHENTICATED_TASKS,
+  consumeLoginHandoffSse,
   isPasswordPasteRequest,
   LOGIN_HANDOFF_COPY,
+  LOGIN_HANDOFF_EVENT,
   LOGIN_HANDOFF_WINDOW_EVENT,
   overlayLayoutContract,
+  overlayOpenFromTakeover,
   routeAuthenticatedComputerTask,
 } from "../lib/computer-login-handoff"
 
@@ -36,6 +39,14 @@ const handoff = cjsRequire("./backend/src/services/computer/login-handoff") as {
   assertCookiesIsolated: (a: unknown, b: unknown, ia: object, ib: object) => { ok: boolean; keyA?: string; keyB?: string }
   isAuthenticatedComputerTask: (prompt: string) => boolean
   modelMustNotAskPasswordInChat: (text: string) => boolean
+  applyObserveHandoff: (session: object, payload: object, opts?: object) => { loginHandoff: boolean; event?: string }
+  waitUntilReleased: (input: object) => Promise<{ released: boolean; timedOut?: boolean; waited?: boolean }>
+  subscribeTakeover: (listener: (evt: Record<string, unknown>) => void) => () => void
+  filterModelPasswordPaste: (text: string) => string
+  sanitizeChatPayload: (payload: unknown) => unknown
+  overlayOpenFromTakeover: (state: { active?: boolean } | null) => { openPanel: boolean; expand: boolean; banner: boolean }
+  ssePayloadFromTakeover: (state: object) => { type: string; active: boolean }
+  getTakeover: (input: object) => { active: boolean }
 }
 const { resolveSessionIdentity } = cjsRequire("./backend/src/services/computer/member-key") as {
   resolveSessionIdentity: (user: { id: string }, conversationId: string) => {
@@ -244,6 +255,122 @@ describe("computer login handoff · example tasks route through computer not cha
     assert.match(handoff.POLICY_ES, /NUNCA pidas/)
     assert.match(handoff.POLICY_ES, /computadora/)
     assert.match(handoff.POLICY_ES, /No inventes integraciones por sitio/)
+  })
+})
+
+describe("computer login handoff · overlay opens when takeover becomes active", () => {
+  it("overlayOpenFromTakeover is closed until active, then opens+expands", () => {
+    assert.deepEqual(overlayOpenFromTakeover({ active: false }), { openPanel: false, expand: false, banner: false })
+    assert.deepEqual(overlayOpenFromTakeover(null), { openPanel: false, expand: false, banner: false })
+    const open = overlayOpenFromTakeover({ active: true })
+    assert.equal(open.openPanel, true)
+    assert.equal(open.expand, true)
+    assert.equal(open.banner, true)
+  })
+
+  it("beginTakeover publishes SSE-shaped event and Listo ends it", () => {
+    handoff.resetTakeoverForTests()
+    const events: Array<Record<string, unknown>> = []
+    const stop = handoff.subscribeTakeover((evt) => events.push(evt))
+    const identity = resolveSessionIdentity({ id: "user_overlay" }, "chat-overlay-1")
+    const started = handoff.beginTakeover({ identity, conversationId: "chat-overlay-1", site: "portal.example", kind: "password" }) as { active: boolean; event: string }
+    assert.equal(started.active, true)
+    assert.equal(handoff.overlayOpenFromTakeover(started).openPanel, true)
+    const sse = handoff.ssePayloadFromTakeover(started)
+    assert.equal(sse.type, "computer_login_handoff")
+    assert.equal(sse.active, true)
+    assert.equal(events.length >= 1, true)
+    const after = handoff.endTakeover({ identity, conversationId: "chat-overlay-1" })
+    assert.equal(after.active, false)
+    assert.equal(handoff.getTakeover({ identity, conversationId: "chat-overlay-1" }).active, false)
+    stop()
+  })
+
+  it("waitUntilReleased resolves when Listo ends takeover", async () => {
+    handoff.resetTakeoverForTests()
+    const identity = resolveSessionIdentity({ id: "user_wait" }, "chat-wait-1")
+    handoff.beginTakeover({ identity, conversationId: "chat-wait-1", kind: "password" })
+    const pending = handoff.waitUntilReleased({ identity, conversationId: "chat-wait-1", timeoutMs: 2_000 })
+    setTimeout(() => {
+      handoff.endTakeover({ identity, conversationId: "chat-wait-1" })
+    }, 20)
+    const out = await pending
+    assert.equal(out.released, true)
+  })
+
+  it("observe login page starts takeover so later type is refused without focused field", () => {
+    handoff.resetTakeoverForTests()
+    const identity = resolveSessionIdentity({ id: "user_obs" }, "chat-obs-1")
+    const observed = handoff.applyObserveHandoff(
+      { conversationId: "chat-obs-1", memberKey: "user_obs" },
+      {
+        text: '<input type="password" name="password">',
+        url: "https://portal.example/login",
+        title: "Iniciar sesión",
+      },
+      { identity, conversationId: "chat-obs-1" },
+    )
+    assert.equal(observed.loginHandoff, true)
+    assert.equal(observed.event, "computer_login_handoff")
+    const typed = handoff.refuseAgentType({
+      toolName: "computer_type",
+      text: "hunter2",
+      identity,
+      conversationId: "chat-obs-1",
+    })
+    assert.equal(typed.refuse, true)
+    assert.doesNotMatch(JSON.stringify(typed), /hunter2/)
+  })
+
+  it("chat API fixture of a login turn never contains the typed password", () => {
+    const SECRET = "SuperSecretValue-12345"
+    const fixture = {
+      path: "/api/chat",
+      body: {
+        messages: [{ role: "user", content: "renueva mi licencia en el DMV" }],
+        computer_type: { text: undefined, focused: { type: "password" } },
+        observe: handoff.redactObservePayload({
+          text: `textbox "Password" = ${SECRET}`,
+          url: "https://dmv.example/login",
+          title: "Sign in",
+          focused: { type: "password", name: "password", focused: true },
+          metadata: { password: SECRET },
+        }),
+      },
+    }
+    const sanitized = handoff.sanitizeChatPayload(fixture)
+    const dumped = JSON.stringify(sanitized)
+    assert.doesNotMatch(dumped, new RegExp(SECRET))
+    assert.doesNotMatch(dumped, /hunter2/)
+    assert.equal(handoff.filterModelPasswordPaste("escríbeme tu contraseña aquí"), handoff.filterModelPasswordPaste("pega tu password: x"))
+    assert.match(handoff.filterModelPasswordPaste("escríbeme tu contraseña aquí"), /contrase/)
+    assert.equal(handoff.filterModelPasswordPaste("Inicia sesión en el equipo"), "Inicia sesión en el equipo")
+  })
+
+  it("frontend wires overlay-open: immediate poll, SSE consume, 409 emit, typeable expanded desktop", () => {
+    const chat = source("components/chat-interface-enhanced.tsx")
+    const panel = source("components/chat/chat-agent-computer-panel.tsx")
+    const api = source("lib/api.ts")
+    const stream = source("backend/src/services/agentic-chat-stream.js")
+    const dept = source("components/code/department-computer-pane.tsx")
+    assert.match(chat, /void pull\(\);/)
+    assert.match(chat, /emitLoginHandoff/)
+    assert.match(panel, /data-user-typeable/)
+    assert.match(panel, /pointerEvents: "auto"/)
+    assert.match(api, /computer_login_handoff/)
+    assert.match(api, /consumeLoginHandoffSse/)
+    assert.match(stream, /subscribeTakeover/)
+    assert.match(stream, /ssePayloadFromTakeover/)
+    assert.match(stream, /filterModelPasswordPaste/)
+    assert.match(dept, /login_handoff_required|loginHandoff/)
+    const consumed = consumeLoginHandoffSse({
+      type: LOGIN_HANDOFF_EVENT,
+      active: true,
+      conversationId: "chat-sse",
+      site: "portal.example",
+    })
+    assert.equal(consumed?.active, true)
+    assert.equal(consumed?.conversationId, "chat-sse")
   })
 })
 

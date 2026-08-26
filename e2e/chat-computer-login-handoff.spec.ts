@@ -115,6 +115,7 @@ test("web overlay shows login-handoff chrome and Sira never sees password copy",
   const box = await page.getByTestId("computer-login-handoff-ready").boundingBox()
   expect(box?.height || 0).toBeGreaterThanOrEqual(40)
   await page.getByTestId("computer-login-handoff-ready").click()
+  await expect(banner).toHaveCount(0, { timeout: 10_000 })
   expect(captured.chatBodies.join("\n")).not.toMatch(/password\s*[:=]\s*\S+/i)
 })
 
@@ -131,6 +132,25 @@ test("mobile viewport overlay is full-screen and usable", async ({ page }) => {
   const box = await ready.boundingBox()
   expect(box?.height || 0).toBeGreaterThanOrEqual(44)
   expect(box?.width || 0).toBeGreaterThanOrEqual(44)
+})
+
+test("overlay auto-opens when login-handoff takeover becomes active (no login query)", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 })
+  const captured = await mockApi(page, { handoffActive: true })
+  await page.goto("/agentes?id=login-handoff-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  const banner = page.getByTestId("computer-login-handoff-banner")
+  await expect(banner).toBeVisible({ timeout: 20_000 })
+  const panel = page.getByTestId("chat-agent-computer-panel")
+  await expect(panel).toHaveAttribute("data-login-handoff", "1")
+  await expect(panel).toHaveAttribute("data-chat-computer-view", "expanded")
+  await expect(panel).toHaveAttribute("data-user-typeable", "1")
+  await expect(page.getByTestId("computer-login-handoff-title")).toContainText("Inicia sesión en el equipo")
+  await expect(page.getByTestId("computer-login-handoff-privacy")).toContainText("SiraGPT no ve tu contraseña")
+  await expect(page.getByTestId("chat-computer-live-desktop")).toBeVisible()
+  await page.getByTestId("computer-login-handoff-ready").click()
+  await expect(banner).toHaveCount(0, { timeout: 10_000 })
+  expect(captured.getHandoffActive()).toBe(false)
+  expect(captured.chatBodies.join("\n")).not.toMatch(/password\s*[:=]\s*\S+/i)
 })
 
 test("typed password is not posted to /api/chat after Listo", async ({ page }) => {

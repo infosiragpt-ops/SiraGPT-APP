@@ -57,6 +57,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
   LOGIN_HANDOFF_WINDOW_EVENT,
+  emitLoginHandoff,
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
 import {
@@ -11766,12 +11767,22 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
           setLoginHandoffActive(true);
           if (body.site) setLoginHandoffSite(String(body.site));
           openComputerPanel();
+          emitLoginHandoff({
+            active: true,
+            conversationId: chatId,
+            site: body.site ? String(body.site) : undefined,
+            kind: body.kind ? String(body.kind) : undefined,
+            reason: body.reason ? String(body.reason) : undefined,
+            title: body.title ? String(body.title) : undefined,
+            instruction: body.instruction ? String(body.instruction) : undefined,
+          });
         }
       } catch {
         /* handoff poll is best-effort */
       }
     };
-    const timer = window.setInterval(() => void pull(), 5000);
+    void pull();
+    const timer = window.setInterval(() => void pull(), 2500);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

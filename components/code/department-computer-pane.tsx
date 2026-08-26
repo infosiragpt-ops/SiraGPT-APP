@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
 import { PensandoBars } from "@/components/pensando-bars"
+import { emitLoginHandoff } from "@/lib/computer-login-handoff"
 
 export type DepartmentComputerDock = "screen" | "files" | "terminal" | "browser"
 
@@ -123,7 +124,17 @@ async function focusDesktopApp(app: string, conversationId?: string | null) {
     }),
     signal: AbortSignal.timeout(20_000),
   })
-  const body = await res.json().catch(() => ({}))
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  if (res.status === 409 && (body?.loginHandoff === true || body?.error === "login_handoff_required")) {
+    emitLoginHandoff({
+      active: true,
+      conversationId: chatId || null,
+      site: typeof (body as any)?.takeover?.site === "string" ? (body as any).takeover.site : undefined,
+      kind: typeof (body as any)?.takeover?.kind === "string" ? (body as any).takeover.kind : undefined,
+      reason: typeof (body as any)?.takeover?.reason === "string" ? (body as any).takeover.reason : undefined,
+      title: typeof (body as any)?.takeover?.title === "string" ? (body as any).takeover.title : undefined,
+    })
+  }
   if (!res.ok) {
     throw Object.assign(
       new Error((body as any)?.message || (body as any)?.error || "No se pudo enfocar la aplicación."),

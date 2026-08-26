@@ -29,6 +29,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import {
   LOGIN_HANDOFF_WINDOW_EVENT,
+  emitLoginHandoff,
   overlayLayoutContract,
   type LoginHandoffDetail,
 } from "@/lib/computer-login-handoff"
@@ -147,6 +148,13 @@ export default function ChatAgentComputerPanel({
           setHandoffActive(true)
           setExpanded(true)
           if (body.site) setHandoffSite(String(body.site))
+          emitLoginHandoff({
+            active: true,
+            conversationId: chatId,
+            site: body.site ? String(body.site) : undefined,
+            kind: body.kind ? String(body.kind) : undefined,
+            reason: body.reason ? String(body.reason) : undefined,
+          })
         }
       } catch {
         /* overlay stays usable without the banner */
@@ -229,6 +237,7 @@ export default function ChatAgentComputerPanel({
         data-chat-computer-view="expanded"
         data-login-handoff={handoffActive ? "1" : "0"}
         data-full-screen={mobileFullScreen ? "1" : "0"}
+        data-user-typeable={handoffActive ? "1" : "0"}
         aria-label="Computadora"
       >
         <ComputerLoginHandoffBanner
@@ -249,7 +258,7 @@ export default function ChatAgentComputerPanel({
             Panel
           </button>
         )}
-        <div className="relative min-h-0 min-w-0 flex-1">
+        <div className="relative min-h-0 min-w-0 flex-1" style={{ pointerEvents: "auto" }} data-testid="chat-computer-live-desktop">
           <AgentComputerShell
             conversationId={chatId}
             variant="overlay"
