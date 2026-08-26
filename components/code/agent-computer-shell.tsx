@@ -29,6 +29,7 @@ import {
   RefreshCw,
   Square,
   TerminalSquare,
+  X,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -48,14 +49,26 @@ type DockApp = "desktop" | "browser" | "files" | "terminal"
 /** Phases that mean the agent computer is still coming up / working. */
 const IN_PROGRESS_PHASES = new Set(["starting", "loading", "building", "booting", "running"])
 
+export type AgentComputerLiveStatus = "starting" | "live" | "error" | "idle"
+
 export type AgentComputerShellProps = {
   /** The workspace main area (live preview + overlays) framed as one window. */
   children: React.ReactNode
   /** Chat/conversation id so dock focus hits that chat's desktop, not another. */
   conversationId?: string | null
+  /** Overlay hides fake routines and uses session liveStatus instead of /code preview events. */
+  variant?: "workspace" | "overlay"
+  onClose?: () => void
+  liveStatus?: AgentComputerLiveStatus
 }
 
-export function AgentComputerShell({ children, conversationId }: AgentComputerShellProps) {
+export function AgentComputerShell({
+  children,
+  conversationId,
+  variant = "workspace",
+  onClose,
+  liveStatus,
+}: AgentComputerShellProps) {
   const t = useTranslations("codex.panel.agentComputer")
   const [preview, setPreview] = React.useState<CodePreviewState | null>(null)
   const [routinesOpen, setRoutinesOpen] = React.useState(true)
@@ -80,15 +93,20 @@ export function AgentComputerShell({ children, conversationId }: AgentComputerSh
     }
   }, [])
 
-  const isLive = preview?.phase === "ready"
-  const isInProgress = IN_PROGRESS_PHASES.has(preview?.phase ?? "")
+  const useSessionStatus = variant === "overlay" && liveStatus != null
+  const isLive = useSessionStatus ? liveStatus === "live" : preview?.phase === "ready"
+  const isInProgress = useSessionStatus
+    ? liveStatus === "starting"
+    : IN_PROGRESS_PHASES.has(preview?.phase ?? "")
   const isStarting = isInProgress
+  const isError = useSessionStatus ? liveStatus === "error" : preview?.phase === "error"
+  const statusPhase = useSessionStatus ? liveStatus : (preview?.phase ?? "idle")
 
   const statusLabel = isLive
     ? t("status.live")
     : isInProgress
       ? t("status.starting")
-      : preview?.phase === "error"
+      : isError
         ? t("status.error")
         : t("status.idle")
 
@@ -160,7 +178,7 @@ export function AgentComputerShell({ children, conversationId }: AgentComputerSh
               !isLive && !isInProgress && "uppercase bg-zinc-500/15 text-zinc-500 dark:text-zinc-400",
             )}
             data-testid="agent-computer-live-status"
-            data-phase={preview?.phase ?? "idle"}
+            data-phase={statusPhase}
           >
             {isInProgress ? (
               <>
@@ -173,8 +191,20 @@ export function AgentComputerShell({ children, conversationId }: AgentComputerSh
           </span>
         </div>
         <span className="hidden truncate text-[10px] text-zinc-400 md:block">
-          {deptName ? `${deptName} · ${t("title")}` : t("title")}
+          {variant === "overlay" ? t("title") : deptName ? `${deptName} · ${t("title")}` : t("title")}
         </span>
+        {onClose ? (
+          <button
+            type="button"
+            className="ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-black/10 hover:text-zinc-800 dark:text-zinc-400 dark:hover:bg-white/10 dark:hover:text-zinc-100"
+            aria-label="Cerrar computadora"
+            title="Cerrar computadora"
+            data-testid={variant === "overlay" ? "chat-agent-computer-close" : "agent-computer-close"}
+            onClick={onClose}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
 
       {/* Live viewport — the existing preview canvas, framed */}
@@ -196,7 +226,8 @@ export function AgentComputerShell({ children, conversationId }: AgentComputerSh
         ) : null}
       </div>
 
-      {/* Rutinas — visible recurring work under the screen */}
+      {/* Rutinas — visible recurring work under the screen (workspace only) */}
+      {variant === "overlay" ? null : (
       <div className="shrink-0 border-t border-black/10 bg-zinc-50 dark:border-white/10 dark:bg-[#161618]">
         <button
           type="button"
@@ -257,6 +288,7 @@ export function AgentComputerShell({ children, conversationId }: AgentComputerSh
           </ul>
         ) : null}
       </div>
+      )}
 
       {/* OS-style dock */}
       <nav

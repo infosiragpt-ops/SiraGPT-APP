@@ -94,6 +94,8 @@ describe("chat agent computer home", () => {
     }
     assert.match(panel, /AgentComputerShell/)
     assert.match(panel, /DepartmentComputerPane/)
+    assert.match(panel, /conversationId=\{chatId\}/)
+    assert.match(panel, /variant="overlay"/)
     assert.match(pane, /PensandoBars/)
     assert.match(pane, /Pensando…/)
     assert.match(pane, /conversationId/)
@@ -123,10 +125,9 @@ describe("chat agent computer home", () => {
     assert.match(pane, /chat-computer-isolation-gap/)
     assert.match(pane, /No se pudo aislar la computadora de esta conversación/)
     assert.match(pane, /attachUrl/)
-    assert.match(panel, /chat-computer-isolation-gap/)
-    assert.match(panel, /canAttach/)
+    assert.match(panel, /variant="overlay"/)
     assert.match(route, /resolveSessionIdentity/)
-    assert.match(route, /conversationBound/)
+    assert.match(route, /conversationBound: identity.conversationBound/)
     assert.match(route, /isolation_required/)
     assert.match(route, /sessionMatchesConversation/)
     assert.match(key, /conversationSessionKey/)
@@ -136,5 +137,31 @@ describe("chat agent computer home", () => {
     assert.equal(existsSync("components/chat/chat-agent-computer-panel.tsx"), true)
     assert.equal(existsSync("lib/agents-home-path.ts"), true)
     assert.equal(existsSync("app/agentes/page.tsx"), true)
+  })
+
+  it("keeps overlay chrome professional: one window, no debug copy", () => {
+    const panel = source("components/chat/chat-agent-computer-panel.tsx")
+    const pane = source("components/code/department-computer-pane.tsx")
+    const shell = source("components/code/agent-computer-shell.tsx")
+    const chat = source("components/chat-interface-enhanced.tsx")
+    for (const [name, src] of [
+      ["panel", panel],
+      ["pane", pane],
+      ["shell", shell],
+    ] as const) {
+      assert.doesNotMatch(src, /Aislamiento por chat pendiente/, `${name} must not show isolation debug banner`)
+      assert.doesNotMatch(src, /session key/, `${name} must not mention session key`)
+      assert.doesNotMatch(src, /noVNC/, `${name} must not mention noVNC`)
+      assert.doesNotMatch(src, /XFCE/, `${name} must not mention XFCE`)
+      assert.doesNotMatch(src, /Conversación pending/, `${name} must not use pending conversation copy`)
+      assert.doesNotMatch(src, /no está activa en este entorno/, `${name} must not show flag-off stub`)
+    }
+    assert.doesNotMatch(panel, /Conversación \{chatId\}/)
+    assert.doesNotMatch(panel, /<h2/)
+    assert.doesNotMatch(panel, /isAgentComputerEnabled/)
+    assert.match(panel, /variant="overlay"/)
+    assert.match(panel, /onClose=\{onClose\}/)
+    assert.match(chat, /conversationId=\{currentChat\?\.id \|\| ""\}/)
+    assert.doesNotMatch(chat.slice(chat.indexOf("<ChatAgentComputerPanel"), chat.indexOf("<ChatAgentComputerPanel") + 400), /pending/)
   })
 })
