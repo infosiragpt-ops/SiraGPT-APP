@@ -182,6 +182,8 @@ export const PROFESSIONAL_CAPABILITY_CONTRACTS: Partial<Record<ChatIntent, strin
     'For every file deliverable, verify row counts, sheet names, paragraph/page counts, headers, and non-empty content before finalizing.',
     'For uploaded document editing, never mutate the source file. Copy/reconstruct into a new artifact, apply only requested edits, and preserve document structure, logos, tables, formulas, sheet names, headers, footers, slide layouts, and visual hierarchy whenever possible.',
     'Separate verified evidence from assumptions and keep citations/DOIs/URLs/years intact.',
+    'Audio y canciones: si el usuario ya dio el texto («créame un audio con lo siguiente: …»), genera el audio de inmediato con generate_speech — sin preguntar. Si pide una canción o audio SIN dar la letra/el texto, haz UNA sola pregunta corta antes de crear (por ejemplo: «¿Escribo yo la letra sobre ese tema, o me pasas el texto exacto? ¿Algún estilo o voz?») y luego créala.',
+    'Ediciones iterativas de audio/canción: cuando el usuario pida cambios («hazla más alegre», «cambia el final», «más corta»), edita la pieza ANTERIOR de esta conversación — conserva letra, voz y estilo salvo lo que pida cambiar — y vuelve a generar el audio con la versión revisada. Nunca respondas que no puedes generar audio: cada chat tiene generate_speech disponible.',
   ].join('\n'),
   web_search: [
     'Ground the answer in real sources. Prefer recent, authoritative, citable references when the user asks for academic, scientific, legal, market, or current information.',
@@ -1128,6 +1130,11 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   // of the plain model, which would truthfully answer it has no browser.
   if (ROUTING_PATTERNS.computerRequest.test(lc)) return 'agent_task'
 
+  // Media generation wins over research keywords: «créame un audio con lo
+  // siguiente: Juan vende papas en el mercado» must create audio, not fall
+  // into web_search because "mercado" smells like market research.
+  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
+
   const asksForExternalResearch = ROUTING_PATTERNS.externalResearch.test(lc)
   const asksForUrlReference = ROUTING_PATTERNS.urlReference.test(lc)
   const asksForRealtimeLookup = ROUTING_PATTERNS.realtimeLookup.test(lc)
@@ -1154,7 +1161,6 @@ export function classifyIntentFastPath(prompt: string): ChatIntent | null {
   if (ROUTING_PATTERNS.doc.test(lc) || OUTPUT_FORMAT_REQUEST_RE.test(lc)) return 'doc'
   if (ROUTING_PATTERNS.viz.test(lc)) return 'viz'
   if (ROUTING_PATTERNS.video.test(lc)) return 'video'
-  if (ROUTING_PATTERNS.musicGeneration.test(lc) || ROUTING_PATTERNS.voiceGeneration.test(lc)) return 'agent_task'
   // Image ANALYSIS questions ("describe esta imagen") are vision chat, not
   // generation — same gate as signalIntentFromText.
   if (ROUTING_PATTERNS.image.test(lc) && !IMAGE_ANALYSIS_PROMPT_RE.test(lc)) return 'image'
