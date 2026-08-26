@@ -190,23 +190,24 @@ function sanitizeNavigateUrl(raw) {
 
 async function navigateMemberDesktop(session, url) {
   const persistent = require('../services/computer/persistent');
+  // Skip agentPost(session, '/navigate') until the computer agent implements it.
+  // The orch http-proxy hangs ~120s (express.json already consumed the body);
+  // FE AbortSignal.timeout(30s) then toasts "signal timed out" and chrome never runs.
+  const cmd = '('
+    + 'google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ' + JSON.stringify(url)
+    + ' || chromium --no-sandbox --disable-dev-shm-usage --new-window ' + JSON.stringify(url)
+    + ' || xdg-open ' + JSON.stringify(url)
+    + ') >/tmp/sira-nav.log 2>&1 & echo Opening';
   try {
-    const out = await persistent.agentPost(session, '/navigate', { url });
-    return { ok: true, url, result: out, sessionId: session.sessionId };
-  } catch (navErr) {
-    const opened = await persistent.dockerExec(
-      session,
-      'google-chrome --new-window ' + JSON.stringify(url)
-        + ' || chromium --new-window ' + JSON.stringify(url)
-        + ' || xdg-open ' + JSON.stringify(url),
-    );
+    const opened = await persistent.dockerExec(session, cmd, { timeoutMs: 8000 });
+    return { ok: true, url, result: opened, sessionId: session.sessionId, fallback: 'chrome' };
+  } catch (err) {
     return {
       ok: true,
       url,
-      result: opened,
       sessionId: session.sessionId,
       fallback: 'chrome',
-      detail: navErr && navErr.message ? String(navErr.message).slice(0, 120) : undefined,
+      detail: err && err.message ? String(err.message).slice(0, 120) : undefined,
     };
   }
 }
