@@ -673,6 +673,12 @@
           "avisarTiendasName": "Notify iPhone and Android stores",
           "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
           "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done"
         }
       }
     }

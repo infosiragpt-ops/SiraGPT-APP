@@ -178,6 +178,12 @@ const ES = {
         "avisarTiendasName": "Avisar tiendas iPhone/Android",
         "avisarTiendasSchedule": "9:32 / 15:32 días laborables",
         "avisarTiendasNext": "programada"
+      },
+      "loginHandoff": {
+        "title": "Inicia sesión en el equipo",
+        "instruction": "Inicia sesión en este sitio",
+        "neverSees": "SiraGPT no ve tu contraseña",
+        "ready": "Listo"
       }
     }
   }
@@ -340,6 +346,12 @@ const EN = {
         "avisarTiendasName": "Notify iPhone and Android stores",
         "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
         "avisarTiendasNext": "scheduled"
+      },
+      "loginHandoff": {
+        "title": "Sign in on the computer",
+        "instruction": "Sign in to this site",
+        "neverSees": "SiraGPT cannot see your password",
+        "ready": "Done"
       }
     }
   }

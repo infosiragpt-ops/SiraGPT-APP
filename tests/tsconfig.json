@@ -27,6 +27,7 @@
     "../lib/chat/brand-label.ts",
     "../lib/chat/code-block-utils.ts",
     "../lib/chat/ocr-preprocess.ts",
+    "../lib/computer-login-handoff.ts",
     "../lib/chat/composer-files.ts",
     "../lib/chat/media-composer-config.ts",
     "../lib/chat/media-mode-chips.ts",

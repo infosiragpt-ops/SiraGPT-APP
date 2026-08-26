@@ -11,6 +11,8 @@
  * is the production path.
  */
 
+const loginHandoff = require('./login-handoff');
+
 function loadPlaywright() {
   try { return require('playwright-core'); } catch (_) { /* fall through */ }
   try { return require('playwright'); } catch (_) { return null; }
@@ -23,7 +25,10 @@ function flattenA11y(node, lines = [], depth = 0) {
   const rawName = node.name && (typeof node.name === 'object' ? node.name.value : node.name);
   const rawValue = node.value && (typeof node.value === 'object' ? node.value.value : node.value);
   const name = rawName ? ` "${String(rawName).slice(0, 120)}"` : '';
-  const value = rawValue ? ` = ${String(rawValue).slice(0, 80)}` : '';
+  const secret = loginHandoff.isSecretField({
+    name: rawName, type: node.inputType || node.type, role, label: rawName, value: rawValue, autocomplete: node.autocomplete,
+  }, { inLoginForm: true });
+  const value = rawValue ? ` = ${secret ? loginHandoff.REDACTED : String(rawValue).slice(0, 80)}` : '';
   lines.push(`${indent}${role}${name}${value}`);
   for (const child of node.children || []) flattenA11y(child, lines, depth + 1);
   return lines;
@@ -46,7 +51,10 @@ function flattenAxNodes(nodes) {
     const name = n.name && (n.name.value || n.name);
     const value = n.value && (n.value.value || n.value);
     const nameBit = name ? ` "${String(name).slice(0, 120)}"` : '';
-    const valueBit = value ? ` = ${String(value).slice(0, 80)}` : '';
+    const secret = loginHandoff.isSecretField({
+      name, type: n.inputType || n.type, role, label: name, value, autocomplete: n.autocomplete,
+    }, { inLoginForm: true });
+    const valueBit = value ? ` = ${secret ? loginHandoff.REDACTED : String(value).slice(0, 80)}` : '';
     lines.push(`${indent}${role}${nameBit}${valueBit}`);
     for (const id of n.childIds || []) walk(byId.get(String(id)), depth + 1);
   };

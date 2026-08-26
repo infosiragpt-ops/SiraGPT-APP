@@ -6,6 +6,7 @@ const { memberKey, resolveSessionIdentity } = require('./member-key');
 const { orchFetch, resolveOrchConfig } = require('./orch-client');
 const { agentComputerEnabled, resolveObservationMode } = require('./flags');
 const { requireProvenIsolation } = require('./conversation-isolation');
+const loginHandoff = require('./login-handoff');
 const {
   applyIsolationClosed,
   applySandboxAbortCleanupClosed,
@@ -203,7 +204,7 @@ async function observe(sessionOrUserId, opts = {}) {
           playwrightImpl: opts.playwrightImpl,
           connect: opts.cdpConnect,
         });
-        return {
+        return loginHandoff.applyObserveHandoff(session, {
           mode: 'cdp',
           backend: 'persistent',
           session,
@@ -211,7 +212,7 @@ async function observe(sessionOrUserId, opts = {}) {
           title: tree.title || '',
           text: capObserveText(tree.text || '(empty)'),
           ok: true,
-        };
+        }, { conversationId: session.conversationId, identity: session });
       }
       const cdp = require('./cdp-client');
       let tree;
@@ -226,7 +227,7 @@ async function observe(sessionOrUserId, opts = {}) {
           return observeErrorResult(dockerErr, session);
         }
       }
-      return {
+      return loginHandoff.applyObserveHandoff(session, {
         mode: 'cdp',
         backend: 'persistent',
         session,
@@ -234,7 +235,7 @@ async function observe(sessionOrUserId, opts = {}) {
         title: tree && tree.title || '',
         text: capObserveText((tree && tree.text) || '(empty)'),
         ok: true,
-      };
+      }, { conversationId: session.conversationId, identity: session });
     }
     const shot = await agentGet(session, '/screenshot', env);
     const ad = loadAdapter();
@@ -244,7 +245,7 @@ async function observe(sessionOrUserId, opts = {}) {
       screenshotOnlyNoCharge: ad && ad.screenshotOnlyNoCharge,
       observeOnlyNoCharge: ad && ad.observeOnlyNoCharge,
     });
-    return {
+    return loginHandoff.applyObserveHandoff(session, {
       mode: 'screenshot',
       backend: 'persistent',
       session,
@@ -255,7 +256,7 @@ async function observe(sessionOrUserId, opts = {}) {
       charge: charge.charge,
       screenshotOnly: true,
       ok: true,
-    };
+    }, { conversationId: session.conversationId, identity: session });
   } catch (err) {
     return observeErrorResult(err, session);
   }

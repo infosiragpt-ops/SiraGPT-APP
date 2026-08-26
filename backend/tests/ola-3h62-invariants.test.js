@@ -534,7 +534,9 @@ test('3H62-V-001 retrieve-before-generate times out and drops inf/low scores', a
   assert.equal(timed.failOpen, true);
   assert.equal(timed.hits.length, 0);
   assert.equal(timed.code, 'pgvector_timeout');
-  const to = ad.pgvectorMemoryQueryTimeout({ elapsedMs: timed.elapsedMs || 15, timeoutMs: 15 });
+  // Date.now() can undershoot setTimeout(cap) by 1ms on loaded CI runners.
+  const elapsedForClassifier = Math.max(Number(timed.elapsedMs) || 0, timed.timeoutMs || 15);
+  const to = ad.pgvectorMemoryQueryTimeout({ elapsedMs: elapsedForClassifier, timeoutMs: 15 });
   assert.equal(to.timedOut, true);
 });
 
