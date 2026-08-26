@@ -652,3 +652,22 @@ describe("ai-service · computer request helper", () => {
     assert.equal(isComputerRequestPrompt("hazme un resumen de este pdf"), false)
   })
 })
+
+describe("ai-service · audio and song generation routing", () => {
+  it("routes audio/song creation to agent_task even when research words appear", () => {
+    assert.equal(
+      classifyIntentFastPath("créame un audio con lo siguiente: Juan vende papas en el mercado"),
+      "agent_task",
+    )
+    assert.equal(classifyIntentFastPath("crea una canción sobre el mercado de flores"), "agent_task")
+    assert.equal(classifyIntentFastPath("genera un audio que investigue el tema"), "agent_task")
+  })
+
+  it("keeps the agent_task contract explicit about audio clarifications and edits", async () => {
+    const { PROFESSIONAL_CAPABILITY_CONTRACTS } = await import("../lib/ai-service")
+    const contract = PROFESSIONAL_CAPABILITY_CONTRACTS.agent_task || ""
+    assert.match(contract, /generate_speech/)
+    assert.match(contract, /UNA sola pregunta corta/)
+    assert.match(contract, /pieza ANTERIOR/)
+  })
+})
