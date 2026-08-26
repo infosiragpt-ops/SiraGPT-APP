@@ -56,6 +56,24 @@ function buildNavigateTool({ userId, conversationId, env }) {
       }
       const uid = ctx.userId || userId;
       const chatId = ctx.chatId || conversationId;
+      const { refuseAgentType, applyObserveHandoff, loginHandoffToolResult, getTakeover, beginTakeover, detectLoginGate } = require('./login-handoff');
+      const paused = refuseAgentType({
+        toolName: 'computer_navigate',
+        conversationId: chatId,
+        user: { id: uid },
+        url,
+      });
+      if (paused.refuse) {
+        const gate = detectLoginGate({ url, text: url });
+        beginTakeover({
+          conversationId: chatId,
+          user: { id: uid },
+          site: gate.site,
+          kind: gate.kind || 'captcha',
+          reason: paused.reason,
+        });
+        return loginHandoffToolResult(gate, getTakeover({ conversationId: chatId, user: { id: uid } }));
+      }
       try {
         const persistent = require('./persistent');
         const session = await persistent.ensureSession({
@@ -65,7 +83,16 @@ function buildNavigateTool({ userId, conversationId, env }) {
         });
         try {
           const out = await persistent.agentPost(session, '/navigate', { url }, env);
-          return { ok: true, tool: 'computer_navigate', url, result: out, _preview: `Navegando a ${url}` };
+          const landedUrl = (out && (out.url || out.finalUrl)) || url;
+          const handed = applyObserveHandoff(session, {
+            url: landedUrl,
+            text: `navigated ${landedUrl}`,
+            title: (out && out.title) || '',
+          }, { user: { id: uid }, conversationId: chatId, identity: session });
+          if (handed && handed.loginHandoff) {
+            return loginHandoffToolResult(handed.loginGate, handed.takeover);
+          }
+          return { ok: true, tool: 'computer_navigate', url: landedUrl, result: out, _preview: `Navegando a ${landedUrl}` };
         } catch (navErr) {
           try {
             const opened = await persistent.dockerExec(

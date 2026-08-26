@@ -255,6 +255,47 @@ function snapshotViaDocker(containerName, { timeoutMs = 20000 } = {}) {
   });
 }
 
+async function peekPageContext(cdpUrl, { timeoutMs = 4000 } = {}) {
+  const base = String(cdpUrl || '').replace(/\/$/, '');
+  if (!base) return { url: null, title: '', text: '' };
+  try {
+    const listed = await fetchJson(base + '/json', timeoutMs);
+    const pages = Array.isArray(listed) ? listed : [];
+    const page = pages.find((p) => p && p.type === 'page' && p.url) || pages.find((p) => p && p.url) || pages[0] || {};
+    const url = page.url || null;
+    const title = page.title || '';
+    return {
+      url,
+      title,
+      text: url || title ? `url: ${url || ''}\ntitle: ${title}` : '',
+    };
+  } catch (_) {
+    return { url: null, title: '', text: '' };
+  }
+}
+
+function peekViaDocker(containerName, { timeoutMs = 8000 } = {}) {
+  return new Promise((resolve, reject) => {
+    if (!containerName) return reject(new Error('container_missing'));
+    const child = spawn(
+      'docker',
+      ['exec', '-u', 'compuser', String(containerName), 'node', '-e',
+        "const http=require('http');http.get({host:'127.0.0.1',port:9222,path:'/json'},r=>{let b='';r.on('data',c=>b+=c);r.on('end',()=>{try{const p=JSON.parse(b);const page=(Array.isArray(p)?p:[]).find(x=>x&&x.type==='page'&&x.url)||(Array.isArray(p)?p[0]:{})||{};process.stdout.write(JSON.stringify({url:page.url||null,title:page.title||'',text:'url: '+(page.url||'')+'\\ntitle: '+(page.title||'')}))}catch(e){process.exit(2)}})}).on('error',()=>process.exit(1))"],
+      { timeout: timeoutMs },
+    );
+    let out = '';
+    let err = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { err += d; });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error(err || out || ('cdp_peek_' + code)));
+      try { resolve(JSON.parse(out)); }
+      catch (parseErr) { reject(parseErr); }
+    });
+  });
+}
+
 module.exports = {
   loadPlaywright,
   flattenA11y,
@@ -263,4 +304,6 @@ module.exports = {
   snapshotViaRawCdp,
   snapshotViaDocker,
   snapshotAccessibility,
+  peekPageContext,
+  peekViaDocker,
 };

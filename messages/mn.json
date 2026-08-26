@@ -578,7 +578,7 @@
         "title": "Agent computer",
         "status": {
           "live": "Live",
-          "starting": "Starting…",
+          "starting": "Thinking…",
           "error": "Error",
           "idle": "Waiting"
         },
@@ -603,10 +603,16 @@
           "avisarTiendasNext": "scheduled"
         },
         "loginHandoff": {
-          "title": "Inicia sesión en el equipo",
-          "instruction": "Inicia sesión en este sitio",
-          "neverSees": "SiraGPT no ve tu contraseña",
-          "ready": "Listo"
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
         }
       }
     }
