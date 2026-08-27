@@ -1,9 +1,9 @@
 /**
- * Chat UI brand aliases.
+ * Chat UI labels.
  *
- * DeepSeek (and leftover OpenAI ids) stay on the wire / backend only.
- * The composer, action rail, and "respondido con" line must never render
- * a raw model_id such as "Deepseek V4 PRO" or "gpt-4o".
+ * DeepSeek V4 Flash/Pro keep Sira brand aliases (Sira Rápido / Sira Pro).
+ * Every other catalog model keeps its display name so the picker can show
+ * GPT, Claude, Grok, Kimi, etc. instead of collapsing everything to one label.
  */
 
 export const SIRA_PRO_LABEL = "Sira Pro"
@@ -58,9 +58,8 @@ export function looksLikeRawVendorModelId(label: string): boolean {
 }
 
 /**
- * Map any model descriptor to the public chat brand.
- * Unknown / non-DeepSeek leftovers collapse to Sira Rápido (the default
- * generation model) so the UI never leaks a vendor id.
+ * Map a model descriptor to the picker / composer label.
+ * DeepSeek Flash/Pro → Sira aliases. Everything else keeps its catalog name.
  */
 export function brandModelLabel(source: BrandLabelSource): string {
   if (isProGenerationModel(source)) return SIRA_PRO_LABEL
@@ -70,23 +69,21 @@ export function brandModelLabel(source: BrandLabelSource): string {
     ? source
     : firstString(source?.displayName, source?.name)
   if (!raw) return SIRA_RAPIDO_LABEL
-  if (looksLikeRawVendorModelId(raw)) return SIRA_RAPIDO_LABEL
   return raw
 }
 
-const VENDOR_PROVIDER_RE = /^(deepseek|openai)$/i
-
 /**
- * Provider / attribution line for chat chrome. DeepSeek and leftover
- * OpenAI names collapse to "Sira" so a picker heading never says
- * "DeepSeek" under a Sira Pro row.
+ * Provider / attribution line for chat chrome.
+ * DeepSeek Flash/Pro stay "Sira". Other vendors keep their provider name
+ * so GPT/Claude/Grok rows are distinguishable.
  */
 export function brandProviderLabel(source: BrandLabelSource): string {
-  const hay = collectModelSearchText(source)
-  if (!hay) return "Sira"
-  if (/deepseek|openai|gpt-?4|gpt-?5/i.test(hay) || VENDOR_PROVIDER_RE.test(hay)) {
-    return "Sira"
+  if (isProGenerationModel(source) || isFlashGenerationModel(source)) return "Sira"
+  if (!source) return "Sira"
+  if (typeof source === "string") {
+    const trimmed = source.trim()
+    if (/^deepseek$/i.test(trimmed)) return "Sira"
+    return trimmed || "Sira"
   }
-  if (typeof source === "string") return source.trim()
-  return firstString(source?.provider) || "Sira"
+  return firstString(source.provider) || "Sira"
 }
