@@ -83,10 +83,45 @@ describe('chat-tool-policy', () => {
   });
 
   it('resolvePolicy reads env flags', () => {
-    assert.deepStrictEqual(resolvePolicy({}), { disabled: false, requiredClearances: [] });
+    assert.deepStrictEqual(resolvePolicy({}), { disabled: false, requiredClearances: [], productionDefaultDeny: false });
     assert.deepStrictEqual(
       resolvePolicy({ SIRAGPT_HOST_TOOLS_DISABLED: 'true', SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE: 'admin,owner' }),
-      { disabled: true, requiredClearances: ['admin', 'owner'] },
+      { disabled: true, requiredClearances: ['admin', 'owner'], productionDefaultDeny: false },
     );
+  });
+
+  it('denies high-risk tools in production when no explicit policy is set (fail-closed)', () => {
+    const gate = createChatToolGate({ env: { NODE_ENV: 'production' } });
+    const denied = gate.authorize('host_bash', {});
+    assert.strictEqual(denied.ok, false);
+    assert.strictEqual(denied.reason, 'host_tools_production_denied');
+    assert.strictEqual(gate.authorize('host_file', {}).ok, false);
+    assert.strictEqual(gate.authorize('clone_project', {}).ok, false);
+    // Low-risk tools keep working in production.
+    assert.strictEqual(gate.authorize('web_search', {}).ok, true);
+  });
+
+  it('explicit production policy overrides the fail-closed default', () => {
+    const clearanceGate = createChatToolGate({
+      env: { NODE_ENV: 'production', SIRAGPT_HOST_TOOLS_REQUIRE_CLEARANCE: 'ops' },
+    });
+    assert.strictEqual(clearanceGate.policy.productionDefaultDeny, false);
+    assert.strictEqual(clearanceGate.authorize('host_bash', { clearance: 'ops' }).ok, true);
+    assert.strictEqual(clearanceGate.authorize('host_bash', { clearance: 'user' }).ok, false);
+
+    const disabledGate = createChatToolGate({ env: { NODE_ENV: 'production', SIRAGPT_HOST_TOOLS_DISABLED: '1' } });
+    assert.strictEqual(disabledGate.authorize('host_bash', {}).reason, 'host_tools_disabled');
+
+    // An explicitly empty-ish DISABLED=0 keeps production open on purpose.
+    const optOutGate = createChatToolGate({ env: { NODE_ENV: 'production', SIRAGPT_HOST_TOOLS_DISABLED: '0' } });
+    assert.strictEqual(optOutGate.authorize('host_bash', {}).ok, true);
+  });
+
+  it('development without policy stays permissive', () => {
+    for (const env of [{}, { NODE_ENV: 'development' }, { NODE_ENV: 'test' }]) {
+      const gate = createChatToolGate({ env });
+      assert.strictEqual(gate.authorize('host_bash', {}).ok, true);
+      assert.strictEqual(gate.policy.productionDefaultDeny, false);
+    }
   });
 });
