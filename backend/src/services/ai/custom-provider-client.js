@@ -50,6 +50,7 @@ const KNOWN_CLOUD_PROVIDER_KEYS = Object.freeze(new Set([
   'together',
   'fireworks',
   'fal',
+  'meta',
 ]));
 
 const HIDDEN_VENDOR_RE = /ollama|hugging\s*face|huggingface|moondream/i;

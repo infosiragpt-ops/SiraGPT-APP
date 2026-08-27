@@ -59,6 +59,7 @@ test('isCustomConnectionRow: custom key or unknown /v1 host; never DeepSeek/Open
   assert.equal(isCustomConnectionRow({ providerKey: 'openai', url: 'https://api.openai.com/v1' }), false);
   assert.equal(isCustomConnectionRow({ providerKey: 'deepseek', url: 'https://api.deepseek.com/v1' }), false);
   assert.equal(isCustomConnectionRow({ providerKey: 'openrouter', url: 'https://openrouter.ai/api/v1' }), false);
+  assert.equal(isCustomConnectionRow({ providerKey: 'meta', url: 'https://api.meta.ai/v1' }), false);
 });
 
 test('publicPickerProvider hides Ollama / HuggingFace / Custom API', () => {
