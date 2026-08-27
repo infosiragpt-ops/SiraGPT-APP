@@ -30,10 +30,12 @@ import * as React from "react"
 import { useParams, useRouter } from "next/navigation"
 import { useTranslations } from "next-intl"
 import {
-  ArrowLeft, MoreHorizontal, Star, Plus, Send,
+  MoreHorizontal, Star, Plus, Send,
   FileText, Trash2, Lock, Paperclip, Pencil,
   Share2, Link as LinkIcon, Check, X, BookOpen,
-  Search, Database, MessageSquare, ShieldCheck} from "lucide-react"
+  Search, MessageSquare, ShieldCheck,
+  CalendarDays, Upload, Mic,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
@@ -50,12 +52,15 @@ import { cn } from "@/lib/utils"
 import {
   projectsService,
   type ProjectChatSummary,
-  type ProjectContextManifest,
   type ProjectDetail,
   type ProjectMemoryItem,
 } from "@/lib/projects-service"
-import { DocumentsSection } from "@/components/projects/documents-section"
 import { MAX_SIMULTANEOUS_DOCUMENTS } from "@/lib/document-batch-limits"
+import {
+  readProjectScheduledTasks,
+  writeProjectScheduledTasks,
+  type ProjectScheduledTask,
+} from "@/lib/project-scheduled-tasks"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 
@@ -67,7 +72,6 @@ export default function ProjectDetailPage() {
   const t = useTranslations("projects")
 
   const [project, setProject] = React.useState<ProjectDetail | null>(null)
-  const [context, setContext] = React.useState<ProjectContextManifest | null>(null)
   const [memories, setMemories] = React.useState<ProjectMemoryItem[]>([])
   const [projectChats, setProjectChats] = React.useState<ProjectChatSummary[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -80,6 +84,10 @@ export default function ProjectDetailPage() {
   const [instructionsOpen, setInstructionsOpen] = React.useState(false)
   const [shareOpen, setShareOpen] = React.useState(false)
   const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [scheduledOpen, setScheduledOpen] = React.useState(false)
+  const [textContentOpen, setTextContentOpen] = React.useState(false)
+  const [composerMode, setComposerMode] = React.useState<"chat" | "cowork">("chat")
+  const [scheduledTasks, setScheduledTasks] = React.useState<ProjectScheduledTask[]>([])
   const composerFileRef = React.useRef<HTMLInputElement | null>(null)
   const openDeleteAfterMenuClose = React.useCallback(() => {
     window.setTimeout(() => setDeleteOpen(true), 0)
@@ -91,14 +99,12 @@ export default function ProjectDetailPage() {
       // Load project + memory in parallel — memory fetch is allowed
       // to fail (memory is a nice-to-have, not required for the
       // page to render), so we catch locally and default to [].
-      const [p, mem, ctx] = await Promise.all([
+      const [p, mem] = await Promise.all([
         projectsService.get(id),
         projectsService.listMemory(id).catch(() => [] as ProjectMemoryItem[]),
-        projectsService.context(id).catch(() => null),
       ])
       setProject(p)
       setMemories(mem)
-      setContext(ctx)
     } catch (err: any) {
       toast.error(err?.message || t("detailLoadFailed"))
     } finally {
@@ -107,6 +113,11 @@ export default function ProjectDetailPage() {
   }, [id, t])
 
   React.useEffect(() => { reload() }, [reload])
+
+  React.useEffect(() => {
+    if (!id) return
+    setScheduledTasks(readProjectScheduledTasks(id))
+  }, [id])
 
   React.useEffect(() => {
     const timer = setTimeout(() => setDebouncedChatSearch(chatSearch.trim()), 220)
@@ -212,26 +223,23 @@ export default function ProjectDetailPage() {
   return (
     <div className="min-h-screen bg-background">
       <div className="mx-auto max-w-6xl px-4 sm:px-6 md:px-8 py-6 md:py-10">
-        {/* Breadcrumb */}
-        <button
-          onClick={() => router.push("/projects")}
-          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-4"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t("allProjects")}
-        </button>
+        <nav className="mb-6 flex items-center gap-2 text-sm text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => router.push("/projects")}
+            className="hover:text-foreground"
+          >
+            {t("title")}
+          </button>
+          <span aria-hidden="true">/</span>
+          <span className="truncate text-foreground">{project.name}</span>
+        </nav>
 
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-6 lg:gap-8">
-          {/* ── Left column: title + composer + recent chats ─────────────── */}
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
           <div>
-            <header className="flex items-start justify-between gap-3 mb-5">
-              <div className="min-w-0">
-                <h1 className="text-3xl font-serif tracking-tight truncate">{project.name}</h1>
-                {project.description && (
-                  <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{project.description}</p>
-                )}
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
+            <header className="mb-8 flex items-start justify-between gap-3">
+              <h1 className="font-serif text-4xl tracking-tight text-foreground">{project.name}</h1>
+              <div className="flex shrink-0 items-center gap-1">
                 <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleToggleStar} aria-label={t("star")}>
                   <Star className={cn("h-4 w-4", project.isStarred && "fill-yellow-400 text-yellow-400")} />
                 </Button>
@@ -245,6 +253,10 @@ export default function ProjectDetailPage() {
                     <DropdownMenuItem onClick={() => setInstructionsOpen(true)}>
                       <Pencil className="mr-2 h-4 w-4" />
                       {t("editInstructions")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => router.push(`/projects/${project.id}/marco-teorico`)}>
+                      <BookOpen className="mr-2 h-4 w-4" />
+                      {t("generateMarcoTeorico")}
                     </DropdownMenuItem>
                     {project.type === "webapp" ? (
                       <DropdownMenuItem disabled>
@@ -267,34 +279,20 @@ export default function ProjectDetailPage() {
               </div>
             </header>
 
-            {/* Composer (launcher) — intentionally minimal. Full chat
-                features live in the /chat page; this is just the
-                entry point. */}
-            <form onSubmit={handleLaunch} className="mb-4">
-              <div className="rounded-xl border border-border/60 bg-background shadow-sm focus-within:border-foreground/40 focus-within:shadow-md transition-all">
+            <form onSubmit={handleLaunch} className="mb-10">
+              <div className="rounded-2xl border border-border/70 bg-background px-4 py-3 shadow-sm">
                 <Textarea
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleLaunch() }
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleLaunch() }
                   }}
                   placeholder={t("composerPlaceholder")}
-                  rows={3}
+                  rows={2}
                   disabled={launching}
-                  className="border-0 resize-none bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 text-base"
+                  className="min-h-[44px] resize-none border-0 bg-transparent px-0 py-1 text-[15px] focus-visible:ring-0 focus-visible:ring-offset-0"
                 />
-                <div className="flex flex-wrap gap-1.5 px-3 pb-2">
-                  <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
-                    {project.files.length} archivos
-                  </span>
-                  <span className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground">
-                    {memories.length} memorias
-                  </span>
-                  <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", project.instructions ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground")}>
-                    {project.instructions ? "Instrucciones activas" : "Sin instrucciones"}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between px-2 pb-2">
+                <div className="mt-1 flex items-center gap-1.5">
                   <Button
                     type="button"
                     variant="ghost"
@@ -304,7 +302,7 @@ export default function ProjectDetailPage() {
                     onClick={() => composerFileRef.current?.click()}
                     aria-label={t("attachFile")}
                   >
-                    {composerUploading ? <ThinkingIndicator size="sm" /> : <Paperclip className="h-4 w-4" />}
+                    {composerUploading ? <ThinkingIndicator size="sm" /> : <Plus className="h-4 w-4" />}
                   </Button>
                   <input
                     ref={composerFileRef}
@@ -313,64 +311,67 @@ export default function ProjectDetailPage() {
                     className="hidden"
                     onChange={(e) => handleComposerFiles(e.target.files)}
                   />
-                  <Button
-                    type="submit"
-                    disabled={!draft.trim() || launching}
-                    size="sm"
-                    className="gap-1.5 h-8"
+                  <button
+                    type="button"
+                    onClick={() => setComposerMode("chat")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-xs font-medium",
+                      composerMode === "chat" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60",
+                    )}
                   >
-                    {launching ? <ThinkingIndicator size="sm" className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
-                    {t("send")}
-                  </Button>
+                    {t("chatMode")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setComposerMode("cowork")}
+                    className={cn(
+                      "rounded-full px-2.5 py-1 text-xs font-medium",
+                      composerMode === "cowork" ? "bg-muted text-foreground" : "text-muted-foreground hover:bg-muted/60",
+                    )}
+                  >
+                    {t("cowork")}
+                  </button>
+                  <div className="ml-auto flex items-center gap-1 text-muted-foreground">
+                    <Mic className="h-4 w-4" />
+                    {draft.trim() ? (
+                      <Button type="submit" disabled={launching} size="sm" className="h-8 gap-1.5">
+                        {launching ? <ThinkingIndicator size="sm" /> : <Send className="h-3.5 w-3.5" />}
+                        {t("send")}
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             </form>
 
-            {/* Marco Teórico launcher — prominent entry point to the
-                academic-literature-review pipeline. Kept above the
-                recent-chats list because this is the signature
-                action for a research-oriented project. */}
-            <button
-              onClick={() => router.push(`/projects/${project.id}/marco-teorico`)}
-              className="w-full group mb-3 rounded-xl border border-border/60 bg-card px-4 py-3 text-left hover:border-foreground/30 hover:shadow-sm transition-all"
-            >
-              <div className="flex items-center gap-3">
-                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-foreground/5 group-hover:bg-foreground/10 transition-colors">
-                  <BookOpen className="h-4 w-4 text-foreground/80" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium">{t("generateMarcoTeorico")}</div>
-                  <div className="text-xs text-muted-foreground mt-0.5 line-clamp-1">
-                    {t("generateMarcoTeoricoDesc")}
-                  </div>
-                </div>
-                <ArrowLeft className="h-4 w-4 text-muted-foreground rotate-180 group-hover:text-foreground transition-colors shrink-0" />
+            {projectChats.length === 0 && !chatSearch.trim() ? (
+              <div className="flex flex-col items-center px-6 py-10 text-center">
+                <MessageSquare className="mb-3 h-8 w-8 text-muted-foreground/50" />
+                <p className="max-w-md text-sm text-muted-foreground">{t("knowledgeHint")}</p>
               </div>
-            </button>
-
-            <ProjectChatsSection
-              chats={projectChats}
-              search={chatSearch}
-              loading={chatsLoading}
-              onSearchChange={setChatSearch}
-              onOpen={openRecentChat}
-              emptyText={t("startConversation")}
-            />
+            ) : (
+              <ProjectChatsSection
+                chats={projectChats}
+                search={chatSearch}
+                loading={chatsLoading}
+                onSearchChange={setChatSearch}
+                onOpen={openRecentChat}
+                emptyText={t("startConversation")}
+              />
+            )}
           </div>
 
-          {/* ── Right column: memory / docs / instructions / files ──────── */}
-          <aside className="space-y-4 lg:sticky lg:top-6 self-start">
-            <ProjectContextSection project={project} context={context} memoryCount={memories.length} />
-            <MemorySection t={t} memories={memories} onDelete={handleDeleteMemory} />
-            <DocumentsSection projectId={project.id} />
-            <InstructionsSection
+          <aside className="self-start lg:sticky lg:top-6">
+            <ProjectKnowledgeRail
               t={t}
               project={project}
-              onEdit={() => setInstructionsOpen(true)}
-            />
-            <FilesSection
-              t={t}
-              project={project}
+              memories={memories}
+              scheduledTasks={scheduledTasks}
+              onEditInstructions={() => setInstructionsOpen(true)}
+              onAddFiles={(files) => void handleComposerFiles(files)}
+              onAddText={() => setTextContentOpen(true)}
+              onSchedule={() => setScheduledOpen(true)}
+              onDeleteMemory={handleDeleteMemory}
               onChange={reload}
             />
           </aside>
@@ -401,104 +402,170 @@ export default function ProjectDetailPage() {
         project={project}
         onConfirm={handleDeleteConfirmed}
       />
+      <ScheduledTaskDialog
+        open={scheduledOpen}
+        onOpenChange={setScheduledOpen}
+        projectId={project.id}
+        onSaved={(tasks) => setScheduledTasks(tasks)}
+      />
+      <TextContentDialog
+        open={textContentOpen}
+        onOpenChange={setTextContentOpen}
+        onSubmit={async (text) => {
+          const file = new File([text], "contexto.txt", { type: "text/plain" })
+          const list = { 0: file, length: 1, item: () => file } as unknown as FileList
+          await handleComposerFiles(list)
+        }}
+      />
     </div>
   )
 }
 
 // ─── Right-panel cards ────────────────────────────────────────────────────
 
-function ProjectContextSection({
+function ProjectKnowledgeRail({
+  t,
   project,
-  context,
-  memoryCount,
+  memories,
+  scheduledTasks,
+  onEditInstructions,
+  onAddFiles,
+  onAddText,
+  onSchedule,
+  onDeleteMemory,
 }: {
+  t: ReturnType<typeof useTranslations>
   project: ProjectDetail
-  context: ProjectContextManifest | null
-  memoryCount: number
+  memories: ProjectMemoryItem[]
+  scheduledTasks: ProjectScheduledTask[]
+  onEditInstructions: () => void
+  onAddFiles: (files: FileList | null) => void
+  onAddText: () => void
+  onSchedule: () => void
+  onDeleteMemory: (id: string) => void
+  onChange: () => void
 }) {
-  const counts = context?.counts || {
-    files: project.files.length,
-    chats: project.chats.length,
-    memories: memoryCount,
-    documents: 0,
-  }
-  const coverage = context?.textCoverage
-  const readyItems = [
-    { label: "Instrucciones", ok: Boolean(project.instructions) },
-    { label: "Conocimiento", ok: counts.files > 0 },
-    { label: "Memoria", ok: counts.memories > 0 },
-    { label: "Chats aislados", ok: counts.chats > 0 },
-  ]
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
 
   return (
-    <div className="rounded-xl border border-emerald-500/25 bg-gradient-to-br from-emerald-500/[0.08] via-card to-card" data-testid="project-context-card">
-      <div className="flex items-start justify-between px-4 pt-4">
-        <div>
-          <h3 className="text-sm font-semibold flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-600" />
-            Contexto de la empresa
-          </h3>
-          <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-            Este workspace mantiene archivos, instrucciones, memoria y conversaciones separados del chat general.
-          </p>
+    <div className="overflow-hidden rounded-2xl border border-border/70 bg-card" data-testid="project-knowledge-rail">
+      <section className="px-4 py-4">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t("instructions")}</h3>
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEditInstructions} aria-label={t("editInstructions")}>
+            <Plus className="h-4 w-4" />
+          </Button>
         </div>
-      </div>
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {project.instructions ? project.instructions : t("instructionsDesc")}
+        </p>
+      </section>
 
-      <div className="grid grid-cols-2 gap-2 px-4 py-3">
-        <ContextMetric icon={Database} label="Archivos" value={counts.files} />
-        <ContextMetric icon={MessageSquare} label="Chats" value={counts.chats} />
-        <ContextMetric icon={BookOpen} label="Docs" value={counts.documents} />
-        <ContextMetric icon={Lock} label="Memoria" value={counts.memories} />
-      </div>
+      <div className="h-px bg-border/70" />
 
-      <div className="px-4 pb-4 space-y-2">
-        {coverage && coverage.total > 0 && (
-          <div className="rounded-lg bg-background/70 px-3 py-2">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-              <span>Texto extraído para IA</span>
-              <span>{coverage.extracted}/{coverage.total} · {coverage.percent}%</span>
-            </div>
-            <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
-              <div className="h-full rounded-full bg-emerald-500" style={{ width: `${coverage.percent}%` }} />
-            </div>
-          </div>
+      <section className="px-4 py-4">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t("memory")}</h3>
+          <span className="inline-flex items-center gap-1 rounded-full border border-border/70 px-2 py-0.5 text-[11px] text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            {t("onlyYou")}
+          </span>
+        </div>
+        {memories.length === 0 ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("memoryDesc")}</p>
+        ) : (
+          <ul className="space-y-1 pt-1">
+            {memories.slice(0, 4).map((item) => (
+              <li key={item.id} className="flex items-start gap-2 text-xs text-foreground/85">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />
+                <span className="flex-1 leading-snug">{item.fact}</span>
+                <button type="button" onClick={() => onDeleteMemory(item.id)} aria-label={t("forgetFact")}>
+                  <X className="h-3 w-3 text-muted-foreground" />
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
-        <div className="flex flex-wrap gap-1.5">
-          {readyItems.map(item => (
-            <span
-              key={item.label}
-              className={cn(
-                "rounded-full border px-2 py-0.5 text-[10px]",
-                item.ok
-                  ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                  : "border-border/70 bg-background/70 text-muted-foreground"
-              )}
-            >
-              {item.ok ? "Activo" : "Pendiente"} · {item.label}
-            </span>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
+      </section>
 
-function ContextMetric({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  value: number
-}) {
-  return (
-    <div className="rounded-lg bg-background/70 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <Icon className="h-3.5 w-3.5" />
-        {label}
-      </div>
-      <div className="mt-1 text-lg font-semibold tabular-nums">{value}</div>
+      <div className="h-px bg-border/70" />
+
+      <section className="px-4 py-4">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t("context")}</h3>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="icon" variant="ghost" className="h-7 w-7" aria-label={t("attachFile")}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[220px]">
+              <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
+                <Upload className="mr-2 h-4 w-4" />
+                {t("uploadFromDevice")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onAddText}>
+                <FileText className="mr-2 h-4 w-4" />
+                {t("addTextContent")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => { window.location.href = "/conexiones" }}>
+                GitHub
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => { window.location.href = "/conexiones" }}>
+                Drive
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => onAddFiles(event.target.files)}
+          />
+        </div>
+        {project.files.length === 0 ? (
+          <div className="rounded-xl bg-muted/40 px-4 py-8 text-center">
+            <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-background">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">{t("filesEmpty")}</p>
+          </div>
+        ) : (
+          <ul className="space-y-1">
+            {project.files.map((file) => (
+              <li key={file.id} className="flex items-center gap-2 text-xs">
+                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="truncate">{file.originalName}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <div className="h-px bg-border/70" />
+
+      <section className="px-4 py-4">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">{t("scheduled")}</h3>
+          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onSchedule} aria-label={t("scheduledCreate")}>
+            <Plus className="h-4 w-4" />
+          </Button>
+        </div>
+        {scheduledTasks.length === 0 ? (
+          <p className="text-xs leading-relaxed text-muted-foreground">{t("scheduledDesc")}</p>
+        ) : (
+          <ul className="space-y-1 pt-1">
+            {scheduledTasks.map((task) => (
+              <li key={task.id} className="flex items-center gap-2 text-xs">
+                <CalendarDays className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="truncate">{task.name}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   )
 }
@@ -577,183 +644,6 @@ function ProjectChatsSection({
   )
 }
 
-function MemorySection({
-  t, memories, onDelete,
-}: {
-  t: ReturnType<typeof useTranslations>
-  memories: ProjectMemoryItem[]
-  onDelete: (id: string) => void
-}) {
-  return (
-    <div className="rounded-xl border border-border/60 bg-card">
-      <div className="flex items-start justify-between px-4 pt-4">
-        <h3 className="text-sm font-semibold">{t("memory")}</h3>
-        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground rounded-full border border-border/60 px-2 py-0.5">
-          <Lock className="h-3 w-3" />
-          {t("onlyYou")}
-        </span>
-      </div>
-
-      {memories.length === 0 ? (
-        <p className="text-xs text-muted-foreground px-4 pb-4 pt-1 leading-relaxed">
-          {t("memoryDesc")}
-        </p>
-      ) : (
-        <ul className="px-2 pb-3 pt-1 space-y-0.5">
-          {memories.map(m => (
-            <li
-              key={m.id}
-              className="group flex items-start gap-2 rounded-md px-2 py-1.5 hover:bg-muted/40 transition-colors"
-            >
-              <span className="mt-1.5 h-1 w-1 rounded-full bg-muted-foreground/60 shrink-0" />
-              <p className="text-xs leading-snug flex-1 text-foreground/85">{m.fact}</p>
-              <button
-                onClick={() => onDelete(m.id)}
-                className="opacity-100 md:opacity-0 md:group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-all shrink-0"
-                aria-label={t("forgetFact")}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function InstructionsSection({
-  t, project, onEdit,
-}: {
-  t: ReturnType<typeof useTranslations>
-  project: ProjectDetail
-  onEdit: () => void
-}) {
-  return (
-    <div className="rounded-xl border border-border/60 bg-card">
-      <div className="flex items-center justify-between px-4 pt-4">
-        <h3 className="text-sm font-semibold">{t("instructions")}</h3>
-        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={onEdit} aria-label={t("editInstructions")}>
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
-      {project.instructions ? (
-        <p className="text-xs text-foreground/80 px-4 pb-4 pt-1 leading-relaxed whitespace-pre-wrap line-clamp-6">
-          {project.instructions}
-        </p>
-      ) : (
-        <p className="text-xs text-muted-foreground px-4 pb-4 pt-1 leading-relaxed">
-          {t("instructionsDesc")}
-        </p>
-      )}
-    </div>
-  )
-}
-
-function FilesSection({
-  t, project, onChange,
-}: {
-  t: ReturnType<typeof useTranslations>
-  project: ProjectDetail
-  onChange: () => void
-}) {
-  const fileInputRef = React.useRef<HTMLInputElement | null>(null)
-  const [uploading, setUploading] = React.useState(false)
-
-  async function handlePickFile() {
-    fileInputRef.current?.click()
-  }
-
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || [])
-    if (files.length === 0) return
-    setUploading(true)
-    try {
-      // Upload first, then attach. We reuse the existing /api/files
-      // upload endpoint — projects just borrow the File model via its
-      // projectId FK, so no new upload plumbing is needed.
-      const uploaded = await projectsService.uploadFiles(files)
-      for (const u of uploaded) {
-        await projectsService.attachFile(project.id, u.id)
-      }
-      onChange()
-      toast.success(t("filesAttached", { count: uploaded.length }))
-    } catch (err: any) {
-      toast.error(err?.message || t("uploadFailed"))
-    } finally {
-      setUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ""
-    }
-  }
-
-  async function detach(fileId: string) {
-    try {
-      await projectsService.detachFile(project.id, fileId)
-      onChange()
-    } catch (err: any) {
-      toast.error(err?.message || t("detachFailed"))
-    }
-  }
-
-  return (
-    <div className="rounded-xl border border-border/60 bg-card">
-      <div className="flex items-center justify-between px-4 pt-4 pb-2">
-        <h3 className="text-sm font-semibold">{t("files")}</h3>
-        <Button
-          size="icon" variant="ghost" className="h-7 w-7"
-          onClick={handlePickFile}
-          disabled={uploading}
-          aria-label={t("attachFile")}
-        >
-          {uploading ? <ThinkingIndicator size="sm" /> : <Plus className="h-4 w-4" />}
-        </Button>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          className="hidden"
-          onChange={handleFileChange}
-        />
-      </div>
-
-      {project.files.length === 0 ? (
-        <div className="mx-3 mb-3 rounded-lg bg-muted/40 py-8 px-4 text-center">
-          <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-md bg-background">
-            <Paperclip className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            {t("filesEmpty")}
-          </p>
-        </div>
-      ) : (
-        <div className="px-2 pb-2">
-          {project.files.map(f => (
-            <div
-              key={f.id}
-              className="group flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-muted/40 transition-colors"
-            >
-              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-              <div className="min-w-0 flex-1">
-                <div className="text-xs font-medium truncate">{f.originalName}</div>
-                <div className="text-[10px] text-muted-foreground">
-                  {(f.size / 1024).toFixed(1)} KB
-                </div>
-              </div>
-              <Button
-                size="icon" variant="ghost"
-                className="h-6 w-6 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
-                onClick={() => detach(f.id)}
-                aria-label={t("detachFile")}
-              >
-                <Trash2 className="h-3 w-3" />
-              </Button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
 
 // ─── Dialogs ──────────────────────────────────────────────────────────────
 
@@ -791,10 +681,10 @@ function InstructionsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
-          <DialogTitle>{t("instructions")}</DialogTitle>
+          <DialogTitle>{t("instructionsSetupTitle")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">{t("instructionsDesc")}</p>
+          <p className="text-xs text-muted-foreground">{t("instructionsSetupDesc")}</p>
           <Textarea
             value={value}
             onChange={(e) => setValue(e.target.value)}
@@ -1048,5 +938,175 @@ function NotFoundState({ t }: { t: ReturnType<typeof useTranslations> }) {
       <h2 className="text-lg font-semibold tracking-tight mb-1">{t("notFoundTitle")}</h2>
       <p className="text-sm text-muted-foreground mb-6">{t("notFoundDesc")}</p>
     </div>
+  )
+}
+
+function TextContentDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (text: string) => Promise<void>
+}) {
+  const t = useTranslations("projects")
+  const [text, setText] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) {
+      setText("")
+      setBusy(false)
+    }
+  }, [open])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[520px] rounded-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("addTextTitle")}</DialogTitle>
+        </DialogHeader>
+        <Textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder={t("addTextPlaceholder")}
+          rows={8}
+          className="resize-none"
+        />
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            {t("cancel")}
+          </Button>
+          <Button
+            type="button"
+            disabled={!text.trim() || busy}
+            onClick={async () => {
+              setBusy(true)
+              try {
+                await onSubmit(text.trim())
+                onOpenChange(false)
+              } catch (err: any) {
+                toast.error(err?.message || t("uploadFailed"))
+              } finally {
+                setBusy(false)
+              }
+            }}
+          >
+            {t("save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function ScheduledTaskDialog({
+  open,
+  onOpenChange,
+  projectId,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  projectId: string
+  onSaved: (tasks: ProjectScheduledTask[]) => void
+}) {
+  const t = useTranslations("projects")
+  const [name, setName] = React.useState("")
+  const [instructions, setInstructions] = React.useState("")
+  const [frequency, setFrequency] = React.useState<"manual" | "daily" | "weekly">("manual")
+  const [requireComputer, setRequireComputer] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!open) {
+      setName("")
+      setInstructions("")
+      setFrequency("manual")
+      setRequireComputer(false)
+    }
+  }, [open])
+
+  const canSave = name.trim().length > 0 && instructions.trim().length > 0
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[560px] rounded-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("scheduledCreate")}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">{t("scheduledName")} *</label>
+            <Input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">{t("scheduledInstructions")} *</label>
+            <Textarea
+              value={instructions}
+              onChange={(event) => setInstructions(event.target.value)}
+              rows={5}
+              className="resize-none"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="w-24 text-sm">{t("scheduledFrequency")}</span>
+            <select
+              value={frequency}
+              onChange={(event) => setFrequency(event.target.value as typeof frequency)}
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="manual">{t("scheduledManual")}</option>
+              <option value="daily">{t("scheduledDaily")}</option>
+              <option value="weekly">{t("scheduledWeekly")}</option>
+            </select>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="w-24 text-sm">{t("scheduledPermissions")}</span>
+            <span className="rounded-md border border-input px-3 py-1.5 text-sm">{t("scheduledApproveManual")}</span>
+          </div>
+          <label className="flex items-start gap-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={requireComputer}
+              onChange={(event) => setRequireComputer(event.target.checked)}
+            />
+            <span>
+              <span className="font-medium">{t("scheduledRequireComputer")}</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">{t("scheduledRequireComputerHint")}</span>
+            </span>
+          </label>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            {t("cancel")}
+          </Button>
+          <Button
+            type="button"
+            disabled={!canSave}
+            onClick={() => {
+              const next = writeProjectScheduledTasks(projectId, [
+                ...readProjectScheduledTasks(projectId),
+                {
+                  id: `task_${Date.now()}`,
+                  name: name.trim(),
+                  instructions: instructions.trim(),
+                  frequency,
+                  approval: "manual",
+                  requireComputer,
+                  createdAt: new Date().toISOString(),
+                },
+              ])
+              onSaved(next)
+              onOpenChange(false)
+              toast.success("Tarea programada")
+            }}
+          >
+            {t("save")}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

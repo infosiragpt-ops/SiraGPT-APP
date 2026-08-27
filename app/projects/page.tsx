@@ -45,6 +45,7 @@ import { Input } from "@/components/ui/input"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 import { projectsService, type Project } from "@/lib/projects-service"
+import { CreateProjectDialog } from "@/components/projects/create-project-dialog"
 import {
   daysUntilProjectDelete,
   getProjectVisualIdentity,
@@ -97,6 +98,7 @@ export default function ProjectsPage() {
   const [openingProjectId, setOpeningProjectId] = React.useState<string | null>(null)
   const [restoringProjectId, setRestoringProjectId] = React.useState<string | null>(null)
   const [deleteProject, setDeleteProject] = React.useState<AppProject | null>(null)
+  const [createOpen, setCreateOpen] = React.useState(false)
 
   const dateLocale = React.useMemo(() => {
     if (typeof document !== "undefined" && document.documentElement.lang?.startsWith("es")) return dfEs
@@ -107,7 +109,7 @@ export default function ProjectsPage() {
     let cancelled = false
     setLoading(true)
     projectsService
-      .list({ type: "webapp", sort: "activity", trash: projectScope === "trash" })
+      .list({ sort: "activity", trash: projectScope === "trash" })
       .then((rows) => {
         if (!cancelled) setProjects(rows)
       })
@@ -186,24 +188,21 @@ export default function ProjectsPage() {
     }
   }, [restoringProjectId])
 
-  const createFullStackProject = React.useCallback(async () => {
-    if (openingProjectId) return
-    setOpeningProjectId("new-fullstack")
-    try {
-      const target = await projectsService.create({
-        name: "Nueva app full-stack",
-        description: "Frontend, backend y base de datos creados desde una sola instrucción.",
-        type: "webapp",
-        hostingProvider: "sira-cloud",
-      })
-      setProjects((prev) => [target, ...prev.filter((row) => row.id !== target.id)])
-      router.push(codeWorkspaceHref(target.id))
-    } catch (err: any) {
-      toast.error(err?.message || "No se pudo crear la app full-stack")
-    } finally {
-      setOpeningProjectId(null)
+  const createKnowledgeProject = React.useCallback(async (project: Project, folderFiles?: File[]) => {
+    setProjects((prev) => [project, ...prev.filter((row) => row.id !== project.id)])
+    if (folderFiles && folderFiles.length > 0) {
+      try {
+        const uploaded = await projectsService.uploadFiles(folderFiles)
+        for (const file of uploaded) {
+          await projectsService.attachFile(project.id, file.id)
+        }
+        toast.success(`${folderFiles.length} archivo(s) de la carpeta añadidos`)
+      } catch (err: any) {
+        toast.warning(err?.message || "El proyecto se creó, pero no se pudo subir la carpeta")
+      }
     }
-  }, [openingProjectId, router])
+    router.push(`/projects/${project.id}`)
+  }, [router])
 
   return (
     <div className={styles.page}>
@@ -217,6 +216,15 @@ export default function ProjectsPage() {
           <h1 className={styles.title} data-testid="projects-page-title">
             {t("title")}
           </h1>
+          <Button
+            type="button"
+            className="ml-auto"
+            onClick={() => setCreateOpen(true)}
+            data-testid="projects-new-button"
+          >
+            <Plus className="h-4 w-4" strokeWidth={2} />
+            {t("newProject")}
+          </Button>
         </header>
 
         <section className={styles.toolbar}>
@@ -310,11 +318,11 @@ export default function ProjectsPage() {
           <Button
             type="button"
             className={styles.builderButton}
-            disabled={openingProjectId === "new-fullstack"}
-            onClick={() => void createFullStackProject()}
+            disabled={false}
+            onClick={() => setCreateOpen(true)}
           >
             <Plus className="h-4 w-4" strokeWidth={2} />
-            {openingProjectId === "new-fullstack" ? "Creando..." : "Nuevo software"}
+            {t("create")}
           </Button>
         </section>
 
@@ -357,6 +365,11 @@ export default function ProjectsPage() {
             if (!open) setDeleteProject(null)
           }}
           onConfirm={moveProjectToTrash}
+        />
+        <CreateProjectDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          onCreated={(project, folderFiles) => void createKnowledgeProject(project, folderFiles)}
         />
       </main>
     </div>
@@ -814,15 +827,11 @@ function toAppProject(project: Project, dateLocale: Locale): AppProject {
     timeLabel: rel,
     status: "active",
     artifactType: "webapp",
-    href: codeWorkspaceHref(project.id),
+    href: `/projects/${project.id}`,
     deletedAt: project.deletedAt || null,
     deleteAfter: project.deleteAfter || null,
     visual: getProjectVisualIdentity(project),
   }
-}
-
-function codeWorkspaceHref(projectId: string) {
-  return `/code?folder=${encodeURIComponent(projectId)}`
 }
 
 type Locale = typeof dfEn
