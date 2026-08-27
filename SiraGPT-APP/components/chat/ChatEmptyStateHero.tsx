@@ -15,6 +15,7 @@ import {
   PenLine,
   Presentation,
   Search,
+  Settings2,
   Sparkles,
   Table,
 } from "lucide-react"
@@ -99,6 +100,8 @@ function sampleSixPrompts(): ExamplePrompt[] {
   return sampleSixFromPool(PROMPT_POOL)
 }
 
+const ONBOARDING_STORAGE_KEY = "siragpt:chat-onboarding:v1"
+
 interface ChatEmptyStateHeroProps {
   userName?: string | null
   onSelectPrompt: (prompt: string) => void
@@ -117,6 +120,59 @@ export function ChatEmptyStateHero({
   // dep array gives us per-mount stability without re-rendering on
   // every keystroke in the composer below.
   const prompts = React.useMemo(sampleSixPrompts, [])
+  const [completedSteps, setCompletedSteps] = React.useState<Record<string, boolean>>({})
+
+  React.useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(ONBOARDING_STORAGE_KEY)
+      if (saved) setCompletedSteps(JSON.parse(saved))
+    } catch {
+      // The checklist is an enhancement; a blocked localStorage must never
+      // prevent the chat composer from rendering.
+    }
+  }, [])
+
+  const completeStep = React.useCallback((step: string) => {
+    setCompletedSteps((current) => {
+      const next = { ...current, [step]: true }
+      try {
+        window.localStorage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(next))
+      } catch {
+        // Keep the optimistic UI state even when storage is unavailable.
+      }
+      return next
+    })
+  }, [])
+
+  const handlePromptSelect = React.useCallback((prompt: string) => {
+    completeStep("first-prompt")
+    onSelectPrompt(prompt)
+  }, [completeStep, onSelectPrompt])
+
+  const onboardingSteps = [
+    {
+      id: "first-prompt",
+      label: "Envía tu primer mensaje",
+      action: () => handlePromptSelect("Ayúdame a organizar mi semana en un plan claro y realista."),
+      icon: Sparkles,
+    },
+    {
+      id: "personalize",
+      label: "Personaliza tus respuestas",
+      href: "/settings?s=personalization",
+      onClick: () => completeStep("personalize"),
+      icon: Settings2,
+    },
+    {
+      id: "code",
+      label: "Prueba el espacio de código",
+      href: "/code",
+      onClick: () => completeStep("code"),
+      icon: Code2,
+    },
+  ]
+  const completedCount = onboardingSteps.filter((step) => completedSteps[step.id]).length
+  const onboardingComplete = completedCount === onboardingSteps.length
 
   return (
     <motion.div
@@ -161,7 +217,7 @@ export function ChatEmptyStateHero({
           <button
             key={item.label}
             type="button"
-            onClick={() => onSelectPrompt(item.prompt)}
+            onClick={() => handlePromptSelect(item.prompt)}
             className={cn(
               "group flex items-center gap-2 rounded-2xl border border-border/60 bg-card/60 px-3 py-2.5 text-left",
               "shadow-[0_1px_2px_rgba(15,23,42,0.03)] dark:shadow-none",
@@ -183,6 +239,76 @@ export function ChatEmptyStateHero({
           </button>
         ))}
       </div>
+
+      {!onboardingComplete && (
+        <section
+          aria-label="Primeros pasos"
+          className="mx-auto mt-6 w-full max-w-2xl rounded-2xl border border-border/55 bg-muted/20 p-3 sm:p-4"
+        >
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-foreground">Primeros pasos</p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {completedCount} de {onboardingSteps.length} completados
+              </p>
+            </div>
+            <div
+              aria-label={`${completedCount} de ${onboardingSteps.length} pasos completados`}
+              className="h-1.5 w-20 overflow-hidden rounded-full bg-border/50"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={onboardingSteps.length}
+              aria-valuenow={completedCount}
+            >
+              <div
+                className="h-full rounded-full bg-foreground/70 transition-[width] duration-300"
+                style={{ width: `${(completedCount / onboardingSteps.length) * 100}%` }}
+              />
+            </div>
+          </div>
+          <div className="grid gap-1 sm:grid-cols-3">
+            {onboardingSteps.map((step) => {
+              const done = Boolean(completedSteps[step.id])
+              const content = (
+                <>
+                  <span className={cn(
+                    "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg",
+                    done ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-background text-muted-foreground",
+                  )}>
+                    {done ? <span aria-hidden>✓</span> : <step.icon className="h-3.5 w-3.5" strokeWidth={1.8} />}
+                  </span>
+                  <span className={cn("truncate text-[12px] font-medium", done && "text-muted-foreground line-through")}>
+                    {step.label}
+                  </span>
+                </>
+              )
+
+              if (step.href) {
+                return (
+                  <a
+                    key={step.id}
+                    href={step.href}
+                    onClick={step.onClick}
+                    className="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+                  >
+                    {content}
+                  </a>
+                )
+              }
+              return (
+                <button
+                  key={step.id}
+                  type="button"
+                  onClick={step.action}
+                  className="group flex min-w-0 items-center gap-2 rounded-xl px-2 py-2 text-left transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-foreground/15"
+                >
+                  {content}
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Discoverability hint — quiet line under the prompt grid that
           surfaces the most useful global shortcut (⌘K / Ctrl+K opens

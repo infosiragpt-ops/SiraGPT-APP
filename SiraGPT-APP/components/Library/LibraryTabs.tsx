@@ -13,6 +13,7 @@ import {
     Play,
     ExternalLink,
     Sparkles,
+    RefreshCw,
 } from 'lucide-react';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { ThinkingIndicator } from '@/components/ui/thinking-indicator';
@@ -91,6 +92,7 @@ const MediaLibrary: React.FC = () => {
     // Web-app projects (created via "Proyecto en la nube" → tipo "App web").
     // Surfaced alongside chat-generated artifacts in the "Apps web" tab.
     const [webappProjects, setWebappProjects] = useState<Project[]>([]);
+    const [reloadToken, setReloadToken] = useState(0);
     const router = useRouter();
     const searchParams = useSearchParams();
 
@@ -124,7 +126,7 @@ const MediaLibrary: React.FC = () => {
 
     useEffect(() => {
         fetchMediaItems(currentPage, filterType);
-    }, [currentPage, filterType]);
+    }, [currentPage, filterType, reloadToken]);
 
     // Pull the user's "App web" projects for the webapp/all tabs. Failures
     // are non-fatal — the artifact grid still renders without them.
@@ -327,14 +329,33 @@ const MediaLibrary: React.FC = () => {
             {filterType === 'references' ? (
                 <ResearchLibrary />
             ) : <>
-            {loading && <p className="text-gray-600 text-center py-10">Cargando archivos…</p>}
-            {error && <p className="text-red-500 text-center py-10">Error: {error}</p>}
+            {loading && (
+                <div className="grid grid-cols-2 gap-3 pb-4 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 xl:grid-cols-5" aria-label="Cargando biblioteca">
+                    {Array.from({ length: 5 }).map((_, index) => (
+                        <div key={index} className="library-card aspect-square animate-pulse bg-muted/50" />
+                    ))}
+                </div>
+            )}
+            {error && (
+                <div className="flex flex-col items-center gap-3 py-12 text-center" role="alert">
+                    <p className="text-sm text-red-500">No se pudo cargar la biblioteca: {error}</p>
+                    <button
+                        type="button"
+                        onClick={() => setReloadToken((token) => token + 1)}
+                        className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                    >
+                        <RefreshCw className="h-4 w-4" />
+                        Reintentar
+                    </button>
+                </div>
+            )}
 
             <div className="library-grid grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 xl:grid-cols-5">
                 {visibleProjects.map((project) => (
-                    <div
+                    <button
+                        type="button"
                         key={`project-${project.id}`}
-                        className="library-card group cursor-pointer aspect-square"
+                        className="library-card group aspect-square text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2"
                         onClick={() => router.push(`/projects/${project.id}`)}
                         title={`Abrir empresa: ${project.name}`}
                     >
@@ -345,13 +366,14 @@ const MediaLibrary: React.FC = () => {
                             </p>
                             <span className="text-xs text-[hsl(var(--muted-foreground))]">Empresa · App web</span>
                         </div>
-                    </div>
+                    </button>
                 ))}
                 {visibleItems.length > 0 ? (
                     visibleItems.map((item) => (
-                        <div
+                        <button
+                            type="button"
                             key={`${item.messageId}-${item.type}-${item.timestamp}`}
-                            className="library-card group cursor-pointer aspect-square"
+                            className="library-card group aspect-square text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2"
                             onClick={() => handleItemClick(item)}
                             title={item.chatId ? 'Abrir el chat donde se creó' : (item.prompt || item.filename)}
                         >
@@ -406,7 +428,7 @@ const MediaLibrary: React.FC = () => {
                                     <Play className="w-8 h-8 text-[hsl(var(--foreground))]/80 opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </div>
                             )}
-                        </div>
+                        </button>
                     ))
                 ) : (
                     visibleProjects.length === 0 && !loading && (

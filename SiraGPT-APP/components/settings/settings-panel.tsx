@@ -28,7 +28,7 @@ import {
   ArrowLeft, Sliders, Brain, Bell, Sparkles, Plug, Clock, Database,
   ShieldCheck, UserCircle2, Star, Check, Monitor, Moon, MoonStar, Sun,
   LogOut, Download, Trash2, Github, Globe, Linkedin, Mail,
-  ExternalLink, Search as SearchIcon, Camera, Plus,
+  ExternalLink, Search as SearchIcon, Camera, Plus, RefreshCw,
   AlertTriangle, Laptop} from "lucide-react"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
@@ -811,24 +811,65 @@ function ModelsSection() {
   const { settings, update } = useSettings()
   const [models, setModels] = React.useState<any[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState<string | null>(null)
+  const [query, setQuery] = React.useState("")
+  const [favoritesOnly, setFavoritesOnly] = React.useState(false)
+  const [reloadToken, setReloadToken] = React.useState(0)
 
   React.useEffect(() => {
-    const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
-    fetch(`${base}/ai/models?type=TEXT`)
-      .then((r) => r.ok ? r.json() : { models: [] })
-      .then((d) => setModels(d.models || []))
-      .catch(() => setModels([]))
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    apiClient.getAIModels("TEXT")
+      .then((d: any) => {
+        if (!cancelled) {
+          const liveModels = Array.isArray(d?.models) ? d.models : []
+          // The catalog can intentionally return an empty list during a
+          // provider refresh. Keep the configured policy fallback selectable
+          // instead of leaving this page in a dead-end state.
+          const fallbackName = typeof d?.policy?.fallbackModel === "string"
+            ? d.policy.fallbackModel.trim()
+            : ""
+          setModels(
+            liveModels.length > 0 || !fallbackName
+              ? liveModels
+              : [{
+                  id: fallbackName,
+                  name: fallbackName,
+                  displayName: fallbackName,
+                  provider: "Respaldo",
+                  description: "Modelo configurado como respaldo temporal",
+                }],
+          )
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          setModels([])
+          setError(err?.message || "No se pudieron cargar los modelos")
+        }
+      })
       .finally(() => setLoading(false))
-  }, [])
+    return () => { cancelled = true }
+  }, [reloadToken])
+
+  const filteredModels = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    return models.filter((model) => {
+      const searchable = `${model.displayName || ""} ${model.name || ""} ${model.provider || ""} ${model.description || ""}`.toLowerCase()
+      return (!normalized || searchable.includes(normalized))
+        && (!favoritesOnly || settings.favoriteModels.includes(model.name))
+    })
+  }, [models, query, favoritesOnly, settings.favoriteModels])
 
   const byProvider = React.useMemo(() => {
     const groups: Record<string, any[]> = {}
-    for (const m of models) (groups[m.provider || "Other"] ??= []).push(m)
+    for (const m of filteredModels) (groups[m.provider || "Other"] ??= []).push(m)
     const order = ["OpenAI", "Anthropic", "Google", "Gemini", "xAI", "OpenRouter"]
     return Object.fromEntries(
       Object.entries(groups).sort(([a], [b]) => (order.indexOf(a) === -1 ? 99 : order.indexOf(a)) - (order.indexOf(b) === -1 ? 99 : order.indexOf(b))),
     )
-  }, [models])
+  }, [filteredModels])
 
   const toggleFav = (name: string) => {
     const next = settings.favoriteModels.includes(name)
@@ -845,6 +886,29 @@ function ModelsSection() {
         Explora los modelos disponibles, marca favoritos y configura tu modelo predeterminado.
       </div>
 
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar por nombre o proveedor"
+            aria-label="Buscar modelos"
+            className="pl-9"
+          />
+        </div>
+        <Button
+          type="button"
+          variant={favoritesOnly ? "default" : "outline"}
+          onClick={() => setFavoritesOnly((value) => !value)}
+          className="shrink-0 gap-2"
+          aria-pressed={favoritesOnly}
+        >
+          <Star className={cn("h-4 w-4", favoritesOnly && "fill-current")} />
+          Favoritos
+        </Button>
+      </div>
+
       <SectionCard title="Modelo predeterminado" desc="Se usa cuando abres un chat nuevo">
         <Row title={current?.displayName || "Sin seleccionar"} desc={current?.provider ? `${current.provider} · ${current.name}` : "—"}>
           <Badge variant="secondary" className="gap-1"><Check className="h-3 w-3" />Por defecto</Badge>
@@ -852,12 +916,44 @@ function ModelsSection() {
       </SectionCard>
 
       {loading ? (
-        <Card className="p-8 text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
-          <ThinkingIndicator size="sm" />Cargando modelos…
+        <div className="grid gap-2" aria-label="Cargando modelos">
+          {[1, 2, 3].map((item) => (
+            <Card key={item} className="h-[60px] animate-pulse bg-muted/40" />
+          ))}
+        </div>
+      ) : error ? (
+        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+          <AlertTriangle className="h-5 w-5 text-amber-500" />
+          <div>
+            <p className="text-sm font-medium">No se pudieron cargar los modelos</p>
+            <p className="mt-1 text-xs text-muted-foreground">{error}</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => setReloadToken((value) => value + 1)} className="gap-2">
+            <RefreshCw className="h-3.5 w-3.5" />
+            Reintentar
+          </Button>
+        </Card>
+      ) : filteredModels.length === 0 ? (
+        <Card className="flex flex-col items-center gap-3 p-8 text-center">
+          <SearchIcon className="h-5 w-5 text-muted-foreground" />
+          <div>
+            <p className="text-sm font-medium">
+              {models.length === 0 ? "No hay modelos disponibles" : "No hay coincidencias"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {models.length === 0 ? "Comprueba la conexión e inténtalo de nuevo." : "Prueba otra búsqueda o muestra todos los modelos."}
+            </p>
+          </div>
+          {models.length === 0 ? (
+            <Button variant="outline" size="sm" onClick={() => setReloadToken((value) => value + 1)} className="gap-2">
+              <RefreshCw className="h-3.5 w-3.5" />
+              Reintentar
+            </Button>
+          ) : null}
         </Card>
       ) : (
         Object.entries(byProvider).map(([provider, list]) => (
-          <SectionCard key={provider} title={provider} desc={`${list.length} modelo(s)`}>
+          <SectionCard key={provider} title={provider} desc={`${list.length} modelo(s)${query || favoritesOnly ? " · filtrados" : ""}`}>
             {list.slice(0, 60).map((m) => (
               <Row key={m.id} title={m.displayName || m.name} desc={m.description || m.name}>
                 <div className="flex items-center gap-1">
