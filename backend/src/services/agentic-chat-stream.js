@@ -1106,6 +1106,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // legacy chat unavailable.
     let __coworkRun = null;
     let __coworkMemoryBlock = '';
+    let __appsBlock = '';
     let __coworkHarnessEnabled = true;
     try {
       __coworkHarnessEnabled = require('./agent-harness/run-agent-turn').harnessEnabled();
@@ -1168,6 +1169,15 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         });
       } catch (coworkError) {
         try { console.warn('[cowork] run bootstrap failed (legacy chat continues):', coworkError.message); } catch (_) { /* noop */ }
+      }
+    }
+
+    if (toolContext?.prisma && toolContext?.userId) {
+      try {
+        const appRuntime = require('./apps');
+        __appsBlock = await appRuntime.buildUserAppsPrompt(toolContext.prisma, toolContext.userId);
+      } catch (appsError) {
+        try { console.warn('[apps] prompt block failed:', appsError.message); } catch (_) { /* noop */ }
       }
     }
 
@@ -1485,6 +1495,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         ].join('\n')
         : '',
       __coworkMemoryBlock,
+      __appsBlock,
       buildThreadWorkContext(history, userQuery),
       'Este hilo es una sesion agentica autónoma: decide, usa herramientas, observa resultados, corrige y finaliza solo cuando tengas una respuesta verificable o la tarea esté completa.',
       'Estándar de calidad (nivel experto): en tareas difíciles piensa antes de actuar (descompón el problema, explicita supuestos y casos límite, verifica cada paso); responde con la conclusión primero; distingue lo que SABES de lo que INFIERES de lo que NO SABES y NUNCA inventes datos, cifras, citas, fuentes ni APIs; cuando dudes, verifica con una herramienta en vez de adivinar; admite y corrige tus errores directamente, sin adular.',
@@ -2212,6 +2223,55 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           toDate:     { type: 'string', description: 'ISO date YYYY-MM-DD upper bound for posts.' },
         },
         required: ['query'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_list_repos, {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 30, description: 'How many repos. Default 10.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.github_create_issue, {
+        type: 'object',
+        properties: {
+          owner: { type: 'string', description: 'Repository owner.' },
+          repo: { type: 'string', description: 'Repository name.' },
+          title: { type: 'string', description: 'Issue title.' },
+          body: { type: 'string', description: 'Issue body.' },
+          approved: { type: 'boolean', description: 'Required true to perform the write.' },
+        },
+        required: ['owner', 'repo', 'title'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.linkedin_read_profile, {
+        type: 'object',
+        properties: {},
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.linkedin_publish_post, {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Post text.' },
+          approved: { type: 'boolean', description: 'Required true to publish.' },
+        },
+        required: ['text'],
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.x_list_mentions, {
+        type: 'object',
+        properties: {
+          limit: { type: 'integer', minimum: 5, maximum: 20, description: 'How many mentions. Default 10.' },
+        },
+        additionalProperties: false,
+      }),
+      adaptAgentTool(agentTools.x_publish_post, {
+        type: 'object',
+        properties: {
+          text: { type: 'string', description: 'Post text, max 280.' },
+          approved: { type: 'boolean', description: 'Required true to publish.' },
+        },
+        required: ['text'],
         additionalProperties: false,
       }),
     ];

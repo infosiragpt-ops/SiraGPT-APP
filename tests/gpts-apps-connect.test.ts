@@ -8,6 +8,7 @@ import {
   catalogNavigateUrl,
   connectGptStoreApp,
   firstPartyOAuthStartPath,
+  isHealthConnected,
   resolveConnectPlan,
   type ConnectableApp,
   type ConnectGptStoreAppDeps,
@@ -177,11 +178,11 @@ describe("gpts apps real connect", () => {
     assert.equal(deps.calls.navigate.length, 0)
   })
 
-  it("starts LinkedIn OAuth and only then marks connected", async () => {
+  it("starts LinkedIn OAuth without marking Conectada before vault health", async () => {
     const deps = fakeDeps()
     const result = await connectGptStoreApp(linkedin, deps)
     assert.equal(result.status, "oauth_started")
-    assert.equal(result.markConnected, true)
+    assert.equal(result.markConnected, false)
     assert.equal(result.redirectUrl, "https://oauth.example/authorize")
     assert.equal(deps.calls.fetch[0]?.path, "/social-posts/connect/linkedin")
     assert.equal(deps.calls.assign.length, 0)
@@ -216,7 +217,8 @@ describe("gpts apps real connect", () => {
     const deps = fakeDeps()
     const result = await connectGptStoreApp(indeed, deps)
     assert.equal(result.status, "computer_opened")
-    assert.equal(result.markConnected, true)
+    assert.equal(result.markConnected, false)
+    assert.equal(result.message, CONNECT_COPY.computerOpened)
     assert.deepEqual(deps.calls.create, ["Conectar Indeed"])
     assert.deepEqual(deps.calls.ensure, ["chat-new"])
     assert.deepEqual(deps.calls.navigate, [{
@@ -261,14 +263,21 @@ describe("gpts apps real connect", () => {
     assert.equal(CONNECT_COPY.connecting, "Conectando…")
     assert.equal(CONNECT_COPY.connected, "Conectada")
     assert.equal(CONNECT_COPY.reconnect, "Reconectar")
+    assert.equal(CONNECT_COPY.computerOpened, "Abierta en la computadora")
+    assert.equal(isHealthConnected("connected"), true)
+    assert.equal(isHealthConnected("degraded"), false)
+    assert.equal(isHealthConnected("expired"), false)
   })
 
   it("removes the localStorage stub from the Apps section", () => {
     const section = source("components/gpts/gpts-apps-section.tsx")
     assert.match(section, /connectGptStoreApp/)
     assert.match(section, /CONNECT_COPY/)
-    assert.match(section, /if \(!result\.markConnected\)/)
+    assert.match(section, /\/apps\/connections/)
+    assert.match(section, /isHealthConnected/)
     assert.match(section, /agent-computer\/navigate/)
+    assert.doesNotMatch(section, /settings\.apps\[id\]\?\.connected/)
     assert.doesNotMatch(section, /toast\.success\(`\$\{app\.name\} conectada`\)/)
+    assert.doesNotMatch(section, /update\(\{ apps:/)
   })
 })

@@ -1528,12 +1528,88 @@ const x_search = {
 
 // ─── Registry ───────────────────────────────────────────────────────────────
 
+function createConnectedAppTool(name, description, schema) {
+  return {
+    name,
+    description,
+    schema,
+    async handler(args, ctx) {
+      const userId = ctx?.userId;
+      const db = ctx?.prisma;
+      if (!userId || !db) return { error: 'missing_user_context' };
+      // eslint-disable-next-line global-require
+      const appRuntime = require('../apps');
+      const out = await appRuntime.executeTool(db, {
+        userId,
+        toolName: name,
+        args: args || {},
+        approved: args?.approved === true || ctx?.approved === true,
+      });
+      return out.result || out;
+    },
+  };
+}
+
+const github_list_repos = createConnectedAppTool(
+  'github_list_repos',
+  'Lista repositorios de la cuenta GitHub conectada del usuario (OAuth). No usa tokens de sistema. Si GitHub no está conectada, pide al usuario que la conecte en /conexiones.',
+  {
+    limit: 'number (optional, default 10, max 30)',
+  },
+);
+
+const github_create_issue = createConnectedAppTool(
+  'github_create_issue',
+  'Crea un issue en un repositorio GitHub de la cuenta conectada. Escritura: requiere approved=true. Nunca inventes el token.',
+  {
+    owner: 'string (required)',
+    repo: 'string (required)',
+    title: 'string (required)',
+    body: 'string (optional)',
+    approved: 'boolean (required for the write to run)',
+  },
+);
+
+const linkedin_read_profile = createConnectedAppTool(
+  'linkedin_read_profile',
+  'Lee el perfil LinkedIn (OpenID userinfo) de la cuenta conectada del usuario.',
+  {},
+);
+
+const linkedin_publish_post = createConnectedAppTool(
+  'linkedin_publish_post',
+  'Publica un post en LinkedIn con la cuenta conectada. Escritura: requiere approved=true.',
+  {
+    text: 'string (required)',
+    approved: 'boolean (required for the write to run)',
+  },
+);
+
+const x_list_mentions = createConnectedAppTool(
+  'x_list_mentions',
+  'Lista menciones recientes de la cuenta X conectada del usuario.',
+  {
+    limit: 'number (optional, default 10, max 20)',
+  },
+);
+
+const x_publish_post = createConnectedAppTool(
+  'x_publish_post',
+  'Publica un post en X con la cuenta conectada. Escritura: requiere approved=true.',
+  {
+    text: 'string (required, max 280)',
+    approved: 'boolean (required for the write to run)',
+  },
+);
+
 const ALL_TOOLS = [
   read_file, list_files, search_docs, search_code, search_graph, get_symbol, static_checks, propose_patch,
   web_search, read_url, web_extract, session_search, session_list, session_history,
   session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
   github_search, scientific_search, x_search,
+  github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
+  x_list_mentions, x_publish_post,
 ];
 
 const TOOLS_BY_NAME = new Map(ALL_TOOLS.map(t => [t.name, t]));
@@ -1552,6 +1628,8 @@ module.exports = {
   session_send, session_spawn,
   browser_navigate, browser_click, browser_type, browser_scroll,
   github_search, scientific_search, x_search,
+  github_list_repos, github_create_issue, linkedin_read_profile, linkedin_publish_post,
+  x_list_mentions, x_publish_post,
   STATIC_CHECKS,
   buildCommentCodeMask, // exported for tests
   stripStringLiterals,  // exported for tests
