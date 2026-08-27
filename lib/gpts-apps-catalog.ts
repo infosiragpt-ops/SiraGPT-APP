@@ -1,6 +1,6 @@
 /**
  * Curated Apps catalog shown at the foot of /gpts.
- * Connection state lives in settings.apps[id].connected.
+ * Connection state for first-party OAuth apps is health-backed via /api/apps/connections.
  */
 
 export type GptStoreAppCategory =
