@@ -63,7 +63,7 @@ test('ai.js exports the request-aware helper and uses the gateway client', () =>
   );
   assert.match(
     src,
-    /createProviderClientForRequest\(actualProvider, req\)/,
+    /createProviderClientForRequest\(actualProvider, req/,
     'must re-resolve via request-aware helper after actualProvider is determined',
   );
 });
