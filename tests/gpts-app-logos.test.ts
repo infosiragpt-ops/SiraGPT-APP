@@ -6,6 +6,7 @@ import path from "node:path"
 import { GPT_STORE_APPS } from "../lib/gpts-apps-catalog"
 import {
   apexLogoDomain,
+  brandFaviconPath,
   generatedBrandTileUrl,
   gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
@@ -34,6 +35,10 @@ function isProfessionalLogoUrl(url: string) {
     || url.includes("logo.clearbit.com/")
     || url.includes("icons.duckduckgo.com/ip3/")
   )
+}
+
+function isLocalBrandPath(url: string) {
+  return url.startsWith("/conexiones-logos/brand/")
 }
 
 describe("gptStoreAppLogoUrl · professional resolver", () => {
@@ -113,19 +118,34 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
 
   it("gives every catalog app a professional primary URL and a fallback src", () => {
     assert.ok(GPT_STORE_APPS.length >= 300)
+    let withBrand = 0
     for (const app of GPT_STORE_APPS) {
       const sources = gptStoreAppLogoSources(app)
       const primary = gptStoreAppLogoUrl(app)
       assert.ok(isProfessionalLogoUrl(primary), `${app.id} primary ${primary}`)
       assert.ok(sources.every((url) => !isGoogleFavicon128(url)))
-      // Invented GPT-store hosts only get the generated SVG (it never 404s).
-      // Real or official-mark apps keep a second src for AppLogo onError.
-      if (officialMarkPath(app)) {
+      const hasLocal = Boolean(officialMarkPath(app) || brandFaviconPath(app))
+      if (hasLocal) {
         assert.ok(sources.length >= 2, `${app.id} needs a fallback src`)
         assert.match(sources[0], /^\/conexiones-logos\//)
+        if (brandFaviconPath(app) && !officialMarkPath(app)) {
+          assert.ok(isLocalBrandPath(sources[0]), `${app.id} should lead with its brand favicon`)
+          withBrand += 1
+        }
       } else {
         assert.match(sources[0], /^data:image\/svg\+xml/)
       }
     }
+    assert.ok(withBrand >= 100, `expected 100+ brand favicons, got ${withBrand}`)
+  })
+
+  it("resolves real favicon brand marks for real catalog domains", () => {
+    const homey = { id: "homey", domain: "homey.app", name: "Homey" }
+    assert.equal(brandFaviconPath(homey), "/conexiones-logos/brand/homey.app.png")
+    const labyrinthos = { id: "tarot", domain: "labyrinthos.co", name: "Tarot" }
+    assert.match(String(brandFaviconPath(labyrinthos) || ""), /^\/conexiones-logos\/brand\/labyrinthos\.co\.png$/)
+    const fotocasa = { id: "fotocasa", domain: "fotocasa.es", name: "Fotocasa" }
+    assert.match(String(brandFaviconPath(fotocasa) || ""), /^\/conexiones-logos\/brand\/fotocasa\.es\.png$/)
+    assert.equal(brandFaviconPath({ id: "steer-astro", domain: "steerastro.com" }), null)
   })
 })
