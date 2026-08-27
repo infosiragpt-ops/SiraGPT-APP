@@ -3,10 +3,12 @@
  *
  * Priority:
  *   1. Local official mark under /conexiones-logos/ (Simple Icons / owned SVG)
- *   2. Generated professional SVG tile (category glyph + monogram) for
+ *   2. Local high-res brand favicon under /conexiones-logos/brand/ (real
+ *      domain mark bundled from each site's favicon, 32px+)
+ *   3. Generated professional SVG tile (category glyph + monogram) for
  *      invented GPT-store hosts and any app without an official mark —
  *      never a blank box or a generic globe favicon
- *   3. Initials fallback is handled by AppLogo after every src errors
+ *   4. Initials fallback is handled by AppLogo after every src errors
  */
 
 export type GptStoreAppLogoInput = {
@@ -25,7 +27,204 @@ function explicitCatalogLogo(app: GptStoreAppLogoInput): string | null {
 
 const LOCAL_LOGO_DIR = "/conexiones-logos"
 
-/** Multi-part public suffixes used as the brand apex (not just the last 2 labels). */
+/**
+ * Real domain marks bundled locally from each site's favicon (Google s2
+ * sz=256, filtered to PNG/JPEG 32px+ so tiles never look pixelated).
+ * Domain (normalized, apex) → bundled file.
+ */
+const BRAND_FAVICON_BY_DOMAIN: Record<string, string> = {
+  "12andus.com": "/conexiones-logos/brand/12andus.com.png",
+  "3byggetilbud.dk": "/conexiones-logos/brand/3byggetilbud.dk.png",
+  "airtasker.com": "/conexiones-logos/brand/airtasker.com.png",
+  "aliexpress.com": "/conexiones-logos/brand/aliexpress.com.png",
+  "alldiscgolf.com": "/conexiones-logos/brand/alldiscgolf.com.png",
+  "amoremall.com": "/conexiones-logos/brand/amoremall.com.png",
+  "annstracts.com": "/conexiones-logos/brand/annstracts.com.jpg",
+  "anyvan.com": "/conexiones-logos/brand/anyvan.com.png",
+  "apexlog.com": "/conexiones-logos/brand/apexlog.com.png",
+  "arabica.ae": "/conexiones-logos/brand/arabica.ae.png",
+  "astrologic.io": "/conexiones-logos/brand/astrologic.io.png",
+  "athome.lu": "/conexiones-logos/brand/athome.lu.png",
+  "auto.com": "/conexiones-logos/brand/auto.com.jpg",
+  "automotion.com": "/conexiones-logos/brand/automotion.com.png",
+  "autoscout24.com": "/conexiones-logos/brand/autoscout24.com.png",
+  "autotrader.com": "/conexiones-logos/brand/autotrader.com.png",
+  "autovit.ro": "/conexiones-logos/brand/autovit.ro.jpg",
+  "avito.ma": "/conexiones-logos/brand/avito.ma.png",
+  "bandsintown.com": "/conexiones-logos/brand/bandsintown.com.png",
+  "bayut.com": "/conexiones-logos/brand/bayut.com.png",
+  "bayut.sa": "/conexiones-logos/brand/bayut.sa.png",
+  "belk.com": "/conexiones-logos/brand/belk.com.png",
+  "blibli.com": "/conexiones-logos/brand/blibli.com.png",
+  "boostermage.com": "/conexiones-logos/brand/boostermage.com.jpg",
+  "boulanger.com": "/conexiones-logos/brand/boulanger.com.png",
+  "boyner.com.tr": "/conexiones-logos/brand/boyner.com.tr.png",
+  "buywise.com": "/conexiones-logos/brand/buywise.com.png",
+  "cafe24.com": "/conexiones-logos/brand/cafe24.com.png",
+  "cargo.com": "/conexiones-logos/brand/cargo.com.png",
+  "carparts.com": "/conexiones-logos/brand/carparts.com.png",
+  "cars24.com": "/conexiones-logos/brand/cars24.com.png",
+  "carsguide.com.au": "/conexiones-logos/brand/carsguide.com.au.png",
+  "carslink.ai": "/conexiones-logos/brand/carslink.ai.png",
+  "carwale.com": "/conexiones-logos/brand/carwale.com.png",
+  "casepoint.com": "/conexiones-logos/brand/casepoint.com.png",
+  "catholic-index.com": "/conexiones-logos/brand/catholic-index.com.png",
+  "chaiz.com": "/conexiones-logos/brand/chaiz.com.png",
+  "champfy.com": "/conexiones-logos/brand/champfy.com.png",
+  "chotot.com": "/conexiones-logos/brand/chotot.com.png",
+  "clickdealer.com": "/conexiones-logos/brand/clickdealer.com.png",
+  "cliqueimudei.com": "/conexiones-logos/brand/cliqueimudei.com.png",
+  "closai.com": "/conexiones-logos/brand/closai.com.png",
+  "clutch.ca": "/conexiones-logos/brand/clutch.ca.png",
+  "coches.net": "/conexiones-logos/brand/coches.net.png",
+  "confused.com": "/conexiones-logos/brand/confused.com.png",
+  "connectlinx.com": "/conexiones-logos/brand/connectlinx.com.jpg",
+  "cora.com": "/conexiones-logos/brand/cora.com.png",
+  "cowboy.com": "/conexiones-logos/brand/cowboy.com.png",
+  "crbonfree.com": "/conexiones-logos/brand/crbonfree.com.jpg",
+  "daft.ie": "/conexiones-logos/brand/daft.ie.png",
+  "develoop.com": "/conexiones-logos/brand/develoop.com.png",
+  "dewa.gov.ae": "/conexiones-logos/brand/dewa.gov.ae.jpg",
+  "dispatcher.city": "/conexiones-logos/brand/dispatcher.city.jpg",
+  "donedeal.ie": "/conexiones-logos/brand/donedeal.ie.png",
+  "elandmall.com": "/conexiones-logos/brand/elandmall.com.png",
+  "elko.is": "/conexiones-logos/brand/elko.is.png",
+  "emlakjet.com": "/conexiones-logos/brand/emlakjet.com.png",
+  "endurance-planner.com": "/conexiones-logos/brand/endurance-planner.com.png",
+  "engelvoelkers.com": "/conexiones-logos/brand/engelvoelkers.com.png",
+  "etland.co.kr": "/conexiones-logos/brand/etland.co.kr.png",
+  "etsy.com": "/conexiones-logos/brand/etsy.com.png",
+  "experteer.com": "/conexiones-logos/brand/experteer.com.png",
+  "facebook.com": "/conexiones-logos/brand/facebook.com.png",
+  "foodora.com": "/conexiones-logos/brand/foodora.com.png",
+  "foodpanda.com": "/conexiones-logos/brand/foodpanda.com.png",
+  "fotocasa.es": "/conexiones-logos/brand/fotocasa.es.png",
+  "freediver.com": "/conexiones-logos/brand/freediver.com.png",
+  "freshblooms.com": "/conexiones-logos/brand/freshblooms.com.png",
+  "fryd.com": "/conexiones-logos/brand/fryd.com.png",
+  "gathrd.com": "/conexiones-logos/brand/gathrd.com.png",
+  "gethumandesign.com": "/conexiones-logos/brand/gethumandesign.com.png",
+  "getir.com": "/conexiones-logos/brand/getir.com.png",
+  "github.com": "/conexiones-logos/brand/github.com.png",
+  "gmarket.co.kr": "/conexiones-logos/brand/gmarket.co.kr.png",
+  "gsretail.com": "/conexiones-logos/brand/gsretail.com.png",
+  "gumtree.com": "/conexiones-logos/brand/gumtree.com.png",
+  "guyal.com": "/conexiones-logos/brand/guyal.com.png",
+  "haaretz.com": "/conexiones-logos/brand/haaretz.com.png",
+  "hausmann-immobilien.com": "/conexiones-logos/brand/hausmann-immobilien.com.jpg",
+  "hepsiemlak.com": "/conexiones-logos/brand/hepsiemlak.com.png",
+  "herecomestheguide.com": "/conexiones-logos/brand/herecomestheguide.com.png",
+  "home-connect.com": "/conexiones-logos/brand/home-connect.com.png",
+  "homey.app": "/conexiones-logos/brand/homey.app.png",
+  "hookradar.com": "/conexiones-logos/brand/hookradar.com.png",
+  "horizon-shield.com": "/conexiones-logos/brand/horizon-shield.com.png",
+  "horoscope.com": "/conexiones-logos/brand/horoscope.com.png",
+  "idealista.com": "/conexiones-logos/brand/idealista.com.png",
+  "immobiliare.it": "/conexiones-logos/brand/immobiliare.it.png",
+  "immobilien-franzen.com": "/conexiones-logos/brand/immobilien-franzen.com.png",
+  "immobilier.lefigaro.fr": "/conexiones-logos/brand/immobilier.lefigaro.fr.png",
+  "imovirtual.com": "/conexiones-logos/brand/imovirtual.com.png",
+  "indeed.com": "/conexiones-logos/brand/indeed.com.png",
+  "innovist.com": "/conexiones-logos/brand/innovist.com.png",
+  "inoreader.com": "/conexiones-logos/brand/inoreader.com.png",
+  "internshala.com": "/conexiones-logos/brand/internshala.com.png",
+  "iqcars.net": "/conexiones-logos/brand/iqcars.net.png",
+  "japanbox.kz": "/conexiones-logos/brand/japanbox.kz.jpg",
+  "jobicy.com": "/conexiones-logos/brand/jobicy.com.png",
+  "justlife.com": "/conexiones-logos/brand/justlife.com.png",
+  "karaca.com": "/conexiones-logos/brand/karaca.com.png",
+  "kleinanzeigen.de": "/conexiones-logos/brand/kleinanzeigen.de.png",
+  "labyrinthos.co": "/conexiones-logos/brand/labyrinthos.co.png",
+  "lacentrale.fr": "/conexiones-logos/brand/lacentrale.fr.png",
+  "ladepeche.fr": "/conexiones-logos/brand/ladepeche.fr.png",
+  "landwirt.com": "/conexiones-logos/brand/landwirt.com.png",
+  "laundryheap.com": "/conexiones-logos/brand/laundryheap.com.png",
+  "leparisien.fr": "/conexiones-logos/brand/leparisien.fr.png",
+  "lfmall.co.kr": "/conexiones-logos/brand/lfmall.co.kr.png",
+  "liftosaur.com": "/conexiones-logos/brand/liftosaur.com.jpg",
+  "linkedin.com": "/conexiones-logos/brand/linkedin.com.png",
+  "loft.com.br": "/conexiones-logos/brand/loft.com.br.png",
+  "loveandlemons.com": "/conexiones-logos/brand/loveandlemons.com.png",
+  "lu.ma": "/conexiones-logos/brand/lu.ma.jpg",
+  "lume.com": "/conexiones-logos/brand/lume.com.png",
+  "luxauto.lu": "/conexiones-logos/brand/luxauto.lu.png",
+  "magneto365.com": "/conexiones-logos/brand/magneto365.com.png",
+  "meetup.com": "/conexiones-logos/brand/meetup.com.png",
+  "mercadolibre.com": "/conexiones-logos/brand/mercadolibre.com.png",
+  "midilibre.fr": "/conexiones-logos/brand/midilibre.fr.png",
+  "milanuncios.com": "/conexiones-logos/brand/milanuncios.com.png",
+  "mimove.com": "/conexiones-logos/brand/mimove.com.png",
+  "minty.com": "/conexiones-logos/brand/minty.com.png",
+  "mondoir.art": "/conexiones-logos/brand/mondoir.art.png",
+  "monnier-paris.com": "/conexiones-logos/brand/monnier-paris.com.png",
+  "motos.net": "/conexiones-logos/brand/motos.net.png",
+  "muju.com": "/conexiones-logos/brand/muju.com.png",
+  "mumzworld.com": "/conexiones-logos/brand/mumzworld.com.png",
+  "municibid.com": "/conexiones-logos/brand/municibid.com.jpg",
+  "musinsa.com": "/conexiones-logos/brand/musinsa.com.png",
+  "mycolive.com": "/conexiones-logos/brand/mycolive.com.png",
+  "myregistry.com": "/conexiones-logos/brand/myregistry.com.png",
+  "nailie.jp": "/conexiones-logos/brand/nailie.jp.png",
+  "newsify.co": "/conexiones-logos/brand/newsify.co.png",
+  "octopart.com": "/conexiones-logos/brand/octopart.com.png",
+  "oliveyoung.co.kr": "/conexiones-logos/brand/oliveyoung.co.kr.png",
+  "olx.in": "/conexiones-logos/brand/olx.in.png",
+  "onxmaps.com": "/conexiones-logos/brand/onxmaps.com.png",
+  "ordering.tools": "/conexiones-logos/brand/ordering.tools.png",
+  "otomoto.pl": "/conexiones-logos/brand/otomoto.pl.png",
+  "pararius.com": "/conexiones-logos/brand/pararius.com.png",
+  "penny.de": "/conexiones-logos/brand/penny.de.png",
+  "polypo.com": "/conexiones-logos/brand/polypo.com.png",
+  "powerly.ai": "/conexiones-logos/brand/powerly.ai.png",
+  "print.com": "/conexiones-logos/brand/print.com.png",
+  "printa.com": "/conexiones-logos/brand/printa.com.png",
+  "privatemdlabs.com": "/conexiones-logos/brand/privatemdlabs.com.png",
+  "producthunt.com": "/conexiones-logos/brand/producthunt.com.png",
+  "promocodes.com": "/conexiones-logos/brand/promocodes.com.png",
+  "publicstorage.com": "/conexiones-logos/brand/publicstorage.com.png",
+  "quintoandar.com.br": "/conexiones-logos/brand/quintoandar.com.br.png",
+  "rakhys.com": "/conexiones-logos/brand/rakhys.com.png",
+  "realestate.com.au": "/conexiones-logos/brand/realestate.com.au.png",
+  "redfin.com": "/conexiones-logos/brand/redfin.com.png",
+  "refermate.com": "/conexiones-logos/brand/refermate.com.png",
+  "remode.com": "/conexiones-logos/brand/remode.com.png",
+  "rentals.ca": "/conexiones-logos/brand/rentals.ca.png",
+  "rilev.com": "/conexiones-logos/brand/rilev.com.png",
+  "rozetka.com.ua": "/conexiones-logos/brand/rozetka.com.ua.png",
+  "sangria.com": "/conexiones-logos/brand/sangria.com.png",
+  "shipal.com": "/conexiones-logos/brand/shipal.com.png",
+  "shopback.com": "/conexiones-logos/brand/shopback.com.png",
+  "simplysefer.com": "/conexiones-logos/brand/simplysefer.com.png",
+  "smartcustomer.com": "/conexiones-logos/brand/smartcustomer.com.png",
+  "softonic.com": "/conexiones-logos/brand/softonic.com.png",
+  "spaartje.com": "/conexiones-logos/brand/spaartje.com.jpg",
+  "spotahome.com": "/conexiones-logos/brand/spotahome.com.png",
+  "squareyards.com": "/conexiones-logos/brand/squareyards.com.png",
+  "standvirtual.com": "/conexiones-logos/brand/standvirtual.com.png",
+  "swiggy.com": "/conexiones-logos/brand/swiggy.com.png",
+  "systembolaget.se": "/conexiones-logos/brand/systembolaget.se.png",
+  "tastewise.io": "/conexiones-logos/brand/tastewise.io.png",
+  "tessie.com": "/conexiones-logos/brand/tessie.com.png",
+  "tessun-immobilien.com": "/conexiones-logos/brand/tessun-immobilien.com.png",
+  "tiendanube.com": "/conexiones-logos/brand/tiendanube.com.png",
+  "tillys.com": "/conexiones-logos/brand/tillys.com.png",
+  "tixel.com": "/conexiones-logos/brand/tixel.com.png",
+  "trocafone.com": "/conexiones-logos/brand/trocafone.com.png",
+  "trovaprezzi.it": "/conexiones-logos/brand/trovaprezzi.it.png",
+  "tuespaciopr.com": "/conexiones-logos/brand/tuespaciopr.com.jpg",
+  "vaktim.com": "/conexiones-logos/brand/vaktim.com.png",
+  "volkswagen.com": "/conexiones-logos/brand/volkswagen.com.png",
+  "wallector.com": "/conexiones-logos/brand/wallector.com.png",
+  "weavify.com": "/conexiones-logos/brand/weavify.com.png",
+  "webuycars.co.za": "/conexiones-logos/brand/webuycars.co.za.png",
+  "whowhatwear.com": "/conexiones-logos/brand/whowhatwear.com.png",
+  "workopia.com": "/conexiones-logos/brand/workopia.com.jpg",
+  "x.com": "/conexiones-logos/brand/x.com.png",
+  "yogiyo.co.kr": "/conexiones-logos/brand/yogiyo.co.kr.png",
+  "zenshopping.com": "/conexiones-logos/brand/zenshopping.com.png",
+  "zola.com": "/conexiones-logos/brand/zola.com.png",
+}
+
 const MULTI_PART_SUFFIXES = new Set([
   "co.uk",
   "com.au",
@@ -327,6 +526,15 @@ export function officialMarkPath(app: GptStoreAppLogoInput): string | null {
   return null
 }
 
+export function brandFaviconPath(app: GptStoreAppLogoInput): string | null {
+  const host = normalizeLogoDomain(app.domain)
+  if (!host) return null
+  if (BRAND_FAVICON_BY_DOMAIN[host]) return BRAND_FAVICON_BY_DOMAIN[host]
+  const apex = apexLogoDomain(host)
+  if (apex && apex !== host && BRAND_FAVICON_BY_DOMAIN[apex]) return BRAND_FAVICON_BY_DOMAIN[apex]
+  return null
+}
+
 export function clearbitLogoUrl(domain: string): string {
   return `https://logo.clearbit.com/${encodeURIComponent(normalizeLogoDomain(domain))}`
 }
@@ -424,9 +632,11 @@ export function gptStoreAppLogoSources(app: GptStoreAppLogoInput): string[] {
   const generated = generatedBrandTileUrl(app)
   const explicit = explicitCatalogLogo(app)
   const local = officialMarkPath(app)
+  const brand = brandFaviconPath(app)
   const sources: string[] = []
   if (explicit) sources.push(explicit)
   if (local && local !== explicit) sources.push(local)
+  if (brand && brand !== explicit && brand !== local) sources.push(brand)
   if (sources.length > 0) return [...sources, generated]
   // Unmapped + invented hosts: a real local SVG so the tile is never a blank
   // box or a generic globe from a failed favicon/Clearbit lookup.
