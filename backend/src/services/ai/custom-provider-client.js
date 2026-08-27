@@ -21,14 +21,16 @@
 
 const KEY_PREFIX = 'enc:v1:';
 
-const SIRA_MINI_DISPLAY_NAME = 'Sira Mini';
+const SIRA_MINI_DISPLAY_NAME = 'SiraGPT Mini';
 const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
 const SIRA_MINI_UPSTREAM_ID = 'moondream:latest';
 const SIRA_MINI_DEFAULT_BASE_URL = 'http://siragpt-ollama:11434/v1';
-const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de Sira.';
+const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
 const SIRA_MINI_ALIASES = Object.freeze([
   'sira-mini',
   'sira mini',
+  'siragpt mini',
+  'siragpt-mini',
   'moondream',
   'moondream:latest',
 ]);
@@ -200,6 +202,7 @@ async function findAiModelByName(prisma, model) {
           OR: [
             { name: { in: ['moondream', SIRA_MINI_UPSTREAM_ID, SIRA_MINI_PUBLIC_NAME] } },
             { displayName: SIRA_MINI_DISPLAY_NAME },
+            { displayName: 'Sira Mini' },
           ],
         },
         select,

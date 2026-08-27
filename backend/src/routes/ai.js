@@ -988,7 +988,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       const publicModel = publicPickerModel(m);
       return {
         ...publicModel,
-        // Picker: displayName Sira Mini. Never leak Ollama / HuggingFace / moondream.
+        // Picker: displayName SiraGPT Mini. Never leak Ollama / HuggingFace / moondream.
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
         planAccess: {

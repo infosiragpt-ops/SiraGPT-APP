@@ -47,6 +47,7 @@ test('isOpenAiCompatibleUrl: /v1 base, not cloud-provider inference', () => {
 test('isSiraMiniAlias: public + upstream ids', () => {
   assert.equal(isSiraMiniAlias('sira-mini'), true);
   assert.equal(isSiraMiniAlias('Sira Mini'), true);
+  assert.equal(isSiraMiniAlias('SiraGPT Mini'), true);
   assert.equal(isSiraMiniAlias('moondream'), true);
   assert.equal(isSiraMiniAlias('moondream:latest'), true);
   assert.equal(isSiraMiniAlias('deepseek-v4-flash'), false);
@@ -81,7 +82,8 @@ test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace'
     isActive: true,
   });
   assert.equal(publicModel.name, SIRA_MINI_PUBLIC_NAME);
-  assert.equal(publicModel.displayName, 'Sira Mini');
+  assert.equal(publicModel.displayName, 'SiraGPT Mini');
+  assert.equal(publicModel.description, 'Modelo rápido multimodal de SiraGPT.');
   assert.equal(publicModel.provider, 'Sira');
   const blob = JSON.stringify(publicModel).toLowerCase();
   assert.equal(blob.includes('moondream'), false);
@@ -95,9 +97,9 @@ test('catalogProviderForConnection canonicalises custom → Custom', () => {
 });
 
 test('defaultCustomDisplayName: moondream → Sira Mini without a vendor display_name', () => {
-  assert.equal(defaultCustomDisplayName('moondream', ''), 'Sira Mini');
-  assert.equal(defaultCustomDisplayName('moondream:latest', 'Moondream'), 'Sira Mini');
-  assert.equal(defaultCustomDisplayName('moondream', 'Sira Mini'), 'Sira Mini');
+  assert.equal(defaultCustomDisplayName('moondream', ''), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('moondream:latest', 'Moondream'), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('moondream', 'Sira Mini'), 'SiraGPT Mini');
   assert.equal(defaultCustomDisplayName('llama3.2', 'Llama 3.2'), 'Llama 3.2');
 });
 

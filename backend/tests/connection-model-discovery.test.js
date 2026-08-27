@@ -287,7 +287,7 @@ test('syncConnectionModels: custom /v1 persists provider Custom and moondream as
   assert.equal(fetchImpl.calls[0].url, 'http://siragpt-ollama:11434/v1/models');
   assert.equal(created[0].name, 'moondream');
   assert.equal(created[0].provider, 'Custom');
-  assert.equal(created[0].displayName, 'Sira Mini');
+  assert.equal(created[0].displayName, 'SiraGPT Mini');
   assert.equal(created[0].isActive, false);
 });
 
