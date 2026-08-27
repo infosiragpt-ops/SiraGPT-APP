@@ -100,23 +100,86 @@ async function deleteSourceSecret(prisma, secretRef) {
     await prisma.socialConnection.deleteMany({ where: { id: parsed.id } });
     return true;
   }
+  if (parsed.kind === SECRET_KINDS.CONNECTOR_ACCOUNT && prisma.connectorAccount) {
+    const row = prisma.connectorAccount.findUnique
+      ? await prisma.connectorAccount.findUnique({
+        where: { id: parsed.id },
+        select: { id: true, userId: true, provider: true },
+      })
+      : null;
+    if (row?.provider === 'google_drive' && prisma.user?.updateMany) {
+      await prisma.user.updateMany({
+        where: { id: row.userId },
+        data: { googleServicesTokens: null },
+      });
+    }
+    if (prisma.connectorAccount.updateMany) {
+      await prisma.connectorAccount.updateMany({
+        where: { id: parsed.id },
+        data: {
+          tokenEncrypted: null,
+          scopes: [],
+          status: 'disconnected',
+          lastHealthAt: new Date(),
+        },
+      });
+    }
+    return true;
+  }
+  if (parsed.kind === SECRET_KINDS.USER_GOOGLE_SERVICES) {
+    if (prisma.user?.updateMany) {
+      await prisma.user.updateMany({
+        where: { id: parsed.id },
+        data: { googleServicesTokens: null },
+      });
+    }
+    if (prisma.connectorAccount?.updateMany) {
+      await prisma.connectorAccount.updateMany({
+        where: { userId: parsed.id, provider: 'google_drive' },
+        data: {
+          tokenEncrypted: null,
+          scopes: [],
+          status: 'disconnected',
+          lastHealthAt: new Date(),
+        },
+      });
+    }
+    return true;
+  }
   return false;
 }
 
 async function fallbackSecretRef(prisma, userId, appId) {
+  const store = require('./store');
   if (appId === 'github' && prisma.githubAccount?.findUnique) {
     const account = await prisma.githubAccount.findUnique({
       where: { userId: String(userId) },
       select: { id: true },
     });
-    return account ? require('./store').githubSecretRef(account.id) : null;
+    return account ? store.githubSecretRef(account.id) : null;
   }
-  if (prisma.socialConnection?.findUnique) {
+  if ((appId === 'onedrive' || appId === 'google-drive') && prisma.connectorAccount?.findUnique) {
+    const provider = appId === 'onedrive' ? 'onedrive' : 'google_drive';
+    const account = await prisma.connectorAccount.findUnique({
+      where: { userId_provider: { userId: String(userId), provider } },
+      select: { id: true, tokenEncrypted: true },
+    });
+    if (account?.id) return store.connectorSecretRef(account.id);
+    if (appId === 'google-drive' && prisma.user?.findUnique) {
+      const user = await prisma.user.findUnique({
+        where: { id: String(userId) },
+        select: { googleServicesTokens: true },
+      });
+      if (user?.googleServicesTokens) return store.userGoogleServicesSecretRef(userId);
+    }
+    return null;
+  }
+  if (['linkedin', 'x', 'facebook'].includes(appId) && prisma.socialConnection?.findUnique) {
     const social = await prisma.socialConnection.findUnique({
       where: { userId_platform: { userId: String(userId), platform: appId } },
       select: { id: true },
     });
-    return social ? require('./store').socialSecretRef(social.id) : null;
+    return social ? store.socialSecretRef(social.id) : null;
   }
   return null;
 }

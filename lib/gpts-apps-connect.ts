@@ -21,7 +21,6 @@ export type FirstPartyProvider =
   | "gmail"
   | "google-services"
   | "onedrive"
-  | "google-drive"
 
 export type ConnectPlan =
   | { kind: "oauth"; provider: FirstPartyProvider; startPath: string }
@@ -94,7 +93,6 @@ const FIRST_PARTY_START: Record<FirstPartyProvider, string> = {
   gmail: "/auth/gmail",
   "google-services": "/auth/google-services",
   onedrive: "/apps/connect/onedrive",
-  "google-drive": "/apps/connect/google-drive",
 }
 
 function normalizeHost(domain: string): string {
@@ -132,26 +130,24 @@ export function resolveFirstPartyProvider(app: ConnectableApp): FirstPartyProvid
   if (
     id === "onedrive"
     || id === "one-drive"
+    || id === "microsoftonedrive"
     || hostMatches(host, "onedrive.live.com")
     || hostMatches(host, "onedrive.com")
+    || hostMatches(host, "sharepoint.com")
     || host === "1drv.ms"
   ) {
     return "onedrive"
   }
   if (
-    id === "google-drive"
-    || id === "gdrive"
-    || id === "drive"
-    || host === "drive.google.com"
-  ) {
-    return "google-drive"
-  }
-  if (
     id === "gcalendar"
     || id === "google"
     || id === "google-services"
+    || id === "google-drive"
+    || id === "gdrive"
+    || id === "drive"
     || host === "google.com"
     || host === "calendar.google.com"
+    || host === "drive.google.com"
   ) {
     return "google-services"
   }

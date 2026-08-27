@@ -23,6 +23,7 @@ const ALIASES = Object.freeze({
   'google-drive': 'google-drive',
   drive: 'google-drive',
   googledrive: 'google-drive',
+  google_drive: 'google-drive',
 });
 
 function normalizeKey(value) {

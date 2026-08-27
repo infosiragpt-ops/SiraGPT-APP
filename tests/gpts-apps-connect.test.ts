@@ -158,8 +158,8 @@ describe("gpts apps real connect", () => {
       domain: "drive.google.com",
     }), {
       kind: "oauth",
-      provider: "google-drive",
-      startPath: "/apps/connect/google-drive",
+      provider: "google-services",
+      startPath: "/auth/google-services",
     })
     assert.deepEqual(resolveConnectPlan({
       id: "gdrive",
@@ -167,8 +167,17 @@ describe("gpts apps real connect", () => {
       domain: "drive.google.com",
     }), {
       kind: "oauth",
-      provider: "google-drive",
-      startPath: "/apps/connect/google-drive",
+      provider: "google-services",
+      startPath: "/auth/google-services",
+    })
+    assert.deepEqual(resolveConnectPlan({
+      id: "sharepoint-files",
+      name: "SharePoint",
+      domain: "contoso.sharepoint.com",
+    }), {
+      kind: "oauth",
+      provider: "onedrive",
+      startPath: "/apps/connect/onedrive",
     })
     assert.deepEqual(resolveConnectPlan(indeed), {
       kind: "computer",

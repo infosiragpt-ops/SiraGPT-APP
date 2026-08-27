@@ -64,7 +64,11 @@ describe("apps @ mentions", () => {
     assert.deepEqual(drivePayload.mentionedApps.sort(), ["google-drive", "onedrive"])
     assert.ok(drivePayload.needsConnect.some((app) => app.id === "onedrive"))
     assert.equal(resolveConnectPlan({ id: "onedrive", name: "OneDrive", domain: "onedrive.live.com" }).kind, "oauth")
-    assert.equal(resolveConnectPlan({ id: "google-drive", name: "Google Drive", domain: "drive.google.com" }).kind, "oauth")
+    assert.deepEqual(resolveConnectPlan({ id: "google-drive", name: "Google Drive", domain: "drive.google.com" }), {
+      kind: "oauth",
+      provider: "google-services",
+      startPath: "/auth/google-services",
+    })
     const onedrive = apps.find((app) => app.id === "onedrive")
     const gdrive = apps.find((app) => app.id === "google-drive")
     assert.equal(onedrive?.logo, "/conexiones-logos/onedrive.svg")

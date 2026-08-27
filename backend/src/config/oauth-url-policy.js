@@ -15,6 +15,7 @@ const CALLBACK_PATHS = Object.freeze({
   googleServices: '/api/auth/google-services/callback',
   github: '/api/github/callback',
   spotify: '/api/spotify/callback',
+  onedrive: '/api/apps/oauth/onedrive/callback',
 });
 
 const stripTrailingSlash = (value) => String(value || '').replace(/\/+$/, '');
@@ -238,6 +239,13 @@ function getSpotifyCallbackURL(env = process.env) {
   return buildCallbackUrl(env, 'SPOTIFY_REDIRECT_URI', CALLBACK_PATHS.spotify);
 }
 
+function getOnedriveCallbackURL(env = process.env) {
+  const key = String(env.ONEDRIVE_REDIRECT_URI || '').trim()
+    ? 'ONEDRIVE_REDIRECT_URI'
+    : 'MICROSOFT_REDIRECT_URI';
+  return buildCallbackUrl(env, key, CALLBACK_PATHS.onedrive);
+}
+
 function getFrontendUrl(env = process.env) {
   const candidates = FRONTEND_ORIGIN_ENV_KEYS.map((key) => env[key]);
 
@@ -376,6 +384,7 @@ module.exports = {
   getGoogleServicesCallbackURL,
   getGithubCallbackURL,
   getSpotifyCallbackURL,
+  getOnedriveCallbackURL,
   getGooglePostCallbackURL,
   getGithubPostCallbackURL,
   getSpotifyPostCallbackURL,

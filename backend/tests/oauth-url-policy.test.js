@@ -11,6 +11,8 @@ const {
   getGoogleCallbackURL,
   getGoogleGmailCallbackURL,
   getGoogleServicesCallbackURL,
+  getOnedriveCallbackURL,
+  CALLBACK_PATHS,
   getGithubCallbackURL,
   getSpotifyCallbackURL,
   getGooglePostCallbackURL,
@@ -63,6 +65,16 @@ test('production honors explicit API-host callbacks for all Google flows', () =>
   assert.equal(getGoogleCallbackURL(env), 'https://api.siragpt.com/api/auth/google/callback');
   assert.equal(getGoogleGmailCallbackURL(env), 'https://api.siragpt.com/api/auth/gmail/callback');
   assert.equal(getGoogleServicesCallbackURL(env), 'https://api.siragpt.com/api/auth/google-services/callback');
+  assert.equal(CALLBACK_PATHS.google, '/api/auth/google/callback');
+  assert.equal(CALLBACK_PATHS.googleServices, '/api/auth/google-services/callback');
+  assert.equal(CALLBACK_PATHS.onedrive, '/api/apps/oauth/onedrive/callback');
+  assert.equal(
+    getOnedriveCallbackURL({
+      ...env,
+      BACKEND_PUBLIC_URL: 'https://api.siragpt.com',
+    }),
+    'https://api.siragpt.com/api/apps/oauth/onedrive/callback',
+  );
 });
 
 test('production frontend URL ignores stale localhost process env', () => {

@@ -8,6 +8,7 @@ const path = require('node:path');
 const {
   APP_IDS,
   STATUSES,
+  SECRET_KINDS,
   listManifests,
   getManifest,
   normalizeAppId,
@@ -18,6 +19,7 @@ const {
   classifyMentions,
 } = require('../src/services/apps');
 const oauth = require('../src/services/apps/oauth');
+const { CALLBACK_PATHS, getOnedriveCallbackURL, getGoogleServicesCallbackURL, getGoogleCallbackURL } = require('../src/config/oauth-url-policy');
 
 const SECRET = 'ya29.DRIVE_TOKEN_MUST_NEVER_LEAVE_THE_VAULT_123456';
 const MS_SECRET = 'EwBw.MSGRAPH_TOKEN_MUST_NEVER_LEAVE_THE_VAULT_abcdef';
@@ -45,7 +47,8 @@ function identityVault() {
 
 function memoryPrisma() {
   const connections = new Map();
-  const social = new Map();
+  const connectors = new Map();
+  const users = new Map();
   return {
     appConnection: {
       findUnique: async ({ where }) => {
@@ -69,74 +72,84 @@ function memoryPrisma() {
         Object.assign(current, data, { updatedAt: new Date() });
         return current;
       },
-      delete: async ({ where }) => {
-        for (const [key, row] of connections) {
-          if (row.id === where.id) connections.delete(key);
-        }
-      },
     },
-    socialConnection: {
+    connectorAccount: {
       findUnique: async ({ where }) => {
-        if (where.id) return social.get(where.id) || null;
-        if (where.userId_platform) {
-          return [...social.values()].find((row) => (
-            row.userId === where.userId_platform.userId
-            && row.platform === where.userId_platform.platform
+        if (where.id) return [...connectors.values()].find((row) => row.id === where.id) || null;
+        if (where.userId_provider) {
+          return [...connectors.values()].find((row) => (
+            row.userId === where.userId_provider.userId
+            && row.provider === where.userId_provider.provider
           )) || null;
         }
         return null;
       },
-      findMany: async ({ where }) => [...social.values()].filter((row) => row.userId === where.userId),
+      findMany: async ({ where }) => [...connectors.values()].filter((row) => {
+        if (row.userId !== where.userId) return false;
+        if (where.provider?.in) return where.provider.in.includes(row.provider);
+        return true;
+      }),
       upsert: async ({ where, create, update }) => {
-        const existing = [...social.values()].find((row) => (
-          row.userId === where.userId_platform.userId
-          && row.platform === where.userId_platform.platform
+        const existing = [...connectors.values()].find((row) => (
+          row.userId === where.userId_provider.userId
+          && row.provider === where.userId_provider.provider
         ));
         const row = existing
           ? { ...existing, ...update, updatedAt: new Date() }
-          : { id: `soc-${create.platform}`, ...create, createdAt: new Date(), updatedAt: new Date() };
-        social.set(row.id, row);
+          : { id: `conn-${create.provider}`, ...create, createdAt: new Date(), updatedAt: new Date() };
+        connectors.set(row.id, row);
         return row;
       },
-      update: async ({ where, data }) => {
-        const current = social.get(where.id);
-        if (!current) return null;
-        Object.assign(current, data, { updatedAt: new Date() });
-        return current;
+      updateMany: async ({ where, data }) => {
+        for (const row of connectors.values()) {
+          if (where.id && row.id !== where.id) continue;
+          if (where.userId && row.userId !== where.userId) continue;
+          if (where.provider && row.provider !== where.provider) continue;
+          Object.assign(row, data);
+        }
+      },
+    },
+    user: {
+      findUnique: async ({ where }) => users.get(where.id) || null,
+      updateMany: async ({ where, data }) => {
+        const row = users.get(where.id);
+        if (row) Object.assign(row, data);
       },
     },
     auditLog: { create: async () => ({ id: 'audit-1' }) },
-    seedSocial(userId, platform, accessToken, scopes) {
+    seedConnector(userId, provider, accessToken, scopes) {
       const row = {
-        id: `soc-${platform}`,
+        id: `conn-${provider}`,
         userId,
-        platform,
-        accountId: `${platform}-user`,
-        accountName: platform === 'onedrive' ? 'Luis OneDrive' : 'infosiragpt@gmail.com',
-        accessToken: JSON.stringify({ accessToken, scopes }),
+        provider,
+        accountLabel: provider === 'onedrive' ? 'Luis OneDrive' : 'infosiragpt@gmail.com',
+        tokenEncrypted: JSON.stringify({ accessToken, scopes }),
         scopes,
+        status: 'connected',
       };
-      social.set(row.id, row);
+      connectors.set(row.id, row);
+      return row;
+    },
+    seedGoogleServices(userId, accessToken, scopes) {
+      const row = {
+        id: userId,
+        googleServicesTokens: JSON.stringify({ accessToken, scopes }),
+      };
+      users.set(userId, row);
       return row;
     },
   };
 }
 
-test('registry lists onedrive and google-drive as first-party OAuth apps', () => {
+test('registry lists onedrive and google-drive; Drive reuses google-services OAuth', () => {
   assert.deepEqual(APP_IDS, ['github', 'linkedin', 'x', 'onedrive', 'google-drive']);
   assert.equal(normalizeAppId('one-drive'), 'onedrive');
   assert.equal(normalizeAppId('gdrive'), 'google-drive');
   assert.equal(normalizeAppId('drive'), 'google-drive');
-  const driveApps = listManifests().filter((app) => app.id === 'onedrive' || app.id === 'google-drive');
-  assert.equal(driveApps.length, 2);
-  for (const app of driveApps) {
-    assert.equal(app.auth.startsWith('oauth'), true);
-    assert.match(app.connectPath, /^\/apps\/connect\//);
-    assert.match(app.callbackPath, /^\/api\/apps\/oauth\//);
-    assert.ok(app.tools.some((tool) => tool.kind === 'read'));
-    assert.doesNotMatch(JSON.stringify(app), /OpenRouter|DeepSeek|claude-|gpt-4/i);
-  }
+  assert.equal(normalizeAppId('google_drive'), 'google-drive');
   const one = getManifest('onedrive');
+  assert.equal(one.connectPath, '/apps/connect/onedrive');
+  assert.equal(one.callbackPath, CALLBACK_PATHS.onedrive);
   assert.deepEqual(one.tools.map((tool) => tool.name), [
     'onedrive_list',
     'onedrive_search',
@@ -144,12 +157,33 @@ test('registry lists onedrive and google-drive as first-party OAuth apps', () =>
     'onedrive_upload',
   ]);
   const gdrive = getManifest('google-drive');
+  assert.equal(gdrive.connectPath, '/auth/google-services');
+  assert.equal(gdrive.callbackPath, CALLBACK_PATHS.googleServices);
   assert.deepEqual(gdrive.tools.map((tool) => tool.name), [
     'gdrive_list',
     'gdrive_search',
     'gdrive_read_text',
     'gdrive_upload',
   ]);
+  for (const app of listManifests()) {
+    assert.doesNotMatch(JSON.stringify(app), /OpenRouter|DeepSeek|claude-|gpt-4/i);
+  }
+});
+
+test('CALLBACK_PATHS.onedrive is registered and login Google callback is unchanged', () => {
+  assert.equal(CALLBACK_PATHS.onedrive, '/api/apps/oauth/onedrive/callback');
+  assert.equal(CALLBACK_PATHS.googleServices, '/api/auth/google-services/callback');
+  assert.equal(CALLBACK_PATHS.google, '/api/auth/google/callback');
+  assert.equal(CALLBACK_PATHS.gmail, '/api/auth/gmail/callback');
+  assert.equal(
+    getOnedriveCallbackURL(BASE_ENV),
+    'https://siragpt.com/api/apps/oauth/onedrive/callback',
+  );
+  assert.equal(
+    getGoogleServicesCallbackURL(BASE_ENV),
+    'https://siragpt.com/api/auth/google-services/callback',
+  );
+  assert.equal(getGoogleCallbackURL(BASE_ENV), 'https://siragpt.com/api/auth/google/callback');
 });
 
 test('OneDrive OAuth start uses Microsoft consumers + PKCE and hides the secret', async () => {
@@ -181,26 +215,18 @@ test('OneDrive OAuth start uses Microsoft consumers + PKCE and hides the secret'
   assert.doesNotMatch(JSON.stringify(out), /ms-secret/);
 });
 
-test('Google Drive OAuth start reuses GOOGLE_CLIENT_ID and a dedicated callback', async () => {
-  const out = await oauth.beginAuthorization({
-    userId: 'u1',
-    appId: 'google-drive',
-    env: BASE_ENV,
-    signState: async () => 'signed-gd',
-  });
-  const url = new URL(out.url);
-  assert.equal(out.app, 'google-drive');
-  assert.match(url.href, /accounts\.google\.com/);
-  assert.equal(url.searchParams.get('client_id'), 'google-client.apps.googleusercontent.com');
-  assert.equal(url.searchParams.get('access_type'), 'offline');
-  assert.match(url.searchParams.get('redirect_uri'), /\/api\/apps\/oauth\/google-drive\/callback$/);
-  assert.doesNotMatch(url.searchParams.get('redirect_uri'), /gmail|google-services|google\/callback/);
-  assert.match(url.searchParams.get('scope'), /drive\.readonly/);
-  assert.match(url.searchParams.get('scope'), /drive\.file/);
-  assert.equal(url.searchParams.has('client_secret'), false);
+test('Google Drive is not a second apps OAuth broker', async () => {
+  await assert.rejects(
+    () => oauth.beginAuthorization({ userId: 'u1', appId: 'google-drive', env: BASE_ENV }),
+    (error) => {
+      assert.equal(error.code, 'APP_UNKNOWN');
+      return true;
+    },
+  );
+  assert.deepEqual(oauth.FILE_APP_IDS, ['onedrive']);
 });
 
-test('missing Microsoft or Google client credentials fail closed in Spanish', async () => {
+test('missing Microsoft client credentials fail closed in Spanish', async () => {
   await assert.rejects(
     () => oauth.beginAuthorization({ userId: 'u1', appId: 'onedrive', env: { NODE_ENV: 'test' } }),
     (error) => {
@@ -209,21 +235,9 @@ test('missing Microsoft or Google client credentials fail closed in Spanish', as
       return true;
     },
   );
-  await assert.rejects(
-    () => oauth.beginAuthorization({
-      userId: 'u1',
-      appId: 'google-drive',
-      env: { NODE_ENV: 'test', MICROSOFT_CLIENT_ID: 'x' },
-    }),
-    (error) => {
-      assert.equal(error.code, 'APP_PROVIDER_NOT_CONFIGURED');
-      assert.match(error.message, /credenciales/i);
-      return true;
-    },
-  );
 });
 
-test('OneDrive callback exchanges code with PKCE and stores a sealed vault row', async () => {
+test('OneDrive callback stores a sealed ConnectorAccount vault row', async () => {
   const requests = [];
   const fetchImpl = async (url, init) => {
     requests.push({ url: String(url), body: String(init?.body || '') });
@@ -264,51 +278,14 @@ test('OneDrive callback exchanges code with PKCE and stores a sealed vault row',
   });
   assert.equal(result.app, 'onedrive');
   assert.equal(result.userId, 'u-od');
-  assert.equal(result.connection.accountName, 'Luis');
+  assert.equal(result.connection.provider, 'onedrive');
+  assert.equal(result.connection.accountLabel, 'Luis');
   const tokenCall = requests.find((row) => row.url.includes('/token'));
   assert.match(tokenCall.body, /code_verifier=verifier-1/);
-  assert.match(tokenCall.body, /client_secret=ms-secret/);
-  const stored = await prisma.socialConnection.findUnique({ where: { id: result.connection.id } });
-  assert.match(stored.accessToken, /^sealed:/);
+  const stored = await prisma.connectorAccount.findUnique({ where: { id: result.connection.id } });
+  assert.match(stored.tokenEncrypted, /^sealed:/);
   assert.doesNotMatch(JSON.stringify(stored), new RegExp(MS_SECRET.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(JSON.stringify(result), new RegExp(MS_SECRET.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-});
-
-test('Google Drive callback stores a sealed vault row without tokens in the result', async () => {
-  const fetchImpl = async (url) => {
-    if (String(url).includes('oauth2.googleapis.com/token')) {
-      return new Response(JSON.stringify({
-        access_token: SECRET,
-        refresh_token: 'gd-refresh',
-        expires_in: 3600,
-        scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file',
-        token_type: 'Bearer',
-      }), { status: 200 });
-    }
-    if (String(url).includes('/drive/v3/about')) {
-      return new Response(JSON.stringify({
-        user: { displayName: 'Luis', emailAddress: 'infosiragpt@gmail.com', permissionId: 'perm-1' },
-      }), { status: 200 });
-    }
-    throw new Error(`unexpected ${url}`);
-  };
-  const prisma = memoryPrisma();
-  const result = await oauth.completeAuthorization({
-    appId: 'google-drive',
-    code: 'code-gd',
-    state: 'state-gd',
-    prisma,
-    env: BASE_ENV,
-    fetchImpl,
-    verifyState: async () => ({ userId: 'u-gd' }),
-    vault: {
-      sealProviderTokens: (bundle) => `sealed:${bundle.tokenType}:${(bundle.scopes || []).join(',')}`,
-    },
-  });
-  assert.equal(result.app, 'google-drive');
-  assert.equal(result.connection.accountName, 'Luis');
-  assert.doesNotMatch(JSON.stringify(result), /ya29\./);
-  assert.equal(JSON.stringify(result).includes(SECRET), false);
 });
 
 test('health probes Graph /me/drive and Drive about.get', () => {
@@ -332,22 +309,24 @@ test('mention aliases attach OneDrive and Google Drive tools only when connected
 
 test('onedrive and gdrive tools never leak vault tokens', async () => {
   const prisma = memoryPrisma();
-  prisma.seedSocial('user-d', 'onedrive', MS_SECRET, ['Files.ReadWrite', 'offline_access', 'User.Read']);
-  prisma.seedSocial('user-d', 'google-drive', SECRET, [
+  prisma.seedConnector('user-d', 'onedrive', MS_SECRET, ['Files.ReadWrite', 'offline_access', 'User.Read']);
+  prisma.seedConnector('user-d', 'google_drive', SECRET, [
     'https://www.googleapis.com/auth/drive.readonly',
     'https://www.googleapis.com/auth/drive.file',
   ]);
   await upsertFromOAuth(prisma, {
     userId: 'user-d',
     appId: 'onedrive',
-    sourceId: 'soc-onedrive',
+    sourceId: 'conn-onedrive',
     scopes: ['Files.ReadWrite', 'offline_access', 'User.Read'],
+    secretKind: SECRET_KINDS.CONNECTOR_ACCOUNT,
   });
   await upsertFromOAuth(prisma, {
     userId: 'user-d',
     appId: 'google-drive',
-    sourceId: 'soc-google-drive',
+    sourceId: 'conn-google_drive',
     scopes: ['https://www.googleapis.com/auth/drive.readonly', 'https://www.googleapis.com/auth/drive.file'],
+    secretKind: SECRET_KINDS.CONNECTOR_ACCOUNT,
   });
 
   const onedrive = await executeTool(prisma, {
@@ -386,20 +365,49 @@ test('onedrive and gdrive tools never leak vault tokens', async () => {
   assert.doesNotMatch(serialized, /ya29\.|EwBw\./);
 });
 
-test('apps OAuth broker lives on /api/apps and does not steal social or login callbacks', () => {
+test('gdrive tools also open the existing User.googleServicesTokens vault', async () => {
+  const prisma = memoryPrisma();
+  prisma.seedGoogleServices('user-legacy', SECRET, [
+    'https://www.googleapis.com/auth/drive.readonly',
+  ]);
+  await upsertFromOAuth(prisma, {
+    userId: 'user-legacy',
+    appId: 'google-drive',
+    sourceId: 'user-legacy',
+    secretKind: SECRET_KINDS.USER_GOOGLE_SERVICES,
+    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+  });
+  const listed = await executeTool(prisma, {
+    userId: 'user-legacy',
+    toolName: 'gdrive_list',
+    vault: identityVault(),
+    fetchImpl: async (_url, init) => {
+      assert.equal(String(init.headers.Authorization).includes(SECRET), true);
+      return new Response(JSON.stringify({ files: [{ id: 'g2', name: 'brief.md' }] }), { status: 200 });
+    },
+  });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.result.items[0].name, 'brief.md');
+  assert.equal(JSON.stringify(listed).includes(SECRET), false);
+});
+
+test('apps OAuth broker is OneDrive-only and does not steal social or login callbacks', () => {
   const appsRoute = fs.readFileSync(path.join(__dirname, '../src/routes/apps.js'), 'utf8');
   const registry = fs.readFileSync(path.join(__dirname, '../src/services/apps/registry.js'), 'utf8');
   const social = fs.readFileSync(path.join(__dirname, '../src/routes/social-posts.js'), 'utf8');
   const auth = fs.readFileSync(path.join(__dirname, '../src/routes/auth.js'), 'utf8');
+  const policy = fs.readFileSync(path.join(__dirname, '../src/config/oauth-url-policy.js'), 'utf8');
   const linkedin = getManifest('linkedin');
   assert.deepEqual(linkedin.minScopes, ['openid', 'profile']);
   assert.deepEqual(linkedin.writeScopes, ['w_member_social']);
   assert.doesNotMatch(linkedin.minScopes.join(' '), /r_member_social/);
   assert.match(appsRoute, /\/connect\/:appId/);
   assert.match(appsRoute, /\/oauth\/:appId\/callback/);
-  assert.match(appsRoute, /credenciales OAuth/);
   assert.match(registry, /\/api\/apps\/oauth\/onedrive\/callback/);
-  assert.match(registry, /\/api\/apps\/oauth\/google-drive\/callback/);
+  assert.match(registry, /\/auth\/google-services/);
+  assert.match(registry, /\/api\/auth\/google-services\/callback/);
+  assert.doesNotMatch(registry, /\/api\/apps\/oauth\/google-drive/);
+  assert.match(policy, /onedrive: '\/api\/apps\/oauth\/onedrive\/callback'/);
   assert.match(social, /\/oauth\/:platform\/callback/);
   assert.doesNotMatch(social, /onedrive|google-drive/);
   assert.match(auth, /router\.get\('\/google\/callback'/);

@@ -1,7 +1,13 @@
 'use strict';
 
-const { STATUSES, normalizeAppId } = require('./registry');
-const { upsertConnection, findByUserAndApp, githubSecretRef, socialSecretRef, listByUser } = require('./store');
+const { STATUSES, normalizeAppId, SECRET_KINDS } = require('./registry');
+const { upsertConnection, findByUserAndApp, secretRefFor, listByUser } = require('./store');
+
+const SOCIAL_PLATFORMS = Object.freeze(['linkedin', 'x']);
+const CONNECTOR_PROVIDERS = Object.freeze({
+  onedrive: 'onedrive',
+  google_drive: 'google-drive',
+});
 
 function asScopes(value) {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -16,10 +22,11 @@ async function upsertFromOAuth(prisma, {
   scopes = [],
   expiresAt = null,
   organizationId = null,
+  secretKind = null,
 }) {
   const id = normalizeAppId(appId);
   if (!id || !userId || !sourceId) return null;
-  const ref = id === 'github' ? githubSecretRef(sourceId) : socialSecretRef(sourceId);
+  const ref = secretRefFor(id, sourceId, secretKind);
   return upsertConnection(prisma, {
     userId,
     organizationId,
@@ -43,11 +50,12 @@ async function linkExistingSource(prisma, {
   accountLabel = null,
   scopes = [],
   expiresAt = null,
+  secretKind = null,
 }) {
   const id = normalizeAppId(appId);
   if (!id || !userId || !sourceId) return null;
   const existing = await findByUserAndApp(prisma, userId, id);
-  const ref = id === 'github' ? githubSecretRef(sourceId) : socialSecretRef(sourceId);
+  const ref = secretRefFor(id, sourceId, secretKind);
   return upsertConnection(prisma, {
     userId,
     appId: id,
@@ -65,15 +73,29 @@ async function linkExistingSource(prisma, {
 
 async function syncFromExisting(prisma, userId) {
   if (!prisma || !userId) return [];
-  const [github, socials] = await Promise.all([
+  const [github, socials, connectors, user] = await Promise.all([
     prisma.githubAccount?.findUnique
       ? prisma.githubAccount.findUnique({ where: { userId: String(userId) } })
       : null,
     prisma.socialConnection?.findMany
       ? prisma.socialConnection.findMany({
-        where: { userId: String(userId), platform: { in: ['linkedin', 'x', 'onedrive', 'google-drive'] } },
+        where: { userId: String(userId), platform: { in: [...SOCIAL_PLATFORMS] } },
       })
       : [],
+    prisma.connectorAccount?.findMany
+      ? prisma.connectorAccount.findMany({
+        where: {
+          userId: String(userId),
+          provider: { in: Object.keys(CONNECTOR_PROVIDERS) },
+        },
+      })
+      : [],
+    prisma.user?.findUnique
+      ? prisma.user.findUnique({
+        where: { id: String(userId) },
+        select: { id: true, googleServicesTokens: true },
+      })
+      : null,
   ]);
   if (github?.id) {
     await linkExistingSource(prisma, {
@@ -82,6 +104,7 @@ async function syncFromExisting(prisma, userId) {
       sourceId: github.id,
       accountLabel: github.login || github.name || null,
       scopes: github.scope,
+      secretKind: SECRET_KINDS.GITHUB_ACCOUNT,
     });
   }
   for (const row of socials || []) {
@@ -92,6 +115,30 @@ async function syncFromExisting(prisma, userId) {
       accountLabel: row.accountName || null,
       scopes: row.scopes,
       expiresAt: row.expiresAt,
+      secretKind: SECRET_KINDS.SOCIAL_CONNECTION,
+    });
+  }
+  let linkedGoogleDrive = false;
+  for (const row of connectors || []) {
+    const appId = CONNECTOR_PROVIDERS[row.provider];
+    if (!appId || !row.id || !row.tokenEncrypted) continue;
+    if (appId === 'google-drive') linkedGoogleDrive = true;
+    await linkExistingSource(prisma, {
+      userId,
+      appId,
+      sourceId: row.id,
+      accountLabel: row.accountLabel || null,
+      scopes: row.scopes,
+      secretKind: SECRET_KINDS.CONNECTOR_ACCOUNT,
+    });
+  }
+  if (!linkedGoogleDrive && user?.googleServicesTokens) {
+    await linkExistingSource(prisma, {
+      userId,
+      appId: 'google-drive',
+      sourceId: user.id,
+      accountLabel: 'Google Drive',
+      secretKind: SECRET_KINDS.USER_GOOGLE_SERVICES,
     });
   }
   return listByUser(prisma, userId);

@@ -71,6 +71,7 @@ const ALIASES: Record<string, string> = {
   "google-drive": "google-drive",
   drive: "google-drive",
   googledrive: "google-drive",
+  google_drive: "google-drive",
 }
 
 export type MentionTrigger = {
@@ -126,7 +127,7 @@ export function canonicalAppId(value: string): string | null {
       || provider === "github"
       || provider === "facebook"
       || provider === "onedrive"
-      || provider === "google-drive"
+      || provider === "google-services"
     ) {
       return provider
     }
@@ -143,7 +144,7 @@ export function isRealConnector(app: ConnectableApp): boolean {
     || provider === "x"
     || provider === "facebook"
     || provider === "onedrive"
-    || provider === "google-drive"
+    || provider === "google-services"
   ) {
     return true
   }

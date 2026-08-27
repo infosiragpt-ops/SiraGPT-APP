@@ -2432,7 +2432,8 @@ model SocialConnection {
 
 // ChatGPT-style first-party apps on /conexiones (github, linkedin, x, onedrive, google-drive).
 // Tokens stay in the existing sealed vaults (GithubAccount.encryptedTokens /
-// SocialConnection.accessToken). This row only stores a secretRef + health.
+// SocialConnection.accessToken / ConnectorAccount.tokenEncrypted /
+// User.googleServicesTokens). This row only stores a secretRef + health.
 model AppConnection {
   id             String    @id @default(cuid())
   userId         String

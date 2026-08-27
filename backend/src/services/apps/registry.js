@@ -19,6 +19,8 @@ const STATUSES = Object.freeze({
 const SECRET_KINDS = Object.freeze({
   GITHUB_ACCOUNT: 'github_account',
   SOCIAL_CONNECTION: 'social_connection',
+  CONNECTOR_ACCOUNT: 'connector_account',
+  USER_GOOGLE_SERVICES: 'user_google_services',
 });
 
 const APPS = Object.freeze({
@@ -139,13 +141,15 @@ const APPS = Object.freeze({
     name: 'Google Drive',
     auth: 'oauth2',
     risk: 'write',
-    connectPath: '/apps/connect/google-drive',
-    callbackPath: '/api/apps/oauth/google-drive/callback',
+    connectPath: '/auth/google-services',
+    callbackPath: '/api/auth/google-services/callback',
     minScopes: Object.freeze([
       'https://www.googleapis.com/auth/drive.readonly',
-      'https://www.googleapis.com/auth/drive.file',
     ]),
-    writeScopes: Object.freeze(['https://www.googleapis.com/auth/drive.file']),
+    writeScopes: Object.freeze([
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive',
+    ]),
     tools: Object.freeze([
       Object.freeze({
         name: 'gdrive_list',
@@ -232,7 +236,12 @@ function parseSecretRef(ref) {
   const kind = raw.slice(0, sep);
   const id = raw.slice(sep + 1).trim();
   if (!id) return null;
-  if (kind !== SECRET_KINDS.GITHUB_ACCOUNT && kind !== SECRET_KINDS.SOCIAL_CONNECTION) {
+  if (
+    kind !== SECRET_KINDS.GITHUB_ACCOUNT
+    && kind !== SECRET_KINDS.SOCIAL_CONNECTION
+    && kind !== SECRET_KINDS.CONNECTOR_ACCOUNT
+    && kind !== SECRET_KINDS.USER_GOOGLE_SERVICES
+  ) {
     return null;
   }
   return { kind, id };
