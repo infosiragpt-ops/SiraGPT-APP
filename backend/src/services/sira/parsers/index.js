@@ -112,6 +112,15 @@ function getLocalParsers() {
     exceljs: (async ({ source } = {}) => {
       const filePath = typeof source === "string" ? source : null;
       if (!filePath) throw new Error("exceljs requires a file path");
+      // Streaming first: constant memory on large books, same text contract.
+      // In-memory fallback preserves the previous behavior if streaming fails.
+      try {
+        const { extractXlsxTextStreaming } = require("../../document/streaming-xlsx");
+        const streamed = await extractXlsxTextStreaming(filePath);
+        if (streamed.text) return streamed;
+      } catch {
+        // fall through to the in-memory reader
+      }
       const { readXlsxFile, selectWorkbookWorksheets, worksheetRows } = require("../../xlsx-safe-workbook");
       const workbook = await readXlsxFile(filePath);
       const { worksheets } = selectWorkbookWorksheets(workbook);
