@@ -3157,7 +3157,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         isPendingStop: () => pendingStopsRef.current.has(currentChat.id),
         run: () => apiClient.editUserMessage(
           messageId,
-          { content: newContent },
+          { content: newContent, files: Array.isArray(updatedFiles) ? updatedFiles : undefined },
           { signal: controller.signal },
         ),
       });
