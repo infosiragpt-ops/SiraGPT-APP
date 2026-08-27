@@ -44,6 +44,17 @@ function createOrchestrationWireup(env = process.env) {
     return _orchestrator;
   }
 
+  // Lazy multi-agent team orchestrator — enhanced local dispatcher
+  // (chain / fork-join / vote) over the shared LLM gateway.
+  let _multiAgentOrchestrator = null;
+  function getMultiAgentOrchestrator() {
+    if (!_multiAgentOrchestrator) {
+      const { createMultiAgentOrchestrator } = require('./multi-agent/enhanced-orchestrator');
+      _multiAgentOrchestrator = createMultiAgentOrchestrator({ gateway });
+    }
+    return _multiAgentOrchestrator;
+  }
+
   // Lazy document parser dispatch — uses Marker/Docling/MarkItDown Python CLIs
   // when available, falling back to Node.js-native parsers.
   let _documentParser = null;
@@ -59,6 +70,7 @@ function createOrchestrationWireup(env = process.env) {
     gateway,
     getOrchestrator,
     getDocumentParser,
+    getMultiAgentOrchestrator,
     semanticCache: ctx.semanticCache,
     checkpointStore: ctx.checkpointStore,
     r2Storage: ctx.r2Storage,
