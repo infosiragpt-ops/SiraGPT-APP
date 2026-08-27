@@ -232,6 +232,72 @@ test('write tools require approval and disconnect revokes then drops the secret'
   assert.equal(listed.length, 0);
 });
 
+test('linkedin and x read tools execute without putting tokens in the result', async () => {
+  const prisma = memoryPrisma();
+  prisma.socialConnection.findUnique = async ({ where }) => {
+    if (where.id === 'li-1' || where.userId_platform?.platform === 'linkedin') {
+      return {
+        id: 'li-1',
+        userId: 'user-4',
+        platform: 'linkedin',
+        accountId: 'li-user',
+        accountName: 'Luis',
+        accessToken: JSON.stringify({ accessToken: SECRET, scopes: ['openid', 'profile'] }),
+        scopes: ['openid', 'profile'],
+      };
+    }
+    if (where.id === 'x-1' || where.userId_platform?.platform === 'x') {
+      return {
+        id: 'x-1',
+        userId: 'user-4',
+        platform: 'x',
+        accountId: '42',
+        accountName: '@luis',
+        accessToken: JSON.stringify({ accessToken: SECRET, scopes: ['users.read', 'tweet.read'] }),
+        scopes: ['users.read', 'tweet.read'],
+      };
+    }
+    return null;
+  };
+  await upsertFromOAuth(prisma, {
+    userId: 'user-4',
+    appId: 'linkedin',
+    sourceId: 'li-1',
+    scopes: ['openid', 'profile'],
+  });
+  await upsertFromOAuth(prisma, {
+    userId: 'user-4',
+    appId: 'x',
+    sourceId: 'x-1',
+    scopes: ['users.read', 'tweet.read'],
+  });
+
+  const linkedin = await executeTool(prisma, {
+    userId: 'user-4',
+    toolName: 'linkedin_read_profile',
+    vault: identityVault,
+    fetchImpl: async (url) => {
+      assert.match(String(url), /linkedin\.com\/v2\/userinfo/);
+      return new Response(JSON.stringify({ name: 'Luis', email: 'luis@example.com' }), { status: 200 });
+    },
+  });
+  const xMentions = await executeTool(prisma, {
+    userId: 'user-4',
+    toolName: 'x_list_mentions',
+    vault: identityVault,
+    fetchImpl: async (url) => {
+      assert.match(String(url), /api\.x\.com\/2\/users\/42\/mentions/);
+      return new Response(JSON.stringify({ data: [{ id: '1', text: 'hola', author_id: '9' }] }), { status: 200 });
+    },
+  });
+  assert.equal(linkedin.ok, true);
+  assert.equal(linkedin.result.name, 'Luis');
+  assert.equal(xMentions.ok, true);
+  assert.equal(xMentions.result.items[0].text, 'hola');
+  assert.equal(JSON.stringify(linkedin).includes(SECRET), false);
+  assert.equal(JSON.stringify(xMentions).includes(SECRET), false);
+});
+
 test('model prompt only exposes app, connection_id and available_tools', async () => {
   const prisma = memoryPrisma();
   const account = prisma.seedGithub('user-3');
