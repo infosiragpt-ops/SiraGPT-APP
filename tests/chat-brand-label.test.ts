@@ -20,16 +20,16 @@ describe("chat brand model labels", () => {
     assert.equal(brandModelLabel("deepseek-v4-flash"), SIRA_RAPIDO_LABEL)
   })
 
-  it("never returns a raw DeepSeek or OpenAI model id", () => {
-    assert.equal(brandModelLabel("gpt-4o"), SIRA_RAPIDO_LABEL)
-    assert.equal(brandModelLabel("openai/gpt-5"), SIRA_RAPIDO_LABEL)
+  it("keeps non-DeepSeek catalog labels so users can tell models apart", () => {
+    assert.equal(brandModelLabel({ name: "openai/gpt-5.5", displayName: "GPT 5.5" }), "GPT 5.5")
+    assert.equal(brandModelLabel("gpt-4o"), "gpt-4o")
     assert.equal(looksLikeRawVendorModelId("Deepseek V4 PRO"), true)
     assert.equal(looksLikeRawVendorModelId(SIRA_PRO_LABEL), false)
   })
 
-  it("maps vendor provider headings to Sira", () => {
+  it("maps DeepSeek provider headings to Sira and leaves other vendors intact", () => {
     assert.equal(brandProviderLabel("DeepSeek"), "Sira")
-    assert.equal(brandProviderLabel("OpenAI"), "Sira")
+    assert.equal(brandProviderLabel("OpenAI"), "OpenAI")
     assert.equal(brandProviderLabel("Anthropic"), "Anthropic")
   })
 })

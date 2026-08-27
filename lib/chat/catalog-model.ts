@@ -11,31 +11,27 @@ function bareModelName(name?: string): string {
   return raw.includes("/") ? raw.split("/").pop() || raw : raw
 }
 
-function isAllowedProvider(provider?: string): boolean {
-  const p = String(provider || "").trim().toLowerCase()
-  if (!p) return true
-  if (/openrouter|openai|gemini|anthropic|cerebras|groq/.test(p)) return false
-  return p === "deepseek"
+function sameModel(a?: string, b?: string): boolean {
+  const left = String(a || "").trim().toLowerCase()
+  const right = String(b || "").trim().toLowerCase()
+  if (!left || !right) return false
+  if (left === right) return true
+  return bareModelName(left) === bareModelName(right)
 }
 
-function isAllowedGenerationModel(name?: string, provider?: string): boolean {
-  const bare = bareModelName(name)
-  if (!(bare === FLASH || bare === PRO)) return false
-  return isAllowedProvider(provider)
+function pickProvider(model: CatalogModelLike | undefined, fallback = ""): string {
+  const raw = String(model?.provider || fallback || "").trim()
+  return raw || "DeepSeek"
 }
 
-function normalizeGenerationModel(name?: string): string {
-  return bareModelName(name) === PRO ? PRO : FLASH
-}
-
-function safeProvider(provider?: string, fallback = "DeepSeek"): string {
-  const raw = String(provider || "").trim()
-  if (raw && isAllowedProvider(raw)) return raw
-  const fb = String(fallback || "").trim()
-  if (fb && isAllowedProvider(fb)) return fb
-  return "DeepSeek"
-}
-
+/**
+ * Resolve the model that will actually be sent.
+ *
+ * The user's picker choice wins. We only replace it when the selection is
+ * empty or not in the catalog for this chat type (e.g. a VIDEO id on TEXT).
+ * An empty catalog snapshot (the generate client path) must still honor
+ * the requested id — never fail-closed to a single DeepSeek model.
+ */
 export function resolveCatalogModel(
   selectedModel: string,
   availableModels: CatalogModelLike[] = [],
@@ -44,33 +40,49 @@ export function resolveCatalogModel(
   const models = Array.isArray(availableModels)
     ? availableModels.filter((model) => model && typeof model.name === "string" && model.name.trim())
     : []
-  const allowed = models.filter((model) => isAllowedGenerationModel(model.name, model.provider))
+  const wanted = String(selectedModel || "").trim()
 
-  if (isAllowedGenerationModel(selectedModel)) {
-    const wanted = normalizeGenerationModel(selectedModel)
-    const match = allowed.find((model) => normalizeGenerationModel(model.name) === wanted)
+  if (wanted) {
+    const match = models.find((model) => sameModel(model.name, wanted))
     if (match?.name) {
-      return { name: wanted, provider: safeProvider(match.provider, fallbackProvider), replaced: false }
+      return {
+        name: match.name,
+        provider: pickProvider(match, fallbackProvider),
+        replaced: false,
+      }
     }
-    return { name: wanted, provider: safeProvider(fallbackProvider), replaced: false }
+    if (models.length === 0) {
+      return {
+        name: wanted,
+        provider: pickProvider(undefined, fallbackProvider),
+        replaced: false,
+      }
+    }
   }
 
-  const flash = allowed.find((model) => normalizeGenerationModel(model.name) === FLASH)
-  const pro = allowed.find((model) => normalizeGenerationModel(model.name) === PRO)
-  const fallback = flash || pro
+  const fallback = models[0]
   if (fallback?.name) {
     return {
-      name: normalizeGenerationModel(fallback.name),
-      provider: safeProvider(fallback.provider, fallbackProvider),
+      name: fallback.name,
+      provider: pickProvider(fallback, fallbackProvider),
       replaced: true,
     }
   }
 
-  return { name: FLASH, provider: safeProvider(fallbackProvider), replaced: true }
+  return {
+    name: FLASH,
+    provider: pickProvider(undefined, fallbackProvider),
+    replaced: true,
+  }
 }
 
-export type GenerateRequestModel = "deepseek-v4-flash" | "deepseek-v4-pro"
+export type GenerateRequestModel = string
 
 export function assertGenerateRequestModel(model?: string): GenerateRequestModel {
-  return bareModelName(model) === PRO ? PRO : FLASH
+  const wanted = String(model || "").trim()
+  if (!wanted) return FLASH
+  const bare = bareModelName(wanted)
+  if (bare === PRO) return PRO
+  if (bare === FLASH) return FLASH
+  return wanted
 }

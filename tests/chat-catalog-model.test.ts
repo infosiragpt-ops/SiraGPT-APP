@@ -14,17 +14,17 @@ describe("chat catalog model", () => {
     )
   })
 
-  it("replaces a non-DeepSeek selection with Flash (fail-closed)", () => {
+  it("honors a non-DeepSeek selection instead of rewriting it to Flash", () => {
     assert.deepEqual(
       resolveCatalogModel("gpt-4o-mini", [
         { name: "deepseek-v4-flash", provider: "DeepSeek" },
         { name: "gpt-4o-mini", provider: "OpenAI" },
       ], "DeepSeek"),
-      { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
+      { name: "gpt-4o-mini", provider: "OpenAI", replaced: false },
     )
   })
 
-  it("falls back to Flash when the selection is invalid for this chat type", () => {
+  it("falls back to the first catalog model when the selection is invalid for this chat type", () => {
     assert.deepEqual(
       resolveCatalogModel("veo-3", [
         { name: "deepseek-v4-flash", provider: "DeepSeek" },
@@ -34,12 +34,19 @@ describe("chat catalog model", () => {
     )
   })
 
-  it("never returns OpenRouter even if that is the only catalog row", () => {
+  it("keeps an OpenRouter pick even if that is the only catalog row", () => {
     assert.deepEqual(
       resolveCatalogModel("moonshotai/kimi-k2.6", [
         { name: "moonshotai/kimi-k2.6", provider: "OpenRouter" },
       ], "OpenRouter"),
-      { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
+      { name: "moonshotai/kimi-k2.6", provider: "OpenRouter", replaced: false },
+    )
+  })
+
+  it("does not rewrite the generate path when the live catalog snapshot is empty", () => {
+    assert.deepEqual(
+      resolveCatalogModel("openai/gpt-5.5", [], "OpenRouter"),
+      { name: "openai/gpt-5.5", provider: "OpenRouter", replaced: false },
     )
   })
 })

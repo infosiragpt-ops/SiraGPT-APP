@@ -3262,7 +3262,9 @@ router.post(
           : null;
         if (ai && typeof ai === 'object') {
           orgAiSettings = ai;
-          if (!customGpt) {
+          // Honor the /agentes picker. Org preferredModel is only a default
+          // when the client did not send a model — never an auto-redirect.
+          if (!customGpt && !String(model || '').trim()) {
             if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
               actualModel = ai.preferredModel.trim();
             }
@@ -5340,6 +5342,8 @@ router.post(
           // Apply intelligent re-routing only when the orchestrator says so AND
           // it's safe: no images (the vision path owns its own model choice),
           // a real provider can be inferred, and the target is plan-eligible.
+          // The user's picker always wins — never auto-redirect a chosen model.
+          const honorUserModel = String(model || '').trim().length > 0;
           const __route = cognitiveDecision.routing;
           if (
             __route
@@ -5347,6 +5351,7 @@ router.post(
             && __route.selectedModel
             && __route.selectedModel !== actualModel
             && !__hasImagesForRoute
+            && !honorUserModel
           ) {
             const __targetModel = __route.selectedModel;
             const __targetCatalog = modelRouter.getModel(__targetModel);
