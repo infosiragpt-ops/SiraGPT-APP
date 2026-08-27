@@ -12,6 +12,7 @@ import {
   type ConnectableApp,
 } from "@/lib/gpts-apps-connect"
 import { GPT_STORE_APPS, type GptStoreApp } from "@/lib/gpts-apps-catalog"
+import { officialCatalogLogoSources } from "@/lib/gpts-app-logos"
 
 export const MENTION_COPY = {
   connectedGroup: "Conectadas",
@@ -33,6 +34,14 @@ export const REGISTRY_APP_IDS = Object.freeze(["github", "linkedin", "x"] as con
 
 /** Phase-1 OAuth connectors. Facebook can start OAuth but is not in the registry. */
 export const REAL_CONNECTOR_IDS = Object.freeze(["github", "linkedin", "x", "facebook"] as const)
+
+/** First-party connectors always reuse the official /conexiones-logos marks. */
+export const FIRST_PARTY_LOGO_BY_ID = Object.freeze({
+  github: "/conexiones-logos/github.svg",
+  linkedin: "/conexiones-logos/linkedin.svg",
+  x: "/conexiones-logos/x.svg",
+  facebook: "/conexiones-logos/facebook.svg",
+} as const)
 
 const ALIASES: Record<string, string> = {
   github: "github",
@@ -63,6 +72,9 @@ export type MentionPickerApp = {
   domain: string
   status: MentionAppStatus
   healthStatus: string | null
+  /** Official catalog mark (local SVG or explicit logo/icon). Null → generic fallback. */
+  logo: string | null
+  logoSources: string[]
 }
 
 export type MentionedAppPayload = {
@@ -169,6 +181,36 @@ export function mentionStatusFor(
   return "unavailable"
 }
 
+export function mentionAppLogoSources(app: {
+  id: string
+  domain?: string
+  name?: string
+  logo?: string | null
+  icon?: string | null
+}): string[] {
+  const id = canonicalAppId(app.id) || String(app.id || "").trim().toLowerCase()
+  const pinned = (FIRST_PARTY_LOGO_BY_ID as Record<string, string>)[id]
+  const sources = officialCatalogLogoSources({
+    id: app.id,
+    domain: app.domain || "",
+    name: app.name,
+    logo: app.logo || undefined,
+    icon: app.icon || undefined,
+  })
+  if (pinned && !sources.includes(pinned)) sources.unshift(pinned)
+  return sources
+}
+
+export function resolveMentionAppLogo(app: {
+  id: string
+  domain?: string
+  name?: string
+  logo?: string | null
+  icon?: string | null
+}): string | null {
+  return mentionAppLogoSources(app)[0] || null
+}
+
 export function toPickerApp(
   app: GptStoreApp,
   healthById: Record<string, string | null | undefined> = {},
@@ -178,6 +220,13 @@ export function toPickerApp(
   const health = isRegistryApp(id, registryIds)
     ? (healthById[id] || healthById[app.id] || null)
     : null
+  const logoInput = {
+    id,
+    domain: app.domain,
+    name: app.name,
+    logo: app.logo,
+    icon: app.icon,
+  }
   return {
     id,
     name: app.name,
@@ -185,6 +234,8 @@ export function toPickerApp(
     domain: app.domain,
     status: mentionStatusFor({ id, name: app.name, domain: app.domain }, healthById, registryIds),
     healthStatus: health,
+    logo: resolveMentionAppLogo(logoInput),
+    logoSources: mentionAppLogoSources(logoInput),
   }
 }
 
