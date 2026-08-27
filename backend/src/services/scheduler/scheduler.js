@@ -31,6 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cron = require('node-cron');
+const cronParser = require('cron-parser');
 const { withRetry } = require('../../utils/retry-with-backoff');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
 
@@ -56,6 +57,23 @@ function setInvoker(fn) { _invoker = fn; }
 // Falls back to the default classifier (always-retryable) when unset.
 let _classifier = null;
 function setJobClassifier(fn) { _classifier = fn; }
+
+// Pluggable run-finished notifier. Resolved lazily from
+// ./routine-notifier so requiring this module never opens the DB
+// connection eagerly; tests inject via setRunNotifier. Best-effort by
+// contract: notifier failures never flip the run record.
+let _notifier = null;
+function setRunNotifier(fn) { _notifier = fn; }
+
+function resolveRunNotifier() {
+  if (_notifier) return _notifier;
+  try {
+    const mod = require('./routine-notifier');
+    return typeof mod.notifyRoutineFinished === 'function' ? mod.notifyRoutineFinished : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 // ─── Persistence ──────────────────────────────────────────────────────────
 
@@ -122,6 +140,36 @@ function validateCron(expr) {
   return { ok: true };
 }
 
+// ─── Next-run computation ───────────────────────────────────────────────────
+
+/**
+ * Next fire of a cron expression strictly after `from`, as an ISO UTC
+ * string honoring the job timezone; null when invalid/unsatisfiable.
+ * Computed on read (never persisted) so it can't drift across restarts
+ * or DST shifts — every listJobs/getJob response carries a fresh value.
+ */
+function computeNextRunAt(expr, timezone = null, from = new Date()) {
+  const check = validateCron(expr);
+  if (!check.ok) return null;
+  try {
+    const interval = cronParser.parseExpression(expr, {
+      currentDate: from,
+      ...(timezone ? { tz: timezone } : {}),
+    });
+    const next = interval.next();
+    return next ? next.toISOString() : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Display name for a job: stored name, else a readable prompt slice. */
+function displayName(job) {
+  const stored = typeof job?.name === 'string' ? job.name.trim() : '';
+  if (stored) return stored.slice(0, 120);
+  return String(job?.prompt || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
 // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
 /**
@@ -175,7 +223,7 @@ function stop() {
 
 // ─── CRUD ──────────────────────────────────────────────────────────────────
 
-function createCronJob({ userId, cron: expr, prompt, thinking = 'medium', timezone = null, meta = {} }) {
+function createCronJob({ userId, cron: expr, prompt, name = null, thinking = 'medium', timezone = null, meta = {} }) {
   if (!userId) throw new Error('createCronJob: userId required');
   if (!prompt || typeof prompt !== 'string') throw new Error('createCronJob: prompt required');
   const check = validateCron(expr);
@@ -187,6 +235,7 @@ function createCronJob({ userId, cron: expr, prompt, thinking = 'medium', timezo
     type: 'cron',
     userId,
     cron: expr,
+    ...(name ? { name: String(name).trim().slice(0, 120) } : {}),
     timezone,
     prompt,
     thinking,
@@ -195,6 +244,7 @@ function createCronJob({ userId, cron: expr, prompt, thinking = 'medium', timezo
     createdAt: new Date().toISOString(),
     lastRuns: [],
   };
+  job.nextRunAt = computeNextRunAt(job.cron, job.timezone);
   jobs.push(job);
   saveAll(jobs);
   activate(job);
@@ -325,14 +375,49 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
     saveAll(jobs);
   }
   appendRunLog({ jobId, ...record });
+
+  // Notify the owner that this routine fire finished. Opt-in via
+  // meta.notify (the cron_schedule skill sets it for new routines);
+  // best-effort and awaited so a burst of fires can't pile up
+  // unbounded notifier promises. Failures inside the notifier never
+  // reach this function's caller and never flip the run record above.
+  if (job.meta && job.meta.notify === true) {
+    const notify = resolveRunNotifier();
+    if (typeof notify === 'function') {
+      try {
+        await notify({
+          userId: job.userId,
+          jobId,
+          runAt: record.at,
+          ok: record.ok,
+          prompt: job.prompt,
+        });
+      } catch (_) { /* best-effort */ }
+    }
+  }
   return { ok: record.ok, record };
 }
 
 function withComputedStatus(job) {
   if (!job || typeof job !== 'object') return job;
   const status = computeJobStatus(job);
+  const last = Array.isArray(job.lastRuns) ? job.lastRuns[0] : null;
   return {
     ...job,
+    name: displayName(job),
+    nextRunAt: job.type === 'cron' && job.enabled
+      ? computeNextRunAt(job.cron, job.timezone)
+      : null,
+    // Panel contract (Planificación Tareas): normalized last-run view.
+    // Each ring entry keeps its raw fields (ok, error, answerSnippet)
+    // for existing consumers and gains a UI-friendly `status`.
+    lastStatus: job.enabled && !running.has(job.id)
+      ? (last ? (last.ok ? 'ok' : 'error') : null)
+      : null,
+    lastError: last && !last.ok ? String(last.error || 'error desconocido') : null,
+    lastRuns: Array.isArray(job.lastRuns)
+      ? job.lastRuns.map(r => ({ ...r, status: r.ok ? 'ok' : 'error' }))
+      : [],
     status,
     statusDetails: buildStatusDetails(job, status),
   };
@@ -397,6 +482,9 @@ module.exports = {
   fireJob,
   setInvoker,
   setJobClassifier,
+  setRunNotifier,
+  computeNextRunAt,
+  displayName,
   validateCron,
   computeJobStatus,
   withComputedStatus,
