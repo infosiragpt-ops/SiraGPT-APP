@@ -29,6 +29,8 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Z.ai',
   'Kimi',
   'Cerebras',
+  'Meta',
+  'xAI',
   'OpenAI',
 ]);
 
@@ -98,7 +100,15 @@ function inferProviderFromModelId(modelId) {
   // 8) Kimi / Moonshot direct — bare ids (slug `moonshotai/...` already → OpenRouter).
   if (m.startsWith('kimi-') || m.startsWith('kimi.') || m.startsWith('moonshot-') || m.startsWith('moonshotai-')) return 'Kimi';
 
-  // 9) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
+  // 9) Meta Model API — Muse Spark / Muse Image (OpenAI-compatible at api.meta.ai).
+  //    OpenRouter `meta-llama/...` slugs already matched above. Bare llama-3.*
+  //    FlashGPT ids stay Cerebras below; do not steal those.
+  if (m.startsWith('muse-') || m.startsWith('llama-4')) return 'Meta';
+
+  // 10) xAI Grok direct (slug `x-ai/...` already → OpenRouter).
+  if (m === 'grok' || m.startsWith('grok-') || m.startsWith('grok_')) return 'xAI';
+
+  // 11) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
   //    the OpenRouter slug forms (`meta-llama/...`, `*/gpt-oss*`, `z-ai/...`)
   //    already matched above. The model served varies per deployment
   //    (gpt-oss-120b, llama-3.x, zai-glm-*) but all go through the Cerebras

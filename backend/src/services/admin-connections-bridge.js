@@ -43,12 +43,14 @@ const PROVIDER_ENV_MAP = Object.freeze({
   together: 'TOGETHER_API_KEY',
   fireworks: 'FIREWORKS_API_KEY',
   fal: 'FAL_KEY',
+  meta: 'MODEL_API_KEY',
 });
 
 const PROVIDER_ENV_ALIASES = Object.freeze({
   fal: ['FAL_API_KEY'],
   cerebras: ['GEMA4_API_KEY'],
   kimi: ['KIMI_API_KEY'],
+  meta: ['META_API_KEY', 'LLAMA_API_KEY'],
 });
 
 // providerKey (lowercase, panel form) → provider value in AiModel.provider column
@@ -67,6 +69,7 @@ const PROVIDER_CATALOG_MAP = Object.freeze({
   together: 'Together',
   fireworks: 'Fireworks',
   fal: 'fal.ai',
+  meta: 'Meta',
 });
 
 // providerKey → { url, authHeader: (key) => headers }
@@ -84,6 +87,7 @@ const PROVIDER_PROBE = Object.freeze({
   xai:        { url: 'https://api.x.ai/v1/models',                                  auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   together:   { url: 'https://api.together.xyz/v1/models',                          auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fireworks:  { url: 'https://api.fireworks.ai/inference/v1/models',                auth: (k) => ({ Authorization: `Bearer ${k}` }) },
+  meta:       { url: 'https://api.meta.ai/v1/models',                               auth: (k) => ({ Authorization: `Bearer ${k}` }) },
   fal:        { url: 'https://api.fal.ai/v1/models?limit=1',                         auth: (k) => ({ Authorization: /^key\s+/i.test(k) ? k : `Key ${k}` }) },
 });
 
