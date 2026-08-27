@@ -13,6 +13,7 @@
  */
 
 const crypto = require('crypto');
+const { isPlaceholderText } = require('../audio-transcriber');
 
 const DEFAULT_COLLECTION = 'default';
 const MAX_DOC_CHARS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_DOC_CHARS || '1000000', 10);
@@ -71,6 +72,9 @@ function normaliseDocs(files = []) {
         : (typeof file.content === 'string' ? file.content : '');
       const raw = rawSource.trim();
       if (raw.length < MIN_DOC_CHARS) return null;
+      // Transcription failure blocks are status notes, not content — never
+      // let them reach the embedding pipeline.
+      if (isPlaceholderText(raw)) return null;
       const truncated = raw.length > MAX_DOC_CHARS;
       return {
         text: truncated ? raw.slice(0, MAX_DOC_CHARS) : raw,
@@ -109,7 +113,9 @@ async function ensureIndexed({
   intentAnalysis = null,
 } = {}) {
   if (!rag || !userId) return { indexed: false, reason: 'missing rag/user', chunksAdded: 0, totalChunks: 0, skippedSources: [] };
-  let cleanDocs = dedupeDocs(docs).filter(d => d && typeof d.text === 'string' && d.text.trim().length >= MIN_DOC_CHARS);
+  let cleanDocs = dedupeDocs(docs).filter(
+    d => d && typeof d.text === 'string' && d.text.trim().length >= MIN_DOC_CHARS && !isPlaceholderText(d.text)
+  );
   if (intentAnalysis) {
     try {
       const intentRagGate = require('../document-intent-rag-gate');
