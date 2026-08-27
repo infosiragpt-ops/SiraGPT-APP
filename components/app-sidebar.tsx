@@ -29,6 +29,7 @@ import {
   LayoutGrid,
   Pin,
   Folder,
+  Send,
   Download,
   Archive,
   EyeOff,
@@ -138,7 +139,13 @@ import {
   CHAT_FOLDER_NAMES_STORAGE_KEY,
   CHAT_FOLDERS_STORAGE_KEY,
   SUGGESTED_CHAT_FOLDERS,
+  chatsAvailableToSendToFolder,
+  countChatsInFolder,
+  decodeChatFolderDragId,
   deleteChatFolder,
+  encodeChatFolderDragId,
+  filterChatsByFolder,
+  isSameChatFolder,
   listChatFolderNames,
   normalizeChatFolderName,
   parseChatFolderAssignments,
@@ -586,6 +593,10 @@ export function AppSidebar() {
   const [folderDialogName, setFolderDialogName] = React.useState("")
   const [folderDialogChat, setFolderDialogChat] = React.useState<any | null>(null)
   const [folderDialogRenameFrom, setFolderDialogRenameFrom] = React.useState<string | null>(null)
+  const [selectedFolder, setSelectedFolder] = React.useState<string | null>(null)
+  const [folderDropTarget, setFolderDropTarget] = React.useState<string | null>(null)
+  const [sendChatFolder, setSendChatFolder] = React.useState<string | null>(null)
+  const [sendChatQuery, setSendChatQuery] = React.useState("")
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
   // Claude-style sidebar mode toggle (header segmented control): "chat"
   // shows the normal agentic-chat sidebar; "code" shows the APPS tree
@@ -798,12 +809,47 @@ export function AppSidebar() {
   )
 
   const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
+    if (!chat?.id) return
     const next = { ...(chatFolders || {}) }
     if (folder) next[chat.id] = folder
     else delete next[chat.id]
     persistChatFolders(next, folder ? [...namedChatFolders, folder] : namedChatFolders)
-    toast.success(folder ? `Movido a ${folder}` : "Chat quitado de carpeta")
+    toast.success(folder ? `Conversación enviada a ${folder}` : "Chat quitado de carpeta")
   }, [chatFolders, namedChatFolders, persistChatFolders])
+
+  const toggleSelectedFolder = React.useCallback((folder: string) => {
+    setSelectedFolder((current) => (current && isSameChatFolder(current, folder) ? null : folder))
+  }, [])
+
+  const openSendChatToFolderDialog = React.useCallback((folder: string) => {
+    setSendChatFolder(folder)
+    setSendChatQuery("")
+    setSelectedFolder(folder)
+  }, [])
+
+  const closeSendChatToFolderDialog = React.useCallback(() => {
+    setSendChatFolder(null)
+    setSendChatQuery("")
+  }, [])
+
+  const sendableChatsForFolder = React.useMemo(() => {
+    if (!sendChatFolder) return []
+    const needle = sendChatQuery.trim().toLowerCase()
+    return chatsAvailableToSendToFolder(chats || [], chatFolders, sendChatFolder).filter((chat) => {
+      if (!needle) return true
+      return String(chat.title || "").toLowerCase().includes(needle)
+    })
+  }, [chatFolders, chats, sendChatFolder, sendChatQuery])
+
+  const handleFolderDrop = React.useCallback((event: React.DragEvent, folder: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    setFolderDropTarget(null)
+    const chatId = decodeChatFolderDragId(event.dataTransfer.getData("text/plain"))
+    if (!chatId) return
+    const chat = (chats || []).find((item: any) => item?.id === chatId)
+    if (chat) moveChatToFolder(chat, folder)
+  }, [chats, moveChatToFolder])
 
   const openCreateFolderDialog = React.useCallback((chat?: any) => {
     setFolderDialogChat(chat ?? null)
@@ -835,14 +881,22 @@ export function AppSidebar() {
     if (folderDialogRenameFrom) {
       const next = renameChatFolder(chatFolders, namedChatFolders, folderDialogRenameFrom, name)
       persistChatFolders(next.assignments, next.named)
+      if (selectedFolder && isSameChatFolder(selectedFolder, folderDialogRenameFrom)) {
+        setSelectedFolder(name)
+      }
+      if (sendChatFolder && isSameChatFolder(sendChatFolder, folderDialogRenameFrom)) {
+        setSendChatFolder(name)
+      }
       toast.success(`Carpeta renombrada a ${name}`)
       closeFolderDialog()
       return
     }
     if (folderDialogChat?.id) {
       moveChatToFolder(folderDialogChat, name)
+      setSelectedFolder(name)
     } else {
       persistChatFolders(chatFolders, [...namedChatFolders, name])
+      setSelectedFolder(name)
       toast.success(`Carpeta "${name}" creada`)
     }
     closeFolderDialog()
@@ -855,13 +909,17 @@ export function AppSidebar() {
     moveChatToFolder,
     namedChatFolders,
     persistChatFolders,
+    selectedFolder,
+    sendChatFolder,
   ])
 
   const removeNamedFolder = React.useCallback((folder: string) => {
     const next = deleteChatFolder(chatFolders, namedChatFolders, folder)
     persistChatFolders(next.assignments, next.named)
+    if (selectedFolder && isSameChatFolder(selectedFolder, folder)) setSelectedFolder(null)
+    if (sendChatFolder && isSameChatFolder(sendChatFolder, folder)) closeSendChatToFolderDialog()
     toast.success(`Carpeta "${folder}" eliminada`)
-  }, [chatFolders, namedChatFolders, persistChatFolders])
+  }, [chatFolders, closeSendChatToFolderDialog, namedChatFolders, persistChatFolders, selectedFolder, sendChatFolder])
 
   const downloadChatExport = React.useCallback(async (chat: any) => {
     try {
@@ -1594,18 +1652,47 @@ export function AppSidebar() {
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
-            {visibleChatFolders.length > 0 && (
-              <div
-                id="sidebar-chat-folders-list"
-                data-sidebar-folders-list="1"
-                className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
-              >
-                {visibleChatFolders.map((folder) => (
+            <div
+              id="sidebar-chat-folders-list"
+              data-sidebar-folders-list="1"
+              className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
+            >
+              {visibleChatFolders.length === 0 ? (
+                <p className="px-2 pb-1 text-[11px] leading-snug text-muted-foreground">
+                  Crea una carpeta con + y envíale conversaciones.
+                </p>
+              ) : (
+                visibleChatFolders.map((folder) => {
+                  const isActive = Boolean(selectedFolder && isSameChatFolder(selectedFolder, folder))
+                  const isDropTarget = Boolean(folderDropTarget && isSameChatFolder(folderDropTarget, folder))
+                  const folderCount = countChatsInFolder(chatFolders, folder)
+                  return (
                   <div key={folder} className="group flex w-full items-center gap-0.5">
-                    <div className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-foreground/85">
+                    <button
+                      type="button"
+                      data-sidebar-folder-row="1"
+                      aria-pressed={isActive}
+                      onClick={() => toggleSelectedFolder(folder)}
+                      onDragOver={(event) => {
+                        event.preventDefault()
+                        event.dataTransfer.dropEffect = "move"
+                        setFolderDropTarget(folder)
+                      }}
+                      onDragLeave={() => {
+                        setFolderDropTarget((current) => (current && isSameChatFolder(current, folder) ? null : current))
+                      }}
+                      onDrop={(event) => handleFolderDrop(event, folder)}
+                      className={cn(
+                        "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm text-foreground/85 transition-colors",
+                        "hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                        isActive && "bg-muted text-foreground",
+                        isDropTarget && "ring-2 ring-ring/50 bg-muted",
+                      )}
+                    >
                       <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="truncate">{folder}</span>
-                    </div>
+                      <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/70">{folderCount}</span>
+                    </button>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -1618,6 +1705,13 @@ export function AppSidebar() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className={CHAT_ACTION_MENU}>
+                        <DropdownMenuItem
+                          onSelect={() => deferChatMenuAction(() => openSendChatToFolderDialog(folder))}
+                          className={CHAT_ACTION_ITEM}
+                        >
+                          <Send className={CHAT_ACTION_ICON} />
+                          Enviar conversación
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           onSelect={() => deferChatMenuAction(() => openRenameFolderDialog(folder))}
                           className={CHAT_ACTION_ITEM}
@@ -1638,9 +1732,10 @@ export function AppSidebar() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                ))}
-              </div>
-            )}
+                  )
+                })
+              )}
+            </div>
             <div
               id="sidebar-recent-chats-toolbar"
               data-sidebar-recent-toolbar="1"
@@ -1666,7 +1761,7 @@ export function AppSidebar() {
                   )}
                   aria-hidden="true"
                 />
-                <span className="truncate">{t("recentChats")}</span>
+                <span className="truncate">{selectedFolder || t("recentChats")}</span>
                 {isLoadingChats || isLoadingMore ? (
                   <ThinkingIndicator
                     size="xs"
@@ -1864,7 +1959,8 @@ export function AppSidebar() {
                         ...chat,
                         title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
                       }))
-                      const visibleChats = filterRecentChats(titledChats, {
+                      const scopedChats = filterChatsByFolder(titledChats, chatFolders, selectedFolder)
+                      const visibleChats = filterRecentChats(scopedChats, {
                         type: chatTypeFilter,
                         status: chatStatusFilter,
                         activity: chatActivityFilter,
@@ -1910,7 +2006,14 @@ export function AppSidebar() {
 
                         return (
                           <SidebarMenuItem key={chat.id} className="chat-history-item">
-                            <div className="flex w-full items-center gap-0.5 group">
+                            <div
+                              className="flex w-full items-center gap-0.5 group"
+                              draggable={!isEditing}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
+                                event.dataTransfer.effectAllowed = "move"
+                              }}
+                            >
                               {isEditing ? (
                                 <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
                                   <Input
@@ -2180,11 +2283,24 @@ export function AppSidebar() {
                         return (
                           <div className="px-3 py-5 text-center">
                             <p className="text-sm font-medium text-foreground/80">
-                              Ningún chat coincide
+                              {selectedFolder ? "Esta carpeta está vacía" : "Ningún chat coincide"}
                             </p>
                             <p className="mt-1 text-xs text-muted-foreground">
-                              Prueba otro filtro o busca en todo el historial.
+                              {selectedFolder
+                                ? "Envía una conversación o arrástrala aquí."
+                                : "Prueba otro filtro o busca en todo el historial."}
                             </p>
+                            {selectedFolder ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-3"
+                                onClick={() => openSendChatToFolderDialog(selectedFolder)}
+                              >
+                                Enviar conversación
+                              </Button>
+                            ) : null}
                           </div>
                         )
                       }
@@ -2617,6 +2733,60 @@ export function AppSidebar() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(sendChatFolder)}
+        onOpenChange={(open) => {
+          if (!open) closeSendChatToFolderDialog()
+        }}
+      >
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader>
+            <DialogTitle>Enviar conversación</DialogTitle>
+            <DialogDescription>
+              {sendChatFolder
+                ? `Elige un chat para enviarlo a “${sendChatFolder}”.`
+                : "Elige un chat para enviarlo a una carpeta."}
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={sendChatQuery}
+            onChange={(event) => setSendChatQuery(event.target.value)}
+            placeholder="Buscar conversación"
+            aria-label="Buscar conversación"
+          />
+          <div className="max-h-64 overflow-y-auto rounded-lg border border-border/60">
+            {sendableChatsForFolder.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                No hay más conversaciones para enviar.
+              </p>
+            ) : (
+              sendableChatsForFolder.slice(0, 40).map((chat: any) => {
+                const title = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title
+                return (
+                  <button
+                    key={chat.id}
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/70"
+                    onClick={() => {
+                      moveChatToFolder(chat, sendChatFolder)
+                      closeSendChatToFolderDialog()
+                    }}
+                  >
+                    <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{title || "Chat"}</span>
+                  </button>
+                )
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={closeSendChatToFolderDialog}>
+              Cerrar
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </Sidebar>
