@@ -66,10 +66,15 @@ async function upsertConnection(prisma, {
   lastError = null,
   lastHealthAt = null,
   lastHealthOk = null,
+  stampHealth = true,
 }) {
   const id = normalizeAppId(appId);
   if (!prisma?.appConnection?.upsert || !userId || !id || !ref) return null;
-  const now = lastHealthAt || new Date();
+  const now = new Date();
+  const healthAt = stampHealth ? (lastHealthAt || now) : lastHealthAt;
+  const healthOk = stampHealth
+    ? (lastHealthOk || (status === STATUSES.CONNECTED ? healthAt : null))
+    : lastHealthOk;
   const data = {
     organizationId: organizationId || null,
     status: String(status || STATUSES.ERROR),
@@ -78,8 +83,8 @@ async function upsertConnection(prisma, {
     secretRef: String(ref),
     accountLabel: accountLabel ? String(accountLabel).slice(0, 160) : null,
     lastError: lastError ? String(lastError).slice(0, 1000) : null,
-    lastHealthAt: now,
-    lastHealthOk: lastHealthOk || (status === STATUSES.CONNECTED ? now : null),
+    lastHealthAt: healthAt || null,
+    lastHealthOk: healthOk || null,
   };
   return prisma.appConnection.upsert({
     where: { userId_appId: { userId: String(userId), appId: id } },

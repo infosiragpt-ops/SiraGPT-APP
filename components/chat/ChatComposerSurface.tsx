@@ -60,6 +60,7 @@ export function ChatComposerSurface({
   overlayVisible = false,
   overlay = null,
   slashMenu = null,
+  mentionMenu = null,
   contextTray,
   leading,
   textarea,
@@ -71,6 +72,7 @@ export function ChatComposerSurface({
   overlayVisible?: boolean
   overlay?: React.ReactNode
   slashMenu?: React.ReactNode
+  mentionMenu?: React.ReactNode
   contextTray: React.ReactNode
   leading: React.ReactNode
   textarea: React.ReactNode
@@ -83,6 +85,7 @@ export function ChatComposerSurface({
     <div className="relative">
       {overlay}
       {slashMenu}
+      {mentionMenu}
       <div
         data-testid="chat-composer-surface"
         data-composer-layout={layout}

@@ -46,3 +46,13 @@ test('catalog-only mentions stay unavailable and never look connected', () => {
 test('parseMentionedNames ignores emails', () => {
   assert.deepEqual(parseMentionedNames('escribe a luis@siragpt.com y luego @GitHub'), ['GitHub']);
 });
+
+test('facebook stays connectable but never attaches without a registry manifest', () => {
+  const ids = resolveMentionedApps('@Facebook');
+  const classified = classifyMentions(ids, [
+    { id: 'c-fb', appId: 'facebook', status: STATUSES.CONNECTED },
+  ]);
+  assert.equal(classified.attached.length, 0);
+  assert.ok(classified.needsConnect.some((app) => app.id === 'facebook'));
+  assert.doesNotMatch(buildMentionPrompt(classified), /connection_id=/);
+});

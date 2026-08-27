@@ -114,6 +114,7 @@ import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/compone
 import { AppsMentionPicker } from "@/components/AppsMentionPicker"
 import {
   MENTION_COPY,
+  REGISTRY_APP_IDS,
   buildPickerApps,
   detectAtMention,
   filterPickerApps,
@@ -125,6 +126,7 @@ import {
 } from "@/lib/apps-mentions"
 import {
   connectGptStoreApp,
+  resolveConnectPlan,
 } from "@/lib/gpts-apps-connect"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
 import {
@@ -7004,6 +7006,7 @@ But first, you need to connect your Spotify account securely using the button be
   const [mentionMenuOpen, setMentionMenuOpen] = React.useState(false);
   const [mentionTrigger, setMentionTrigger] = React.useState<MentionTrigger | null>(null);
   const [mentionHealthById, setMentionHealthById] = React.useState<Record<string, string>>({});
+  const [mentionRegistryIds, setMentionRegistryIds] = React.useState<readonly string[]>(REGISTRY_APP_IDS);
   const [selectedMentionIds, setSelectedMentionIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
@@ -7037,24 +7040,43 @@ But first, you need to connect your Spotify account securely using the button be
     if (!user) return
     let cancelled = false
     const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
-    authenticatedFetch(`${getNormalizedApiBaseUrl()}/apps/connections?probe=0`, {
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      signal: AbortSignal.timeout(15_000),
-    })
-      .then(async (res) => {
-        if (cancelled || !res.ok) return
-        const body = await res.json().catch(() => ({})) as { connections?: Array<{ app?: string; status?: string }> }
+    const headers = {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    }
+    const api = getNormalizedApiBaseUrl()
+    Promise.all([
+      authenticatedFetch(`${api}/apps`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+      authenticatedFetch(`${api}/apps/connections`, {
+        credentials: "include",
+        headers,
+        signal: AbortSignal.timeout(15_000),
+      }).then(async (res) => (res.ok ? res.json().catch(() => ({})) : {})),
+    ])
+      .then(([appsBody, connectionsBody]) => {
+        if (cancelled) return
+        const manifests = Array.isArray((appsBody as { apps?: unknown }).apps)
+          ? (appsBody as { apps: Array<{ id?: string }> }).apps
+          : []
+        const registry = manifests
+          .map((app) => String(app?.id || "").trim())
+          .filter(Boolean)
+        if (registry.length) setMentionRegistryIds(registry)
+        const allowed = new Set(registry.length ? registry : REGISTRY_APP_IDS)
         const next: Record<string, string> = {}
-        for (const row of body.connections || []) {
+        const list = Array.isArray((connectionsBody as { connections?: unknown }).connections)
+          ? (connectionsBody as { connections: Array<{ app?: string; status?: string }> }).connections
+          : []
+        for (const row of list) {
           const appId = String(row?.app || "").trim()
           const status = String(row?.status || "").trim()
-          if (appId && status) next[appId] = status
+          if (appId && status && allowed.has(appId)) next[appId] = status
         }
-        if (!cancelled) setMentionHealthById(next)
+        setMentionHealthById(next)
       })
       .catch(() => undefined)
     return () => {
@@ -7063,11 +7085,19 @@ But first, you need to connect your Spotify account securely using the button be
   }, [user]);
 
   const mentionPickerApps = React.useMemo(() => {
-    const grouped = groupPickerApps(filterPickerApps(buildPickerApps(mentionHealthById), mentionTrigger?.query || ""))
+    const grouped = groupPickerApps(filterPickerApps(
+      buildPickerApps(mentionHealthById, undefined, mentionRegistryIds),
+      mentionTrigger?.query || "",
+    ))
     return grouped.flat.slice(0, 40)
-  }, [mentionHealthById, mentionTrigger]);
+  }, [mentionHealthById, mentionRegistryIds, mentionTrigger]);
 
   const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
+    const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
+    if (plan.kind !== "oauth") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
+      return { status: "unavailable" as const, markConnected: false, message: MENTION_COPY.unavailableDetail(app.name) }
+    }
     const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
     const result = await connectGptStoreApp(
       { id: app.id, name: app.name, domain: app.domain },
@@ -7104,8 +7134,8 @@ But first, you need to connect your Spotify account securely using the button be
       window.location.href = result.redirectUrl
       return result
     }
-    if (result.status === "unavailable") {
-      toast.message(result.message)
+    if (result.status === "computer_opened") {
+      toast.message(MENTION_COPY.unavailableDetail(app.name))
       return result
     }
     if (result.status !== "oauth_started") {
@@ -7954,7 +7984,6 @@ But first, you need to connect your Spotify account securely using the button be
       overlayVisible={pasteCapture.overlayVisible}
       overlay={pasteCapture.Overlay}
       slashMenu={
-        <>
         <SlashCommandMenu
           open={slashMenuOpen}
           filter={slashMenuFilter}
@@ -7972,6 +8001,8 @@ But first, you need to connect your Spotify account securely using the button be
           }}
           onClose={() => setSlashMenuOpen(false)}
         />
+      }
+      mentionMenu={
         <AppsMentionPicker
           open={mentionMenuOpen && !slashMenuOpen}
           filter={mentionTrigger?.query || ""}
@@ -7982,7 +8013,6 @@ But first, you need to connect your Spotify account securely using the button be
             setMentionTrigger(null);
           }}
         />
-        </>
       }
       contextTray={
         <>
@@ -9574,7 +9604,7 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
-    const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById)
+    const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById, undefined, mentionRegistryIds)
     if (mentionPayload.needsConnect[0]) {
       toast.message(MENTION_COPY.connectPrompt(mentionPayload.needsConnect[0].name))
     }

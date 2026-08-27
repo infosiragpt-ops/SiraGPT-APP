@@ -28,7 +28,10 @@ export const MENTION_COPY = {
     `${name} no está conectada. Conéctala con la autorización oficial para usarla en este chat.`,
 } as const
 
-/** Phase-1 OAuth connectors. Facebook stays in this set but is key-gated server-side. */
+/** Registry first-party apps that can receive Conectada from GET /api/apps/connections. */
+export const REGISTRY_APP_IDS = Object.freeze(["github", "linkedin", "x"] as const)
+
+/** Phase-1 OAuth connectors. Facebook can start OAuth but is not in the registry. */
 export const REAL_CONNECTOR_IDS = Object.freeze(["github", "linkedin", "x", "facebook"] as const)
 
 const ALIASES: Record<string, string> = {
@@ -146,12 +149,22 @@ export function insertMention(input: string, trigger: MentionTrigger | null, nam
   return `${before}${token}${spacer}${after}`
 }
 
+export function isRegistryApp(
+  id: string,
+  registryIds: readonly string[] = REGISTRY_APP_IDS,
+): boolean {
+  const canonical = canonicalAppId(id) || String(id || "").trim().toLowerCase()
+  return registryIds.includes(canonical)
+}
+
 export function mentionStatusFor(
   app: ConnectableApp,
   healthById: Record<string, string | null | undefined> = {},
+  registryIds: readonly string[] = REGISTRY_APP_IDS,
 ): MentionAppStatus {
   const id = canonicalAppId(app.id) || app.id
-  if (isHealthConnected(healthById[id] || healthById[app.id])) return "connected"
+  const health = healthById[id] || healthById[app.id]
+  if (isRegistryApp(id, registryIds) && isHealthConnected(health)) return "connected"
   if (isRealConnector(app)) return "connect"
   return "unavailable"
 }
@@ -159,15 +172,18 @@ export function mentionStatusFor(
 export function toPickerApp(
   app: GptStoreApp,
   healthById: Record<string, string | null | undefined> = {},
+  registryIds: readonly string[] = REGISTRY_APP_IDS,
 ): MentionPickerApp {
   const id = canonicalAppId(app.id) || app.id
-  const health = healthById[id] || healthById[app.id] || null
+  const health = isRegistryApp(id, registryIds)
+    ? (healthById[id] || healthById[app.id] || null)
+    : null
   return {
     id,
     name: app.name,
     description: app.description,
     domain: app.domain,
-    status: mentionStatusFor({ id, name: app.name, domain: app.domain }, healthById),
+    status: mentionStatusFor({ id, name: app.name, domain: app.domain }, healthById, registryIds),
     healthStatus: health,
   }
 }
@@ -175,11 +191,12 @@ export function toPickerApp(
 export function buildPickerApps(
   healthById: Record<string, string | null | undefined> = {},
   catalog: GptStoreApp[] = GPT_STORE_APPS,
+  registryIds: readonly string[] = REGISTRY_APP_IDS,
 ): MentionPickerApp[] {
   const seen = new Set<string>()
   const items: MentionPickerApp[] = []
   for (const app of catalog) {
-    const item = toPickerApp(app, healthById)
+    const item = toPickerApp(app, healthById, registryIds)
     if (seen.has(item.id)) continue
     seen.add(item.id)
     items.push(item)
@@ -219,8 +236,9 @@ export function resolveMentionedApps(
   selectedIds: string[] = [],
   healthById: Record<string, string | null | undefined> = {},
   catalog: GptStoreApp[] = GPT_STORE_APPS,
+  registryIds: readonly string[] = REGISTRY_APP_IDS,
 ): MentionedAppPayload {
-  const picker = buildPickerApps(healthById, catalog)
+  const picker = buildPickerApps(healthById, catalog, registryIds)
   const byId = new Map(picker.map((app) => [app.id, app]))
   const byName = new Map(picker.map((app) => [normalizeMentionKey(app.name), app]))
 
@@ -245,7 +263,7 @@ export function resolveMentionedApps(
   for (const id of mentionedApps) {
     const app = byId.get(id)
     const name = app?.name || id
-    const status = app?.status || mentionStatusFor({ id, name, domain: "" }, healthById)
+    const status = app?.status || mentionStatusFor({ id, name, domain: "" }, healthById, registryIds)
     if (status === "connected") connectedAppIds.push(id)
     else if (status === "connect") needsConnect.push({ id, name })
     else unavailable.push({ id, name })

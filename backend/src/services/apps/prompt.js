@@ -26,10 +26,7 @@ async function buildUserAppsPrompt(prisma, userId, opts = {}) {
     const rows = await listByUser(prisma, userId);
     const mentionedIds = resolveMentionedApps(opts.prompt, opts.mentionedApps);
     const classified = classifyMentions(mentionedIds, rows);
-    const live = mentionedIds.length
-      ? rows.filter((row) => mentionedIds.includes(row.appId) && row.status === 'connected')
-      : rows;
-    const connectedBlock = buildModelPrompt(live);
+    const connectedBlock = buildModelPrompt(rows);
     const mentionBlock = buildMentionPrompt(classified);
     return [connectedBlock, mentionBlock].filter(Boolean).join('\n\n');
   } catch {

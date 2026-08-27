@@ -16,6 +16,7 @@ const STALE_HEALTH_MS = 15 * 60 * 1000;
 
 function isStale(row, nowMs) {
   if (!row?.lastHealthAt) return true;
+  if (row.status === registry.STATUSES.CONNECTED && !row.lastHealthOk) return true;
   const at = new Date(row.lastHealthAt).getTime();
   return !Number.isFinite(at) || nowMs - at > STALE_HEALTH_MS;
 }

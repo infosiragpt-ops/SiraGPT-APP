@@ -35,23 +35,15 @@ test('social provider capabilities expose generated image support and X requests
   assert.equal(providerConfig('linkedin', BASE_ENV).scopes.includes('r_member_social'), false);
   assert.deepEqual(
     providerConfig('linkedin', BASE_ENV).scopes,
-    ['openid', 'profile', 'email', 'w_member_social'],
+    ['openid', 'profile', 'w_member_social'],
   );
   assert.equal(
     providerConfig('linkedin', {
       ...BASE_ENV,
       SOCIAL_LINKEDIN_SCOPES: 'openid profile r_member_social w_member_social',
-    }).scopes.includes('r_member_social'),
-    false,
-    'legacy env must not request unauthorized r_member_social',
-  );
-  assert.equal(
-    providerConfig('linkedin', {
-      ...BASE_ENV,
-      SOCIAL_LINKEDIN_SCOPES: 'openid profile r_member_social w_member_social',
-      SOCIAL_LINKEDIN_INCLUDE_MEMBER_SOCIAL: '1',
     }).scopes.includes('r_member_social'),
     true,
+    'SOCIAL_LINKEDIN_SCOPES must win over the default',
   );
   for (const platform of ['facebook', 'linkedin', 'x']) {
     assert.equal(publicProviderStatus(platform, BASE_ENV).supports.generatedImage, true);

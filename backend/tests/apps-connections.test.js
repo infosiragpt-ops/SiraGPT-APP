@@ -327,9 +327,23 @@ test('mentioned apps prompt attaches healthy tools and asks to connect the rest'
     scopes: ['repo', 'read:user'],
   });
   const prompt = await buildUserAppsPrompt(prisma, 'user-mention', {
-    prompt: 'Usa @GitHub y @LinkedIn',
+    prompt: 'Usa @LinkedIn',
   });
+  assert.match(prompt, /## Apps conectadas/);
   assert.match(prompt, /github_list_repos/);
   assert.match(prompt, /LinkedIn no está conectada/);
   assert.doesNotMatch(prompt, /gho_|THIS_MUST_NEVER/);
+});
+
+test('syncFromExisting does not mark a source row connected without a health probe', async () => {
+  const { syncFromExisting } = require('../src/services/apps');
+  const prisma = memoryPrisma();
+  prisma.seedGithub('user-sync');
+  await syncFromExisting(prisma, 'user-sync');
+  const listed = await listUserApps(prisma, 'user-sync', { probe: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].app, 'github');
+  assert.notEqual(listed[0].status, 'connected');
+  assert.equal(listed[0].connected, false);
+  assert.equal(listed[0].lastHealthAt, null);
 });
