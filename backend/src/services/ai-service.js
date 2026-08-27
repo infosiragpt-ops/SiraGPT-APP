@@ -171,6 +171,7 @@ function modelSupportsVision(provider, model) {
     const normalizedModel = String(model || '').toLowerCase();
 
     if (normalizedProvider === 'deepseek') return false;
+    if (/(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(normalizedModel)) return true;
     if (normalizedProvider === 'gemini') return /^gemini/.test(normalizedModel);
     if (normalizedProvider === 'openai') {
         return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);

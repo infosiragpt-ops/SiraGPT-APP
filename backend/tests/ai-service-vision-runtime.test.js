@@ -53,6 +53,8 @@ describe('ai-service vision routing', () => {
       assert.equal(service.modelSupportsVision('Gemini', 'gemini-2.5-flash'), true);
       assert.equal(service.modelSupportsVision('OpenRouter', 'anthropic/claude-3.5-sonnet'), true);
       assert.equal(service.modelSupportsVision('OpenRouter', 'qwen/qwen2-vl-7b-instruct'), true);
+      assert.equal(service.modelSupportsVision('Custom', 'moondream'), true);
+      assert.equal(service.modelSupportsVision('Sira', 'moondream:latest'), true);
     });
 
     test('rejects text-only models', () => {

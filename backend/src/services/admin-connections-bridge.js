@@ -44,6 +44,10 @@ const PROVIDER_ENV_MAP = Object.freeze({
   fireworks: 'FIREWORKS_API_KEY',
   fal: 'FAL_KEY',
   meta: 'MODEL_API_KEY',
+  // `custom` is intentionally absent: each AdminConnection has its own
+  // base URL (Ollama / vLLM / LM Studio). Live chat reads the row at
+  // request time via services/ai/custom-provider-client.js — stuffing
+  // OPENAI_BASE_URL would clobber the real OpenAI client.
 });
 
 const PROVIDER_ENV_ALIASES = Object.freeze({

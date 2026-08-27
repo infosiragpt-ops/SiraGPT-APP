@@ -43,7 +43,7 @@ test('ai.js exports the request-aware helper and uses the gateway client', () =>
   );
   assert.match(
     src,
-    /createProviderClientForRequest\(provider, req\)/,
+    /createProviderClientForRequest\((?:actualProvider|provider), req/,
     'the main /generate path must use the request-aware variant on first resolution',
   );
   assert.match(
