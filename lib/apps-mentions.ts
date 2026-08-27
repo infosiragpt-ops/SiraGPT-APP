@@ -10,8 +10,8 @@ import {
   isHealthConnected,
   resolveFirstPartyProvider,
   type ConnectableApp,
-} from "./gpts-apps-connect"
-import { GPT_STORE_APPS, type GptStoreApp } from "./gpts-apps-catalog"
+} from "@/lib/gpts-apps-connect"
+import { GPT_STORE_APPS, type GptStoreApp } from "@/lib/gpts-apps-catalog"
 
 export const MENTION_COPY = {
   connectedGroup: "Conectadas",
@@ -87,7 +87,7 @@ export function canonicalAppId(value: string): string | null {
   if (ALIASES[raw]) return ALIASES[raw]
   const compact = normalizeMentionKey(raw)
   if (ALIASES[compact]) return ALIASES[compact]
-  const fromCatalog = GPT_STORE_APPS.find((app) => (
+  const fromCatalog = GPT_STORE_APPS.find((app: GptStoreApp) => (
     normalizeMentionKey(app.id) === compact
     || normalizeMentionKey(app.name) === compact
   ))
