@@ -1130,6 +1130,9 @@ E2E con git real en tmpdir: `codex-e2e-flow.test.js`. Golden replay: `tests/lib/
 `CODEX_WORKER_CONCURRENCY` (2) · `CODEX_RUN_TIMEOUT_MS` (15min) · `CODEX_MAX_STEPS` (24) ·
 `CODEX_MAX_TOOLS_PER_TURN` (4) · `CODEX_COST_PROMO_MULTIPLIER` · `CEREBRAS_API_KEY` (LLM).
 `logCodexConfig()` valida coherencia al boot.
+Autoscaling en caliente del worker: `CODEX_WORKER_MAX_CONCURRENCY` (8; techo, si ≤ floor
+desactiva) · `CODEX_AUTOSCALE_QUEUE_DEPTH` (3) · `CODEX_AUTOSCALE_STEP` (2) ·
+`CODEX_AUTOSCALE_SCALE_DOWN_MS` (120s) · `CODEX_AUTOSCALE_INTERVAL_MS` (15s).
 
 ### Gotchas
 - vitest forks pool cuelga aquí → usar `--pool=threads`.

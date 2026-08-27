@@ -7,7 +7,18 @@ const runQueue = require('../src/services/codex/run-queue');
 
 const savedEnv = { ...process.env };
 afterEach(() => {
-  for (const k of ['CODEX_QUEUE_NAME', 'CODEX_AGENT_V2', 'REDIS_URL', 'BULLMQ_SKIP_VERSION_CHECK']) {
+  for (const k of [
+    'CODEX_QUEUE_NAME',
+    'CODEX_AGENT_V2',
+    'REDIS_URL',
+    'BULLMQ_SKIP_VERSION_CHECK',
+    'CODEX_WORKER_CONCURRENCY',
+    'CODEX_WORKER_MAX_CONCURRENCY',
+    'CODEX_AUTOSCALE_QUEUE_DEPTH',
+    'CODEX_AUTOSCALE_STEP',
+    'CODEX_AUTOSCALE_SCALE_DOWN_MS',
+    'CODEX_AUTOSCALE_INTERVAL_MS',
+  ]) {
     if (savedEnv[k] === undefined) delete process.env[k];
     else process.env[k] = savedEnv[k];
   }
@@ -96,4 +107,109 @@ test('default handler pins the adapter id validated at boot and captures injecte
   assert.equal(calls[0].env.CODEX_IMPLEMENTER_ADAPTER, 'native');
   assert.equal(calls[0].env.CODEX_RUN_TIMEOUT_MS, '1234');
   assert.equal(Object.isFrozen(calls[0].env), true);
+});
+
+// ── Autoscaler: hot concurrency for the codex-runs worker ──────────────────
+
+const AUTOSCALER_CONFIG = {
+  enabled: true,
+  floor: 2,
+  ceiling: 8,
+  scaleUpThreshold: 3,
+  scaleUpStep: 2,
+  scaleDownAfterMs: 120_000,
+  intervalMs: 15_000,
+};
+
+test('getAutoscalerConfig floors at the operator concurrency and disables when ceiling <= floor', () => {
+  const base = runQueue.getAutoscalerConfig({ CODEX_WORKER_CONCURRENCY: '4' });
+  assert.equal(base.floor, 4);
+  assert.equal(base.ceiling, 8);
+  assert.equal(base.enabled, true);
+
+  const inert = runQueue.getAutoscalerConfig({ CODEX_WORKER_CONCURRENCY: '8' });
+  assert.equal(inert.enabled, false);
+
+  // A ceiling below the operator floor never pulls capacity DOWN.
+  const clamped = runQueue.getAutoscalerConfig({
+    CODEX_WORKER_CONCURRENCY: '6',
+    CODEX_WORKER_MAX_CONCURRENCY: '3',
+  });
+  assert.equal(clamped.enabled, false);
+  assert.equal(clamped.ceiling, 6);
+
+  const junk = runQueue.getAutoscalerConfig({ CODEX_WORKER_MAX_CONCURRENCY: 'not-a-number' });
+  assert.equal(junk.ceiling, 8);
+});
+
+test('nextAutoscalerTarget scales up by step when waiting depth exceeds threshold', () => {
+  const next = runQueue.nextAutoscalerTarget({
+    depth: 5,
+    current: 2,
+    busySinceMs: null,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(next.target, 4);
+  assert.equal(next.changed, true);
+  assert.equal(next.busySinceMs, 1_000);
+});
+
+test('nextAutoscalerTarget never exceeds the ceiling and holds below threshold while hot', () => {
+  const atCeiling = runQueue.nextAutoscalerTarget({
+    depth: 50,
+    current: 8,
+    busySinceMs: 500,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(atCeiling.target, 8);
+  assert.equal(atCeiling.changed, false);
+
+  const holding = runQueue.nextAutoscalerTarget({
+    depth: 2,
+    current: 6,
+    busySinceMs: 1_000 - 10_000,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(holding.target, 6);
+  assert.equal(holding.changed, false);
+});
+
+test('nextAutoscalerTarget scales down to floor only after the quiet period', () => {
+  const stillHot = runQueue.nextAutoscalerTarget({
+    depth: 0,
+    current: 6,
+    busySinceMs: 1_000 - 119_999,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(stillHot.target, 6);
+  assert.equal(stillHot.changed, false);
+
+  const cooled = runQueue.nextAutoscalerTarget({
+    depth: 0,
+    current: 6,
+    busySinceMs: 1_000 - 120_000,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(cooled.target, 2);
+  assert.equal(cooled.changed, true);
+  assert.equal(cooled.busySinceMs, null);
+
+  const idleAtFloor = runQueue.nextAutoscalerTarget({
+    depth: 0,
+    current: 2,
+    busySinceMs: null,
+    now: 1_000,
+    config: AUTOSCALER_CONFIG,
+  });
+  assert.equal(idleAtFloor.target, 2);
+  assert.equal(idleAtFloor.changed, false);
+});
+
+test('startCodexAutoscaler is a no-op without a live worker (no Redis touched)', () => {
+  assert.equal(runQueue.startCodexAutoscaler({ env: { CODEX_WORKER_CONCURRENCY: '2' } }), null);
 });
