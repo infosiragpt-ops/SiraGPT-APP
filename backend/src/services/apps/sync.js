@@ -1,7 +1,7 @@
 'use strict';
 
 const { STATUSES, normalizeAppId } = require('./registry');
-const { upsertConnection, githubSecretRef, socialSecretRef, listByUser } = require('./store');
+const { upsertConnection, findByUserAndApp, githubSecretRef, socialSecretRef, listByUser } = require('./store');
 
 function asScopes(value) {
   if (Array.isArray(value)) return value.map(String).filter(Boolean);
@@ -32,6 +32,34 @@ async function upsertFromOAuth(prisma, {
     lastError: null,
     lastHealthAt: new Date(),
     lastHealthOk: new Date(),
+    stampHealth: true,
+  });
+}
+
+async function linkExistingSource(prisma, {
+  userId,
+  appId,
+  sourceId,
+  accountLabel = null,
+  scopes = [],
+  expiresAt = null,
+}) {
+  const id = normalizeAppId(appId);
+  if (!id || !userId || !sourceId) return null;
+  const existing = await findByUserAndApp(prisma, userId, id);
+  const ref = id === 'github' ? githubSecretRef(sourceId) : socialSecretRef(sourceId);
+  return upsertConnection(prisma, {
+    userId,
+    appId: id,
+    status: existing?.status || STATUSES.ERROR,
+    scopes: asScopes(scopes).length ? asScopes(scopes) : existing?.scopes || [],
+    expiresAt: expiresAt || existing?.expiresAt || null,
+    secretRef: ref,
+    accountLabel: accountLabel || existing?.accountLabel || null,
+    lastError: existing?.lastError || 'pending_health',
+    lastHealthAt: existing?.lastHealthAt || null,
+    lastHealthOk: existing?.lastHealthOk || null,
+    stampHealth: false,
   });
 }
 
@@ -48,7 +76,7 @@ async function syncFromExisting(prisma, userId) {
       : [],
   ]);
   if (github?.id) {
-    await upsertFromOAuth(prisma, {
+    await linkExistingSource(prisma, {
       userId,
       appId: 'github',
       sourceId: github.id,
@@ -57,7 +85,7 @@ async function syncFromExisting(prisma, userId) {
     });
   }
   for (const row of socials || []) {
-    await upsertFromOAuth(prisma, {
+    await linkExistingSource(prisma, {
       userId,
       appId: row.platform,
       sourceId: row.id,
@@ -71,5 +99,6 @@ async function syncFromExisting(prisma, userId) {
 
 module.exports = {
   upsertFromOAuth,
+  linkExistingSource,
   syncFromExisting,
 };

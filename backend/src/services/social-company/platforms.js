@@ -70,7 +70,10 @@ function providerConfig(platformValue, env = process.env) {
       tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
       apiBase: 'https://api.linkedin.com',
       apiVersion: envValue(env, 'SOCIAL_LINKEDIN_API_VERSION') || '202607',
-      scopes: (envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile r_member_social w_member_social')
+      // Default omits r_member_social (Community Management). Prod LinkedIn
+      // apps without that product return unauthorized_scope_error. Operators
+      // can still request it via SOCIAL_LINKEDIN_SCOPES.
+      scopes: (envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile w_member_social')
         .split(/\s+/)
         .filter(Boolean),
     };

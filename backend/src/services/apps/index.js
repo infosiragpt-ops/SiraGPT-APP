@@ -8,6 +8,7 @@ const sync = require('./sync');
 const revoke = require('./revoke');
 const gateway = require('./gateway');
 const prompt = require('./prompt');
+const mentions = require('./mentions');
 const redact = require('./redact');
 const audit = require('./audit');
 
@@ -15,6 +16,7 @@ const STALE_HEALTH_MS = 15 * 60 * 1000;
 
 function isStale(row, nowMs) {
   if (!row?.lastHealthAt) return true;
+  if (row.status === registry.STATUSES.CONNECTED && !row.lastHealthOk) return true;
   const at = new Date(row.lastHealthAt).getTime();
   return !Number.isFinite(at) || nowMs - at > STALE_HEALTH_MS;
 }
@@ -52,6 +54,7 @@ module.exports = {
   ...revoke,
   ...gateway,
   ...prompt,
+  ...mentions,
   ...redact,
   ...audit,
   listUserApps,

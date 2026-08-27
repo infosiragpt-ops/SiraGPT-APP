@@ -173,6 +173,12 @@ function selectTools(rawInput, deps = {}) {
     // specific-intent turn even though the user attached a file to edit it.
     if (signals.hasFiles && /(rag_retrieve|docintel|deep_analyze|document_edit)/.test(n)) coreSet.add(toName(t));
     if ((signals.hasMedia || /media|image|chart/.test(it)) && /(create_document|generate_image|create_chart)/.test(n)) coreSet.add(toName(t));
+    const mentionedTools = new Set(
+      (Array.isArray(signals.mentionedAppTools) ? signals.mentionedAppTools : [])
+        .map((name) => String(name || '').toLowerCase())
+        .filter(Boolean),
+    );
+    if (mentionedTools.has(n)) coreSet.add(toName(t));
   }
 
   // Score everything, then pick core + top-scored up to maxTools.

@@ -315,3 +315,35 @@ test('model prompt only exposes app, connection_id and available_tools', async (
   assert.equal(row.secretRef, githubSecretRef(account.id));
   assert.equal(JSON.stringify(row).includes(SECRET), false);
 });
+
+test('mentioned apps prompt attaches healthy tools and asks to connect the rest', async () => {
+  const { buildUserAppsPrompt } = require('../src/services/apps');
+  const prisma = memoryPrisma();
+  const account = prisma.seedGithub('user-mention');
+  await upsertFromOAuth(prisma, {
+    userId: 'user-mention',
+    appId: 'github',
+    sourceId: account.id,
+    scopes: ['repo', 'read:user'],
+  });
+  const prompt = await buildUserAppsPrompt(prisma, 'user-mention', {
+    prompt: 'Usa @LinkedIn',
+  });
+  assert.match(prompt, /## Apps conectadas/);
+  assert.match(prompt, /github_list_repos/);
+  assert.match(prompt, /LinkedIn no está conectada/);
+  assert.doesNotMatch(prompt, /gho_|THIS_MUST_NEVER/);
+});
+
+test('syncFromExisting does not mark a source row connected without a health probe', async () => {
+  const { syncFromExisting } = require('../src/services/apps');
+  const prisma = memoryPrisma();
+  prisma.seedGithub('user-sync');
+  await syncFromExisting(prisma, 'user-sync');
+  const listed = await listUserApps(prisma, 'user-sync', { probe: false });
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].app, 'github');
+  assert.notEqual(listed[0].status, 'connected');
+  assert.equal(listed[0].connected, false);
+  assert.equal(listed[0].lastHealthAt, null);
+});

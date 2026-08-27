@@ -31,6 +31,7 @@ export interface PendingAIRequestEnvelope {
   enableWebGrounding?: boolean
   webGroundingQuery?: string
   webSearchMode?: string
+  mentionedApps?: string[]
 }
 
 export interface PendingGeneratePayload extends PendingAIRequestEnvelope {
