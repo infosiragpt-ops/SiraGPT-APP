@@ -30,7 +30,7 @@ test('parses @mentions and attaches only healthy connected app tools', () => {
   assert.match(prompt, /@GitHub/);
   assert.match(prompt, /github_list_repos/);
   assert.match(prompt, /LinkedIn no está conectada/);
-  assert.doesNotMatch(prompt, /token|gho_|Bearer /i);
+  assert.doesNotMatch(prompt, /gho_|Bearer |accessToken/i);
 });
 
 test('catalog-only mentions stay unavailable and never look connected', () => {

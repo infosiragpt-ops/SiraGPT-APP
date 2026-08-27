@@ -23,6 +23,7 @@
     "../lib/app-wrapper-routes.ts",
     "../lib/agents-home-path.ts",
     "../lib/gpts-apps-connect.ts",
+    "../lib/apps-mentions.ts",
     "../lib/long-paste.ts",
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",

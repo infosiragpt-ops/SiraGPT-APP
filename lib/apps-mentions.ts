@@ -10,8 +10,8 @@ import {
   isHealthConnected,
   resolveFirstPartyProvider,
   type ConnectableApp,
-} from "@/lib/gpts-apps-connect"
-import { GPT_STORE_APPS, type GptStoreApp } from "@/lib/gpts-apps-catalog"
+} from "./gpts-apps-connect"
+import { GPT_STORE_APPS, type GptStoreApp } from "./gpts-apps-catalog"
 
 export const MENTION_COPY = {
   connectedGroup: "Conectadas",
