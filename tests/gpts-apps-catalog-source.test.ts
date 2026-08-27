@@ -44,7 +44,7 @@ describe("GPTs Apps catalog", () => {
     assert.match(section, /\/apps\/connections/)
     assert.doesNotMatch(section, /settings\.apps\[id\]\?\.connected === true/)
     assert.match(section, /connectGptStoreApp/)
-    assert.match(section, /agent-computer\/navigate/)
+    assert.doesNotMatch(section, /agent-computer\/navigate/)
     assert.doesNotMatch(section, /toast\.success\(`\$\{app\.name\} conectada`\)/)
     assert.match(section, /gptStoreAppLogoUrl/)
     assert.match(section, /gptStoreAppLogoSources/)

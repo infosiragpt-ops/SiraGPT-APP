@@ -111,6 +111,22 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
 import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
 import { canOpenComposerPreview, INDEXING_STATUS_LABEL } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
+import { AppsMentionPicker } from "@/components/AppsMentionPicker"
+import {
+  MENTION_COPY,
+  buildPickerApps,
+  detectAtMention,
+  filterPickerApps,
+  groupPickerApps,
+  insertMention,
+  resolveMentionedApps,
+  type MentionPickerApp,
+  type MentionTrigger,
+} from "@/lib/apps-mentions"
+import {
+  connectGptStoreApp,
+} from "@/lib/gpts-apps-connect"
+import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
@@ -6985,6 +7001,10 @@ But first, you need to connect your Spotify account securely using the button be
   // typing the command name.
   const [slashMenuOpen, setSlashMenuOpen] = React.useState(false);
   const [slashMenuFilter, setSlashMenuFilter] = React.useState("");
+  const [mentionMenuOpen, setMentionMenuOpen] = React.useState(false);
+  const [mentionTrigger, setMentionTrigger] = React.useState<MentionTrigger | null>(null);
+  const [mentionHealthById, setMentionHealthById] = React.useState<Record<string, string>>({});
+  const [selectedMentionIds, setSelectedMentionIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     inputRef.current = input;
@@ -7002,7 +7022,120 @@ But first, you need to connect your Spotify account securely using the button be
       setSlashMenuOpen(true);
       setSlashMenuFilter(filter);
     }
+    const caret = textareaRef.current?.selectionStart;
+    const mention = detectAtMention(input, caret);
+    if (mention && filter === null) {
+      setMentionMenuOpen(true);
+      setMentionTrigger(mention);
+    } else if (!mention) {
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+    }
   }, [input]);
+
+  React.useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    authenticatedFetch(`${getNormalizedApiBaseUrl()}/apps/connections?probe=0`, {
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      signal: AbortSignal.timeout(15_000),
+    })
+      .then(async (res) => {
+        if (cancelled || !res.ok) return
+        const body = await res.json().catch(() => ({})) as { connections?: Array<{ app?: string; status?: string }> }
+        const next: Record<string, string> = {}
+        for (const row of body.connections || []) {
+          const appId = String(row?.app || "").trim()
+          const status = String(row?.status || "").trim()
+          if (appId && status) next[appId] = status
+        }
+        if (!cancelled) setMentionHealthById(next)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [user]);
+
+  const mentionPickerApps = React.useMemo(() => {
+    const grouped = groupPickerApps(filterPickerApps(buildPickerApps(mentionHealthById), mentionTrigger?.query || ""))
+    return grouped.flat.slice(0, 40)
+  }, [mentionHealthById, mentionTrigger]);
+
+  const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
+    const token = typeof window !== "undefined" ? window.localStorage.getItem("auth-token") : null
+    const result = await connectGptStoreApp(
+      { id: app.id, name: app.name, domain: app.domain },
+      {
+        isAuthenticated: Boolean(user || token),
+        loginNext: typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search || ""}` || "/agentes"
+          : "/agentes",
+        requireLogin: (next) => {
+          if (typeof window !== "undefined") {
+            window.location.href = `/auth/login?next=${encodeURIComponent(next || "/agentes")}`
+          }
+        },
+        fetchJson: async (requestPath) => {
+          const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}${requestPath}`, {
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+            signal: AbortSignal.timeout(20_000),
+          })
+          const body = await res.json().catch(() => ({})) as Record<string, unknown>
+          return { ok: res.ok, status: res.status, body }
+        },
+        ensureComputer: async () => ({ conversationBound: false }),
+        navigateComputer: async () => undefined,
+        createConversation: async () => ({ id: "" }),
+        openComputerOverlay: () => undefined,
+      },
+    )
+    if (result.redirectUrl) {
+      toast.message(result.message)
+      window.location.href = result.redirectUrl
+      return result
+    }
+    if (result.status === "unavailable") {
+      toast.message(result.message)
+      return result
+    }
+    if (result.status !== "oauth_started") {
+      toast.error(result.message)
+    }
+    return result
+  }, [user])
+
+  const handleAppsMentionPick = React.useCallback(async (app: MentionPickerApp) => {
+    setMentionMenuOpen(false)
+    if (app.status === "connected") {
+      const next = insertMention(input, mentionTrigger, app.name)
+      setSelectedMentionIds((prev) => (prev.includes(app.id) ? prev : [...prev, app.id]))
+      setInput(next)
+      chatDraft.save(next)
+      window.setTimeout(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        const caret = next.length
+        try { el.setSelectionRange(caret, caret) } catch { /* old Safari */ }
+      }, 0)
+      return
+    }
+    if (app.status === "connect") {
+      await startAppConnect(app)
+      return
+    }
+    toast.message(MENTION_COPY.unavailableDetail(app.name))
+  }, [chatDraft, input, mentionTrigger, startAppConnect]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
   const hasDetectedLinks = detectedLinks.length > 0;
@@ -7821,6 +7954,7 @@ But first, you need to connect your Spotify account securely using the button be
       overlayVisible={pasteCapture.overlayVisible}
       overlay={pasteCapture.Overlay}
       slashMenu={
+        <>
         <SlashCommandMenu
           open={slashMenuOpen}
           filter={slashMenuFilter}
@@ -7838,6 +7972,17 @@ But first, you need to connect your Spotify account securely using the button be
           }}
           onClose={() => setSlashMenuOpen(false)}
         />
+        <AppsMentionPicker
+          open={mentionMenuOpen && !slashMenuOpen}
+          filter={mentionTrigger?.query || ""}
+          apps={mentionPickerApps}
+          onPick={(app) => { void handleAppsMentionPick(app); }}
+          onClose={() => {
+            setMentionMenuOpen(false);
+            setMentionTrigger(null);
+          }}
+        />
+        </>
       }
       contextTray={
         <>
@@ -9429,6 +9574,14 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const mentionPayload = resolveMentionedApps(rawMsg, selectedMentionIds, mentionHealthById)
+    if (mentionPayload.needsConnect[0]) {
+      toast.message(MENTION_COPY.connectPrompt(mentionPayload.needsConnect[0].name))
+    }
+    if (mentionPayload.unavailable[0] && mentionPayload.connectedAppIds.length === 0 && mentionPayload.needsConnect.length === 0) {
+      toast.message(MENTION_COPY.unavailableDetail(mentionPayload.unavailable[0].name))
+    }
+
     if (composerFiles.some(isComposerFileUploadPending)) {
       toast.info("Espera a que el documento llegue al 100% antes de enviarlo.", { duration: 2200 });
       return;
@@ -9685,6 +9838,9 @@ REWRITTEN TEXT:`;
       return `${rawPrompt}\n\nImage edit target: modify only the marked region of the attached image. Region in percentages from the image top-left: x=${Math.round(region.x || 0)}%, y=${Math.round(region.y || 0)}%, width=${Math.round(region.width || 0)}%, height=${Math.round(region.height || 0)}%. Keep the rest of the image visually unchanged.`;
     };
     setInput("");
+    setSelectedMentionIds([]);
+    setMentionMenuOpen(false);
+    setMentionTrigger(null);
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
@@ -10283,7 +10439,10 @@ REWRITTEN TEXT:`;
         if (isNewChat) {
           await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
         } else {
-          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, { idempotencyKey });
+          await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
+            idempotencyKey,
+            mentionedApps: mentionPayload.mentionedApps,
+          });
         }
       };
 

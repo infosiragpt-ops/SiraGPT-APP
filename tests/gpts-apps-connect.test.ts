@@ -103,7 +103,7 @@ function fakeDeps(overrides: Partial<ConnectGptStoreAppDeps> = {}): ConnectGptSt
 }
 
 describe("gpts apps real connect", () => {
-  it("branches first-party OAuth by domain/id and leaves catalog sites on the computer", () => {
+  it("branches first-party OAuth by domain/id and keeps catalog sites unavailable", () => {
     assert.deepEqual(resolveConnectPlan(linkedin), {
       kind: "oauth",
       provider: "linkedin",
@@ -143,14 +143,8 @@ describe("gpts apps real connect", () => {
       provider: "google-services",
       startPath: "/auth/google-services",
     })
-    assert.deepEqual(resolveConnectPlan(indeed), {
-      kind: "computer",
-      url: "https://indeed.com",
-    })
-    assert.deepEqual(resolveConnectPlan(etsy), {
-      kind: "computer",
-      url: "https://etsy.com",
-    })
+    assert.deepEqual(resolveConnectPlan(indeed), { kind: "unavailable" })
+    assert.deepEqual(resolveConnectPlan(etsy), { kind: "unavailable" })
     assert.equal(firstPartyOAuthStartPath(indeed), null)
     assert.equal(catalogNavigateUrl(indeed), "https://indeed.com")
   })
@@ -162,7 +156,7 @@ describe("gpts apps real connect", () => {
       { id: "tarot", name: "Tarot", domain: "labyrinthos.co" },
     ]) {
       const plan = resolveConnectPlan(app)
-      assert.equal(plan.kind, "computer")
+      assert.equal(plan.kind, "unavailable")
       assert.doesNotMatch(JSON.stringify(plan), /oauth|social-posts|auth\//)
     }
   })
@@ -213,49 +207,25 @@ describe("gpts apps real connect", () => {
     assert.equal(deps.calls.assign.length, 0)
   })
 
-  it("opens the isolated computer on the catalog domain instead of a local stub", async () => {
+  it("does not open Chrome or mark catalog apps Conectada", async () => {
     const deps = fakeDeps()
     const result = await connectGptStoreApp(indeed, deps)
-    assert.equal(result.status, "computer_opened")
+    assert.equal(result.status, "unavailable")
     assert.equal(result.markConnected, false)
-    assert.equal(result.message, CONNECT_COPY.computerOpened)
-    assert.deepEqual(deps.calls.create, ["Conectar Indeed"])
-    assert.deepEqual(deps.calls.ensure, ["chat-new"])
-    assert.deepEqual(deps.calls.navigate, [{
-      conversationId: "chat-new",
-      url: "https://indeed.com",
-    }])
-    assert.deepEqual(deps.calls.open, [{
-      conversationId: "chat-new",
-      url: "https://indeed.com",
-    }])
-    assert.equal(result.conversationId, "chat-new")
+    assert.equal(result.message, CONNECT_COPY.unavailable("Indeed"))
+    assert.equal(deps.calls.create.length, 0)
+    assert.equal(deps.calls.ensure.length, 0)
+    assert.equal(deps.calls.navigate.length, 0)
+    assert.equal(deps.calls.open.length, 0)
   })
 
-  it("reuses the open conversation when the computer session already exists", async () => {
+  it("keeps Etsy unavailable without a computer session", async () => {
     const deps = fakeDeps({ currentConversationId: "chat-open" })
     const result = await connectGptStoreApp(etsy, deps)
-    assert.equal(result.status, "computer_opened")
+    assert.equal(result.status, "unavailable")
     assert.deepEqual(deps.calls.create, [])
-    assert.deepEqual(deps.calls.ensure, ["chat-open"])
-    assert.deepEqual(deps.calls.navigate, [{
-      conversationId: "chat-open",
-      url: "https://etsy.com",
-    }])
-  })
-
-  it("never marks connected when computer isolation or navigate fails", async () => {
-    const deps = fakeDeps({
-      navigateComputer: async () => {
-        throw new Error("No se pudo aislar la computadora de esta conversación.")
-      },
-    })
-    const result = await connectGptStoreApp(indeed, deps)
-    assert.equal(result.status, "error")
-    assert.equal(result.markConnected, false)
-    assert.equal(result.message, "No se pudo aislar la computadora de esta conversación.")
-    assert.equal(deps.calls.open.length, 0)
-    assert.equal(deps.calls.assign.length, 0)
+    assert.deepEqual(deps.calls.ensure, [])
+    assert.deepEqual(deps.calls.navigate, [])
   })
 
   it("keeps Spanish button labels for the four connect states", () => {
@@ -275,7 +245,7 @@ describe("gpts apps real connect", () => {
     assert.match(section, /CONNECT_COPY/)
     assert.match(section, /\/apps\/connections/)
     assert.match(section, /isHealthConnected/)
-    assert.match(section, /agent-computer\/navigate/)
+    assert.doesNotMatch(section, /agent-computer\/navigate/)
     assert.doesNotMatch(section, /settings\.apps\[id\]\?\.connected/)
     assert.doesNotMatch(section, /toast\.success\(`\$\{app\.name\} conectada`\)/)
     assert.doesNotMatch(section, /update\(\{ apps:/)

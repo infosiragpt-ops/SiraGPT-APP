@@ -5,13 +5,10 @@ import { useRouter } from "next/navigation"
 import { Check, Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { useSettings } from "@/lib/settings-context"
 import { useAuth } from "@/lib/auth-context-integrated"
 import { toast } from "sonner"
-import { apiClient } from "@/lib/api"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
-import { agentsHomeHref } from "@/lib/agents-home-path"
 import {
   CONNECT_COPY,
   connectButtonLabel,
@@ -152,12 +149,6 @@ function AppCard({
   )
 }
 
-function storedConversationId(): string | null {
-  if (typeof window === "undefined") return null
-  const id = String(window.localStorage.getItem("currentChatId") || "").trim()
-  return id && id !== "pending" ? id : null
-}
-
 function storedAuthToken(): string | null {
   if (typeof window === "undefined") return null
   try {
@@ -185,40 +176,6 @@ async function fetchConnectJson(requestPath: string): Promise<{ ok: boolean; sta
   return { ok: res.ok, status: res.status, body }
 }
 
-async function ensureComputerSession(conversationId: string) {
-  const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/agent-computer/sessions`, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify({ conversationId }),
-    signal: AbortSignal.timeout(60_000),
-  })
-  const body = await res.json().catch(() => ({})) as Record<string, unknown>
-  if (!res.ok) {
-    throw new Error(String(body.message || body.error || CONNECT_COPY.computerFailed))
-  }
-  return {
-    sessionId: body.sessionId ? String(body.sessionId) : undefined,
-    conversationId: body.conversationId ? String(body.conversationId) : conversationId,
-    conversationBound: body.conversationBound !== false,
-  }
-}
-
-async function navigateComputerSession(conversationId: string, url: string) {
-  const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/agent-computer/navigate`, {
-    method: "POST",
-    credentials: "include",
-    headers: authHeaders(),
-    body: JSON.stringify({ conversationId, url }),
-    signal: AbortSignal.timeout(30_000),
-  })
-  const body = await res.json().catch(() => ({})) as Record<string, unknown>
-  if (!res.ok) {
-    throw new Error(String(body.message || body.error || CONNECT_COPY.navigateFailed(url)))
-  }
-  return body
-}
-
 export function GptsAppsSection({
   searchQuery,
   showAll = false,
@@ -228,7 +185,6 @@ export function GptsAppsSection({
   showAll?: boolean
   hideHeading?: boolean
 }) {
-  const { settings } = useSettings()
   const { isAuthenticated } = useAuth()
   const router = useRouter()
   const [category, setCategory] = useState<"All" | GptStoreAppCategory>("All")
@@ -283,25 +239,15 @@ export function GptsAppsSection({
       : "/conexiones"
     const deps: ConnectGptStoreAppDeps = {
       isAuthenticated: Boolean(isAuthenticated || storedAuthToken()),
-      defaultModel: settings.defaultModel,
-      currentConversationId: storedConversationId(),
       loginNext,
       requireLogin: (next) => {
         router.push(`/auth/login?next=${encodeURIComponent(next || "/conexiones")}`)
       },
       fetchJson: fetchConnectJson,
-      ensureComputer: ensureComputerSession,
-      navigateComputer: navigateComputerSession,
-      createConversation: async (title, model) => {
-        const response = await apiClient.createChat({ title, model })
-        const id = String(response?.chat?.id || response?.id || "").trim()
-        if (!id) throw new Error(CONNECT_COPY.computerFailed)
-        try { window.localStorage.setItem("currentChatId", id) } catch { /* ignore */ }
-        return { id }
-      },
-      openComputerOverlay: (conversationId) => {
-        router.push(agentsHomeHref(new URLSearchParams({ computer: "1" }), null, conversationId))
-      },
+      ensureComputer: async () => ({ conversationBound: false }),
+      navigateComputer: async () => undefined,
+      createConversation: async () => ({ id: "" }),
+      openComputerOverlay: () => undefined,
     }
     try {
       const result = await connectGptStoreApp(app, deps)
@@ -313,12 +259,12 @@ export function GptsAppsSection({
         window.location.href = result.redirectUrl
         return
       }
-      if (result.status === "computer_opened") {
-        toast.success(`${app.name}: ${CONNECT_COPY.computerOpened.toLowerCase()}`)
+      if (result.status === "unavailable") {
+        toast.message(result.message)
         return
       }
       if (!result.markConnected) {
-        toast.error(result.message || CONNECT_COPY.computerFailed)
+        toast.error(result.message || CONNECT_COPY.oauthFailed(app.name))
       }
     } catch (error) {
       const message = error instanceof Error && error.message

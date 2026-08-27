@@ -315,3 +315,21 @@ test('model prompt only exposes app, connection_id and available_tools', async (
   assert.equal(row.secretRef, githubSecretRef(account.id));
   assert.equal(JSON.stringify(row).includes(SECRET), false);
 });
+
+test('mentioned apps prompt attaches healthy tools and asks to connect the rest', async () => {
+  const { buildUserAppsPrompt } = require('../src/services/apps');
+  const prisma = memoryPrisma();
+  const account = prisma.seedGithub('user-mention');
+  await upsertFromOAuth(prisma, {
+    userId: 'user-mention',
+    appId: 'github',
+    sourceId: account.id,
+    scopes: ['repo', 'read:user'],
+  });
+  const prompt = await buildUserAppsPrompt(prisma, 'user-mention', {
+    prompt: 'Usa @GitHub y @LinkedIn',
+  });
+  assert.match(prompt, /github_list_repos/);
+  assert.match(prompt, /LinkedIn no está conectada/);
+  assert.doesNotMatch(prompt, /gho_|THIS_MUST_NEVER/);
+});

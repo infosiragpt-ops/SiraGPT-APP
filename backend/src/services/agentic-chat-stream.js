@@ -1024,6 +1024,22 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     };
     const artifactDeliveryContract = buildArtifactDeliveryContract(userQuery, customGptAgentPolicy);
 
+    if (toolContext?.prisma && toolContext?.userId) {
+      try {
+        const appRuntime = require('./apps');
+        const mentionedIds = appRuntime.resolveMentionedApps(
+          userQuery,
+          toolContext.mentionedApps,
+        );
+        const rows = await appRuntime.listByUser(toolContext.prisma, toolContext.userId);
+        const classified = appRuntime.classifyMentions(mentionedIds, rows);
+        toolContext.mentionedAppTools = appRuntime.mentionedToolNames(classified.attached);
+        toolContext.mentionedAppsResolved = classified;
+      } catch (mentionErr) {
+        try { console.warn('[apps] mention resolve failed:', mentionErr.message); } catch (_) { /* noop */ }
+      }
+    }
+
     let tools = toolsOverride || buildDefaultTools({
       userQuery,
       selection,
@@ -1032,6 +1048,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       skillPolicy: runtimeSkillPolicy,
       chatId: toolContext && toolContext.chatId,
       userId: toolContext && toolContext.userId,
+      mentionedAppTools: toolContext && toolContext.mentionedAppTools,
     });
 
     // Inject this custom GPT's creator-defined Actions as agent tools. Appended
@@ -1175,7 +1192,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     if (toolContext?.prisma && toolContext?.userId) {
       try {
         const appRuntime = require('./apps');
-        __appsBlock = await appRuntime.buildUserAppsPrompt(toolContext.prisma, toolContext.userId);
+        __appsBlock = await appRuntime.buildUserAppsPrompt(toolContext.prisma, toolContext.userId, {
+          prompt: userQuery,
+          mentionedApps: Array.isArray(toolContext.mentionedApps) ? toolContext.mentionedApps : [],
+        });
       } catch (appsError) {
         try { console.warn('[apps] prompt block failed:', appsError.message); } catch (_) { /* noop */ }
       }
@@ -1242,6 +1262,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           ...(Array.isArray(toolContext.fileIds) && toolContext.fileIds.length
             ? ['rag_retrieve', 'docintel_analyze', 'search_docs', 'document_edit']
             : []),
+          ...(Array.isArray(toolContext.mentionedAppTools) ? toolContext.mentionedAppTools : []),
         ].filter(Boolean);
         tools = capToolsForPrompted(tools, { pinned });
       } catch (capErr) {
@@ -2425,7 +2446,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           userQuery,
           decision: sel.decision || null,
           intent: sel.intent || (sel.decision && sel.decision.intent) || null,
-          signals: sel.signals || {},
+          signals: {
+            ...(sel.signals || {}),
+            mentionedAppTools: opts.mentionedAppTools
+              || (opts.toolContext && opts.toolContext.mentionedAppTools)
+              || [],
+          },
           maxTools: sel.maxTools,
         });
         if (picked && picked.applied && Array.isArray(picked.tools) && picked.tools.length >= 4) {

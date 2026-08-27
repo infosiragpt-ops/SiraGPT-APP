@@ -11,6 +11,14 @@ function cleanPlatform(value) {
   return PLATFORM_SET.has(normalized) ? normalized : null;
 }
 
+function sanitizeLinkedInScopes(raw, env = process.env) {
+  const allowMemberSocial = /^(1|true|on|yes)$/i.test(String(env.SOCIAL_LINKEDIN_INCLUDE_MEMBER_SOCIAL || '').trim());
+  return String(raw || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((scope) => allowMemberSocial || scope !== 'r_member_social');
+}
+
 function envValue(env, ...keys) {
   for (const key of keys) {
     const value = String(env[key] || '').trim();
@@ -70,9 +78,14 @@ function providerConfig(platformValue, env = process.env) {
       tokenUrl: 'https://www.linkedin.com/oauth/v2/accessToken',
       apiBase: 'https://api.linkedin.com',
       apiVersion: envValue(env, 'SOCIAL_LINKEDIN_API_VERSION') || '202607',
-      scopes: (envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile r_member_social w_member_social')
-        .split(/\s+/)
-        .filter(Boolean),
+      // r_member_social is a Community Management API scope. Most LinkedIn
+      // developer apps are not approved for it and the authorize step returns
+      // unauthorized_scope_error → social=denied. Request only Sign In +
+      // Share on LinkedIn scopes unless the operator opts back in.
+      scopes: sanitizeLinkedInScopes(
+        envValue(env, 'SOCIAL_LINKEDIN_SCOPES') || 'openid profile email w_member_social',
+        env,
+      ),
     };
   }
 

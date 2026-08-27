@@ -1,10 +1,10 @@
 /**
- * Real /conexiones Conectar — first-party OAuth vs isolated computer.
+ * Real /conexiones Conectar — first-party OAuth only.
  *
  * First-party cards (LinkedIn / X / Facebook / GitHub / Google) start the
- * existing backend OAuth. Every other catalog card opens the /agentes
- * computer on https://{domain}. Nothing is marked connected from localStorage
- * alone.
+ * existing backend OAuth. Catalog cards without a connector stay available
+ * to browse but cannot be marked Conectada and must not open Chrome or the
+ * isolated computer. Nothing is marked connected from localStorage alone.
  */
 
 export type ConnectableApp = {
@@ -23,9 +23,9 @@ export type FirstPartyProvider =
 
 export type ConnectPlan =
   | { kind: "oauth"; provider: FirstPartyProvider; startPath: string }
-  | { kind: "computer"; url: string }
+  | { kind: "unavailable" }
 
-export type ConnectStatus = "oauth_started" | "computer_opened" | "login_required" | "error"
+export type ConnectStatus = "oauth_started" | "unavailable" | "login_required" | "error"
 
 export type ConnectResult = {
   status: ConnectStatus
@@ -75,6 +75,8 @@ export const CONNECT_COPY = {
   oauthStarted: (name: string) => `Abriendo la autorización de ${name}…`,
   disconnectFailed: (name: string) => `No se pudo quitar ${name}.`,
   disconnected: (name: string) => `${name} desconectada`,
+  unavailable: (name: string) =>
+    `${name} todavía no se puede conectar. No abre el navegador ni queda marcada como Conectada.`,
   computerFailed: "No se pudo abrir la computadora.",
   isolationFailed: "No se pudo aislar la computadora de esta conversación.",
   navigateFailed: (domain: string) => `No se pudo abrir ${domain} en la computadora.`,
@@ -149,7 +151,7 @@ export function resolveConnectPlan(app: ConnectableApp): ConnectPlan {
   if (provider) {
     return { kind: "oauth", provider, startPath: FIRST_PARTY_START[provider] }
   }
-  return { kind: "computer", url: catalogNavigateUrl(app) }
+  return { kind: "unavailable" }
 }
 
 function readOAuthStartUrl(body: Record<string, unknown>): string {
@@ -177,18 +179,6 @@ function oauthErrorMessage(app: ConnectableApp, result: FetchJsonResult): string
   return CONNECT_COPY.oauthFailed(app.name)
 }
 
-function computerErrorMessage(err: unknown, domain: string): string {
-  const raw = err && typeof err === "object" && "message" in err
-    ? String((err as { message?: unknown }).message || "")
-    : String(err || "")
-  const trimmed = raw.replace(/\s+/g, " ").trim()
-  if (/aislar/i.test(trimmed)) return CONNECT_COPY.isolationFailed
-  if (trimmed && !/sk-[A-Za-z0-9_-]{8,}/i.test(trimmed) && !/^[a-z0-9_]+$/i.test(trimmed)) {
-    return trimmed.slice(0, 180)
-  }
-  return CONNECT_COPY.navigateFailed(domain)
-}
-
 export async function connectGptStoreApp(
   app: ConnectableApp,
   deps: ConnectGptStoreAppDeps,
@@ -204,6 +194,13 @@ export async function connectGptStoreApp(
   }
 
   const plan = resolveConnectPlan(app)
+  if (plan.kind === "unavailable") {
+    return {
+      status: "unavailable",
+      markConnected: false,
+      message: CONNECT_COPY.unavailable(app.name),
+    }
+  }
   if (plan.kind === "oauth") {
     try {
       const response = await deps.fetchJson(plan.startPath)
@@ -245,46 +242,10 @@ export async function connectGptStoreApp(
     }
   }
 
-  try {
-    let conversationId = String(deps.currentConversationId || "").trim()
-    if (!conversationId) {
-      const created = await deps.createConversation(
-        `Conectar ${app.name}`,
-        String(deps.defaultModel || "deepseek-chat"),
-      )
-      conversationId = String(created?.id || "").trim()
-    }
-    if (!conversationId) {
-      return {
-        status: "error",
-        markConnected: false,
-        message: CONNECT_COPY.computerFailed,
-      }
-    }
-
-    const session = await deps.ensureComputer(conversationId)
-    if (session && session.conversationBound === false) {
-      return {
-        status: "error",
-        markConnected: false,
-        message: CONNECT_COPY.isolationFailed,
-      }
-    }
-
-    await deps.navigateComputer(conversationId, plan.url)
-    deps.openComputerOverlay(conversationId, plan.url)
-    return {
-      status: "computer_opened",
-      markConnected: false,
-      message: CONNECT_COPY.computerOpened,
-      conversationId,
-    }
-  } catch (err) {
-    return {
-      status: "error",
-      markConnected: false,
-      message: computerErrorMessage(err, normalizeHost(app.domain) || app.name),
-    }
+  return {
+    status: "unavailable",
+    markConnected: false,
+    message: CONNECT_COPY.unavailable(app.name),
   }
 }
 

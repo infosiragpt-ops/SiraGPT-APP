@@ -8,6 +8,7 @@ const sync = require('./sync');
 const revoke = require('./revoke');
 const gateway = require('./gateway');
 const prompt = require('./prompt');
+const mentions = require('./mentions');
 const redact = require('./redact');
 const audit = require('./audit');
 
@@ -52,6 +53,7 @@ module.exports = {
   ...revoke,
   ...gateway,
   ...prompt,
+  ...mentions,
   ...redact,
   ...audit,
   listUserApps,

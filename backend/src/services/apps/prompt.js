@@ -3,6 +3,7 @@
 const { listManifests, getManifest } = require('./registry');
 const { listByUser, publicConnection } = require('./store');
 const { modelSafeSummary } = require('./gateway');
+const { resolveMentionedApps, classifyMentions, buildMentionPrompt } = require('./mentions');
 
 function buildModelPrompt(connections = []) {
   const live = (connections || [])
@@ -19,11 +20,18 @@ function buildModelPrompt(connections = []) {
   ].join('\n');
 }
 
-async function buildUserAppsPrompt(prisma, userId) {
+async function buildUserAppsPrompt(prisma, userId, opts = {}) {
   if (!prisma || !userId) return '';
   try {
     const rows = await listByUser(prisma, userId);
-    return buildModelPrompt(rows);
+    const mentionedIds = resolveMentionedApps(opts.prompt, opts.mentionedApps);
+    const classified = classifyMentions(mentionedIds, rows);
+    const live = mentionedIds.length
+      ? rows.filter((row) => mentionedIds.includes(row.appId) && row.status === 'connected')
+      : rows;
+    const connectedBlock = buildModelPrompt(live);
+    const mentionBlock = buildMentionPrompt(classified);
+    return [connectedBlock, mentionBlock].filter(Boolean).join('\n\n');
   } catch {
     return '';
   }

@@ -38,6 +38,7 @@ import { hydrateTrailingAssistant } from "./hydrate-streaming-chat"
 import { createPollingRegistry, type PollingRegistry } from "./polling-registry"
 import { startSerializedPreviewPoll, type SerializedPreviewPollController } from "./code-preview-poll"
 import { awaitCancellableChatStep } from "./chat/turn-cancellation"
+import { mentionPayloadForGenerate } from "./apps-mentions"
 
 // Helper function to check if error is related to monthly API limit
 const isMonthlyLimitError = (errorMessage: string) => {
@@ -636,6 +637,7 @@ interface AddMessageOptions {
   streamId?: string
   reusePending?: boolean
   requestEnvelope?: PendingAIRequestEnvelope
+  mentionedApps?: string[]
 }
 interface ChatContextType {
   chats: Chat[]
@@ -1187,6 +1189,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             provider: catalogModel.provider,
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
+            ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
           };
       const pendingMessage = options?.reusePending
         ? null
@@ -2900,6 +2903,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           model: regenCatalogModel.name,
           reasoningEffort: selectedEffort,
           prompt: originalUserMessage.content,
+          ...mentionPayloadForGenerate(originalUserMessage.content),
           chatId: currentChat.id,
           files: (() => {
             const attached = collectMessageFileIds(originalUserMessage.files);
@@ -3293,6 +3297,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           model: editCatalogModel.name,
           reasoningEffort: selectedEffort,
           prompt: newContent,
+          ...mentionPayloadForGenerate(newContent),
           chatId: currentChat.id,
           files: (() => {
             const attached = collectMessageFileIds(parsedFiles);

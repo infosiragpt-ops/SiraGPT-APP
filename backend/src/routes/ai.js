@@ -6925,6 +6925,9 @@ router.post(
                     prisma,
                     openai: agenticToolOpenAI,
                     collection: 'default',
+                    mentionedApps: Array.isArray(req.body?.mentionedApps)
+                      ? req.body.mentionedApps.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 20)
+                      : [],
                     maxCostUsd: Number.isFinite(Number(req.body?.coworkBudget?.maxCostUsd))
                       ? Math.max(0.01, Number(req.body.coworkBudget.maxCostUsd))
                       : null,
