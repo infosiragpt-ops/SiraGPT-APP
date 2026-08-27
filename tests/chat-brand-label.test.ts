@@ -31,6 +31,7 @@ describe("chat brand model labels", () => {
     assert.equal(brandModelLabel({ name: "moondream", displayName: "SiraGPT Mini", provider: "Ollama" }), "SiraGPT Mini")
     assert.equal(brandModelLabel({ name: "sira-gpt-mini", displayName: "SiraGPT Mini", provider: "Custom" }), "SiraGPT Mini")
     assert.equal(brandModelLabel("SiraGPT Mini"), "SiraGPT Mini")
+    assert.equal(brandModelLabel("sira-mini"), "SiraGPT Mini")
     assert.equal(brandModelLabel("moondream"), "SiraGPT Mini")
     assert.equal(brandModelLabel({ name: "moondream" }), "SiraGPT Mini")
     assert.notEqual(brandModelLabel({ name: "moondream", displayName: "SiraGPT Mini" }), SIRA_RAPIDO_LABEL)

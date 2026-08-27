@@ -91,6 +91,7 @@ function hideForbiddenVendorLabel(label: string): string {
   const trimmed = String(label || "").trim()
   if (!trimmed) return SIRA_RAPIDO_LABEL
   if (/\bmoondream\b/i.test(trimmed)) return "SiraGPT Mini"
+  if (/^sira[- ]?mini$/i.test(trimmed) || /^siragpt[- ]?mini$/i.test(trimmed)) return "SiraGPT Mini"
   if (/ollama|huggingface/i.test(trimmed)) return "Sira"
   if (/^deepseek\b/i.test(trimmed)) return SIRA_RAPIDO_LABEL
   return trimmed

@@ -26,7 +26,9 @@ function looksLikeLocalCustomModel(name?: string): boolean {
     || raw.includes("ollama")
     || raw.includes("huggingface")
     || raw.includes("sira-gpt-mini")
+    || raw.includes("sira-mini")
     || raw === "siragpt mini"
+    || raw === "sira mini"
 }
 
 function pickProvider(model: CatalogModelLike | undefined, fallback = "", wantedName = ""): string {
