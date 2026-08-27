@@ -37,6 +37,13 @@ function getAnthropicSummarizerClient() {
 }
 const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
 const { sharedFetch } = require('../utils/provider-http-agent');
+const {
+    isCustomProvider,
+    isSiraMiniAlias,
+    createCustomProviderClient,
+    SIRA_MINI_DEFAULT_BASE_URL,
+    SIRA_MINI_UNAVAILABLE_MESSAGE,
+} = require('./ai/custom-provider-client');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -89,7 +96,15 @@ function writeWithBackpressure(res, frame) {
  * tried before another model on the same account so billing/auth outages fail
  * over without serial dead hops.
  */
-function getFallbackChain(primaryProvider = '') {
+function isPinnedLocalGenerate(provider, model) {
+    return isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim()) || isSiraMiniAlias(model);
+}
+
+function getFallbackChain(primaryProvider = '', primaryModel = '') {
+    // SiraGPT Mini / Custom must never silently walk to DeepSeek Flash
+    // (Sira Rápido) or any other cloud model.
+    if (isPinnedLocalGenerate(primaryProvider, primaryModel)) return [];
+
     const raw = (process.env.FALLBACK_MODELS || '').trim();
     if (raw) return raw.split(',').map(s => s.trim()).filter(Boolean);
 
@@ -142,6 +157,7 @@ function providerForModel(model) {
         return process.env.GEMA4_PROVIDER || 'OpenAI';
     }
     if (isSiragptCombined(m)) return 'OpenRouter';
+    if (isSiraMiniAlias(m)) return 'Custom';
     if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
     if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
     if (/^(openai|google|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
@@ -171,6 +187,7 @@ function modelSupportsVision(provider, model) {
     const normalizedModel = String(model || '').toLowerCase();
 
     if (normalizedProvider === 'deepseek') return false;
+    if (isSiraMiniAlias(model) || isSiraMiniAlias(normalizedModel)) return true;
     if (/(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(normalizedModel)) return true;
     if (normalizedProvider === 'gemini') return /^gemini/.test(normalizedModel);
     if (normalizedProvider === 'openai') {
@@ -309,6 +326,14 @@ class AIService {
                 ...baseOpts,
                 apiKey: process.env.DEEPSEEK_API_KEY,
                 baseURL: "https://api.deepseek.com",
+            });
+        }
+
+        if (isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim())) {
+            return createCustomProviderClient({
+                url: SIRA_MINI_DEFAULT_BASE_URL,
+                apiKey: null,
+                authType: 'None',
             });
         }
 
@@ -493,7 +518,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -670,8 +695,21 @@ class AIService {
 
             // Build the model chain: primary first, then env-configured
             // fallbacks. Deduped so the primary doesn't get tried twice.
-            const fallbackModels = getFallbackChain(provider).filter(m => m !== model);
+            // SiraGPT Mini / Custom never walks to DeepSeek Flash (Sira Rápido).
+            const pinnedLocal = isPinnedLocalGenerate(provider, model);
+            const fallbackModels = pinnedLocal
+                ? []
+                : getFallbackChain(provider, model).filter(m => m !== model);
             const modelChain = [model, ...fallbackModels];
+            const resolveAttemptClient = (currentProvider, currentModel) => {
+                if (client && (currentProvider === provider || isPinnedLocalGenerate(currentProvider, currentModel))) {
+                    return client;
+                }
+                if (customConnection && customConnection.url && isPinnedLocalGenerate(currentProvider, currentModel)) {
+                    return createCustomProviderClient(customConnection);
+                }
+                return this.getClient(currentProvider);
+            };
 
             console.log(`🤖 Generating with primary=${provider}:${model}, fallback=[${fallbackModels.join(', ') || 'none'}]`);
             console.log(`📝 Messages count: ${workingMessages.length}`);
@@ -742,7 +780,7 @@ class AIService {
                     }, FIRST_BYTE_TIMEOUT_MS);
 
                     try {
-                        const client = this.getClient(currentProvider);
+                        const attemptClient = resolveAttemptClient(currentProvider, currentModel);
                         // Per-(provider, model) circuit breaker: if a provider
                         // has been failing consistently, short-circuit the call
                         // so we move to the next model in the chain instantly
@@ -753,7 +791,7 @@ class AIService {
                             resetTimeoutMs: 60_000,
                         });
                         const stream = await breaker.execute(() =>
-                            client.chat.completions.create(payload, { signal: attemptCtrl.signal })
+                            attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal })
                         );
 
                         // Per-attempt reasoning state. A retry/fallback restarts
@@ -946,6 +984,17 @@ class AIService {
                 const note = '\n\n' + getFallbackMessage(language);
                 try { res.write(`data: ${JSON.stringify({ content: note })}\n\n`); } catch { /* socket may be gone */ }
                 return fullResponseContent + note;
+            }
+
+            // SiraGPT Mini / Custom: honest Spanish error. Never recover by
+            // swapping to DeepSeek Flash / Sira Rápido.
+            if (isPinnedLocalGenerate(provider, model)) {
+                const message = SIRA_MINI_UNAVAILABLE_MESSAGE;
+                try {
+                    res.write(`data: ${JSON.stringify({ type: 'error', error: 'sira_mini_unavailable', message, recovered: false })}\n\n`);
+                    res.write(`data: ${JSON.stringify({ type: 'text_delta', content: message })}\n\n`);
+                } catch { /* socket may be gone */ }
+                return message;
             }
 
             // Nothing was streamed — deliver a professional fallback as the
@@ -1546,6 +1595,7 @@ service.__test = {
     normalizeChatProvider,
     normalizeModelForProvider,
     getFallbackChain,
+    isPinnedLocalGenerate,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

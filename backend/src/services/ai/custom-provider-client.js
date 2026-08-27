@@ -26,6 +26,8 @@ const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
 const SIRA_MINI_UPSTREAM_ID = 'moondream:latest';
 const SIRA_MINI_DEFAULT_BASE_URL = 'http://siragpt-ollama:11434/v1';
 const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
+const SIRA_MINI_UNAVAILABLE_MESSAGE =
+  'SiraGPT Mini no está disponible ahora. No cambié el modelo. Revisa la conexión Custom en Admin → Conexiones e inténtalo de nuevo.';
 const SIRA_MINI_ALIASES = Object.freeze([
   'sira-mini',
   'sira mini',
@@ -389,6 +391,7 @@ module.exports = {
   SIRA_MINI_PUBLIC_NAME,
   SIRA_MINI_UPSTREAM_ID,
   SIRA_MINI_DEFAULT_BASE_URL,
+  SIRA_MINI_UNAVAILABLE_MESSAGE,
   isCustomProvider,
   isCustomConnectionRow,
   isOpenAiCompatibleUrl,

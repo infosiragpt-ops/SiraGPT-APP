@@ -414,6 +414,9 @@ function createProviderClientForRequest(provider, req, opts = {}) {
   if (opts.customConnection && opts.customConnection.url) {
     return { client: createProviderClient(provider, opts), via: 'direct' };
   }
+  if (isCustomProvider(provider) || isSiraMiniAlias(opts.model) || isSiraMiniAlias(provider)) {
+    return { client: createProviderClient(provider, opts), via: 'direct' };
+  }
   try {
     // Lazy require so the route module loads even if the gateway client
     // file is absent (e.g. shallow checkouts in CI).
@@ -3173,6 +3176,8 @@ router.post(
           fullResponseContent = await aiService.generateStream({
             provider: actualProvider,
             model: actualModel,
+            client: openai,
+            customConnection,
             messages: publicMessages,
             systemBlocks: [{
               kind: 'public-web-readonly',
@@ -6837,6 +6842,7 @@ router.post(
                 && (shouldRunAgentic || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
+                && !isSiraMiniAlias(actualModel)
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
               );
@@ -7095,6 +7101,8 @@ router.post(
             const out = await aiService.generateStream({
               provider: actualProvider,
               model: actualModel,
+              client: openai,
+              customConnection,
               messages,
               systemBlocks,
               chatId: canPersist ? chatId : null,

@@ -55,6 +55,8 @@ describe('ai-service vision routing', () => {
       assert.equal(service.modelSupportsVision('OpenRouter', 'qwen/qwen2-vl-7b-instruct'), true);
       assert.equal(service.modelSupportsVision('Custom', 'moondream'), true);
       assert.equal(service.modelSupportsVision('Sira', 'moondream:latest'), true);
+      assert.equal(service.modelSupportsVision('Custom', 'sira-mini'), true);
+      assert.equal(service.modelSupportsVision('Sira', 'SiraGPT Mini'), true);
     });
 
     test('rejects text-only models', () => {

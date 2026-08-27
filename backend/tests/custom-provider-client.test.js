@@ -291,5 +291,73 @@ test('ai.js wires Custom into createProviderClient / generate', () => {
   assert.match(src, /createCustomProviderClient/, 'createProviderClient must call createCustomProviderClient');
   assert.match(src, /resolveCustomConnectionForTurn/, 'generate must resolve the connection row at request time');
   assert.match(src, /customConnection/, 'request-aware client must accept the resolved connection');
+  assert.match(src, /client: openai/, 'plain stream must reuse the Custom client, not getClient(Custom)→OpenAI');
+  assert.match(src, /!isSiraMiniAlias\(actualModel\)/, 'Mini must skip the agentic loop so a tool-call miss cannot fall through to DeepSeek');
   assert.doesNotMatch(src, /OPENAI_BASE_URL/, 'must not stuff Custom into OPENAI_BASE_URL');
+});
+
+test('getFallbackChain: Custom / SiraGPT Mini never includes DeepSeek Flash', () => {
+  const service = require('../src/services/ai-service');
+  const keys = ['FALLBACK_MODELS', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  delete process.env.FALLBACK_MODELS;
+  process.env.DEEPSEEK_API_KEY = 'sk-deepseek';
+  process.env.OPENAI_API_KEY = 'sk-openai';
+  try {
+    assert.deepEqual(service.__test.getFallbackChain('Custom', 'sira-mini'), []);
+    assert.deepEqual(service.__test.getFallbackChain('Sira', 'SiraGPT Mini'), []);
+    assert.deepEqual(service.__test.getFallbackChain('DeepSeek', 'sira-mini'), []);
+    assert.equal(service.__test.isPinnedLocalGenerate('Custom', 'sira-mini'), true);
+    assert.equal(service.__test.providerForModel('sira-mini'), 'Custom');
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+});
+
+test('generateStream: Mini failure errors in Spanish and never swaps to DeepSeek', async () => {
+  const service = require('../src/services/ai-service');
+  const { SIRA_MINI_UNAVAILABLE_MESSAGE } = require('../src/services/ai/custom-provider-client');
+  const seen = [];
+  const frames = [];
+  const originalGetClient = service.getClient;
+  service.getClient = (provider) => {
+    seen.push(provider);
+    const err = new Error('upstream down');
+    err.status = 503;
+    throw err;
+  };
+  const failingClient = {
+    chat: {
+      completions: {
+        create: async () => {
+          const err = new Error('ollama down');
+          err.status = 503;
+          throw err;
+        },
+      },
+    },
+  };
+  try {
+    const out = await service.generateStream({
+      provider: 'Custom',
+      model: 'sira-mini',
+      client: failingClient,
+      messages: [{ role: 'user', content: 'hola' }],
+      res: { write: (chunk) => { frames.push(String(chunk)); return true; } },
+      qualityGuard: false,
+      skipDoneSentinel: true,
+    });
+    assert.equal(out, SIRA_MINI_UNAVAILABLE_MESSAGE);
+    assert.equal(seen.includes('DeepSeek'), false);
+    assert.equal(seen.includes('OpenAI'), false);
+    const blob = frames.join('\n');
+    assert.match(blob, /sira_mini_unavailable/);
+    assert.match(blob, /SiraGPT Mini no está disponible/);
+    assert.equal(/deepseek-v4-flash|Sira Rápido/i.test(blob), false);
+  } finally {
+    service.getClient = originalGetClient;
+  }
 });

@@ -168,6 +168,14 @@ test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () =
   assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
 });
 
+test('inferProviderFromModelId: SiraGPT Mini / moondream → Custom, never DeepSeek', () => {
+  assert.equal(inferProviderFromModelId('sira-mini'), 'Custom');
+  assert.equal(inferProviderFromModelId('SiraGPT Mini'), 'Custom');
+  assert.equal(inferProviderFromModelId('moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('moondream:latest'), 'Custom');
+  assert.equal(inferProviderFromModelId('deepseek-v4-flash'), 'DeepSeek');
+});
+
 test('inferProviderFromModelId: Meta Muse / Llama 4 direct ids', () => {
   assert.equal(inferProviderFromModelId('muse-spark-1.2'), 'Meta');
   assert.equal(inferProviderFromModelId('muse-image-1.0'), 'Meta');
