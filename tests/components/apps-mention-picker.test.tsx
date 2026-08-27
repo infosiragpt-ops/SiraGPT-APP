@@ -26,6 +26,28 @@ const linkedin: MentionPickerApp = {
   logoSources: ["/conexiones-logos/linkedin.svg"],
 }
 
+const x: MentionPickerApp = {
+  id: "x",
+  name: "X",
+  description: "Posts and public conversation",
+  domain: "x.com",
+  status: "connect",
+  healthStatus: null,
+  logo: "/conexiones-logos/x.svg",
+  logoSources: ["/conexiones-logos/x.svg"],
+}
+
+const facebook: MentionPickerApp = {
+  id: "facebook",
+  name: "Facebook",
+  description: "Pages and social publishing",
+  domain: "facebook.com",
+  status: "connect",
+  healthStatus: null,
+  logo: "/conexiones-logos/facebook.svg",
+  logoSources: ["/conexiones-logos/facebook.svg"],
+}
+
 const unknown: MentionPickerApp = {
   id: "obscure-demo",
   name: "Obscure Demo",
@@ -43,7 +65,7 @@ describe("AppsMentionPicker logos", () => {
       <AppsMentionPicker
         open
         filter=""
-        apps={[github, linkedin]}
+        apps={[github, linkedin, x, facebook]}
         onPick={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -56,8 +78,13 @@ describe("AppsMentionPicker logos", () => {
       "src",
       "/conexiones-logos/linkedin.svg",
     )
+    expect(screen.getByTestId("apps-mention-logo-x")).toHaveAttribute("src", "/conexiones-logos/x.svg")
+    expect(screen.getByTestId("apps-mention-logo-facebook")).toHaveAttribute(
+      "src",
+      "/conexiones-logos/facebook.svg",
+    )
     expect(screen.getByText("Conectada")).toBeInTheDocument()
-    expect(screen.getByText("Conectar")).toBeInTheDocument()
+    expect(screen.getAllByText("Conectar").length).toBeGreaterThan(0)
     expect(screen.getByTestId("apps-mention-status-github")).toBeInTheDocument()
   })
 
