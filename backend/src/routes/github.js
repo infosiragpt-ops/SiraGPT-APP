@@ -164,7 +164,7 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
       return res.redirect(githubConfig.postCallbackRedirect('already_linked'));
     }
 
-    await accounts.upsertForUser(userId, {
+    const account = await accounts.upsertForUser(userId, {
       githubUserId,
       login: ghUser.login,
       name: ghUser.name || null,
@@ -173,6 +173,26 @@ router.get('/callback', requireGithubOAuth, async (req, res) => {
       tokenType: tokens.tokenType,
       encryptedTokens: oauth.sealTokens(tokens),
     });
+    try {
+      const apps = require('../services/apps');
+      const prisma = require('../config/database');
+      await apps.upsertFromOAuth(prisma, {
+        userId,
+        appId: 'github',
+        sourceId: account.id,
+        accountLabel: account.login || ghUser.login || null,
+        scopes: tokens.scope,
+      });
+      await apps.auditAppEvent(prisma, {
+        userId,
+        action: 'app_connected',
+        appId: 'github',
+        connectionId: account.id,
+        metadata: { login: account.login || null },
+      });
+    } catch (syncErr) {
+      console.warn('[github] app connection sync failed:', syncErr.message);
+    }
 
     return res.redirect(githubConfig.postCallbackRedirect('connected'));
   } catch (err) {
@@ -1084,6 +1104,13 @@ router.get('/test', (req, res) => {
 // POST /api/github/disconnect
 router.post('/disconnect', authenticateToken, async (req, res) => {
   try {
+    try {
+      const apps = require('../services/apps');
+      const prisma = require('../config/database');
+      await apps.disconnectApp(prisma, { userId: req.user.id, appId: 'github', req });
+    } catch (syncErr) {
+      console.warn('[github] app disconnect sync failed:', syncErr.message);
+    }
     await accounts.deleteForUser(req.user.id);
     return res.json({ ok: true, disconnected: true });
   } catch (err) {

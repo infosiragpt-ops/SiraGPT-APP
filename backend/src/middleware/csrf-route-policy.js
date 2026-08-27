@@ -53,6 +53,7 @@ const EXPENSIVE_GENERATION_MOUNTS = Object.freeze([
   '/api/artifact',
   '/api/enterprise',
   '/api/social-posts',
+  '/api/apps',
   '/api/gpts',
   '/api/voice/grok',
 ]);

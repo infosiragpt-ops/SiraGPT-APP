@@ -66,14 +66,23 @@ export const CONNECT_COPY = {
   connecting: "Conectando…",
   connected: "Conectada",
   reconnect: "Reconectar",
+  remove: "Quitar",
+  computerOpened: "Abierta en la computadora",
   loginRequired: "Inicia sesión para conectar esta app.",
   oauthMissing: (name: string) =>
     `No se pudo conectar ${name}: faltan las credenciales OAuth en el servidor.`,
   oauthFailed: (name: string) => `No se pudo iniciar la conexión con ${name}.`,
+  oauthStarted: (name: string) => `Abriendo la autorización de ${name}…`,
+  disconnectFailed: (name: string) => `No se pudo quitar ${name}.`,
+  disconnected: (name: string) => `${name} desconectada`,
   computerFailed: "No se pudo abrir la computadora.",
   isolationFailed: "No se pudo aislar la computadora de esta conversación.",
   navigateFailed: (domain: string) => `No se pudo abrir ${domain} en la computadora.`,
 } as const
+
+export function isHealthConnected(status: string | null | undefined): boolean {
+  return String(status || "").toLowerCase() === "connected"
+}
 
 const FIRST_PARTY_START: Record<FirstPartyProvider, string> = {
   linkedin: "/social-posts/connect/linkedin",
@@ -223,8 +232,8 @@ export async function connectGptStoreApp(
       }
       return {
         status: "oauth_started",
-        markConnected: true,
-        message: CONNECT_COPY.connected,
+        markConnected: false,
+        message: CONNECT_COPY.oauthStarted(app.name),
         redirectUrl,
       }
     } catch {
@@ -266,8 +275,8 @@ export async function connectGptStoreApp(
     deps.openComputerOverlay(conversationId, plan.url)
     return {
       status: "computer_opened",
-      markConnected: true,
-      message: CONNECT_COPY.connected,
+      markConnected: false,
+      message: CONNECT_COPY.computerOpened,
       conversationId,
     }
   } catch (err) {

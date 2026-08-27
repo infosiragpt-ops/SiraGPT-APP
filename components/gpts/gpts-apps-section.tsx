@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Check, Plug } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -16,6 +16,8 @@ import {
   CONNECT_COPY,
   connectButtonLabel,
   connectGptStoreApp,
+  isHealthConnected,
+  resolveFirstPartyProvider,
   type ConnectGptStoreAppDeps,
 } from "@/lib/gpts-apps-connect"
 import {
@@ -125,7 +127,7 @@ function AppCard({
                 onClick={() => onDisconnect(app)}
                 className="rounded-full px-2 py-1 text-[0.72rem] font-medium text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
               >
-                Quitar
+                {CONNECT_COPY.remove}
               </button>
             </div>
           ) : (
@@ -226,12 +228,35 @@ export function GptsAppsSection({
   showAll?: boolean
   hideHeading?: boolean
 }) {
-  const { settings, update } = useSettings()
+  const { settings } = useSettings()
   const { isAuthenticated } = useAuth()
   const router = useRouter()
   const [category, setCategory] = useState<"All" | GptStoreAppCategory>("All")
   const [expanded, setExpanded] = useState(showAll)
   const [connectingId, setConnectingId] = useState<string | null>(null)
+  const [healthById, setHealthById] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (!isAuthenticated && !storedAuthToken()) return
+    let cancelled = false
+    fetchConnectJson("/apps/connections")
+      .then((res) => {
+        if (cancelled || !res.ok) return
+        const list = Array.isArray(res.body.connections) ? res.body.connections : []
+        const next: Record<string, string> = {}
+        for (const row of list) {
+          if (!row || typeof row !== "object") continue
+          const appId = String((row as { app?: unknown }).app || "").trim()
+          const status = String((row as { status?: unknown }).status || "").trim()
+          if (appId) next[appId] = status
+        }
+        setHealthById(next)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [isAuthenticated])
 
   const filtered = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -248,7 +273,7 @@ export function GptsAppsSection({
   const visible = showAll || expanded || searchQuery.trim() ? filtered : filtered.slice(0, INITIAL_VISIBLE)
   const hiddenCount = Math.max(0, filtered.length - visible.length)
 
-  const isConnected = (id: string) => settings.apps[id]?.connected === true
+  const isConnected = (id: string) => isHealthConnected(healthById[id])
 
   const connect = async (app: GptStoreApp) => {
     if (connectingId) return
@@ -284,17 +309,16 @@ export function GptsAppsSection({
         toast.error(result.message)
         return
       }
-      if (!result.markConnected) {
-        toast.error(result.message || CONNECT_COPY.computerFailed)
-        return
-      }
-      update({ apps: { [app.id]: { connected: true } } })
       if (result.redirectUrl) {
         window.location.href = result.redirectUrl
         return
       }
       if (result.status === "computer_opened") {
-        toast.success(`${app.name} ${CONNECT_COPY.connected.toLowerCase()}`)
+        toast.success(`${app.name}: ${CONNECT_COPY.computerOpened.toLowerCase()}`)
+        return
+      }
+      if (!result.markConnected) {
+        toast.error(result.message || CONNECT_COPY.computerFailed)
       }
     } catch (error) {
       const message = error instanceof Error && error.message
@@ -306,9 +330,31 @@ export function GptsAppsSection({
     }
   }
 
-  const disconnect = (app: GptStoreApp) => {
-    update({ apps: { [app.id]: { connected: false } } })
-    toast.success(`${app.name} desconectada`)
+  const disconnect = async (app: GptStoreApp) => {
+    if (!resolveFirstPartyProvider(app)) {
+      toast.success(CONNECT_COPY.disconnected(app.name))
+      return
+    }
+    try {
+      const res = await authenticatedFetch(`${getNormalizedApiBaseUrl()}/apps/connections/${encodeURIComponent(app.id)}`, {
+        method: "DELETE",
+        credentials: "include",
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(20_000),
+      })
+      if (!res.ok && res.status !== 204) {
+        toast.error(CONNECT_COPY.disconnectFailed(app.name))
+        return
+      }
+      setHealthById((prev) => {
+        const next = { ...prev }
+        delete next[app.id]
+        return next
+      })
+      toast.success(CONNECT_COPY.disconnected(app.name))
+    } catch {
+      toast.error(CONNECT_COPY.disconnectFailed(app.name))
+    }
   }
 
   return (

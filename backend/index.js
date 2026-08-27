@@ -485,6 +485,7 @@ const docRoutes = require('./src/routes/doc');
 const artifactRoutes = require('./src/routes/artifact');
 const enterpriseRoutes = require('./src/routes/enterprise');
 const socialPostsRoutes = require('./src/routes/social-posts');
+const appsRoutes = require('./src/routes/apps');
 const githubCodexRoutes = require('./src/routes/github-codex');
 const codexRunsRoutes = require('./src/routes/codex-runs');
 const codexV2Routes = require('./src/routes/codex');
@@ -1327,6 +1328,7 @@ app.use('/api/doc', docRoutes);
 app.use('/api/artifact', artifactRoutes);
 app.use('/api/enterprise', enterpriseRoutes);
 app.use('/api/social-posts', socialPostsRoutes);
+app.use('/api/apps', appsRoutes);
 app.use('/api/codex/github', githubCodexRoutes);
 app.use('/api/codex', codexRunsRoutes);
 // Codex Agent V2 (flag CODEX_AGENT_V2). Mounted AFTER codex-runs so the legacy
