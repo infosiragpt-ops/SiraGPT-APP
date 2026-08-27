@@ -70,6 +70,21 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(source, /window\.prompt\("Nombre de la carpeta"\)/)
   })
 
+  it("lets folders receive conversations by click, drop, and send dialog", () => {
+    const foldersStart = source.indexOf('id="sidebar-chat-folders-toolbar"')
+    const recentsStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
+    const folders = source.slice(foldersStart, recentsStart)
+    assert.match(folders, /data-sidebar-folder-row="1"/)
+    assert.match(folders, /openSendChatToFolderDialog/)
+    assert.match(folders, /Enviar conversación/)
+    assert.match(folders, /onDrop=/)
+    assert.match(source, /selectedFolder/)
+    assert.match(source, /filterChatsByFolder/)
+    assert.match(source, /encodeChatFolderDragId/)
+    assert.match(source, /draggable=\{!isEditing\}/)
+    assert.match(source, /Esta carpeta está vacía/)
+  })
+
   it("opens the centered ChatSearchDialog from the recent-chats lupa and ⌘K", () => {
     const toolbarStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
     assert.ok(toolbarStart > 0, "recent-chats toolbar id must exist")

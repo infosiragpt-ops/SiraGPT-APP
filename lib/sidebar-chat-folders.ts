@@ -3,8 +3,65 @@ export const CHAT_FOLDER_NAMES_STORAGE_KEY = "sira:chat-folder-names"
 
 export const SUGGESTED_CHAT_FOLDERS = ["Trabajo", "Empresa", "Personal"] as const
 
+/** text/plain prefix so Safari/Chrome accept the drag payload. */
+export const CHAT_FOLDER_DRAG_PREFIX = "siragpt-chat:"
+
 export function normalizeChatFolderName(name: string): string {
   return name.replace(/\s+/g, " ").trim()
+}
+
+export function chatFolderKey(name: string): string {
+  return normalizeChatFolderName(name).toLowerCase()
+}
+
+export function isSameChatFolder(a: string, b: string): boolean {
+  const left = chatFolderKey(a)
+  const right = chatFolderKey(b)
+  return Boolean(left) && left === right
+}
+
+export function encodeChatFolderDragId(chatId: string): string {
+  return `${CHAT_FOLDER_DRAG_PREFIX}${chatId}`
+}
+
+export function decodeChatFolderDragId(raw: unknown): string | null {
+  const value = String(raw || "")
+  if (!value.startsWith(CHAT_FOLDER_DRAG_PREFIX)) return null
+  const id = value.slice(CHAT_FOLDER_DRAG_PREFIX.length).trim()
+  return id || null
+}
+
+export function countChatsInFolder(
+  assignments: Record<string, string> | null | undefined,
+  folder: string,
+): number {
+  const key = chatFolderKey(folder)
+  if (!key) return 0
+  let count = 0
+  for (const name of Object.values(assignments || {})) {
+    if (name.toLowerCase() === key) count += 1
+  }
+  return count
+}
+
+export function filterChatsByFolder<T extends { id: string }>(
+  chats: T[],
+  assignments: Record<string, string> | null | undefined,
+  folder: string | null | undefined,
+): T[] {
+  const key = folder ? chatFolderKey(folder) : ""
+  if (!key) return chats
+  return chats.filter((chat) => (assignments?.[chat.id] || "").toLowerCase() === key)
+}
+
+export function chatsAvailableToSendToFolder<T extends { id: string }>(
+  chats: T[],
+  assignments: Record<string, string> | null | undefined,
+  folder: string,
+): T[] {
+  const key = chatFolderKey(folder)
+  if (!key) return []
+  return chats.filter((chat) => Boolean(chat?.id) && (assignments?.[chat.id] || "").toLowerCase() !== key)
 }
 
 function pushUniqueFolderName(out: string[], seen: Set<string>, raw: unknown) {
