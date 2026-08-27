@@ -43,6 +43,8 @@
     "../lib/attachment-ingest.ts",
     "../lib/search-brain-ui.ts",
     "../lib/file-processing-vocab.ts",
+    "../lib/file-processing-status-client.ts",
+    "../lib/api-base-url.ts",
     "../lib/document-preview-gate.ts",
     "../lib/document-viewer-attachment.ts",
     "../lib/download-utils.ts",

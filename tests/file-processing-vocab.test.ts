@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 
 import {
   describeComposerChipProgress,
+  describeComposerDocumentThumb,
   describeStage,
   friendlyFailureLabel,
   isActiveProcessingStage,
@@ -84,6 +85,62 @@ test("describeComposerChipProgress names RAG processing so ~80% is not a stuck u
   assert.equal(extracting.phase, "processing")
   assert.ok(extracting.barPercent > 50)
   assert.ok(extracting.barPercent < 100)
+})
+
+test("describeComposerDocumentThumb follows live stage instead of freezing on preparando índice", () => {
+  const uploading = describeComposerDocumentThumb({ uploading: true, uploadProgress: 40 })
+  assert.equal(uploading.busy, true)
+  assert.equal(uploading.failed, false)
+  assert.equal(uploading.label, "Subiendo · 40%")
+
+  const unknown = describeComposerDocumentThumb({
+    uploading: false,
+    status: "processing",
+    stage: null,
+  })
+  assert.equal(unknown.busy, true)
+  assert.equal(unknown.label, "Subido · preparando índice…")
+
+  const extracting = describeComposerDocumentThumb({
+    uploading: false,
+    status: "processing",
+    stage: "extracting",
+  })
+  assert.equal(extracting.busy, true)
+  assert.equal(extracting.label, "Subido · Extrayendo texto")
+
+  const chunking = describeComposerDocumentThumb({
+    uploading: false,
+    status: "processing",
+    stage: "chunking",
+  })
+  assert.equal(chunking.label, "Subido · Fragmentando")
+
+  const indexing = describeComposerDocumentThumb({
+    uploading: false,
+    status: "processing",
+    stage: "indexing",
+  })
+  assert.equal(indexing.label, "Subido · Indexando")
+
+  const ready = describeComposerDocumentThumb({
+    uploading: false,
+    status: "ready",
+    stage: "ready",
+  })
+  assert.equal(ready.busy, false)
+  assert.equal(ready.failed, false)
+  assert.equal(ready.label, undefined)
+
+  const failed = describeComposerDocumentThumb({
+    uploading: false,
+    status: "failed",
+    stage: "failed",
+    error: "processing: parser blew up",
+  })
+  assert.equal(failed.busy, false)
+  assert.equal(failed.failed, true)
+  assert.equal(failed.label, "No se pudo procesar el documento")
 })
 
 test("describeStage returns the canonical Spanish label per stage", () => {
