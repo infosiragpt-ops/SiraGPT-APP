@@ -5,7 +5,7 @@
  * App ≠ plugin ≠ skill ≠ tool ≠ MCP server ≠ widget ≠ connection ≠ workflow.
  */
 
-const APP_IDS = Object.freeze(['github', 'linkedin', 'x']);
+const APP_IDS = Object.freeze(['github', 'linkedin', 'x', 'onedrive', 'google-drive']);
 
 const STATUSES = Object.freeze({
   CONNECTED: 'connected',
@@ -19,6 +19,8 @@ const STATUSES = Object.freeze({
 const SECRET_KINDS = Object.freeze({
   GITHUB_ACCOUNT: 'github_account',
   SOCIAL_CONNECTION: 'social_connection',
+  CONNECTOR_ACCOUNT: 'connector_account',
+  USER_GOOGLE_SERVICES: 'user_google_services',
 });
 
 const APPS = Object.freeze({
@@ -97,11 +99,92 @@ const APPS = Object.freeze({
       }),
     ]),
   }),
+  onedrive: Object.freeze({
+    id: 'onedrive',
+    name: 'OneDrive',
+    auth: 'oauth2_pkce',
+    risk: 'write',
+    connectPath: '/apps/connect/onedrive',
+    callbackPath: '/api/apps/oauth/onedrive/callback',
+    minScopes: Object.freeze(['Files.ReadWrite', 'User.Read']),
+    writeScopes: Object.freeze(['Files.ReadWrite']),
+    tools: Object.freeze([
+      Object.freeze({
+        name: 'onedrive_list',
+        kind: 'read',
+        risk: 'read',
+        description: 'List files and folders in the connected OneDrive.',
+      }),
+      Object.freeze({
+        name: 'onedrive_search',
+        kind: 'read',
+        risk: 'read',
+        description: 'Search files in the connected OneDrive.',
+      }),
+      Object.freeze({
+        name: 'onedrive_read_text',
+        kind: 'read',
+        risk: 'read',
+        description: 'Read a small text file from OneDrive.',
+      }),
+      Object.freeze({
+        name: 'onedrive_upload',
+        kind: 'write',
+        risk: 'write',
+        requiresApproval: true,
+        description: 'Upload a small file or create a folder in OneDrive. Requires explicit approval.',
+      }),
+    ]),
+  }),
+  'google-drive': Object.freeze({
+    id: 'google-drive',
+    name: 'Google Drive',
+    auth: 'oauth2',
+    risk: 'write',
+    connectPath: '/auth/google-services',
+    callbackPath: '/api/auth/google-services/callback',
+    minScopes: Object.freeze([
+      'https://www.googleapis.com/auth/drive.readonly',
+    ]),
+    writeScopes: Object.freeze([
+      'https://www.googleapis.com/auth/drive.file',
+      'https://www.googleapis.com/auth/drive',
+    ]),
+    tools: Object.freeze([
+      Object.freeze({
+        name: 'gdrive_list',
+        kind: 'read',
+        risk: 'read',
+        description: 'List files in the connected Google Drive.',
+      }),
+      Object.freeze({
+        name: 'gdrive_search',
+        kind: 'read',
+        risk: 'read',
+        description: 'Search files in the connected Google Drive.',
+      }),
+      Object.freeze({
+        name: 'gdrive_read_text',
+        kind: 'read',
+        risk: 'read',
+        description: 'Read a small text file from Google Drive.',
+      }),
+      Object.freeze({
+        name: 'gdrive_upload',
+        kind: 'write',
+        risk: 'write',
+        requiresApproval: true,
+        description: 'Upload a small file to Google Drive. Requires explicit approval.',
+      }),
+    ]),
+  }),
 });
 
 function normalizeAppId(value) {
   const id = String(value || '').trim().toLowerCase();
   if (id === 'twitter') return 'x';
+  if (id === 'gdrive' || id === 'drive' || id === 'googledrive' || id === 'google_drive') return 'google-drive';
+  if (id === 'one-drive' || id === 'microsoftonedrive' || id === 'microsoft-onedrive') return 'onedrive';
   return APP_IDS.includes(id) ? id : null;
 }
 
@@ -153,7 +236,12 @@ function parseSecretRef(ref) {
   const kind = raw.slice(0, sep);
   const id = raw.slice(sep + 1).trim();
   if (!id) return null;
-  if (kind !== SECRET_KINDS.GITHUB_ACCOUNT && kind !== SECRET_KINDS.SOCIAL_CONNECTION) {
+  if (
+    kind !== SECRET_KINDS.GITHUB_ACCOUNT
+    && kind !== SECRET_KINDS.SOCIAL_CONNECTION
+    && kind !== SECRET_KINDS.CONNECTOR_ACCOUNT
+    && kind !== SECRET_KINDS.USER_GOOGLE_SERVICES
+  ) {
     return null;
   }
   return { kind, id };

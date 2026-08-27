@@ -2,7 +2,7 @@
 
 const { APP_IDS, getManifest, normalizeAppId, STATUSES } = require('./registry');
 
-const CONNECTOR_IDS = Object.freeze(['github', 'linkedin', 'x', 'facebook']);
+const CONNECTOR_IDS = Object.freeze(['github', 'linkedin', 'x', 'facebook', 'onedrive', 'google-drive']);
 
 const ALIASES = Object.freeze({
   github: 'github',
@@ -17,6 +17,13 @@ const ALIASES = Object.freeze({
   facebook: 'facebook',
   fb: 'facebook',
   meta: 'facebook',
+  onedrive: 'onedrive',
+  'one-drive': 'onedrive',
+  gdrive: 'google-drive',
+  'google-drive': 'google-drive',
+  drive: 'google-drive',
+  googledrive: 'google-drive',
+  google_drive: 'google-drive',
 });
 
 function normalizeKey(value) {

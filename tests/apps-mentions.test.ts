@@ -19,6 +19,7 @@ import {
   toPickerApp,
 } from "../lib/apps-mentions"
 import { resolveConnectPlan } from "../lib/gpts-apps-connect"
+import { officialMarkPath } from "../lib/gpts-app-logos"
 
 function source(file: string) {
   return readFileSync(path.join(process.cwd(), file), "utf8")
@@ -57,6 +58,27 @@ describe("apps @ mentions", () => {
     assert.equal(indeed.status, "unavailable")
     assert.equal(resolveConnectPlan({ id: "indeed", name: "Indeed", domain: "indeed.com" }).kind, "computer")
     assert.ok(grouped.connect.some((app) => app.id === "facebook"))
+    assert.ok(grouped.connect.some((app) => app.id === "onedrive"))
+    assert.ok(grouped.connect.some((app) => app.id === "google-drive"))
+    const drivePayload = resolveMentionedApps("@OneDrive y @gdrive y @Google-Drive")
+    assert.deepEqual(drivePayload.mentionedApps.sort(), ["google-drive", "onedrive"])
+    assert.ok(drivePayload.needsConnect.some((app) => app.id === "onedrive"))
+    assert.equal(resolveConnectPlan({ id: "onedrive", name: "OneDrive", domain: "onedrive.live.com" }).kind, "oauth")
+    assert.deepEqual(resolveConnectPlan({ id: "google-drive", name: "Google Drive", domain: "drive.google.com" }), {
+      kind: "oauth",
+      provider: "google-services",
+      startPath: "/auth/google-services",
+    })
+    const onedrive = apps.find((app) => app.id === "onedrive")
+    const gdrive = apps.find((app) => app.id === "google-drive")
+    assert.equal(onedrive?.logo, "/conexiones-logos/onedrive.svg")
+    assert.equal(gdrive?.logo, "/conexiones-logos/googledrive.svg")
+    assert.ok(onedrive?.logoSources.includes("/conexiones-logos/onedrive.svg"))
+    assert.ok(gdrive?.logoSources.includes("/conexiones-logos/googledrive.svg"))
+    assert.equal(officialMarkPath({ id: "onedrive", domain: "onedrive.live.com" }), "/conexiones-logos/onedrive.svg")
+    assert.equal(officialMarkPath({ id: "google-drive", domain: "drive.google.com" }), "/conexiones-logos/googledrive.svg")
+    assert.doesNotMatch(onedrive?.logo || "", /data:image/)
+    assert.doesNotMatch(gdrive?.logo || "", /data:image/)
     const facebook = buildPickerApps({ facebook: "connected" }).find((app) => app.id === "facebook")
     assert.equal(facebook?.status, "connect")
     assert.equal(MENTION_COPY.connectedGroup, "Conectadas")
@@ -90,7 +112,7 @@ describe("apps @ mentions", () => {
 
   it("passes official catalog logos through the picker rows", () => {
     const apps = buildPickerApps()
-    for (const id of ["github", "linkedin", "x", "facebook"] as const) {
+    for (const id of ["github", "linkedin", "x", "facebook", "onedrive", "google-drive"] as const) {
       const row = apps.find((app) => app.id === id)
       assert.ok(row, `missing picker row ${id}`)
       assert.equal(row.logo, FIRST_PARTY_LOGO_BY_ID[id])

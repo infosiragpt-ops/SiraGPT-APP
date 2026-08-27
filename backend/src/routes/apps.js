@@ -4,6 +4,11 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const apps = require('../services/apps');
+const appsOAuth = require('../services/apps/oauth');
+const {
+  isOAuthStateInfrastructureError,
+  sendOAuthStateUnavailable,
+} = require('../services/auth/oauth-state-http');
 
 const router = express.Router();
 
@@ -19,6 +24,65 @@ router.get('/', (_req, res) => {
   return res.json({
     apps: apps.listManifests().map((app) => apps.publicManifest(app)),
   });
+});
+
+router.get('/oauth/:appId/callback', async (req, res) => {
+  const appId = apps.normalizeAppId(req.params.appId);
+  if (!appsOAuth.FILE_APP_IDS.includes(appId)) {
+    return res.status(400).json({ error: 'App OAuth desconocida' });
+  }
+  if (req.query.error) return res.redirect(appsOAuth.postCallbackUrl(appId, 'denied'));
+  if (!req.query.code || !req.query.state) {
+    return res.redirect(appsOAuth.postCallbackUrl(appId, 'invalid'));
+  }
+  try {
+    const result = await appsOAuth.completeAuthorization({
+      appId,
+      code: String(req.query.code),
+      state: String(req.query.state),
+      prisma,
+    });
+    await apps.auditAppEvent(prisma, {
+      userId: result.userId,
+      action: 'app_connected',
+      appId,
+      connectionId: result.connection.id,
+    });
+    return res.redirect(appsOAuth.postCallbackUrl(appId, 'connected'));
+  } catch (error) {
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: `app_${appId}`, error });
+    }
+    console.warn(`[apps] ${appId} OAuth callback failed:`, error?.code || error?.message);
+    return res.redirect(appsOAuth.postCallbackUrl(appId, 'error'));
+  }
+});
+
+router.get('/connect/:appId', authenticateToken, async (req, res) => {
+  const appId = apps.normalizeAppId(req.params.appId);
+  if (!appsOAuth.FILE_APP_IDS.includes(appId)) {
+    return res.status(400).json({ error: 'App OAuth desconocida' });
+  }
+  try {
+    const authorization = await appsOAuth.beginAuthorization({
+      userId: req.user.id,
+      appId,
+    });
+    if (String(req.query.redirect || '') === '1') return res.redirect(authorization.url);
+    return res.json(authorization);
+  } catch (error) {
+    if (error?.code === 'APP_PROVIDER_NOT_CONFIGURED') {
+      return res.status(503).json({
+        error: 'Faltan las credenciales OAuth en el servidor.',
+        message: error.message || 'Faltan las credenciales OAuth en el servidor.',
+        code: 'social_provider_not_configured',
+      });
+    }
+    if (isOAuthStateInfrastructureError(error)) {
+      return sendOAuthStateUnavailable(res, { provider: `app_${appId}`, error });
+    }
+    return sendError(res, error);
+  }
 });
 
 router.get('/connections', authenticateToken, async (req, res) => {

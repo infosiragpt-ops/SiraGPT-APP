@@ -20,6 +20,7 @@ export type FirstPartyProvider =
   | "github"
   | "gmail"
   | "google-services"
+  | "onedrive"
 
 export type ConnectPlan =
   | { kind: "oauth"; provider: FirstPartyProvider; startPath: string }
@@ -91,6 +92,7 @@ const FIRST_PARTY_START: Record<FirstPartyProvider, string> = {
   github: "/github/connect",
   gmail: "/auth/gmail",
   "google-services": "/auth/google-services",
+  onedrive: "/apps/connect/onedrive",
 }
 
 function normalizeHost(domain: string): string {
@@ -126,10 +128,23 @@ export function resolveFirstPartyProvider(app: ConnectableApp): FirstPartyProvid
   if (id === "github" || hostMatches(host, "github.com")) return "github"
   if (id === "gmail" || host === "gmail.com" || host === "mail.google.com") return "gmail"
   if (
+    id === "onedrive"
+    || id === "one-drive"
+    || id === "microsoftonedrive"
+    || hostMatches(host, "onedrive.live.com")
+    || hostMatches(host, "onedrive.com")
+    || hostMatches(host, "sharepoint.com")
+    || host === "1drv.ms"
+  ) {
+    return "onedrive"
+  }
+  if (
     id === "gcalendar"
-    || id === "gdrive"
     || id === "google"
     || id === "google-services"
+    || id === "google-drive"
+    || id === "gdrive"
+    || id === "drive"
     || host === "google.com"
     || host === "calendar.google.com"
     || host === "drive.google.com"
@@ -170,7 +185,8 @@ function oauthErrorMessage(app: ConnectableApp, result: FetchJsonResult): string
   if (
     result.status === 503
     || code === "social_provider_not_configured"
-    || /not configured/i.test(String(result.body.error || result.body.message || ""))
+    || code === "APP_PROVIDER_NOT_CONFIGURED"
+    || /not configured|credenciales OAuth/i.test(String(result.body.error || result.body.message || ""))
   ) {
     return CONNECT_COPY.oauthMissing(app.name)
   }

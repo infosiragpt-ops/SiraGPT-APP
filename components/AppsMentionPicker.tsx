@@ -161,7 +161,10 @@ export function AppsMentionPicker({
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className="font-medium text-sm text-foreground">@{app.name}</span>
-          <span className="text-[11px] text-muted-foreground">{statusLabel(app.status)}</span>
+          <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+            {statusIcon(app.status)}
+            {statusLabel(app.status)}
+          </span>
         </span>
         <span className="block text-xs text-muted-foreground leading-snug mt-0.5 line-clamp-1">
           {app.status === "unavailable" ? MENTION_COPY.unavailableDetail(app.name) : app.description}

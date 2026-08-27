@@ -30,10 +30,17 @@ export const MENTION_COPY = {
 } as const
 
 /** Registry first-party apps that can receive Conectada from GET /api/apps/connections. */
-export const REGISTRY_APP_IDS = Object.freeze(["github", "linkedin", "x"] as const)
+export const REGISTRY_APP_IDS = Object.freeze(["github", "linkedin", "x", "onedrive", "google-drive"] as const)
 
 /** Phase-1 OAuth connectors. Facebook can start OAuth but is not in the registry. */
-export const REAL_CONNECTOR_IDS = Object.freeze(["github", "linkedin", "x", "facebook"] as const)
+export const REAL_CONNECTOR_IDS = Object.freeze([
+  "github",
+  "linkedin",
+  "x",
+  "facebook",
+  "onedrive",
+  "google-drive",
+] as const)
 
 /** First-party connectors always reuse the official /conexiones-logos marks. */
 export const FIRST_PARTY_LOGO_BY_ID = Object.freeze({
@@ -41,6 +48,8 @@ export const FIRST_PARTY_LOGO_BY_ID = Object.freeze({
   linkedin: "/conexiones-logos/linkedin.svg",
   x: "/conexiones-logos/x.svg",
   facebook: "/conexiones-logos/facebook.svg",
+  onedrive: "/conexiones-logos/onedrive.svg",
+  "google-drive": "/conexiones-logos/googledrive.svg",
 } as const)
 
 const ALIASES: Record<string, string> = {
@@ -56,6 +65,13 @@ const ALIASES: Record<string, string> = {
   facebook: "facebook",
   fb: "facebook",
   meta: "facebook",
+  onedrive: "onedrive",
+  "one-drive": "onedrive",
+  gdrive: "google-drive",
+  "google-drive": "google-drive",
+  drive: "google-drive",
+  googledrive: "google-drive",
+  google_drive: "google-drive",
 }
 
 export type MentionTrigger = {
@@ -105,7 +121,14 @@ export function canonicalAppId(value: string): string | null {
   ))
   if (fromCatalog) {
     const provider = resolveFirstPartyProvider(fromCatalog)
-    if (provider === "x" || provider === "linkedin" || provider === "github" || provider === "facebook") {
+    if (
+      provider === "x"
+      || provider === "linkedin"
+      || provider === "github"
+      || provider === "facebook"
+      || provider === "onedrive"
+      || provider === "google-services"
+    ) {
       return provider
     }
     return fromCatalog.id
@@ -115,7 +138,14 @@ export function canonicalAppId(value: string): string | null {
 
 export function isRealConnector(app: ConnectableApp): boolean {
   const provider = resolveFirstPartyProvider(app)
-  if (provider === "github" || provider === "linkedin" || provider === "x" || provider === "facebook") {
+  if (
+    provider === "github"
+    || provider === "linkedin"
+    || provider === "x"
+    || provider === "facebook"
+    || provider === "onedrive"
+    || provider === "google-services"
+  ) {
     return true
   }
   const id = canonicalAppId(app.id)

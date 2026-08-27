@@ -122,6 +122,22 @@ function socialSecretRef(connectionId) {
   return secretRef(SECRET_KINDS.SOCIAL_CONNECTION, connectionId);
 }
 
+function connectorSecretRef(accountId) {
+  return secretRef(SECRET_KINDS.CONNECTOR_ACCOUNT, accountId);
+}
+
+function userGoogleServicesSecretRef(userId) {
+  return secretRef(SECRET_KINDS.USER_GOOGLE_SERVICES, userId);
+}
+
+function secretRefFor(appId, sourceId, kind = null) {
+  if (kind === SECRET_KINDS.CONNECTOR_ACCOUNT) return connectorSecretRef(sourceId);
+  if (kind === SECRET_KINDS.USER_GOOGLE_SERVICES) return userGoogleServicesSecretRef(sourceId);
+  if (kind === SECRET_KINDS.GITHUB_ACCOUNT || appId === 'github') return githubSecretRef(sourceId);
+  if (appId === 'onedrive' || appId === 'google-drive') return connectorSecretRef(sourceId);
+  return socialSecretRef(sourceId);
+}
+
 module.exports = {
   PUBLIC_SELECT,
   publicConnection,
@@ -132,4 +148,7 @@ module.exports = {
   deleteConnection,
   githubSecretRef,
   socialSecretRef,
+  connectorSecretRef,
+  userGoogleServicesSecretRef,
+  secretRefFor,
 };

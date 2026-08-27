@@ -71,6 +71,28 @@ async function loadSealedBlob(prisma, secretRef) {
     });
     return row ? { blob: row.accessToken, row, kind: parsed.kind } : null;
   }
+  if (parsed.kind === SECRET_KINDS.CONNECTOR_ACCOUNT && prisma.connectorAccount?.findUnique) {
+    const row = await prisma.connectorAccount.findUnique({
+      where: { id: parsed.id },
+      select: {
+        id: true,
+        userId: true,
+        provider: true,
+        tokenEncrypted: true,
+        scopes: true,
+        status: true,
+        accountLabel: true,
+      },
+    });
+    return row ? { blob: row.tokenEncrypted, row, kind: parsed.kind } : null;
+  }
+  if (parsed.kind === SECRET_KINDS.USER_GOOGLE_SERVICES && prisma.user?.findUnique) {
+    const row = await prisma.user.findUnique({
+      where: { id: parsed.id },
+      select: { id: true, googleServicesTokens: true },
+    });
+    return row ? { blob: row.googleServicesTokens, row: { ...row, userId: parsed.id }, kind: parsed.kind } : null;
+  }
   return null;
 }
 
