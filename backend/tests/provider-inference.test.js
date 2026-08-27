@@ -168,6 +168,14 @@ test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () =
   assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
 });
 
+test('inferProviderFromModelId: Meta Muse / Llama 4 direct ids', () => {
+  assert.equal(inferProviderFromModelId('muse-spark-1.2'), 'Meta');
+  assert.equal(inferProviderFromModelId('muse-image-1.0'), 'Meta');
+  assert.equal(inferProviderFromModelId('llama-4-scout'), 'Meta');
+  assert.equal(inferProviderFromModelId('meta-llama/Llama-4-Maverick'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('llama-3.1-8b'), 'Cerebras');
+});
+
 test('listKnownProviders / KNOWN_PROVIDERS: stable canonical set', () => {
   const list = listKnownProviders();
   assert.ok(list.includes('Gemini'));

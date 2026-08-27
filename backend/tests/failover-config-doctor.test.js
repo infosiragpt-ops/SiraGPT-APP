@@ -11,6 +11,8 @@ test('providerOfModel maps known families and returns null for unknown', () => {
     assert.equal(providerOfModel('claude-sonnet-4.5'), 'anthropic');
     assert.equal(providerOfModel('gemini-2.5-flash'), 'gemini');
     assert.equal(providerOfModel('deepseek-v4-pro'), 'deepseek');
+    assert.equal(providerOfModel('muse-spark-1.2'), 'meta');
+    assert.equal(providerOfModel('llama-4-maverick'), 'meta');
     assert.equal(providerOfModel('llama-3.1-8b'), 'cerebras');
     assert.equal(providerOfModel('mistral-large'), 'mistral');
     assert.equal(providerOfModel('grok-2'), 'xai');

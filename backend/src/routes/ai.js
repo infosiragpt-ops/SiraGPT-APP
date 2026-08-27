@@ -344,6 +344,35 @@ function createProviderClient(provider) {
     });
   }
 
+  if (provider === "Groq" && process.env.GROQ_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.GROQ_API_KEY,
+      baseURL: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
+    });
+  }
+
+  if (provider === "Mistral" && process.env.MISTRAL_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.MISTRAL_API_KEY,
+      baseURL: process.env.MISTRAL_BASE_URL || "https://api.mistral.ai/v1",
+    });
+  }
+
+  if ((provider === "xAI" || provider === "XAI" || provider === "Grok") && process.env.XAI_API_KEY) {
+    return new OpenAI({
+      apiKey: process.env.XAI_API_KEY,
+      baseURL: process.env.XAI_BASE_URL || "https://api.x.ai/v1",
+    });
+  }
+
+  if ((provider === "Meta" || provider === "Llama") && (process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY)) {
+    return new OpenAI({
+      apiKey: process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY,
+      baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || "https://api.meta.ai/v1",
+    });
+  }
+
+
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });

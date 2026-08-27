@@ -121,6 +121,7 @@ const KNOWN_PROVIDERS = new Set([
   'fireworks',
   'deepseek',
   'xai',
+  'meta',
   'fal',
   'custom',
 ]);
@@ -139,6 +140,7 @@ const DEFAULT_PROVIDER_LABELS = {
   fireworks: 'Fireworks AI API',
   deepseek: 'DeepSeek API',
   xai: 'xAI API',
+  meta: 'Meta Model API',
   fal: 'fal.ai Video API',
   custom: 'Custom API',
 };
