@@ -45,6 +45,12 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
     assert.equal(officialMarkPath(gmail), "/conexiones-logos/gmail.svg")
     assert.equal(officialMarkPath({ id: "calendar", domain: "calendar.google.com" }), "/conexiones-logos/googlecalendar.svg")
     assert.equal(officialMarkPath({ id: "drive", domain: "drive.google.com" }), "/conexiones-logos/googledrive.svg")
+    assert.equal(officialMarkPath({ id: "onedrive", domain: "onedrive.live.com" }), "/conexiones-logos/onedrive.svg")
+    assert.equal(officialMarkPath({ id: "onedrive", domain: "" }), "/conexiones-logos/onedrive.svg")
+    assert.equal(officialMarkPath({ id: "google-drive", domain: "drive.google.com" }), "/conexiones-logos/googledrive.svg")
+    assert.equal(officialMarkPath({ id: "google-drive", domain: "" }), "/conexiones-logos/googledrive.svg")
+    assert.equal(gptStoreAppLogoUrl({ id: "onedrive", domain: "onedrive.live.com", name: "OneDrive" }), "/conexiones-logos/onedrive.svg")
+    assert.equal(gptStoreAppLogoUrl({ id: "google-drive", domain: "drive.google.com", name: "Google Drive" }), "/conexiones-logos/googledrive.svg")
   })
 
   it("does not default to the blurry Google sz=128 favicon", () => {
@@ -92,7 +98,7 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
   })
 
   it("keeps the local SVG files for catalog and requested brands", () => {
-    for (const file of ["linkedin.svg", "indeed.svg", "gmail.svg", "google.svg", "etsy.svg", "idealista.svg", "redfin.svg", "autoscout24.svg", "autotrader.svg"]) {
+    for (const file of ["linkedin.svg", "indeed.svg", "gmail.svg", "google.svg", "etsy.svg", "idealista.svg", "redfin.svg", "autoscout24.svg", "autotrader.svg", "onedrive.svg", "googledrive.svg"]) {
       assert.ok(fs.existsSync(path.join(logosDir, file)), `missing ${file}`)
     }
   })

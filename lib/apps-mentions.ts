@@ -48,6 +48,8 @@ export const FIRST_PARTY_LOGO_BY_ID = Object.freeze({
   linkedin: "/conexiones-logos/linkedin.svg",
   x: "/conexiones-logos/x.svg",
   facebook: "/conexiones-logos/facebook.svg",
+  onedrive: "/conexiones-logos/onedrive.svg",
+  "google-drive": "/conexiones-logos/googledrive.svg",
 } as const)
 
 const ALIASES: Record<string, string> = {
