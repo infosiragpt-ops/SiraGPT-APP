@@ -256,6 +256,41 @@ test('syncConnectionModels returns a failure verdict (no persist) on upstream er
   assert.equal(createdCalled, false);
 });
 
+test('syncConnectionModels: custom /v1 persists provider Custom and moondream as Sira Mini', async () => {
+  const created = [];
+  const mockPrisma = {
+    aiModel: {
+      findMany: async () => [],
+      createMany: async ({ data }) => {
+        created.push(...data);
+        return { count: data.length };
+      },
+      update: async ({ data }) => data,
+    },
+  };
+  const svc = new ModelSyncService({ prismaClient: mockPrisma });
+  const fetchImpl = recordingFetch(
+    fakeResponse({ json: { data: [{ id: 'moondream' }] } })
+  );
+
+  const result = await svc.syncConnectionModels({
+    providerKey: 'custom',
+    providerLabel: 'Ollama local',
+    url: 'http://siragpt-ollama:11434/v1',
+    authType: 'None',
+    apiKey: null,
+    fetchImpl,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.created, 1);
+  assert.equal(fetchImpl.calls[0].url, 'http://siragpt-ollama:11434/v1/models');
+  assert.equal(created[0].name, 'moondream');
+  assert.equal(created[0].provider, 'Custom');
+  assert.equal(created[0].displayName, 'SiraGPT Mini');
+  assert.equal(created[0].isActive, false);
+});
+
 test('syncConnectionModels rejects a connection with no URL', async () => {
   const svc = new ModelSyncService();
   const result = await svc.syncConnectionModels({ providerKey: 'openai', url: '' });

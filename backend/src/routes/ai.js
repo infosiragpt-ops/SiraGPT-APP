@@ -288,8 +288,27 @@ function hasEnv(name) {
 // dedicated, testable helper in services/ai/provider-inference.js — keeps
 // this file lean and gives a single place to maintain the heuristic.
 const { inferProviderFromModelId } = require('../services/ai/provider-inference');
+const {
+  isCustomProvider,
+  isLocalVisionModel,
+  isSiraMiniAlias,
+  publicPickerModel,
+  resolveCustomConnectionForTurn,
+  createCustomProviderClient,
+  SIRA_MINI_PUBLIC_NAME,
+} = require('../services/ai/custom-provider-client');
 
-function createProviderClient(provider) {
+function createProviderClient(provider, opts = {}) {
+  // Custom / Ollama OpenAI-compatible: read the AdminConnection at request
+  // time (custom is not in the env bridge map). Never fall through to
+  // api.openai.com — that was the production-main gap.
+  if (opts.customConnection && opts.customConnection.url) {
+    return createCustomProviderClient(opts.customConnection);
+  }
+  if (isCustomProvider(provider)) {
+    return createCustomProviderClient({ url: 'http://127.0.0.1:9/v1', apiKey: null, authType: 'None' });
+  }
+
   if (provider === "Anthropic") {
     const { createAnthropicOpenAIAdapter } = require('../services/providers/anthropic-openai-adapter');
     return createAnthropicOpenAIAdapter();
@@ -391,7 +410,13 @@ function createProviderClient(provider) {
  *
  * @returns {{ client: OpenAI, via: 'gateway' | 'direct' }}
  */
-function createProviderClientForRequest(provider, req) {
+function createProviderClientForRequest(provider, req, opts = {}) {
+  if (opts.customConnection && opts.customConnection.url) {
+    return { client: createProviderClient(provider, opts), via: 'direct' };
+  }
+  if (isCustomProvider(provider) || isSiraMiniAlias(opts.model) || isSiraMiniAlias(provider)) {
+    return { client: createProviderClient(provider, opts), via: 'direct' };
+  }
   try {
     // Lazy require so the route module loads even if the gateway client
     // file is absent (e.g. shallow checkouts in CI).
@@ -405,7 +430,7 @@ function createProviderClientForRequest(provider, req) {
     // Fall through to legacy on any failure — never break the user's chat
     // because the gateway helper crashed.
   }
-  return { client: createProviderClient(provider), via: 'direct' };
+  return { client: createProviderClient(provider, opts), via: 'direct' };
 }
 
 // One-shot boot-time provider-key audit. Logs a single WARN for each
@@ -963,8 +988,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
     models = models.map((m) => {
       const catalogEntry = modelRouter.getModel(m.name);
+      const publicModel = publicPickerModel(m);
       return {
-        ...m,
+        ...publicModel,
+        // Picker: displayName SiraGPT Mini. Never leak Ollama / HuggingFace / moondream.
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
         planAccess: {
@@ -1158,6 +1185,7 @@ function routeSupportsVision(provider, model) {
   const p = String(provider || '').toLowerCase();
   const m = String(model || '').toLowerCase();
   if (p === 'deepseek') return false;
+  if (isLocalVisionModel(m)) return true;
   if (p === 'gemini') return /^gemini/.test(m);
   if (p === 'openai') return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/.test(m);
   if (p === 'openrouter') return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/.test(m);
@@ -2906,7 +2934,23 @@ router.post(
       }).catch(() => ({ language: (req.user && req.user.locale) || uiLocale || 'es', detected: null, source: 'fallback', shouldPersist: false }));
 
       let actualProvider = provider; // ✅ NEW: track actual provider
-      let _providerResolution = createProviderClientForRequest(provider, req);
+      let customConnection = null;
+      let _customResolution = { isCustom: false, connection: null };
+      try {
+        _customResolution = await resolveCustomConnectionForTurn({ provider, model, prisma });
+        customConnection = _customResolution.connection || null;
+        if (customConnection) actualProvider = 'Custom';
+      } catch (customLookupErr) {
+        console.warn('[ai/generate] custom connection lookup failed:', customLookupErr && customLookupErr.message);
+      }
+      if (_customResolution.isCustom && !customConnection) {
+        controller.abort();
+        return res.status(503).json({
+          error: 'custom_connection_unavailable',
+          message: 'El modelo local no tiene una conexión Custom activa. Configúrala en Admin → Conexiones.',
+        });
+      }
+      let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
       let openai = _providerResolution.client;
 
       // Plan gating — premium models are catalogued in model-router with an
@@ -3071,7 +3115,7 @@ router.post(
       // project, since projects are task-scoped, not persona-defined.
       let customGpt = null;
       let project = null;
-      let actualModel = model;
+      let actualModel = isSiraMiniAlias(model) ? SIRA_MINI_PUBLIC_NAME : model;
       let actualTemperature = 0.55;
       // Default completion budget. Custom GPTs raise this so trained long-form
       // deliverables (thesis chapters, full templates) finish in one turn.
@@ -3132,6 +3176,8 @@ router.post(
           fullResponseContent = await aiService.generateStream({
             provider: actualProvider,
             model: actualModel,
+            client: openai,
+            customConnection,
             messages: publicMessages,
             systemBlocks: [{
               kind: 'public-web-readonly',
@@ -3311,8 +3357,28 @@ router.post(
         console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
       }
 
+      // Re-resolve Custom after Custom-GPT / org overrides may have changed the model.
+      try {
+        const _customAgain = await resolveCustomConnectionForTurn({
+          provider: actualProvider,
+          model: actualModel,
+          prisma,
+        });
+        if (_customAgain.connection) {
+          customConnection = _customAgain.connection;
+          actualProvider = 'Custom';
+          if (isSiraMiniAlias(actualModel)) actualModel = SIRA_MINI_PUBLIC_NAME;
+        } else if (customConnection && !_customAgain.isCustom) {
+          customConnection = null;
+        } else if (_customAgain.isCustom && !_customAgain.connection) {
+          customConnection = null;
+        }
+      } catch (customLookupErr) {
+        console.warn('[ai/generate] custom connection re-lookup failed:', customLookupErr && customLookupErr.message);
+      }
+
       // ✅ Re-initialize OpenAI client with actualProvider
-      _providerResolution = createProviderClientForRequest(actualProvider, req);
+      _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
       openai = _providerResolution.client;
       if (_providerResolution.via === 'gateway') {
         console.log('[ai/generate] via=gateway', JSON.stringify({
@@ -6776,6 +6842,7 @@ router.post(
                 && (shouldRunAgentic || documentEditRequested || createDocRequested)
                 && req.body.disableAgentic !== true
                 && !__publicWebReadonly
+                && !isSiraMiniAlias(actualModel)
                 && (__toolCallMode !== 'none' || documentEditRequested || createDocRequested)
                 && (!hasImages || documentEditRequested || createDocRequested)
               );
@@ -6858,7 +6925,7 @@ router.post(
                 // no silent substitution of a stronger model underneath. The
                 // chosen provider/model drives every step (plan → tools →
                 // finalize) in its own tool-call mode.
-                const agenticClient = createProviderClient(actualProvider);
+                const agenticClient = createProviderClient(actualProvider, { customConnection });
                 // Direct Claude uses a native Anthropic adapter to drive the
                 // ReAct loop. RAG helpers still expect a real OpenAI client and
                 // may hard-code embedding/judge model ids, so keep that
@@ -7034,6 +7101,8 @@ router.post(
             const out = await aiService.generateStream({
               provider: actualProvider,
               model: actualModel,
+              client: openai,
+              customConnection,
               messages,
               systemBlocks,
               chatId: canPersist ? chatId : null,

@@ -1,0 +1,363 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const {
+  isCustomProvider,
+  isCustomConnectionRow,
+  isOpenAiCompatibleUrl,
+  isLocalVisionModel,
+  isSiraMiniAlias,
+  publicPickerProvider,
+  publicPickerModel,
+  catalogProviderForConnection,
+  defaultCustomDisplayName,
+  rewriteCustomChatModel,
+  pickCustomConnectionRow,
+  shapeConnection,
+  resolveCustomConnectionForTurn,
+  createCustomProviderClient,
+  SIRA_MINI_DEFAULT_BASE_URL,
+  SIRA_MINI_UPSTREAM_ID,
+  SIRA_MINI_PUBLIC_NAME,
+} = require('../src/services/ai/custom-provider-client');
+
+test('isCustomProvider: Custom / Custom API / ollama only', () => {
+  assert.equal(isCustomProvider('Custom'), true);
+  assert.equal(isCustomProvider('custom'), true);
+  assert.equal(isCustomProvider('Custom API'), true);
+  assert.equal(isCustomProvider('Ollama'), true);
+  assert.equal(isCustomProvider('DeepSeek'), false);
+  assert.equal(isCustomProvider('OpenAI'), false);
+  assert.equal(isCustomProvider('OpenRouter'), false);
+  assert.equal(isCustomProvider('Sira'), false);
+  assert.equal(isCustomProvider(''), false);
+});
+
+test('isOpenAiCompatibleUrl: /v1 base, not cloud-provider inference', () => {
+  assert.equal(isOpenAiCompatibleUrl('http://siragpt-ollama:11434/v1'), true);
+  assert.equal(isOpenAiCompatibleUrl('http://siragpt-ollama:11434/v1/'), true);
+  assert.equal(isOpenAiCompatibleUrl('http://siragpt-ollama:11434'), false);
+  assert.equal(isOpenAiCompatibleUrl('https://api.openai.com/v1'), true);
+});
+
+test('isSiraMiniAlias: public + upstream ids', () => {
+  assert.equal(isSiraMiniAlias('sira-mini'), true);
+  assert.equal(isSiraMiniAlias('Sira Mini'), true);
+  assert.equal(isSiraMiniAlias('SiraGPT Mini'), true);
+  assert.equal(isSiraMiniAlias('moondream'), true);
+  assert.equal(isSiraMiniAlias('moondream:latest'), true);
+  assert.equal(isSiraMiniAlias('deepseek-v4-flash'), false);
+});
+
+test('isCustomConnectionRow: custom key or unknown /v1 host; never DeepSeek/OpenAI', () => {
+  assert.equal(isCustomConnectionRow({ providerKey: 'custom', url: 'http://siragpt-ollama:11434/v1' }), true);
+  assert.equal(isCustomConnectionRow({ providerKey: 'local-llm', url: 'http://siragpt-ollama:11434/v1' }), true);
+  assert.equal(isCustomConnectionRow({ providerKey: 'openai', url: 'https://api.openai.com/v1' }), false);
+  assert.equal(isCustomConnectionRow({ providerKey: 'deepseek', url: 'https://api.deepseek.com/v1' }), false);
+  assert.equal(isCustomConnectionRow({ providerKey: 'openrouter', url: 'https://openrouter.ai/api/v1' }), false);
+  assert.equal(isCustomConnectionRow({ providerKey: 'meta', url: 'https://api.meta.ai/v1' }), false);
+});
+
+test('publicPickerProvider hides Ollama / HuggingFace / Custom API', () => {
+  assert.equal(publicPickerProvider('Custom'), 'Sira');
+  assert.equal(publicPickerProvider('Custom API'), 'Sira');
+  assert.equal(publicPickerProvider('Ollama'), 'Sira');
+  assert.equal(publicPickerProvider('HuggingFace'), 'Sira');
+  assert.equal(publicPickerProvider('Hugging Face'), 'Sira');
+  assert.equal(publicPickerProvider('DeepSeek'), 'DeepSeek');
+  assert.equal(publicPickerProvider('OpenAI'), 'OpenAI');
+});
+
+test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace', () => {
+  const publicModel = publicPickerModel({
+    id: 'row-1',
+    name: 'moondream:latest',
+    displayName: 'Moondream',
+    provider: 'Ollama',
+    description: 'HuggingFace moondream via Ollama',
+    type: 'TEXT',
+    isActive: true,
+  });
+  assert.equal(publicModel.name, SIRA_MINI_PUBLIC_NAME);
+  assert.equal(publicModel.displayName, 'SiraGPT Mini');
+  assert.equal(publicModel.description, 'Modelo rápido multimodal de SiraGPT.');
+  assert.equal(publicModel.provider, 'Sira');
+  const blob = JSON.stringify(publicModel).toLowerCase();
+  assert.equal(blob.includes('moondream'), false);
+  assert.equal(blob.includes('ollama'), false);
+  assert.equal(blob.includes('huggingface'), false);
+});
+
+test('catalogProviderForConnection canonicalises custom → Custom', () => {
+  assert.equal(catalogProviderForConnection('custom', 'Ollama local'), 'Custom');
+  assert.equal(catalogProviderForConnection('openai', 'OpenAI'), 'OpenAI');
+});
+
+test('defaultCustomDisplayName: moondream → Sira Mini without a vendor display_name', () => {
+  assert.equal(defaultCustomDisplayName('moondream', ''), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('moondream:latest', 'Moondream'), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('moondream', 'Sira Mini'), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('llama3.2', 'Llama 3.2'), 'Llama 3.2');
+});
+
+test('isLocalVisionModel: moondream / llava are multimodal', () => {
+  assert.equal(isLocalVisionModel('moondream'), true);
+  assert.equal(isLocalVisionModel('moondream:latest'), true);
+  assert.equal(isLocalVisionModel('sira-mini'), true);
+  assert.equal(isLocalVisionModel('llava'), true);
+  assert.equal(isLocalVisionModel('deepseek-v4-flash'), false);
+  assert.equal(isLocalVisionModel('llama-3.1-8b'), false);
+});
+
+test('createCustomProviderClient uses connection.url, never api.openai.com', () => {
+  const captured = [];
+  class FakeOpenAI {
+    constructor(opts) {
+      captured.push(opts);
+      this.opts = opts;
+    }
+  }
+
+  const client = createCustomProviderClient(
+    { url: 'http://siragpt-ollama:11434/v1/', apiKey: null, authType: 'None' },
+    { OpenAI: FakeOpenAI },
+  );
+
+  assert.equal(client.opts.baseURL, SIRA_MINI_DEFAULT_BASE_URL);
+  assert.notEqual(client.opts.baseURL, 'https://api.openai.com/v1');
+  assert.ok(!String(client.opts.baseURL).includes('api.openai.com'));
+  assert.equal(client.opts.apiKey, 'local');
+  assert.equal(captured.length, 1);
+});
+
+test('createCustomProviderClient rewrites sira-mini → moondream:latest on chat.completions', async () => {
+  const calls = [];
+  class FakeOpenAI {
+    constructor(opts) {
+      this.opts = opts;
+      this.chat = {
+        completions: {
+          create: async (body) => {
+            calls.push(body);
+            return { id: 'cmpl' };
+          },
+        },
+      };
+    }
+  }
+  const client = createCustomProviderClient(
+    { url: SIRA_MINI_DEFAULT_BASE_URL, apiKey: null, authType: 'None' },
+    { OpenAI: FakeOpenAI },
+  );
+  await client.chat.completions.create({ model: 'sira-mini', messages: [{ role: 'user', content: 'hola' }] });
+  assert.equal(calls[0].model, SIRA_MINI_UPSTREAM_ID);
+  assert.equal(rewriteCustomChatModel('moondream'), SIRA_MINI_UPSTREAM_ID);
+  assert.equal(client.opts.baseURL, 'http://siragpt-ollama:11434/v1');
+});
+
+test('createCustomProviderClient: Bearer key is forwarded; None does not decrypt', () => {
+  class FakeOpenAI {
+    constructor(opts) { this.opts = opts; }
+  }
+  const withKey = createCustomProviderClient(
+    { url: 'http://127.0.0.1:11434/v1', apiKey: 'not-a-secret-placeholder', authType: 'Bearer' },
+    { OpenAI: FakeOpenAI },
+  );
+  assert.equal(withKey.opts.apiKey, 'not-a-secret-placeholder');
+  assert.equal(withKey.opts.baseURL, 'http://127.0.0.1:11434/v1');
+});
+
+test('pickCustomConnectionRow prefers modelIds match over newest catch-all', () => {
+  const rows = [
+    { id: 'newer', providerKey: 'custom', url: 'http://a:11434/v1', modelIds: ['other'] },
+    { id: 'match', providerKey: 'custom', url: 'http://siragpt-ollama:11434/v1', modelIds: ['moondream'] },
+  ];
+  const picked = pickCustomConnectionRow(rows, 'moondream:latest');
+  assert.equal(picked.id, 'match');
+  assert.equal(picked.url, 'http://siragpt-ollama:11434/v1');
+});
+
+test('shapeConnection: auth None drops the key even if a leftover blob exists', () => {
+  const shaped = shapeConnection({
+    id: 'c1',
+    url: 'http://siragpt-ollama:11434/v1/',
+    authType: 'None',
+    apiKey: 'enc:v1:should-not-be-used',
+  });
+  assert.equal(shaped.url, 'http://siragpt-ollama:11434/v1');
+  assert.equal(shaped.apiKey, null);
+  assert.equal(shaped.authType, 'None');
+});
+
+test('resolveCustomConnectionForTurn: Custom catalog row + enabled connection.url', async () => {
+  const prisma = {
+    aiModel: {
+      findUnique: async ({ where }) => (
+        where.name === 'moondream'
+          ? { name: 'moondream', displayName: 'Sira Mini', provider: 'Custom', isActive: true, type: 'TEXT' }
+          : null
+      ),
+    },
+    adminConnection: {
+      findMany: async () => ([
+        {
+          id: 'conn-custom',
+          url: 'http://siragpt-ollama:11434/v1',
+          providerKey: 'custom',
+          apiKey: null,
+          authType: 'None',
+          modelIds: [],
+          headers: null,
+          enabled: true,
+          updatedAt: new Date('2026-08-27'),
+        },
+      ]),
+    },
+  };
+
+  const resolved = await resolveCustomConnectionForTurn({
+    provider: 'Sira',
+    model: 'sira-mini',
+    prisma,
+  });
+  assert.equal(resolved.isCustom, true);
+  assert.ok(resolved.connection);
+  assert.equal(resolved.connection.url, SIRA_MINI_DEFAULT_BASE_URL);
+  assert.equal(resolved.connection.apiKey, null);
+  assert.equal(resolved.catalog.displayName, 'Sira Mini');
+});
+
+test('resolveCustomConnectionForTurn: Sira Mini falls back to siragpt-ollama:11434/v1', async () => {
+  const prisma = {
+    aiModel: {
+      findUnique: async () => null,
+    },
+    adminConnection: {
+      findMany: async () => [],
+    },
+  };
+  const resolved = await resolveCustomConnectionForTurn({
+    provider: 'Sira',
+    model: 'sira-mini',
+    prisma,
+  });
+  assert.equal(resolved.isCustom, true);
+  assert.equal(resolved.connection.url, 'http://siragpt-ollama:11434/v1');
+  assert.equal(resolved.connection.authType, 'None');
+  assert.equal(resolved.connection.apiKey, null);
+});
+
+test('resolveCustomConnectionForTurn: DeepSeek stays off the custom path', async () => {
+  const prisma = {
+    aiModel: {
+      findUnique: async ({ where }) => (
+        where.name === 'deepseek-v4-flash'
+          ? { name: 'deepseek-v4-flash', displayName: 'Sira Rápido', provider: 'DeepSeek', isActive: true, type: 'TEXT' }
+          : null
+      ),
+    },
+    adminConnection: {
+      findMany: async () => ([
+        {
+          id: 'conn-custom',
+          url: 'http://siragpt-ollama:11434/v1',
+          providerKey: 'custom',
+          apiKey: null,
+          authType: 'None',
+          modelIds: [],
+          enabled: true,
+          updatedAt: new Date(),
+        },
+      ]),
+    },
+  };
+
+  const resolved = await resolveCustomConnectionForTurn({
+    provider: 'DeepSeek',
+    model: 'deepseek-v4-flash',
+    prisma,
+  });
+  assert.equal(resolved.isCustom, false);
+  assert.equal(resolved.connection, null);
+});
+
+test('ai.js wires Custom into createProviderClient / generate', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
+  assert.match(src, /custom-provider-client/, 'route must require the custom connection helper');
+  assert.match(src, /createCustomProviderClient/, 'createProviderClient must call createCustomProviderClient');
+  assert.match(src, /resolveCustomConnectionForTurn/, 'generate must resolve the connection row at request time');
+  assert.match(src, /customConnection/, 'request-aware client must accept the resolved connection');
+  assert.match(src, /client: openai/, 'plain stream must reuse the Custom client, not getClient(Custom)→OpenAI');
+  assert.match(src, /!isSiraMiniAlias\(actualModel\)/, 'Mini must skip the agentic loop so a tool-call miss cannot fall through to DeepSeek');
+  assert.doesNotMatch(src, /OPENAI_BASE_URL/, 'must not stuff Custom into OPENAI_BASE_URL');
+});
+
+test('getFallbackChain: Custom / SiraGPT Mini never includes DeepSeek Flash', () => {
+  const service = require('../src/services/ai-service');
+  const keys = ['FALLBACK_MODELS', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY', 'OPENROUTER_API_KEY'];
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  delete process.env.FALLBACK_MODELS;
+  process.env.DEEPSEEK_API_KEY = 'sk-deepseek';
+  process.env.OPENAI_API_KEY = 'sk-openai';
+  try {
+    assert.deepEqual(service.__test.getFallbackChain('Custom', 'sira-mini'), []);
+    assert.deepEqual(service.__test.getFallbackChain('Sira', 'SiraGPT Mini'), []);
+    assert.deepEqual(service.__test.getFallbackChain('DeepSeek', 'sira-mini'), []);
+    assert.equal(service.__test.isPinnedLocalGenerate('Custom', 'sira-mini'), true);
+    assert.equal(service.__test.providerForModel('sira-mini'), 'Custom');
+  } finally {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+  }
+});
+
+test('generateStream: Mini failure errors in Spanish and never swaps to DeepSeek', async () => {
+  const service = require('../src/services/ai-service');
+  const { SIRA_MINI_UNAVAILABLE_MESSAGE } = require('../src/services/ai/custom-provider-client');
+  const seen = [];
+  const frames = [];
+  const originalGetClient = service.getClient;
+  service.getClient = (provider) => {
+    seen.push(provider);
+    const err = new Error('upstream down');
+    err.status = 503;
+    throw err;
+  };
+  const failingClient = {
+    chat: {
+      completions: {
+        create: async () => {
+          const err = new Error('ollama down');
+          err.status = 503;
+          throw err;
+        },
+      },
+    },
+  };
+  try {
+    const out = await service.generateStream({
+      provider: 'Custom',
+      model: 'sira-mini',
+      client: failingClient,
+      messages: [{ role: 'user', content: 'hola' }],
+      res: { write: (chunk) => { frames.push(String(chunk)); return true; } },
+      qualityGuard: false,
+      skipDoneSentinel: true,
+    });
+    assert.equal(out, SIRA_MINI_UNAVAILABLE_MESSAGE);
+    assert.equal(seen.includes('DeepSeek'), false);
+    assert.equal(seen.includes('OpenAI'), false);
+    const blob = frames.join('\n');
+    assert.match(blob, /sira_mini_unavailable/);
+    assert.match(blob, /SiraGPT Mini no está disponible/);
+    assert.equal(/deepseek-v4-flash|Sira Rápido/i.test(blob), false);
+  } finally {
+    service.getClient = originalGetClient;
+  }
+});

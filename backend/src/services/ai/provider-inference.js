@@ -31,6 +31,7 @@ const KNOWN_PROVIDERS = Object.freeze([
   'Cerebras',
   'Meta',
   'xAI',
+  'Custom',
   'OpenAI',
 ]);
 
@@ -65,6 +66,13 @@ function isDirectDeepSeekModel(modelName) {
 function inferProviderFromModelId(modelId) {
   const m = normaliseModelId(modelId).toLowerCase();
   if (!m) return 'OpenAI';
+
+  // 0) Local SiraGPT Mini (Custom/Ollama). Never infer OpenAI/DeepSeek —
+  //    that silent swap sent Mini turns to Sira Rápido.
+  if (
+    m === 'sira-mini' || m === 'siragpt-mini' || m === 'sira mini' || m === 'siragpt mini'
+    || m === 'moondream' || m.startsWith('moondream:')
+  ) return 'Custom';
 
   // 1) Direct-API providers we explicitly route to.
   if (isDirectDeepSeekModel(m)) return 'DeepSeek';

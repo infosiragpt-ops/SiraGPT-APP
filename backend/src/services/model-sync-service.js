@@ -805,11 +805,16 @@ class ModelSyncService {
   async syncConnectionModels(conn = {}) {
     let catalogMap = {};
     try { catalogMap = require('./admin-connections-bridge').PROVIDER_CATALOG_MAP || {}; } catch (_) { /* noop */ }
-    const providerLabel = conn.providerLabel
-      || catalogMap[String(conn.providerKey || '').toLowerCase()]
+    const providerKey = String(conn.providerKey || '').toLowerCase();
+    let catalogProviderLabel = conn.providerLabel
+      || catalogMap[providerKey]
       || conn.providerKey
       || 'Custom';
-    const providerKey = String(conn.providerKey || '').toLowerCase();
+    try {
+      const { catalogProviderForConnection } = require('./ai/custom-provider-client');
+      catalogProviderLabel = catalogProviderForConnection(providerKey, catalogProviderLabel);
+    } catch (_) { /* keep label */ }
+    const providerLabel = catalogProviderLabel;
 
     if (providerKey === 'fal') {
       const apiKey = cleanEnvValue(conn.apiKey || '');
@@ -865,6 +870,17 @@ class ModelSyncService {
 
     if (!res.ok) return { ...res, created: 0, updated: 0, errors: 0, count: 0 };
     if (!res.models.length) return { ok: true, error: null, created: 0, updated: 0, errors: 0, count: 0, models: [] };
+
+    if (providerKey === 'custom') {
+      try {
+        const { defaultCustomDisplayName } = require('./ai/custom-provider-client');
+        res.models = res.models.map((m) => ({
+          ...m,
+          provider: 'Custom',
+          displayName: defaultCustomDisplayName(m.name, m.displayName),
+        }));
+      } catch (_) { /* keep discovered rows */ }
+    }
 
     const persisted = await this.persistModels(res.models);
     return { ok: true, error: null, ...persisted, count: res.models.length, models: res.models };
