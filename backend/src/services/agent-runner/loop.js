@@ -2724,7 +2724,11 @@ async function runAgentLoop({
   }
 
   bail(cap);
-  onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Listo' });
+  // Exhausting the budget is NOT a finished turn: the deliverable may be
+  // half-built (the real PPTX incident). Labeling it "Listo" made the user
+  // trust an unverified partial deck. Close honestly instead.
+  finalText = 'Se agotó el presupuesto de pasos del agente antes de terminar el trabajo. Lo generado hasta ahora puede estar incompleto; pídeme continuar y retomo desde donde quedó.';
+  onEvent({ type: 'final', text: finalText, iterations: cap, label: 'Incompleto', verified: false });
   return { finalText, iterations: cap, steps, stoppedReason, verificationAttempts };
   } finally {
     try {
