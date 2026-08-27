@@ -850,6 +850,52 @@ test('a blocking LLM error (402) emits action_required before the run errors', a
   assert.equal(ar.data.remediationUrl, 'https://openrouter.ai/credits');
 });
 
+test('a transient LLM transport error (502) is retried and the run recovers', async () => {
+  let calls = 0;
+  const f = fakeDeps({
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('502 Bad Gateway');
+      if (calls === 2) throw new Error('socket hang up');
+      return { text: 'Listo, terminé.', toolCalls: [] };
+    },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'done');
+  assert.equal(calls, 3);
+  const retries = f.events.filter((e) => e.type === 'narrative_delta' && /Fallo transitorio/.test(e.data?.text || ''));
+  assert.equal(retries.length, 2);
+});
+
+test('a persistent transient error exhausts bounded retries then fails the run', async () => {
+  let calls = 0;
+  const f = fakeDeps({
+    llmTurn: async () => {
+      calls += 1;
+      throw new Error('503 Service Unavailable');
+    },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'error');
+  // Initial attempt + MAX_LLM_STEP_RETRIES (3).
+  assert.equal(calls, 4);
+  assert.match(res.error, /503/);
+  assert.match(res.error, /reintentos transitorios/);
+});
+
+test('a non-retryable auth error (401) fails the run on the first attempt without retrying', async () => {
+  let calls = 0;
+  const f = fakeDeps({
+    llmTurn: async () => {
+      calls += 1;
+      throw new Error('HTTP 401 invalid api key');
+    },
+  });
+  const res = await runAgentLoop({ run: { id: 'r1', mode: 'build' }, project: { id: 'p1' }, deps: f.deps });
+  assert.equal(res.status, 'error');
+  assert.equal(calls, 1);
+});
+
 test('a blocking tool error (runner down) ends the run with action_required', async () => {
   const f = fakeDeps({
     runner: {
