@@ -27,3 +27,19 @@ test("page thumbs keep a loading veil so a local File is not a finished page", (
   assert.match(thumb, /busy \|\| !page/)
   assert.match(thumb, /ThinkingIndicator/)
 })
+
+test("PDF/Office composer chips poll processing-status and follow the live stage", () => {
+  const composer = source("components/chat-interface-enhanced.tsx")
+  const hook = source("hooks/use-file-processing-status.ts")
+  assert.match(composer, /FileProcessingStatusSync/)
+  assert.match(composer, /describeComposerDocumentThumb/)
+  assert.match(composer, /isDocPage[\s\S]{0,900}FileProcessingStatusSync/)
+  assert.doesNotMatch(
+    composer,
+    /file\.status === 'processing'\s*\n\s*\? INDEXING_STATUS_LABEL/,
+    "PDF thumbs must not freeze on the default indexing copy after HTTP upload",
+  )
+  assert.match(hook, /buildFileProcessingStatusUrl/)
+  assert.match(hook, /decideProcessingStatusPoll/)
+  assert.match(hook, /resolveProcessingPollGiveUp/)
+})

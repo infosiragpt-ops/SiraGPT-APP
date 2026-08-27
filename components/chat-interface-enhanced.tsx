@@ -109,7 +109,7 @@ function prewarmUnifiedDocumentPreview(a: AttachmentLike): void {
     .catch(() => null)
 }
 import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "@/lib/document-viewer-attachment"
-import { canOpenComposerPreview, INDEXING_STATUS_LABEL } from "@/lib/document-preview-gate"
+import { canOpenComposerPreview } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import { AppsMentionPicker } from "@/components/AppsMentionPicker"
 import {
@@ -144,10 +144,11 @@ import {
   shouldShowComposerExpandControl,
 } from "@/lib/composer-layout"
 import { FileUploadProgress } from "@/components/file-upload-progress"
+import { FileProcessingStatusSync } from "@/components/file-processing-status-sync"
 import { DocumentPageThumb } from "@/components/document-page-thumb"
 import { isPagePreviewDocument } from "@/lib/document-first-page"
 import type { FileProcessingStatus } from "@/hooks/use-file-processing-status"
-import { isActiveProcessingStage } from "@/lib/file-processing-vocab"
+import { describeComposerDocumentThumb, isActiveProcessingStage } from "@/lib/file-processing-vocab"
 import {
   extractFilesFromDataTransfer,
   extractFromClipboardEvent,
@@ -2018,7 +2019,14 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
           const isDocPage = !isImage && !isAudio && !isVideo && !longPasteMeta
             && isPagePreviewDocument(file.name, file.type || file.mimeType);
           const chipLabel = `${longPasteMeta?.title || file.name}, adjunto ${index + 1} de ${uploadedFiles.length}`;
-          const docBusy = isUploading || file.status === 'processing';
+          const thumbProgress = describeComposerDocumentThumb({
+            uploading: isUploading,
+            uploadProgress: progress,
+            status: file.status,
+            stage: getFileProcessingStage(file),
+            error: file.processingError || file.uploadError,
+          });
+          const docBusy = thumbProgress.busy;
           const handleReorder = (delta: -1 | 1) => {
             if (!moveFile) return;
             const target = index + delta;
@@ -2057,8 +2065,8 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 : isUploading
                   ? 'Subiendo…'
                   : canPreview
-                    ? (file.status === 'processing' ? `Ver documento · ${INDEXING_STATUS_LABEL}` : 'Ver documento')
-                    : 'Preparando documento'}
+                    ? (thumbProgress.busy && thumbProgress.label ? `Ver documento · ${thumbProgress.label}` : 'Ver documento')
+                    : (thumbProgress.label || 'Preparando documento')}
               onClick={openPreview}
               role="listitem"
               aria-label={chipLabel}
@@ -2131,6 +2139,11 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                 </>
               ) : isDocPage ? (
                 <>
+                  <FileProcessingStatusSync
+                    fileId={isUploading ? null : file.id}
+                    onReady={() => toast.success(`Documento listo: ${file.name}`)}
+                    onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                  />
                   <DocumentPageThumb
                     source={{
                       id: file.id,
@@ -2142,12 +2155,25 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                     }}
                     busy={docBusy}
                     progress={isUploading ? progress : null}
-                    label={isUploading
-                      ? `Subiendo · ${Math.round(progress)}%`
-                      : file.status === 'processing'
-                        ? INDEXING_STATUS_LABEL
-                        : undefined}
+                    label={thumbProgress.label}
                   />
+                  {isFailed && retryUpload && (
+                    <div className="absolute inset-0 bg-red-900/55 flex flex-col items-center justify-center gap-1 rounded-[0.9rem]">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-full bg-white/95 hover:bg-white text-red-600"
+                        onClick={(e) => { e.stopPropagation(); retryUpload(file); }}
+                        title="Reintentar subida"
+                        aria-label="Reintentar subida"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      </Button>
+                      <span className="max-w-[90%] truncate px-1 text-center text-[9.5px] text-white font-medium">
+                        {thumbProgress.label || "Reintentar"}
+                      </span>
+                    </div>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
