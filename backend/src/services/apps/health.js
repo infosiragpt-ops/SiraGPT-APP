@@ -47,6 +47,18 @@ function healthTarget(appId) {
       headers: { Accept: 'application/json' },
     };
   }
+  if (appId === 'onedrive') {
+    return {
+      url: 'https://graph.microsoft.com/v1.0/me/drive',
+      headers: { Accept: 'application/json' },
+    };
+  }
+  if (appId === 'google-drive') {
+    return {
+      url: 'https://www.googleapis.com/drive/v3/about?fields=user',
+      headers: { Accept: 'application/json' },
+    };
+  }
   return {
     url: 'https://api.x.com/2/users/me',
     headers: { Accept: 'application/json' },

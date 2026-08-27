@@ -48,6 +48,8 @@ export const GPT_STORE_APPS: GptStoreApp[] = [
   { id: "indeed", name: "Indeed", description: "Find jobs tailored for you", category: "Empleo", domain: "indeed.com" },
   { id: "linkedin", name: "LinkedIn", description: "Find the right professional", category: "Empleo", domain: "linkedin.com" },
   { id: "github", name: "GitHub", description: "Code, repos and collaboration", category: "Otros", domain: "github.com" },
+  { id: "onedrive", name: "OneDrive", description: "Archivos y carpetas de tu cuenta", category: "Otros", domain: "onedrive.live.com" },
+  { id: "google-drive", name: "Google Drive", description: "Archivos y carpetas de tu cuenta", category: "Otros", domain: "drive.google.com" },
   { id: "x", name: "X", description: "Posts and public conversation", category: "Noticias", domain: "x.com" },
   { id: "facebook", name: "Facebook", description: "Pages and social publishing", category: "Otros", domain: "facebook.com" },
   { id: "tarot", name: "Tarot", description: "Tarot Reading & Divination", category: "Astrología", domain: "labyrinthos.co" },

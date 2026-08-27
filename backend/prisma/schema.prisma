@@ -2430,7 +2430,7 @@ model SocialConnection {
   @@map("social_connections")
 }
 
-// ChatGPT-style first-party apps on /conexiones (Phase 1: github, linkedin, x).
+// ChatGPT-style first-party apps on /conexiones (github, linkedin, x, onedrive, google-drive).
 // Tokens stay in the existing sealed vaults (GithubAccount.encryptedTokens /
 // SocialConnection.accessToken). This row only stores a secretRef + health.
 model AppConnection {

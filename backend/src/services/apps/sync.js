@@ -71,7 +71,7 @@ async function syncFromExisting(prisma, userId) {
       : null,
     prisma.socialConnection?.findMany
       ? prisma.socialConnection.findMany({
-        where: { userId: String(userId), platform: { in: ['linkedin', 'x'] } },
+        where: { userId: String(userId), platform: { in: ['linkedin', 'x', 'onedrive', 'google-drive'] } },
       })
       : [],
   ]);

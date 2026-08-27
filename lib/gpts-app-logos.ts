@@ -148,6 +148,8 @@ const FILE_BY_ID: Record<string, string> = {
   google: "google.svg",
   calendar: "googlecalendar.svg",
   drive: "googledrive.svg",
+  "google-drive": "googledrive.svg",
+  gdrive: "googledrive.svg",
   slack: "slack.svg",
   twitter: "x.svg",
   x: "x.svg",

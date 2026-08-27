@@ -59,6 +59,17 @@ async function revokeRemote({ appId, accessToken, env, fetchImpl }) {
       }, fetchImpl);
       return { attempted: true, ok: response.ok || response.status === 404 };
     }
+    if (appId === 'onedrive') {
+      return { attempted: false, ok: false };
+    }
+    if (appId === 'google-drive') {
+      const response = await fetchWithTimeout('https://oauth2.googleapis.com/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+        body: new URLSearchParams({ token: accessToken }),
+      }, fetchImpl);
+      return { attempted: true, ok: response.ok || response.status === 400 || response.status === 404 };
+    }
     const clientId = envValue(env, 'SOCIAL_X_CLIENT_ID', 'X_CLIENT_ID', 'TWITTER_CLIENT_ID');
     const clientSecret = envValue(env, 'SOCIAL_X_CLIENT_SECRET', 'X_CLIENT_SECRET', 'TWITTER_CLIENT_SECRET');
     const headers = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };

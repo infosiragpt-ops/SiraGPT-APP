@@ -115,8 +115,8 @@ const identityVault = {
   },
 };
 
-test('apps registry exposes github, linkedin and x without provider brand leakage in public tools', () => {
-  assert.deepEqual(APP_IDS, ['github', 'linkedin', 'x']);
+test('apps registry exposes github, linkedin, x, onedrive and google-drive without provider brand leakage in public tools', () => {
+  assert.deepEqual(APP_IDS, ['github', 'linkedin', 'x', 'onedrive', 'google-drive']);
   const names = listManifests().map((app) => app.id);
   assert.deepEqual(names, APP_IDS);
   for (const app of listManifests()) {
