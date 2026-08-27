@@ -14,6 +14,13 @@ export type GptStoreAppLogoInput = {
   domain: string
   name?: string
   category?: string
+  logo?: string
+  icon?: string
+}
+
+function explicitCatalogLogo(app: GptStoreAppLogoInput): string | null {
+  const value = String(app.logo || app.icon || "").trim()
+  return value || null
 }
 
 const LOCAL_LOGO_DIR = "/conexiones-logos"
@@ -415,8 +422,12 @@ export function generatedBrandTileUrl(app: GptStoreAppLogoInput): string {
 
 export function gptStoreAppLogoSources(app: GptStoreAppLogoInput): string[] {
   const generated = generatedBrandTileUrl(app)
+  const explicit = explicitCatalogLogo(app)
   const local = officialMarkPath(app)
-  if (local) return [local, generated]
+  const sources: string[] = []
+  if (explicit) sources.push(explicit)
+  if (local && local !== explicit) sources.push(local)
+  if (sources.length > 0) return [...sources, generated]
   // Unmapped + invented hosts: a real local SVG so the tile is never a blank
   // box or a generic globe from a failed favicon/Clearbit lookup.
   return [generated]
@@ -425,4 +436,22 @@ export function gptStoreAppLogoSources(app: GptStoreAppLogoInput): string[] {
 /** Primary logo URL (local mark, high-res domain logo, or generated SVG tile). */
 export function gptStoreAppLogoUrl(app: GptStoreAppLogoInput): string {
   return gptStoreAppLogoSources(app)[0] || generatedBrandTileUrl(app)
+}
+
+/**
+ * Official catalog mark only — explicit `logo`/`icon` or a local SVG.
+ * Returns null when the app has no real asset (caller keeps its generic fallback).
+ * Never invents a monogram tile.
+ */
+export function officialCatalogLogoSources(app: GptStoreAppLogoInput): string[] {
+  const explicit = explicitCatalogLogo(app)
+  const local = officialMarkPath(app)
+  const sources: string[] = []
+  if (explicit) sources.push(explicit)
+  if (local && local !== explicit) sources.push(local)
+  return sources
+}
+
+export function officialCatalogLogoUrl(app: GptStoreAppLogoInput): string | null {
+  return officialCatalogLogoSources(app)[0] || null
 }

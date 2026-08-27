@@ -8,6 +8,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- The `/agentes` `@` Apps picker now shows official catalog logos
+  (GitHub invertocat, LinkedIn in, X, Facebook f, and every other row
+  with a `/conexiones-logos/` mark). Connected vs Conectar stays a
+  label plus a small badge — the brand mark is no longer replaced by
+  the generic green check/link square.
 - App cards on `/conexiones` and `/gpts` use professional brand marks
   (local Simple Icons under `public/conexiones-logos/`, Clearbit /
   DuckDuckGo for real domains, and a generated monogram SVG for

@@ -19,11 +19,17 @@ export type GptStoreApp = {
   description: string
   category: GptStoreAppCategory
   domain: string
+  /** Official mark URL or public path when the catalog ships one. */
+  logo?: string
+  /** Alias of `logo` used by some registry rows. */
+  icon?: string
 }
 
 export {
   gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
+  officialCatalogLogoSources,
+  officialCatalogLogoUrl,
 } from "./gpts-app-logos"
 
 export const GPT_STORE_APP_CATEGORIES: { value: "All" | GptStoreAppCategory; label: string }[] = [

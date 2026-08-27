@@ -10,6 +10,8 @@ import {
   gptStoreAppLogoSources,
   gptStoreAppLogoUrl,
   isLikelyInventedDomain,
+  officialCatalogLogoSources,
+  officialCatalogLogoUrl,
   officialMarkPath,
 } from "../lib/gpts-app-logos"
 
@@ -93,6 +95,20 @@ describe("gptStoreAppLogoUrl · professional resolver", () => {
     for (const file of ["linkedin.svg", "indeed.svg", "gmail.svg", "google.svg", "etsy.svg", "idealista.svg", "redfin.svg", "autoscout24.svg", "autotrader.svg"]) {
       assert.ok(fs.existsSync(path.join(logosDir, file)), `missing ${file}`)
     }
+  })
+
+  it("prefers an explicit catalog logo/icon and keeps official-only sources separate", () => {
+    const withLogo = { id: "custom", domain: "example.com", logo: "/owned/custom.svg" }
+    assert.equal(officialCatalogLogoUrl(withLogo), "/owned/custom.svg")
+    assert.deepEqual(officialCatalogLogoSources(withLogo), ["/owned/custom.svg"])
+    assert.equal(gptStoreAppLogoSources(withLogo)[0], "/owned/custom.svg")
+    assert.equal(officialCatalogLogoUrl({ id: "github", domain: "github.com" }), "/conexiones-logos/github.svg")
+    assert.equal(officialCatalogLogoUrl({ id: "x", domain: "x.com" }), "/conexiones-logos/x.svg")
+    assert.equal(officialCatalogLogoUrl({ id: "facebook", domain: "facebook.com" }), "/conexiones-logos/facebook.svg")
+    assert.equal(officialCatalogLogoUrl({
+      id: "astro-scope-destiny-matrix",
+      domain: "astro-scope-destiny-matrix.com",
+    }), null)
   })
 
   it("gives every catalog app a professional primary URL and a fallback src", () => {
