@@ -19,8 +19,21 @@ function sameModel(a?: string, b?: string): boolean {
   return bareModelName(left) === bareModelName(right)
 }
 
-function pickProvider(model: CatalogModelLike | undefined, fallback = ""): string {
-  const raw = String(model?.provider || fallback || "").trim()
+function looksLikeLocalCustomModel(name?: string): boolean {
+  const raw = String(name || "").trim().toLowerCase()
+  if (!raw) return false
+  return /\bmoondream\b/.test(raw)
+    || raw.includes("ollama")
+    || raw.includes("huggingface")
+    || raw.includes("sira-gpt-mini")
+    || raw === "siragpt mini"
+}
+
+function pickProvider(model: CatalogModelLike | undefined, fallback = "", wantedName = ""): string {
+  const fromModel = String(model?.provider || "").trim()
+  if (fromModel) return fromModel
+  if (looksLikeLocalCustomModel(model?.name || wantedName)) return "Custom"
+  const raw = String(fallback || "").trim()
   return raw || "DeepSeek"
 }
 
@@ -47,13 +60,13 @@ export function resolveCatalogModel(
     if (match?.name) {
       return {
         name: match.name,
-        provider: pickProvider(match, fallbackProvider),
+        provider: pickProvider(match, fallbackProvider, wanted),
         replaced: false,
       }
     }
     return {
       name: wanted,
-      provider: pickProvider(undefined, fallbackProvider),
+      provider: pickProvider(undefined, fallbackProvider, wanted),
       replaced: false,
     }
   }
@@ -100,8 +113,8 @@ export function pickPreferredCatalogModel(
   const current = String(opts.current || "").trim()
   if (current) {
     const match = find(current)
-    if (match?.name) return { name: match.name, provider: pickProvider(match) }
-    return { name: current, provider: pickProvider(undefined) }
+    if (match?.name) return { name: match.name, provider: pickProvider(match, "", current) }
+    return { name: current, provider: pickProvider(undefined, "", current) }
   }
 
   const pinned = find(opts.pinned)

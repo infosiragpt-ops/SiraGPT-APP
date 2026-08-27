@@ -14,7 +14,7 @@ const PRO_RE =
 const FLASH_RE =
   /(?:deepseek[-/_\s]?v?4[-/_\s]?flash|deepseek\s*v4\s*flash|v4[-_\s]?flash)/i
 const RAW_VENDOR_RE = /deepseek|openai|gpt-?4|gpt-?5|o1\b|o3\b|o4-mini|ollama|huggingface|moondream/i
-const HIDDEN_PROVIDER_RE = /^(deepseek|ollama|huggingface|moondream|openrouter|openai)$/i
+const HIDDEN_PROVIDER_RE = /^(deepseek|ollama|huggingface|moondream)$/i
 
 export type BrandLabelSource = {
   name?: string | null
@@ -84,7 +84,16 @@ export function brandModelLabel(source: BrandLabelSource): string {
     : firstString(source?.displayName, source?.name)
   if (!raw) return SIRA_RAPIDO_LABEL
   if (looksLikeRawVendorModelId(raw) && display && isExplicitProductLabel(display)) return display
-  return raw
+  return hideForbiddenVendorLabel(raw)
+}
+
+function hideForbiddenVendorLabel(label: string): string {
+  const trimmed = String(label || "").trim()
+  if (!trimmed) return SIRA_RAPIDO_LABEL
+  if (/\bmoondream\b/i.test(trimmed)) return "SiraGPT Mini"
+  if (/ollama|huggingface/i.test(trimmed)) return "Sira"
+  if (/^deepseek\b/i.test(trimmed)) return SIRA_RAPIDO_LABEL
+  return trimmed
 }
 
 /**

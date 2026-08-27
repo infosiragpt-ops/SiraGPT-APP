@@ -30,7 +30,7 @@ describe("chat catalog model", () => {
         { name: "deepseek-v4-flash", provider: "DeepSeek" },
         { name: "deepseek-v4-pro", provider: "DeepSeek" },
       ], "DeepSeek"),
-      { name: "sira-gpt-mini", provider: "DeepSeek", replaced: false },
+      { name: "sira-gpt-mini", provider: "Custom", replaced: false },
     )
   })
 

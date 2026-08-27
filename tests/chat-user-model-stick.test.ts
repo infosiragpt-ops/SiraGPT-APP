@@ -31,6 +31,14 @@ describe("user-selected model always wins", () => {
     assert.notEqual(brandModelLabel(mini), SIRA_RAPIDO_LABEL)
   })
 
+  it("keeps Mini on an empty catalog snapshot and routes it as Custom", () => {
+    const resolved = resolveCatalogModel(mini.name, [], "DeepSeek")
+    assert.equal(resolved.name, "sira-gpt-mini")
+    assert.equal(resolved.provider, "Custom")
+    assert.equal(resolved.replaced, false)
+    assert.equal(clampDeepSeekModel(resolved.name), "sira-gpt-mini")
+  })
+
   it("does not fall back to Sira Rápido when a valid selection exists", () => {
     const resolved = resolveCatalogModel("sira-gpt-mini", catalog, "DeepSeek")
     assert.equal(resolved.replaced, false)

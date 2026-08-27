@@ -36,6 +36,16 @@ test('generate routes Custom/Ollama through the local connection client', () => 
   );
 });
 
+test('generate surfaces a Spanish error when the selected model cannot run', () => {
+  assert.match(
+    aiRoute,
+    /Este modelo no se pudo ejecutar\. No cambié a otro modelo/,
+    'failed Custom/local models must error in Spanish on that model',
+  );
+  assert.match(aiRoute, /ECONNREFUSED/);
+  assert.match(aiRoute, /unknown model/);
+});
+
 test('generate does not steal a user-selected model via reasoning-orchestrator', () => {
   assert.match(
     aiRoute,
