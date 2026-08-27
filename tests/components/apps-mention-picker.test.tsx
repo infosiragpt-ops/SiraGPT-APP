@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
 import { describe, expect, it, vi } from "vitest"
 
 import { AppsMentionPicker } from "@/components/AppsMentionPicker"
@@ -59,6 +59,18 @@ const unknown: MentionPickerApp = {
   logoSources: [],
 }
 
+function expectOfficialLogoRow(
+  id: string,
+  src: string,
+  statusLabel: string,
+) {
+  const row = screen.getByTestId(`apps-mention-option-${id}`)
+  const logo = within(row).getByTestId(`apps-mention-logo-${id}`)
+  expect(logo).toHaveAttribute("src", src)
+  expect(logo.tagName).toBe("IMG")
+  expect(within(row).getByText(statusLabel)).toBeInTheDocument()
+}
+
 describe("AppsMentionPicker logos", () => {
   it("renders official catalog logo srcs and keeps status as a label", () => {
     render(
@@ -71,20 +83,11 @@ describe("AppsMentionPicker logos", () => {
       />,
     )
 
-    const githubLogo = screen.getByTestId("apps-mention-logo-github")
-    expect(githubLogo).toHaveAttribute("src", "/conexiones-logos/github.svg")
-    expect(githubLogo).toHaveAttribute("alt", "GitHub logo")
-    expect(screen.getByTestId("apps-mention-logo-linkedin")).toHaveAttribute(
-      "src",
-      "/conexiones-logos/linkedin.svg",
-    )
-    expect(screen.getByTestId("apps-mention-logo-x")).toHaveAttribute("src", "/conexiones-logos/x.svg")
-    expect(screen.getByTestId("apps-mention-logo-facebook")).toHaveAttribute(
-      "src",
-      "/conexiones-logos/facebook.svg",
-    )
-    expect(screen.getByText("Conectada")).toBeInTheDocument()
-    expect(screen.getAllByText("Conectar").length).toBeGreaterThan(0)
+    expectOfficialLogoRow("github", "/conexiones-logos/github.svg", "Conectada")
+    expectOfficialLogoRow("linkedin", "/conexiones-logos/linkedin.svg", "Conectar")
+    expectOfficialLogoRow("x", "/conexiones-logos/x.svg", "Conectar")
+    expectOfficialLogoRow("facebook", "/conexiones-logos/facebook.svg", "Conectar")
+    expect(screen.getByTestId("apps-mention-logo-github")).toHaveAttribute("alt", "GitHub logo")
     expect(screen.getByTestId("apps-mention-status-github")).toBeInTheDocument()
   })
 
@@ -99,8 +102,8 @@ describe("AppsMentionPicker logos", () => {
       />,
     )
 
-    expect(screen.queryByTestId("apps-mention-logo-obscure-demo")).toBeNull()
-    expect(screen.getByTestId("apps-mention-option-obscure-demo")).toBeInTheDocument()
-    expect(screen.getByText("No disponible todavía")).toBeInTheDocument()
+    const row = screen.getByTestId("apps-mention-option-obscure-demo")
+    expect(within(row).queryByTestId("apps-mention-logo-obscure-demo")).toBeNull()
+    expect(within(row).getByText("No disponible todavía")).toBeInTheDocument()
   })
 })
