@@ -34,6 +34,52 @@ function statusLabel(status: MentionAppStatus) {
   return MENTION_COPY.unavailable
 }
 
+function AppMentionLogo({ app }: { app: MentionPickerApp }) {
+  const sources = app.logoSources?.length
+    ? app.logoSources
+    : app.logo
+      ? [app.logo]
+      : []
+  const [sourceIndex, setSourceIndex] = React.useState(0)
+  const src = sources[sourceIndex]
+
+  if (src && sourceIndex < sources.length) {
+    return (
+      <span className="relative mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center">
+        <span className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md bg-white ring-1 ring-border/50">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={`${app.name} logo`}
+            width={28}
+            height={28}
+            data-testid={`apps-mention-logo-${app.id}`}
+            loading="lazy"
+            decoding="async"
+            onError={() => setSourceIndex((index) => index + 1)}
+            className="h-full w-full object-contain p-0.5"
+          />
+        </span>
+        {app.status === "connected" ? (
+          <span
+            className="absolute -bottom-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-popover"
+            aria-hidden="true"
+            data-testid={`apps-mention-status-${app.id}`}
+          >
+            <Check className="h-2.5 w-2.5" />
+          </span>
+        ) : null}
+      </span>
+    )
+  }
+
+  return (
+    <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+      {statusIcon(app.status)}
+    </span>
+  )
+}
+
 export function AppsMentionPicker({
   open,
   filter,
@@ -111,9 +157,7 @@ export function AppsMentionPicker({
         idx === activeIdx ? "bg-accent" : "hover:bg-accent/50",
       )}
     >
-      <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
-        {statusIcon(app.status)}
-      </span>
+      <AppMentionLogo app={app} />
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
           <span className="font-medium text-sm text-foreground">@{app.name}</span>
