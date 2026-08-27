@@ -2472,6 +2472,10 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
  * leaving the stream hanging until the response timeout (which the client
  * then renders as the opaque `stream_closed_without_done`). Idempotent;
  * never throws.
+ *
+ * Also fires a best-effort team alert through services/alerting so a
+ * permanent agentic failure is visible to operations even when no SSE
+ * client is attached. Disable with AGENT_TASK_FAILURE_ALERTS_DISABLED=1.
  */
 function failTaskTerminal(taskId, userId, message) {
   try {
@@ -2487,10 +2491,40 @@ function failTaskTerminal(taskId, userId, message) {
       streamState: state,
       stats: { error: errorEvent.message },
     });
+    notifyAgentTaskFailure(latest, errorEvent.message);
     return true;
   } catch (_) {
     return false;
   }
+}
+
+function notifyAgentTaskFailure(task, errorMessage) {
+  try {
+    const disabled = ['1', 'true', 'yes', 'on'].includes(
+      String(process.env.AGENT_TASK_FAILURE_ALERTS_DISABLED || '').trim().toLowerCase(),
+    );
+    if (disabled) return;
+    // Lazy require + fire-and-forget: alerting must never alter the failure
+    // path that the streaming client depends on.
+    // eslint-disable-next-line global-require
+    const alerting = require('../services/alerting');
+    if (!alerting?.sendAlert) return;
+    Promise.resolve(alerting.sendAlert({
+      title: `agent_task_permanent_failure:${String(task.taskId).slice(0, 12)}`,
+      message: `Tarea agéntica ${task.taskId} terminó en error permanente: ${String(errorMessage || '').slice(0, 300)}`,
+      severity: 'warn',
+      context: {
+        domain: 'agent-task',
+        taskId: task.taskId,
+        userId: task.userId || null,
+        chatId: task.chatId || null,
+        model: task.model || null,
+        traceId: task.traceId || null,
+        queue: task.queueName || null,
+        jobId: task.jobId || null,
+      },
+    })).catch(() => {});
+  } catch { /* never throw from alerting */ }
 }
 
 function streamTaskEvents(req, res, taskId, userId) {
