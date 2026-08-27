@@ -917,6 +917,14 @@ function getTasksByStatus(statuses, { limit = 100 } = {}) {
 // This helper finds and removes them, but only after a grace
 // period so an artifact that was just uploaded — and not yet
 // linked into a snapshot — is not yanked from under the agent.
+//
+// R2 mirror: when object storage is enabled, saveArtifact() has
+// already offloaded the binary to R2 (key `agent-artifacts/<rel>`)
+// and unlinked the local copy; the `{id}.json` metadata carries the
+// only durable pointer (`storageRef`). Deleting that metadata while
+// a remote object exists would orphan the R2 object permanently, so
+// the sweep purges the remote ref first and keeps the metadata on
+// disk whenever the remote delete cannot be confirmed.
 
 function getDefaultArtifactDir() {
   return process.env.AGENT_ARTIFACT_DIR
@@ -947,17 +955,52 @@ function collectReferencedArtifactIds() {
 }
 
 /**
+ * Best-effort purge of an artifact's remote (R2) mirror. Returns true
+ * only when we have positive evidence the object is gone (or there was
+ * never a remote ref). A failed purge must keep the metadata JSON on
+ * disk — it carries the only durable `storageRef` pointer.
+ */
+async function _purgeRemoteArtifact(storageRef) {
+  if (!storageRef) return true;
+  // Lazy require so test seams (__setStorageForTests) and local-dev
+  // environments without R2 never pay the module cost up front.
+  // eslint-disable-next-line global-require
+  const objectStorage = require('../object-storage');
+  if (!objectStorage.isRemote(storageRef)) return true;
+  if (!objectStorage.enabled()) return false; // cannot confirm delete — keep pointer
+  try {
+    await objectStorage.remove(storageRef);
+    // remove() is best-effort internally; confirm the object is gone
+    // before we drop the metadata that points at it.
+    return !(await objectStorage.exists(storageRef));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Remove artifact files whose id is not referenced by any snapshot
  * and whose metadata createdAt is older than `graceMs`. Returns
- * { scanned, removed, freedBytes }. Best-effort: filesystem errors
- * on individual entries are swallowed so a bad permission on one
- * artifact does not abort the whole sweep.
+ * { scanned, removed, freedBytes, remotePurged, remotePurgeFailed }.
+ * Best-effort: filesystem errors on individual entries are swallowed
+ * so a bad permission on one artifact does not abort the whole sweep.
+ * When an orphan carries a remote storageRef, the R2 object is purged
+ * first; if that purge cannot be confirmed, the metadata JSON is kept
+ * (annotated with `_r2PurgeFailedAt`) so the next sweep retries
+ * instead of orphaning the remote object forever.
  */
-function cleanupOrphanedArtifacts({
+async function cleanupOrphanedArtifacts({
   artifactDir = getDefaultArtifactDir(),
   graceMs = 60 * 60 * 1000,
 } = {}) {
-  const result = { scanned: 0, removed: 0, freedBytes: 0, missingDir: false };
+  const result = {
+    scanned: 0,
+    removed: 0,
+    freedBytes: 0,
+    missingDir: false,
+    remotePurged: 0,
+    remotePurgeFailed: 0,
+  };
   if (!fs.existsSync(artifactDir)) {
     result.missingDir = true;
     return result;
@@ -984,10 +1027,11 @@ function cleanupOrphanedArtifacts({
     if (referenced.has(id)) continue;
     // Read metadata createdAt to honor the grace period.
     const metaName = files.find((f) => f === `${id}.json`);
+    let meta = null;
     let createdAt = 0;
     if (metaName) {
       try {
-        const meta = JSON.parse(fs.readFileSync(path.join(artifactDir, metaName), 'utf8'));
+        meta = JSON.parse(fs.readFileSync(path.join(artifactDir, metaName), 'utf8'));
         createdAt = Date.parse(meta.createdAt || 0) || 0;
       } catch { /* fall through, treat as unknown age */ }
     }
@@ -1001,7 +1045,25 @@ function cleanupOrphanedArtifacts({
       }
     }
     if (createdAt && createdAt > cutoff) continue;
-    for (const file of files) {
+
+    // Purge the R2 mirror BEFORE dropping the metadata JSON — it is the
+    // only durable pointer to the remote object.
+    const storageRef = meta && typeof meta.storageRef === 'string' ? meta.storageRef : null;
+    const remoteOk = await _purgeRemoteArtifact(storageRef);
+    if (!remoteOk) {
+      result.remotePurgeFailed++;
+      // Keep the metadata so the next sweep can retry; annotate it.
+      if (metaName) {
+        try {
+          const annotated = { ...(meta || {}), _r2PurgeFailedAt: new Date().toISOString() };
+          fs.writeFileSync(path.join(artifactDir, metaName), JSON.stringify(annotated, null, 2));
+        } catch { /* best effort */ }
+      }
+    } else if (storageRef) {
+      result.remotePurged++;
+    }
+    const filesToRemove = remoteOk ? files : files.filter((f) => f !== metaName);
+    for (const file of filesToRemove) {
       const full = path.join(artifactDir, file);
       try {
         const stat = fs.statSync(full);
@@ -1080,14 +1142,14 @@ function verifyAllSnapshots() {
  * callers from having to coordinate the order (prune first, so newly
  * orphaned artifact ids are visible to the cleanup pass).
  */
-function pruneAndCleanup({
+async function pruneAndCleanup({
   retentionMs = DEFAULT_RETENTION_MS,
   maxFiles = DEFAULT_MAX_FILES,
   artifactDir,
   graceMs = 60 * 60 * 1000,
 } = {}) {
   const prune = pruneTaskSnapshots({ retentionMs, maxFiles });
-  const cleanup = cleanupOrphanedArtifacts({
+  const cleanup = await cleanupOrphanedArtifacts({
     ...(artifactDir ? { artifactDir } : {}),
     graceMs,
   });

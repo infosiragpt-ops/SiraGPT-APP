@@ -606,7 +606,7 @@ test('agent task store: getRunningTasksForUser returns only running/queued for t
   assert.deepEqual(ids, ['r-1', 'r-2']);
 });
 
-test('agent task store: cleanupOrphanedArtifacts removes artifacts not referenced by any snapshot', () => {
+test('agent task store: cleanupOrphanedArtifacts removes artifacts not referenced by any snapshot', async () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-'));
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-art-'));
 
@@ -625,14 +625,14 @@ test('agent task store: cleanupOrphanedArtifacts removes artifacts not reference
   fs.writeFileSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb-orphan.svg'), '<svg/>');
   fs.writeFileSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb.json'), JSON.stringify({ id: 'bbbbbbbbbbbbbbbb', createdAt: oldIso }));
 
-  const result = taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60_000 });
+  const result = await taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60_000 });
   assert.equal(result.scanned, 2);
   assert.equal(result.removed, 2); // 2 files for the orphan id
   assert.ok(fs.existsSync(path.join(artifactDir, 'aaaaaaaaaaaaaaaa-kept.svg')));
   assert.ok(!fs.existsSync(path.join(artifactDir, 'bbbbbbbbbbbbbbbb-orphan.svg')));
 });
 
-test('agent task store: cleanupOrphanedArtifacts honors the grace period', () => {
+test('agent task store: cleanupOrphanedArtifacts honors the grace period', async () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-grace-'));
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-grace-art-'));
 
@@ -641,9 +641,83 @@ test('agent task store: cleanupOrphanedArtifacts honors the grace period', () =>
   fs.writeFileSync(path.join(artifactDir, 'cccccccccccccccc.json'), JSON.stringify({ id: 'cccccccccccccccc', createdAt: freshIso }));
 
   // No snapshots reference it, but it's within the grace period.
-  const result = taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60 * 60 * 1000 });
+  const result = await taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60 * 60 * 1000 });
   assert.equal(result.removed, 0);
   assert.ok(fs.existsSync(path.join(artifactDir, 'cccccccccccccccc-fresh.svg')));
+});
+
+test('agent task store: cleanupOrphanedArtifacts purges the R2 mirror and then the metadata', async () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-r2-'));
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-r2-art-'));
+
+  const oldIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(path.join(artifactDir, 'eeeeeeeeeeeeeeee-orphan.pdf'), '%PDF-1.4');
+  fs.writeFileSync(path.join(artifactDir, 'eeeeeeeeeeeeeeee.json'), JSON.stringify({
+    id: 'eeeeeeeeeeeeeeee',
+    createdAt: oldIso,
+    storageRef: 'r2:agent-artifacts/reports/orphan.pdf',
+  }));
+
+  // Inject a fake R2 backend through the object-storage test seam.
+  const deletedKeys = [];
+  const objectStorage = require('../src/services/object-storage');
+  const fakeStorage = {
+    enabled: true,
+    delete: async (key) => { deletedKeys.push(key); },
+    head: async (key) => {
+      if (deletedKeys.includes(key)) {
+        const err = new Error('NotFound');
+        err.name = 'NoSuchKey';
+        throw err;
+      }
+      return { ContentLength: 10, ContentType: 'application/pdf' };
+    },
+  };
+  objectStorage.__setStorageForTests(fakeStorage);
+  try {
+    const result = await taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60_000 });
+    assert.equal(result.remotePurged, 1);
+    assert.equal(result.remotePurgeFailed, 0);
+    assert.deepEqual(deletedKeys, ['agent-artifacts/reports/orphan.pdf']);
+    assert.ok(!fs.existsSync(path.join(artifactDir, 'eeeeeeeeeeeeeeee-orphan.pdf')));
+    // Metadata is dropped only after a confirmed remote purge.
+    assert.ok(!fs.existsSync(path.join(artifactDir, 'eeeeeeeeeeeeeeee.json')));
+  } finally {
+    objectStorage.__setStorageForTests(undefined);
+  }
+});
+
+test('agent task store: failed R2 purge keeps metadata for retry', async () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-r2fail-'));
+  const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-orphan-r2fail-art-'));
+
+  const oldIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  fs.writeFileSync(path.join(artifactDir, 'ffffffffffffffff-orphan.pdf'), '%PDF-1.4');
+  fs.writeFileSync(path.join(artifactDir, 'ffffffffffffffff.json'), JSON.stringify({
+    id: 'ffffffffffffffff',
+    createdAt: oldIso,
+    storageRef: 'r2:agent-artifacts/reports/stuck.pdf',
+  }));
+
+  const objectStorage = require('../src/services/object-storage');
+  const fakeStorage = {
+    enabled: true,
+    delete: async () => { throw new Error('R2 unavailable'); },
+    head: async () => ({ ContentLength: 10, ContentType: 'application/pdf' }), // still exists
+  };
+  objectStorage.__setStorageForTests(fakeStorage);
+  try {
+    const result = await taskStore.cleanupOrphanedArtifacts({ artifactDir, graceMs: 60_000 });
+    assert.equal(result.remotePurgeFailed, 1);
+    // Local payload is gone but the pointer survives for the next sweep.
+    assert.ok(!fs.existsSync(path.join(artifactDir, 'ffffffffffffffff-orphan.pdf')));
+    assert.ok(fs.existsSync(path.join(artifactDir, 'ffffffffffffffff.json')));
+    const kept = JSON.parse(fs.readFileSync(path.join(artifactDir, 'ffffffffffffffff.json'), 'utf8'));
+    assert.equal(kept.storageRef, 'r2:agent-artifacts/reports/stuck.pdf');
+    assert.ok(kept._r2PurgeFailedAt, 'metadata should carry _r2PurgeFailedAt');
+  } finally {
+    objectStorage.__setStorageForTests(undefined);
+  }
 });
 
 test('agent task store: collectReferencedArtifactIds includes file_artifact event ids', () => {
@@ -812,7 +886,7 @@ test('agent task store: verifySnapshotIntegrity detects index drift', () => {
   assert.ok(result.problems.includes('index_status_mismatch'));
 });
 
-test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', () => {
+test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', async () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-prune-clean-'));
   const artifactDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-prune-clean-art-'));
 
@@ -831,7 +905,7 @@ test('agent task store: pruneAndCleanup runs prune then orphan-cleanup', () => {
   fs.writeFileSync(path.join(artifactDir, 'dddddddddddddddd.json'),
     JSON.stringify({ id: 'dddddddddddddddd', createdAt: oldIso }));
 
-  const result = taskStore.pruneAndCleanup({
+  const result = await taskStore.pruneAndCleanup({
     retentionMs: 24 * 60 * 60 * 1000,
     artifactDir,
     graceMs: 60_000,
