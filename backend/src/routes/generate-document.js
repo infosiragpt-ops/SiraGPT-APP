@@ -11,6 +11,7 @@ const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const googleMCPService = require('../services/google-mcp');
 const documentService = require('../services/document-service');
+const { startSSEHeartbeat } = require('../utils/sse-heartbeat');
 const router = express.Router();
 const cookie = require('cookie');
 const crypto = require('crypto');
@@ -188,10 +189,18 @@ router.post(
                 ).then(results => results.filter(Boolean));
             }
 
-            // Set up streaming response
+            // Set up streaming response. Anti-buffering headers + flush +
+            // heartbeat keep Caddy/Cloudflare from killing or coalescing
+            // the stream during the silent first-token window (5–30 s on
+            // long document prompts).
             res.setHeader('Content-Type', 'text/event-stream');
-            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Cache-Control', 'no-cache, no-transform');
             res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+            res.flushHeaders();
+            res.write(': connected\n\n');
+            const cancelHeartbeat = startSSEHeartbeat(res);
+            const sseClosed = () => res.writableEnded || res.destroyed;
 
             // Build messages for Word document generation
             const messages = [];
@@ -299,12 +308,17 @@ ${prompt}
 
             // Stream response
             for await (const chunk of stream) {
+                if (sseClosed()) {
+                    controller.abort();
+                    break;
+                }
                 const contentChunk = chunk.choices[0]?.delta?.content || '';
                 if (contentChunk) {
                     fullResponseContent += contentChunk;
                     res.write(`data: ${JSON.stringify({ content: contentChunk })}\n\n`);
                 }
             }
+            cancelHeartbeat();
 
             // Save chat and track usage
             if (chatId && fullResponseContent.trim()) {
@@ -340,7 +354,7 @@ ${prompt}
 
             if (!res.headersSent) {
                 res.status(500).json({ error: sanitizedError });
-            } else {
+            } else if (!sseClosed()) {
                 try {
                     res.write(`data: ${JSON.stringify({ error: sanitizedError })}\n\n`);
                 } catch (writeError) {
