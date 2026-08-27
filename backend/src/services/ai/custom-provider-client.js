@@ -67,7 +67,7 @@ function isOpenAiCompatibleUrl(url) {
 
 function isCustomProvider(provider) {
   const p = String(provider || '').trim().toLowerCase();
-  return p === 'custom' || p === 'custom api' || p === 'ollama';
+  return p === 'custom' || p === 'custom api' || p === 'ollama' || p === 'huggingface';
 }
 
 function isCustomConnectionRow(row) {

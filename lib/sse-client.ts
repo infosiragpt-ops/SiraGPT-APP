@@ -34,13 +34,29 @@ export function freshGenerateHeaders(): Record<string, string> {
   return { "Cache-Control": "no-store" }
 }
 
+const FLASH = "deepseek-v4-flash"
+const PRO = "deepseek-v4-pro"
+
+/**
+ * Leftover OpenRouter / GPT vendor ids from older clients. Only those
+ * are remapped to the DeepSeek pair. A user-selected catalog id
+ * (SiraGPT Mini, Custom/Ollama, …) must pass through unchanged.
+ */
+const LEFTOVER_VENDOR_RE =
+  /^(openai\/|google\/|anthropic\/|openrouter\/|meta-llama\/|gpt-4o|gpt-4\.1|gpt-5|o1\b|o3\b|o4-mini)/i
+
 /** 3H5-FE leftover candado: clamp leftover OpenRouter/gpt-4o ids to DeepSeek Flash/Pro. */
 export function clampDeepSeekModel(model?: string | null): string | undefined {
   const raw = String(model || "").trim()
   if (!raw) return undefined
   const bare = (raw.includes("/") ? raw.split("/").pop() : raw)!.toLowerCase()
-  if (bare.includes("pro") && !bare.includes("flash")) return "deepseek-v4-pro"
-  return "deepseek-v4-flash"
+  if (bare === PRO || /^(deepseek[-/_\s]?v?4[-/_\s]?pro)$/i.test(bare)) return PRO
+  if (bare === FLASH || /^(deepseek[-/_\s]?v?4[-/_\s]?flash)$/i.test(bare)) return FLASH
+  if (LEFTOVER_VENDOR_RE.test(raw) || LEFTOVER_VENDOR_RE.test(bare)) {
+    if (bare.includes("pro") && !bare.includes("flash")) return PRO
+    return FLASH
+  }
+  return raw
 }
 
 export function appendLastEventId(url: string, lastEventId?: string | null, param = "lastEventId"): string {

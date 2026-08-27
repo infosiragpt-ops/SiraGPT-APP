@@ -402,6 +402,13 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
 import {
+  clearPinnedModel,
+  getPinnedModel,
+  isPinnedModel,
+  setLastModel,
+  setPinnedModel,
+} from "@/lib/chat/model-preference"
+import {
   enrichImageFilesWithClientOcr,
   isWeakOcrText,
   looksLikeTranscriptionRequest,
@@ -3929,6 +3936,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
   const [searchQuery, setSearchQuery] = React.useState("");
+  const [pinnedModel, setPinnedModelState] = React.useState("")
+  const [rowMenu, setRowMenu] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    setPinnedModelState(getPinnedModel())
+  }, [])
   // Re-fetch the model list when the picker opens so a model an admin just
   // activated shows up without a page reload (live admin → frontend sync).
   // Use the fine-grained models/files context (NOT useChat) — useChat also
@@ -4893,7 +4905,13 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     setSelectedModel(model.name);
     setSelectedProvider(model.provider);
     recordRecent(model.name);
+    setLastModel(model.name);
     setSearchQuery("");
+    setRowMenu(null);
+    if (currentChat?.id) {
+      setCurrentChat?.((chat: any) => chat ? { ...chat, model: model.name } : chat);
+      void apiClient.updateChat(currentChat.id, { model: model.name }).catch(() => {});
+    }
     // Main model-picker funnel event. Programmatic model swaps
     // (auto-fallback, pickModelForTier, etc.) intentionally do NOT
     // emit — only direct user picks do. Dashboards can compare
@@ -4906,22 +4924,43 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     });
   };
 
+  const pinModel = (model: any) => {
+    setPinnedModel(model.name);
+    setPinnedModelState(model.name);
+    onPick(model);
+  };
+
+  const unpinModel = (modelName: string) => {
+    if (!isPinnedModel(modelName, pinnedModel)) return;
+    clearPinnedModel();
+    setPinnedModelState("");
+    setRowMenu(null);
+  };
+
   // ModelRow — single picker entry. Active state = subtle bg + Check on
   // the right; rows stay one-line and restrained for fast scanning.
   const ModelRow = ({ model }: { model: any }) => {
     const isSelected = model.name === selectedModel;
     const isComingSoon = Boolean(model.comingSoon);
+    const isPinned = isPinnedModel(model.name, pinnedModel);
+    const menuOpen = rowMenu === model.name;
     const label = getModelDisplayLabel(model);
-    const attribution = brandProviderLabel(resolveModelAttributionName(model));
     return (
       <DropdownMenuItem
-        aria-label={`${label}${attribution ? `, ${attribution}` : ""}`}
-        title={attribution ? `${label} - ${attribution}` : label}
-        onSelect={isComingSoon ? (e) => e.preventDefault() : () => onPick(model)}
+        aria-label={label}
+        title={label}
+        onSelect={(event) => {
+          const target = event.target as HTMLElement | null
+          if (isComingSoon || target?.closest?.(".model-picker-row-more, .model-picker-row-menu")) {
+            event.preventDefault()
+            return
+          }
+          onPick(model)
+        }}
         data-selected={isSelected ? "true" : undefined}
         disabled={isComingSoon}
         className={cn(
-          "model-picker-row group/row flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
+          "model-picker-row group/row relative flex min-h-9 cursor-pointer items-center gap-2 rounded-md px-2 py-1",
           "text-foreground/90 focus:bg-transparent data-[highlighted]:bg-transparent",
           isComingSoon && "cursor-default opacity-55",
         )}
@@ -4932,6 +4971,11 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             <span className="liquid-label block truncate text-[12.5px] font-medium leading-4">
               {label}
             </span>
+            {isPinned && (
+              <span className="model-picker-pin shrink-0 text-[9px] leading-none text-muted-foreground/80" aria-hidden>
+                •
+              </span>
+            )}
             {isComingSoon && (
               <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Pronto
@@ -4939,6 +4983,61 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             )}
           </span>
         </span>
+        <button
+          type="button"
+          aria-label="Más opciones"
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          className="model-picker-row-more -mr-0.5 shrink-0 rounded px-1 py-0.5 text-[11px] font-medium leading-none tracking-widest text-muted-foreground/70 hover:text-foreground"
+          onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setRowMenu((current) => current === model.name ? null : model.name);
+          }}
+        >
+          ...
+        </button>
+        {menuOpen && (
+          <div
+            role="menu"
+            className="model-picker-row-menu absolute right-1 top-full z-30 mt-0.5 min-w-[8.5rem] rounded-md border bg-popover p-1 text-[12px] shadow-md"
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {!isSelected && (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => onPick(model)}
+              >
+                Usar en este chat
+              </button>
+            )}
+            {isPinned ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => unpinModel(model.name)}
+              >
+                Quitar fijo
+              </button>
+            ) : (
+              <button
+                type="button"
+                role="menuitem"
+                className="flex w-full rounded-sm px-2 py-1.5 text-left text-foreground hover:bg-muted/70"
+                onClick={() => pinModel(model)}
+              >
+                Fijar modelo
+              </button>
+            )}
+          </div>
+        )}
       </DropdownMenuItem>
     );
   };
@@ -4947,7 +5046,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (open) { void refreshModels?.(); }
-      else setSearchQuery("");
+      else {
+        setSearchQuery("");
+        setRowMenu(null);
+      }
     }}>
       {/* Model selector trigger — h-10, medium weight, subtle surface.
           The always-on red dot was removed: it was a dead indicator

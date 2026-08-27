@@ -27,10 +27,10 @@ function pickProvider(model: CatalogModelLike | undefined, fallback = ""): strin
 /**
  * Resolve the model that will actually be sent.
  *
- * The user's picker choice wins. We only replace it when the selection is
- * empty or not in the catalog for this chat type (e.g. a VIDEO id on TEXT).
- * An empty catalog snapshot (the generate client path) must still honor
- * the requested id — never fail-closed to a single DeepSeek model.
+ * The user's picker choice always wins. A non-empty selection is never
+ * rewritten to Flash / catalog[0] / cheapest — if that id cannot run,
+ * generate must error on that model instead of silently swapping.
+ * Empty catalog snapshots (the generate client path) keep the requested id.
  */
 export function resolveCatalogModel(
   selectedModel: string,
@@ -51,12 +51,10 @@ export function resolveCatalogModel(
         replaced: false,
       }
     }
-    if (models.length === 0) {
-      return {
-        name: wanted,
-        provider: pickProvider(undefined, fallbackProvider),
-        replaced: false,
-      }
+    return {
+      name: wanted,
+      provider: pickProvider(undefined, fallbackProvider),
+      replaced: false,
     }
   }
 
@@ -74,6 +72,47 @@ export function resolveCatalogModel(
     provider: pickProvider(undefined, fallbackProvider),
     replaced: true,
   }
+}
+
+export type PreferredModelOptions = {
+  current?: string
+  pinned?: string
+  last?: string
+}
+
+/**
+ * Pick the catalog row to show on a new / reloaded chat.
+ * Current selection wins, then the pinned default, then last pick, then [0].
+ */
+export function pickPreferredCatalogModel(
+  availableModels: CatalogModelLike[] = [],
+  opts: PreferredModelOptions = {},
+): { name: string; provider: string } | null {
+  const models = Array.isArray(availableModels)
+    ? availableModels.filter((model) => model && typeof model.name === "string" && model.name.trim())
+    : []
+  const find = (wanted?: string) => {
+    const id = String(wanted || "").trim()
+    if (!id) return undefined
+    return models.find((model) => sameModel(model.name, id))
+  }
+
+  const current = String(opts.current || "").trim()
+  if (current) {
+    const match = find(current)
+    if (match?.name) return { name: match.name, provider: pickProvider(match) }
+    return { name: current, provider: pickProvider(undefined) }
+  }
+
+  const pinned = find(opts.pinned)
+  if (pinned?.name) return { name: pinned.name, provider: pickProvider(pinned) }
+
+  const last = find(opts.last)
+  if (last?.name) return { name: last.name, provider: pickProvider(last) }
+
+  const first = models[0]
+  if (first?.name) return { name: first.name, provider: pickProvider(first) }
+  return null
 }
 
 export type GenerateRequestModel = string

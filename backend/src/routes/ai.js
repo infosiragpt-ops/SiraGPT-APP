@@ -391,7 +391,8 @@ function createProviderClient(provider, opts = {}) {
     });
   }
 
-
+  // Custom / Ollama / HuggingFace already handled at the top via
+  // createCustomProviderClient — never fall through to OpenAI.
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });

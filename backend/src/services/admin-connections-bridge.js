@@ -28,6 +28,9 @@
 const prisma = require('../config/database');
 const { decrypt } = require('../utils/encryption');
 
+const CUSTOM_BASE_URL_ENV = 'CUSTOM_BASE_URL';
+const CUSTOM_API_KEY_ENV = 'CUSTOM_API_KEY';
+
 const PROVIDER_ENV_MAP = Object.freeze({
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
@@ -120,6 +123,8 @@ function captureSnapshotOnce() {
       envSnapshot[env] = process.env[env] || '';
     }
   }
+  envSnapshot[CUSTOM_BASE_URL_ENV] = process.env[CUSTOM_BASE_URL_ENV] || '';
+  envSnapshot[CUSTOM_API_KEY_ENV] = process.env[CUSTOM_API_KEY_ENV] || '';
   snapshotCaptured = true;
 }
 
@@ -202,6 +207,8 @@ async function applyAdminConnections() {
       if (didRestore) restored.push(providerKey);
     }));
 
+    await applyCustomConnectionEnv();
+
     if (applied.length || restored.length || rejected.length) {
       console.log(
         '[admin-connections-bridge] applied:',
@@ -224,6 +231,36 @@ async function applyAdminConnections() {
   } finally {
     applying = false;
   }
+}
+
+async function applyCustomConnectionEnv() {
+  captureSnapshotOnce();
+  let rows = [];
+  try {
+    rows = await prisma.adminConnection.findMany({
+      where: { enabled: true, providerKey: 'custom' },
+      orderBy: { updatedAt: 'desc' },
+      select: { url: true, apiKey: true },
+    });
+  } catch (err) {
+    console.warn('[admin-connections-bridge] custom connection lookup failed:', err.message);
+    return;
+  }
+
+  const row = Array.isArray(rows) ? rows.find((item) => String(item?.url || '').trim()) : null;
+  if (!row) {
+    if (envSnapshot[CUSTOM_BASE_URL_ENV] !== undefined) {
+      process.env[CUSTOM_BASE_URL_ENV] = envSnapshot[CUSTOM_BASE_URL_ENV];
+    }
+    if (envSnapshot[CUSTOM_API_KEY_ENV] !== undefined) {
+      process.env[CUSTOM_API_KEY_ENV] = envSnapshot[CUSTOM_API_KEY_ENV];
+    }
+    return;
+  }
+
+  process.env[CUSTOM_BASE_URL_ENV] = String(row.url).trim();
+  const key = unwrap(row.apiKey);
+  if (key) process.env[CUSTOM_API_KEY_ENV] = key;
 }
 
 async function probeKey(providerKey, apiKey) {
@@ -282,4 +319,10 @@ async function reconcileCatalog() {
   return results;
 }
 
-module.exports = { applyAdminConnections, reconcileCatalog, PROVIDER_ENV_MAP, PROVIDER_CATALOG_MAP };
+module.exports = {
+  applyAdminConnections,
+  applyCustomConnectionEnv,
+  reconcileCatalog,
+  PROVIDER_ENV_MAP,
+  PROVIDER_CATALOG_MAP,
+};

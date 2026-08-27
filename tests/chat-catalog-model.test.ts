@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
 
 describe("chat catalog model", () => {
   it("keeps Flash when it is the selected generation model", () => {
@@ -24,13 +24,23 @@ describe("chat catalog model", () => {
     )
   })
 
-  it("falls back to the first catalog model when the selection is invalid for this chat type", () => {
+  it("keeps a valid user pick even when it is not in the live catalog snapshot", () => {
     assert.deepEqual(
-      resolveCatalogModel("veo-3", [
+      resolveCatalogModel("sira-gpt-mini", [
         { name: "deepseek-v4-flash", provider: "DeepSeek" },
-        { name: "gpt-4o-mini", provider: "OpenAI" },
-      ], "Fal"),
-      { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
+        { name: "deepseek-v4-pro", provider: "DeepSeek" },
+      ], "DeepSeek"),
+      { name: "sira-gpt-mini", provider: "DeepSeek", replaced: false },
+    )
+  })
+
+  it("does not fall back to Flash when a non-Flash selection exists", () => {
+    assert.deepEqual(
+      resolveCatalogModel("SiraGPT Mini", [
+        { name: "deepseek-v4-flash", provider: "DeepSeek" },
+        { name: "SiraGPT Mini", provider: "Custom" },
+      ], "Custom"),
+      { name: "SiraGPT Mini", provider: "Custom", replaced: false },
     )
   })
 
@@ -47,6 +57,26 @@ describe("chat catalog model", () => {
     assert.deepEqual(
       resolveCatalogModel("openai/gpt-5.5", [], "OpenRouter"),
       { name: "openai/gpt-5.5", provider: "OpenRouter", replaced: false },
+    )
+  })
+
+  it("prefers the current pick, then pinned, then last, over catalog[0]", () => {
+    const catalog = [
+      { name: "deepseek-v4-flash", provider: "DeepSeek" },
+      { name: "sira-gpt-mini", provider: "Custom" },
+      { name: "deepseek-v4-pro", provider: "DeepSeek" },
+    ]
+    assert.deepEqual(
+      pickPreferredCatalogModel(catalog, { current: "sira-gpt-mini", pinned: "deepseek-v4-pro" }),
+      { name: "sira-gpt-mini", provider: "Custom" },
+    )
+    assert.deepEqual(
+      pickPreferredCatalogModel(catalog, { pinned: "sira-gpt-mini", last: "deepseek-v4-pro" }),
+      { name: "sira-gpt-mini", provider: "Custom" },
+    )
+    assert.deepEqual(
+      pickPreferredCatalogModel(catalog, { last: "deepseek-v4-pro" }),
+      { name: "deepseek-v4-pro", provider: "DeepSeek" },
     )
   })
 })

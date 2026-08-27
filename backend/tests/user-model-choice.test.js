@@ -23,6 +23,19 @@ test('generate does not auto-redirect the user picker to org preferredModel', ()
   );
 });
 
+test('generate routes Custom/Ollama through the local connection client', () => {
+  assert.match(
+    aiRoute,
+    /createCustomProviderClient/,
+    'Custom/Ollama/HuggingFace must not fall through to OpenAI',
+  );
+  assert.match(
+    aiRoute,
+    /isCustomProvider\(provider\)/,
+    'the local Custom provider names must be recognized',
+  );
+});
+
 test('generate does not steal a user-selected model via reasoning-orchestrator', () => {
   assert.match(
     aiRoute,

@@ -126,6 +126,10 @@ function inferProviderFromModelId(modelId) {
   //    that doesn't exist.
   if (m === 'gpt-oss' || m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
 
+  // 10) Admin-local Custom (Ollama / HuggingFace / moondream). Must not
+  //     fall through to OpenAI — that silently swaps the user's pick.
+  if (/\bmoondream\b/.test(m) || m.includes('ollama') || m.includes('huggingface')) return 'Custom';
+
   return 'OpenAI';
 }
 

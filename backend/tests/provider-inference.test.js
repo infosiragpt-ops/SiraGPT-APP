@@ -101,6 +101,12 @@ test('inferProviderFromModelId: unknown ids fall back to OpenAI (safe)', () => {
   assert.equal(inferProviderFromModelId('something-totally-new'), 'OpenAI');
 });
 
+test('inferProviderFromModelId: local Custom/Ollama ids stay Custom', () => {
+  assert.equal(inferProviderFromModelId('moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('ollama/moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('huggingface/moondream'), 'Custom');
+});
+
 test('inferProviderFromModelId: hostile non-string inputs never throw → OpenAI default', () => {
   // Null-prototype object — String() throws "Cannot convert object to primitive value".
   assert.equal(inferProviderFromModelId(Object.create(null)), 'OpenAI');

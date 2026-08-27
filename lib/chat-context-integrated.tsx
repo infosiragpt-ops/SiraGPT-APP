@@ -14,7 +14,8 @@ import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./re
 import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
-import { resolveCatalogModel } from "./chat/catalog-model"
+import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
 import { useBackgroundStreams } from "./background-streams-context"
@@ -76,6 +77,9 @@ const normalizeChatError = (raw: string): string => {
   }
   if (/auth|api.?key|401|403|invalid.*key/i.test(raw)) {
     return "Error de configuración del servicio. Por favor contacta al administrador."
+  }
+  if (/ECONNREFUSED|ENOTFOUND|model.?not found|unknown model|does not exist/i.test(raw)) {
+    return "No se pudo usar el modelo seleccionado. No se cambió a otro modelo. Revisa la conexión o elige otro modelo."
   }
   if (/timeout|timed.?out|ETIMEDOUT/i.test(raw)) {
     return "La solicitud tardó demasiado. Intenta de nuevo."
@@ -697,6 +701,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [currentChat, setCurrentChat] = useState<Chat | null>(null)
   const [selectedModel, setSelectedModel] = useState("")
+  const selectedModelRef = useRef(selectedModel)
+  selectedModelRef.current = selectedModel
   // Composer reasoning-effort picker (Bajo/Medio/Extra/Max), Claude-style.
   // Persisted so the user's choice survives reloads; sent to the backend as
   // `reasoningEffort` and mapped to the compute plan there.
@@ -905,12 +911,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
       setAvailableModels(modelsResponse.models)
 
-      // Set default model
-      if (modelsResponse.models.length > 0 && !selectedModel) {
-        devLog("default model selected:", modelsResponse.models[0]);
-
-        setSelectedModel(modelsResponse.models[0].name)
-        setSelectedProivder(modelsResponse.models[0].provider)
+      const preferred = pickPreferredCatalogModel(modelsResponse.models, {
+        current: selectedModelRef.current,
+        pinned: getPinnedModel(),
+        last: getLastModel(),
+      })
+      if (preferred?.name) {
+        devLog("default model selected:", preferred)
+        setSelectedModel(preferred.name)
+        if (preferred.provider) setSelectedProivder(preferred.provider)
       }
 
       // Load chats
@@ -937,12 +946,18 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           setAvailableModels(modelsResponse.models);
           devLog(`${modelsResponse.models.length} models loaded.`, modelsResponse.models);
 
-          // Select the first model by default.
-          setSelectedModel(modelsResponse.models[0].name);
-          setSelectedProivder(modelsResponse.models[0].provider);
+          const preferred = pickPreferredCatalogModel(modelsResponse.models, {
+            current: selectedModelRef.current,
+            pinned: getPinnedModel(),
+            last: getLastModel(),
+          })
+          if (preferred?.name) {
+            setSelectedModel(preferred.name);
+            if (preferred.provider) setSelectedProivder(preferred.provider);
+          }
         } else {
           setAvailableModels([]);
-          setSelectedModel("");
+          if (!selectedModelRef.current) setSelectedModel("");
           console.warn(`>>> Is type (${chatType}) ke liye koi models nahi mile.`);
         }
       } catch (e) {
@@ -2529,6 +2544,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isAuthenticated, selectedModel, availableModels, setChatType, addMessage, handleNewChatWithPlaceholder, selectProvider, uploadedFiles]);
 
+  const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
+    const name = String(chat?.model || "").trim()
+    if (!name) return
+    setSelectedModel(name)
+  }, [])
+
   const selectChat = useCallback(
     async (chatId: string) => {
       latestSelectedChatIdRef.current = chatId
@@ -2566,6 +2587,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         })
         localStorage.setItem('currentChatId', chatId)
         setUploadedFiles([])
+        applyChatModelSelection(cachedChat)
       }
 
       // If this specific chat is still streaming, keep the optimistic
@@ -2619,6 +2641,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         if (latestSelectedChatIdRef.current === chatId) {
           localStorage.setItem('currentChatId', chatId)
           setUploadedFiles([])
+          applyChatModelSelection(chat)
         }
 
         // Background completion catch-up: if the last turn is still a lone
@@ -2676,7 +2699,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // bg is read to hydrate a mid-stream chat's partial answer on switch-back.
     // Safe to include: exported consumers call through selectChatRef, so the
     // callback identity churn does not cause extra renders.
-    [bg],
+    [applyChatModelSelection, bg],
   )
 
   const clearCurrentChat = useCallback(async () => {

@@ -27,8 +27,17 @@ describe("chat brand model labels", () => {
     assert.equal(looksLikeRawVendorModelId(SIRA_PRO_LABEL), false)
   })
 
+  it("keeps SiraGPT Mini even when the raw id is local/custom", () => {
+    assert.equal(brandModelLabel({ name: "moondream", displayName: "SiraGPT Mini", provider: "Ollama" }), "SiraGPT Mini")
+    assert.equal(brandModelLabel({ name: "sira-gpt-mini", displayName: "SiraGPT Mini", provider: "Custom" }), "SiraGPT Mini")
+    assert.equal(brandModelLabel("SiraGPT Mini"), "SiraGPT Mini")
+    assert.notEqual(brandModelLabel({ name: "moondream", displayName: "SiraGPT Mini" }), SIRA_RAPIDO_LABEL)
+  })
+
   it("maps DeepSeek provider headings to Sira and leaves other vendors intact", () => {
     assert.equal(brandProviderLabel("DeepSeek"), "Sira")
+    assert.equal(brandProviderLabel("Ollama"), "Sira")
+    assert.equal(brandProviderLabel("HuggingFace"), "Sira")
     assert.equal(brandProviderLabel("OpenAI"), "OpenAI")
     assert.equal(brandProviderLabel("Anthropic"), "Anthropic")
   })
