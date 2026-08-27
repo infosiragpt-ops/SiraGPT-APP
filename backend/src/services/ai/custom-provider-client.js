@@ -14,11 +14,24 @@
  * Live chat must therefore read the AdminConnection row at request time and
  * point the OpenAI SDK at `connection.url`. Never api.openai.com.
  *
- * Public picker: Custom-sourced models keep their displayName (e.g. "Sira Mini")
- * and never expose Ollama / HuggingFace / DeepSeek as the provider label.
+ * Public picker: Sira Mini never exposes Ollama / HuggingFace / moondream.
+ * Upstream (Lenovo, docker network iliagpt-app): siragpt-ollama:11434/v1,
+ * model id moondream:latest, auth None. Host bind is loopback-only.
  */
 
 const KEY_PREFIX = 'enc:v1:';
+
+const SIRA_MINI_DISPLAY_NAME = 'Sira Mini';
+const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
+const SIRA_MINI_UPSTREAM_ID = 'moondream:latest';
+const SIRA_MINI_DEFAULT_BASE_URL = 'http://siragpt-ollama:11434/v1';
+const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de Sira.';
+const SIRA_MINI_ALIASES = Object.freeze([
+  'sira-mini',
+  'sira mini',
+  'moondream',
+  'moondream:latest',
+]);
 
 const KNOWN_CLOUD_PROVIDER_KEYS = Object.freeze(new Set([
   'openai',
@@ -37,7 +50,7 @@ const KNOWN_CLOUD_PROVIDER_KEYS = Object.freeze(new Set([
   'fal',
 ]));
 
-const HIDDEN_VENDOR_RE = /ollama|hugging\s*face|huggingface/i;
+const HIDDEN_VENDOR_RE = /ollama|hugging\s*face|huggingface|moondream/i;
 
 function normalizeOpenAiCompatibleUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -68,6 +81,50 @@ function namesMatch(a, b) {
   const left = normalizeModelName(a);
   const right = normalizeModelName(b);
   return !!left && left === right;
+}
+
+function isSiraMiniAlias(name) {
+  const raw = String(name || '').trim().toLowerCase();
+  if (!raw) return false;
+  if (SIRA_MINI_ALIASES.includes(raw)) return true;
+  return normalizeModelName(raw) === 'moondream' || normalizeModelName(raw) === 'sira-mini';
+}
+
+function catalogNameCandidates(model) {
+  const raw = String(model || '').trim();
+  if (!raw) return [];
+  const out = [raw];
+  const bare = raw.replace(/:latest$/i, '');
+  if (bare && bare !== raw) out.push(bare);
+  if (isSiraMiniAlias(raw)) {
+    out.push(SIRA_MINI_PUBLIC_NAME, 'moondream', SIRA_MINI_UPSTREAM_ID);
+  }
+  return [...new Set(out)];
+}
+
+function publicSiraMiniName() {
+  return SIRA_MINI_PUBLIC_NAME;
+}
+
+function rewriteCustomChatModel(model) {
+  if (isSiraMiniAlias(model)) return SIRA_MINI_UPSTREAM_ID;
+  return String(model || '').trim();
+}
+
+function defaultSiraMiniBaseUrl(env = process.env) {
+  const override = String((env && env.SIRAGPT_CUSTOM_BASE_URL) || '').trim();
+  if (override) return normalizeOpenAiCompatibleUrl(override);
+  return SIRA_MINI_DEFAULT_BASE_URL;
+}
+
+function defaultSiraMiniConnection(env) {
+  return {
+    id: null,
+    url: defaultSiraMiniBaseUrl(env),
+    apiKey: null,
+    authType: 'None',
+    headers: null,
+  };
 }
 
 function unwrapStoredKey(stored, decryptFn) {
@@ -128,16 +185,25 @@ async function findAiModelByName(prisma, model) {
   const name = String(model || '').trim();
   if (!name || !prisma || !prisma.aiModel) return null;
   const select = { name: true, displayName: true, provider: true, isActive: true, type: true };
-  try {
-    const exact = await prisma.aiModel.findUnique({ where: { name }, select });
-    if (exact) return exact;
-  } catch {
-    return null;
-  }
-  const bare = name.replace(/:latest$/i, '');
-  if (bare && bare !== name) {
+  for (const candidate of catalogNameCandidates(name)) {
     try {
-      return await prisma.aiModel.findUnique({ where: { name: bare }, select });
+      const exact = await prisma.aiModel.findUnique({ where: { name: candidate }, select });
+      if (exact) return exact;
+    } catch {
+      return null;
+    }
+  }
+  if (isSiraMiniAlias(name) && typeof prisma.aiModel.findFirst === 'function') {
+    try {
+      return await prisma.aiModel.findFirst({
+        where: {
+          OR: [
+            { name: { in: ['moondream', SIRA_MINI_UPSTREAM_ID, SIRA_MINI_PUBLIC_NAME] } },
+            { displayName: SIRA_MINI_DISPLAY_NAME },
+          ],
+        },
+        select,
+      });
     } catch {
       return null;
     }
@@ -157,12 +223,19 @@ async function resolveCustomConnectionForTurn({
   decryptFn,
 } = {}) {
   const catalog = await findAiModelByName(prisma, model);
-  const catalogIsCustom = !!(catalog && isCustomProvider(catalog.provider));
+  const catalogIsCustom = !!(catalog && (
+    isCustomProvider(catalog.provider) || isSiraMiniAlias(catalog.name) || isSiraMiniAlias(catalog.displayName)
+  ));
   const providerIsCustom = isCustomProvider(provider);
-  const isCustomSignal = catalogIsCustom || providerIsCustom;
+  const aliasIsSiraMini = isSiraMiniAlias(model);
+  const isCustomSignal = catalogIsCustom || providerIsCustom || aliasIsSiraMini;
 
   if (!prisma || !prisma.adminConnection || typeof prisma.adminConnection.findMany !== 'function') {
-    return { isCustom: isCustomSignal, connection: null, catalog };
+    return {
+      isCustom: isCustomSignal,
+      connection: isCustomSignal ? defaultSiraMiniConnection() : null,
+      catalog,
+    };
   }
 
   let rows = [];
@@ -184,7 +257,11 @@ async function resolveCustomConnectionForTurn({
     });
   } catch (err) {
     console.warn('[custom-provider-client] lookup failed:', err && err.message);
-    return { isCustom: isCustomSignal, connection: null, catalog };
+    return {
+      isCustom: isCustomSignal,
+      connection: isCustomSignal ? defaultSiraMiniConnection() : null,
+      catalog,
+    };
   }
 
   const matchedByModel = pickCustomConnectionRow(
@@ -200,11 +277,18 @@ async function resolveCustomConnectionForTurn({
   }
 
   const chosen = pickCustomConnectionRow(rows, model);
-  return {
-    isCustom: true,
-    connection: chosen ? shapeConnection(chosen, { decryptFn }) : null,
-    catalog,
-  };
+  if (chosen) {
+    return { isCustom: true, connection: shapeConnection(chosen, { decryptFn }), catalog };
+  }
+
+  // Lenovo: iliagpt-backend and siragpt-ollama share iliagpt-app.
+  // Host bind is 127.0.0.1:11434 (not public) — the backend must use the
+  // docker DNS name. Auth none.
+  if (aliasIsSiraMini || catalogIsCustom) {
+    return { isCustom: true, connection: defaultSiraMiniConnection(), catalog };
+  }
+
+  return { isCustom: true, connection: null, catalog };
 }
 
 /**
@@ -226,7 +310,21 @@ function createCustomProviderClient(connection, { OpenAI } = {}) {
   if (connection && connection.headers) {
     opts.defaultHeaders = connection.headers;
   }
-  return new Ctor(opts);
+  const client = new Ctor(opts);
+  if (!client.chat) client.chat = {};
+  if (!client.chat.completions) client.chat.completions = {};
+  const originalCreate = typeof client.chat.completions.create === 'function'
+    ? client.chat.completions.create.bind(client.chat.completions)
+    : null;
+  client.chat.completions.create = function create(body, options) {
+    if (body && typeof body === 'object' && body.model) {
+      const rewritten = rewriteCustomChatModel(body.model);
+      if (rewritten !== body.model) body = { ...body, model: rewritten };
+    }
+    if (!originalCreate) return undefined;
+    return originalCreate(body, options);
+  };
+  return client;
 }
 
 function loadOpenAI() {
@@ -245,8 +343,24 @@ function publicPickerProvider(provider) {
   return raw;
 }
 
+function publicPickerModel(model) {
+  if (!model || typeof model !== 'object') return model;
+  const next = { ...model, provider: publicPickerProvider(model.provider) };
+  const mini = isSiraMiniAlias(model.name) || isSiraMiniAlias(model.displayName);
+  if (mini) {
+    next.name = SIRA_MINI_PUBLIC_NAME;
+    next.displayName = SIRA_MINI_DISPLAY_NAME;
+    next.provider = 'Sira';
+    next.description = SIRA_MINI_DESCRIPTION;
+  } else if (next.description && HIDDEN_VENDOR_RE.test(String(next.description))) {
+    next.description = String(next.description).replace(HIDDEN_VENDOR_RE, 'Sira');
+  }
+  return next;
+}
+
 function isLocalVisionModel(model) {
-  return /(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(String(model || ''));
+  if (isSiraMiniAlias(model)) return true;
+  return /(^|\/)(llava|bakllava|minicpm-v)/i.test(String(model || ''));
 }
 
 function catalogProviderForConnection(providerKey, providerLabel) {
@@ -258,8 +372,8 @@ function catalogProviderForConnection(providerKey, providerLabel) {
 function defaultCustomDisplayName(name, currentDisplayName) {
   const rawName = String(name || '').trim();
   const current = String(currentDisplayName || '').trim();
-  if (/^moondream\b/i.test(rawName) && (!current || /^moondream\b/i.test(current))) {
-    return 'Sira Mini';
+  if (isSiraMiniAlias(rawName) && (!current || isSiraMiniAlias(current) || /^moondream\b/i.test(current))) {
+    return SIRA_MINI_DISPLAY_NAME;
   }
   return current || rawName;
 }
@@ -267,15 +381,23 @@ function defaultCustomDisplayName(name, currentDisplayName) {
 module.exports = {
   KEY_PREFIX,
   KNOWN_CLOUD_PROVIDER_KEYS,
+  SIRA_MINI_DISPLAY_NAME,
+  SIRA_MINI_PUBLIC_NAME,
+  SIRA_MINI_UPSTREAM_ID,
+  SIRA_MINI_DEFAULT_BASE_URL,
   isCustomProvider,
   isCustomConnectionRow,
   isOpenAiCompatibleUrl,
   isLocalVisionModel,
+  isSiraMiniAlias,
   normalizeOpenAiCompatibleUrl,
   normalizeModelName,
   publicPickerProvider,
+  publicPickerModel,
   catalogProviderForConnection,
   defaultCustomDisplayName,
+  rewriteCustomChatModel,
+  defaultSiraMiniBaseUrl,
   unwrapStoredKey,
   shapeConnection,
   pickCustomConnectionRow,

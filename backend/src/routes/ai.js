@@ -291,9 +291,11 @@ const { inferProviderFromModelId } = require('../services/ai/provider-inference'
 const {
   isCustomProvider,
   isLocalVisionModel,
-  publicPickerProvider,
+  isSiraMiniAlias,
+  publicPickerModel,
   resolveCustomConnectionForTurn,
   createCustomProviderClient,
+  SIRA_MINI_PUBLIC_NAME,
 } = require('../services/ai/custom-provider-client');
 
 function createProviderClient(provider, opts = {}) {
@@ -983,11 +985,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
 
     models = models.map((m) => {
       const catalogEntry = modelRouter.getModel(m.name);
+      const publicModel = publicPickerModel(m);
       return {
-        ...m,
-        // Picker grouping: displayName only for the chip; never leak
-        // Ollama / HuggingFace / "Custom API" as the provider heading.
-        provider: publicPickerProvider(m.provider),
+        ...publicModel,
+        // Picker: displayName Sira Mini. Never leak Ollama / HuggingFace / moondream.
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
         planAccess: {
@@ -3111,7 +3112,7 @@ router.post(
       // project, since projects are task-scoped, not persona-defined.
       let customGpt = null;
       let project = null;
-      let actualModel = model;
+      let actualModel = isSiraMiniAlias(model) ? SIRA_MINI_PUBLIC_NAME : model;
       let actualTemperature = 0.55;
       // Default completion budget. Custom GPTs raise this so trained long-form
       // deliverables (thesis chapters, full templates) finish in one turn.
@@ -3361,6 +3362,7 @@ router.post(
         if (_customAgain.connection) {
           customConnection = _customAgain.connection;
           actualProvider = 'Custom';
+          if (isSiraMiniAlias(actualModel)) actualModel = SIRA_MINI_PUBLIC_NAME;
         } else if (customConnection && !_customAgain.isCustom) {
           customConnection = null;
         } else if (_customAgain.isCustom && !_customAgain.connection) {

@@ -276,7 +276,7 @@ test('syncConnectionModels: custom /v1 persists provider Custom and moondream as
   const result = await svc.syncConnectionModels({
     providerKey: 'custom',
     providerLabel: 'Ollama local',
-    url: 'http://10.0.0.8:11434/v1',
+    url: 'http://siragpt-ollama:11434/v1',
     authType: 'None',
     apiKey: null,
     fetchImpl,
@@ -284,7 +284,7 @@ test('syncConnectionModels: custom /v1 persists provider Custom and moondream as
 
   assert.equal(result.ok, true);
   assert.equal(result.created, 1);
-  assert.equal(fetchImpl.calls[0].url, 'http://10.0.0.8:11434/v1/models');
+  assert.equal(fetchImpl.calls[0].url, 'http://siragpt-ollama:11434/v1/models');
   assert.equal(created[0].name, 'moondream');
   assert.equal(created[0].provider, 'Custom');
   assert.equal(created[0].displayName, 'Sira Mini');
