@@ -444,7 +444,11 @@ function dropLeadingTocBlob(text) {
 function prepareDocumentTextForProfessionalSynthesis(text) {
   const original = String(text || '');
   if (!original.trim()) return '';
-  let cleaned = stripDocumentExtractorHeader(original)
+  // Body-vs-backmatter: trailing references/annexes/systematization matrices
+  // must never be the densest content in a synthesis excerpt (eco bug:
+  // "resumen" answered with the document's own internal instructions).
+  const { body: withoutBackmatter } = require('./document/body-vs-backmatter').splitBodyVsBackmatter(original);
+  let cleaned = stripDocumentExtractorHeader(withoutBackmatter)
     .replace(/\[[^\]\n]{0,12}\.\s*#\s*/g, '# ')
     .replace(/\[\s*#\s*/g, '# ');
 
@@ -467,10 +471,12 @@ function prepareDocumentTextForProfessionalSynthesis(text) {
   );
   const cleanedHasBodyAnchor = /\b(?:introducci[oó]n|cap[ií]tulo\s+(?:[ivxlcdm]+|\d+)\s+(?:planteamiento|marco|metodolog[ií]a|resultados?|discusi[oó]n|conclusiones?)|resumen|abstract)\b/i.test(cleaned);
   if (countDocumentWords(cleaned) < 25 && countDocumentWords(original) >= 25 && !(originalLooksLikeToc && cleanedHasBodyAnchor && countDocumentWords(cleaned) >= 8)) {
-    return stripDocumentExtractorHeader(original)
+    const fallbackHeaderStripped = stripDocumentExtractorHeader(original)
       .replace(/\[([^\]\n]{1,180})\]\((?:#[^)]+|[^)]*)\)/g, '$1')
       .replace(/[ \t]{2,}/g, ' ')
       .trim();
+    // Same body-vs-backmatter guard applies to the fallback path.
+    return require('./document/body-vs-backmatter').stripTrailingBackmatter(fallbackHeaderStripped);
   }
   return cleaned;
 }
