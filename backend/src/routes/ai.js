@@ -1605,7 +1605,7 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, provider = null, _attempt = 0) {
   const safeExtraMetadata = extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {};
   const idempotencyKey = safeExtraMetadata.idempotencyKey || null;
   const streamId = safeExtraMetadata.streamId || null;
@@ -1767,7 +1767,28 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       if (isFreeAttachmentTurn) {
         console.log('[ai/quota] FREE attachment turn — exempt from the daily text cap (usage not counted)');
       } else {
-        await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
+        // Real per-model cost via the canonical pricing table (llm-cost),
+        // replacing the legacy flat-rate estimate for ApiUsage.cost. The
+        // token counter that drives plan gating stays `totalTokens`.
+        let turnCostUsd = null;
+        try {
+          const { trackTurnCost } = require('../services/ai/turn-cost');
+          turnCostUsd = trackTurnCost({
+            userId,
+            model,
+            provider: provider || null,
+            inputTokens: promptTokens,
+            outputTokens: responseTokens,
+          })?.cost_usd ?? null;
+        } catch (turnCostErr) {
+          console.warn('[ai/cost] turn cost tracking failed:', turnCostErr?.message);
+        }
+        await usageService.recordUsage(
+          userId,
+          model,
+          totalTokens,
+          turnCostUsd != null ? turnCostUsd : totalTokens * 0.001,
+        );
       }
 
       console.log("Background task: Database save complete.");
@@ -1783,7 +1804,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         const delayMs = 500 * (_attempt + 1);
         console.warn(`[ai/persist] background save failed — retrying in ${delayMs}ms (attempt ${_attempt + 2}/3)`, { chatId, userId });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1)
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, provider, _attempt + 1)
             .catch((retryErr) => console.error('[ai/persist] retry attempt crashed:', retryErr));
         }, delayMs);
       } else if (!assistantMessage) {
@@ -7424,6 +7445,7 @@ router.post(
                 req.user?.plan || null,
                 null,
                 req._agentRun || null,
+                actualProvider || provider || null,
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
@@ -7762,6 +7784,7 @@ router.post(
           req.user?.plan || null,
           __reasoningSink,
           req._agentRun || null,
+          actualProvider || provider || null,
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
