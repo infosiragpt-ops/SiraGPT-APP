@@ -7036,6 +7036,15 @@ router.post(
                     mentionedApps: Array.isArray(req.body?.mentionedApps)
                       ? req.body.mentionedApps.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 20)
                       : [],
+                    // Persistent app pins: every turn of a conversation with
+                    // pinned apps loads those apps' tools (plus any explicit
+                    // @mentions). The chat route persists the effective pin
+                    // list; this is what makes "using the tool persistently"
+                    // real instead of cosmetic. Invalid pins are filtered by
+                    // the same validation used on PUT /chats/:id/pins.
+                    pinnedAppIds: Array.isArray(req.body?.pinnedAppIds)
+                      ? req.body.pinnedAppIds.map((id) => String(id || '').trim()).filter(Boolean).slice(0, 4)
+                      : [],
                     maxCostUsd: Number.isFinite(Number(req.body?.coworkBudget?.maxCostUsd))
                       ? Math.max(0.01, Number(req.body.coworkBudget.maxCostUsd))
                       : null,

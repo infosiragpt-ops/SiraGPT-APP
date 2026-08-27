@@ -488,6 +488,15 @@ model Chat {
   // draft survives across devices.
   draftText String? @db.Text
 
+  // Persistent app pins for this conversation (Apps panel + composer
+  // rail). Array of catalog app ids in visual order, max 4. Server-side
+  // validation: only apps the user has an active connection for can be
+  // pinned. Unpinning never disconnects the underlying OAuth.
+  pinnedAppIds Json? @map("pinned_app_ids")
+  // Monotonic revision for concurrency (If-Match on writes). Bumped by
+  // every effective pin mutation; idempotent no-ops keep it unchanged.
+  pinRevision Int @default(0) @map("pin_revision")
+
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any
   // explicit "respond in X" instruction); reused on every subsequent turn

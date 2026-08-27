@@ -18,6 +18,7 @@ export const MENTION_COPY = {
   connectedGroup: "Conectadas",
   connectGroup: "Conectar",
   unavailableGroup: "Aún no disponibles",
+  pinnedGroup: "Activas en este chat",
   empty: "No hay apps para esta búsqueda",
   hint: "↑↓ navegar · Enter seleccionar · Esc cerrar",
   connected: "Conectada",
@@ -265,20 +266,36 @@ export function filterPickerApps(apps: MentionPickerApp[], query: string): Menti
   ))
 }
 
-export function groupPickerApps(apps: MentionPickerApp[]): {
+export function groupPickerApps(
+  apps: MentionPickerApp[],
+  pinnedAppIds: string[] = [],
+): {
+  pinned: MentionPickerApp[]
   connected: MentionPickerApp[]
   connect: MentionPickerApp[]
   unavailable: MentionPickerApp[]
   flat: MentionPickerApp[]
 } {
-  const connected = apps.filter((app) => app.status === "connected")
-  const connect = apps.filter((app) => app.status === "connect")
-  const unavailable = apps.filter((app) => app.status === "unavailable")
+  const pinnedSet = new Set(pinnedAppIds.filter(Boolean))
+  const pinned: MentionPickerApp[] = []
+  const connected: MentionPickerApp[] = []
+  const connect: MentionPickerApp[] = []
+  const unavailable: MentionPickerApp[] = []
+  for (const app of apps) {
+    if (pinnedSet.has(app.id)) {
+      pinned.push(app)
+      continue
+    }
+    if (app.status === "connected") connected.push(app)
+    else if (app.status === "connect") connect.push(app)
+    else unavailable.push(app)
+  }
   return {
+    pinned,
     connected,
     connect,
     unavailable,
-    flat: [...connected, ...connect, ...unavailable],
+    flat: [...pinned, ...connected, ...connect, ...unavailable],
   }
 }
 

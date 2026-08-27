@@ -642,6 +642,10 @@ interface AddMessageOptions {
   reusePending?: boolean
   requestEnvelope?: PendingAIRequestEnvelope
   mentionedApps?: string[]
+  /** Persistent app pins — included in the turn payload so the agentic
+      loop loads those apps' tools on every message, not just when the
+      user types an explicit @mention. */
+  pinnedAppIds?: string[]
 }
 interface ChatContextType {
   chats: Chat[]
@@ -649,9 +653,9 @@ interface ChatContextType {
   setCurrentChat: React.Dispatch<React.SetStateAction<Chat | null>>
   createNewChat: (
     type?: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis',
-    initialContent?: string,
-    initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
+    content?: string,
+    files?: any[],
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
   ) => Promise<any>
   selectChat: (chatId: string) => void
   addMessage: (content: string, files?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => Promise<boolean>
@@ -1205,6 +1209,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
+            ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
+              ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
+              : {}),
           };
       const pendingMessage = options?.reusePending
         ? null
@@ -2391,7 +2398,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     type: 'text' | 'image' | 'video' | 'webdev' | 'gmail' | 'google_services' | 'spotify' | 'computer-use' | 'thesis' = 'text',
     initialContent?: string,
     initialFiles?: any[],
-    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
+    options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string; pinnedAppIds?: string[] }
   ) => {
     const chatModel = options?.model || selectedModel;
     if (!user || !isAuthenticated || !chatModel) return;
@@ -2406,6 +2413,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         idempotencyKey: options?.idempotencyKey,
       });
       const newChat = response.chat;
+      // Migrate draft pins into the new conversation on the very first turn.
+      const draftPins = Array.isArray(options?.pinnedAppIds) ? options.pinnedAppIds.slice(0, 4) : [];
+      if (draftPins.length && newChat?.id) {
+        void apiClient.setChatPins(newChat.id, draftPins).catch(() => undefined)
+      }
       newChat.messages = [];
 
       setChats((prev) => [newChat, ...prev]);

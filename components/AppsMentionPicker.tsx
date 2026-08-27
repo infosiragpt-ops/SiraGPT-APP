@@ -3,10 +3,13 @@
 /**
  * Apps @ picker for the /agentes composer.
  * Mirrors SlashCommandMenu: popover above the textarea, keyboard nav, Spanish labels.
+ * With `enableSearchField` it renders a sticky search field (spec §4.1) that
+ * debounces the live query to the composer, which feeds the same filter as
+ * the `@token`.
  */
 
 import * as React from "react"
-import { Check, Plug, PlugZap } from "lucide-react"
+import { Check, Plug, PlugZap, Search } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
   MENTION_COPY,
@@ -20,6 +23,12 @@ interface AppsMentionPickerProps {
   apps: MentionPickerApp[]
   onPick: (app: MentionPickerApp) => void
   onClose: () => void
+  /** Live search query owned by the composer (kept in sync with the @token). */
+  onSearchChange?: (query: string) => void
+  /** Sticky search field inside the panel. When unset the @token drives the filter. */
+  enableSearchField?: boolean
+  /** Apps currently pinned in this conversation — rendered as ACTIVAS group. */
+  pinnedAppIds?: string[]
 }
 
 function statusIcon(status: MentionAppStatus) {
@@ -86,9 +95,44 @@ export function AppsMentionPicker({
   apps,
   onPick,
   onClose,
+  onSearchChange,
+  enableSearchField = false,
+  pinnedAppIds = [],
 }: AppsMentionPickerProps) {
   const [activeIdx, setActiveIdx] = React.useState(0)
+  const [searchDraft, setSearchDraft] = React.useState("")
   const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const searchRef = React.useRef<HTMLInputElement | null>(null)
+  const searchDraftRef = React.useRef("")
+  searchDraftRef.current = searchDraft
+
+  // Sync the internal search field when the @token drives the query.
+  React.useEffect(() => {
+    if (enableSearchField && searchDraftRef.current !== filter) {
+      setSearchDraft(filter)
+    }
+  }, [filter, enableSearchField])
+
+  // Debounced (100ms) search — the catalog is local so filtering is cheap,
+  // but keystroke-by-keystroke re-renders of the whole list still add up.
+  React.useEffect(() => {
+    if (!enableSearchField) return
+    const timer = window.setTimeout(() => {
+      onSearchChange?.(searchDraft)
+    }, 100)
+    return () => window.clearTimeout(timer)
+  }, [searchDraft, enableSearchField, onSearchChange])
+
+  React.useEffect(() => {
+    if (!open) return
+    if (enableSearchField) {
+      const frame = window.requestAnimationFrame(() => {
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      })
+      return () => window.cancelAnimationFrame(frame)
+    }
+  }, [open, enableSearchField])
 
   React.useEffect(() => {
     if (activeIdx >= apps.length) setActiveIdx(0)
@@ -138,9 +182,12 @@ export function AppsMentionPicker({
 
   if (!open) return null
 
-  const connected = apps.filter((app) => app.status === "connected")
-  const connect = apps.filter((app) => app.status === "connect")
-  const unavailable = apps.filter((app) => app.status === "unavailable")
+  const grouped = {
+    pinned: apps.filter((app) => pinnedAppIds.includes(app.id)),
+    connected: apps.filter((app) => app.status === "connected" && !pinnedAppIds.includes(app.id)),
+    connect: apps.filter((app) => app.status === "connect" && !pinnedAppIds.includes(app.id)),
+    unavailable: apps.filter((app) => app.status === "unavailable" && !pinnedAppIds.includes(app.id)),
+  }
 
   const renderRow = (app: MentionPickerApp, idx: number) => (
     <button
@@ -172,9 +219,10 @@ export function AppsMentionPicker({
 
   let offset = 0
   const sections: Array<{ title: string; items: MentionPickerApp[] }> = [
-    { title: MENTION_COPY.connectedGroup, items: connected },
-    { title: MENTION_COPY.connectGroup, items: connect },
-    { title: MENTION_COPY.unavailableGroup, items: unavailable },
+    { title: MENTION_COPY.pinnedGroup, items: grouped.pinned },
+    { title: MENTION_COPY.connectedGroup, items: grouped.connected },
+    { title: MENTION_COPY.connectGroup, items: grouped.connect },
+    { title: MENTION_COPY.unavailableGroup, items: grouped.unavailable },
   ]
 
   return (
@@ -190,7 +238,35 @@ export function AppsMentionPicker({
       <div className="px-3 py-2 text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/40">
         Apps
       </div>
-      <div className="max-h-64 overflow-y-auto">
+      {enableSearchField && (
+        <div className="relative border-b border-border/40 px-3 py-2">
+          <Search className="pointer-events-none absolute left-5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            ref={searchRef}
+            type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="apps-mention-list"
+            aria-label="Buscar apps"
+            placeholder="Buscar apps…"
+            value={searchDraft}
+            onChange={(event) => setSearchDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault()
+                setSearchDraft("")
+                onClose()
+              }
+              if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter") {
+                event.stopPropagation()
+              }
+            }}
+            data-testid="apps-mention-search"
+            className="h-8 w-full rounded-lg border border-border/50 bg-muted/40 pl-8 pr-3 text-[13px] text-foreground placeholder:text-muted-foreground/70 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring/60"
+          />
+        </div>
+      )}
+      <div id="apps-mention-list" className="max-h-64 overflow-y-auto">
         {apps.length === 0 ? (
           <div className="px-3 py-4 text-sm text-muted-foreground">{MENTION_COPY.empty}</div>
         ) : (

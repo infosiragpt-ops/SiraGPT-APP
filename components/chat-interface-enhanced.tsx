@@ -112,6 +112,9 @@ import { getAttachmentLocalFile, toDocumentViewerAttachmentWithProgress } from "
 import { canOpenComposerPreview } from "@/lib/document-preview-gate"
 import { SlashCommandMenu, detectSlashFilter, parseSlashPrefix } from "@/components/SlashCommandMenu"
 import { AppsMentionPicker } from "@/components/AppsMentionPicker"
+import { PinnedAppRail, type PinnedChipView } from "@/components/PinnedAppRail"
+import { useAppPins } from "@/lib/use-app-pins"
+import { MAX_PINS } from "@/lib/apps-pins"
 import {
   MENTION_COPY,
   REGISTRY_APP_IDS,
@@ -7133,9 +7136,37 @@ But first, you need to connect your Spotify account securely using the button be
   const [slashMenuFilter, setSlashMenuFilter] = React.useState("");
   const [mentionMenuOpen, setMentionMenuOpen] = React.useState(false);
   const [mentionTrigger, setMentionTrigger] = React.useState<MentionTrigger | null>(null);
+  const [mentionSearchQuery, setMentionSearchQuery] = React.useState("");
+  const mentionSearchQueryRef = React.useRef("");
+  mentionSearchQueryRef.current = mentionSearchQuery;
   const [mentionHealthById, setMentionHealthById] = React.useState<Record<string, string>>({});
   const [mentionRegistryIds, setMentionRegistryIds] = React.useState<readonly string[]>(REGISTRY_APP_IDS);
   const [selectedMentionIds, setSelectedMentionIds] = React.useState<string[]>([]);
+
+  // Persistent app pins — the composer rail to the right of "+" renders
+  // these logo-only chips. Per-conversation: server pins for real chats,
+  // localStorage draft pins before the first message.
+  const appPins = useAppPins(currentChat?.id)
+  const pinnedAppChips = React.useMemo<PinnedChipView[]>(() => {
+    const health = mentionHealthById
+    const pickerApps = buildPickerApps(health, undefined, mentionRegistryIds)
+    const byId = new Map(pickerApps.map((entry) => [entry.id, entry]))
+    const chips: PinnedChipView[] = []
+    for (const appId of appPins.pinnedAppIds) {
+      const app = byId.get(appId)
+      if (!app) continue
+      chips.push({
+        appId,
+        name: app.name,
+        logoUrl: app.logo || undefined,
+        logoSources: app.logoSources || undefined,
+        brandColor: undefined,
+        availability: app.status === "unavailable" ? "unavailable" : "available",
+        connectionStatus: health[appId] || null,
+      })
+    }
+    return chips
+  }, [appPins.pinnedAppIds, mentionHealthById, mentionRegistryIds])
 
   React.useEffect(() => {
     inputRef.current = input;
@@ -7158,6 +7189,7 @@ But first, you need to connect your Spotify account securely using the button be
     if (mention && filter === null) {
       setMentionMenuOpen(true);
       setMentionTrigger(mention);
+      if (mentionSearchQueryRef.current) setMentionSearchQuery("");
     } else if (!mention) {
       setMentionMenuOpen(false);
       setMentionTrigger(null);
@@ -7213,12 +7245,13 @@ But first, you need to connect your Spotify account securely using the button be
   }, [user]);
 
   const mentionPickerApps = React.useMemo(() => {
+    const query = mentionSearchQuery.trim() || mentionTrigger?.query || ""
     const grouped = groupPickerApps(filterPickerApps(
       buildPickerApps(mentionHealthById, undefined, mentionRegistryIds),
-      mentionTrigger?.query || "",
+      query,
     ))
     return grouped.flat.slice(0, 40)
-  }, [mentionHealthById, mentionRegistryIds, mentionTrigger]);
+  }, [mentionHealthById, mentionRegistryIds, mentionTrigger, mentionSearchQuery]);
 
   const startAppConnect = React.useCallback(async (app: MentionPickerApp) => {
     const plan = resolveConnectPlan({ id: app.id, name: app.name, domain: app.domain })
@@ -7275,15 +7308,27 @@ But first, you need to connect your Spotify account securely using the button be
   const handleAppsMentionPick = React.useCallback(async (app: MentionPickerApp) => {
     setMentionMenuOpen(false)
     if (app.status === "connected") {
-      const next = insertMention(input, mentionTrigger, app.name)
-      setSelectedMentionIds((prev) => (prev.includes(app.id) ? prev : [...prev, app.id]))
-      setInput(next)
-      chatDraft.save(next)
+      // Pin it (spec §4.3): connected + unpinned → pin + close panel +
+      // clear the @query token. The pin persists across turns and every
+      // subsequent message carries pinnedAppIds, so no inline @mention
+      // text is needed.
+      let nextInput = input
+      if (mentionTrigger) {
+        nextInput = `${input.slice(0, mentionTrigger.start)}${input.slice(mentionTrigger.start + 1 + mentionTrigger.query.length)}`
+          .replace(/\s+$/, "")
+      }
+      if (nextInput !== input) {
+        setInput(nextInput)
+        chatDraft.save(nextInput)
+      }
+      setMentionTrigger(null)
+      const ok = await appPins.pinApp(app.id)
+      if (!ok) toast.error("Puedes fijar hasta 4 apps. Quita una para agregar otra.")
       window.setTimeout(() => {
         const el = textareaRef.current
         if (!el) return
         el.focus()
-        const caret = next.length
+        const caret = nextInput.length
         try { el.setSelectionRange(caret, caret) } catch { /* old Safari */ }
       }, 0)
       return
@@ -7293,7 +7338,7 @@ But first, you need to connect your Spotify account securely using the button be
       return
     }
     toast.message(MENTION_COPY.unavailableDetail(app.name))
-  }, [chatDraft, input, mentionTrigger, startAppConnect]);
+  }, [appPins, chatDraft, input, mentionTrigger, startAppConnect]);
 
   const detectedLinks = React.useMemo(() => extractDetectedLinks(input), [input]);
   const hasDetectedLinks = detectedLinks.length > 0;
@@ -8133,12 +8178,16 @@ But first, you need to connect your Spotify account securely using the button be
       mentionMenu={
         <AppsMentionPicker
           open={mentionMenuOpen && !slashMenuOpen}
-          filter={mentionTrigger?.query || ""}
+          filter={mentionSearchQuery || mentionTrigger?.query || ""}
           apps={mentionPickerApps}
+          enableSearchField
+          pinnedAppIds={appPins.pinnedAppIds}
+          onSearchChange={(query) => setMentionSearchQuery(query)}
           onPick={(app) => { void handleAppsMentionPick(app); }}
           onClose={() => {
             setMentionMenuOpen(false);
             setMentionTrigger(null);
+            setMentionSearchQuery("");
           }}
         />
       }
@@ -8160,6 +8209,20 @@ But first, you need to connect your Spotify account securely using the button be
       leading={
         <>
           <ActionsDropdown {...actionsDropdownProps} />
+          {appPins.enabled && (
+            <PinnedAppRail
+              chips={pinnedAppChips}
+              onUnpin={(appId) => {
+                void appPins.unpinApp(appId)
+                toast.success("App quitada de este chat")
+              }}
+              onReconnect={(chip) => {
+                const app = buildPickerApps(mentionHealthById, undefined, mentionRegistryIds)
+                  .find((entry) => entry.id === chip.appId)
+                if (app) void startAppConnect(app)
+              }}
+            />
+          )}
           {shouldInlineActiveTools && (
             <div className="composer-inline-active-tools">
               <ActiveToolsDisplay {...activeToolsProps} />
@@ -9999,6 +10062,7 @@ REWRITTEN TEXT:`;
     setSelectedMentionIds([]);
     setMentionMenuOpen(false);
     setMentionTrigger(null);
+    setMentionSearchQuery("");
     // The message is on its way — drop the saved draft so the next
     // visit to this chat starts with a clean composer instead of
     // re-showing the text the user just sent.
@@ -10594,12 +10658,18 @@ REWRITTEN TEXT:`;
       }
 
       const runContextPipeline = async (pipelineIntent: ChatIntent) => {
+        const pins = appPins.pinnedAppIds
         if (isNewChat) {
-          await createNewChat('text', msg, filesToSend, { initialIntent: pipelineIntent, idempotencyKey });
+          await createNewChat('text', msg, filesToSend, {
+            initialIntent: pipelineIntent,
+            idempotencyKey,
+            pinnedAppIds: pins,
+          });
         } else {
           await addMessage(msg, filesToSend, chatToUpdate, true, pipelineIntent, {
             idempotencyKey,
             mentionedApps: mentionPayload.mentionedApps,
+            pinnedAppIds: pins,
           });
         }
       };
