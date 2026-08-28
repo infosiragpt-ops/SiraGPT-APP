@@ -8,6 +8,7 @@
  */
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { Folder, Globe, Monitor, TerminalSquare, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -17,6 +18,28 @@ import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
 import { PensandoBars } from "@/components/pensando-bars"
 import { emitLoginHandoff } from "@/lib/computer-login-handoff"
+
+function DesktopScreenLoading() {
+  return (
+    <div
+      className="relative h-full w-full min-h-0 overflow-hidden bg-[#1b1b1d]"
+      data-testid="desktop-screen"
+    >
+      <div
+        className="absolute inset-0 z-10 flex items-center justify-center bg-[#1b1b1d]"
+        data-testid="desktop-screen-black"
+        aria-hidden
+      >
+        <p className="text-sm text-zinc-400">Preparando escritorio…</p>
+      </div>
+    </div>
+  )
+}
+
+const DesktopScreen = dynamic(
+  () => import("@/components/desktop/DesktopScreen").then((m) => m.DesktopScreen),
+  { ssr: false, loading: () => <DesktopScreenLoading /> },
+)
 
 export type DepartmentComputerDock = "screen" | "files" | "terminal" | "browser"
 
@@ -101,9 +124,11 @@ function userFacingComputerError(
 type DesktopLease = {
   sessionId: string
   wsUrl?: string
+  viewerToken?: string
   provider?: string
   expiresAt?: string
   status?: string
+  inputMode?: string
   fromPool?: boolean
 }
 
@@ -413,18 +438,15 @@ export function DepartmentComputerPane({
         {attachUrl ? (
           <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
         ) : desktopLease ? (
-          <div
-            className="absolute inset-0 flex items-center justify-center px-6 text-center"
-            role="img"
-            aria-label="Primera imagen del escritorio"
-            data-testid="desktop-first-frame"
-          >
-            <div className="flex flex-col items-center gap-2">
-              <DesktopMonitorGlyph className="h-10 w-10 text-zinc-500" />
-              <p className="text-sm text-zinc-300">Escritorio listo</p>
-              <p className="text-[11px] text-zinc-500">La vista en vivo llega en la siguiente fase.</p>
-            </div>
-          </div>
+          <DesktopScreen
+            key={desktopLease.sessionId}
+            sessionId={desktopLease.sessionId}
+            wsUrl={desktopLease.wsUrl}
+            viewerToken={desktopLease.viewerToken}
+            viewOnly={desktopLease.inputMode !== "human"}
+            className="absolute inset-0 h-full w-full min-h-0"
+            onFirstFrame={() => setStatusLine("En vivo")}
+          />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div className="flex flex-col items-center gap-3">

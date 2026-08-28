@@ -1,3 +1,15 @@
+declare module "@novnc/novnc" {
+  export default class RFB {
+    constructor(target: HTMLElement, url: string, options?: Record<string, unknown>)
+    viewOnly: boolean
+    scaleViewport: boolean
+    clipViewport: boolean
+    addEventListener(type: string, cb: (ev: Event) => void): void
+    removeEventListener(type: string, cb: (ev: Event) => void): void
+    disconnect(): void
+  }
+}
+
 declare module "mammoth/mammoth.browser" {
   export function convertToHtml(
     input: { arrayBuffer: ArrayBuffer },

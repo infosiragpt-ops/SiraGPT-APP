@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1562**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1563**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -1622,10 +1622,11 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `zod` | 3.25.76, 4.3.6, 4.4.3 | MIT | [link](https://github.com/colinhacks/zod) |
 | `zwitch` | 2.0.4 | MIT | [link](https://github.com/wooorm/zwitch) |
 
-## MPL-2.0 (1)
+## MPL-2.0 (2)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
+| `@novnc/novnc` | 1.7.0 | MPL-2.0 | [link](https://github.com/novnc/noVNC) |
 | `dxf-viewer` | 1.0.47 | MPL-2.0 | [link](https://github.com/vagran/dxf-viewer) |
 
 ## Public Domain (4)

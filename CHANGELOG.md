@@ -8,6 +8,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraComputer F7.2 (IN_PROGRESS — waiting on CI frontend + desktop-f71 +
+  desktop-f72): full Desktop
+  Control Plane on `127.0.0.1:9000` (click/type/scroll/launch/navigate/exec/
+  file/cursor/input_mode/mask; 423 Locked when human owns input),
+  authenticated same-origin `/ws/desktop/:sessionId` proxy (token scoped
+  userId/chatId, loopback noVNC only), and `DesktopScreen` RFB viewer
+  whose first frame ends the black panel. Kill switch
+  `SIRAGPT_DESKTOP_ENABLED` still fail-closed. The live computer
+  orchestrator is unchanged. F7.3 (CU-loop) is not started.
 - SiraComputer F7.1 (COMPLETED — unit provision gate green): real
   `E2BDesktopProvider` (isolated `@e2b/desktop` require, fail-closed without
   `E2B_API_KEY`) plus in-memory `DesktopSessionManager` warm pool

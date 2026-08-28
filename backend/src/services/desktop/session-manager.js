@@ -21,6 +21,7 @@ const {
   GENERIC_PROVISION_ERROR_ES,
   isGenericProvisionError,
 } = require('./desktop-errors');
+const { issueDesktopWsToken } = require('./ws-token');
 
 const SESSION_STATUSES = Object.freeze([
   'starting',
@@ -200,17 +201,38 @@ class DesktopSessionManager {
     const sessionId = `desk-${randomUUID()}`;
     const acquiredAt = this.now();
     const expiresAt = new Date(acquiredAt + this.ttlMs()).toISOString();
-    const wsUrl = String((handle && handle.wsUrl) || opts.wsUrl || '');
+    const userId = String(opts.userId || '').trim() || null;
+    const upstreamWs = String(
+      (handle && (handle.novncWsUrl || handle.wsTarget || handle.wsUrl)) || opts.wsUrl || '',
+    );
+    const novncPort = Number(handle && (handle.novncPort || handle.websockifyPort)) || 0;
+    let viewerToken = '';
+    try {
+      if (userId) {
+        viewerToken = issueDesktopWsToken(
+          { userId, chatId: boundChat, sessionId },
+          { env: this.env, secret: opts.wsSecret },
+        );
+      }
+    } catch (_) {
+      viewerToken = '';
+    }
+    const tokenQs = viewerToken ? `?token=${encodeURIComponent(viewerToken)}` : '';
     const record = {
       sessionId,
       chatId: boundChat || null,
+      userId,
       handle,
       provider: handle.provider || provider.kind || this.providerKind(),
       status: 'ready',
+      inputMode: 'agent',
       acquiredAt,
       lastHeartbeat: acquiredAt,
       expiresAt,
-      wsUrl,
+      upstreamWs,
+      novncPort,
+      viewerToken,
+      wsUrl: `/ws/desktop/${sessionId}${tokenQs}`,
       fromPool,
     };
     this.sessions.set(sessionId, record);
@@ -265,6 +287,32 @@ class DesktopSessionManager {
     const rec = this.sessions.get(String(sessionId || ''));
     if (!rec) return { status: 'dead', sessionId: String(sessionId || '') };
     return { ...this._toLease(rec) };
+  }
+
+  /**
+   * Internal record for the WS proxy. Not a public API shape.
+   */
+  getRecord(sessionId) {
+    return this.sessions.get(String(sessionId || '')) || null;
+  }
+
+  setInputMode(sessionId, mode) {
+    const rec = this.sessions.get(String(sessionId || ''));
+    if (!rec) {
+      throw new DesktopProviderError('La sesión de escritorio no existe.', {
+        code: 'desktop_session_not_found',
+        status: 404,
+      });
+    }
+    const next = String(mode || '').trim().toLowerCase();
+    if (next !== 'agent' && next !== 'human') {
+      throw new DesktopProviderError('input_mode debe ser agent o human.', {
+        code: 'desktop_input_mode_invalid',
+        status: 400,
+      });
+    }
+    rec.inputMode = next;
+    return this._toLease(rec);
   }
 
   async refillPool() {
@@ -389,10 +437,13 @@ class DesktopSessionManager {
     return {
       sessionId: rec.sessionId,
       wsUrl: rec.wsUrl || '',
+      viewerToken: rec.viewerToken || '',
       provider: rec.provider,
       expiresAt: rec.expiresAt,
       status: rec.status,
+      inputMode: rec.inputMode || 'agent',
       chatId: rec.chatId,
+      userId: rec.userId || null,
       fromPool: Boolean(rec.fromPool),
     };
   }

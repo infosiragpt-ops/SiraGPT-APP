@@ -285,4 +285,10 @@ test('F7.1: live orch #484 is still in the tree (not rerouted)', () => {
   assert.doesNotMatch(mgrSrc, /orchFetch\s*\(/);
   assert.doesNotMatch(routeSrc, /require\(['"].*orch-client['"]\)/);
   assert.doesNotMatch(routeSrc, /orchFetch\s*\(/);
+  const tokenSrc = fs.readFileSync(
+    path.join(__dirname, '../src/services/desktop/ws-token.js'),
+    'utf8',
+  );
+  assert.doesNotMatch(tokenSrc, /^const jwt = require\(['"]jsonwebtoken['"]\)/m);
+  assert.match(tokenSrc, /function loadJwt\(\)/);
 });

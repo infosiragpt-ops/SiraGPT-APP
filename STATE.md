@@ -9,8 +9,14 @@
 ## Fase activa
 
 **F7 — SiraComputer (multimodal + desktop VM).**
-Estado: **IN_PROGRESS**. Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-Siguiente sub-fase: **F7.2** — **no iniciada**.
+Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+**F7.2:** **IN_PROGRESS** — CI run 33213964824 rojo (frontend `@novnc/novnc`
+`./lib/rfb`; desktop-f71 `jsonwebtoken`; desktop-f72 `ws`). Este PR
+corrige: DesktopScreen client-only (`next/dynamic` + `ssr:false`) e
+import RFB vía export oficial `@novnc/novnc`; `jsonwebtoken` lazy en
+ws-token; `npm ci` en desktop-f71/f72. No se marca COMPLETED hasta que
+estén verdes frontend + desktop-f71 + desktop-f72 + «CI · required
+checks passed». **No se inicia F7.3.**
 
 **F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
 (`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
@@ -315,13 +321,13 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.1 cerrado. F7.2 no se inicia en este PR.
-- Nada de F7.2–F7.8.
+- **F7** (fase): F7.2 IN_PROGRESS — esperar CI verde. F7.3 no se inicia.
+- Nada de F7.3–F7.8.
 
 ## Pendiente
 
-- **F7.2** (siguiente): según spec §21 (no iniciar en este PR).
-- **F7.3–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F7.3** (siguiente): CU-loop (spec §21). No iniciar en este PR.
+- **F7.4–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
 - **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
   flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
@@ -335,7 +341,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
 2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-3. Implementar SOLO la sub-fase activa (siguiente: F7.1). No adelantar F7.2+.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.3). No adelantar F7.3+.
 4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas
