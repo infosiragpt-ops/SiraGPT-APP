@@ -289,7 +289,7 @@ F7.5 (egress allowlist) is still required. F7 itself stays IN_PROGRESS.
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
 | **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **COMPLETED** (merged #488) | §22.2 |
 | **F7.3** | `computer_*` / `computer` tool + Anthropic/OpenAI/Gemini → SiraAction + CU-loop (vision, grounding, verification, budget, AbortSignal) | **COMPLETED** (CI desktop-f73) | §22.3 |
-| **F7.4** | Handoff / takeover FSM (HARD leak gate) | **this PR** | §22.4 |
+| **F7.4** | Handoff / takeover FSM (HARD leak gate) | **COMPLETED** (CI `desktop-f74`) | §22.4 |
 | F7.5 | Egress allowlist — do not start | no | — |
 | F7.6 | LocalGvisor full flags (`runsc`, `--network none`) | no | fail-closed like F5 `resolveSandboxRuntime` |
 | F7.7 | Prisma `DesktopSession` tables | no | migrate deploy |

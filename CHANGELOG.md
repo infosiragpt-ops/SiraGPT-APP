@@ -8,8 +8,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
-- SiraComputer F7.4 (IN_PROGRESS — leak gate, CI `desktop-f74` not seen
-  yet): in-memory handoff FSM
+- SiraComputer F7.4 (COMPLETED — leak gate CI `desktop-f74` green,
+  run 33218133543): in-memory handoff FSM
   (`AGENT_CONTROL → HANDOFF_REQUESTED → HUMAN_CONTROL → RESUMING →
   AGENT_CONTROL`), CU-loop `waitForResume`, paused screenshots while
   the member types, 423 Locked on agent DCP actions, REST

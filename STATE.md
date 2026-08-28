@@ -10,12 +10,12 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-**F7.4:** **IN_PROGRESS** — handoff / takeover FSM (HARD leak gate).
-Gate local §22.4 verde en este checkout
-(`node --test tests/desktop-f7-handoff.test.js`: 13/13, sin Docker/E2B).
-CI `desktop-f74` **aún no se ha visto** — no se marca COMPLETED ni
-se declara CI-green. **F7.5 no iniciada.** F7.4 verde ≠ exponer a
-todos los usuarios (falta allowlist de egreso).
+**F7.4:** **COMPLETED** — gate §22.4 verde en CI (`Desktop · F7.4
+handoff FSM`, run 33218133543 / job 99006255307) y «CI · required
+checks passed». Handoff FSM in-memory + 423 Locked + screenshots
+pausadas; leak tests 13/13 sin Docker/E2B. **F7 (fase) sigue
+IN_PROGRESS.** **F7.5 no iniciada.** F7.4 verde ≠ exponer a todos
+los usuarios (falta allowlist de egreso).
 
 **F7.3:** **COMPLETED** — gate §22.3 verde en CI (`Desktop · F7.3
 CU-loop + SiraAction`, run 33215826539) y «CI · required checks
@@ -334,8 +334,8 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): IN_PROGRESS. F7.3 COMPLETED. **F7.4 IN_PROGRESS**
-  (handoff FSM + leak gate). Nada de F7.5–F7.8 (`network-policy.js`,
+- **F7** (fase): IN_PROGRESS. F7.0–F7.4 COMPLETED. **F7.5 no iniciada**
+  (egress allowlist). Nada de F7.5–F7.8 (`network-policy.js`,
   Prisma `DesktopSession`, LocalGvisor `runsc`).
 
 ## Pendiente
