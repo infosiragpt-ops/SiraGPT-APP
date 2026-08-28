@@ -9,8 +9,20 @@
 ## Fase activa
 
 **F7 — SiraComputer (multimodal + desktop VM).**
-Estado: **IN_PROGRESS**. Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-Siguiente sub-fase: **F7.2** — **no iniciada**.
+Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+**F7.2:** **COMPLETED** — gate unitario verde en este checkout
+(`node --test tests/desktop-f7-dcp.test.js` + F7.0/F7.1: 32 pass, 0 fail;
+screenshot-diff e integración Docker/E2B se omiten honestamente).
+CI de este PR aún no se ha visto. Siguiente: **F7.3** — no iniciada.
+
+**F7.2:** **COMPLETED** — DCP completo en `infra/desktop/dcp/dcp.py`
+(health/screenshot/click/type/scroll/launch/navigate/exec/file/cursor/
+input_mode/mask; 423 Locked en modo human). Proxy WS autenticado
+`/ws/desktop/:sessionId` (token userId/chatId, solo loopback, kill
+switch fail-closed). `DesktopScreen.tsx` con RFB; first frame cierra
+el panel negro; `viewOnly` en modo agent. El orquestador live se
+conservó. Tests: `desktop-f7-dcp.test.js` verdes aquí; CI no visto.
+**No se inicia F7.3 en este PR.**
 
 **F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
 (`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
@@ -315,13 +327,13 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.1 cerrado. F7.2 no se inicia en este PR.
-- Nada de F7.2–F7.8.
+- **F7** (fase): F7.2 cerrado a nivel unitario en este checkout. F7.3 no se inicia.
+- Nada de F7.3–F7.8.
 
 ## Pendiente
 
-- **F7.2** (siguiente): según spec §21 (no iniciar en este PR).
-- **F7.3–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F7.3** (siguiente): CU-loop (spec §21). No iniciar en este PR.
+- **F7.4–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
 - **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
   flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
@@ -335,7 +347,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
 2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-3. Implementar SOLO la sub-fase activa (siguiente: F7.1). No adelantar F7.2+.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.3). No adelantar F7.3+.
 4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas

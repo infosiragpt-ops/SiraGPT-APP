@@ -65,6 +65,8 @@ const nextConfig = {
     webpackMemoryOptimizations: true,
   },
 
+  transpilePackages: ['@novnc/novnc'],
+
   // Prevent Next.js from issuing a 308 redirect when the URL has a trailing
   // slash. Without this, /sira-promo/ → 308 → /sira-promo happens BEFORE
   // beforeFiles rewrites run, which causes the Replit cloud proxy to 502.
@@ -188,6 +190,11 @@ const nextConfig = {
         {
           source: '/api/:path*',
           destination: `${backendBase}/api/:path*`,
+        },
+        // F7.2 same-origin desktop viewer. Never api.siragpt.com.
+        {
+          source: '/ws/desktop/:sessionId',
+          destination: `${backendBase}/ws/desktop/:sessionId`,
         },
         // `/uploads/*` is served by Express via `express.static(uploadDir)`.
         {

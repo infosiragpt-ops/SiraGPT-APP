@@ -47,7 +47,8 @@ if [ -z "$NOVNC_WEB" ]; then
   NOVNC_WEB="/usr/share/novnc"
 fi
 
-# noVNC stays on loopback in F7.0 (WS proxy is a later phase).
+# noVNC stays on loopback. The authenticated viewer proxy lives on the
+# backend (/ws/desktop/:sessionId) — do not publish this port.
 websockify --web="$NOVNC_WEB" 127.0.0.1:6080 127.0.0.1:5900 &
 
 run_as_sira "python3 /opt/sira-dcp/dcp.py" &

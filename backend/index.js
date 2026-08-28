@@ -1676,6 +1676,15 @@ async function startServer() {
     // attached to the underlying Node server because Express never sees them.
     codeRunnerRoutes.attachPreviewWebSocketProxy(server);
 
+    // F7.2 same-origin noVNC proxy (/ws/desktop/:sessionId). Kill-switch
+    // fail-closed; token scoped to userId/chatId. Does not publish
+    // container ports and does not replace the live computer orchestrator.
+    try {
+        desktopRoutes.attachDesktopWebSocketProxy(server);
+    } catch (err) {
+        logger.warn({ err: err && err.message }, 'desktop_ws_proxy_init_failed');
+    }
+
     // Token-authenticated Vite HMR tunnel for cross-origin Codex previews.
     // Caddy forwards the upgrade to this HTTP server; the route resolves the
     // owning project's isolated runner port before bridging either direction.

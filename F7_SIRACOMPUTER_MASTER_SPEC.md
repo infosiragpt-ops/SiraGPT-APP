@@ -159,16 +159,42 @@ is F7.5. F7.0 does not implement or replace it.
 |---|---|---|---|
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
-| F7.2 | Session manager acquire SLO | no | acquire p95 documented |
-| F7.3 | WS proxy (noVNC to the member) | no | same-origin viewer on siragpt.com |
-| F7.4 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
-| F7.5 | Handoff FSM | no | pause / yield / resume |
+| **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **this PR** | §22.2 |
+| F7.3 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
+| F7.4 | Handoff FSM (beyond DCP input_mode) | no | pause / yield / resume |
+| F7.5 | — reserved; do not start | no | — |
 | F7.6 | LocalGvisor full flags (`runsc`, `--network none`) | no | fail-closed like F5 `resolveSandboxRuntime` |
 | F7.7 | Prisma `DesktopSession` tables | no | migrate deploy |
 | F7.8 | Frontend panel rewrite | no | UI lock; no `model_id` / DeepSeek |
 
-F7.2–F7.8 detail will grow **in this file** when that sub-phase becomes
+F7.3–F7.8 detail will grow **in this file** when that sub-phase becomes
 active. Do not implement them early.
+
+### F7.2 row (normative)
+
+- DCP: `infra/desktop/dcp/dcp.py` on `127.0.0.1:9000` only.
+  Routes: health, screenshot, click, double_click, move, drag, type,
+  key, scroll, launch, navigate, exec, file get/post, cursor,
+  input_mode (`agent`|`human` → 423 Locked on agent actions when
+  human), mask. Ready file contract unchanged
+  (`/workspace/.desktop_ready` after GET `/health` 200).
+- Viewer WS: `GET /ws/desktop/:sessionId` on the same-origin host
+  (siragpt.com). Token scoped `userId`/`chatId`/`sessionId`. Proxy
+  to the session handle's noVNC/websockify **loopback** port. Do not
+  publish container ports. Never `api.siragpt.com`.
+- Frontend: `components/desktop/DesktopScreen.tsx` (`@novnc/novnc`
+  RFB on a canvas). First framebuffer update ends the black panel.
+  `viewOnly=true` in agent mode. Wired into
+  `department-computer-pane` for `/api/desktop` leases. If
+  `SIRAGPT_DESKTOP_ENABLED` is off, the live computer orchestrator
+  path is unchanged.
+- Persistence: still in-memory (no Prisma `DesktopSession`).
+- Tests: `backend/tests/desktop-f7-dcp.test.js` (DRY DCP + mocked
+  xdotool; WS wrong-user 403). Screenshot-diff skips honestly
+  without Docker. No live E2B.
+- Out of scope: CU-loop, `tools.computer`, handoff FSM, Prisma
+  desktop tables, LocalGvisor `runsc` flags, replacing the live
+  computer orchestrator.
 
 ### F7.1 row (normative)
 
@@ -230,6 +256,20 @@ When Docker is **not** available:
   contracts, and the LocalGvisor argv (no silent runc/gVisor claims).
 
 Do not fake a green provision result.
+
+### 22.2 DCP + viewer gate (F7.2)
+
+Always-on without Docker / E2B:
+
+1. DCP source binds `127.0.0.1:9000` and exposes the F7.2 routes.
+2. Click / type / scroll succeed against a DRY DCP (fake xdotool).
+3. `input_mode=human` returns **423** on agent mutations.
+4. Viewer token for user A is rejected on user B's session (403).
+5. Kill switch unset/0 rejects `/ws/desktop` (503).
+6. Upstream target must be loopback. No container port publish.
+
+Screenshot-diff against a running `sira-desktop` container may skip
+honestly when Docker (or the image) is absent.
 
 ---
 

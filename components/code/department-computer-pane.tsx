@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
+import { DesktopScreen } from "@/components/desktop/DesktopScreen"
 import { PensandoBars } from "@/components/pensando-bars"
 import { emitLoginHandoff } from "@/lib/computer-login-handoff"
 
@@ -101,9 +102,11 @@ function userFacingComputerError(
 type DesktopLease = {
   sessionId: string
   wsUrl?: string
+  viewerToken?: string
   provider?: string
   expiresAt?: string
   status?: string
+  inputMode?: string
   fromPool?: boolean
 }
 
@@ -413,18 +416,15 @@ export function DepartmentComputerPane({
         {attachUrl ? (
           <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
         ) : desktopLease ? (
-          <div
-            className="absolute inset-0 flex items-center justify-center px-6 text-center"
-            role="img"
-            aria-label="Primera imagen del escritorio"
-            data-testid="desktop-first-frame"
-          >
-            <div className="flex flex-col items-center gap-2">
-              <DesktopMonitorGlyph className="h-10 w-10 text-zinc-500" />
-              <p className="text-sm text-zinc-300">Escritorio listo</p>
-              <p className="text-[11px] text-zinc-500">La vista en vivo llega en la siguiente fase.</p>
-            </div>
-          </div>
+          <DesktopScreen
+            key={desktopLease.sessionId}
+            sessionId={desktopLease.sessionId}
+            wsUrl={desktopLease.wsUrl}
+            viewerToken={desktopLease.viewerToken}
+            viewOnly={desktopLease.inputMode !== "human"}
+            className="absolute inset-0 h-full w-full min-h-0"
+            onFirstFrame={() => setStatusLine("En vivo")}
+          />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
             <div className="flex flex-col items-center gap-3">
