@@ -110,6 +110,15 @@ describe('siragpt-computer-orchestrator session contract', () => {
     assert.doesNotMatch(dockerfile, /useradd[^\n]*-u 1000/);
     assert.match(dockerfile, /getent passwd compuser/);
   });
+
+  test('docker runtime defaults to Engine API v1.44 for Docker 29 MinAPIVersion', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../../services/computer-orchestrator/docker-runtime.js'),
+      'utf8',
+    );
+    assert.match(src, /DEFAULT_API\s*=\s*.*['"]v1\.44['"]/);
+    assert.doesNotMatch(src, /DEFAULT_API\s*=\s*['"]v1\.43['"]/);
+  });
 });
 
 describe('orchestrator http server health', () => {

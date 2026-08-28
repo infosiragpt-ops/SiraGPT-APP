@@ -4,7 +4,7 @@ const http = require('http');
 const { spawn } = require('child_process');
 
 const DEFAULT_SOCKET = '/var/run/docker.sock';
-const DEFAULT_API = 'v1.43';
+const DEFAULT_API = 'v1.44';
 
 function memoryBytes(mb) {
   const n = Number(mb);
@@ -18,7 +18,8 @@ function nanoCpus(cpus) {
 
 function createDockerRuntime(opts = {}) {
   const socketPath = opts.socketPath || process.env.DOCKER_HOST_SOCKET || DEFAULT_SOCKET;
-  const apiVersion = opts.apiVersion || DEFAULT_API;
+  const rawApi = opts.apiVersion || process.env.DOCKER_API_VERSION || DEFAULT_API;
+  const apiVersion = String(rawApi).startsWith('v') ? String(rawApi) : `v${rawApi}`;
   const image = opts.image || process.env.AGENT_COMPUTER_DESKTOP_IMAGE || 'siragpt-computer-orchestrator:latest';
   const memoryMb = opts.memoryMb || process.env.AGENT_COMPUTER_DESKTOP_MEMORY_MB || 1024;
   const cpus = opts.cpus || process.env.AGENT_COMPUTER_DESKTOP_CPUS || '1';
