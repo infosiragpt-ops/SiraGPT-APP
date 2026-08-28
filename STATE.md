@@ -1,6 +1,6 @@
 # STATE — Estado del programa Frontier Agent
 
-- **Última actualización:** 2026-08-14
+- **Última actualización:** 2026-08-28
 - **Owner:** SiraGPT / Luis Carrera
 - **Repo:** `infosiragpt-ops/SiraGPT-APP`
 
@@ -8,8 +8,24 @@
 
 ## Fase activa
 
+**F7 — SiraComputer (multimodal + desktop VM).**
+Estado: **IN_PROGRESS**. Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+Siguiente sub-fase: **F7.1** (E2BDesktopProvider + warm pool) — **no iniciada**.
+
+**F7.0:** **COMPLETED** — gate §22.1 verde en CI (`Desktop · F7.0 sira-desktop
+provision`, run 33201966689). `docker build` de `sira-desktop` + contenedor +
+`GET :9000/health` `{status:"ok",display:":0"}` + screenshot PNG. En el VM
+del agente el daemon Docker no existía y el test se saltó honestamente; CI
+sí lo corrió. Interfaz `DesktopProvider` + stubs E2B/LocalGvisor + imagen
+`infra/desktop`. El orquestador live de #484 se conservó. **No se inicia F7.1
+en este PR.**
+
+---
+
+## Fase anterior (cerrada)
+
 **F5 — Sandbox hardening (gVisor, fail-closed, límites duros).**
-Estado: **COMPLETED (pendiente de merge/deploy — este PR)** — el driver
+Estado: **COMPLETED** — el driver
 docker del sandbox del doc-agent (`backend/src/services/doc-agent/sandbox.js`)
 sube de un contenedor Docker plano a aislamiento de producción: runtime
 gVisor (`--runtime runsc`) cuando el daemon lo tiene registrado, con
@@ -290,17 +306,15 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- Nada fuera de F5. F6+ NO se inicia (Playwright/web_search, computer-use,
-  voz, memoria/MCP, evals, LoRA, SSO, MinIO, Drizzle quedan secuenciados en
-  `ROADMAP.md`).
+- **F7** (fase): F7.0 cerrado. F7.1 no se inicia en este PR.
+- Nada de F7.1–F7.8.
 
 ## Pendiente
 
-- **F6 en adelante**, según `ROADMAP.md`: search/browser → multimodal →
-  memoria/skills/MCP → evals/optimizer → flywheel (router aprendido +
-  LoRA/vLLM) → enterprise (SSO/SCIM/Stripe/marketplace) → plataforma y
-  superficies (MinIO/OTel/canary, voz/cron/email/CLI/PWA, i18n, migración
-  Prisma→Drizzle).
+- **F7.1** (siguiente): `E2BDesktopProvider` real + warm pool. Spec §21.
+- **F7.2–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
+  flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
   `/etc/docker/daemon.json` (https://gvisor.dev/docs/user_guide/install/);
   hasta entonces, `SIRAGPT_SANDBOX_RUNTIME=runc` explícito mantiene el
@@ -311,10 +325,9 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 ## Cómo retoma una sesión futura
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
-2. Leer `ROADMAP.md` para el alcance y el gate de la fase activa.
-3. Implementar SOLO la fase activa. No adelantar fases. No reabrir la base obligatoria.
-4. Al cerrar: tests + evals verdes, commit propio, actualizar `STATE.md`
-   (fase cerrada → siguiente fase activa) en el mismo PR.
+2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.1). No adelantar F7.2+.
+4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas
 

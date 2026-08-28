@@ -6,6 +6,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Next production release] — 2026-07-22
 
+### Added
+
+- SiraComputer F7.0 (COMPLETED in CI): model-agnostic `DesktopProvider`
+  (`create` / `destroy` / `health` / `screenshot`) plus the `sira-desktop`
+  image (Xvfb :0, openbox, x11vnc/noVNC, xdotool, scrot, DCP on
+  `127.0.0.1:9000`). E2B and full gVisor flags stay stubs. The live
+  computer orchestrator from #484 is unchanged. Spec:
+  `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+
 ### Fixed
 
 - Computer orchestrator image build no longer fails with `useradd: UID 1000

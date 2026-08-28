@@ -769,6 +769,31 @@ jobs:
           retention-days: 7
 
   # ───────────────────────────────────────────────────────────────────
+  # F7.0 — sira-desktop provision (Docker is on ubuntu-latest)
+  # Unit contracts also run in the backend shard; this job is the
+  # honest docker-build + health + screenshot gate. If Docker were
+  # missing the test file skips — it is not missing here.
+  # ───────────────────────────────────────────────────────────────────
+  desktop-f70:
+    name: Desktop · F7.0 sira-desktop provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: F7.0 DesktopProvider + docker provision gate
+        run: node --test tests/desktop-provider-f70.test.js
+
+  # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
   # Branch protection on `main` can require this single status instead
@@ -776,7 +801,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, desktop-f70, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -788,6 +813,10 @@ jobs:
           fi
           if [[ "${{ needs.backend.result }}" != "success" ]]; then
             echo "✗ backend: ${{ needs.backend.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f70.result }}" != "success" ]]; then
+            echo "✗ desktop-f70: ${{ needs.desktop-f70.result }}"
             exit 1
           fi
           if [[ "${{ needs.licenses.result }}" != "success" ]]; then
