@@ -39,6 +39,11 @@ const STAGE_LABELS = {
   replanning: 'Replanificando',
   budgetExceeded: 'Presupuesto agotado',
   steered: 'Instrucción recibida',
+  // F7.4 — handoff / takeover (existing generate/trace channel)
+  handoffRequested: 'El agente pide que tomes el control',
+  handoffGranted: 'Tú controlas el escritorio',
+  handoffReturned: 'El agente retoma el control',
+  handoffTimeout: 'La entrega de control expiró',
 };
 
 /** Tools whose whole purpose is verification, not mutation. */
@@ -113,6 +118,14 @@ function toStageEvent(ev) {
       return { ...base, label: ev.label || STAGE_LABELS.budgetExceeded };
     case 'steered':
       return { ...base, label: ev.label || STAGE_LABELS.steered };
+    case 'handoff_requested':
+      return { ...base, label: ev.label || STAGE_LABELS.handoffRequested };
+    case 'handoff_granted':
+      return { ...base, label: ev.label || STAGE_LABELS.handoffGranted };
+    case 'handoff_returned':
+      return { ...base, label: ev.label || STAGE_LABELS.handoffReturned };
+    case 'handoff_timeout':
+      return { ...base, label: ev.label || STAGE_LABELS.handoffTimeout };
     case 'error':
       return {
         ...base,

@@ -7,7 +7,7 @@
  * pool > 0). Missing kill-switch / missing provider fail CLOSED with
  * honest Spanish copy. Never talks to the live computer orchestrator.
  *
- * human_control / agent_control are placeholders (FSM is F7.4).
+ * F7.4 wires the handoff FSM (human_control / agent_control are live).
  * Persistence is in-memory (Prisma DesktopSession is F7.7).
  */
 
@@ -22,6 +22,13 @@ const {
   isGenericProvisionError,
 } = require('./desktop-errors');
 const { issueDesktopWsToken } = require('./ws-token');
+const {
+  createHandoffFsm,
+  STATES: HANDOFF_STATES,
+  EVENT_TYPES: HANDOFF_EVENTS,
+  clampTimeout,
+} = require('./handoff-fsm');
+const { callDcp } = require('./dcp-client');
 
 const SESSION_STATUSES = Object.freeze([
   'starting',
@@ -180,6 +187,11 @@ class DesktopSessionManager {
       clearInterval(this._reaperTimer);
       this._reaperTimer = null;
     }
+    for (const rec of this.sessions.values()) {
+      if (rec.handoff && typeof rec.handoff.abort === 'function') {
+        try { rec.handoff.abort({ reason: 'stopped' }); } catch (_) { /* ignore */ }
+      }
+    }
   }
 
   async acquire(chatId, opts = {}) {
@@ -226,6 +238,12 @@ class DesktopSessionManager {
       provider: handle.provider || provider.kind || this.providerKind(),
       status: 'ready',
       inputMode: 'agent',
+      handoff: createHandoffFsm({
+        sessionId,
+        now: () => this.now(),
+        timeoutMs: clampTimeout(this.env.SIRAGPT_HANDOFF_TIMEOUT_MS),
+        onEvent: (ev) => this._emitHandoff(sessionId, ev),
+      }),
       acquiredAt,
       lastHeartbeat: acquiredAt,
       expiresAt,
@@ -253,6 +271,9 @@ class DesktopSessionManager {
     if (!rec) return { released: false };
     this.sessions.delete(rec.sessionId);
     rec.status = 'idle';
+    if (rec.handoff && typeof rec.handoff.abort === 'function') {
+      try { rec.handoff.abort({ reason: 'released' }); } catch (_) { /* ignore */ }
+    }
     if (keepWarm && this.pool.length < this.cfg.poolMax) {
       this.pool.push({
         handle: rec.handle,
@@ -336,7 +357,88 @@ class DesktopSessionManager {
       });
     }
     rec.inputMode = next;
+    rec.status = next === 'human' ? 'human_control' : 'agent_control';
+    void this._syncDcpInputMode(rec, next);
     return this._toLease(rec);
+  }
+
+  getHandoff(sessionId) {
+    const rec = this.sessions.get(String(sessionId || ''));
+    return rec && rec.handoff ? rec.handoff : null;
+  }
+
+  isHumanControl(sessionId) {
+    const fsm = this.getHandoff(sessionId);
+    if (fsm) return fsm.isHumanControl();
+    const rec = this.sessions.get(String(sessionId || ''));
+    return Boolean(rec && rec.inputMode === 'human');
+  }
+
+  screenshotsPaused(sessionId) {
+    const fsm = this.getHandoff(sessionId);
+    if (fsm) return fsm.screenshotsPaused();
+    return this.isHumanControl(sessionId);
+  }
+
+  requestHandoff(sessionId, opts = {}) {
+    return this.applyHandoff(sessionId, 'request', opts);
+  }
+
+  applyHandoff(sessionId, action, opts = {}) {
+    const rec = this.sessions.get(String(sessionId || ''));
+    if (!rec) {
+      throw new DesktopProviderError('La sesión de escritorio no existe.', {
+        code: 'desktop_session_not_found',
+        status: 404,
+      });
+    }
+    if (!rec.handoff) {
+      rec.handoff = createHandoffFsm({
+        sessionId: rec.sessionId,
+        now: () => this.now(),
+        timeoutMs: clampTimeout(this.env.SIRAGPT_HANDOFF_TIMEOUT_MS),
+        onEvent: (ev) => this._emitHandoff(rec.sessionId, ev),
+      });
+    }
+    const snap = rec.handoff.apply(action, opts);
+    rec.inputMode = rec.handoff.inputMode();
+    rec.status = rec.handoff.isHumanControl()
+      || rec.handoff.state === HANDOFF_STATES.HANDOFF_REQUESTED
+      ? 'human_control'
+      : 'agent_control';
+    void this._syncDcpInputMode(rec, rec.inputMode);
+    if (typeof opts.onEvent === 'function' && snap) {
+      const last = rec.handoff.events[rec.handoff.events.length - 1];
+      if (last) {
+        try { opts.onEvent(last); } catch (_) { /* never throw into REST */ }
+      }
+    }
+    return this._toLease(rec);
+  }
+
+  waitForResume(sessionId, opts = {}) {
+    const fsm = this.getHandoff(sessionId);
+    if (!fsm) {
+      return Promise.resolve({ resumed: false, status: HANDOFF_EVENTS.REQUESTED, ok: false, waited: false });
+    }
+    return fsm.waitForResume(opts);
+  }
+
+  _emitHandoff(sessionId, ev) {
+    const rec = this.sessions.get(String(sessionId || ''));
+    if (rec && typeof rec.onHandoff === 'function') {
+      try { rec.onHandoff(ev); } catch (_) { /* ignore */ }
+    }
+  }
+
+  async _syncDcpInputMode(rec, mode) {
+    const handle = rec && rec.handle;
+    if (!handle) return;
+    try {
+      await callDcp(handle, { method: 'POST', path: '/input_mode', body: { mode } });
+    } catch (_) {
+      // best-effort: fake handles and dry DCP must not fail the FSM
+    }
   }
 
   async refillPool() {
@@ -466,6 +568,8 @@ class DesktopSessionManager {
       expiresAt: rec.expiresAt,
       status: rec.status,
       inputMode: rec.inputMode || 'agent',
+      handoffState: rec.handoff ? rec.handoff.state : HANDOFF_STATES.AGENT_CONTROL,
+      screenshotsPaused: rec.handoff ? rec.handoff.screenshotsPaused() : rec.inputMode === 'human',
       chatId: rec.chatId,
       userId: rec.userId || null,
       fromPool: Boolean(rec.fromPool),

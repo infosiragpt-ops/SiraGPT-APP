@@ -12,18 +12,21 @@
  * image sent to the model was resized.
  *
  * Screen content is DATA, never instructions. Does not talk to the live
- * computer orchestrator. Handoff FSM / UI is F7.4 — this loop only
- * surfaces HANDOFF_REQUESTED.
+ * computer orchestrator. F7.4: waitForResume on HUMAN_CONTROL; screenshots
+ * to the model are paused until the member returns. A new screenshot is
+ * taken after handoff_returned. Abort / timeout never declare success.
  */
 
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { isDesktopEnabled } = require('../desktop/session-manager');
 const { DESKTOP_DISABLED_ES } = require('../desktop/desktop-errors');
 const { toSiraActions, scalePoint } = require('./adapters');
+const { toStageEvent } = require('./trace');
 const {
   executeComputer,
   takeScreenshot,
   packShot,
+  pausedShot,
   FAKE_FRAME_PNG,
   looksLikeSecret,
 } = require('./tools.computer');
@@ -204,7 +207,25 @@ async function runCuLoop(opts = {}) {
   const imageSize = opts.imageSize || null;
   const sessionManager = opts.sessionManager;
   const exec = typeof opts.executeComputer === 'function' ? opts.executeComputer : executeComputer;
+  const waitForHandoff = opts.waitForHandoff !== false;
   const started = Date.now();
+  const emitHandoff = (ev) => {
+    if (!ev) return;
+    if (typeof opts.onHandoff === 'function') {
+      try { opts.onHandoff(ev); } catch (_) { /* ignore */ }
+    }
+    if (typeof opts.onStage === 'function') {
+      const stage = toStageEvent({
+        type: ev.type,
+        tool: 'computer',
+        label: handoffStageLabel(ev.type),
+        preview: ev.reason,
+      });
+      if (stage) {
+        try { opts.onStage(stage); } catch (_) { /* ignore */ }
+      }
+    }
+  };
 
   const { controller, signal, cleanup } = composeAbortSignals(
     [opts.signal],
@@ -227,7 +248,9 @@ async function runCuLoop(opts = {}) {
 
   const finish = async (result) => {
     cleanup();
-    const shouldRelease = Boolean(lease && sessionManager && result.release !== false);
+    const shouldRelease = Boolean(
+      lease && sessionManager && opts.release !== false && result.release !== false,
+    );
     if (shouldRelease && typeof sessionManager.release === 'function') {
       try { await sessionManager.release(lease.sessionId); } catch (_) { /* idempotent */ }
     }
@@ -251,6 +274,13 @@ async function runCuLoop(opts = {}) {
       const resolved = await resolveSession(sessionManager, { chatId, userId, env });
       lease = resolved.lease;
       handle = sessionManager.getHandle(lease.sessionId) || opts.handle;
+    } else if (sessionManager) {
+      lease = (chatId && typeof sessionManager.findByChatId === 'function'
+        ? sessionManager.findByChatId(chatId)
+        : null)
+        || (opts.sessionId && typeof sessionManager.status === 'function'
+          ? sessionManager.status(opts.sessionId)
+          : null);
     }
 
     const llm = opts.llm;
@@ -265,6 +295,35 @@ async function runCuLoop(opts = {}) {
       });
     }
 
+    const shotCtx = () => ({
+      sessionManager,
+      sessionId: lease && lease.sessionId,
+      handle,
+    });
+
+    const pauseForHuman = async () => {
+      if (!waitForHandoff || !sessionManager || typeof sessionManager.waitForResume !== 'function') {
+        return { resumed: false, skipped: true };
+      }
+      const sid = lease && lease.sessionId;
+      if (!sid || typeof sessionManager.screenshotsPaused !== 'function') {
+        return { resumed: false, skipped: true };
+      }
+      if (!sessionManager.screenshotsPaused(sid) && !sessionManager.isHumanControl(sid)) {
+        return { resumed: false, skipped: true };
+      }
+      const resume = await sessionManager.waitForResume(sid, {
+        signal,
+        timeoutMs: opts.handoffTimeoutMs,
+      });
+      emitHandoff({ type: resume && resume.status, reason: resume && resume.reason });
+      if (resume && resume.resumed) {
+        lastShot = await takeScreenshot(handle, { signal, fetchImpl: opts.fetchImpl, ctx: shotCtx() });
+        return { resumed: true, status: resume.status };
+      }
+      return resume || { resumed: false, status: 'handoff_timeout' };
+    };
+
     for (let step = 0; step < budgets.maxSteps; step += 1) {
       throwIfAborted(signal);
       if (Date.now() - started > budgets.wallMs) {
@@ -272,7 +331,13 @@ async function runCuLoop(opts = {}) {
         break;
       }
 
-      lastShot = await takeScreenshot(handle, { signal, fetchImpl: opts.fetchImpl });
+      const pre = await pauseForHuman();
+      if (pre && pre.resumed === false && !pre.skipped) {
+        status = pre.status || 'handoff_timeout';
+        break;
+      }
+
+      lastShot = await takeScreenshot(handle, { signal, fetchImpl: opts.fetchImpl, ctx: shotCtx() });
       if (step > 0 && step % budgets.compactEvery === 0) {
         const compacted = compactScreenshotHistory(messages, { keepLast: KEEP_RECENT_SHOTS });
         messages.splice(0, messages.length, ...compacted);
@@ -331,27 +396,70 @@ async function runCuLoop(opts = {}) {
           env,
           chatId,
           userId,
+          sessionId: lease && lease.sessionId,
           image: imageSize,
           native,
         });
-        if (result && result.screenshot) lastShot = result.screenshot;
+        if (result && result.screenshot && !(result.screenshot.paused)) lastShot = result.screenshot;
+        else if (result && result.screenshot && result.screenshot.paused) {
+          lastShot = pausedShot();
+        }
         recordTrace(trace, action);
         steps.push({
           step,
           action: { type: action.type },
           result: result && result.status ? result.status : (result && result.text ? String(result.text).slice(0, 200) : 'ok'),
         });
+        const toolShot = result && result.screenshot && result.screenshot.paused
+          ? pausedShot()
+          : (result && result.screenshot);
         messages.push({
           role: 'tool',
           content: result && result.text ? String(result.text).slice(0, 4000) : 'ok',
-          screenshot: result && result.screenshot,
+          screenshot: toolShot,
         });
 
-        if (result && result.status === 'HANDOFF_REQUESTED' || action.type === 'request_handoff') {
+        if ((result && result.status === 'HANDOFF_REQUESTED') || action.type === 'request_handoff') {
           handoffs += 1;
+          emitHandoff({ type: 'handoff_requested', reason: action.reason });
+          if (waitForHandoff && sessionManager && typeof sessionManager.waitForResume === 'function' && lease) {
+            const resume = await sessionManager.waitForResume(lease.sessionId, {
+              signal,
+              timeoutMs: opts.handoffTimeoutMs,
+            });
+            emitHandoff({ type: resume && resume.status, reason: resume && resume.reason });
+            if (resume && resume.resumed) {
+              lastShot = await takeScreenshot(handle, { signal, fetchImpl: opts.fetchImpl, ctx: shotCtx() });
+              messages.push({
+                role: 'tool',
+                content: 'HANDOFF_RETURNED — nueva captura post-login. No reescribir secretos.',
+                screenshot: lastShot,
+              });
+              status = 'running';
+              stop = false;
+              break;
+            }
+            status = (resume && resume.status) || 'handoff_timeout';
+            stop = true;
+            break;
+          }
           status = 'HANDOFF_REQUESTED';
           stop = true;
           break;
+        }
+        if (result && result.status === 'human_control') {
+          emitHandoff({ type: 'handoff_granted', reason: 'force' });
+          const waited = await pauseForHuman();
+          if (waited && waited.resumed) {
+            status = 'running';
+            stop = false;
+            break;
+          }
+          if (waited && !waited.skipped) {
+            status = waited.status || 'human_control';
+            stop = true;
+            break;
+          }
         }
         if (action.type === 'done' || (result && result.status === 'done')) {
           status = 'done';
@@ -413,6 +521,15 @@ async function runCuLoop(opts = {}) {
   }
 }
 
+function handoffStageLabel(type) {
+  const t = String(type || '');
+  if (t === 'handoff_requested') return 'El agente pide que tomes el control';
+  if (t === 'handoff_granted') return 'Tú controlas el escritorio';
+  if (t === 'handoff_returned') return 'El agente retoma el control';
+  if (t === 'handoff_timeout') return 'La entrega de control expiró';
+  return '';
+}
+
 function isAbortLike(err) {
   if (!err) return false;
   return err.name === 'AbortError'
@@ -432,4 +549,5 @@ module.exports = {
   DEFAULT_MAX_HANDOFFS,
   COMPACT_EVERY,
   SCREEN_DATA_PREAMBLE,
+  handoffStageLabel,
 };

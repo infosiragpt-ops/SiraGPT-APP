@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraComputer F7.4 (IN_PROGRESS — leak gate, CI `desktop-f74` not seen
+  yet): in-memory handoff FSM
+  (`AGENT_CONTROL → HANDOFF_REQUESTED → HUMAN_CONTROL → RESUMING →
+  AGENT_CONTROL`), CU-loop `waitForResume`, paused screenshots while
+  the member types, 423 Locked on agent DCP actions, REST
+  `POST /api/desktop/session/:id/handoff`, `HandoffBanner` (Spanish).
+  Secrets never reach the LLM. F7.5 (egress) is not started. The live
+  computer orchestrator is unchanged.
 - SiraComputer F7.2 (IN_PROGRESS — waiting on CI frontend + desktop-f71 +
   desktop-f72): full Desktop
   Control Plane on `127.0.0.1:9000` (click/type/scroll/launch/navigate/exec/

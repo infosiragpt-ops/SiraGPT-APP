@@ -10,16 +10,22 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
+**F7.4:** **IN_PROGRESS** — handoff / takeover FSM (HARD leak gate).
+Gate local §22.4 verde en este checkout
+(`node --test tests/desktop-f7-handoff.test.js`: 13/13, sin Docker/E2B).
+CI `desktop-f74` **aún no se ha visto** — no se marca COMPLETED ni
+se declara CI-green. **F7.5 no iniciada.** F7.4 verde ≠ exponer a
+todos los usuarios (falta allowlist de egreso).
+
 **F7.3:** **COMPLETED** — gate §22.3 verde en CI (`Desktop · F7.3
 CU-loop + SiraAction`, run 33215826539) y «CI · required checks
 passed». `computer` tool + Anthropic/OpenAI/Gemini → SiraAction +
 CU-loop (vision, grounding, `verifyGoal`, budgets 40 / 5 min / 3
 handoffs, AbortSignal). `executeComputer` habla con DCP vía
 `DesktopSessionManager` (reusa lease del chat; kill switch
-`SIRAGPT_DESKTOP_ENABLED` fail-closed). `request_handoff` es solo una
-acción que devuelve `HANDOFF_REQUESTED` (FSM/UI = F7.4). Tests
-`backend/tests/desktop-f7-cu-loop.test.js`: 16 pass / 0 fail, sin
-Docker / sin E2B. **No se inicia F7.4.**
+`SIRAGPT_DESKTOP_ENABLED` fail-closed). `request_handoff` es una
+acción; el FSM/UI es F7.4. Tests
+`backend/tests/desktop-f7-cu-loop.test.js` verdes sin Docker / E2B.
 
 **F7.2:** **merged** — PR #488 / `b43f3aeb` (DCP completo + WS proxy
 autenticado + DesktopScreen). Este PR no reabre F7.2 ni declara su CI
@@ -328,15 +334,14 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.3 COMPLETED (CI `desktop-f73` + required checks).
-- **F7.4 no iniciada.** Nada de F7.4–F7.8 (`handoff-fsm.js`,
-  `network-policy.js`, Prisma `DesktopSession`, LocalGvisor `runsc`).
+- **F7** (fase): IN_PROGRESS. F7.3 COMPLETED. **F7.4 IN_PROGRESS**
+  (handoff FSM + leak gate). Nada de F7.5–F7.8 (`network-policy.js`,
+  Prisma `DesktopSession`, LocalGvisor `runsc`).
 
 ## Pendiente
 
-- **F7.4** (siguiente): handoff FSM (pause / yield / resume) — spec §21.
-  No iniciar en este PR.
-- **F7.5–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F7.5** (siguiente, no iniciada): egress allowlist — spec §21.
+- **F7.6–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
 - **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
   flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
@@ -350,7 +355,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
 2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-3. Implementar SOLO la sub-fase activa (siguiente: F7.4). No adelantar F7.4+.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.5). No adelantar F7.5+.
 4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas
