@@ -13,6 +13,7 @@ import { Folder, Globe, Monitor, TerminalSquare, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
 import { PensandoBars } from "@/components/pensando-bars"
 import { emitLoginHandoff } from "@/lib/computer-login-handoff"
@@ -33,7 +34,9 @@ export type DepartmentComputerPaneProps = {
   onStatusChange?: (status: "starting" | "live" | "error" | "idle") => void
 }
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
+function computerApiBase() {
+  return getSameOriginApiBaseUrl().replace(/\/+$/, "")
+}
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -66,22 +69,26 @@ function cacheKey(conversationId?: string | null) {
 
 function userFacingComputerError(message?: string): string {
   const msg = String(message || "").trim()
-  if (!msg) return "No se pudo abrir la computadora."
+  if (!msg) return "No se pudo abrir la computadora. El escritorio no está disponible."
   if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg)) return "No se pudo abrir la computadora."
-  if (/^[a-z0-9_]+$/i.test(msg)) return "No se pudo abrir la computadora."
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network/i.test(msg)) {
+    return "No se pudo abrir la computadora. El escritorio no está disponible."
+  }
+  if (/^[a-z0-9_]+$/i.test(msg)) return "No se pudo abrir la computadora. El escritorio no está disponible."
   return msg
 }
 
 function embedFrom(session: AgentSession): string {
-  if (session.embedUrl) return session.embedUrl
+  const raw = String(session.embedUrl || session.novncUrl || "").trim()
+  if (raw && !/computer\.(siragpt|chatagic)\.com/i.test(raw)) return raw
   const id = session.sessionId
   if (!id) return ""
-  return `/agent-computer/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=agent-computer/sessions/${id}/novnc/websockify`
+  return `/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=sessions/${id}/novnc/websockify`
 }
 
 async function postMemberDesktop(chatId: string, useQuery: boolean) {
   const qs = chatId && useQuery ? `?conversationId=${encodeURIComponent(chatId)}` : ""
-  const res = await authenticatedFetch(`${API_BASE}/agent-computer/sessions${qs}`, {
+  const res = await authenticatedFetch(`${computerApiBase()}/agent-computer/sessions${qs}`, {
     method: "POST",
     credentials: "include",
     headers: authHeaders(),
@@ -134,7 +141,7 @@ export function prewarmDepartmentDesktop(_departmentId = "ceo-office", conversat
 
 async function focusDesktopApp(app: string, conversationId?: string | null) {
   const chatId = String(conversationId || "").trim()
-  const res = await authenticatedFetch(`${API_BASE}/agent-computer/action`, {
+  const res = await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
     method: "POST",
     credentials: "include",
     headers: authHeaders(),

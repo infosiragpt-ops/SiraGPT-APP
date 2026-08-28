@@ -12,7 +12,29 @@
 # ── SiraGPT itself (explicit hosts — always matched before the catch-all
 # below, so SiraGPT is never affected by user publishing) ──────────────
 siragpt.com, www.siragpt.com, office.siragpt.com {
-	encode zstd gzip
+	# Live SSE fix (do not drop): never gzip/zstd text/event-stream.
+	# /api/ai/generate* must flush immediately. Backup: iliagpt-gateway
+	# Caddy 2.10 — flush_interval -1 + X-Accel-Buffering: no.
+	encode zstd gzip {
+		match {
+			header Content-Type text/*
+			header Content-Type application/json*
+			header Content-Type application/javascript*
+			header Content-Type application/xhtml+xml*
+			header Content-Type application/xml*
+			header Content-Type image/svg+xml*
+			header Content-Type font/*
+			header Content-Type application/wasm*
+			not header Content-Type text/event-stream*
+		}
+	}
+
+	handle /api/ai/generate* {
+		reverse_proxy backend:5000 {
+			flush_interval -1
+			header_down X-Accel-Buffering no
+		}
+	}
 
 	handle /api/agents* {
 		reverse_proxy frontend:3000
@@ -28,6 +50,19 @@ siragpt.com, www.siragpt.com, office.siragpt.com {
 
 	handle /api/demo {
 		reverse_proxy frontend:3000
+	}
+
+	# Viewer on https://siragpt.com/sessions/:id/novnc/ — not computer.siragpt.com.
+	handle /sessions/* {
+		reverse_proxy siragpt-computer-orchestrator:8090 {
+			flush_interval -1
+		}
+	}
+
+	handle_path /agent-computer/* {
+		reverse_proxy siragpt-computer-orchestrator:8090 {
+			flush_interval -1
+		}
 	}
 
 	handle /api/* {

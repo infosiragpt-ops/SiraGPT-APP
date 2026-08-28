@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` computer pane («Pantalla de Siragpt») no longer shows raw
+  «fetch failed». `POST /api/agent-computer/sessions` talks to a real
+  `siragpt-computer-orchestrator:8090` on the iliagpt docker network, and
+  embed URLs are `https://siragpt.com/sessions/:id/novnc/…` (not
+  `computer.siragpt.com`, which 404s). Caddy still does not gzip/zstd
+  `text/event-stream`; `/api/ai/generate*` keeps `flush_interval -1` and
+  `X-Accel-Buffering: no`.
 - The `/agentes` `@` Apps picker now shows official catalog logos
   (GitHub invertocat, LinkedIn in, X, Facebook f, and every other row
   with a `/conexiones-logos/` mark). Connected vs Conectar stays a

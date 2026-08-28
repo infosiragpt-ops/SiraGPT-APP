@@ -34,6 +34,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { PensandoBars } from "@/components/pensando-bars"
 import {
   CODE_PREVIEW_STATE_EVENT,
@@ -42,7 +43,9 @@ import {
   CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
 } from "@/lib/code-workspace-context"
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
+function computerApiBase() {
+  return getSameOriginApiBaseUrl().replace(/\/+$/, "")
+}
 
 type DockApp = "desktop" | "browser" | "files" | "terminal"
 
@@ -123,7 +126,7 @@ export function AgentComputerShell({
       if (app === "desktop") return
       setFocusNote(null)
       try {
-        await authenticatedFetch(`${API_BASE}/agent-computer/action`, {
+        await authenticatedFetch(`${computerApiBase()}/agent-computer/action`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },

@@ -266,11 +266,16 @@ services:
       CODEX_AGENT_V2: "${CODEX_AGENT_V2:-}"
       CODEX_IMPLEMENTER_ADAPTER: "${CODEX_IMPLEMENTER_ADAPTER:-native}"
       CODE_RUNNER_URL: "${CODE_RUNNER_URL:-http://runner:4097}"
+      AGENT_COMPUTER_ORCHESTRATOR_URL: "${AGENT_COMPUTER_ORCHESTRATOR_URL:-http://siragpt-computer-orchestrator:8090}"
+      AGENT_COMPUTER_PUBLIC_BASE: "${AGENT_COMPUTER_PUBLIC_BASE:-https://siragpt.com}"
+      SIRAGPT_AGENT_COMPUTER: "${SIRAGPT_AGENT_COMPUTER:-1}"
+      NEXT_PUBLIC_AGENT_COMPUTER: "${NEXT_PUBLIC_AGENT_COMPUTER:-1}"
       # Host-visible base dir the runner's /export bind-mount maps to (display
       # only; shown to the user so they can find the mirrored project on disk).
       CODEX_EXPORT_HOST_DIR: "${CODEX_EXPORT_HOST_DIR:-.codex-workspaces}"
     volumes:
       - uploads_data:/app/uploads
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       db:
         condition: service_healthy
@@ -392,6 +397,47 @@ services:
       - "5173:5173"   # dev server → preview iframe
     expose:
       - "4097"        # control API (backend → runner)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Persistent per-member Linux desktop (noVNC + Chrome CDP). Hostname must
+  # be siragpt-computer-orchestrator so orch-client.js default URL resolves
+  # on the same docker network as iliagpt-backend.
+  computer-orchestrator:
+    container_name: siragpt-computer-orchestrator
+    hostname: siragpt-computer-orchestrator
+    build:
+      context: ./services/computer-orchestrator
+      dockerfile: Dockerfile
+    image: siragpt-computer-orchestrator:latest
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      AGENT_COMPUTER_ORCH_DRIVER: "${AGENT_COMPUTER_ORCH_DRIVER:-docker}"
+      AGENT_COMPUTER_DESKTOP_IMAGE: "${AGENT_COMPUTER_DESKTOP_IMAGE:-siragpt-computer-orchestrator:latest}"
+      AGENT_COMPUTER_DESKTOP_MEMORY_MB: "${AGENT_COMPUTER_DESKTOP_MEMORY_MB:-1024}"
+      AGENT_COMPUTER_DESKTOP_CPUS: "${AGENT_COMPUTER_DESKTOP_CPUS:-1}"
+      AGENT_COMPUTER_MAX_DESKTOPS: "${AGENT_COMPUTER_MAX_DESKTOPS:-8}"
+      AGENT_COMPUTER_DOCKER_NETWORK: "${AGENT_COMPUTER_DOCKER_NETWORK:-}"
+      AGENT_COMPUTER_API_KEY: "${AGENT_COMPUTER_API_KEY:-}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
     logging:
       driver: "json-file"
       options:

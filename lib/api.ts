@@ -9,7 +9,7 @@ import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { resolveCatalogModel } from "./chat/catalog-model"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
-export { getNormalizedApiBaseUrl } from "./api-base-url"
+export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
 // with `node backend/scripts/generate-api-types.js` whenever schemas change.
