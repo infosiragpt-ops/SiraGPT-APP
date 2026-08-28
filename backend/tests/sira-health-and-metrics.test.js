@@ -492,7 +492,10 @@ describe("checkModelProvidersConfigured", () => {
       ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
       GROQ_API_KEY: process.env.GROQ_API_KEY,
       GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+      GOOGLE_GENERATIVE_AI_API_KEY: process.env.GOOGLE_GENERATIVE_AI_API_KEY,
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
+      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+      XAI_API_KEY: process.env.XAI_API_KEY,
     };
     try {
       for (const k of Object.keys(originals)) delete process.env[k];
@@ -505,6 +508,38 @@ describe("checkModelProvidersConfigured", () => {
         else process.env[k] = v;
       }
     }
+  });
+
+  test("reports every provider the TEXT catalog routes to", () => {
+    const r = checkModelProvidersConfigured({});
+    for (const name of [
+      "openai",
+      "anthropic",
+      "groq",
+      "gemini",
+      "openrouter",
+      "deepseek",
+      "xai",
+    ]) {
+      assert.equal(r.details.providers[name], false, `${name} missing from model_providers`);
+    }
+  });
+
+  test("counts deepseek and xai keys", () => {
+    const r = checkModelProvidersConfigured({
+      DEEPSEEK_API_KEY: "sk-deepseek",
+      XAI_API_KEY: "xai-key",
+    });
+    assert.equal(r.details.providers.deepseek, true);
+    assert.equal(r.details.providers.xai, true);
+    assert.equal(r.details.providers.openrouter, false);
+    assert.equal(r.details.configured_count, 2);
+    assert.equal(r.status, "healthy");
+  });
+
+  test("accepts GOOGLE_GENERATIVE_AI_API_KEY as a gemini key", () => {
+    const r = checkModelProvidersConfigured({ GOOGLE_GENERATIVE_AI_API_KEY: "goog-key" });
+    assert.equal(r.details.providers.gemini, true);
   });
 });
 

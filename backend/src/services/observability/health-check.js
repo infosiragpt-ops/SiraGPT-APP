@@ -436,12 +436,18 @@ function checkModelProvidersConfigured(env = process.env) {
   // Informational only — environment configuration is an ops concern,
   // not a runtime invariant. Surfaces *which* providers are reachable
   // so dashboards can flag missing keys without 503'ing the API.
+  // Every provider the TEXT catalog can route to gets a row, so a missing
+  // key is visible here instead of only surfacing as a 503 mid-chat.
+  // Gemini accepts either name — createProviderClient reads GEMINI_API_KEY,
+  // while the boot-time audit also honours GOOGLE_GENERATIVE_AI_API_KEY.
   const providers = {
     openai: Boolean(env.OPENAI_API_KEY),
     anthropic: Boolean(env.ANTHROPIC_API_KEY),
     groq: Boolean(env.GROQ_API_KEY),
-    gemini: Boolean(env.GEMINI_API_KEY),
+    gemini: Boolean(env.GEMINI_API_KEY || env.GOOGLE_GENERATIVE_AI_API_KEY),
     openrouter: Boolean(env.OPENROUTER_API_KEY),
+    deepseek: Boolean(env.DEEPSEEK_API_KEY),
+    xai: Boolean(env.XAI_API_KEY),
   };
   const configured = Object.values(providers).filter(Boolean).length;
   return {
