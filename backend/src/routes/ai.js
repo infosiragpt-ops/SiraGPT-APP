@@ -391,7 +391,8 @@ function createProviderClient(provider, opts = {}) {
     });
   }
 
-
+  // Custom / Ollama / HuggingFace already handled at the top via
+  // createCustomProviderClient — never fall through to OpenAI.
   return new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
   });
@@ -1256,6 +1257,12 @@ function sanitizeErrorForUser(error) {
   }
   if (/timeout|timed.?out|ETIMEDOUT/i.test(msg)) {
     return 'La solicitud tardó demasiado. Intenta de nuevo.';
+  }
+  if (/ECONNREFUSED|ENOTFOUND|ECONNRESET|fetch failed|socket hang up/i.test(msg)) {
+    return 'Este modelo no se pudo ejecutar. No cambié a otro modelo. Revisa la conexión local o elige otro modelo.';
+  }
+  if (/model.?not.?found|unknown model|does not exist|invalid model|not found.*model/i.test(msg)) {
+    return 'Este modelo no se pudo ejecutar. No cambié a otro modelo. Elige otro modelo o revisa la configuración.';
   }
   return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
 }

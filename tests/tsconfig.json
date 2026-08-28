@@ -31,6 +31,8 @@
     "../lib/long-paste.ts",
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",
+    "../lib/chat/catalog-model.ts",
+    "../lib/chat/model-preference.ts",
     "../lib/chat/code-block-utils.ts",
     "../lib/chat/ocr-preprocess.ts",
     "../lib/computer-login-handoff.ts",

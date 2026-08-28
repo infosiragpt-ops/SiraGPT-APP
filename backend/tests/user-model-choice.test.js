@@ -23,6 +23,29 @@ test('generate does not auto-redirect the user picker to org preferredModel', ()
   );
 });
 
+test('generate routes Custom/Ollama through the local connection client', () => {
+  assert.match(
+    aiRoute,
+    /createCustomProviderClient/,
+    'Custom/Ollama/HuggingFace must not fall through to OpenAI',
+  );
+  assert.match(
+    aiRoute,
+    /isCustomProvider\(provider\)/,
+    'the local Custom provider names must be recognized',
+  );
+});
+
+test('generate surfaces a Spanish error when the selected model cannot run', () => {
+  assert.match(
+    aiRoute,
+    /Este modelo no se pudo ejecutar\. No cambié a otro modelo/,
+    'failed Custom/local models must error in Spanish on that model',
+  );
+  assert.match(aiRoute, /ECONNREFUSED/);
+  assert.match(aiRoute, /unknown model/);
+});
+
 test('generate does not steal a user-selected model via reasoning-orchestrator', () => {
   assert.match(
     aiRoute,

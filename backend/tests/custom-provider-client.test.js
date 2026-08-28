@@ -30,6 +30,7 @@ test('isCustomProvider: Custom / Custom API / ollama only', () => {
   assert.equal(isCustomProvider('custom'), true);
   assert.equal(isCustomProvider('Custom API'), true);
   assert.equal(isCustomProvider('Ollama'), true);
+  assert.equal(isCustomProvider('HuggingFace'), true);
   assert.equal(isCustomProvider('DeepSeek'), false);
   assert.equal(isCustomProvider('OpenAI'), false);
   assert.equal(isCustomProvider('OpenRouter'), false);

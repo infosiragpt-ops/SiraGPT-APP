@@ -13,7 +13,8 @@ const PRO_RE =
   /(?:deepseek[-/_\s]?v?4[-/_\s]?pro|deepseek\s*v4\s*pro|v4[-_\s]?pro(?:\s+live)?)/i
 const FLASH_RE =
   /(?:deepseek[-/_\s]?v?4[-/_\s]?flash|deepseek\s*v4\s*flash|v4[-_\s]?flash)/i
-const RAW_VENDOR_RE = /deepseek|openai|gpt-?4|gpt-?5|o1\b|o3\b|o4-mini/i
+const RAW_VENDOR_RE = /deepseek|openai|gpt-?4|gpt-?5|o1\b|o3\b|o4-mini|ollama|huggingface|moondream/i
+const HIDDEN_PROVIDER_RE = /^(deepseek|ollama|huggingface|moondream)$/i
 
 export type BrandLabelSource = {
   name?: string | null
@@ -57,11 +58,24 @@ export function looksLikeRawVendorModelId(label: string): boolean {
   return RAW_VENDOR_RE.test(trimmed)
 }
 
+function isExplicitProductLabel(label: string): boolean {
+  const trimmed = String(label || "").trim()
+  if (!trimmed) return false
+  if (trimmed === SIRA_PRO_LABEL || trimmed === SIRA_RAPIDO_LABEL) return false
+  if (isProGenerationModel(trimmed) || isFlashGenerationModel(trimmed)) return false
+  if (looksLikeRawVendorModelId(trimmed)) return false
+  return true
+}
+
 /**
  * Map a model descriptor to the picker / composer label.
- * DeepSeek Flash/Pro → Sira aliases. Everything else keeps its catalog name.
+ * DeepSeek Flash/Pro → Sira aliases. An explicit catalog displayName
+ * (e.g. SiraGPT Mini) always wins so raw ids never leak into the pill.
  */
 export function brandModelLabel(source: BrandLabelSource): string {
+  const display = typeof source === "string" ? "" : firstString(source?.displayName)
+  if (isExplicitProductLabel(display)) return display
+
   if (isProGenerationModel(source)) return SIRA_PRO_LABEL
   if (isFlashGenerationModel(source)) return SIRA_RAPIDO_LABEL
 
@@ -69,21 +83,34 @@ export function brandModelLabel(source: BrandLabelSource): string {
     ? source
     : firstString(source?.displayName, source?.name)
   if (!raw) return SIRA_RAPIDO_LABEL
-  return raw
+  if (looksLikeRawVendorModelId(raw) && display && isExplicitProductLabel(display)) return display
+  return hideForbiddenVendorLabel(raw)
+}
+
+function hideForbiddenVendorLabel(label: string): string {
+  const trimmed = String(label || "").trim()
+  if (!trimmed) return SIRA_RAPIDO_LABEL
+  if (/\bmoondream\b/i.test(trimmed)) return "SiraGPT Mini"
+  if (/^sira[- ]?mini$/i.test(trimmed) || /^siragpt[- ]?mini$/i.test(trimmed)) return "SiraGPT Mini"
+  if (/ollama|huggingface/i.test(trimmed)) return "Sira"
+  if (/^deepseek\b/i.test(trimmed)) return SIRA_RAPIDO_LABEL
+  return trimmed
 }
 
 /**
  * Provider / attribution line for chat chrome.
- * DeepSeek Flash/Pro stay "Sira". Other vendors keep their provider name
- * so GPT/Claude/Grok rows are distinguishable.
+ * DeepSeek Flash/Pro stay "Sira". Hidden local vendors (Ollama,
+ * HuggingFace, moondream) are not shown — the product label is enough.
  */
 export function brandProviderLabel(source: BrandLabelSource): string {
   if (isProGenerationModel(source) || isFlashGenerationModel(source)) return "Sira"
   if (!source) return "Sira"
   if (typeof source === "string") {
     const trimmed = source.trim()
-    if (/^deepseek$/i.test(trimmed)) return "Sira"
+    if (HIDDEN_PROVIDER_RE.test(trimmed)) return "Sira"
     return trimmed || "Sira"
   }
-  return firstString(source.provider) || "Sira"
+  const provider = firstString(source.provider)
+  if (!provider || HIDDEN_PROVIDER_RE.test(provider)) return "Sira"
+  return provider
 }
