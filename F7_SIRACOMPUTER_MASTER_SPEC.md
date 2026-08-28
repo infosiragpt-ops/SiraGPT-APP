@@ -159,7 +159,7 @@ is F7.5. F7.0 does not implement or replace it.
 |---|---|---|---|
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
-| **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **this PR** | §22.2 |
+| **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **COMPLETED** (CI 33214651334) | §22.2 |
 | F7.3 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
 | F7.4 | Handoff FSM (beyond DCP input_mode) | no | pause / yield / resume |
 | F7.5 | — reserved; do not start | no | — |

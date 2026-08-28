@@ -10,13 +10,12 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-**F7.2:** **IN_PROGRESS** — CI run 33213964824 rojo (frontend `@novnc/novnc`
-`./lib/rfb`; desktop-f71 `jsonwebtoken`; desktop-f72 `ws`). Este PR
-corrige: DesktopScreen client-only (`next/dynamic` + `ssr:false`) e
-import RFB vía export oficial `@novnc/novnc`; `jsonwebtoken` lazy en
-ws-token; `npm ci` en desktop-f71/f72. No se marca COMPLETED hasta que
-estén verdes frontend + desktop-f71 + desktop-f72 + «CI · required
-checks passed». **No se inicia F7.3.**
+**F7.2:** **COMPLETED** — CI run 33214651334 verde en `34e1a6b12`
+(Frontend · build, Desktop · F7.1, Desktop · F7.2, «CI · required
+checks passed»). DCP completo, proxy WS autenticado, DesktopScreen
+client-only (`next/dynamic` + `ssr:false`, RFB vía `@novnc/novnc`).
+`jsonwebtoken` lazy; `npm ci` en desktop-f71/f72. El orquestador live
+se conservó. **No se inicia F7.3.**
 
 **F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
 (`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
@@ -321,7 +320,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.2 IN_PROGRESS — esperar CI verde. F7.3 no se inicia.
+- **F7** (fase): F7.2 COMPLETED en CI 33214651334. F7.3 no se inicia.
 - Nada de F7.3–F7.8.
 
 ## Pendiente
