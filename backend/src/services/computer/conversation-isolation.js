@@ -20,6 +20,12 @@ function publicComputerError(err, fallback = OPEN_FAILED_ES) {
   if (looksLikeSecretOrStack(raw)) return fallback;
   const trimmed = raw.replace(/\s+/g, ' ').trim();
   if (!trimmed) return fallback;
+  if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT|orchestrator HTTP|ORCH_/i.test(trimmed)) {
+    return 'No se pudo abrir la computadora. El escritorio no está disponible.';
+  }
+  if (/deepseek|model[_-]?id/i.test(trimmed)) {
+    return 'No se pudo abrir la computadora.';
+  }
   return trimmed.slice(0, 180);
 }
 

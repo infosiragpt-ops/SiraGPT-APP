@@ -1,0 +1,44 @@
+# Overlay for /home/user/deployments/iliagpt/compose.yaml (project iliagpt).
+# Use:  docker compose -p iliagpt -f compose.yaml -f this-file …
+# or paste the service under services: in compose.yaml.
+#
+# build.context is relative to the same tree publish.sh already uses
+# for backend/frontend (this repo's services/computer-orchestrator).
+# Network must match iliagpt-backend (iliagpt-app).
+# MAX_DESKTOPS default 2 — 8×1GB OOM'd the Lenovo before.
+# AGENT_COMPUTER_PUBLIC_BASE stays https://siragpt.com. No DNS.
+
+services:
+  computer-orchestrator:
+    container_name: siragpt-computer-orchestrator
+    hostname: siragpt-computer-orchestrator
+    build:
+      context: ./services/computer-orchestrator
+      dockerfile: Dockerfile
+    image: siragpt-computer-orchestrator:latest
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      AGENT_COMPUTER_ORCH_DRIVER: docker
+      AGENT_COMPUTER_DESKTOP_IMAGE: siragpt-computer-orchestrator:latest
+      AGENT_COMPUTER_DESKTOP_MEMORY_MB: "1024"
+      AGENT_COMPUTER_DESKTOP_CPUS: "1"
+      AGENT_COMPUTER_MAX_DESKTOPS: "2"
+      AGENT_COMPUTER_DOCKER_NETWORK: iliagpt-app
+      AGENT_COMPUTER_PUBLIC_BASE: https://siragpt.com
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8090"
+    networks:
+      - iliagpt-app
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+networks:
+  iliagpt-app:
+    external: true
+    name: iliagpt-app

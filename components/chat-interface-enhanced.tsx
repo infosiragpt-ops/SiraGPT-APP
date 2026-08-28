@@ -131,7 +131,7 @@ import {
   connectGptStoreApp,
   resolveConnectPlan,
 } from "@/lib/gpts-apps-connect"
-import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
+import { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import {
   ImageAspectRatioMark,
   SelectedTextDisplay,
@@ -12180,7 +12180,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     let cancelled = false;
     const pull = async () => {
       try {
-        const api = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "");
+        const api = getSameOriginApiBaseUrl().replace(/\/+$/, "");
         const res = await authenticatedFetch(
           `${api}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}${computerPanelOpen ? "&probe=1" : ""}`,
           { credentials: "include", signal: AbortSignal.timeout(12_000) },

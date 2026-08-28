@@ -6,7 +6,8 @@
  * NEXT_PUBLIC_AGENT_COMPUTER / SIRAGPT_AGENT_COMPUTER must be explicitly
  * 1/true/on to expose /api/agent-computer and route computer_* to the VM.
  *
- * Public viewer host is computer.siragpt.com — never computer.chatagic.com.
+ * Public viewer host is siragpt.com (path prefix) — never computer.siragpt.com
+ * or computer.chatagic.com.
  * DeepSeek only; OpenRouter model ids are rejected.
  * Sessions are always-on per member (no idle destroy TTL).
  */
@@ -29,7 +30,7 @@ function agentComputerEnabled(env = process.env) {
   return env.NODE_ENV !== 'test';
 }
 
-const PUBLIC_HOST = 'computer.siragpt.com';
+const PUBLIC_HOST = 'siragpt.com';
 const DEEPSEEK_FLASH = 'deepseek-v4-flash';
 const DEEPSEEK_PRO = 'deepseek-v4-pro';
 const MAX_CONTROL_STEPS = 25;
@@ -41,7 +42,7 @@ function publicComputerHost(env = process.env) {
     .toLowerCase()
     .replace(/^https?:\/\//, '')
     .replace(/\/.*$/, '');
-  if (!raw || raw.includes('chatagic')) return PUBLIC_HOST;
+  if (!raw || raw.includes('chatagic') || raw.includes('computer.siragpt.com')) return PUBLIC_HOST;
   return raw || PUBLIC_HOST;
 }
 

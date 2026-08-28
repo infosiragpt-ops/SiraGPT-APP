@@ -27,6 +27,7 @@ import { formatScheduleEsPE } from "@/lib/format-schedule-es-pe"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import {
   LOGIN_HANDOFF_WINDOW_EVENT,
   emitLoginHandoff,
@@ -53,7 +54,9 @@ const SCHEDULE_PRESETS: Array<{ id: string; label: string; cron: string }> = [
   { id: "hourly", label: "Cada hora", cron: "0 * * * *" },
 ]
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api").replace(/\/+$/, "")
+function computerApiBase() {
+  return getSameOriginApiBaseUrl().replace(/\/+$/, "")
+}
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
@@ -144,7 +147,7 @@ export default function ChatAgentComputerPanel({
     const pull = async () => {
       try {
         const res = await authenticatedFetch(
-          `${API_BASE}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}&probe=1`,
+          `${computerApiBase()}/agent-computer/login-handoff?conversationId=${encodeURIComponent(chatId)}&probe=1`,
           { credentials: "include", headers: authHeaders(), signal: AbortSignal.timeout(15_000) },
         )
         const body = await res.json().catch(() => ({}))
@@ -179,7 +182,7 @@ export default function ChatAgentComputerPanel({
     setHandoffActive(false)
     if (!chatId) return
     try {
-      await authenticatedFetch(`${API_BASE}/agent-computer/login-handoff`, {
+      await authenticatedFetch(`${computerApiBase()}/agent-computer/login-handoff`, {
         method: "POST",
         credentials: "include",
         headers: authHeaders(),
