@@ -8,8 +8,8 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
-- SiraComputer F7.2 (IN_PROGRESS — waiting on CI frontend + desktop-f71 +
-  desktop-f72): full Desktop
+- SiraComputer F7.2 (COMPLETED — CI 33214651334: frontend + desktop-f71 +
+  desktop-f72 + required checks): full Desktop
   Control Plane on `127.0.0.1:9000` (click/type/scroll/launch/navigate/exec/
   file/cursor/input_mode/mask; 423 Locked when human owns input),
   authenticated same-origin `/ws/desktop/:sessionId` proxy (token scoped
