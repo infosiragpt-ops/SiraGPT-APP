@@ -6208,7 +6208,24 @@ footer {
 
 .composer-plus-liquid-button:active {
   transform: scale(0.94);
-  transition-duration: 90ms;
+}
+
+/* Persistent app pins — logo-only chips to the right of the "+" button.
+   The close affordance is hover/focus on desktop and always visible on
+   touch (no hover exists there). Closing never disconnects OAuth. */
+.pinned-chip-close {
+  display: none;
+}
+
+@media (hover: none) {
+  .pinned-chip-close {
+    display: grid;
+  }
+}
+
+.pinned-chip:hover .pinned-chip-close,
+.pinned-chip:focus-visible .pinned-chip-close {
+  display: grid;
 }
 
 .composer-plus-liquid-button:disabled {

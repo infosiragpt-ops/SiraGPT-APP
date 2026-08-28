@@ -1375,11 +1375,26 @@ class ApiClient {
 
   // Returns AddMessageEnvelope at runtime — kept as `any` because the
   // local Message interface narrows `id` to `string`.
-  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string | Record<string, unknown>; idempotencyKey?: string }): Promise<any> {
+  async addMessage(chatId: string, data: { role: string; content: string; files?: string[]; metadata?: string | Record<string, unknown>; idempotencyKey?: string; pinnedAppIds?: string[] }): Promise<any> {
     return this.request(`/chats/${chatId}/messages`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
+  }
+
+  /** Persistent app pins of a conversation (server-side source of truth). */
+  async getChatPins(chatId: string): Promise<string[]> {
+    const res = await this.request(`/chats/${chatId}/pins`, { method: 'GET' });
+    return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];
+  }
+
+  /** Replace the conversation's pinned apps. Throws with { code, appId } on rejection. */
+  async setChatPins(chatId: string, pinnedAppIds: string[]): Promise<string[]> {
+    const res = await this.request(`/chats/${chatId}/pins`, {
+      method: 'PUT',
+      body: JSON.stringify({ pinnedAppIds }),
+    });
+    return Array.isArray(res?.pinnedAppIds) ? res.pinnedAppIds.map(String) : [];
   }
 
   async clearChat(chatId: string): Promise<SuccessEnvelope | null> {
@@ -1665,7 +1680,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, idempotencyKey?: string, mentionedApps?: string[] },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,

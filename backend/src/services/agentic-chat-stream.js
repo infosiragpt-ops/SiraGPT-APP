@@ -1031,8 +1031,19 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           userQuery,
           toolContext.mentionedApps,
         );
+        // Persistent pins behave like implicit mentions on every turn: the
+        // user pinned the app in the composer rail, so its tools stay loaded
+        // until unpinned. Only connected, available apps survive validation
+        // (classifyMentions drops the rest), so a revoked token never leaks
+        // a tool into the model.
+        const pinnedIds = Array.isArray(toolContext.pinnedAppIds)
+          ? toolContext.pinnedAppIds.slice(0, 4)
+          : [];
         const rows = await appRuntime.listByUser(toolContext.prisma, toolContext.userId);
-        const classified = appRuntime.classifyMentions(mentionedIds, rows);
+        const classified = appRuntime.classifyMentions(
+          Array.from(new Set([...mentionedIds, ...pinnedIds])),
+          rows,
+        );
         toolContext.mentionedAppTools = appRuntime.mentionedToolNames(classified.attached);
         toolContext.mentionedAppsResolved = classified;
       } catch (mentionErr) {

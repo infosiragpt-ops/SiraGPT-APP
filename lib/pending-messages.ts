@@ -32,6 +32,8 @@ export interface PendingAIRequestEnvelope {
   webGroundingQuery?: string
   webSearchMode?: string
   mentionedApps?: string[]
+  /** Persistent app pins — replayed on every turn of the conversation. */
+  pinnedAppIds?: string[]
 }
 
 export interface PendingGeneratePayload extends PendingAIRequestEnvelope {

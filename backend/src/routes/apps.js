@@ -4,6 +4,7 @@ const express = require('express');
 const { authenticateToken } = require('../middleware/auth');
 const prisma = require('../config/database');
 const apps = require('../services/apps');
+const appPins = require('../services/apps/pins');
 
 const router = express.Router();
 
@@ -18,6 +19,7 @@ function sendError(res, error, fallback = 500) {
 router.get('/', (_req, res) => {
   return res.json({
     apps: apps.listManifests().map((app) => apps.publicManifest(app)),
+    pinsEnabled: appPins.PINS_ENABLED,
   });
 });
 
