@@ -8,6 +8,7 @@ import {
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { resolveCatalogModel } from "./chat/catalog-model"
+import { resolveChatTurnModel } from "./chat/chat-model-guard"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -1673,14 +1674,24 @@ class ApiClient {
     options: AIStreamOptions = {}
   ) {
     const locked = resolveCatalogModel(data.model, [], data.provider);
+    const turn = resolveChatTurnModel({
+      selectedModel: locked.name,
+      provider: locked.provider,
+      prompt: data.prompt,
+    });
+    if (turn.action !== "chat") {
+      onError(new Error(turn.message || "Este modelo no sirve para chatear. Elige DeepSeek V4 Flash o Pro."));
+      return;
+    }
     const turnKey = typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()
       ? data.idempotencyKey.trim()
       : safeUUID();
     data = {
       ...data,
-      provider: locked.provider,
-      model: locked.name,
+      provider: turn.provider,
+      model: turn.name,
       idempotencyKey: turnKey,
+      disableAgentic: data.disableAgentic || turn.disableAgentic || undefined,
     };
     const url = `${this.baseURL}/ai/generate`;
     const baseConfig: RequestInit = {

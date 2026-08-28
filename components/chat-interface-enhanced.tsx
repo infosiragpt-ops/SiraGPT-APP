@@ -166,6 +166,7 @@ import {
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { clampDeepSeekModel } from "@/lib/sse-client"
+import { resolveChatTurnModel } from "@/lib/chat/chat-model-guard"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
@@ -9785,7 +9786,19 @@ But first, you need to connect your Spotify account securely using the button be
     const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
 
-    const activeFreePreviewTool = isFreePlan
+    const chatTurnGuard = resolveChatTurnModel({
+      selectedModel,
+      provider: selectProvider,
+      prompt: msg,
+    });
+    if (chatTurnGuard.action === "reject_media") {
+      toast.error(chatTurnGuard.message);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    const skipMediaGenerator = chatTurnGuard.action !== "media";
+
+    const activeFreePreviewTool = isFreePlan && !skipMediaGenerator
       ? (isImageGenerationActive || chatType === 'image')
         ? 'Imágenes'
         : (isVideoGenerationActive || chatType === 'video')
@@ -9813,7 +9826,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     let imageModelForSendOverride: string | undefined;
-    if (isImageGenerationActive || chatType === 'image') {
+    if (!skipMediaGenerator && (isImageGenerationActive || chatType === 'image')) {
       const selectedImageModelForSend = selectedImageModel?.trim();
       let activeImageModel: any = null;
       try {
@@ -10259,14 +10272,14 @@ REWRITTEN TEXT:`;
       }
     }
 
-    if (isVideoGenerationActive || chatType === 'video') {
+    if (!skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
       isGeneratingVideoRef.current = true;
       isVideoGenerationActiveRef.current = true;
       setIsVideoGenerationActive(true);
       setChatType('video');
     }
 
-    if (isVoiceGenerationActive) {
+    if (!skipMediaGenerator && isVoiceGenerationActive) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
@@ -10282,7 +10295,7 @@ REWRITTEN TEXT:`;
       return;
     }
 
-    if (isMusicGenerationActive) {
+    if (!skipMediaGenerator && isMusicGenerationActive) {
       isGeneratingMusicRef.current = true;
       setIsGeneratingMusic(true);
       setIsMusicGenerationActive(true);
@@ -10421,7 +10434,7 @@ REWRITTEN TEXT:`;
         markQueuedSendSucceeded();
         return;
       }
-      if (isImageGenerationActive || chatType === 'image') {
+      if (!skipMediaGenerator && (isImageGenerationActive || chatType === 'image')) {
         // Even with the "Imágenes" composer mode on (it can be left sticky by
         // a previous generation), an ANALYSIS question about an image
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
@@ -10432,7 +10445,7 @@ REWRITTEN TEXT:`;
           return;
         }
       }
-      if (isVideoGenerationActive || chatType === 'video') {
+      if (!skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
         isGeneratingVideoRef.current = true;
         isVideoGenerationActiveRef.current = true;
         setIsVideoGenerationActive(true);

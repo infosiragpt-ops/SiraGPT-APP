@@ -32,6 +32,7 @@
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",
     "../lib/chat/catalog-model.ts",
+    "../lib/chat/chat-model-guard.ts",
     "../lib/chat/model-preference.ts",
     "../lib/chat/code-block-utils.ts",
     "../lib/chat/ocr-preprocess.ts",
