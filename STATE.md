@@ -10,17 +10,16 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-**F7.3:** **IN_PROGRESS** — `computer` tool + Anthropic/OpenAI/Gemini →
-SiraAction + CU-loop (vision, grounding, `verifyGoal`, budgets 40 /
-5 min / 3 handoffs, AbortSignal). `executeComputer` habla con DCP vía
+**F7.3:** **COMPLETED** — gate §22.3 verde en CI (`Desktop · F7.3
+CU-loop + SiraAction`, run 33215826539) y «CI · required checks
+passed». `computer` tool + Anthropic/OpenAI/Gemini → SiraAction +
+CU-loop (vision, grounding, `verifyGoal`, budgets 40 / 5 min / 3
+handoffs, AbortSignal). `executeComputer` habla con DCP vía
 `DesktopSessionManager` (reusa lease del chat; kill switch
 `SIRAGPT_DESKTOP_ENABLED` fail-closed). `request_handoff` es solo una
 acción que devuelve `HANDOFF_REQUESTED` (FSM/UI = F7.4). Tests
-unitarios en `backend/tests/desktop-f7-cu-loop.test.js` (fake provider
-+ fake LLM; sin Docker / sin E2B). Gate local: **16 pass / 0 fail**
-(`node --test tests/desktop-f7-cu-loop.test.js`). **No se marca
-COMPLETED** — el job CI `desktop-f73` aún no se ha visto verde.
-**No se inicia F7.4.**
+`backend/tests/desktop-f7-cu-loop.test.js`: 16 pass / 0 fail, sin
+Docker / sin E2B. **No se inicia F7.4.**
 
 **F7.2:** **merged** — PR #488 / `b43f3aeb` (DCP completo + WS proxy
 autenticado + DesktopScreen). Este PR no reabre F7.2 ni declara su CI
@@ -329,8 +328,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.3 IN_PROGRESS (CU-loop + adapters). Esperar
-  `desktop-f73` verde en CI antes de COMPLETED.
+- **F7** (fase): F7.3 COMPLETED (CI `desktop-f73` + required checks).
 - **F7.4 no iniciada.** Nada de F7.4–F7.8 (`handoff-fsm.js`,
   `network-policy.js`, Prisma `DesktopSession`, LocalGvisor `runsc`).
 

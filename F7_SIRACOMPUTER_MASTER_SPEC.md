@@ -252,7 +252,7 @@ orchestrator.
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
 | **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **COMPLETED** (merged #488) | §22.2 |
-| **F7.3** | `computer_*` / `computer` tool + Anthropic/OpenAI/Gemini → SiraAction + CU-loop (vision, grounding, verification, budget, AbortSignal) | **this PR** | §22.3 |
+| **F7.3** | `computer_*` / `computer` tool + Anthropic/OpenAI/Gemini → SiraAction + CU-loop (vision, grounding, verification, budget, AbortSignal) | **COMPLETED** (CI desktop-f73) | §22.3 |
 | F7.4 | Handoff FSM (beyond DCP input_mode / `request_handoff` action) | no | pause / yield / resume |
 | F7.5 | — reserved; do not start | no | — |
 | F7.6 | LocalGvisor full flags (`runsc`, `--network none`) | no | fail-closed like F5 `resolveSandboxRuntime` |
@@ -412,9 +412,10 @@ Always-on without Docker / E2B:
 - **F7.1 COMPLETED** only if `desktop-f7-provision.test.js` is green
   (warm-pool acquire SLO, no generic error, reaper, kill switch). Live
   E2B may skip honestly.
-- **F7.3 IN_PROGRESS** until `desktop-f7-cu-loop.test.js` is green
-  locally **and** the `desktop-f73` CI job has been seen green. Do not
-  mark COMPLETED on local-only runs if a new CI job fails.
+- **F7.3 COMPLETED** only if `desktop-f7-cu-loop.test.js` is green
+  **and** the `desktop-f73` CI job has been seen green (this PR: run
+  33215826539). Do not mark COMPLETED on local-only runs if a new CI
+  job fails.
 
 ### Deploy (Luis)
 
