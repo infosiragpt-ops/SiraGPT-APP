@@ -436,8 +436,10 @@ function createProviderClientForRequest(provider, req, opts = {}) {
 
 // One-shot boot-time provider-key audit. Logs a single WARN for each
 // missing key so operators see at a glance which providers will 503.
-// Models from unconfigured providers are also hidden from /api/ai/models
-// (see the filter inside that route handler below).
+// Note: models from unconfigured providers are still listed by
+// /api/ai/models — provider-key gating is deliberately off so the picker
+// shows every active model (see the note at the end of that handler).
+// /api/health `model_providers` is the place to check which keys are set.
 (function auditProviderKeys() {
   const checks = [
     { name: 'OpenAI', envKey: 'OPENAI_API_KEY' },
@@ -455,7 +457,7 @@ function createProviderClientForRequest(provider, req, opts = {}) {
   if (missing.length > 0) {
     console.info(
       `[ai] Optional provider API keys not configured: ${missing.map((m) => `${m.name} (${m.envKey})`).join(', ')}. `
-      + 'Requests to these providers will be hidden from /api/ai/models and return 503 if invoked directly.'
+      + 'Models from these providers stay listed in /api/ai/models but will return 503 when invoked.'
     );
   }
 })();
