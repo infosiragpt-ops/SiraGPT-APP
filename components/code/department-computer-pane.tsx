@@ -74,6 +74,7 @@ function userFacingComputerError(message?: string): string {
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network/i.test(msg)) {
     return "No se pudo abrir la computadora. El escritorio no está disponible."
   }
+  if (/deepseek|model[_-]?id/i.test(msg)) return "No se pudo abrir la computadora."
   if (/^[a-z0-9_]+$/i.test(msg)) return "No se pudo abrir la computadora. El escritorio no está disponible."
   return msg
 }

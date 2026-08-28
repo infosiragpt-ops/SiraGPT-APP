@@ -22,8 +22,12 @@ describe("department computer pane API base + errors", () => {
     }
     assert.match(helper, /getSameOriginApiBaseUrl/)
     assert.match(helper, /api\\.siragpt\\.com/)
+    assert.match(helper, /NODE_ENV === "production"/)
+    assert.match(helper, /localhost:5000/)
+    assert.match(helper, /return "\/api"/)
     assert.match(pane, /El escritorio no está disponible/)
     assert.match(pane, /fetch failed/)
+    assert.match(pane, /deepseek\|model\[_-]\?id/)
     assert.match(pane, /computer\\\.\(siragpt\|chatagic\)/)
   })
 

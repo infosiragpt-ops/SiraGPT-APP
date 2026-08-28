@@ -32,7 +32,7 @@ const {
 } = require('../computer-use-action-mapper');
 const { capControlSteps } = require('./control-loop');
 
-const OPENROUTER_DENIED_ES = 'Generate solo usa DeepSeek Flash/Pro. OpenRouter está prohibido.';
+const OPENROUTER_DENIED_ES = 'Ese modelo no está permitido en la computadora.';
 const COMPUTER_FLAG_OFF_ES = 'La computadora no está habilitada. No ejecuté la herramienta.';
 const COMPUTER_NO_USER_ES = 'Falta el usuario de esta computadora. No ejecuté la herramienta.';
 const COMPUTER_NO_SESSION_ES = 'No hay sesión de computadora. No ejecuté la herramienta.';

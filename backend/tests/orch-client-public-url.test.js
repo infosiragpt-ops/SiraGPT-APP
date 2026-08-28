@@ -57,5 +57,9 @@ describe('agent-computer public URL rewrite', () => {
       'No se pudo abrir la computadora. El escritorio no está disponible.',
     );
     assert.doesNotMatch(publicComputerError({ message: 'fetch failed' }), /fetch failed/);
+    assert.doesNotMatch(
+      publicComputerError({ message: 'Generate solo usa DeepSeek Flash/Pro' }),
+      /deepseek|model_id/i,
+    );
   });
 });

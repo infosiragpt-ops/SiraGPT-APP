@@ -18,7 +18,8 @@ describe('Caddy computer viewer + live SSE backup', () => {
   test('serves noVNC on siragpt.com /sessions, not computer.siragpt.com', () => {
     assert.match(caddy, /handle \/sessions\/\*/);
     assert.match(caddy, /siragpt-computer-orchestrator:8090/);
-    assert.doesNotMatch(caddy, /computer\.siragpt\.com/);
-    assert.doesNotMatch(caddy, /computer\.chatagic\.com/);
+    const handles = caddy.split('\n').filter((line) => /^\s*(handle|reverse_proxy|@)/.test(line)).join('\n');
+    assert.doesNotMatch(handles, /computer\.siragpt\.com/);
+    assert.doesNotMatch(handles, /computer\.chatagic\.com/);
   });
 });

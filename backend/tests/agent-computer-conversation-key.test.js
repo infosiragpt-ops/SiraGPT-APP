@@ -214,6 +214,7 @@ describe('agent-computer conversation session key', () => {
     assert.equal(denied.ok, false);
     assert.equal(denied.code, 'openrouter_denied');
     assert.doesNotMatch(denied.message, /sk-/);
+    assert.doesNotMatch(denied.message, /deepseek|model_id/i);
     const ok = guard.refuseOpenRouterComputerModel('deepseek-v4-pro');
     assert.equal(ok.ok, true);
     assert.match(ok.model, /deepseek/);
