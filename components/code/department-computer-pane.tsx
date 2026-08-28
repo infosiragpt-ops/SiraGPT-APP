@@ -62,21 +62,86 @@ type AgentSession = {
 
 const sessionCache = new Map<string, AgentSession>()
 
+const GENERIC_DESKTOP_UNAVAILABLE =
+  "No se pudo abrir la computadora. El escritorio no está disponible."
+const PREPARING_DESKTOP_ES = "Preparando escritorio…"
+
 function cacheKey(conversationId?: string | null) {
   const id = String(conversationId || "").trim()
   return id ? `chat:${id}` : "member"
 }
 
-function userFacingComputerError(message?: string): string {
+type DesktopPoolHint = { poolWarm: number; enabled: boolean; starting: boolean }
+
+function userFacingComputerError(
+  message?: string,
+  hint: DesktopPoolHint = { poolWarm: 0, enabled: false, starting: false },
+): string {
+  if (hint.poolWarm > 0 || hint.starting) {
+    const msg = String(message || "").trim()
+    if (!msg || /fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network|El escritorio no está disponible/i.test(msg)) {
+      return PREPARING_DESKTOP_ES
+    }
+    if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg) || /deepseek|model[_-]?id/i.test(msg)) {
+      return PREPARING_DESKTOP_ES
+    }
+    return msg
+  }
   const msg = String(message || "").trim()
-  if (!msg) return "No se pudo abrir la computadora. El escritorio no está disponible."
+  if (!msg) return GENERIC_DESKTOP_UNAVAILABLE
   if (/sk-[A-Za-z0-9_-]{8,}/i.test(msg)) return "No se pudo abrir la computadora."
   if (/fetch failed|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|AbortError|timed out|orchestrator|ORCH_|network/i.test(msg)) {
-    return "No se pudo abrir la computadora. El escritorio no está disponible."
+    return GENERIC_DESKTOP_UNAVAILABLE
   }
   if (/deepseek|model[_-]?id/i.test(msg)) return "No se pudo abrir la computadora."
-  if (/^[a-z0-9_]+$/i.test(msg)) return "No se pudo abrir la computadora. El escritorio no está disponible."
+  if (/^[a-z0-9_]+$/i.test(msg)) return GENERIC_DESKTOP_UNAVAILABLE
   return msg
+}
+
+type DesktopLease = {
+  sessionId: string
+  wsUrl?: string
+  provider?: string
+  expiresAt?: string
+  status?: string
+  fromPool?: boolean
+}
+
+async function getDesktopStatus(): Promise<{ enabled: boolean; poolWarm: number } | null> {
+  try {
+    const res = await authenticatedFetch(`${computerApiBase()}/desktop/status`, {
+      method: "GET",
+      credentials: "include",
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    const body = await res.json().catch(() => ({})) as { enabled?: boolean; poolWarm?: number }
+    return {
+      enabled: Boolean(body.enabled),
+      poolWarm: Number(body.poolWarm) || 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+async function acquireDesktopLease(chatId: string): Promise<DesktopLease> {
+  const res = await authenticatedFetch(`${computerApiBase()}/desktop/sessions`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: JSON.stringify(chatId ? { conversationId: chatId } : {}),
+    signal: AbortSignal.timeout(25_000),
+  })
+  const body = await res.json().catch(() => ({})) as DesktopLease & { message?: string; error?: string; poolWarm?: number }
+  if (!res.ok) {
+    throw Object.assign(
+      new Error(body.message || body.error || PREPARING_DESKTOP_ES),
+      { status: res.status, body, poolWarm: Number(body.poolWarm) || 0 },
+    )
+  }
+  return body
 }
 
 function embedFrom(session: AgentSession): string {
@@ -187,7 +252,10 @@ export function DepartmentComputerPane({
   const [error, setError] = React.useState<string | null>(null)
   const [loading, setLoading] = React.useState(!initial)
   const [dock, setDock] = React.useState<DepartmentComputerDock>("screen")
-  const [statusLine, setStatusLine] = React.useState("Pensando…")
+  const [statusLine, setStatusLine] = React.useState(PREPARING_DESKTOP_ES)
+  const [poolWarm, setPoolWarm] = React.useState(0)
+  const [desktopLease, setDesktopLease] = React.useState<DesktopLease | null>(null)
+  const [prepareProgress, setPrepareProgress] = React.useState(12)
   const dept = String(departmentId || "").trim() || "ceo-office"
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
@@ -196,33 +264,79 @@ export function DepartmentComputerPane({
   React.useEffect(() => {
     let cancelled = false
     setError(null)
+    setDesktopLease(null)
     const cached = sessionCache.get(cacheKey(chatId || null)) ?? null
     if (!cached) {
       setSession(null)
       setLoading(true)
+      setStatusLine(PREPARING_DESKTOP_ES)
+      setPrepareProgress(18)
     } else {
       setSession(cached)
       setLoading(false)
     }
-    void ensureMemberDesktop(chatId || null)
-      .then((row) => {
+
+    void (async () => {
+      const desk = await getDesktopStatus()
+      if (cancelled) return
+      const warm = desk?.poolWarm ?? 0
+      setPoolWarm(warm)
+      setPrepareProgress(desk?.enabled ? 42 : 28)
+
+      if (desk?.enabled) {
+        try {
+          const lease = await acquireDesktopLease(chatId)
+          if (cancelled) return
+          setDesktopLease(lease)
+          setPoolWarm(Math.max(warm, lease.fromPool ? 1 : warm))
+          setStatusLine("En vivo")
+          setLoading(false)
+          setError(null)
+          return
+        } catch (deskErr: any) {
+          if (cancelled) return
+          if (warm > 0) {
+            setError(null)
+            setStatusLine(userFacingComputerError(deskErr?.message, { poolWarm: warm, enabled: true, starting: true }))
+            setLoading(true)
+            return
+          }
+          setError(userFacingComputerError(deskErr?.message, { poolWarm: 0, enabled: true, starting: true }))
+          setStatusLine(PREPARING_DESKTOP_ES)
+          setLoading(true)
+        }
+      }
+
+      try {
+        const row = await ensureMemberDesktop(chatId || null)
         if (cancelled) return
         setSession(row)
         setStatusLine("En vivo")
         setLoading(false)
-      })
-      .catch((err) => {
+      } catch (err: any) {
         if (cancelled) return
         if (err?.emptyChat) {
           setError(null)
-          setStatusLine("Pensando…")
+          setStatusLine(PREPARING_DESKTOP_ES)
           setLoading(true)
           return
         }
-        setError(userFacingComputerError(err?.message))
-        setStatusLine(userFacingComputerError(err?.message))
+        const nextHint: DesktopPoolHint = {
+          poolWarm: warm,
+          enabled: Boolean(desk?.enabled),
+          starting: !desk?.enabled && warm <= 0 ? false : warm > 0 || Boolean(desk?.enabled),
+        }
+        if (nextHint.poolWarm > 0 || nextHint.starting) {
+          setError(null)
+          setStatusLine(userFacingComputerError(err?.message, nextHint))
+          setLoading(true)
+          return
+        }
+        setError(userFacingComputerError(err?.message, nextHint))
+        setStatusLine(userFacingComputerError(err?.message, nextHint))
         setLoading(false)
-      })
+      }
+    })()
     return () => {
       cancelled = true
     }
@@ -241,10 +355,10 @@ export function DepartmentComputerPane({
   React.useEffect(() => {
     if (!onStatusChange) return
     if (loading) onStatusChange("starting")
-    else if (error) onStatusChange("error")
-    else if (session && attachUrl) onStatusChange("live")
+    else if (error && poolWarm <= 0) onStatusChange("error")
+    else if ((session && attachUrl) || desktopLease) onStatusChange("live")
     else onStatusChange("idle")
-  }, [loading, error, session, attachUrl, onStatusChange])
+  }, [loading, error, session, attachUrl, desktopLease, poolWarm, onStatusChange])
 
   return (
     <section
@@ -267,7 +381,9 @@ export function DepartmentComputerPane({
               {resolvedName} · Computadora
             </h2>
             <p className="truncate text-[10px] text-zinc-400" data-testid="department-computer-status">
-              {error ? userFacingComputerError(error) : statusLine || (loading ? "Pensando…" : "En vivo")}
+              {error
+                ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
+                : statusLine || (loading ? PREPARING_DESKTOP_ES : "En vivo")}
             </p>
           </div>
           <Button
@@ -287,16 +403,49 @@ export function DepartmentComputerPane({
 
       <span className="sr-only" data-testid="chat-computer-isolation-gap" />
 
-      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50" data-novnc-fit="cover">
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50"
+        data-novnc-fit="cover"
+        data-desktop-pool-warm={poolWarm}
+        data-desktop-preparing={loading && !attachUrl ? "1" : "0"}
+        data-desktop-first-frame={desktopLease && !attachUrl ? "1" : "0"}
+      >
         {attachUrl ? (
           <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
+        ) : desktopLease ? (
+          <div
+            className="absolute inset-0 flex items-center justify-center px-6 text-center"
+            role="img"
+            aria-label="Primera imagen del escritorio"
+            data-testid="desktop-first-frame"
+          >
+            <div className="flex flex-col items-center gap-2">
+              <DesktopMonitorGlyph className="h-10 w-10 text-zinc-500" />
+              <p className="text-sm text-zinc-300">Escritorio listo</p>
+              <p className="text-[11px] text-zinc-500">La vista en vivo llega en la siguiente fase.</p>
+            </div>
+          </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-3">
               {!error ? <PensandoBars size={28} /> : null}
-              <p className="text-sm text-zinc-300">
-                {error || "Pensando…"}
+              <p className="text-sm text-zinc-300" data-testid="desktop-preparing-label">
+                {error
+                  ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
+                  : PREPARING_DESKTOP_ES}
               </p>
+              {!error ? (
+                <div
+                  className="h-1 w-40 overflow-hidden rounded-full bg-zinc-700"
+                  data-testid="desktop-prepare-progress"
+                  aria-hidden
+                >
+                  <div
+                    className="h-full bg-sky-400/80 transition-[width]"
+                    style={{ width: `${Math.min(92, Math.max(12, prepareProgress))}%` }}
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
         )}

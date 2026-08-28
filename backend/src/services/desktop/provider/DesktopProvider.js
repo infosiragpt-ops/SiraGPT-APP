@@ -8,7 +8,7 @@
  * that service, the AgentRunner, the F5 sandbox, SSE, or artifacts.
  *
  * Implementations:
- *   - E2BDesktopProvider        — stub in F7.0; SDK + warm pool arrive in F7.1
+ *   - E2BDesktopProvider        — F7.1 real (isolated SDK + injected client)
  *   - LocalGvisorDesktopProvider — stub that can docker-run `sira-desktop`
  *                                  in tests; full gVisor flags are F7.6
  *
