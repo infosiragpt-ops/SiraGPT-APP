@@ -1,0 +1,10 @@
+# LIVE edit only — paste next to the existing @sse block in
+# /home/user/deployments/iliagpt/Caddyfile.
+# Do NOT replace that file with repo deploy/Caddyfile.
+# Do NOT touch @sse, encode, /api/ai/generate*, /api/ai/stream*,
+# or /api/*/pending-stream*. encode must never wrap SSE.
+# Viewer stays on https://siragpt.com/sessions/… — no DNS change.
+
+handle /sessions/* {
+	reverse_proxy siragpt-computer-orchestrator:8090
+}

@@ -9,6 +9,8 @@ describe('Caddy computer viewer + live SSE backup', () => {
   const caddy = fs.readFileSync(path.join(__dirname, '../../deploy/Caddyfile'), 'utf8');
 
   test('does not gzip/zstd text/event-stream and keeps generate flush', () => {
+    assert.match(caddy, /NOT the live iliagpt-gateway Caddyfile/);
+    assert.match(caddy, /\/home\/user\/deployments\/iliagpt\/Caddyfile/);
     assert.match(caddy, /not header Content-Type text\/event-stream\*/);
     assert.match(caddy, /handle \/api\/ai\/generate\*/);
     assert.match(caddy, /flush_interval -1/);

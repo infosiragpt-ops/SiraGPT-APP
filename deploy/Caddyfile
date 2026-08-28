@@ -1,3 +1,12 @@
+# NOT the live iliagpt-gateway Caddyfile.
+# Production publish mounts /home/user/deployments/iliagpt/Caddyfile
+# (a :80 file with @sse for /api/ai/generate* /api/ai/stream*
+# /api/*/pending-stream*; encode never wraps SSE).
+# Do NOT copy this file over that one — it would drop the stronger SSE
+# block and bring back the Pensando hang.
+# Live computer viewer edit: deploy/iliagpt/sessions.handle.caddy
+# (handle /sessions/* only, next to @sse, no SSE changes).
+
 {
 	email admin@siragpt.com
 
@@ -12,9 +21,9 @@
 # ── SiraGPT itself (explicit hosts — always matched before the catch-all
 # below, so SiraGPT is never affected by user publishing) ──────────────
 siragpt.com, www.siragpt.com, office.siragpt.com {
-	# Live SSE fix (do not drop): never gzip/zstd text/event-stream.
-	# /api/ai/generate* must flush immediately. Backup: iliagpt-gateway
-	# Caddy 2.10 — flush_interval -1 + X-Accel-Buffering: no.
+	# Repo-only SSE reminder. Live gateway uses the iliagpt @sse handle
+	# (stronger: generate* + stream* + pending-stream*). Do not replace
+	# /home/user/deployments/iliagpt/Caddyfile with this file.
 	encode zstd gzip {
 		match {
 			header Content-Type text/*
@@ -52,7 +61,8 @@ siragpt.com, www.siragpt.com, office.siragpt.com {
 		reverse_proxy frontend:3000
 	}
 
-	# Viewer on https://siragpt.com/sessions/:id/novnc/ — not computer.siragpt.com.
+	# Repo reference only. Live edit is deploy/iliagpt/sessions.handle.caddy
+	# on /home/user/deployments/iliagpt/Caddyfile (next to @sse).
 	handle /sessions/* {
 		reverse_proxy siragpt-computer-orchestrator:8090 {
 			flush_interval -1

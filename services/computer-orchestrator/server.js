@@ -85,7 +85,7 @@ function createOrchestrator(opts = {}) {
   const driver = String(opts.driver || env.AGENT_COMPUTER_ORCH_DRIVER || 'docker').trim().toLowerCase();
   const maxDesktops = Number(env.AGENT_COMPUTER_MAX_DESKTOPS) > 0
     ? Number(env.AGENT_COMPUTER_MAX_DESKTOPS)
-    : 8;
+    : 2;
   const runtime = opts.runtime || (driver === 'fake' ? null : createDockerRuntime({
     image: env.AGENT_COMPUTER_DESKTOP_IMAGE,
     memoryMb: env.AGENT_COMPUTER_DESKTOP_MEMORY_MB,

@@ -588,6 +588,8 @@ services:
 
   # Persistent per-member Linux desktop. Hostname must match orch-client
   # default http://siragpt-computer-orchestrator:8090 on the iliagpt network.
+  # Live Lenovo compose is /home/user/deployments/iliagpt/compose.yaml
+  # (see deploy/iliagpt/). MAX_DESKTOPS default 2 — 8×1GB OOM'd that host.
   computer-orchestrator:
     container_name: siragpt-computer-orchestrator
     hostname: siragpt-computer-orchestrator
@@ -602,7 +604,7 @@ services:
       AGENT_COMPUTER_DESKTOP_IMAGE: ${AGENT_COMPUTER_DESKTOP_IMAGE:-siragpt-computer-orchestrator:latest}
       AGENT_COMPUTER_DESKTOP_MEMORY_MB: ${AGENT_COMPUTER_DESKTOP_MEMORY_MB:-1024}
       AGENT_COMPUTER_DESKTOP_CPUS: ${AGENT_COMPUTER_DESKTOP_CPUS:-1}
-      AGENT_COMPUTER_MAX_DESKTOPS: ${AGENT_COMPUTER_MAX_DESKTOPS:-8}
+      AGENT_COMPUTER_MAX_DESKTOPS: ${AGENT_COMPUTER_MAX_DESKTOPS:-2}
       AGENT_COMPUTER_DOCKER_NETWORK: ${AGENT_COMPUTER_DOCKER_NETWORK:-}
       AGENT_COMPUTER_API_KEY: ${AGENT_COMPUTER_API_KEY:-}
     volumes:
