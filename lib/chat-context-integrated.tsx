@@ -2407,7 +2407,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     initialFiles?: any[],
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => {
-    const chatModel = options?.model || selectedModel;
+    const requestedModel = options?.model || selectedModel;
+    const chatModel = type === "video" || type === "image"
+      ? requestedModel
+      : resolveCatalogModel(requestedModel, availableModels).name;
     if (!user || !isAuthenticated || !chatModel) return;
     setChatType(type);
     try {
@@ -2561,8 +2564,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
     const name = String(chat?.model || "").trim()
     if (!name) return
-    setSelectedModel(name)
-  }, [])
+    const preferred = pickPreferredCatalogModel(availableModels, {
+      current: name,
+      pinned: getPinnedModel(),
+      last: getLastModel(),
+    })
+    if (!preferred?.name) return
+    setSelectedModel(preferred.name)
+    if (preferred.provider) setSelectedProivder(preferred.provider)
+  }, [availableModels])
 
   const selectChat = useCallback(
     async (chatId: string) => {

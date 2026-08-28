@@ -402,6 +402,7 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
+import { isNonChatMediaModel } from "@/lib/chat/chat-model-guard"
 import {
   clearPinnedModel,
   getPinnedModel,
@@ -3929,10 +3930,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     lastGoodSelectedModelRef.current = liveSelectedModelData;
   } else if (
     lastGoodSelectedModelRef.current &&
-    lastGoodSelectedModelRef.current.name !== selectedModel
+    (lastGoodSelectedModelRef.current.name !== selectedModel
+      // #479 leftover: Seedance stayed painted after it left the TEXT catalog.
+      || isNonChatMediaModel(lastGoodSelectedModelRef.current))
   ) {
-    // User picked a genuinely different model not yet in the list: drop the
-    // stale entry so we never show a logo for the wrong model.
     lastGoodSelectedModelRef.current = undefined;
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;

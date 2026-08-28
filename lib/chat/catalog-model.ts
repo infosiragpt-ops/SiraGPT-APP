@@ -1,9 +1,11 @@
+import { DEEPSEEK_FLASH, DEEPSEEK_PROVIDER, isNonChatMediaModel } from "./chat-model-guard"
+
 export type CatalogModelLike = {
   name?: string
   provider?: string
 }
 
-const FLASH = "deepseek-v4-flash"
+const FLASH = DEEPSEEK_FLASH
 const PRO = "deepseek-v4-pro"
 
 function bareModelName(name?: string): string {
@@ -36,7 +38,22 @@ function pickProvider(model: CatalogModelLike | undefined, fallback = "", wanted
   if (fromModel) return fromModel
   if (looksLikeLocalCustomModel(model?.name || wantedName)) return "Custom"
   const raw = String(fallback || "").trim()
-  return raw || "DeepSeek"
+  return raw || DEEPSEEK_PROVIDER
+}
+
+/**
+ * #479 persist-model can leave a VIDEO id (Seedance) in current / chat.model
+ * after that id left the TEXT catalog. Honor a missing id only when it is
+ * still a chat model (SiraGPT Mini, Custom/Ollama, DeepSeek).
+ */
+export function isStaleNonChatCatalogSelection(
+  selectedModel?: string,
+  availableModels: CatalogModelLike[] = [],
+): boolean {
+  const wanted = String(selectedModel || "").trim()
+  if (!wanted || !isNonChatMediaModel(wanted)) return false
+  const models = Array.isArray(availableModels) ? availableModels : []
+  return !models.some((model) => sameModel(model.name, wanted))
 }
 
 /**
@@ -64,6 +81,13 @@ export function resolveCatalogModel(
         name: match.name,
         provider: pickProvider(match, fallbackProvider, wanted),
         replaced: false,
+      }
+    }
+    if (isStaleNonChatCatalogSelection(wanted, models)) {
+      return {
+        name: FLASH,
+        provider: DEEPSEEK_PROVIDER,
+        replaced: true,
       }
     }
     return {
@@ -113,7 +137,7 @@ export function pickPreferredCatalogModel(
   }
 
   const current = String(opts.current || "").trim()
-  if (current) {
+  if (current && !isStaleNonChatCatalogSelection(current, models)) {
     const match = find(current)
     if (match?.name) return { name: match.name, provider: pickProvider(match, "", current) }
     return { name: current, provider: pickProvider(undefined, "", current) }
