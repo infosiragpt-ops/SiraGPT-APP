@@ -29,6 +29,9 @@ describe("department computer pane API base + errors", () => {
     assert.match(pane, /fetch failed/)
     assert.match(pane, /deepseek\|model\[_-]\?id/)
     assert.match(pane, /computer\\\.\(siragpt\|chatagic\)/)
+    assert.match(pane, /Preparando escritorio/)
+    assert.match(pane, /\/desktop\/status/)
+    assert.match(pane, /poolWarm/)
   })
 
   it("renders the noVNC frame from a same-origin /sessions embed path", () => {

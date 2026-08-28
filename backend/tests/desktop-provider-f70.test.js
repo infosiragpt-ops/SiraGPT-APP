@@ -5,8 +5,8 @@
  *
  * Always-on (no Docker needed):
  *   (a) DesktopProvider exposes create/destroy/health/screenshot;
- *   (b) E2BDesktopProvider is a stub (F7.1) that implements the interface
- *       and throws F7_1_NOT_IMPLEMENTED — no E2B SDK require;
+ *   (b) E2BDesktopProvider implements the interface; missing key fails
+ *       closed (F7.1). Isolated SDK require — no live E2B needed;
  *   (c) LocalGvisorDesktopProvider implements the interface; docker-run
  *       argv has no --runtime runsc / --network none (those are F7.6);
  *   (d) infra/desktop Dockerfile + start.sh + DCP contracts
@@ -81,30 +81,29 @@ describe('F7.0 DesktopProvider interface', () => {
   });
 });
 
-/* ── (b) E2B stub ────────────────────────────────────────────────────────── */
+/* ── (b) E2B provider (F7.1 real; fail-closed without key) ──────────────── */
 
-describe('F7.0 E2BDesktopProvider stub', () => {
-  test('F7.0(b): implements the interface and every method is F7.1', async () => {
-    const p = new E2BDesktopProvider();
+describe('F7.0 E2BDesktopProvider (F7.1 fail-closed)', () => {
+  test('F7.0(b): implements the interface; missing key is not a 501 stub', async () => {
+    const p = new E2BDesktopProvider({ apiKey: '', env: {} });
     assertImplementsDesktopProvider(p);
     assert.equal(p.kind, 'e2b');
-    for (const name of DESKTOP_PROVIDER_METHODS) {
-      await assert.rejects(p[name]({}), (err) => (
-        err instanceof DesktopProviderError
-        && err.code === 'F7_1_NOT_IMPLEMENTED'
-        && err.status === 501
-      ));
-    }
+    await assert.rejects(p.create(), (err) => (
+      err instanceof DesktopProviderError
+      && err.code === 'desktop_e2b_unconfigured'
+      && err.status === 503
+      && /E2B_API_KEY/.test(err.message)
+    ));
   });
 
-  test('F7.0(b): source does not require the E2B SDK', () => {
+  test('F7.0(b): SDK require is isolated (lazy, injectable)', () => {
     const src = fs.readFileSync(
       path.join(__dirname, '../src/services/desktop/provider/E2BDesktopProvider.js'),
       'utf8',
     );
-    assert.doesNotMatch(src, /require\(['"]@e2b\//);
-    assert.doesNotMatch(src, /require\(['"]e2b['"]\)/);
+    assert.match(src, /loadE2BDesktopSdk/);
     assert.match(src, /F7\.1/);
+    assert.doesNotMatch(src, /F7_1_NOT_IMPLEMENTED/);
   });
 });
 

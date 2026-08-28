@@ -793,6 +793,25 @@ jobs:
       - name: F7.0 DesktopProvider + docker provision gate
         run: node --test tests/desktop-provider-f70.test.js
 
+  desktop-f71:
+    name: Desktop · F7.1 warm-pool provision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: F7.1 warm-pool acquire SLO + reaper (no Docker/E2B)
+        run: node --test tests/desktop-f7-provision.test.js
+
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
@@ -801,7 +820,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, desktop-f70, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, desktop-f70, desktop-f71, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -817,6 +836,10 @@ jobs:
           fi
           if [[ "${{ needs.desktop-f70.result }}" != "success" ]]; then
             echo "✗ desktop-f70: ${{ needs.desktop-f70.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f71.result }}" != "success" ]]; then
+            echo "✗ desktop-f71: ${{ needs.desktop-f71.result }}"
             exit 1
           fi
           if [[ "${{ needs.licenses.result }}" != "success" ]]; then

@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraComputer F7.1 (IN_PROGRESS until provision tests are green): real
+  `E2BDesktopProvider` (isolated `@e2b/desktop` require, fail-closed without
+  `E2B_API_KEY`) plus in-memory `DesktopSessionManager` warm pool
+  (`DESKTOP_POOL_MIN=2`). New `/api/desktop` routes do not talk to the
+  #484 orchestrator. Computer pane shows «Preparando escritorio…» instead
+  of the generic black-panel error while starting or when the pool is warm.
 - SiraComputer F7.0 (COMPLETED in CI): model-agnostic `DesktopProvider`
   (`create` / `destroy` / `health` / `screenshot`) plus the `sira-desktop`
   image (Xvfb :0, openbox, x11vnc/noVNC, xdotool, scrot, DCP on

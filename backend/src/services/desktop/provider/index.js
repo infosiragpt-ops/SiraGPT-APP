@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * DesktopProvider factory (F7.0).
+ * DesktopProvider factory (F7.0 + F7.1).
  *
  * Model-agnostic: pick a backend by kind, never by LLM. The live
  * computer orchestrator (PR #484) stays in place — this factory does
@@ -18,7 +18,7 @@ const { E2BDesktopProvider } = require('./E2BDesktopProvider');
 const { LocalGvisorDesktopProvider, buildDesktopRunArgs } = require('./LocalGvisorDesktopProvider');
 
 function createDesktopProvider(kind = 'local-gvisor', opts = {}) {
-  const k = String(kind || 'local-gvisor').trim().toLowerCase();
+  const k = String(kind || 'local-gvisor').trim().toLowerCase().replace(/_/g, '-');
   if (k === 'e2b') return new E2BDesktopProvider(opts);
   if (k === 'local-gvisor' || k === 'local' || k === 'gvisor') {
     return new LocalGvisorDesktopProvider(opts);

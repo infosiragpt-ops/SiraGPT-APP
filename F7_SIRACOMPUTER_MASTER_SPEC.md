@@ -158,7 +158,7 @@ is F7.5. F7.0 does not implement or replace it.
 | Sub | Goal | In F7.0 PR? | Gate (summary) |
 |---|---|---|---|
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
-| F7.1 | `E2BDesktopProvider` implementation + warm pool | no | E2B create/destroy SLO; pool hit rate |
+| **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **this PR** | §22.1 provision (unit) |
 | F7.2 | Session manager acquire SLO | no | acquire p95 documented |
 | F7.3 | WS proxy (noVNC to the member) | no | same-origin viewer on siragpt.com |
 | F7.4 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
@@ -167,8 +167,33 @@ is F7.5. F7.0 does not implement or replace it.
 | F7.7 | Prisma `DesktopSession` tables | no | migrate deploy |
 | F7.8 | Frontend panel rewrite | no | UI lock; no `model_id` / DeepSeek |
 
-F7.1–F7.8 detail will grow **in this file** when that sub-phase becomes
+F7.2–F7.8 detail will grow **in this file** when that sub-phase becomes
 active. Do not implement them early.
+
+### F7.1 row (normative)
+
+- Path: `backend/src/services/desktop/session-manager.js`
+- Provider: `backend/src/services/desktop/provider/E2BDesktopProvider.js`
+  (isolated `require('@e2b/desktop')`; inject `Desktop` / `createDesktop`
+  in tests). Missing `E2B_API_KEY` fails CLOSED in Spanish — no network.
+- `acquire(chatId)` → `{ sessionId, wsUrl, provider, expiresAt, status }`
+  1. take a warm healthy desktop from the in-memory pool
+  2. else `provider.create()` + `waitHealthy` (~20s) while refill continues
+- `release` / `heartbeat` / `status` (`starting|ready|human_control|
+  agent_control|idle|dead` — human/agent are placeholders; FSM is F7.4)
+- Pool: `DESKTOP_POOL_MIN` default **2**, `DESKTOP_POOL_MAX` default 20.
+  Do not raise MIN (Lenovo/prod memory).
+- Reaper: idle > `DESKTOP_SESSION_TTL_MIN` (default 15) and unhealthy.
+- Kill switch: `SIRAGPT_DESKTOP_ENABLED` unset/0 → acquire fails closed.
+- Provider kind: `DESKTOP_PROVIDER` (`e2b` | `local_gvisor`). Default:
+  `e2b` when a key is present; otherwise do not silently lie.
+- Tests: `backend/tests/desktop-f7-provision.test.js` (fake provider;
+  no Docker / no live E2B). Optional live E2B skips honestly.
+- Frontend: computer pane shows «Preparando escritorio…» while starting;
+  never the generic «El escritorio no está disponible» when pool>0.
+  First-frame placeholder only — no noVNC DesktopScreen (F7.2 / F7.3).
+- Out of scope: WS proxy, CU-loop, handoff FSM, Prisma `DesktopSession`,
+  LocalGvisor `runsc` flags, replacing the #484 orchestrator.
 
 ### F7.0 row (normative)
 
