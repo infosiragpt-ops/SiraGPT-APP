@@ -277,6 +277,12 @@ test('F7.1: live orch #484 is still in the tree (not rerouted)', () => {
     path.join(__dirname, '../src/services/desktop/session-manager.js'),
     'utf8',
   );
-  assert.doesNotMatch(mgrSrc, /siragpt-computer-orchestrator/);
-  assert.doesNotMatch(mgrSrc, /orchFetch/);
+  const routeSrc = fs.readFileSync(
+    path.join(__dirname, '../src/routes/desktop.js'),
+    'utf8',
+  );
+  assert.doesNotMatch(mgrSrc, /require\(['"].*orch-client['"]\)/);
+  assert.doesNotMatch(mgrSrc, /orchFetch\s*\(/);
+  assert.doesNotMatch(routeSrc, /require\(['"].*orch-client['"]\)/);
+  assert.doesNotMatch(routeSrc, /orchFetch\s*\(/);
 });

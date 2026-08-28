@@ -10,19 +10,18 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS**. Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-Sub-fase activa: **F7.1** (E2BDesktopProvider real + warm pool) — **IN_PROGRESS**
-(gates de provision aún no verificados en este checkout).
 Siguiente sub-fase: **F7.2** — **no iniciada**.
 
-**F7.1:** **IN_PROGRESS** — `E2BDesktopProvider` deja de ser el stub 501:
-require aislado de `@e2b/desktop`, cliente inyectable, fail-closed sin
-`E2B_API_KEY` (español honesto, sin red). `DesktopSessionManager` en memoria
-(`backend/src/services/desktop/session-manager.js`): acquire/release/
-heartbeat/status, pool MIN=2 / MAX=20, reaper TTL 15 min, kill switch
-`SIRAGPT_DESKTOP_ENABLED`. Ruta nueva `/api/desktop/*` (no habla con el
-orquestador #484). Panel: «Preparando escritorio…» + first-frame; nunca el
-error genérico cuando pool>0. Tests: `backend/tests/desktop-f7-provision.test.js`.
-**No se inicia F7.2 en este PR.**
+**F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
+(`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
+26 pass, 0 fail; integración E2B y docker F7.0 se omiten honestamente).
+`E2BDesktopProvider` deja de ser el stub 501: require aislado de `@e2b/desktop`,
+cliente inyectable, fail-closed sin `E2B_API_KEY` (español honesto, sin red).
+`DesktopSessionManager` en memoria: acquire p50 < 800 ms con pool caliente,
+release/heartbeat/status, pool MIN=2 / MAX=20, reaper TTL 15 min, kill switch
+`SIRAGPT_DESKTOP_ENABLED`. Ruta `/api/desktop/*` (no habla con el orquestador
+#484). Panel: «Preparando escritorio…» + first-frame; nunca el error genérico
+cuando pool>0. **No se inicia F7.2 en este PR.**
 
 **F7.0:** **COMPLETED** — gate §22.1 verde en CI (`Desktop · F7.0 sira-desktop
 provision`, run 33201966689). `docker build` de `sira-desktop` + contenedor +
@@ -316,8 +315,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7.1**: E2BDesktopProvider real + DesktopSessionManager (warm pool).
-  Gates de provision pendientes de verificación en este checkout.
+- **F7** (fase): F7.1 cerrado. F7.2 no se inicia en este PR.
 - Nada de F7.2–F7.8.
 
 ## Pendiente

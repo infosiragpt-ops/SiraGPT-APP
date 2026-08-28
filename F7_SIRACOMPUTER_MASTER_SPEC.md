@@ -158,7 +158,7 @@ is F7.5. F7.0 does not implement or replace it.
 | Sub | Goal | In F7.0 PR? | Gate (summary) |
 |---|---|---|---|
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
-| **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **this PR** | §22.1 provision (unit) |
+| **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
 | F7.2 | Session manager acquire SLO | no | acquire p95 documented |
 | F7.3 | WS proxy (noVNC to the member) | no | same-origin viewer on siragpt.com |
 | F7.4 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
@@ -244,6 +244,9 @@ Do not fake a green provision result.
   + health + screenshot), or
 - **F7.0 IN_PROGRESS** if the docker gate was skipped or failed — say so
   in `STATE.md`. Unit-contract green is not enough to close F7.0.
+- **F7.1 COMPLETED** only if `desktop-f7-provision.test.js` is green
+  (warm-pool acquire SLO, no generic error, reaper, kill switch). Live
+  E2B may skip honestly.
 
 ### Deploy (Luis)
 

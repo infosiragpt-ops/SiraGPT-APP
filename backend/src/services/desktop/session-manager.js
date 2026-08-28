@@ -5,7 +5,7 @@
  *
  * acquire() prefers a healthy warm desktop (SLO: p50 < 800 ms when
  * pool > 0). Missing kill-switch / missing provider fail CLOSED with
- * honest Spanish copy. Never talks to siragpt-computer-orchestrator.
+ * honest Spanish copy. Never talks to the live computer orchestrator.
  *
  * human_control / agent_control are placeholders (FSM is F7.4).
  * Persistence is in-memory (Prisma DesktopSession is F7.7).

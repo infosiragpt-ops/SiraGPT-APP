@@ -8,7 +8,7 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
-- SiraComputer F7.1 (IN_PROGRESS until provision tests are green): real
+- SiraComputer F7.1 (COMPLETED — unit provision gate green): real
   `E2BDesktopProvider` (isolated `@e2b/desktop` require, fail-closed without
   `E2B_API_KEY`) plus in-memory `DesktopSessionManager` warm pool
   (`DESKTOP_POOL_MIN=2`). New `/api/desktop` routes do not talk to the
