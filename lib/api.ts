@@ -8,6 +8,9 @@ import {
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { resolveCatalogModel } from "./chat/catalog-model"
+import { isVideoTextGenerateModel, VIDEO_TEXT_GENERATE_ERROR_ES } from "./chat/media-composer-config"
+import { generateStreamFlights, generateTurnFlightKey } from "./generate-turn-flight"
+import { extractPersistedAssistantContent, pollPersistedAssistantTurn } from "./recover-persisted-turn"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 export { getNormalizedApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -1697,6 +1700,11 @@ class ApiClient {
       model: locked.name,
       idempotencyKey: turnKey,
     };
+    if (isVideoTextGenerateModel({ name: data.model, provider: data.provider }) || isVideoTextGenerateModel(data.model)) {
+      onError(new Error(VIDEO_TEXT_GENERATE_ERROR_ES));
+      return;
+    }
+    const flightKey = generateTurnFlightKey(data.chatId, turnKey);
     const url = `${this.baseURL}/ai/generate`;
     const baseConfig: RequestInit = {
       method: 'POST',
@@ -1731,8 +1739,11 @@ class ApiClient {
         lastEventId = sessionStorage.getItem(`siragpt:lastEventId:${data.chatId}`) || null;
       }
     } catch { /* private mode */ }
+    return generateStreamFlights.joinOrRun(flightKey, async () => {
     let terminalErrorDelivered = false;
     let streamFinished = false;
+    let sawStartEvent = false;
+    let finishedPersistedTurn = false;
 
     const deliverStreamError = (error: Error) => {
       if (terminalErrorDelivered || streamFinished) return;
@@ -1924,6 +1935,27 @@ class ApiClient {
               flushBatch();
               doneMessageSeen = true;
               if (!hasDeliveredAnyContent) {
+                // After type:start or a replay/persisted-turn frame, the
+                // backend already finished this turn. Retrying the same
+                // POST hits streamDuplicateTurnReplay, Caddy aborts the
+                // short SSE, and Pensando spins. Refetch the saved reply.
+                const shouldFinishPersistedTurn = finishedPersistedTurn
+                  || sawStartEvent
+                  || Boolean(data.chatId && data.idempotencyKey);
+                if (shouldFinishPersistedTurn) {
+                  try { await reader.cancel(); } catch { /* already closed */ }
+                  const recovered = await this.recoverPersistedGenerateContent(data, signal);
+                  if (recovered) {
+                    if (options.onReplace) options.onReplace(recovered);
+                    else onData(recovered);
+                    hasDeliveredAnyContent = true;
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                  deliverStreamError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+                  return;
+                }
                 // A clean [DONE] with zero tokens means the PROVIDER produced
                 // nothing (transient provider error the backend closed over).
                 // Retry with the same backoff budget as an abrupt close —
@@ -1950,14 +1982,27 @@ class ApiClient {
             }
             try {
               const jsonData = JSON.parse(payload);
-              if (jsonData.replace && typeof jsonData.content === 'string') {
+              if (jsonData.type === 'start') {
+                sawStartEvent = true;
+                lastProcessTime = Date.now();
+              } else if (
+                jsonData.type === 'duplicate_turn_replay'
+                || jsonData.duplicate === true
+                || (jsonData.replace && typeof jsonData.content === 'string')
+              ) {
+                // Persisted-turn payload: show the saved reply and treat
+                // the stream as finished. Never cancel+retry.
                 flushBatch();
-                if (options.onReplace) {
-                  options.onReplace(jsonData.content);
-                } else {
-                  onData(jsonData.content);
+                finishedPersistedTurn = true;
+                const replayContent = typeof jsonData.content === 'string' ? jsonData.content : '';
+                if (replayContent) {
+                  if (options.onReplace) {
+                    options.onReplace(replayContent);
+                  } else {
+                    onData(replayContent);
+                  }
+                  hasDeliveredAnyContent = true;
                 }
-                hasDeliveredAnyContent = true;
                 lastProcessTime = Date.now();
               } else if (jsonData.content) {
                 batchBuffer += jsonData.content;
@@ -2106,7 +2151,60 @@ class ApiClient {
         : `No se pudo completar la respuesta después de ${MAX_CONNECT_ATTEMPTS} intentos. ${msg}`;
       deliverStreamError(new Error(friendly));
     }
+    }, () => this.deliverPersistedGenerateTurn(data, onData, onClose, onError, signal, options));
   }
+
+  private async deliverPersistedGenerateTurn(
+    data: { chatId?: string; idempotencyKey?: string; streamId?: string },
+    onData: (chunk: string) => void,
+    onClose: () => void,
+    onError: (error: Error) => void,
+    signal?: AbortSignal,
+    options: AIStreamOptions = {},
+  ) {
+    if (signal?.aborted) {
+      onError(new Error('Request aborted'));
+      return;
+    }
+    const content = await this.recoverPersistedGenerateContent(data, signal);
+    if (content) {
+      if (options.onReplace) options.onReplace(content);
+      else onData(content);
+      onClose();
+      return;
+    }
+    onError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+  }
+
+  private async recoverPersistedGenerateContent(
+    data: { chatId?: string; idempotencyKey?: string; streamId?: string },
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    const chatId = typeof data.chatId === 'string' ? data.chatId.trim() : '';
+    if (!chatId) return null;
+    try {
+      const recovered = await pollPersistedAssistantTurn({
+        getChat: (id) => this.getChat(id),
+        chatId,
+        pending: {
+          idempotencyKey: data.idempotencyKey || "",
+          turnKey: data.idempotencyKey || "",
+          streamId: data.streamId || "",
+        },
+        attempts: 6,
+        delayMs: 350,
+        isCancelled: () => Boolean(signal?.aborted),
+      });
+      return extractPersistedAssistantContent(recovered?.chat, {
+        idempotencyKey: data.idempotencyKey || "",
+        turnKey: data.idempotencyKey || "",
+        streamId: data.streamId || "",
+      });
+    } catch {
+      return null;
+    }
+  }
+
   async generateImage(
     data: { prompt: string; chatId?: string; provider: string; model: string; fileId?: string; aspectRatio?: string; quality?: string; imageCount?: number },
     options: { signal?: AbortSignal } = {},

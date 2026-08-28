@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apiClient as api } from '@/lib/api'
 import { cancelTask, resolveApproval } from '@/lib/agent-task-service'
 import { serializeBranchedMessageMetadata } from '@/lib/chat/branch-metadata'
+import { VIDEO_TEXT_GENERATE_ERROR_ES } from '@/lib/chat/media-composer-config'
+import { resetGenerateTurnFlights } from '@/lib/generate-turn-flight'
 import {
   authenticatedFetch,
   clearAuthenticatedFetchCsrfCache,
@@ -100,6 +102,7 @@ describe('generateAIStream cookie session CSRF transport', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     api.setToken(null)
     clearAuthenticatedFetchCsrfCache()
+    resetGenerateTurnFlights()
   })
 
   afterEach(() => {
@@ -510,6 +513,159 @@ describe('generateAIStream cookie session CSRF transport', () => {
     }
     expect(JSON.parse(bodies[0].metadata)).toMatchObject({ origin: 'user-copy' })
     expect(JSON.parse(bodies[1].metadata)).toMatchObject({ origin: 'assistant-copy' })
+  })
+
+  it('treats duplicate_turn_replay as a finished turn and does not retry', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-replay')
+    mockFetch.mockResolvedValueOnce(sseEvents([
+      { type: 'start', at: 1 },
+      {
+        replace: true,
+        content: '¡Hola, Sara!',
+        type: 'duplicate_turn_replay',
+        duplicate: true,
+        assistantMessageId: 'a1',
+      },
+    ]))
+
+    const chunks: string[] = []
+    const replacements: string[] = []
+    const onClose = vi.fn()
+    const onError = vi.fn()
+
+    await api.generateAIStream(
+      { ...streamData, chatId: 'chat-replay', idempotencyKey: 'turn-replay' },
+      chunk => chunks.push(chunk),
+      onClose,
+      onError,
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(mockFetch).toHaveBeenCalledOnce()
+    expect(replacements).toEqual(['¡Hola, Sara!'])
+    expect(chunks).toEqual([])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('refetches the persisted assistant after type:start and a contentless [DONE]', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-empty-done')
+    mockFetch
+      .mockResolvedValueOnce(sseEvents([{ type: 'start', at: 1 }]))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        chat: {
+          id: 'chat-hola',
+          messages: [
+            { role: 'USER', content: 'hola', metadata: { idempotencyKey: 'turn-hola' } },
+            { role: 'ASSISTANT', content: '¡Hola, Sara!', metadata: { idempotencyKey: 'turn-hola' } },
+          ],
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const replacements: string[] = []
+    const onClose = vi.fn()
+    const onError = vi.fn()
+
+    await api.generateAIStream(
+      { ...streamData, chatId: 'chat-hola', idempotencyKey: 'turn-hola' },
+      () => {},
+      onClose,
+      onError,
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(replacements).toEqual(['¡Hola, Sara!'])
+    expect(onClose).toHaveBeenCalledOnce()
+    expect(onError).not.toHaveBeenCalled()
+    const generateCalls = mockFetch.mock.calls.filter(([url]) => String(url).includes('/ai/generate'))
+    expect(generateCalls).toHaveLength(1)
+  })
+
+  it('joins a second mount onto the in-flight generate instead of POSTing again', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-single-flight')
+    let releaseOwner: (() => void) | null = null
+    const ownerReleased = new Promise<void>(resolve => { releaseOwner = resolve })
+    mockFetch
+      .mockImplementationOnce(async () => {
+        const encoder = new TextEncoder()
+        const body = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'start', at: 1 })}\n\n`))
+            await ownerReleased
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: '¡Hola, Sara!' })}\n\n`))
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+            controller.close()
+          },
+        })
+        return { ok: true, status: 200, headers: new Headers(), body }
+      })
+      .mockResolvedValue(new Response(JSON.stringify({
+        chat: {
+          id: 'chat-flight',
+          messages: [
+            { role: 'USER', content: 'hola', metadata: { idempotencyKey: 'turn-flight' } },
+            { role: 'ASSISTANT', content: '¡Hola, Sara!', metadata: { idempotencyKey: 'turn-flight' } },
+          ],
+        },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+
+    const ownerChunks: string[] = []
+    const followerReplacements: string[] = []
+    const ownerClose = vi.fn()
+    const followerClose = vi.fn()
+    const ownerError = vi.fn()
+    const followerError = vi.fn()
+    const payload = { ...streamData, chatId: 'chat-flight', idempotencyKey: 'turn-flight' }
+
+    const owner = api.generateAIStream(payload, chunk => ownerChunks.push(chunk), ownerClose, ownerError)
+    await vi.waitFor(() => {
+      expect(mockFetch.mock.calls.filter(([url]) => String(url).includes('/ai/generate'))).toHaveLength(1)
+    })
+    const follower = api.generateAIStream(
+      payload,
+      () => {},
+      followerClose,
+      followerError,
+      undefined,
+      { onReplace: content => followerReplacements.push(content) },
+    )
+
+    releaseOwner?.()
+    await Promise.all([owner, follower])
+
+    expect(ownerChunks.join('')).toBe('¡Hola, Sara!')
+    expect(followerReplacements).toEqual(['¡Hola, Sara!'])
+    expect(ownerClose).toHaveBeenCalledOnce()
+    expect(followerClose).toHaveBeenCalledOnce()
+    expect(ownerError).not.toHaveBeenCalled()
+    expect(followerError).not.toHaveBeenCalled()
+    expect(mockFetch.mock.calls.filter(([url]) => String(url).includes('/ai/generate'))).toHaveLength(1)
+  })
+
+  it('rejects VIDEO catalog models before opening the text generate stream', async () => {
+    const onClose = vi.fn()
+    const onError = vi.fn()
+
+    await api.generateAIStream(
+      {
+        provider: 'fal.ai',
+        model: 'bytedance/seedance-2.0/text-to-video',
+        prompt: 'hola',
+        streamId: 'stream-video',
+        chatId: 'chat-video',
+        idempotencyKey: 'turn-video',
+      },
+      () => {},
+      onClose,
+      onError,
+    )
+
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledOnce()
+    expect(onError.mock.calls[0][0].message).toBe(VIDEO_TEXT_GENERATE_ERROR_ES)
   })
 
   it('protects standalone agent cancel and approval transports for cookie sessions', async () => {

@@ -106,6 +106,30 @@ export function isVideoModelEntry(model: MediaModelEntry | null | undefined): bo
   return type === "video" || type === "videos" || type.includes("video") || /video|text-to-video|image-to-video|veo|kling|sora|seedance|pixverse|hailuo|ltx|wan|cosmos|fal\.ai/i.test(label)
 }
 
+export const VIDEO_TEXT_GENERATE_ERROR_ES =
+  "Este modelo genera video, no texto. Elige Sira Rápido, Sira Pro o SiraGPT Mini para chatear."
+
+/**
+ * VIDEO catalog rows (Seedance / fal.ai / type=VIDEO) must never open
+ * the text /api/ai/generate stream. Image-only fal models are not rejected.
+ */
+export function isVideoTextGenerateModel(
+  model: MediaModelEntry | string | null | undefined,
+): boolean {
+  const source = typeof model === "string" ? { name: model } : model
+  if (!source) return false
+  const type = String(source.type || source.kind || "").trim().toUpperCase()
+  if (type === "VIDEO" || type === "VIDEOS") return true
+  const label = `${source.name || ""} ${source.displayName || ""} ${source.provider || ""}`.toLowerCase()
+  if (!label.trim()) return false
+  if (/seedance|text-to-video|image-to-video|reference-to-video/.test(label)) return true
+  if (/(?:^|[\s/_-])(?:veo|kling|sora|pixverse|hailuo|ltx|wan)(?:[\s/_-]|$)/.test(label) && /video/.test(label)) {
+    return true
+  }
+  if (/(?:fal\.ai|fal-ai)/.test(label) && /video/.test(label)) return true
+  return false
+}
+
 /**
  * Admin-catalog visibility for the /chat Video picker.
  * Same flags as Admin > AI Models: type=VIDEO and isActive=true.

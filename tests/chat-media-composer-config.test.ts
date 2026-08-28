@@ -11,7 +11,9 @@ import {
   VOICE_MODEL_OPTIONS,
   isImageModelEntry,
   isVideoModelEntry,
+  isVideoTextGenerateModel,
   providerForMediaModel,
+  VIDEO_TEXT_GENERATE_ERROR_ES,
 } from "../lib/chat/media-composer-config"
 
 describe("chat media composer configuration", () => {
@@ -43,5 +45,12 @@ describe("chat media composer configuration", () => {
     assert.equal(isImageModelEntry({ displayName: "GPT Image 1" }), true)
     assert.equal(isVideoModelEntry({ name: "Sora 2" }), true)
     assert.equal(isImageModelEntry({ type: "text", name: "GPT" }), false)
+  })
+
+  it("rejects Seedance / fal.ai VIDEO rows for the text generate stream", () => {
+    assert.equal(isVideoTextGenerateModel({ type: "VIDEO", name: "bytedance/seedance-2.0/text-to-video", provider: "fal.ai" }), true)
+    assert.equal(isVideoTextGenerateModel("bytedance/seedance-2.0/text-to-video"), true)
+    assert.equal(isVideoTextGenerateModel({ name: "deepseek-v4-flash", provider: "DeepSeek", type: "TEXT" }), false)
+    assert.match(VIDEO_TEXT_GENERATE_ERROR_ES, /Sira Rápido/)
   })
 })

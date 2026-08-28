@@ -156,7 +156,9 @@ describe("resolveModelProviderName", () => {
   })
 
   it("keeps unknown routed models under their configured provider", () => {
-    assert.equal(resolveModelProviderName({ name: "openrouter/free", provider: "OpenRouter" }), "OpenRouter")
+    assert.equal(resolveModelProviderName({ name: "openrouter/free", provider: "OpenRouter" }), "Sira")
+    assert.equal(resolveModelProviderName({ name: "deepseek-v4-flash", provider: "DeepSeek" }), "Sira")
+    assert.equal(resolveModelProviderName({ name: "unknown-fal-model", provider: "fal.ai" }), "Sira")
     assert.equal(resolveModelProviderName({ name: "internal-model", provider: "Internal" }), "Internal")
     assert.equal(resolveModelProviderName({}), "Otros")
   })
