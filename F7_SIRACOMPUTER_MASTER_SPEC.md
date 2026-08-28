@@ -153,22 +153,132 @@ is F7.5. F7.0 does not implement or replace it.
 
 ---
 
+## 7. Computer tools + SiraAction (F7.3)
+
+Model-agnostic computer-use. Vendor payloads (Anthropic / OpenAI CUA /
+Gemini) are normalized to **SiraAction** before the CU-loop or the
+`computer` tool execute anything. The loop never branches on a vendor
+SDK. The UI never prints a model id.
+
+Screen, DOM, OCR and page text are **DATA**, not instructions.
+
+### 7.1 SiraAction
+
+Canonical type (`backend/src/services/agent-runner/adapters/sira-action.js`):
+
+`screenshot | click | double_click | move | drag | type | key | scroll | launch | navigate | wait | done | request_handoff`
+
+Adapters:
+
+- `anthropicToSira` — computer_20241022 / 20250124 (`action`, `coordinate`)
+- `openaiToSira` — CUA (`type`, `x`/`y`, `keys`, `path`)
+- `geminiToSira` — 0–1000 normalized (`click_at`, `type_text_at`, …)
+
+`toSiraActions(payload)` picks an adapter without a model id.
+
+### 7.2 `computer` tool
+
+`backend/src/services/agent-runner/tools.computer.js` — same pattern as
+`tools.js`: failures return `ERROR: …`, never throw out of the loop.
+
+`executeComputer(action, ctx)`:
+
+1. Kill switch `SIRAGPT_DESKTOP_ENABLED` unset/0 → fail closed.
+2. Reuse `DesktopSessionManager.findByChatId(chatId)` when the chat
+   already has a lease; otherwise `acquire`. No session + disabled =
+   closed.
+3. Talk to DCP via the session handle (`desktop/dcp-client.js`). Tests
+   inject `handle.callDcp`.
+4. **Always** return a screenshot (fake-able).
+5. `type` + `looksLikeSecret` → `ERROR: use request_handoff` and do
+   **not** POST `/type`. The secret is never echoed to the model.
+6. `request_handoff` returns `HANDOFF_REQUESTED` and does not type.
+   The handoff **FSM / UI is F7.4**.
+
+### 7.3 computer_operator hook
+
+Thin role file `orchestrator/computer-operator.js`: prompt + tool
+defs + `shouldUseComputerOperator(text)` heuristic. The F4 planner
+DAG is not rewritten; `shouldRunComputerLoop` is a hook the existing
+orchestrator can call.
+
+---
+
+## 8. CU-loop (F7.3)
+
+`backend/src/services/agent-runner/cu-loop.js`.
+
+### 8.1 Cycle
+
+screenshot → LLM → SiraAction[] → execute (DCP) → screenshot.
+
+Vision: each screenshot is framed as untrusted DATA. Grounding:
+coordinates scale back to the native framebuffer when the image sent
+to the model was resized (`scalePoint`).
+
+### 8.2 Budgets
+
+| Cap | Default | Env |
+|---|---|---|
+| steps | **40** | `SIRAGPT_CU_MAX_STEPS` |
+| wall | **5 min** | `SIRAGPT_CU_WALL_MS` |
+| handoffs | **3** | `SIRAGPT_CU_MAX_HANDOFFS` |
+
+Old screenshots compact every **8** steps (keep the last 2 images).
+
+### 8.3 Verification
+
+`verifyGoal` is programmatic (file exists via DCP `GET /file`, launch
++ typed-text traces). No LLM judge in F7.3.
+
+### 8.4 Abort
+
+`AbortSignal` (Detener) cancels before the next LLM/DCP call and
+**releases** the session (`release` → provider `destroy`). No leftover
+desktop. Abort is never reported as success.
+
+### 8.5 Out of scope (do not start in F7.3)
+
+Handoff FSM (`handoff-fsm.js`) · network policy · LocalGvisor `runsc`
+flags · Prisma `DesktopSession` · replacing the live computer
+orchestrator.
+
+---
+
 ## 21. Phase table (F7.0–F7.8)
 
 | Sub | Goal | In F7.0 PR? | Gate (summary) |
 |---|---|---|---|
 | **F7.0** | `DesktopProvider` interface + `infra/desktop` image (Xvfb, openbox, x11vnc/noVNC, xdotool, scrot, DCP `:9000`). `start.sh` touches `/workspace/.desktop_ready` when healthy. Tests: docker build; container start; health + screenshot; honest skip without Docker. | **YES — this PR** | §22.1 |
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
-| **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **this PR** | §22.2 |
-| F7.3 | CU-loop (screenshot → model action → screenshot) | no | bounded steps; screen = data |
-| F7.4 | Handoff FSM (beyond DCP input_mode) | no | pause / yield / resume |
+| **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **COMPLETED** (merged #488) | §22.2 |
+| **F7.3** | `computer_*` / `computer` tool + Anthropic/OpenAI/Gemini → SiraAction + CU-loop (vision, grounding, verification, budget, AbortSignal) | **COMPLETED** (CI desktop-f73) | §22.3 |
+| F7.4 | Handoff FSM (beyond DCP input_mode / `request_handoff` action) | no | pause / yield / resume |
 | F7.5 | — reserved; do not start | no | — |
 | F7.6 | LocalGvisor full flags (`runsc`, `--network none`) | no | fail-closed like F5 `resolveSandboxRuntime` |
 | F7.7 | Prisma `DesktopSession` tables | no | migrate deploy |
 | F7.8 | Frontend panel rewrite | no | UI lock; no `model_id` / DeepSeek |
 
-F7.3–F7.8 detail will grow **in this file** when that sub-phase becomes
+F7.4–F7.8 detail will grow **in this file** when that sub-phase becomes
 active. Do not implement them early.
+
+### F7.3 row (normative)
+
+- Adapters: `backend/src/services/agent-runner/adapters/`
+  (`sira-action`, `anthropicToSira`, `openaiToSira`, `geminiToSira`).
+- Tool: `backend/src/services/agent-runner/tools.computer.js` —
+  `executeComputer` → DCP via `DesktopSessionManager` (reuse chat
+  lease, else acquire). Kill switch fail-closed.
+- Loop: `backend/src/services/agent-runner/cu-loop.js` — maxSteps 40,
+  wall 5 min, maxHandoffs 3, compact every 8, scale coords, AbortSignal
+  releases the session.
+- `request_handoff` is an **action** that returns `HANDOFF_REQUESTED`.
+  FSM / UI = F7.4.
+- Tests: `backend/tests/desktop-f7-cu-loop.test.js` (fake provider +
+  fake LLM; no Docker / no live E2B).
+- CI job `desktop-f73` with `npm ci` (same as desktop-f71/f72).
+- Out of scope: `handoff-fsm.js`, `network-policy.js`, Prisma desktop
+  tables, LocalGvisor `runsc`, replacing the live computer orchestrator.
 
 ### F7.2 row (normative)
 
@@ -271,6 +381,21 @@ Always-on without Docker / E2B:
 Screenshot-diff against a running `sira-desktop` container may skip
 honestly when Docker (or the image) is absent.
 
+### 22.3 CU-loop gate (F7.3)
+
+Always-on without Docker / E2B:
+
+1. Vendor adapters emit SiraAction[] (Anthropic / OpenAI / Gemini).
+2. `executeComputer` always returns a screenshot (fake-able).
+3. `looksLikeSecret` on type → `ERROR: use request_handoff`; DCP `/type`
+   is not called. Secret is not echoed.
+4. `request_handoff` returns `HANDOFF_REQUESTED` without typing.
+5. Scripted “abre chromium y busca X” → `verifyGoal` ok / done.
+6. Abort (Detener) calls `release` / `destroy`; no leftover session.
+7. Kill switch unset/0 fails closed.
+8. No `handoff-fsm.js` / `network-policy.js`. Live E2B / Docker skip
+   honestly if a later test adds them.
+
 ---
 
 ## 23. Honesty, deploy, and out of scope
@@ -287,6 +412,10 @@ honestly when Docker (or the image) is absent.
 - **F7.1 COMPLETED** only if `desktop-f7-provision.test.js` is green
   (warm-pool acquire SLO, no generic error, reaper, kill switch). Live
   E2B may skip honestly.
+- **F7.3 COMPLETED** only if `desktop-f7-cu-loop.test.js` is green
+  **and** the `desktop-f73` CI job has been seen green (this PR: run
+  33215826539). Do not mark COMPLETED on local-only runs if a new CI
+  job fails.
 
 ### Deploy (Luis)
 

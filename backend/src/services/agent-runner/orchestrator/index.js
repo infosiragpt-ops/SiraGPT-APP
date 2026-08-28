@@ -92,6 +92,15 @@ function shouldOrchestrate(text, _ctx = {}) {
   return SEQUENCE_SIGNAL.test(t) || SECOND_IMPERATIVE_SIGNAL.test(t);
 }
 
+/** F7.3 hook — CU-loop, not an F4 DAG. Planner wiring stays untouched. */
+function shouldRunComputerLoop(text, ctx) {
+  try {
+    return require('./computer-operator').shouldUseComputerOperator(text, ctx);
+  } catch (_) {
+    return false;
+  }
+}
+
 /* ── Steering: live-run registry ─────────────────────────────────────────── */
 
 const ACTIVE_RUNS = new Map(); // runId -> { steeringQueue: string[] }
@@ -586,6 +595,7 @@ async function runOrchestratorForChat({
 module.exports = {
   orchestratorEnabled,
   shouldOrchestrate,
+  shouldRunComputerLoop,
   runOrchestrator,
   runOrchestratorForChat,
   steer,

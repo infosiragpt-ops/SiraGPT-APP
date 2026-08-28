@@ -10,13 +10,20 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-**F7.2:** **IN_PROGRESS** — CI run 33213964824 rojo (frontend `@novnc/novnc`
-`./lib/rfb`; desktop-f71 `jsonwebtoken`; desktop-f72 `ws`). Este PR
-corrige: DesktopScreen client-only (`next/dynamic` + `ssr:false`) e
-import RFB vía export oficial `@novnc/novnc`; `jsonwebtoken` lazy en
-ws-token; `npm ci` en desktop-f71/f72. No se marca COMPLETED hasta que
-estén verdes frontend + desktop-f71 + desktop-f72 + «CI · required
-checks passed». **No se inicia F7.3.**
+**F7.3:** **COMPLETED** — gate §22.3 verde en CI (`Desktop · F7.3
+CU-loop + SiraAction`, run 33215826539) y «CI · required checks
+passed». `computer` tool + Anthropic/OpenAI/Gemini → SiraAction +
+CU-loop (vision, grounding, `verifyGoal`, budgets 40 / 5 min / 3
+handoffs, AbortSignal). `executeComputer` habla con DCP vía
+`DesktopSessionManager` (reusa lease del chat; kill switch
+`SIRAGPT_DESKTOP_ENABLED` fail-closed). `request_handoff` es solo una
+acción que devuelve `HANDOFF_REQUESTED` (FSM/UI = F7.4). Tests
+`backend/tests/desktop-f7-cu-loop.test.js`: 16 pass / 0 fail, sin
+Docker / sin E2B. **No se inicia F7.4.**
+
+**F7.2:** **merged** — PR #488 / `b43f3aeb` (DCP completo + WS proxy
+autenticado + DesktopScreen). Este PR no reabre F7.2 ni declara su CI
+verde; esa verificación queda en el merge de #488.
 
 **F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
 (`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
@@ -321,13 +328,15 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.2 IN_PROGRESS — esperar CI verde. F7.3 no se inicia.
-- Nada de F7.3–F7.8.
+- **F7** (fase): F7.3 COMPLETED (CI `desktop-f73` + required checks).
+- **F7.4 no iniciada.** Nada de F7.4–F7.8 (`handoff-fsm.js`,
+  `network-policy.js`, Prisma `DesktopSession`, LocalGvisor `runsc`).
 
 ## Pendiente
 
-- **F7.3** (siguiente): CU-loop (spec §21). No iniciar en este PR.
-- **F7.4–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F7.4** (siguiente): handoff FSM (pause / yield / resume) — spec §21.
+  No iniciar en este PR.
+- **F7.5–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
 - **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
   flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
@@ -341,7 +350,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
 2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-3. Implementar SOLO la sub-fase activa (siguiente: F7.3). No adelantar F7.3+.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.4). No adelantar F7.4+.
 4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas
