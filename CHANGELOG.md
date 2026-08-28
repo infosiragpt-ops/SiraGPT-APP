@@ -8,6 +8,9 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Computer orchestrator image build no longer fails with `useradd: UID 1000
+  is not unique` on `node:22-bookworm` (that image already owns uid 1000).
+  `compuser` is created by name; `docker exec -u compuser` is unchanged.
 - `/agentes` computer pane («Pantalla de Siragpt») no longer shows raw
   «fetch failed». `POST /api/agent-computer/sessions` talks to a real
   `siragpt-computer-orchestrator:8090` on the iliagpt docker network, and

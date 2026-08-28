@@ -2,6 +2,8 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 const { createOrchestrator } = require('../../services/computer-orchestrator/server');
 const { slugUserId, sessionIdFor, containerNameFor } = require('../../services/computer-orchestrator/session-store');
 const { buildActionCommand } = require('../../services/computer-orchestrator/agent-actions');
@@ -97,6 +99,16 @@ describe('siragpt-computer-orchestrator session contract', () => {
     assert.equal(buildActionCommand({ type: 'click', x: 4, y: 8 }), 'xdotool mousemove 4 8 click 1');
     assert.match(buildActionCommand({ type: 'type', text: "hi" }), /xdotool type/);
     assert.equal(buildActionCommand({ type: 'unknown' }), null);
+  });
+
+  test('Dockerfile creates compuser by name without forcing UID 1000', () => {
+    const dockerfile = fs.readFileSync(
+      path.join(__dirname, '../../services/computer-orchestrator/Dockerfile'),
+      'utf8',
+    );
+    assert.match(dockerfile, /useradd -m -s \/bin\/bash compuser/);
+    assert.doesNotMatch(dockerfile, /useradd[^\n]*-u 1000/);
+    assert.match(dockerfile, /getent passwd compuser/);
   });
 });
 
