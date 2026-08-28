@@ -10273,43 +10273,55 @@ REWRITTEN TEXT:`;
       }
     }
 
-    if (!skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
+    if (isVideoGenerationActive || chatType === 'video') {
       isGeneratingVideoRef.current = true;
       isVideoGenerationActiveRef.current = true;
       setIsVideoGenerationActive(true);
       setChatType('video');
     }
 
-    if (!skipMediaGenerator && isVoiceGenerationActive) {
+    if (isVoiceGenerationActive) {
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
-      try {
-        await handleVoiceGeneration(msg, filesToSend);
-        markQueuedSendSucceeded();
-      } finally {
-        isGeneratingVoiceRef.current = false;
-        setIsGeneratingVoice(false);
-        setIsVoiceGenerationActive(true);
-        inFlightSendKeysRef.current.delete(sendKey);
+      if (!skipMediaGenerator) {
+        try {
+          await handleVoiceGeneration(msg, filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isGeneratingVoiceRef.current = false;
+          setIsGeneratingVoice(false);
+          setIsVoiceGenerationActive(true);
+          inFlightSendKeysRef.current.delete(sendKey);
+        }
+        return;
       }
-      return;
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
     }
 
-    if (!skipMediaGenerator && isMusicGenerationActive) {
+    if (isMusicGenerationActive) {
       isGeneratingMusicRef.current = true;
       setIsGeneratingMusic(true);
       setIsMusicGenerationActive(true);
-      try {
-        await handleMusicGeneration(msg, filesToSend);
-        markQueuedSendSucceeded();
-      } finally {
-        isGeneratingMusicRef.current = false;
-        setIsGeneratingMusic(false);
-        setIsMusicGenerationActive(true);
-        inFlightSendKeysRef.current.delete(sendKey);
+      if (!skipMediaGenerator) {
+        try {
+          await handleMusicGeneration(msg, filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isGeneratingMusicRef.current = false;
+          setIsGeneratingMusic(false);
+          setIsMusicGenerationActive(true);
+          inFlightSendKeysRef.current.delete(sendKey);
+        }
+        return;
       }
-      return;
+      isGeneratingMusicRef.current = false;
+      setIsGeneratingMusic(false);
+    }
+
+    if (skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
+      isGeneratingVideoRef.current = false;
     }
 
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
