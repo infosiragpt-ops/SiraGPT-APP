@@ -1,7 +1,13 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
+import { pickPreferredCatalogModel, resolveCatalogModel, isStaleNonChatCatalogSelection } from "../lib/chat/catalog-model"
+
+const TEXT_CATALOG = [
+  { name: "deepseek-v4-flash", provider: "DeepSeek" },
+  { name: "SiraGPT Mini", provider: "Custom" },
+]
+const SEEDANCE = "bytedance/seedance-2.0/text-to-video"
 
 describe("chat catalog model", () => {
   it("keeps Flash when it is the selected generation model", () => {
@@ -57,6 +63,34 @@ describe("chat catalog model", () => {
     assert.deepEqual(
       resolveCatalogModel("openai/gpt-5.5", [], "OpenRouter"),
       { name: "openai/gpt-5.5", provider: "OpenRouter", replaced: false },
+    )
+  })
+
+  it("drops a leftover Seedance current once it left the TEXT catalog", () => {
+    assert.equal(isStaleNonChatCatalogSelection(SEEDANCE, TEXT_CATALOG), true)
+    assert.deepEqual(
+      pickPreferredCatalogModel(TEXT_CATALOG, { current: SEEDANCE, last: "SiraGPT Mini" }),
+      { name: "SiraGPT Mini", provider: "Custom" },
+    )
+    assert.deepEqual(
+      resolveCatalogModel(SEEDANCE, TEXT_CATALOG, "fal.ai"),
+      { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
+    )
+  })
+
+  it("does not honor a leftover Seedance id on an empty generate snapshot", () => {
+    assert.deepEqual(
+      resolveCatalogModel(SEEDANCE, [], "fal.ai"),
+      { name: "deepseek-v4-flash", provider: "DeepSeek", replaced: true },
+    )
+  })
+
+  it("keeps Seedance when the loaded catalog is actually VIDEO", () => {
+    const videoCatalog = [{ name: SEEDANCE, provider: "fal.ai" }]
+    assert.equal(isStaleNonChatCatalogSelection(SEEDANCE, videoCatalog), false)
+    assert.deepEqual(
+      pickPreferredCatalogModel(videoCatalog, { current: SEEDANCE }),
+      { name: SEEDANCE, provider: "fal.ai" },
     )
   })
 

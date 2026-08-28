@@ -6,10 +6,21 @@
  *
  * Conversation-scoped choice lives on `chat.model`. This module only
  * stores the cross-chat default / last-used ids.
+ *
+ * Video/image/audio ids (Seedance, etc.) must never persist here: after
+ * #479 they survived as leftover picker state once they left the TEXT catalog.
  */
+
+import { isNonChatMediaModel } from "./chat-model-guard"
 
 export const PINNED_MODEL_STORAGE_KEY = "sira:chat:pinned-model"
 export const LAST_MODEL_STORAGE_KEY = "sira:chat:last-model"
+
+function chatOnly(modelName: string): string {
+  const next = String(modelName || "").trim()
+  if (!next || isNonChatMediaModel(next)) return ""
+  return next
+}
 
 function readKey(key: string): string {
   if (typeof window === "undefined") return ""
@@ -32,11 +43,11 @@ function writeKey(key: string, value: string): void {
 }
 
 export function getPinnedModel(): string {
-  return readKey(PINNED_MODEL_STORAGE_KEY)
+  return chatOnly(readKey(PINNED_MODEL_STORAGE_KEY))
 }
 
 export function setPinnedModel(modelName: string): void {
-  writeKey(PINNED_MODEL_STORAGE_KEY, modelName)
+  writeKey(PINNED_MODEL_STORAGE_KEY, chatOnly(modelName))
 }
 
 export function clearPinnedModel(): void {
@@ -44,11 +55,11 @@ export function clearPinnedModel(): void {
 }
 
 export function getLastModel(): string {
-  return readKey(LAST_MODEL_STORAGE_KEY)
+  return chatOnly(readKey(LAST_MODEL_STORAGE_KEY))
 }
 
 export function setLastModel(modelName: string): void {
-  writeKey(LAST_MODEL_STORAGE_KEY, modelName)
+  writeKey(LAST_MODEL_STORAGE_KEY, chatOnly(modelName))
 }
 
 export function isPinnedModel(modelName: string, pinned = getPinnedModel()): boolean {

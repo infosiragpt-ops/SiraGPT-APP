@@ -2233,6 +2233,24 @@ router.post(
       }
 
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
+      try {
+        const { resolveChatTurnModel } = require('../services/ai/chat-model-guard');
+        const __chatTurn = resolveChatTurnModel({
+          selectedModel: model,
+          provider,
+          prompt,
+        });
+        if (__chatTurn.action !== 'chat') {
+          controller.abort();
+          return res.status(400).json({
+            error: 'non_chat_model',
+            message: __chatTurn.message || 'Este modelo no sirve para chatear. Elige DeepSeek V4 Flash o Pro.',
+          });
+        }
+        model = __chatTurn.name;
+        provider = __chatTurn.provider;
+        if (__chatTurn.disableAgentic) req.body.disableAgentic = true;
+      } catch (_chatTurnErr) { /* fail-open to existing routing */ }
       const __publicWebReadonly = req.body.enableWebGrounding === true;
       const __publicWebQuery = __publicWebReadonly
         && typeof req.body.webGroundingQuery === 'string'
@@ -9907,6 +9925,15 @@ router.post(
 
       const { prompt, chatId, aspect_ratio = '16:9', resolution = '720p', duration = 8, audio = true, negative_prompt, files, image_url, image_urls, model
       } = req.body;
+      try {
+        const { isGreetingChatPrompt, GREETING_NOT_VIDEO_MESSAGE } = require('../services/ai/chat-model-guard');
+        if (isGreetingChatPrompt(prompt)) {
+          return res.status(400).json({
+            error: 'greeting_not_video',
+            message: GREETING_NOT_VIDEO_MESSAGE,
+          });
+        }
+      } catch (_greetingErr) { /* fail-open */ }
       const userId = req.user.id;
       let effectiveAspectRatio = aspect_ratio;
       try {

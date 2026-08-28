@@ -428,7 +428,7 @@ function resolveToolCallMode(provider, model) {
   return promptedToolsEnabled() ? 'prompted' : 'none';
 }
 
-const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
+const SIMPLE_CHAT_PROMPT = /^\s*(hola|hi|hello|hey|buenas|buenos\s+d[ií]as|buenas\s+tardes|buenas\s+noches|qu[eé]\s+tal|c[oó]mo\s+est[aá]s|gracias|thanks|ok|vale|listo|perfecto|sí|si|no|test|prueba)[.!?¡¿\s]*$/i;
 const DIRECT_ONLY_PROMPT = /^\s*(?:responde|contesta|reply|answer)\s+(?:únicamente|unicamente|solo|solamente|only)\s*:?[\s\S]{1,120}$/i;
 const AGENTIC_PROMPT_HINT = /\b(clon|repo|repositorio|github|git|commit|push|pr|pull ?request|deploy|despleg|codex|cursor|claude.?code|program|c[oó]digo|refactor|mejora|arregla|corrige|no.?funciona|no.?sirve|todav[ií]a|sigue|contin[uú]a|investiga|busca|fuentes?|cita|web|internet|actual|reciente|pdf|documento|archivo|excel|word|ppt|tabla|analiza|compara|genera.?archivo|descargable|aut[oó]nom|background|segundo.?plano|meses?|semanas?|historial|sesiones?|conversaci[oó]n(?:es)?|navegador|browser|naveg|scrap|rasp|extrae.?web|click|clic|scroll|desplaz|\b\/goal\b|\b\/plan\b)\b/i;
 

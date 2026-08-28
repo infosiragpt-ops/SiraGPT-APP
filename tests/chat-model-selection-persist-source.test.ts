@@ -22,4 +22,9 @@ describe("model selection persistence source contract", () => {
     assert.match(picker, /updateChat\(currentChat\.id, \{ model: model\.name \}\)/)
     assert.match(context, /applyChatModelSelection/)
   })
+
+  it("does not re-apply a leftover Seedance chat.model onto the TEXT picker", () => {
+    assert.match(context, /pickPreferredCatalogModel\(availableModels/)
+    assert.match(context, /applyChatModelSelection/)
+  })
 })

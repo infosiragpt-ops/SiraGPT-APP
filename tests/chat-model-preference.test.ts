@@ -59,4 +59,15 @@ describe("chat model preference", () => {
     setLastModel("SiraGPT Mini")
     assert.equal(getLastModel(), "SiraGPT Mini")
   })
+
+  it("does not persist leftover Seedance / video ids as the TEXT default", () => {
+    setLastModel("bytedance/seedance-2.0/text-to-video")
+    setPinnedModel("bytedance/seedance-2.0/text-to-video")
+    assert.equal(getLastModel(), "")
+    assert.equal(getPinnedModel(), "")
+    store.set(LAST_MODEL_STORAGE_KEY, "bytedance/seedance-2.0/text-to-video")
+    store.set(PINNED_MODEL_STORAGE_KEY, "bytedance/seedance-2.0/text-to-video")
+    assert.equal(getLastModel(), "")
+    assert.equal(getPinnedModel(), "")
+  })
 })

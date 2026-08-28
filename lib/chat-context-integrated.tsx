@@ -15,6 +15,7 @@ import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocument
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { resolveChatTurnModel } from "./chat/chat-model-guard"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -1184,10 +1185,22 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Offline/reload retries pass reusePending=true and reuse this exact key
       // instead of replacing the durable draft with a fresh stream identity.
       const catalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      const chatTurn = resolveChatTurnModel({
+        selectedModel: catalogModel.name,
+        provider: catalogModel.provider,
+        prompt: content,
+      });
+      if (chatTurn.action === "reject_media") {
+        toast.error(chatTurn.message);
+        return false;
+      }
       if (catalogModel.replaced) {
         setSelectedModel(catalogModel.name);
         if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
       }
+      const generateModel = chatTurn.action === "chat"
+        ? { name: chatTurn.name, provider: chatTurn.provider }
+        : catalogModel;
 
       const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
         ? options.idempotencyKey.trim()
@@ -1201,9 +1214,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
         ? { ...options.requestEnvelope }
         : {
-            provider: catalogModel.provider,
-            model: catalogModel.name,
+            provider: generateModel.provider,
+            model: generateModel.name,
             reasoningEffort: selectedEffort,
+            disableAgentic: chatTurn.disableAgentic || undefined,
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
           };
       const pendingMessage = options?.reusePending
@@ -2393,7 +2407,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     initialFiles?: any[],
     options?: { skipInitialProcessing?: boolean; isWordConnectorChat?: boolean; isExcelConnectorChat?: boolean; projectId?: string; initialIntent?: ChatIntent; model?: string; idempotencyKey?: string }
   ) => {
-    const chatModel = options?.model || selectedModel;
+    const requestedModel = options?.model || selectedModel;
+    const chatModel = type === "video" || type === "image"
+      ? requestedModel
+      : resolveCatalogModel(requestedModel, availableModels).name;
     if (!user || !isAuthenticated || !chatModel) return;
     setChatType(type);
     try {
@@ -2547,8 +2564,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
     const name = String(chat?.model || "").trim()
     if (!name) return
-    setSelectedModel(name)
-  }, [])
+    const preferred = pickPreferredCatalogModel(availableModels, {
+      current: name,
+      pinned: getPinnedModel(),
+      last: getLastModel(),
+    })
+    if (!preferred?.name) return
+    setSelectedModel(preferred.name)
+    if (preferred.provider) setSelectedProivder(preferred.provider)
+  }, [availableModels])
 
   const selectChat = useCallback(
     async (chatId: string) => {

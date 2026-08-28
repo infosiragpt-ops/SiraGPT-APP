@@ -166,6 +166,7 @@ import {
 import { serializeBranchedMessageMetadata } from "@/lib/chat/branch-metadata"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { clampDeepSeekModel } from "@/lib/sse-client"
+import { resolveChatTurnModel } from "@/lib/chat/chat-model-guard"
 import { shouldRecoverImageGenerationViaPolling } from "@/lib/image-generation-recovery"
 import { track } from "@/lib/analytics"
 import { aiService, buildProfessionalCapabilityPrompt, classifyIntentFastPath, extractRequestedVideoAspectRatio, extractRequestedVideoAudio, extractRequestedVideoDurationSeconds, extractRequestedVideoResolution, isComputerRequestPrompt, isImageAnalysisPrompt, isImageOnlyAttachmentTurn, PROFESSIONAL_CAPABILITY_CONTRACTS, shouldAutoActivateVideoGeneration, shouldRouteTextPromptThroughAgenticRuntime, shouldRouteThroughAgenticRuntime, shouldRouteWorkModePromptThroughAgentTask, type ChatIntent } from "@/lib/ai-service"
@@ -401,6 +402,7 @@ import { clampVideoDuration, resolveVideoDurationSpec, stepVideoDuration } from 
 // awaited/caught, surfaces as an unhandled rejection in the dev overlay.
 import { writeText as copyTextSafe } from "@/lib/native/clipboard"
 import { brandModelLabel, brandProviderLabel } from "@/lib/chat/brand-label"
+import { isNonChatMediaModel } from "@/lib/chat/chat-model-guard"
 import {
   clearPinnedModel,
   getPinnedModel,
@@ -3928,10 +3930,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     lastGoodSelectedModelRef.current = liveSelectedModelData;
   } else if (
     lastGoodSelectedModelRef.current &&
-    lastGoodSelectedModelRef.current.name !== selectedModel
+    (lastGoodSelectedModelRef.current.name !== selectedModel
+      // #479 leftover: Seedance stayed painted after it left the TEXT catalog.
+      || isNonChatMediaModel(lastGoodSelectedModelRef.current))
   ) {
-    // User picked a genuinely different model not yet in the list: drop the
-    // stale entry so we never show a logo for the wrong model.
     lastGoodSelectedModelRef.current = undefined;
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
@@ -9785,7 +9787,19 @@ But first, you need to connect your Spotify account securely using the button be
     const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
 
-    const activeFreePreviewTool = isFreePlan
+    const chatTurnGuard = resolveChatTurnModel({
+      selectedModel,
+      provider: selectProvider,
+      prompt: msg,
+    });
+    if (chatTurnGuard.action === "reject_media") {
+      toast.error(chatTurnGuard.message);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    const skipMediaGenerator = chatTurnGuard.action !== "media";
+
+    const activeFreePreviewTool = isFreePlan && !skipMediaGenerator
       ? (isImageGenerationActive || chatType === 'image')
         ? 'Imágenes'
         : (isVideoGenerationActive || chatType === 'video')
@@ -9813,7 +9827,7 @@ But first, you need to connect your Spotify account securely using the button be
     }
 
     let imageModelForSendOverride: string | undefined;
-    if (isImageGenerationActive || chatType === 'image') {
+    if (!skipMediaGenerator && (isImageGenerationActive || chatType === 'image')) {
       const selectedImageModelForSend = selectedImageModel?.trim();
       let activeImageModel: any = null;
       try {
@@ -10270,32 +10284,44 @@ REWRITTEN TEXT:`;
       isGeneratingVoiceRef.current = true;
       setIsGeneratingVoice(true);
       setIsVoiceGenerationActive(true);
-      try {
-        await handleVoiceGeneration(msg, filesToSend);
-        markQueuedSendSucceeded();
-      } finally {
-        isGeneratingVoiceRef.current = false;
-        setIsGeneratingVoice(false);
-        setIsVoiceGenerationActive(true);
-        inFlightSendKeysRef.current.delete(sendKey);
+      if (!skipMediaGenerator) {
+        try {
+          await handleVoiceGeneration(msg, filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isGeneratingVoiceRef.current = false;
+          setIsGeneratingVoice(false);
+          setIsVoiceGenerationActive(true);
+          inFlightSendKeysRef.current.delete(sendKey);
+        }
+        return;
       }
-      return;
+      isGeneratingVoiceRef.current = false;
+      setIsGeneratingVoice(false);
     }
 
     if (isMusicGenerationActive) {
       isGeneratingMusicRef.current = true;
       setIsGeneratingMusic(true);
       setIsMusicGenerationActive(true);
-      try {
-        await handleMusicGeneration(msg, filesToSend);
-        markQueuedSendSucceeded();
-      } finally {
-        isGeneratingMusicRef.current = false;
-        setIsGeneratingMusic(false);
-        setIsMusicGenerationActive(true);
-        inFlightSendKeysRef.current.delete(sendKey);
+      if (!skipMediaGenerator) {
+        try {
+          await handleMusicGeneration(msg, filesToSend);
+          markQueuedSendSucceeded();
+        } finally {
+          isGeneratingMusicRef.current = false;
+          setIsGeneratingMusic(false);
+          setIsMusicGenerationActive(true);
+          inFlightSendKeysRef.current.delete(sendKey);
+        }
+        return;
       }
-      return;
+      isGeneratingMusicRef.current = false;
+      setIsGeneratingMusic(false);
+    }
+
+    if (skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
+      isGeneratingVideoRef.current = false;
     }
 
     const deterministicAgenticIntent = classifyIntentFastPath(msg);
@@ -10421,7 +10447,7 @@ REWRITTEN TEXT:`;
         markQueuedSendSucceeded();
         return;
       }
-      if (isImageGenerationActive || chatType === 'image') {
+      if (!skipMediaGenerator && (isImageGenerationActive || chatType === 'image')) {
         // Even with the "Imágenes" composer mode on (it can be left sticky by
         // a previous generation), an ANALYSIS question about an image
         // ("describe esta imagen", "¿qué ves?") must go to the vision chat
@@ -10432,7 +10458,7 @@ REWRITTEN TEXT:`;
           return;
         }
       }
-      if (isVideoGenerationActive || chatType === 'video') {
+      if (!skipMediaGenerator && (isVideoGenerationActive || chatType === 'video')) {
         isGeneratingVideoRef.current = true;
         isVideoGenerationActiveRef.current = true;
         setIsVideoGenerationActive(true);

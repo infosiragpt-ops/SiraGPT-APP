@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes`: a greeting (`hola`, `hi`, `gracias`, `ok`, `qué tal`) no
+  longer hangs on thinking. It skips video/image/audio jobs (including
+  Seedance) and answers with DeepSeek V4 Flash or Pro. A chat-only
+  prompt on a video/image/audio model fails fast in Spanish instead of
+  starting a fal/ByteDance job. After #479 persist-model, a leftover
+  Seedance id that left the TEXT catalog is no longer honored as
+  current / last / pinned / `chat.model` — it resolves to Flash.
 - The `/agentes` `@` Apps picker now shows official catalog logos
   (GitHub invertocat, LinkedIn in, X, Facebook f, and every other row
   with a `/conexiones-logos/` mark). Connected vs Conectar stays a

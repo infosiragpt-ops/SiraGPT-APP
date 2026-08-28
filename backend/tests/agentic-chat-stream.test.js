@@ -131,6 +131,7 @@ test('modelSupportsFunctionCalling allowlist', () => {
 
 test('shouldUseAgenticChat skips greetings and trivial smalltalk', () => {
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'hola' }), false);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'qué tal' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'gracias!' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'Responde únicamente: OK' }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: '¿Puedes explicarme qué es una API?' }), false);
