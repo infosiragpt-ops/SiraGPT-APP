@@ -13,8 +13,8 @@ const PRO_RE =
   /(?:deepseek[-/_\s]?v?4[-/_\s]?pro|deepseek\s*v4\s*pro|v4[-_\s]?pro(?:\s+live)?)/i
 const FLASH_RE =
   /(?:deepseek[-/_\s]?v?4[-/_\s]?flash|deepseek\s*v4\s*flash|v4[-_\s]?flash)/i
-const RAW_VENDOR_RE = /deepseek|openai|gpt-?4|gpt-?5|o1\b|o3\b|o4-mini|ollama|huggingface|moondream/i
-const HIDDEN_PROVIDER_RE = /^(deepseek|ollama|huggingface|moondream)$/i
+const RAW_VENDOR_RE = /deepseek|openai|gpt-?4|gpt-?5|o1\b|o3\b|o4-mini|ollama|huggingface|moondream|fal\.ai|fal-ai|openrouter/i
+const HIDDEN_PROVIDER_RE = /^(deepseek|ollama|huggingface|moondream|fal\.ai|fal-ai|openrouter)$/i
 
 export type BrandLabelSource = {
   name?: string | null
@@ -93,6 +93,8 @@ function hideForbiddenVendorLabel(label: string): string {
   if (/\bmoondream\b/i.test(trimmed)) return "SiraGPT Mini"
   if (/^sira[- ]?mini$/i.test(trimmed) || /^siragpt[- ]?mini$/i.test(trimmed)) return "SiraGPT Mini"
   if (/ollama|huggingface/i.test(trimmed)) return "Sira"
+  if (/openrouter/i.test(trimmed)) return "Sira"
+  if (/fal\.ai|fal-ai/i.test(trimmed)) return /video|seedance/.test(trimmed.toLowerCase()) ? "Video" : "Sira"
   if (/^deepseek\b/i.test(trimmed)) return SIRA_RAPIDO_LABEL
   return trimmed
 }

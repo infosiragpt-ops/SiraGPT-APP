@@ -15,6 +15,8 @@ import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocument
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { isVideoTextGenerateModel, VIDEO_TEXT_GENERATE_ERROR_ES } from "./chat/media-composer-config"
+import { addMessageFlights, generateTurnFlightKey } from "./generate-turn-flight"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -1192,6 +1194,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSelectedModel(catalogModel.name);
         if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
       }
+      const catalogEntry = availableModels.find((model: any) => model?.name === catalogModel.name);
+      if (
+        isVideoTextGenerateModel(catalogEntry)
+        || isVideoTextGenerateModel({ name: catalogModel.name, provider: catalogModel.provider })
+      ) {
+        toast.error(VIDEO_TEXT_GENERATE_ERROR_ES);
+        return false;
+      }
 
       const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
         ? options.idempotencyKey.trim()
@@ -1228,6 +1238,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const turnIdempotencyKey = pendingMessage?.idempotencyKey
         || requestedIdempotencyKey
         || safeUUID();
+      const addFlightKey = generateTurnFlightKey(activeChat.id, turnIdempotencyKey);
+      return addMessageFlights.run(addFlightKey, async () => {
       const streamId = pendingMessage?.streamId || requestedStreamId;
       const pendingOwnerId = String(user.id);
       const clearThisPendingTurn = () => clearPendingTurn(
@@ -2288,6 +2300,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         }
       }
       return terminalSucceeded;
+      });
     },
     // bg / pendingStop / selectChat / selectProvider are intentionally
     // omitted — they're either refs, secondary helpers, or recreated

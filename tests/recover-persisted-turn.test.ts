@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 import {
+  extractPersistedAssistantContent,
   isExplicitUserStop,
   pollPersistedAssistantTurn,
   shouldRecoverPersistedGenerate,
@@ -75,5 +76,19 @@ describe("recover persisted generate turn", () => {
     })
     assert.equal(recovered, null)
     assert.equal(calls, 0)
+  })
+
+  it("extracts the persisted assistant for a replayed turn", () => {
+    const chat = {
+      messages: [
+        { role: "USER", content: "hola", metadata: { idempotencyKey: "turn-1" } },
+        { role: "ASSISTANT", content: "¡Hola, Sara!", metadata: { idempotencyKey: "turn-1" } },
+      ],
+    }
+    assert.equal(
+      extractPersistedAssistantContent(chat, { idempotencyKey: "turn-1" }),
+      "¡Hola, Sara!",
+    )
+    assert.equal(extractPersistedAssistantContent(chat), "¡Hola, Sara!")
   })
 })

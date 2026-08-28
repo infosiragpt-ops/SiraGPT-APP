@@ -373,7 +373,9 @@ import {
   isAdminVisibleVideoModel,
   isImageModelEntry,
   isVideoModelEntry,
+  isVideoTextGenerateModel,
   providerForMediaModel,
+  VIDEO_TEXT_GENERATE_ERROR_ES,
   type ImageAspectRatio,
   type ImageGenerationCount,
   type ImageQuality,
@@ -2805,7 +2807,7 @@ const ActiveToolsDisplay = ({
             size="sm"
             className="media-model-trigger group/media-model relative isolate h-7 sm:h-8 max-w-[200px] sm:max-w-[300px] shrink-0 gap-1 sm:gap-1.5 overflow-hidden rounded-full px-2 sm:px-3 py-0 text-[12px] sm:text-[14px] font-semibold"
             aria-label={`Seleccionar modelo de ${tool}`}
-            title={`Modelo: ${label}${selected?.provider ? ` · ${selected.provider}` : ""}`}
+            title={`Modelo: ${label}${selected ? ` · ${brandProviderLabel(selected)}` : ""}`}
             disabled={disabled}
             data-media-tool={tool}
           >
@@ -4897,14 +4899,19 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
   }
 
   // Filter models based on search query
-  const filteredModels = availableModels.filter((model: any) =>
-    model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+  const filteredModels = availableModels.filter((model: any) => {
+    if (chatTypes !== "video" && isVideoTextGenerateModel(model)) return false
+    return model.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     model.provider?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     resolveModelProviderName(model).toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  });
 
   const onPick = (model: any) => {
+    if (isVideoTextGenerateModel(model) && chatTypes !== "video") {
+      toast.error(VIDEO_TEXT_GENERATE_ERROR_ES);
+      return;
+    }
     setSelectedModel(model.name);
     setSelectedProvider(model.provider);
     recordRecent(model.name);
@@ -9847,6 +9854,15 @@ But first, you need to connect your Spotify account securely using the button be
     }
     const idempotencyKey = queuedSend?.idempotencyKey || `chat-send-${safeUUID()}`;
     inFlightSendKeysRef.current.set(sendKey, { startedAt: nowForSendKey, idempotencyKey });
+
+    if (!isVideoGenerationActive && chatType !== "video") {
+      const selectedCatalog = (availableModels || []).find((model: any) => model?.name === selectedModel);
+      if (isVideoTextGenerateModel(selectedCatalog || selectedModel)) {
+        toast.error(VIDEO_TEXT_GENERATE_ERROR_ES);
+        inFlightSendKeysRef.current.delete(sendKey);
+        return;
+      }
+    }
 
     const activeFreePreviewTool = isFreePlan
       ? (isImageGenerationActive || chatType === 'image')

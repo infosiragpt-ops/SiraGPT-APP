@@ -17,6 +17,7 @@ const normalizedSearchText = (model: ModelIconInput) => {
 }
 
 export const MODEL_PROVIDER_ORDER = [
+  "Sira",
   "OpenAI",
   "Anthropic",
   "Google",
@@ -52,7 +53,7 @@ export function resolveModelProviderName(model: ModelIconInput | null | undefine
   if (has(searchable, /anthropic\/|claude/)) return "Anthropic"
   if (has(searchable, /google\/|gemini|gemma|imagen|veo|lyria/)) return "Google"
   if (has(searchable, /x-ai\/|\bxai\b|grok/)) return "xAI"
-  if (has(searchable, /deepseek/)) return "DeepSeek"
+  if (has(searchable, /deepseek/)) return "Sira"
   if (has(searchable, /moonshotai\/|moonshot|kimi/)) return "Moonshot AI"
   if (has(searchable, /qwen\/|qwen|alibaba/)) return "Qwen"
   if (has(searchable, /ollama/)) return "Ollama"
@@ -63,14 +64,19 @@ export function resolveModelProviderName(model: ModelIconInput | null | undefine
   if (has(searchable, /mistralai\/|mistral|codestral/)) return "Mistral AI"
   if (has(searchable, /\bz\.?ai\b|z-ai\/|zhipu|chatglm|\bglm[-\s]?\d?/)) return "Z.ai"
   if (has(searchable, /bytedance-seed\/|seedream|bytedance|doubao/)) return "ByteDance Seed"
-  if (has(searchable, /fal\.ai|fal-ai\//)) return "fal.ai"
+  if (has(searchable, /fal\.ai|fal-ai\//)) return "Sira"
   if (has(searchable, /kling/)) return "Kling AI"
   if (has(searchable, /pixverse/)) return "PixVerse"
   if (has(searchable, /minimax|hailuo/)) return "MiniMax"
   if (has(searchable, /\bwan\b|wan\//)) return "Wan"
   if (has(searchable, /\bltx\b|ltx-/)) return "LTX"
 
-  if (provider) return provider
+  if (provider) {
+    if (/^(deepseek|fal\.ai|fal-ai|openrouter|moondream|ollama|huggingface)$/i.test(provider)) {
+      return "Sira"
+    }
+    return provider
+  }
   return "Otros"
 }
 

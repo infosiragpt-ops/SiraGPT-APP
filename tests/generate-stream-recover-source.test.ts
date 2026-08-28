@@ -47,6 +47,21 @@ describe("generate stream persist-then-poll recovery", () => {
     assert.match(catchBlock, /shouldRecoverPersistedGenerate\(error/)
   })
 
+  it("treats duplicate_turn_replay and start+empty [DONE] as a finished turn", () => {
+    assert.match(apiSource, /type === 'duplicate_turn_replay'/)
+    assert.match(apiSource, /finishedPersistedTurn/)
+    assert.match(apiSource, /sawStartEvent/)
+    assert.match(apiSource, /recoverPersistedGenerateContent/)
+    assert.match(apiSource, /generateStreamFlights\.joinOrRun/)
+    assert.match(apiSource, /VIDEO_TEXT_GENERATE_ERROR_ES/)
+    const doneHandler = apiSource.slice(
+      apiSource.indexOf("if (payload === '[DONE]')"),
+      apiSource.indexOf("if (payload === '[DONE]')") + 2200,
+    )
+    assert.match(doneHandler, /shouldFinishPersistedTurn/)
+    assert.match(doneHandler, /recoverPersistedGenerateContent/)
+  })
+
   it("emits [DONE] from generate finally when persist finished", () => {
     const idx = generateSource.indexOf("Safari/Cloudflare can drop the socket after persist")
     assert.ok(idx > 0, "generate finally must mention Safari persist-then-poll")
