@@ -841,6 +841,30 @@ jobs:
       - name: F7.2 DCP contract + authenticated WS proxy (no Docker/E2B)
         run: node --test tests/desktop-f7-dcp.test.js
 
+  desktop-f73:
+    name: Desktop · F7.3 CU-loop + SiraAction
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        run: npm ci --prefer-offline --no-audit --no-fund
+
+      - name: F7.3 CU-loop + adapters (no Docker/E2B)
+        run: node --test tests/desktop-f7-cu-loop.test.js
+
   # ───────────────────────────────────────────────────────────────────
   # FINAL GATE — one-green-check for branch protection rules
   # ───────────────────────────────────────────────────────────────────
@@ -849,7 +873,7 @@ jobs:
   # touching the protection rule.
   ci:
     name: CI · required checks passed
-    needs: [frontend, backend, desktop-f70, desktop-f71, desktop-f72, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
+    needs: [frontend, backend, desktop-f70, desktop-f71, desktop-f72, desktop-f73, licenses, security-audit, ui-lock-verify, visual-regression-check, secret-scan, dependency-audit, drizzle-migrations-dry-run, e2e-critical]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -873,6 +897,10 @@ jobs:
           fi
           if [[ "${{ needs.desktop-f72.result }}" != "success" ]]; then
             echo "✗ desktop-f72: ${{ needs.desktop-f72.result }}"
+            exit 1
+          fi
+          if [[ "${{ needs.desktop-f73.result }}" != "success" ]]; then
+            echo "✗ desktop-f73: ${{ needs.desktop-f73.result }}"
             exit 1
           fi
           if [[ "${{ needs.licenses.result }}" != "success" ]]; then

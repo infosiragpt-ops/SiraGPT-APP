@@ -290,6 +290,30 @@ class DesktopSessionManager {
   }
 
   /**
+   * Reuse a live lease for this chat (F7.3 CU-loop). Newest ready session
+   * wins. Does not acquire and does not talk to a provider.
+   */
+  findByChatId(chatId) {
+    const key = String(chatId || '').trim();
+    if (!key) return null;
+    let best = null;
+    for (const rec of this.sessions.values()) {
+      if (String(rec.chatId || '') !== key) continue;
+      if (rec.status === 'dead') continue;
+      if (!best || Number(rec.acquiredAt) > Number(best.acquiredAt)) best = rec;
+    }
+    return best ? this._toLease(best) : null;
+  }
+
+  /**
+   * Provider handle for DCP calls. Not a public lease shape.
+   */
+  getHandle(sessionId) {
+    const rec = this.getRecord(sessionId);
+    return rec ? rec.handle : null;
+  }
+
+  /**
    * Internal record for the WS proxy. Not a public API shape.
    */
   getRecord(sessionId) {
