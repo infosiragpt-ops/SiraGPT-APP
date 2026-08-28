@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && CHROME_BIN="$(command -v chromium || command -v chromium-browser || true)" \
     && if [ -n "$CHROME_BIN" ]; then ln -sf "$CHROME_BIN" /usr/local/bin/google-chrome; fi \
-    && useradd -m -u 1000 -s /bin/bash compuser \
+    && (getent passwd compuser >/dev/null || useradd -m -s /bin/bash compuser) \
     && mkdir -p /workspace /opt/sira-orch \
     && chown compuser:compuser /workspace
 
