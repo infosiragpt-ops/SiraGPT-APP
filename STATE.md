@@ -10,18 +10,15 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS**. Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-Sub-fase activa: **F7.0** (DesktopProvider + imagen `sira-desktop` + DCP).
+Siguiente sub-fase: **F7.1** (E2BDesktopProvider + warm pool) — **no iniciada**.
 
-**F7.0:** **IN_PROGRESS** — contratos de interfaz / Dockerfile / `start.sh` /
-DCP unit-testeados. El gate de provision (§22.1: `docker build` + contenedor +
-`GET :9000/health` + screenshot) se **omite honestamente** en el entorno del
-agente (no hay daemon Docker). CI de GitHub Actions (ubuntu-latest) SÍ tiene
-Docker y debe correr el gate de verdad. No se marca COMPLETED hasta que ese
-gate pase. **No se inicia F7.1.**
-
-El orquestador live de #484 (`services/computer-orchestrator`) se conserva.
-F7.0 AÑADE `backend/src/services/desktop/provider/` + `infra/desktop/`.
-No se toca Caddy live, DNS, ni `computer.siragpt.com`.
+**F7.0:** **COMPLETED** — gate §22.1 verde en CI (`Desktop · F7.0 sira-desktop
+provision`, run 33201966689). `docker build` de `sira-desktop` + contenedor +
+`GET :9000/health` `{status:"ok",display:":0"}` + screenshot PNG. En el VM
+del agente el daemon Docker no existía y el test se saltó honestamente; CI
+sí lo corrió. Interfaz `DesktopProvider` + stubs E2B/LocalGvisor + imagen
+`infra/desktop`. El orquestador live de #484 se conservó. **No se inicia F7.1
+en este PR.**
 
 ---
 
@@ -309,17 +306,13 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7.0** (SiraComputer provision): interfaz `DesktopProvider` + imagen
-  `sira-desktop` + DCP `:9000`. Gate de Docker pendiente de CI / máquina con
-  daemon. F7.1–F7.8 NO se inician.
+- **F7** (fase): F7.0 cerrado. F7.1 no se inicia en este PR.
+- Nada de F7.1–F7.8.
 
 ## Pendiente
 
-- **Cerrar F7.0** cuando CI (o una máquina con Docker) pase §22.1: `docker
-  build` + contenedor + `/health` + `/screenshot`. Entonces marcar F7.0
-  COMPLETED y dejar F7.1 como siguiente (E2B + warm pool) — sin empezarla
-  en el mismo PR.
-- **F7.1–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
+- **F7.1** (siguiente): `E2BDesktopProvider` real + warm pool. Spec §21.
+- **F7.2–F7.8**, según `F7_SIRACOMPUTER_MASTER_SPEC.md` §21.
 - **F8 en adelante**, según `ROADMAP.md`: memoria/skills/MCP → evals →
   flywheel → enterprise → plataforma (MinIO/OTel/canary, Drizzle).
 - **Paso de deploy F5 (Luis, VPS)**: instalar gVisor y registrar `runsc` en
@@ -333,7 +326,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 1. Leer `STATE.md` (este archivo) para saber la fase activa y su estado.
 2. Leer `ROADMAP.md` y, si la fase es F7, `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-3. Implementar SOLO la sub-fase activa (hoy F7.0). No adelantar F7.1+.
+3. Implementar SOLO la sub-fase activa (siguiente: F7.1). No adelantar F7.2+.
 4. Al cerrar: tests + gates verdes, commit propio, actualizar `STATE.md`.
 
 ## Notas operativas

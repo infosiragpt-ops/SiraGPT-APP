@@ -8,7 +8,7 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
-- SiraComputer F7.0 (in progress): model-agnostic `DesktopProvider`
+- SiraComputer F7.0 (COMPLETED in CI): model-agnostic `DesktopProvider`
   (`create` / `destroy` / `health` / `screenshot`) plus the `sira-desktop`
   image (Xvfb :0, openbox, x11vnc/noVNC, xdotool, scrot, DCP on
   `127.0.0.1:9000`). E2B and full gVisor flags stay stubs. The live
