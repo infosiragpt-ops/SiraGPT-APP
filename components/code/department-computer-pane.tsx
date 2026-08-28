@@ -8,6 +8,7 @@
  */
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { Folder, Globe, Monitor, TerminalSquare, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -15,9 +16,30 @@ import { cn } from "@/lib/utils"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
-import { DesktopScreen } from "@/components/desktop/DesktopScreen"
 import { PensandoBars } from "@/components/pensando-bars"
 import { emitLoginHandoff } from "@/lib/computer-login-handoff"
+
+function DesktopScreenLoading() {
+  return (
+    <div
+      className="relative h-full w-full min-h-0 overflow-hidden bg-[#1b1b1d]"
+      data-testid="desktop-screen"
+    >
+      <div
+        className="absolute inset-0 z-10 flex items-center justify-center bg-[#1b1b1d]"
+        data-testid="desktop-screen-black"
+        aria-hidden
+      >
+        <p className="text-sm text-zinc-400">Preparando escritorio…</p>
+      </div>
+    </div>
+  )
+}
+
+const DesktopScreen = dynamic(
+  () => import("@/components/desktop/DesktopScreen").then((m) => m.DesktopScreen),
+  { ssr: false, loading: () => <DesktopScreenLoading /> },
+)
 
 export type DepartmentComputerDock = "screen" | "files" | "terminal" | "browser"
 

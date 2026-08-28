@@ -86,7 +86,7 @@ export function DesktopScreen({
 
     void (async () => {
       try {
-        const mod = await import("@novnc/novnc/lib/rfb")
+        const mod = await import("./desktop-rfb-client")
         if (cancelled || !hostRef.current) return
         const RFB = (mod as { default?: unknown }).default || mod
         const Ctor = RFB as new (target: HTMLElement, url: string, opts?: Record<string, unknown>) => RfbHandle

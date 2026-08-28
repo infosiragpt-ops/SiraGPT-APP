@@ -5,12 +5,17 @@
  *
  * Binds userId + chatId + sessionId. Never a model credential.
  * Kill-switch / missing secret fail closed — no anonymous desktop WS.
+ *
+ * jsonwebtoken is required only when minting/verifying so F7.1
+ * provision tests that load session-manager do not need the module.
  */
-
-const jwt = require('jsonwebtoken');
 
 const DESKTOP_WS_SCOPE = 'desktop:ws';
 const DEFAULT_EXPIRES = '15m';
+
+function loadJwt() {
+  return require('jsonwebtoken');
+}
 
 function resolveSecret(env = process.env, explicit) {
   if (explicit) return String(explicit);
@@ -33,7 +38,7 @@ function issueDesktopWsToken({ userId, chatId, sessionId }, opts = {}) {
     err.status = 400;
     throw err;
   }
-  return jwt.sign(
+  return loadJwt().sign(
     {
       scope: DESKTOP_WS_SCOPE,
       typ: 'desktop-ws',
@@ -54,7 +59,7 @@ function verifyDesktopWsToken(token, opts = {}) {
   const raw = String(token || '').trim();
   if (!secret || !raw) return null;
   try {
-    const payload = jwt.verify(raw, secret, { algorithms: ['HS256'] });
+    const payload = loadJwt().verify(raw, secret, { algorithms: ['HS256'] });
     if (!payload || payload.scope !== DESKTOP_WS_SCOPE) return null;
     if (!payload.userId || !payload.sessionId) return null;
     return {

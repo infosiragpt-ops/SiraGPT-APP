@@ -10,19 +10,13 @@
 
 **F7 — SiraComputer (multimodal + desktop VM).**
 Estado: **IN_PROGRESS** (fase). Spec: `F7_SIRACOMPUTER_MASTER_SPEC.md`.
-**F7.2:** **COMPLETED** — gate unitario verde en este checkout
-(`node --test tests/desktop-f7-dcp.test.js` + F7.0/F7.1: 32 pass, 0 fail;
-screenshot-diff e integración Docker/E2B se omiten honestamente).
-CI de este PR aún no se ha visto. Siguiente: **F7.3** — no iniciada.
-
-**F7.2:** **COMPLETED** — DCP completo en `infra/desktop/dcp/dcp.py`
-(health/screenshot/click/type/scroll/launch/navigate/exec/file/cursor/
-input_mode/mask; 423 Locked en modo human). Proxy WS autenticado
-`/ws/desktop/:sessionId` (token userId/chatId, solo loopback, kill
-switch fail-closed). `DesktopScreen.tsx` con RFB; first frame cierra
-el panel negro; `viewOnly` en modo agent. El orquestador live se
-conservó. Tests: `desktop-f7-dcp.test.js` verdes aquí; CI no visto.
-**No se inicia F7.3 en este PR.**
+**F7.2:** **IN_PROGRESS** — CI run 33213964824 rojo (frontend `@novnc/novnc`
+`./lib/rfb`; desktop-f71 `jsonwebtoken`; desktop-f72 `ws`). Este PR
+corrige: DesktopScreen client-only (`next/dynamic` + `ssr:false`) e
+import RFB vía export oficial `@novnc/novnc`; `jsonwebtoken` lazy en
+ws-token; `npm ci` en desktop-f71/f72. No se marca COMPLETED hasta que
+estén verdes frontend + desktop-f71 + desktop-f72 + «CI · required
+checks passed». **No se inicia F7.3.**
 
 **F7.1:** **COMPLETED** — gate de provision unitario verde en este checkout
 (`node --test tests/desktop-f7-provision.test.js` + `desktop-provider-f70.test.js`:
@@ -327,7 +321,7 @@ F0 (docs): **COMPLETED** — ROADMAP aprobado por Luis el 2026-08-13.
 
 ## En progreso
 
-- **F7** (fase): F7.2 cerrado a nivel unitario en este checkout. F7.3 no se inicia.
+- **F7** (fase): F7.2 IN_PROGRESS — esperar CI verde. F7.3 no se inicia.
 - Nada de F7.3–F7.8.
 
 ## Pendiente

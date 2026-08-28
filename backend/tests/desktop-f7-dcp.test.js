@@ -24,9 +24,17 @@ const http = require('http');
 const { spawn } = require('child_process');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const WebSocket = require('ws');
 
 const pexec = promisify(execFile);
+
+function loadWs() {
+  try {
+    return require('ws');
+  } catch (err) {
+    if (err && err.code === 'MODULE_NOT_FOUND') return null;
+    throw err;
+  }
+}
 
 const {
   DesktopSessionManager,
@@ -302,7 +310,12 @@ describe('F7.2 WS token + proxy', () => {
     }
   });
 
-  test('F7.2(c): scoped token rejected for the wrong user', async () => {
+  test('F7.2(c): scoped token rejected for the wrong user', async (t) => {
+    const WebSocket = loadWs();
+    if (!WebSocket) {
+      t.skip('ws no instalado — desktop-f72 debe correr npm ci');
+      return;
+    }
     const upstream = http.createServer();
     await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
     servers.push(upstream);
@@ -426,6 +439,10 @@ describe('F7.2 scope fences', () => {
     );
     assert.match(screen, /viewOnly/);
     assert.match(screen, /framebufferupdate|firstFrame/);
+    assert.match(screen, /desktop-rfb-client/);
+    assert.doesNotMatch(screen, /@novnc\/novnc\/lib\/rfb/);
+    assert.match(pane, /next\/dynamic/);
+    assert.match(pane, /ssr:\s*false/);
   });
 });
 
