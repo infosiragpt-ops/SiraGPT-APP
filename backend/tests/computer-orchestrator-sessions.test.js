@@ -66,6 +66,15 @@ function inspectRunning(name) {
   };
 }
 
+function mockDockerAlreadyRunning(name) {
+  return async function requestImpl(method, path) {
+    if (method === 'GET' && /\/json$/.test(path)) {
+      return { status: 200, data: inspectRunning(name) };
+    }
+    return { status: 200, data: {} };
+  };
+}
+
 function mockDockerMissingThenCreate(name) {
   let created = false;
   return async function requestImpl(method, path) {
@@ -211,6 +220,45 @@ describe('siragpt-computer-orchestrator session contract', () => {
       assert.equal(settled, true);
       assert.equal(res.status, 201);
       assert.equal(body.sessionId, sessionIdFor(userId));
+      assert.equal(body.container, container);
+    } finally {
+      clearTimeout(listenLater);
+      await srv.close();
+      await closeServer(novnc);
+    }
+  });
+
+  test('reused running desktop still waits until 6080 accepts', async () => {
+    const userId = 'reusenovnc';
+    const container = containerNameFor(userId);
+    const port = await reservePort();
+    let listening = false;
+    const novnc = net.createServer();
+    const listenLater = setTimeout(() => {
+      novnc.listen(port, '127.0.0.1', () => { listening = true; });
+    }, 280);
+
+    const runtime = createDockerRuntime({
+      requestImpl: mockDockerAlreadyRunning(container),
+      network: 'bridge',
+      novncPort: port,
+      novncWaitIntervalMs: 40,
+      novncWaitTimeoutMs: 3000,
+    });
+    const orch = createOrchestrator({ runtime, env: { PORT: '0' } });
+    const srv = await listen(orch);
+    try {
+      let settled = false;
+      const pending = postSession(srv.url, userId).then((out) => {
+        settled = true;
+        return out;
+      });
+      await delay(120);
+      assert.equal(settled, false, 'reuse must still wait for noVNC');
+      const { res, body } = await pending;
+      assert.equal(listening, true);
+      assert.ok(res.status === 200 || res.status === 201);
+      assert.equal(body.reused, true);
       assert.equal(body.container, container);
     } finally {
       clearTimeout(listenLater);

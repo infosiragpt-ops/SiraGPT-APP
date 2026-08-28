@@ -195,7 +195,8 @@ function createDockerRuntime(opts = {}) {
   async function ensureContainer(containerName) {
     const existing = await inspectContainer(containerName);
     if (existing && isRunning(existing)) {
-      return { info: existing, reused: true, created: false };
+      const info = await afterStart(containerName);
+      return { info, reused: true, created: false };
     }
     if (existing && !isRunning(existing)) {
       await requestImpl('POST', `/containers/${encodeURIComponent(containerName)}/start`);
