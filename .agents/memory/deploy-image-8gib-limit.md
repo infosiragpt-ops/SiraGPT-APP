@@ -19,9 +19,10 @@ deleted. `scripts/postbuild-slim.js` is the gatekeeper: it runs last
 
 **What tipped it over:** Adding `pkgs.libreoffice` to `replit.nix` (~1.6 GB nix
 closure, needed at runtime for the document/PDF render pipeline). The image was
-already near the cap because a **stray duplicate project copy `siraGPT/`**
-(2.2 GB, its own gitignored `node_modules`) was NOT in the slim prune list.
-Fix was to add `siraGPT` to the prune list, freeing ~2.2 GB.
+already near the cap because stray duplicate project copies carried their own
+gitignored `node_modules` and `.next` output. Cleanup names are case-sensitive:
+audit and prune every exact duplicate name rather than assuming one spelling
+covers variants.
 
 **How to apply:** when publish hits the 8 GiB cap, do NOT remove runtime-needed
 nix deps (libreoffice + playwright-driver are both used at runtime here —
