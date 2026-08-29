@@ -9,7 +9,7 @@
 
 import * as React from "react"
 import dynamic from "next/dynamic"
-import { Folder, Globe, Monitor, TerminalSquare, X } from "lucide-react"
+import { Folder, Globe, Maximize2, Monitor, TerminalSquare, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -281,6 +281,7 @@ export function DepartmentComputerPane({
   const [poolWarm, setPoolWarm] = React.useState(0)
   const [desktopLease, setDesktopLease] = React.useState<DesktopLease | null>(null)
   const [prepareProgress, setPrepareProgress] = React.useState(12)
+  const [expanded, setExpanded] = React.useState(false)
   const dept = String(departmentId || "").trim() || "ceo-office"
   const resolvedName = departmentName || (dept === "ceo-office" ? "CEO Office" : dept)
   const embedUrl = session ? embedFrom(session) : ""
@@ -376,6 +377,21 @@ export function DepartmentComputerPane({
   }, [chatId])
 
   const attachUrl = bound || !chatId ? embedUrl : ""
+  const hasLiveDesktop = Boolean(attachUrl || desktopLease)
+
+  React.useEffect(() => {
+    if (!expanded) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setExpanded(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener("keydown", onKey)
+    }
+  }, [expanded])
 
   React.useEffect(() => {
     if (!onStatusChange) return
@@ -428,49 +444,100 @@ export function DepartmentComputerPane({
 
       <span className="sr-only" data-testid="chat-computer-isolation-gap" />
 
+      {expanded ? (
+        <div
+          className="fixed inset-0 z-[80] bg-black/60"
+          data-testid="computer-abrir-overlay"
+          aria-hidden
+          onClick={() => setExpanded(false)}
+        />
+      ) : null}
+
       <div
-        className="relative min-h-0 flex-1 overflow-hidden bg-[#1b1b1d] text-zinc-50"
+        className={cn(
+          "relative min-h-0 flex-1 bg-[#1b1b1d] text-zinc-50",
+          expanded ? "overflow-visible" : "overflow-hidden",
+        )}
         data-novnc-fit="cover"
         data-desktop-pool-warm={poolWarm}
         data-desktop-preparing={loading && !attachUrl ? "1" : "0"}
         data-desktop-first-frame={desktopLease && !attachUrl ? "1" : "0"}
+        data-computer-expanded={expanded ? "1" : "0"}
       >
-        {attachUrl ? (
-          <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
-        ) : desktopLease ? (
-          <DesktopScreen
-            key={desktopLease.sessionId}
-            sessionId={desktopLease.sessionId}
-            wsUrl={desktopLease.wsUrl}
-            viewerToken={desktopLease.viewerToken}
-            viewOnly={desktopLease.inputMode !== "human"}
-            className="absolute inset-0 h-full w-full min-h-0"
-            onFirstFrame={() => setStatusLine("En vivo")}
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
-            <div className="flex flex-col items-center gap-3">
-              {!error ? <PensandoBars size={28} /> : null}
-              <p className="text-sm text-zinc-300" data-testid="desktop-preparing-label">
-                {error
-                  ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
-                  : PREPARING_DESKTOP_ES}
-              </p>
-              {!error ? (
-                <div
-                  className="h-1 w-40 overflow-hidden rounded-full bg-zinc-700"
-                  data-testid="desktop-prepare-progress"
-                  aria-hidden
-                >
+        <div
+          className={cn(
+            expanded
+              ? "fixed left-[5vw] top-[5vh] z-[90] h-[90vh] w-[90vw] overflow-hidden rounded-lg bg-[#1b1b1d] shadow-2xl"
+              : "absolute inset-0 h-full w-full min-h-0",
+          )}
+        >
+          {attachUrl ? (
+            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
+          ) : desktopLease ? (
+            <DesktopScreen
+              key={desktopLease.sessionId}
+              sessionId={desktopLease.sessionId}
+              wsUrl={desktopLease.wsUrl}
+              viewerToken={desktopLease.viewerToken}
+              viewOnly={desktopLease.inputMode !== "human"}
+              className="absolute inset-0 h-full w-full min-h-0"
+              onFirstFrame={() => setStatusLine("En vivo")}
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
+              <div className="flex flex-col items-center gap-3">
+                {!error ? <PensandoBars size={28} /> : null}
+                <p className="text-sm text-zinc-300" data-testid="desktop-preparing-label">
+                  {error
+                    ? userFacingComputerError(error, { poolWarm, enabled: poolWarm > 0, starting: loading })
+                    : PREPARING_DESKTOP_ES}
+                </p>
+                {!error ? (
                   <div
-                    className="h-full bg-sky-400/80 transition-[width]"
-                    style={{ width: `${Math.min(92, Math.max(12, prepareProgress))}%` }}
-                  />
-                </div>
-              ) : null}
+                    className="h-1 w-40 overflow-hidden rounded-full bg-zinc-700"
+                    data-testid="desktop-prepare-progress"
+                    aria-hidden
+                  >
+                    <div
+                      className="h-full bg-sky-400/80 transition-[width]"
+                      style={{ width: `${Math.min(92, Math.max(12, prepareProgress))}%` }}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </div>
-          </div>
-        )}
+          )}
+
+          {expanded && hasLiveDesktop ? (
+            <button
+              type="button"
+              className="absolute right-3 top-3 z-[95] inline-flex items-center gap-1.5 rounded-full bg-zinc-950/95 px-3 py-1.5 text-sm font-medium text-white shadow-lg transition-colors hover:bg-black"
+              aria-label="Cerrar"
+              title="Cerrar"
+              onClick={() => setExpanded(false)}
+            >
+              <X className="h-4 w-4" aria-hidden />
+              Cerrar
+            </button>
+          ) : null}
+
+          {!expanded && hasLiveDesktop ? (
+            <div className="group/abrir absolute inset-0 z-20 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/0 transition-colors group-hover/abrir:bg-black/25" />
+              <button
+                type="button"
+                data-testid="computer-abrir"
+                className="relative z-10 inline-flex items-center gap-2 rounded-full bg-zinc-950/95 px-4 py-2 text-sm font-medium text-white opacity-0 shadow-lg transition-opacity group-hover/abrir:opacity-100 hover:bg-black focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                aria-label="Abrir"
+                title="Abrir"
+                onClick={() => setExpanded(true)}
+              >
+                <Maximize2 className="h-4 w-4" aria-hidden />
+                Abrir
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {embedded ? null : (

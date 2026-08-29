@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Google Chrome
+GenericName=Navegador
+Comment=Google Chrome
+Exec=/usr/local/bin/google-chrome --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --user-data-dir=/workspace/.chrome %U
+Icon=chromium
+Terminal=false
+Categories=Network;WebBrowser;
+StartupNotify=true
+StartupWMClass=Chromium

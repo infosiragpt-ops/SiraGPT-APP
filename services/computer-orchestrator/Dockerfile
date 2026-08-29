@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xfce4 \
       xfce4-terminal \
       thunar \
+      plank \
       dbus-x11 \
       chromium \
       xdotool \
@@ -32,7 +33,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY session-store.js docker-runtime.js agent-actions.js http-proxy.js server.js /opt/sira-orch/
 COPY start-desktop.sh /usr/local/bin/start-desktop.sh
-RUN chmod 755 /usr/local/bin/start-desktop.sh
+COPY desktop-look/ /opt/sira-orch/desktop-look/
+RUN chmod 755 /usr/local/bin/start-desktop.sh \
+    && mkdir -p /usr/share/backgrounds /usr/local/share/applications \
+    && if [ -f /opt/sira-orch/desktop-look/wallpaper-gray-fabric.jpg ]; then \
+         cp /opt/sira-orch/desktop-look/wallpaper-gray-fabric.jpg /usr/share/backgrounds/sira-gray-fabric.jpg; \
+       fi \
+    && if [ -d /opt/sira-orch/desktop-look/applications ]; then \
+         cp /opt/sira-orch/desktop-look/applications/*.desktop /usr/local/share/applications/; \
+       fi
 
 WORKDIR /opt/sira-orch
 EXPOSE 8090
