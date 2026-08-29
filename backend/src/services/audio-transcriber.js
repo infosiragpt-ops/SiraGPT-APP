@@ -1,157 +1,301 @@
 'use strict';
 
 /**
- * Audio transcriber — extracts text from audio/video files
- * using OpenAI Whisper API.
+ * Audio transcriber — speech-to-text for audio/video, including WhatsApp
+ * PTT (ogg/opus/m4a).
  *
- * Supports: mp3, mp4, mpeg, wav, webm, ogg, m4a, mov
- *
- * Falls back gracefully when OPENAI_API_KEY is not set,
- * returning a descriptive placeholder for the file.
+ * Ladder:
+ *   1. OpenAI Whisper — optional faster path when a key is present AND the
+ *      request succeeds.
+ *   2. Local Whisper (whisper.cpp or faster-whisper) — no API key.
+ *   3. Sanitized Spanish placeholder — never includes provider error text
+ *      or API keys.
  *
  * Config:
- *   WHISPER_MODEL = whisper-1 (default)
- *   WHISPER_LANGUAGE = auto-detect (set to e.g. 'es' for Spanish)
+ *   WHISPER_MODEL = whisper-1 (OpenAI only)
+ *   WHISPER_LANGUAGE = es when unset (Peru/Spanish WhatsApp notes)
  *   WHISPER_PROMPT = optional guiding prompt
- *   AUDIO_MAX_FILE_BYTES = 25 MB (OpenAI API limit)
+ *   AUDIO_MAX_FILE_BYTES = 25 MB
+ *   WHISPER_CPP_BIN / WHISPER_CPP_MODEL / LOCAL_WHISPER_MODEL
  */
 
-const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
+const { redactString } = require('../utils/secret-redactor');
+const localWhisper = require('./local-whisper-engine');
 
-const WHISPER_MODEL = process.env.WHISPER_MODEL || 'whisper-1';
-const WHISPER_LANGUAGE = process.env.WHISPER_LANGUAGE || undefined;
-const AUDIO_MAX_FILE_BYTES = Number.parseInt(process.env.AUDIO_MAX_FILE_BYTES || String(25 * 1024 * 1024), 10);
+const DEFAULT_AUDIO_MAX_FILE_BYTES = 25 * 1024 * 1024;
+const DEFAULT_OPENAI_MODEL = 'whisper-1';
+const DEFAULT_LANGUAGE = 'es';
 
 const AUDIO_MIME_MAP = {
-  'audio/mpeg': { ext: 'mp3', label: 'MP3 Audio' },
-  'audio/wav': { ext: 'wav', label: 'WAV Audio' },
-  'audio/ogg': { ext: 'ogg', label: 'OGG Audio' },
-  'audio/webm': { ext: 'webm', label: 'WebM Audio' },
-  'audio/mp4': { ext: 'mp4', label: 'MP4 Audio' },
-  'video/mp4': { ext: 'mp4', label: 'MP4 Video' },
-  'video/mpeg': { ext: 'mpeg', label: 'MPEG Video' },
-  'video/quicktime': { ext: 'mov', label: 'QuickTime Video' },
-  'video/webm': { ext: 'webm', label: 'WebM Video' },
+  'audio/mpeg': { ext: 'mp3', label: 'Audio MP3' },
+  'audio/mp3': { ext: 'mp3', label: 'Audio MP3' },
+  'audio/wav': { ext: 'wav', label: 'Audio WAV' },
+  'audio/x-wav': { ext: 'wav', label: 'Audio WAV' },
+  'audio/ogg': { ext: 'ogg', label: 'Audio OGG' },
+  'audio/opus': { ext: 'opus', label: 'Audio Opus' },
+  'application/ogg': { ext: 'ogg', label: 'Audio OGG' },
+  'audio/webm': { ext: 'webm', label: 'Audio WebM' },
+  'audio/mp4': { ext: 'm4a', label: 'Audio M4A' },
+  'audio/m4a': { ext: 'm4a', label: 'Audio M4A' },
+  'audio/x-m4a': { ext: 'm4a', label: 'Audio M4A' },
+  'video/mp4': { ext: 'mp4', label: 'Video MP4' },
+  'video/mpeg': { ext: 'mpeg', label: 'Video MPEG' },
+  'video/quicktime': { ext: 'mov', label: 'Video QuickTime' },
+  'video/webm': { ext: 'webm', label: 'Video WebM' },
 };
 
+const EXT_MIME_FALLBACK = {
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.opus': 'audio/opus',
+  '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4',
+  '.mpeg': 'video/mpeg',
+  '.mpg': 'video/mpeg',
+  '.mov': 'video/quicktime',
+  '.webm': 'audio/webm',
+};
+
+const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
+const KEYISH_RE = /\bsk-[A-Za-z0-9._-]{3,}\b|\bBearer\s+\S+|OPENAI_API_KEY/i;
+
+function envOf(options = {}) {
+  return options.env || process.env;
+}
+
+function audioMaxFileBytes(options = {}) {
+  const raw = Number.parseInt(
+    options.maxFileBytes || envOf(options).AUDIO_MAX_FILE_BYTES || '',
+    10,
+  );
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIO_MAX_FILE_BYTES;
+}
+
+function normalizeAudioMime(mimeType, fileName) {
+  const declared = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  if (AUDIO_MIME_MAP[declared]) return declared;
+  const ext = path.extname(String(fileName || '')).toLowerCase();
+  return EXT_MIME_FALLBACK[ext] || declared;
+}
+
+function mimeInfo(mimeType, fileName) {
+  const normalized = normalizeAudioMime(mimeType, fileName);
+  return AUDIO_MIME_MAP[normalized] || { ext: 'bin', label: 'Archivo de audio' };
+}
+
+function resolveLanguage(options = {}) {
+  if (typeof options.language === 'string' && options.language.trim()) {
+    return options.language.trim();
+  }
+  const env = envOf(options);
+  if (Object.prototype.hasOwnProperty.call(env, 'WHISPER_LANGUAGE')) {
+    const value = String(env.WHISPER_LANGUAGE || '').trim();
+    return value || undefined;
+  }
+  return DEFAULT_LANGUAGE;
+}
+
+function hasOpenAiKey(options = {}) {
+  if (options.openai) return true;
+  return Boolean(String(envOf(options).OPENAI_API_KEY || '').trim());
+}
+
+function isInvalidKeyError(err) {
+  const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
+  const code = String(err?.code || err?.error?.code || '');
+  const message = String(err?.message || err?.error?.message || '');
+  return status === 401
+    || status === 403
+    || code === 'invalid_api_key'
+    || /invalid_api_key|incorrect api key|invalid api key/i.test(message);
+}
+
+function sanitizeProviderError(err) {
+  const raw = String(err?.message || err || '');
+  const redacted = redactString(raw);
+  if (KEYISH_RE.test(raw) || KEYISH_RE.test(redacted) || isInvalidKeyError(err)) {
+    return 'error de proveedor';
+  }
+  return redacted.slice(0, 180);
+}
+
+function generatePlaceholder(fileName, label, mimeType, reasonCode) {
+  const publicReason = reasonCode === 'file_too_large'
+    ? 'El archivo supera el tamaño máximo.'
+    : reasonCode === 'no_speech'
+      ? 'No se detectó voz.'
+      : 'Transcripción no disponible.';
+  return [
+    `${label} — ${fileName}`,
+    `Tipo: ${mimeType || 'desconocido'}`,
+    `Estado: ${publicReason}`,
+  ].join('\n');
+}
+
+function placeholderResult(fileName, label, mimeType, reasonCode) {
+  return {
+    text: generatePlaceholder(fileName, label, mimeType, reasonCode),
+    method: 'placeholder',
+    reasonCode,
+  };
+}
+
+function formatSuccess({ text, method, model, language, segments }) {
+  const transcript = String(text || '').trim();
+  const header = `${method === 'local-whisper' ? 'Transcripción local' : 'Transcripción'} — ${transcript.length} caracteres` +
+    (model ? `, modelo: ${model}` : '') +
+    (language ? `, idioma: ${language}` : '') +
+    '\n---\n';
+  return {
+    text: header + transcript,
+    transcript,
+    method,
+    model: model || null,
+    language: language || null,
+    segments: Array.isArray(segments) ? segments : [],
+  };
+}
+
+function logSafe(message) {
+  console.warn(`[audio-transcriber] ${redactString(String(message || ''))}`);
+}
+
+async function transcribeOpenAi(filePath, mimeType, fileName, options, language, prompt, model) {
+  const openai = options.openai || (() => {
+    const OpenAI = require('openai');
+    return new OpenAI({ apiKey: envOf(options).OPENAI_API_KEY });
+  })();
+
+  const fileBuffer = await fsPromises.readFile(filePath);
+  const blob = typeof options.createFile === 'function'
+    ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
+    : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
+
+  const request = {
+    model,
+    file: blob,
+    response_format: 'verbose_json',
+    timestamp_granularities: ['segment'],
+  };
+  if (language) request.language = language;
+  if (prompt) request.prompt = prompt;
+  const requestOptions = options.signal ? { signal: options.signal } : undefined;
+  const transcription = await openai.audio.transcriptions.create(request, requestOptions);
+  return {
+    text: transcription.text || '',
+    segments: transcription.segments?.map((s) => ({
+      start: s.start,
+      end: s.end,
+      text: s.text,
+    })) || [],
+    model,
+    language: language || null,
+  };
+}
+
+async function transcribeLocalPath(filePath, options, language, prompt) {
+  const impl = options.localTranscribe || localWhisper.transcribeLocal;
+  return impl(filePath, {
+    ...options,
+    language,
+    prompt,
+  });
+}
+
 /**
- * Transcribe an audio or video file using OpenAI Whisper.
- * Returns { text, method: 'whisper' | 'placeholder' }
+ * Transcribe an audio or video file.
+ * Returns { text, method: 'local-whisper' | 'whisper' | 'placeholder' }
  */
 async function transcribe(filePath, mimeType, originalName, options = {}) {
-  const info = AUDIO_MIME_MAP[mimeType];
-  const label = info ? info.label : 'Media File';
   const fileName = originalName || path.basename(filePath);
-  const language = typeof options.language === 'string' && options.language.trim()
-    ? options.language.trim()
-    : WHISPER_LANGUAGE;
+  const normalizedMime = normalizeAudioMime(mimeType, fileName);
+  const info = mimeInfo(normalizedMime, fileName);
+  const label = info.label;
+  const language = resolveLanguage(options);
   const prompt = typeof options.prompt === 'string' && options.prompt.trim()
     ? options.prompt.trim().slice(0, 1000)
-    : process.env.WHISPER_PROMPT || undefined;
-  const model = options.model || WHISPER_MODEL;
+    : envOf(options).WHISPER_PROMPT || undefined;
+  const model = options.model || envOf(options).WHISPER_MODEL || DEFAULT_OPENAI_MODEL;
+  const maxBytes = audioMaxFileBytes(options);
 
-  // An injected client is the test/provider-router seam. Production falls
-  // back to the deployment key exactly as the legacy upload pipeline did.
-  if (!options.openai && !process.env.OPENAI_API_KEY) {
-    return {
-      text: generatePlaceholder(fileName, label, mimeType, 'OpenAI API key not configured'),
-      method: 'placeholder',
-      reasonCode: 'provider_not_configured',
-    };
-  }
-
-  // Check file size
   let fileSize = 0;
   try {
-    const stat = await fsPromises.stat(filePath);
-    fileSize = stat.size;
+    fileSize = (await fsPromises.stat(filePath)).size;
   } catch {
     fileSize = 0;
   }
 
-  if (fileSize > AUDIO_MAX_FILE_BYTES) {
-    return {
-      text: generatePlaceholder(fileName, label, mimeType, `File too large (${(fileSize / 1024 / 1024).toFixed(1)}MB > ${(AUDIO_MAX_FILE_BYTES / 1024 / 1024).toFixed(0)}MB)`),
-      method: 'placeholder',
-      reasonCode: 'file_too_large',
-    };
+  if (fileSize > maxBytes) {
+    return placeholderResult(fileName, label, normalizedMime, 'file_too_large');
   }
 
-  // Try Whisper transcription
-  try {
-    const openai = options.openai || (() => {
-      const OpenAI = require('openai');
-      return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    })();
-
-    const fileBuffer = await fsPromises.readFile(filePath);
-
-    // OpenAI needs the file as a proper Blob-like object with a name
-    const blob = typeof options.createFile === 'function'
-      ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
-      : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
-
-    const request = {
-      model,
-      file: blob,
-      response_format: 'verbose_json',
-      timestamp_granularities: ['segment'],
-    };
-    if (language) request.language = language;
-    if (prompt) request.prompt = prompt;
-    const requestOptions = options.signal ? { signal: options.signal } : undefined;
-    const transcription = await openai.audio.transcriptions.create(request, requestOptions);
-
-    const text = transcription.text || '';
-
-    if (!text || text.trim().length < 10) {
-      return {
-        text: generatePlaceholder(fileName, label, mimeType, 'No speech detected'),
+  if (hasOpenAiKey(options)) {
+    try {
+      const cloud = await transcribeOpenAi(
+        filePath,
+        normalizedMime,
+        fileName,
+        options,
+        language,
+        prompt,
+        model,
+      );
+      const text = String(cloud.text || '').trim();
+      if (text.length < 10) {
+        return placeholderResult(fileName, label, normalizedMime, 'no_speech');
+      }
+      return formatSuccess({
+        text,
         method: 'whisper',
-        reasonCode: 'no_speech',
-      };
+        model: cloud.model,
+        language: cloud.language,
+        segments: cloud.segments,
+      });
+    } catch (err) {
+      const safe = sanitizeProviderError(err);
+      if (isInvalidKeyError(err)) {
+        logSafe(`OpenAI Whisper rejected the key (${safe}); falling back to local`);
+      } else {
+        logSafe(`OpenAI Whisper failed (${safe}); falling back to local`);
+      }
     }
+  }
 
-    const header = `${label} transcription — ${text.length} characters, ` +
-      `model: ${model}` +
-      (language ? `, language: ${language}` : '') +
-      `\n---\n`;
-
-    return {
-      text: header + text,
-      transcript: text,
-      method: 'whisper',
-      model,
-      language: language || null,
-      segments: transcription.segments?.map(s => ({
-        start: s.start,
-        end: s.end,
-        text: s.text,
-      })) || [],
-    };
+  try {
+    const local = await transcribeLocalPath(filePath, options, language, prompt);
+    const text = String(local?.text || local?.transcript || '').trim();
+    if (!text || text.length < 3) {
+      return placeholderResult(fileName, label, normalizedMime, 'no_speech');
+    }
+    return formatSuccess({
+      text,
+      method: 'local-whisper',
+      model: local.model || 'base',
+      language: local.language || language || null,
+      segments: local.segments,
+    });
   } catch (err) {
-    console.warn(`[audio-transcriber] Whisper failed for ${fileName}: ${err.message}`);
-    return {
-      text: generatePlaceholder(fileName, label, mimeType, `Transcription failed: ${err.message}`),
-      method: 'placeholder',
-      reasonCode: 'provider_error',
-    };
+    if (err?.code === 'LOCAL_WHISPER_ABORTED' || options.signal?.aborted) throw err;
+    logSafe(`Local Whisper failed: ${sanitizeProviderError(err)}`);
+    return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
   }
 }
 
-function generatePlaceholder(fileName, label, mimeType, reason) {
-  return [
-    `${label} — ${fileName}`,
-    `Type: ${mimeType || 'unknown'}`,
-    `Status: Transcription not available (${reason})`,
-    '',
-    'This media file has been uploaded for reference. To enable transcription:',
-    '1. Set OPENAI_API_KEY in your environment',
-    '2. Ensure the file is under 25 MB',
-    '3. Supported formats: mp3, mp4, mpeg, wav, webm, ogg, m4a, mov',
-  ].join('\n');
-}
-
-module.exports = { transcribe, AUDIO_MAX_FILE_BYTES, AUDIO_MIME_MAP };
+module.exports = {
+  transcribe,
+  generatePlaceholder,
+  sanitizeProviderError,
+  normalizeAudioMime,
+  resolveLanguage,
+  isInvalidKeyError,
+  hasOpenAiKey,
+  AUDIO_MIME_MAP,
+  SUCCESS_METHODS,
+  get AUDIO_MAX_FILE_BYTES() {
+    return audioMaxFileBytes();
+  },
+};

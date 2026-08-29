@@ -29,7 +29,11 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key (format: `sk-proj-...` or `sk-svc-...`) |
+| `OPENAI_API_KEY` | Optional. Faster Whisper path only. Invalid/401 keys fall back to local Whisper. Never required for WhatsApp voice notes. |
+| `WHISPER_LANGUAGE` | Default language hint for transcription. Unset → `es`. |
+| `WHISPER_CPP_BIN` | Local whisper.cpp binary. Default `/usr/local/bin/whisper-cli` after image install. |
+| `WHISPER_CPP_MODEL` | Local ggml model path. Default `/usr/local/share/whisper/ggml-base.bin`. |
+| `LOCAL_WHISPER_MODEL` | Optional Python faster-whisper model name (`base`). |
 | `ANTHROPIC_API_KEY` | Anthropic Claude API key |
 | `GROQ_API_KEY` | Groq API key |
 | `GEMINI_API_KEY` | Google Gemini API key |

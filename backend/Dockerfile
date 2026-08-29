@@ -64,11 +64,26 @@ RUN apk add --no-cache \
     tesseract-ocr-data-osd \
     tesseract-ocr-data-spa \
     ttf-dejavu \
-    ttf-freefont
+    ttf-freefont \
+    libgomp \
+    libstdc++ \
+    wget
 
 # Create non-root user and group if they don't exist
 RUN addgroup -S appgroup 2>/dev/null || true; \
     adduser -S appuser -G appgroup 2>/dev/null || true
+
+# Local Whisper (whisper.cpp + ggml-base). No API key. Used when OpenAI
+# Whisper is unset or returns 401/403. See scripts/install-local-whisper.sh
+# and docs/operations/LOCAL_WHISPER.md.
+COPY scripts/install-local-whisper.sh /tmp/install-local-whisper.sh
+RUN bash /tmp/install-local-whisper.sh \
+    && apk del --no-network cmake make g++ || true; \
+    rm -f /tmp/install-local-whisper.sh
+
+ENV WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
+    WHISPER_CPP_MODEL=/usr/local/share/whisper/ggml-base.bin \
+    WHISPER_LANGUAGE=es
 
 # Copy only runtime production assets
 COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules

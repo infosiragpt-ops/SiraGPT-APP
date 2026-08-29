@@ -50,7 +50,8 @@ const ALLOWED_MIMES = new Set([
   'message/rfc822',
   'application/vnd.ms-outlook',
   // Audio
-  'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/webm', 'audio/mp4',
+  'audio/mpeg', 'audio/wav', 'audio/ogg', 'audio/opus', 'application/ogg',
+  'audio/webm', 'audio/mp4', 'audio/m4a', 'audio/x-m4a',
   // Video
   'video/mp4', 'video/mpeg', 'video/quicktime', 'video/webm',
   // Ebooks / Academic
@@ -75,7 +76,7 @@ const ALLOWED_EXTENSIONS = new Set([
   // Email
   'eml', 'msg',
   // Media
-  'mp3', 'wav', 'ogg', 'webm', 'mp4', 'm4a', 'mov', 'mpeg', 'mpg',
+  'mp3', 'wav', 'ogg', 'oga', 'opus', 'webm', 'mp4', 'm4a', 'mov', 'mpeg', 'mpg',
   // Ebooks / Academic
   // Ebooks / Academic
   'epub', 'tex', 'latex',
@@ -118,7 +119,9 @@ const EXTENSION_TO_MIMES = new Map([
   ['msg', new Set(['application/vnd.ms-outlook'])],
   ['mp3', new Set(['audio/mpeg'])],
   ['wav', new Set(['audio/wav'])],
-  ['ogg', new Set(['audio/ogg'])],
+  ['ogg', new Set(['audio/ogg', 'application/ogg', 'audio/opus'])],
+  ['oga', new Set(['audio/ogg', 'application/ogg'])],
+  ['opus', new Set(['audio/opus', 'audio/ogg'])],
   ['webm', new Set(['audio/webm', 'video/webm'])],
   ['mp4', new Set(['audio/mp4', 'video/mp4'])],
   ['m4a', new Set(['audio/mp4'])],
