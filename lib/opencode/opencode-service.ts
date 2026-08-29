@@ -71,7 +71,7 @@ export const opencodeService = {
     return json.session
   },
 
-  /** Send a text prompt to a session. `model` is the picker choice (never printed). */
+  /** Send a text prompt to a session. The picker model is forwarded, not displayed. */
   async prompt(sessionId: string, text: string, opts: { model?: string; agent?: string } = {}): Promise<unknown> {
     const res = await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: "POST",

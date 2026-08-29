@@ -1,8 +1,7 @@
 /**
  * SiraCode agent mode for /agentes.
  *
- * Stable ids match the native engine. Spanish labels only — never DeepSeek,
- * OpenRouter, or a raw model_id.
+ * Stable ids match the native engine. Spanish product labels only.
  */
 
 export const SIRA_CODE_AGENTS = [

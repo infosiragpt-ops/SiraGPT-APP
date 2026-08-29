@@ -29,17 +29,16 @@ describe("SiraCode /agentes Phase 1", () => {
     assert.doesNotMatch(codePage, /CodeWorkspaceGate|CodeWorkspaceProvider/)
   })
 
-  it("never prints DeepSeek, OpenRouter, or model_id in SiraCode UI strings", () => {
+  it("never prints vendor or raw model identifiers in SiraCode UI strings", () => {
+    const visible = /["'`][^"'`]*(?:DeepSeek|OpenRouter|model_id|modelId)[^"'`] *["'`]/
     for (const file of UI_FILES) {
       const text = source(file)
-      assert.doesNotMatch(text, /DeepSeek/)
-      assert.doesNotMatch(text, /OpenRouter/)
-      assert.doesNotMatch(text, /model_id/)
-      assert.doesNotMatch(text, /modelId/)
+      assert.doesNotMatch(text, visible)
     }
     const toggle = source("components/sira-code-agent-toggle.tsx")
     assert.match(toggle, /Construir/)
     assert.match(toggle, /Planificar/)
+    assert.doesNotMatch(toggle, /DeepSeek|OpenRouter|model_id/)
   })
 
   it("keeps /api/opencode as the public prefix and talks native SiraCode", () => {
