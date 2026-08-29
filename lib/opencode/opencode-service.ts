@@ -81,7 +81,7 @@ export const opencodeService = {
     })
     const json = await handle<{ result: unknown }>(res)
     return json.result
-  }
+  },
 
   /** Switch Construir / Planificar on an existing session. */
   async switchAgent(sessionId: string, agent: string): Promise<OpencodeSession> {
