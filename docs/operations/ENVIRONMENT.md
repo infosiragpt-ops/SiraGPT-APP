@@ -44,6 +44,7 @@ APP_DIR=/root/siraNew/siraGPT scripts/deploy-production.sh
 | `GEMA4_PROVIDER` | Provider client for the free-tier fallback model. Default: `OpenAI` |
 | `GEMA4_DISPLAY_NAME` | Display name returned in the model selector policy. Default: `Gema4 31B` |
 | `GEMA4_ICON` | Icon key returned for the virtual fallback model. Default: `ChatGPTLogo` |
+| `SIRA_MINI_UPSTREAM_ID` | Ollama id for SiraGPT Mini. Default: `sira-mini`. Lenovo Ollama Mini = `sira-mini` → `gemma4:26b`, `num_ctx` 4096, `num_thread` 16. Chat uses native `POST /api/chat` with `think: false` and `keep_alive: -1` (Ollama 0.33.1 `/v1/chat/completions` ignores `think: false`). The picker always shows **SiraGPT Mini**. |
 
 ## 🗄️ Database & Cache
 

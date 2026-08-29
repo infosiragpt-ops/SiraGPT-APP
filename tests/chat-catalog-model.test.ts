@@ -24,6 +24,20 @@ describe("chat catalog model", () => {
     )
   })
 
+  it("maps Mini aliases including gemma4 to Custom without dumping vendor ids", () => {
+    assert.deepEqual(
+      resolveCatalogModel("gemma4:26b", [], "DeepSeek"),
+      { name: "gemma4:26b", provider: "Custom", replaced: false },
+    )
+    assert.deepEqual(
+      resolveCatalogModel("sira-mini", [
+        { name: "sira-mini", provider: "Custom" },
+        { name: "deepseek-v4-flash", provider: "DeepSeek" },
+      ]),
+      { name: "sira-mini", provider: "Custom", replaced: false },
+    )
+  })
+
   it("keeps a valid user pick even when it is not in the live catalog snapshot", () => {
     assert.deepEqual(
       resolveCatalogModel("sira-gpt-mini", [

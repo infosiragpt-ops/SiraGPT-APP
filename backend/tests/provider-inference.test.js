@@ -105,6 +105,8 @@ test('inferProviderFromModelId: local Custom/Ollama ids stay Custom', () => {
   assert.equal(inferProviderFromModelId('moondream'), 'Custom');
   assert.equal(inferProviderFromModelId('ollama/moondream'), 'Custom');
   assert.equal(inferProviderFromModelId('huggingface/moondream'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4:26b'), 'Custom');
 });
 
 test('inferProviderFromModelId: hostile non-string inputs never throw → OpenAI default', () => {
@@ -174,11 +176,12 @@ test('inferProviderFromModelId: Z.ai (GLM) and Kimi (Moonshot) direct ids', () =
   assert.equal(inferProviderFromModelId('moonshotai/kimi-k2'), 'OpenRouter');
 });
 
-test('inferProviderFromModelId: SiraGPT Mini / moondream → Custom, never DeepSeek', () => {
+test('inferProviderFromModelId: SiraGPT Mini / moondream / gemma4 → Custom, never DeepSeek', () => {
   assert.equal(inferProviderFromModelId('sira-mini'), 'Custom');
   assert.equal(inferProviderFromModelId('SiraGPT Mini'), 'Custom');
   assert.equal(inferProviderFromModelId('moondream'), 'Custom');
   assert.equal(inferProviderFromModelId('moondream:latest'), 'Custom');
+  assert.equal(inferProviderFromModelId('gemma4:26b'), 'Custom');
   assert.equal(inferProviderFromModelId('deepseek-v4-flash'), 'DeepSeek');
 });
 
