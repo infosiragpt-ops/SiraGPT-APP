@@ -41,6 +41,29 @@ function timeoutMs(options) {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
+function resolveThreadCount(options) {
+  const env = envOf(options);
+  const raw = options.threads ?? env.WHISPER_CPP_THREADS ?? env.WHISPER_THREADS;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
+function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads }) {
+  const args = [
+    '-m', modelPath,
+    '-f', wavPath,
+    '-otxt',
+    '-oj',
+    '-of', outBase,
+    '-nt',
+    '--no-prints',
+    '-ng',
+    '-t', String(threads ?? 1),
+  ];
+  if (language) args.push('-l', language);
+  return args;
+}
+
 function candidateBins(options) {
   const env = envOf(options);
   return [
@@ -221,16 +244,13 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
   }
 
   const outBase = path.join(path.dirname(wavPath), 'transcript');
-  const args = [
-    '-m', modelPath,
-    '-f', wavPath,
-    '-otxt',
-    '-oj',
-    '-of', outBase,
-    '-nt',
-    '--no-prints',
-  ];
-  if (language) args.push('-l', language);
+  const args = buildWhisperCppArgs({
+    modelPath,
+    wavPath,
+    outBase,
+    language,
+    threads: resolveThreadCount(options),
+  });
 
   const spawned = await runProcess(bin, args, options);
   const txt = (await readIfExists(`${outBase}.txt`)).trim();
@@ -317,4 +337,6 @@ module.exports = {
   transcribeWithPython,
   candidateBins,
   candidateModels,
+  resolveThreadCount,
+  buildWhisperCppArgs,
 };
