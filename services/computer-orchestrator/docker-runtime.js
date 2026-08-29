@@ -1,10 +1,65 @@
 'use strict';
 
 const http = require('http');
+const net = require('net');
 const { spawn } = require('child_process');
 
 const DEFAULT_SOCKET = '/var/run/docker.sock';
 const DEFAULT_API = 'v1.44';
+const NOVNC_PORT = 6080;
+const NOVNC_WAIT_INTERVAL_MS = 250;
+const NOVNC_WAIT_TIMEOUT_MS = 45_000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function tcpConnectOnce(port, host, { connectImpl, connectTimeoutMs = 1500 } = {}) {
+  if (typeof connectImpl === 'function') {
+    return new Promise((resolve, reject) => {
+      connectImpl(port, host, (err) => (err ? reject(err) : resolve()));
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const socket = net.connect({ port, host });
+    const finish = (err) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      if (err) reject(err);
+      else resolve();
+    };
+    socket.setTimeout(connectTimeoutMs, () => {
+      const err = new Error('connect timeout');
+      err.code = 'ETIMEDOUT';
+      finish(err);
+    });
+    socket.once('connect', () => finish());
+    socket.once('error', finish);
+  });
+}
+
+async function waitForTcpPort(host, port, opts = {}) {
+  const intervalMs = Number(opts.intervalMs) > 0 ? Number(opts.intervalMs) : NOVNC_WAIT_INTERVAL_MS;
+  const timeoutMs = Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : NOVNC_WAIT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let lastErr;
+  while (Date.now() <= deadline) {
+    try {
+      await tcpConnectOnce(port, host, opts);
+      return { host, port, ready: true };
+    } catch (err) {
+      lastErr = err;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(intervalMs, remaining));
+    }
+  }
+  const err = new Error(`novnc not reachable on ${host}:${port} after ${timeoutMs}ms`);
+  err.status = 503;
+  err.code = 'NOVNC_NOT_READY';
+  err.cause = lastErr;
+  throw err;
+}
 
 function memoryBytes(mb) {
   const n = Number(mb);
@@ -24,6 +79,13 @@ function createDockerRuntime(opts = {}) {
   const memoryMb = opts.memoryMb || process.env.AGENT_COMPUTER_DESKTOP_MEMORY_MB || 1024;
   const cpus = opts.cpus || process.env.AGENT_COMPUTER_DESKTOP_CPUS || '1';
   const requestImpl = opts.requestImpl || dockerRequest;
+  const novncPort = Number(opts.novncPort) > 0 ? Number(opts.novncPort) : NOVNC_PORT;
+  const novncWaitIntervalMs = Number(opts.novncWaitIntervalMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_INTERVAL_MS) > 0
+    ? Number(opts.novncWaitIntervalMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_INTERVAL_MS)
+    : NOVNC_WAIT_INTERVAL_MS;
+  const novncWaitTimeoutMs = Number(opts.novncWaitTimeoutMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_TIMEOUT_MS) > 0
+    ? Number(opts.novncWaitTimeoutMs || process.env.AGENT_COMPUTER_NOVNC_WAIT_TIMEOUT_MS)
+    : NOVNC_WAIT_TIMEOUT_MS;
 
   function dockerRequest(method, path, body) {
     return new Promise((resolve, reject) => {
@@ -116,17 +178,29 @@ function createDockerRuntime(opts = {}) {
       if (!(err && err.status === 409)) throw err;
     }
     await requestImpl('POST', `/containers/${encodeURIComponent(containerName)}/start`);
-    return inspectContainer(containerName);
+    return afterStart(containerName);
+  }
+
+  async function afterStart(containerName) {
+    const info = await inspectContainer(containerName);
+    const host = containerIp(info) || containerName;
+    await waitForTcpPort(host, novncPort, {
+      intervalMs: novncWaitIntervalMs,
+      timeoutMs: novncWaitTimeoutMs,
+      connectImpl: opts.connectImpl,
+    });
+    return info;
   }
 
   async function ensureContainer(containerName) {
     const existing = await inspectContainer(containerName);
     if (existing && isRunning(existing)) {
-      return { info: existing, reused: true, created: false };
+      const info = await afterStart(containerName);
+      return { info, reused: true, created: false };
     }
     if (existing && !isRunning(existing)) {
       await requestImpl('POST', `/containers/${encodeURIComponent(containerName)}/start`);
-      const info = await inspectContainer(containerName);
+      const info = await afterStart(containerName);
       return { info, reused: true, created: false };
     }
     const info = await createAndStart(containerName);
@@ -187,6 +261,11 @@ function createDockerRuntime(opts = {}) {
 
 module.exports = {
   createDockerRuntime,
+  waitForTcpPort,
   memoryBytes,
   nanoCpus,
+  NOVNC_PORT,
+  NOVNC_WAIT_INTERVAL_MS,
+  NOVNC_WAIT_TIMEOUT_MS,
+  DEFAULT_API,
 };

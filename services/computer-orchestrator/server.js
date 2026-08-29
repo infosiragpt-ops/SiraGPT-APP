@@ -256,6 +256,8 @@ function createOrchestrator(opts = {}) {
         hostname: session.host,
         port: 6080,
         path: joinPath('', sub || '/'),
+        retries: 4,
+        retryDelayMs: 250,
       });
     }
 

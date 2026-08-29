@@ -3,8 +3,10 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const net = require('net');
 const path = require('path');
 const { createOrchestrator } = require('../../services/computer-orchestrator/server');
+const { createDockerRuntime, waitForTcpPort } = require('../../services/computer-orchestrator/docker-runtime');
 const { slugUserId, sessionIdFor, containerNameFor } = require('../../services/computer-orchestrator/session-store');
 const { buildActionCommand } = require('../../services/computer-orchestrator/agent-actions');
 
@@ -29,6 +31,70 @@ async function postSession(base, userId) {
   });
   const body = await res.json();
   return { res, body };
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function reservePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close((err) => (err ? reject(err) : resolve(port)));
+    });
+    probe.on('error', reject);
+  });
+}
+
+function closeServer(server) {
+  return new Promise((resolve) => {
+    if (!server || !server.listening) return resolve();
+    server.close(() => resolve());
+  });
+}
+
+function inspectRunning(name) {
+  return {
+    Name: `/${name}`,
+    State: { Running: true },
+    NetworkSettings: {
+      IPAddress: '127.0.0.1',
+      Networks: { bridge: { IPAddress: '127.0.0.1' } },
+    },
+  };
+}
+
+function mockDockerAlreadyRunning(name) {
+  return async function requestImpl(method, path) {
+    if (method === 'GET' && /\/json$/.test(path)) {
+      return { status: 200, data: inspectRunning(name) };
+    }
+    return { status: 200, data: {} };
+  };
+}
+
+function mockDockerMissingThenCreate(name) {
+  let created = false;
+  return async function requestImpl(method, path) {
+    if (method === 'GET' && /\/json$/.test(path)) {
+      if (!created) {
+        const err = new Error('no such container');
+        err.status = 404;
+        throw err;
+      }
+      return { status: 200, data: inspectRunning(name) };
+    }
+    if (method === 'POST' && path.includes('/create')) {
+      created = true;
+      return { status: 201, data: { Id: 'ctr' } };
+    }
+    if (method === 'POST' && path.endsWith('/start')) {
+      return { status: 204, data: {} };
+    }
+    return { status: 200, data: {} };
+  };
 }
 
 describe('siragpt-computer-orchestrator session contract', () => {
@@ -118,6 +184,127 @@ describe('siragpt-computer-orchestrator session contract', () => {
     );
     assert.match(src, /DEFAULT_API\s*=\s*.*['"]v1\.44['"]/);
     assert.doesNotMatch(src, /DEFAULT_API\s*=\s*['"]v1\.43['"]/);
+  });
+
+  test('POST /sessions does not resolve before desktop 6080 accepts', async () => {
+    const userId = 'waitnovnc';
+    const container = containerNameFor(userId);
+    const port = await reservePort();
+    let listening = false;
+    const novnc = net.createServer();
+    const listenLater = setTimeout(() => {
+      novnc.listen(port, '127.0.0.1', () => { listening = true; });
+    }, 280);
+
+    const runtime = createDockerRuntime({
+      requestImpl: mockDockerMissingThenCreate(container),
+      network: 'bridge',
+      novncPort: port,
+      novncWaitIntervalMs: 40,
+      novncWaitTimeoutMs: 3000,
+    });
+    const orch = createOrchestrator({ runtime, env: { PORT: '0' } });
+    const srv = await listen(orch);
+    try {
+      let settled = false;
+      const pending = postSession(srv.url, userId).then((out) => {
+        settled = true;
+        return out;
+      });
+      await delay(120);
+      assert.equal(settled, false, 'session create must wait for noVNC TCP 6080');
+      assert.equal(listening, false);
+
+      const { res, body } = await pending;
+      assert.equal(listening, true);
+      assert.equal(settled, true);
+      assert.equal(res.status, 201);
+      assert.equal(body.sessionId, sessionIdFor(userId));
+      assert.equal(body.container, container);
+    } finally {
+      clearTimeout(listenLater);
+      await srv.close();
+      await closeServer(novnc);
+    }
+  });
+
+  test('reused running desktop still waits until 6080 accepts', async () => {
+    const userId = 'reusenovnc';
+    const container = containerNameFor(userId);
+    const port = await reservePort();
+    let listening = false;
+    const novnc = net.createServer();
+    const listenLater = setTimeout(() => {
+      novnc.listen(port, '127.0.0.1', () => { listening = true; });
+    }, 280);
+
+    const runtime = createDockerRuntime({
+      requestImpl: mockDockerAlreadyRunning(container),
+      network: 'bridge',
+      novncPort: port,
+      novncWaitIntervalMs: 40,
+      novncWaitTimeoutMs: 3000,
+    });
+    const orch = createOrchestrator({ runtime, env: { PORT: '0' } });
+    const srv = await listen(orch);
+    try {
+      let settled = false;
+      const pending = postSession(srv.url, userId).then((out) => {
+        settled = true;
+        return out;
+      });
+      await delay(120);
+      assert.equal(settled, false, 'reuse must still wait for noVNC');
+      const { res, body } = await pending;
+      assert.equal(listening, true);
+      assert.ok(res.status === 200 || res.status === 201);
+      assert.equal(body.reused, true);
+      assert.equal(body.container, container);
+    } finally {
+      clearTimeout(listenLater);
+      await srv.close();
+      await closeServer(novnc);
+    }
+  });
+
+  test('POST /sessions returns 503 when noVNC never accepts', async () => {
+    const userId = 'deadnovnc';
+    const container = containerNameFor(userId);
+    const runtime = createDockerRuntime({
+      requestImpl: mockDockerMissingThenCreate(container),
+      network: 'bridge',
+      novncPort: 1,
+      novncWaitIntervalMs: 20,
+      novncWaitTimeoutMs: 80,
+    });
+    const orch = createOrchestrator({ runtime, env: { PORT: '0' } });
+    const srv = await listen(orch);
+    try {
+      const { res, body } = await postSession(srv.url, userId);
+      assert.equal(res.status, 503);
+      assert.equal(body.error, 'ORCH_UNAVAILABLE');
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('waitForTcpPort', () => {
+  test('resolves only after the port starts accepting connections', async () => {
+    const port = await reservePort();
+    const server = net.createServer();
+    const pending = waitForTcpPort('127.0.0.1', port, { intervalMs: 30, timeoutMs: 1500 });
+    let ready = false;
+    pending.then(() => { ready = true; }).catch(() => {});
+    await delay(80);
+    assert.equal(ready, false);
+    await new Promise((resolve, reject) => {
+      server.listen(port, '127.0.0.1', resolve);
+      server.on('error', reject);
+    });
+    await pending;
+    assert.equal(ready, true);
+    await closeServer(server);
   });
 });
 
