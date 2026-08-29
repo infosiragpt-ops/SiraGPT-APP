@@ -29,3 +29,11 @@ document rendering and computer-use/screenshots). Instead audit the working dir
 for large dirs that survive the build and add them to the `junk` list in
 `scripts/postbuild-slim.js`. Both `libreoffice` and `playwright-driver` are
 heavy but load-bearing — cutting them breaks features, not the right lever.
+
+**Layering note:** if the hosting service performs an automatic root npm install
+before a custom build, do not delete and reinstall that same root tree in the
+custom command. The later deletion does not reclaim the earlier image layer;
+reuse the preinstalled tree and only install additional runtime dependencies.
+Never trust a retained workspace tree from package presence alone: require the
+installed Next version to match the lockfile and a clean top-level `npm ls`;
+otherwise fall back to a clean install.

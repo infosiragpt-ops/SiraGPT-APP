@@ -10,13 +10,10 @@ channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "gce"
-# Replit reuses the workspace across deploys. A stale @next/swc-* directory can
-# make npm fail before build with ENOTEMPTY while renaming the platform SWC
-# binary. Always start from a clean workspace and use npm ci so installs match
-# package-lock.json exactly.
-#
-# replit-deploy-install.cjs runs the root and backend `npm ci` steps in parallel
-# (each via the retry wrapper) so the install phase collapses to ~max(root, backend).
+# Replit's GCE builder performs a root npm install before this command. Keep that
+# root tree so it is not duplicated in a second image layer. The installer
+# verifies the root build packages and falls back to npm ci if they are absent;
+# backend production dependencies are installed separately.
 #
 # MEMORY: the builder is an 8 GiB e2-standard-2. `next build` was intermittently
 # OOM-killed (SIGKILL, no error in the build log — it died right as next build
@@ -24,16 +21,16 @@ deploymentTarget = "gce"
 # native allocs + static-generation workers + OS. We pin NODE_OPTIONS=
 # --max-old-space-size=4096 here (explicit, so an external NODE_OPTIONS can't
 # bypass it) and enable experimental.webpackMemoryOptimizations in next.config.
-build = "rm -rf node_modules backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 NODE_OPTIONS=--max-old-space-size=4096 npm run build"
+build = "rm -rf backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 NODE_OPTIONS=--max-old-space-size=4096 npm run build"
 # start-all waits 50s for both children after SIGTERM/SIGINT. Override with
 # SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS (clamped to 40000-120000ms / 40-120s).
 # Windows relays backend drain over IPC; process-tree force kill is deadline-only.
 run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS=50000 REPLIT_DEPLOYMENT=1 npm start"
 
 [packager.features]
-# The deployment build command above owns installation. Disabling hosting's
-# automatic npm install avoids the pre-build package phase that hit ENOTEMPTY.
-enabledForHosting = false
+# The GCE builder owns the root install. The custom installer validates and reuses
+# that tree, avoiding a duplicate multi-GB image layer while retaining a safe fallback.
+enabledForHosting = true
 
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix", "package.json"]
@@ -64,10 +61,6 @@ args = "Start application"
 task = "workflow.run"
 args = "oauth-url-smoke"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Backend API"
-
 [[workflows.workflow]]
 name = "Start application"
 author = "agent"
@@ -77,8 +70,8 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd SiraGPT-APP && ALLOW_REPLIT_PREVIEW=1 BACKEND_INTERNAL_URL=http://127.0.0.1:5050 NEXT_PUBLIC_API_URL=/api npm run dev -- -H 0.0.0.0 -p 5000"
-waitForPort = 5000
+args = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 NODE_ENV=development node -e \"const { spawn } = require('child_process'); const env = process.env; const backend = spawn('node', ['backend/scripts/start-with-migrations.js'], { cwd: '.', env: { ...env, PORT: '5050', HOST: '127.0.0.1', NODE_ENV: 'production' }, stdio: 'inherit' }); const frontend = spawn('npx', ['next', 'dev', '-p', '3000', '-H', '0.0.0.0'], { env: { ...env, PORT: '3000' }, stdio: 'inherit' }); const prewarm = spawn('node', ['scripts/prewarm-chunks.js'], { cwd: '.', env: { ...env, FRONTEND_PORT: '3000' }, stdio: 'inherit' });\""
+waitForPort = 3000
 
 [[workflows.workflow]]
 name = "oauth-url-smoke"
@@ -90,17 +83,6 @@ args = "cd backend && node --test tests/oauth-url-policy.test.js"
 
 [workflows.workflow.metadata]
 isValidation = true
-
-[[workflows.workflow]]
-name = "Backend API"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd SiraGPT-APP/backend && PORT=5050 REPLIT_BACKEND_MODE=sidecar SKIP_MIGRATIONS=1 node scripts/start-with-migrations.js"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [userenv]
 
@@ -127,15 +109,3 @@ timeoutMs = 120000
 [[ports]]
 localPort = 3000
 externalPort = 80
-
-[[ports]]
-localPort = 5000
-externalPort = 80
-
-[[ports]]
-localPort = 5050
-externalPort = 3000
-
-[[ports]]
-localPort = 5099
-externalPort = 3001
