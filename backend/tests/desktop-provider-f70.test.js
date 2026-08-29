@@ -252,6 +252,11 @@ describe('F7.0 does not rip out the live orchestrator', () => {
     const df = fs.readFileSync(path.join(orch, 'Dockerfile'), 'utf8');
     assert.match(df, /getent passwd compuser/);
     assert.doesNotMatch(df, /useradd[^\n]*-u 1000/);
+    const sh = fs.readFileSync(path.join(orch, 'start-desktop.sh'), 'utf8');
+    assert.match(sh, /--no-startup-window/);
+    assert.doesNotMatch(sh, /about:blank/);
+    assert.match(sh, /websockify --web="\$NOVNC_WEB" 6080 127\.0\.0\.1:5901/);
+    assert.match(sh, /plank/);
   });
 });
 

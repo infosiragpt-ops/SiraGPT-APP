@@ -40,3 +40,16 @@ conversation suffix). Reuse; never spawn a new Chrome/VM per catalog click.
 Each desktop container is `sira-ac-user-{slug}` with user `compuser`,
 `DISPLAY=:1`, and memory/CPU caps (`AGENT_COMPUTER_DESKTOP_MEMORY_MB`,
 `AGENT_COMPUTER_DESKTOP_CPUS`).
+
+## Desktop look (Grok Bot)
+
+`start-desktop.sh` seeds XFCE + Plank so a **new** session first-paints as
+an empty gray-fabric desktop: no xfce4-panel, no maze wallpaper, no
+auto-opened Chrome window. Plank at the bottom has exactly three
+launchers (Google Chrome, Thunar, Terminal). Chrome still listens on
+CDP `:9222` via `--no-startup-window`.
+
+**Already-running** `sira-ac-user-*` containers keep the previous look
+until they are recreated (rebuild the orchestrator image and replace
+those session containers). Do not `compose down -v` just to refresh the
+wallpaper.
