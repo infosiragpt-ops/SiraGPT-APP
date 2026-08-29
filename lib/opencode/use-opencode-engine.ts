@@ -1,10 +1,8 @@
 "use client"
 
 /**
- * useOpencodeEngine — small hook the /code chat uses to know whether the
- * OpenCode engine (vendor/opencode, Bun sidecar behind /api/opencode) is
- * configured/reachable, so it can offer an opt-in "Motor" toggle and degrade
- * to the normal LLM/builder path when the engine is offline.
+ * useOpencodeEngine — whether the native SiraCode engine behind /api/opencode
+ * is reachable. /agentes is the canonical surface; /code stays redirected.
  *
  * `extractEngineText` pulls readable assistant text out of an OpenCode message
  * result, defensively (the engine returns a message-parts shape).

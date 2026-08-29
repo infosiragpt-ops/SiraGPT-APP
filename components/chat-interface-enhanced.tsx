@@ -140,6 +140,7 @@ import {
   ChatComposerPrimaryAction,
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
+import { SiraCodeAgentToggle } from "@/components/sira-code-agent-toggle"
 import {
   COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
   COMPOSER_TEXTAREA_MIN_PX,
@@ -8343,6 +8344,7 @@ But first, you need to connect your Spotify account securely using the button be
           />
         </div>
       }
+      agentToggle={<SiraCodeAgentToggle />}
       footer={
         hasActiveTools && !shouldInlineActiveTools ? (
           <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">

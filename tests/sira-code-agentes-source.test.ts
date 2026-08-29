@@ -1,0 +1,53 @@
+import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import path from "node:path"
+import { describe, it } from "node:test"
+
+const source = (file: string) => readFileSync(path.join(process.cwd(), file), "utf8")
+
+const UI_FILES = [
+  "components/sira-code-agent-toggle.tsx",
+  "lib/sira-code/agent-mode.ts",
+  "lib/opencode/opencode-service.ts",
+  "lib/opencode/use-opencode-engine.ts",
+  "components/agents-home-surface.tsx",
+  "app/agentes/page.tsx",
+]
+
+describe("SiraCode /agentes Phase 1", () => {
+  it("exposes Construir | Planificar on the composer without reviving /code", () => {
+    const toggle = source("components/sira-code-agent-toggle.tsx")
+    const chat = source("components/chat-interface-enhanced.tsx")
+    const composer = source("components/chat/ChatComposerSurface.tsx")
+    const codePage = source("app/code/page.tsx")
+    assert.match(toggle, /Construir/)
+    assert.match(toggle, /Planificar/)
+    assert.match(toggle, /data-testid="sira-code-agent-toggle"/)
+    assert.match(chat, /SiraCodeAgentToggle/)
+    assert.match(composer, /agentToggle/)
+    assert.match(codePage, /redirect\(/)
+    assert.doesNotMatch(codePage, /CodeWorkspaceGate|CodeWorkspaceProvider/)
+  })
+
+  it("never prints DeepSeek, OpenRouter, or model_id in SiraCode UI strings", () => {
+    for (const file of UI_FILES) {
+      const text = source(file)
+      assert.doesNotMatch(text, /DeepSeek/)
+      assert.doesNotMatch(text, /OpenRouter/)
+      assert.doesNotMatch(text, /model_id/)
+      assert.doesNotMatch(text, /modelId/)
+    }
+    const toggle = source("components/sira-code-agent-toggle.tsx")
+    assert.match(toggle, /Construir/)
+    assert.match(toggle, /Planificar/)
+  })
+
+  it("keeps /api/opencode as the public prefix and talks native SiraCode", () => {
+    const svc = source("lib/opencode/opencode-service.ts")
+    assert.match(svc, /\/opencode/)
+    assert.match(svc, /switchAgent/)
+    assert.match(svc, /SiraCode native engine/)
+    assert.doesNotMatch(svc, /OPENCODE_SERVER_URL/)
+    assert.doesNotMatch(svc, /vendor\/opencode/)
+  })
+})

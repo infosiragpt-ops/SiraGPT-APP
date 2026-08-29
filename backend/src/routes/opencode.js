@@ -1,72 +1,79 @@
 'use strict';
 
 /**
- * opencode route — bridge between siraGPT and the vendored OpenCode engine
- * (runs as a Bun sidecar; see vendor/opencode/INTEGRATION.md).
+ * /api/opencode — public prefix for SiraCode (native Node engine).
  *
- *   GET  /api/opencode/health            → { ok, configured, baseUrl }  (public)
- *   POST /api/opencode/session           → { session }                  (auth)
- *   POST /api/opencode/session/:id/prompt→ { result }                   (auth)
- *   POST /api/opencode/session/:id/abort → { ok }                       (auth)
- *   GET  /api/opencode/events            → SSE proxy of the engine stream(auth)
+ * Phase 1: the Bun sidecar / OPENCODE_SERVER_URL path is ignored unless
+ * SIRAGPT_OPENCODE_SIDECAR=1 (fail-closed, off by default, unused here).
  *
- * Degrades to 503 when OPENCODE_SERVER_URL isn't set, so the route is safe to
- * mount even when no engine is running.
+ *   GET  /api/opencode/health
+ *   POST /api/opencode/session
+ *   POST /api/opencode/session/:id/prompt
+ *   POST /api/opencode/session/:id/agent
+ *   POST /api/opencode/session/:id/abort
+ *   POST /api/opencode/session/:id/permission
+ *   GET  /api/opencode/file
+ *   GET  /api/opencode/files
+ *   GET  /api/opencode/events
+ *   POST /api/opencode/run  (+ /run/status, /run/stop)
  */
 
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
-const {
-  isOpencodeConfigured,
-  getOpencodeConfig,
-  getOpencodeModel,
-  basicAuthHeader,
-} = require('../services/opencode/opencode-config');
-const { createOpencodeClient } = require('../services/opencode/opencode-client');
+const siraCode = require('../services/sira-code');
 
 const router = express.Router();
 
-// Don't echo raw upstream error messages to the client — they enumerate the
-// internal OpenCode API surface (method + path + status). Log server-side,
-// return a generic message.
+function userIdOf(req) {
+  return req.user && (req.user.id || req.user.userId || req.user.sub) || null;
+}
+
+function fail(res, err, code = 'sira_code_error') {
+  const status = Number(err && err.status) || 500;
+  if (status >= 500) {
+    console.error(`[sira-code] ${code}:`, (err && err.message) || err);
+    return res.status(500).json({ error: code, message: 'Error interno del motor' });
+  }
+  return res.status(status).json({
+    error: err.code || code,
+    message: err.message || 'solicitud inválida',
+  });
+}
+
 function upstreamFail(res, err, code = 'opencode_upstream') {
   console.error(`[opencode] ${code}:`, (err && err.message) || err);
   return res.status(502).json({ error: code, message: 'Upstream service error' });
 }
 
-function requireConfigured(req, res, next) {
-  if (!isOpencodeConfigured()) {
-    return res.status(503).json({
-      error: 'opencode_not_configured',
-      message: 'OpenCode engine is not configured. Set OPENCODE_SERVER_URL.',
-    });
-  }
-  next();
-}
-
-// Public liveness — never leaks the password.
 router.get('/health', (req, res) => {
-  const cfg = getOpencodeConfig();
-  res.json({ ok: true, configured: cfg.enabled, baseUrl: cfg.enabled ? cfg.baseUrl : null });
+  res.json(siraCode.health());
 });
 
-// Create an agent session on the engine.
-router.post('/session', authenticateToken, requireConfigured, async (req, res) => {
+router.get('/agents', authenticateToken, (req, res) => {
+  res.json({ agents: siraCode.listPublicAgents() });
+});
+
+router.post('/session', authenticateToken, async (req, res) => {
   try {
-    const seed = req.body && typeof req.body === 'object' && req.body.session ? req.body.session : {};
-    const session = await createOpencodeClient().createSession(seed);
+    const seed = req.body && typeof req.body === 'object'
+      ? (req.body.session && typeof req.body.session === 'object' ? req.body.session : req.body)
+      : {};
+    const session = await siraCode.create({
+      userId: userIdOf(req),
+      agent: seed.agent || seed.agentId,
+      model: seed.model,
+      title: seed.title,
+    });
     return res.json({ session });
   } catch (err) {
-    return upstreamFail(res, err);
+    return fail(res, err);
   }
 });
 
-// Send a text prompt to a session.
 router.post(
   '/session/:id/prompt',
   authenticateToken,
-  requireConfigured,
   [body('text').isString().withMessage('text must be a string').bail().trim().notEmpty().withMessage('text is required')],
   async (req, res) => {
     const errors = validationResult(req);
@@ -74,86 +81,104 @@ router.post(
       return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
     try {
-      const result = await createOpencodeClient().prompt(req.params.id, req.body.text, {
-        model: getOpencodeModel(),
+      const result = await siraCode.prompt(req.params.id, req.body.text, {
+        userId: userIdOf(req),
+        agent: req.body.agent,
+        model: req.body.model,
+        llmTurn: req.app.get('siraCodeLlmTurn'),
       });
       return res.json({ result });
     } catch (err) {
-      return upstreamFail(res, err);
+      return fail(res, err);
     }
   },
 );
 
-// Stop an in-flight engine turn so the /code Stop button actually halts writes.
-router.post('/session/:id/abort', authenticateToken, requireConfigured, async (req, res) => {
-  try {
-    const result = await createOpencodeClient().abortSession(req.params.id);
-    return res.json({ ok: true, result: result ?? null });
-  } catch (err) {
-    return upstreamFail(res, err);
-  }
-});
-
-// Read a file the agent wrote in the engine's workspace → { path, content }.
-// Used by the /code UI to surface engine edits in the editor/preview.
-router.get('/file', authenticateToken, requireConfigured, async (req, res) => {
-  const path = typeof req.query.path === 'string' ? req.query.path : '';
-  if (!path) return res.status(400).json({ error: 'validation_failed', message: 'path is required' });
-  try {
-    const out = await createOpencodeClient().readFileContent(path);
-    const content = out && typeof out.content === 'string' ? out.content : '';
-    return res.json({ path, content });
-  } catch (err) {
-    return upstreamFail(res, err);
-  }
-});
-
-// List + read EVERY file the agent wrote in its workspace (recursive), so the
-// /code UI can surface a real multi-file project in the file tree — not just a
-// single index.html. Caps depth/count/size and skips dependency/build dirs.
-const PROJECT_SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', '.cache', '.opencode', 'coverage', '.turbo']);
-const PROJECT_MAX_FILES = 80;
-router.get('/files', authenticateToken, requireConfigured, async (req, res) => {
-  const client = createOpencodeClient();
-  const files = [];
-  async function walk(dir, depth) {
-    if (depth > 6 || files.length >= PROJECT_MAX_FILES) return;
-    let listing;
-    try { listing = await client.listFiles(dir); } catch { return; }
-    const entries = listing && Array.isArray(listing.data) ? listing.data : [];
-    for (const e of entries) {
-      if (files.length >= PROJECT_MAX_FILES) break;
-      const name = String(e.path || '').split('/').pop();
-      if (!name || name.startsWith('.')) continue;
-      const full = dir === '.' ? name : `${dir}/${name}`;
-      if (e.type === 'directory') {
-        if (!PROJECT_SKIP_DIRS.has(name)) await walk(full, depth + 1);
-      } else if (e.type === 'file') {
-        try {
-          const out = await client.readFileContent(full);
-          const content = out && typeof out.content === 'string' ? out.content : '';
-          if (content) files.push({ path: full, content: content.slice(0, 200_000) });
-        } catch { /* unreadable/binary → skip */ }
-      }
+router.post(
+  '/session/:id/agent',
+  authenticateToken,
+  [body('agent').isString().withMessage('agent is required').bail().trim().notEmpty()],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
     }
-  }
+    try {
+      const session = siraCode.switchAgent(req.params.id, req.body.agent, userIdOf(req));
+      return res.json({ session });
+    } catch (err) {
+      return fail(res, err);
+    }
+  },
+);
+
+router.post('/session/:id/abort', authenticateToken, (req, res) => {
   try {
-    await walk('.', 0);
-    return res.json({ files });
+    const result = siraCode.abort(req.params.id, userIdOf(req));
+    return res.json({ ok: true, result: result.session });
   } catch (err) {
-    return upstreamFail(res, err);
+    return fail(res, err);
   }
 });
 
-// Phase B — drive the code-runner sidecar that installs deps + starts the
-// project's dev server, so the preview can iframe a REAL running Node/Vite/Next
-// app. `devUrl` is where the browser reaches the dev server (published port).
+router.post(
+  '/session/:id/permission',
+  authenticateToken,
+  [
+    body('permissionId').isString().trim().notEmpty(),
+    body('decision').isIn(['allow', 'deny']),
+  ],
+  (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    }
+    try {
+      const result = siraCode.resolvePermission(
+        req.params.id,
+        req.body.permissionId,
+        req.body.decision,
+        userIdOf(req),
+      );
+      return res.json(result);
+    } catch (err) {
+      return fail(res, err);
+    }
+  },
+);
+
+router.get('/file', authenticateToken, async (req, res) => {
+  const rel = typeof req.query.path === 'string' ? req.query.path : '';
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : req.query.session;
+  if (!rel) return res.status(400).json({ error: 'validation_failed', message: 'path is required' });
+  if (!sessionId) return res.status(400).json({ error: 'validation_failed', message: 'sessionId is required' });
+  try {
+    const out = await siraCode.readFile(sessionId, rel, userIdOf(req));
+    return res.json(out);
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+router.get('/files', authenticateToken, async (req, res) => {
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : req.query.session;
+  if (!sessionId) return res.status(400).json({ error: 'validation_failed', message: 'sessionId is required' });
+  try {
+    return res.json(await siraCode.listFiles(sessionId, userIdOf(req)));
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
 const RUNNER_CTRL = process.env.CODE_RUNNER_URL || 'http://runner:4097';
 const RUNNER_DEV_URL = process.env.CODE_RUNNER_DEV_URL || 'http://localhost:5173';
 
-router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
+router.post('/run', authenticateToken, async (req, res) => {
   try {
-    const r = await fetch(`${RUNNER_CTRL}/run`, { method: 'POST', signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) });
+    const r = await fetch(`${RUNNER_CTRL}/run`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000),
+    });
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
@@ -161,9 +186,11 @@ router.post('/run', authenticateToken, requireConfigured, async (req, res) => {
   }
 });
 
-router.get('/run/status', authenticateToken, requireConfigured, async (req, res) => {
+router.get('/run/status', authenticateToken, async (req, res) => {
   try {
-    const r = await fetch(`${RUNNER_CTRL}/status`, { signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) });
+    const r = await fetch(`${RUNNER_CTRL}/status`, {
+      signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000),
+    });
     const j = await r.json().catch(() => ({}));
     return res.json({ ...j, devUrl: RUNNER_DEV_URL });
   } catch (err) {
@@ -171,50 +198,45 @@ router.get('/run/status', authenticateToken, requireConfigured, async (req, res)
   }
 });
 
-router.post('/run/stop', authenticateToken, requireConfigured, async (req, res) => {
+router.post('/run/stop', authenticateToken, async (req, res) => {
   try {
-    await fetch(`${RUNNER_CTRL}/stop`, { method: 'POST', signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000) }).catch(() => {});
+    await fetch(`${RUNNER_CTRL}/stop`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(Number(process.env.RUNNER_CTRL_TIMEOUT_MS) || 10000),
+    }).catch(() => {});
     return res.json({ ok: true });
   } catch (err) {
     return upstreamFail(res, err, 'runner_unreachable');
   }
 });
 
-// Proxy the engine's SSE event stream to the browser.
-router.get('/events', authenticateToken, requireConfigured, async (req, res) => {
-  const client = createOpencodeClient();
+router.get('/events', authenticateToken, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
 
-  let upstream;
+  const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+  const lastEventId = req.headers['last-event-id'] || req.query.lastEventId;
+  let unsubscribe = () => {};
   try {
-    const headers = { Accept: 'text/event-stream' };
-    const auth = basicAuthHeader(getOpencodeConfig());
-    if (auth) headers.Authorization = auth;
-    upstream = await fetch(client.eventStreamUrl(), { headers });
+    unsubscribe = siraCode.streamEvents(res, {
+      sessionId: sessionId || undefined,
+      userId: userIdOf(req),
+      lastEventId,
+    });
   } catch (err) {
-    console.error('[opencode] event-stream connect failed:', (err && err.message) || err);
-    res.write(`event: error\ndata: ${JSON.stringify({ message: 'Upstream stream error' })}\n\n`);
-    return res.end();
-  }
-  if (!upstream.ok || !upstream.body) {
-    res.write(`event: error\ndata: ${JSON.stringify({ status: upstream.status })}\n\n`);
+    res.write(`event: error\ndata: ${JSON.stringify({ message: err.message || 'stream error' })}\n\n`);
     return res.end();
   }
 
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  req.on('close', () => { try { reader.cancel(); } catch { /* already closed */ } });
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(decoder.decode(value, { stream: true }));
-    }
-  } catch { /* upstream dropped — fall through to end */ }
-  return res.end();
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n'); } catch { /* closed */ }
+  }, 15_000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    try { unsubscribe(); } catch { /* already closed */ }
+  });
 });
 
 module.exports = router;

@@ -66,6 +66,7 @@ export function ChatComposerSurface({
   textarea,
   toolbar,
   footer = null,
+  agentToggle = null,
   layout = "row",
   expanded = false,
 }: {
@@ -78,6 +79,7 @@ export function ChatComposerSurface({
   textarea: React.ReactNode
   toolbar: React.ReactNode
   footer?: React.ReactNode
+  agentToggle?: React.ReactNode
   layout?: "row" | "stacked"
   expanded?: boolean
 }) {
@@ -108,6 +110,11 @@ export function ChatComposerSurface({
             {toolbar}
           </div>
         </TooltipProvider>
+        {agentToggle ? (
+          <div className="composer-sira-code-toggle flex items-center px-3 pb-2 pt-0" data-testid="composer-sira-code-toggle">
+            {agentToggle}
+          </div>
+        ) : null}
         {footer}
       </div>
     </div>

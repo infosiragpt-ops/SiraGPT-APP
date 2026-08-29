@@ -1,0 +1,19 @@
+SiraGPT — SiraCode notice
+=========================
+
+SiraCode is the native coding-agent core in this repository
+(`backend/src/services/sira-code/`). It is an independent rewrite
+inspired by the architecture of OpenCode:
+
+  https://github.com/anomalyco/opencode
+  License: MIT
+  Copyright (c) the OpenCode / Anomaly contributors
+
+MIT allows use of the ideas. This tree does **not** copy the
+anomalyco/opencode monorepo (packages/opencode, SST console, Nix,
+desktop, Electron, TUI, or the 75-provider catalog).
+
+SiraGPT and SiraCode are not affiliated with, endorsed by, or
+sponsored by OpenCode or Anomaly.
+
+Third-party architecture notes also live in THIRD_PARTY_NOTICES.md.
