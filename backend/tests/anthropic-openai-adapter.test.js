@@ -233,8 +233,8 @@ test('native Claude adapter drives a multi-step skill and multi-artifact ReAct r
   assert.equal(requests[2].messages.at(-1).content.length, 2, 'both artifact results return in one Anthropic user turn');
 });
 
-test('ai route wires direct Anthropic through the native adapter', () => {
+test('ai route wires direct Anthropic through the streaming first-party client', () => {
   const route = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
-  assert.match(route, /provider === ["']Anthropic["'][\s\S]{0,240}createAnthropicOpenAIAdapter/);
+  assert.match(route, /provider === ["']Anthropic["'][\s\S]{0,240}createAnthropicStreamingClient/);
   assert.match(route, /const agenticToolOpenAI = actualProvider === 'Anthropic'/);
 });

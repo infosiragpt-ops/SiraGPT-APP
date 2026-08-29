@@ -36,6 +36,11 @@ function getAnthropicSummarizerClient() {
     }
 }
 const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
+const {
+    inferProviderFromModelId,
+    resolveGenerateProvider,
+    CONNECTION_UNAVAILABLE_MESSAGE,
+} = require('./ai/provider-inference');
 const { sharedFetch } = require('../utils/provider-http-agent');
 const {
     isCustomProvider,
@@ -44,6 +49,12 @@ const {
     SIRA_MINI_DEFAULT_BASE_URL,
     SIRA_MINI_UNAVAILABLE_MESSAGE,
 } = require('./ai/custom-provider-client');
+const {
+    createAnthropicStreamingClient,
+    createMoonshotClient,
+    createXaiClient,
+    stripVendorPrefix,
+} = require('./ai/first-party-chat-clients');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -100,10 +111,18 @@ function isPinnedLocalGenerate(provider, model) {
     return isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim()) || isSiraMiniAlias(model);
 }
 
+function isPinnedUserGenerate(provider, model) {
+    if (isPinnedLocalGenerate(provider, model)) return true;
+    // Any explicit picker model is user-pinned — never silent-swap vendors.
+    // Empty model keeps the legacy chain for internal callers (timeout tests).
+    if (String(model || '').trim()) return true;
+    return /^(Gemini|Anthropic|OpenAI|Kimi|Moonshot|DeepSeek|Custom)$/i.test(String(provider || '').trim());
+}
+
 function getFallbackChain(primaryProvider = '', primaryModel = '') {
-    // SiraGPT Mini / Custom must never silently walk to DeepSeek Flash
-    // (Sira Rápido) or any other cloud model.
-    if (isPinnedLocalGenerate(primaryProvider, primaryModel)) return [];
+    // User-pinned picker models (Mini, Gemini, Claude, GPT, Kimi, Sira pair,
+    // leftover Grok/Z.ai, …) must never walk gemini → gpt-4o-mini → Flash.
+    if (isPinnedUserGenerate(primaryProvider, primaryModel)) return [];
 
     const raw = (process.env.FALLBACK_MODELS || '').trim();
     if (raw) return raw.split(',').map(s => s.trim()).filter(Boolean);
@@ -157,28 +176,21 @@ function providerForModel(model) {
         return process.env.GEMA4_PROVIDER || 'OpenAI';
     }
     if (isSiragptCombined(m)) return 'OpenRouter';
-    if (isSiraMiniAlias(m)) return 'Custom';
-    if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
-    if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
-    if (/^(openai|google|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
-    if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'OpenRouter';
-    if (/^(gemini|imagen)/i.test(m)) return 'Gemini';
-    return 'OpenAI';
+    return inferProviderFromModelId(m);
 }
 
 function normalizeChatProvider(provider, model) {
-    const p = String(provider || '').trim();
-    if (/^anthropic$/i.test(p)) return 'OpenRouter';
-    if (!p) return providerForModel(model);
-    return p;
+    return resolveGenerateProvider(provider, model);
 }
 
 function normalizeModelForProvider(provider, model) {
     const m = String(model || '').trim();
     if (!m) return m;
-    if (/^openrouter$/i.test(String(provider || '')) && /^claude/i.test(m) && !m.includes('/')) {
-        return `anthropic/${m}`;
-    }
+    const p = String(provider || '').trim();
+    if (/^anthropic$/i.test(p)) return stripVendorPrefix(m, ['anthropic/']);
+    if (/^(kimi|moonshot)$/i.test(p)) return stripVendorPrefix(m, ['moonshotai/', 'moonshot/']);
+    if (/^gemini$/i.test(p)) return stripVendorPrefix(m, ['google/']);
+    if (/^openai$/i.test(p) && !/gpt-oss/i.test(m)) return stripVendorPrefix(m, ['openai/']);
     return m;
 }
 
@@ -334,6 +346,27 @@ class AIService {
                 url: SIRA_MINI_DEFAULT_BASE_URL,
                 apiKey: null,
                 authType: 'None',
+            });
+        }
+
+        if (/^anthropic$/i.test(String(provider || ''))) {
+            return createAnthropicStreamingClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(kimi|moonshot)$/i.test(String(provider || ''))) {
+            return createMoonshotClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(xai|x-ai|grok)$/i.test(String(provider || ''))) {
+            return createXaiClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
             });
         }
 
@@ -695,9 +728,10 @@ class AIService {
 
             // Build the model chain: primary first, then env-configured
             // fallbacks. Deduped so the primary doesn't get tried twice.
-            // SiraGPT Mini / Custom never walks to DeepSeek Flash (Sira Rápido).
-            const pinnedLocal = isPinnedLocalGenerate(provider, model);
-            const fallbackModels = pinnedLocal
+            // A user-selected catalog model (Mini / Gemini / Claude / GPT /
+            // Kimi / Sira pair) never walks to another vendor.
+            const pinnedUser = isPinnedUserGenerate(provider, model);
+            const fallbackModels = pinnedUser
                 ? []
                 : getFallbackChain(provider, model).filter(m => m !== model);
             const modelChain = [model, ...fallbackModels];
@@ -986,12 +1020,14 @@ class AIService {
                 return fullResponseContent + note;
             }
 
-            // SiraGPT Mini / Custom: honest Spanish error. Never recover by
-            // swapping to DeepSeek Flash / Sira Rápido.
-            if (isPinnedLocalGenerate(provider, model)) {
-                const message = SIRA_MINI_UNAVAILABLE_MESSAGE;
+            // User-selected catalog model: honest Spanish error. Never recover
+            // by swapping to another vendor / DeepSeek Flash / Sira Rápido.
+            if (isPinnedUserGenerate(provider, model)) {
+                const mini = isPinnedLocalGenerate(provider, model);
+                const message = mini ? SIRA_MINI_UNAVAILABLE_MESSAGE : CONNECTION_UNAVAILABLE_MESSAGE;
+                const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
                 try {
-                    res.write(`data: ${JSON.stringify({ type: 'error', error: 'sira_mini_unavailable', message, recovered: false })}\n\n`);
+                    res.write(`data: ${JSON.stringify({ type: 'error', error, message, recovered: false })}\n\n`);
                     res.write(`data: ${JSON.stringify({ type: 'text_delta', content: message })}\n\n`);
                 } catch { /* socket may be gone */ }
                 return message;
@@ -1596,6 +1632,7 @@ service.__test = {
     normalizeModelForProvider,
     getFallbackChain,
     isPinnedLocalGenerate,
+    isPinnedUserGenerate,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

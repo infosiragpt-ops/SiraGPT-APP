@@ -33,6 +33,10 @@ const SIRA_MINI_NATIVE_CHAT_PATH = '/api/chat';
 const SIRA_MINI_KEEP_ALIVE = -1;
 const SIRA_MINI_THINK = false;
 const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
+const SIRA_RAPIDO_DISPLAY_NAME = 'Sira Rápido';
+const SIRA_PRO_DISPLAY_NAME = 'Sira Pro';
+const SIRA_RAPIDO_DESCRIPTION = 'Modelo rápido de SiraGPT para chat cotidiano y tareas cortas.';
+const SIRA_PRO_DESCRIPTION = 'Modelo profesional de SiraGPT para razonamiento, código y documentos.';
 const SIRA_MINI_UNAVAILABLE_MESSAGE =
   'SiraGPT Mini no está disponible ahora. No cambié el modelo. Revisa la conexión Custom en Admin → Conexiones e inténtalo de nuevo.';
 const SIRA_MINI_ALIASES = Object.freeze([
@@ -577,6 +581,16 @@ function publicPickerProvider(provider) {
   return raw;
 }
 
+function isSiraProRow(model) {
+  const hay = `${model && model.name ? model.name : ''} ${model && model.displayName ? model.displayName : ''}`;
+  return /deepseek/i.test(hay) && /v4[-_\s]?pro/i.test(hay) && !/flash/i.test(hay);
+}
+
+function isSiraRapidoRow(model) {
+  const hay = `${model && model.name ? model.name : ''} ${model && model.displayName ? model.displayName : ''}`;
+  return /deepseek/i.test(hay) && /v4[-_\s]?flash/i.test(hay);
+}
+
 function publicPickerModel(model) {
   if (!model || typeof model !== 'object') return model;
   const next = { ...model, provider: publicPickerProvider(model.provider) };
@@ -586,6 +600,12 @@ function publicPickerModel(model) {
     next.displayName = SIRA_MINI_DISPLAY_NAME;
     next.provider = 'Sira';
     next.description = SIRA_MINI_DESCRIPTION;
+  } else if (isSiraProRow(model)) {
+    next.displayName = SIRA_PRO_DISPLAY_NAME;
+    next.description = SIRA_PRO_DESCRIPTION;
+  } else if (isSiraRapidoRow(model)) {
+    next.displayName = SIRA_RAPIDO_DISPLAY_NAME;
+    next.description = SIRA_RAPIDO_DESCRIPTION;
   } else if (next.description && HIDDEN_VENDOR_RE.test(String(next.description))) {
     next.description = String(next.description).replace(HIDDEN_VENDOR_RE, 'Sira');
   }
@@ -626,6 +646,8 @@ module.exports = {
   SIRA_MINI_KEEP_ALIVE,
   SIRA_MINI_THINK,
   SIRA_MINI_UNAVAILABLE_MESSAGE,
+  SIRA_RAPIDO_DISPLAY_NAME,
+  SIRA_PRO_DISPLAY_NAME,
   isCustomProvider,
   isCustomConnectionRow,
   isOpenAiCompatibleUrl,

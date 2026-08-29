@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { triageIntent, _internal } = require('../src/services/agents/intent-triage');
+const { triageIntent, isShortChitchatPrompt, _internal } = require('../src/services/agents/intent-triage');
 const { parseModelOutput, buildUserBlock } = require('../src/services/agents/intent-triage-judge');
 
 function makeAnalysis({ score = 0, needs = false, questions = [] } = {}) {
@@ -64,6 +64,13 @@ test('triage: short greeting → execute even with high ambiguity score (no clar
     assert.equal(verdict.source, 'heuristic_override');
   }
   assert.equal(judgeCalled, false);
+});
+
+test('isShortChitchatPrompt: Hola is chitchat, a real request is not', () => {
+  assert.equal(isShortChitchatPrompt('Hola'), true);
+  assert.equal(isShortChitchatPrompt('hola'), true);
+  assert.equal(isShortChitchatPrompt('hola necesito el reporte'), false);
+  assert.equal(isShortChitchatPrompt(''), false);
 });
 
 test('triage: concrete CJK question executes instead of asking clarification', async () => {

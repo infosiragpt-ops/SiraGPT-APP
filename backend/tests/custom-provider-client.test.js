@@ -105,6 +105,29 @@ test('publicPickerProvider hides Ollama / HuggingFace / Custom API', () => {
   assert.equal(publicPickerProvider('OpenAI'), 'OpenAI');
 });
 
+test('publicPickerModel: DeepSeek V4 Flash/Pro display as Sira Rápido / Sira Pro', () => {
+  const flash = publicPickerModel({
+    name: 'deepseek-v4-flash',
+    displayName: 'Deepseek V4 Flash',
+    provider: 'DeepSeek',
+    description: 'DeepSeek direct API fast V4 model.',
+  });
+  assert.equal(flash.displayName, 'Sira Rápido');
+  assert.equal(flash.provider, 'DeepSeek');
+  assert.equal(/deepseek/i.test(String(flash.displayName)), false);
+  assert.equal(/deepseek/i.test(String(flash.description)), false);
+
+  const pro = publicPickerModel({
+    name: 'deepseek/deepseek-v4-pro',
+    displayName: 'Deepseek V4 PRO',
+    provider: 'OpenRouter',
+    description: 'Deepseek V4 PRO via OpenRouter.',
+  });
+  assert.equal(pro.displayName, 'Sira Pro');
+  assert.equal(/deepseek/i.test(String(pro.displayName)), false);
+  assert.equal(/deepseek/i.test(String(pro.description)), false);
+});
+
 test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace / gemma4', () => {
   const publicModel = publicPickerModel({
     id: 'row-1',

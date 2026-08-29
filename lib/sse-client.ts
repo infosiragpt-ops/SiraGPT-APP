@@ -38,21 +38,68 @@ const FLASH = "deepseek-v4-flash"
 const PRO = "deepseek-v4-pro"
 
 /**
- * Leftover OpenRouter / GPT vendor ids from older clients. Only those
- * are remapped to the DeepSeek pair. A user-selected catalog id
- * (SiraGPT Mini, Custom/Ollama, …) must pass through unchanged.
+ * Leftover mixer / obsolete ids from older clients. Only these are remapped
+ * to the DeepSeek pair — and only when they are NOT in the live catalog.
+ *
+ * User-selected Gemini / Claude / GPT / Kimi / Mini / Sira pair ids must
+ * pass through unchanged so generate hits that row's own provider API.
  */
-const LEFTOVER_VENDOR_RE =
-  /^(openai\/|google\/|anthropic\/|openrouter\/|meta-llama\/|gpt-4o|gpt-4\.1|gpt-5|o1\b|o3\b|o4-mini)/i
+const LEFTOVER_OPENROUTER_RE = /^openrouter\//i
+const OBSOLETE_LEFTOVER_RE =
+  /^(gpt-4o(-mini)?|gpt-4\.1([.-].*)?|gpt-5|o1(-mini|-preview)?|o3(-mini)?|o4-mini)$/i
 
-/** 3H5-FE leftover candado: clamp leftover OpenRouter/gpt-4o ids to DeepSeek Flash/Pro. */
-export function clampDeepSeekModel(model?: string | null): string | undefined {
+function bareModelName(raw: string): string {
+  return (raw.includes("/") ? raw.split("/").pop() : raw)!.toLowerCase()
+}
+
+function normalizeCatalogId(name: string): string {
+  return String(name || "").trim().toLowerCase()
+}
+
+/** First-party catalog families that must never be remapped to DeepSeek. */
+export function isFirstPartyCatalogModel(model?: string | null): boolean {
+  const raw = String(model || "").trim()
+  if (!raw) return false
+  const lower = raw.toLowerCase()
+  const bare = bareModelName(lower)
+  if (/sira[-_ ]?(gpt[-_ ]?)?mini|siragpt[-_ ]?mini|moondream/.test(lower)) return true
+  if (/gemini/.test(lower) || lower.startsWith("google/")) return true
+  if (/claude/.test(lower) || lower.startsWith("anthropic/")) return true
+  if (/kimi|moonshot/.test(lower)) return true
+  if (/terra/.test(lower) || /gpt-5\.\d/.test(lower)) return true
+  if (bare === FLASH || bare === PRO) return true
+  if (/^deepseek[-/_\s]?v?4[-/_\s]?(flash|pro)$/.test(bare)) return true
+  return false
+}
+
+function isObsoleteLeftoverId(raw: string, bare: string): boolean {
+  if (LEFTOVER_OPENROUTER_RE.test(raw)) return true
+  return OBSOLETE_LEFTOVER_RE.test(bare) || OBSOLETE_LEFTOVER_RE.test(raw)
+}
+
+function catalogHasId(catalogNames: string[] | undefined, raw: string, bare: string): boolean {
+  if (!Array.isArray(catalogNames) || catalogNames.length === 0) return false
+  const wanted = new Set(catalogNames.map(normalizeCatalogId).filter(Boolean))
+  return wanted.has(normalizeCatalogId(raw)) || wanted.has(bare)
+}
+
+/**
+ * Clamp leftover OpenRouter / obsolete ids to DeepSeek Flash/Pro.
+ * Catalog Gemini/Claude/GPT/Kimi/Mini ids pass through unchanged.
+ */
+export function clampDeepSeekModel(
+  model?: string | null,
+  catalogNames?: string[],
+): string | undefined {
   const raw = String(model || "").trim()
   if (!raw) return undefined
-  const bare = (raw.includes("/") ? raw.split("/").pop() : raw)!.toLowerCase()
+  const lower = raw.toLowerCase()
+  const bare = bareModelName(lower)
   if (bare === PRO || /^(deepseek[-/_\s]?v?4[-/_\s]?pro)$/i.test(bare)) return PRO
   if (bare === FLASH || /^(deepseek[-/_\s]?v?4[-/_\s]?flash)$/i.test(bare)) return FLASH
-  if (LEFTOVER_VENDOR_RE.test(raw) || LEFTOVER_VENDOR_RE.test(bare)) {
+  if (isFirstPartyCatalogModel(raw)) return raw
+  if (catalogHasId(catalogNames, raw, bare)) return raw
+  if (isObsoleteLeftoverId(lower, bare)) {
     if (bare.includes("pro") && !bare.includes("flash")) return PRO
     return FLASH
   }

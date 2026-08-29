@@ -1694,7 +1694,7 @@ class ApiClient {
     data = {
       ...data,
       provider: locked.provider,
-      model: locked.name,
+      model: clampDeepSeekModel(locked.name) || locked.name,
       idempotencyKey: turnKey,
     };
     const url = `${this.baseURL}/ai/generate`;
@@ -1954,7 +1954,11 @@ class ApiClient {
                 flushBatch();
                 if (options.onReplace) {
                   options.onReplace(jsonData.content);
-                } else {
+                }
+                // Safari can abort the first SSE after Mini finished. A
+                // duplicate_turn_replay must still deliver tokens even if
+                // onReplace no-ops on an aborted controller.
+                if (jsonData.type === 'duplicate_turn_replay' || !options.onReplace) {
                   onData(jsonData.content);
                 }
                 hasDeliveredAnyContent = true;
@@ -3719,7 +3723,7 @@ class ApiClient {
         body: JSON.stringify({
           ...data,
           model: clampDeepSeekModel(data?.model) || data?.model,
-          provider: data?.provider ? 'DeepSeek' : data?.provider,
+          provider: data?.provider,
         }),
         signal: opts.signal,
       });
@@ -3743,7 +3747,7 @@ class ApiClient {
               body: JSON.stringify({
                 ...data,
                 model: clampDeepSeekModel(data?.model) || data?.model,
-                provider: data?.provider ? 'DeepSeek' : data?.provider,
+                provider: data?.provider,
               }),
               signal: opts.signal,
             });

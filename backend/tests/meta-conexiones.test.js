@@ -12,6 +12,7 @@ const {
 
 const root = path.join(__dirname, '..');
 const aiRoute = fs.readFileSync(path.join(root, 'src', 'routes', 'ai.js'), 'utf8');
+const firstPartyClients = fs.readFileSync(path.join(root, 'src', 'services', 'ai', 'first-party-chat-clients.js'), 'utf8');
 const bridge = fs.readFileSync(path.join(root, 'src', 'services', 'admin-connections-bridge.js'), 'utf8');
 const connectionsRoute = fs.readFileSync(path.join(root, 'src', 'routes', 'admin-connections.js'), 'utf8');
 
@@ -40,7 +41,9 @@ test('createProviderClient also honors Groq / Mistral / xAI keys from Connection
   assert.match(aiRoute, /provider === "Mistral"/);
   assert.match(aiRoute, /https:\/\/api\.mistral\.ai\/v1/);
   assert.match(aiRoute, /provider === "xAI"/);
-  assert.match(aiRoute, /https:\/\/api\.x\.ai\/v1/);
+  assert.match(aiRoute, /createXaiClient/);
+  // Native xAI URL lives in the first-party client, not inlined in ai.js.
+  assert.match(firstPartyClients, /https:\/\/api\.x\.ai\/v1/);
 });
 
 test('inferProviderFromModelId: Meta Muse Spark / Llama 4 vs Cerebras llama-3 and OpenRouter', () => {

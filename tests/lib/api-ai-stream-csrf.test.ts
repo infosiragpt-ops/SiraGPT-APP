@@ -152,6 +152,27 @@ describe('generateAIStream cookie session CSRF transport', () => {
     expect(onError).not.toHaveBeenCalled()
   })
 
+  it('delivers duplicate_turn_replay tokens even when onReplace is present', async () => {
+    vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-replay')
+    mockFetch.mockResolvedValueOnce(sseEvents([
+      { type: 'duplicate_turn_replay', replace: true, content: 'Hola, ¿cómo estás?' },
+    ]))
+    const chunks: string[] = []
+    const replacements: string[] = []
+
+    await api.generateAIStream(
+      streamData,
+      chunk => chunks.push(chunk),
+      vi.fn(),
+      vi.fn(),
+      undefined,
+      { onReplace: content => replacements.push(content) },
+    )
+
+    expect(replacements).toEqual(['Hola, ¿cómo estás?'])
+    expect(chunks.join('')).toBe('Hola, ¿cómo estás?')
+  })
+
   it('flushes the buffered tail and does not close after a terminal SSE error', async () => {
     vi.spyOn(authenticatedFetch.csrfManager, 'getToken').mockResolvedValue('csrf-error')
     mockFetch.mockResolvedValueOnce(rawSseResponse(
