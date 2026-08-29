@@ -17,6 +17,18 @@ test('stripVendorPrefix removes only the matching leading slug', () => {
   assert.equal(stripVendorPrefix('claude-sonnet-5', ['anthropic/']), 'claude-sonnet-5');
 });
 
+test('createXaiClient points at api.x.ai when the key is present', () => {
+  const prev = process.env.XAI_API_KEY;
+  process.env.XAI_API_KEY = 'xai-test-key';
+  try {
+    const client = createXaiClient();
+    assert.equal(client.baseURL, 'https://api.x.ai/v1');
+  } finally {
+    if (prev === undefined) delete process.env.XAI_API_KEY;
+    else process.env.XAI_API_KEY = prev;
+  }
+});
+
 test('missing first-party keys throw Conexión no disponible', () => {
   const prev = {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
