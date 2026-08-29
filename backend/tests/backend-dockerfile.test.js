@@ -39,6 +39,10 @@ test('backend Dockerfile installs whisper.cpp with sh and a hard smoke test', ()
   assert.match(dockerfile, /WHISPER_CPP_MODEL=\/usr\/local\/share\/whisper\/ggml-base\.bin/);
   assert.match(dockerfile, /whisper-cli -h/);
   assert.match(dockerfile, /test -s "\$\{WHISPER_CPP_MODEL\}"/);
+  assert.match(dockerfile, /sine=frequency=440:duration=1/);
+  assert.match(dockerfile, /-ng -t 1/);
+  assert.match(dockerfile, /DGGML_OPENMP=OFF/);
+  assert.match(dockerfile, /DBUILD_SHARED_LIBS=OFF/);
   // Old bug: `cmd && apk del … || true` made a missing-bash install exit 0.
   assert.doesNotMatch(
     dockerfile,
@@ -56,6 +60,12 @@ test('install-local-whisper.sh is POSIX sh and ships ggml shared libs', () => {
   assert.match(script, /libwhisper\.so/);
   assert.match(script, /libggml/);
   assert.match(script, /ldconfig/);
+  assert.match(script, /-DBUILD_SHARED_LIBS=OFF/);
+  assert.match(script, /-DGGML_OPENMP=OFF/);
+  assert.match(script, /-DGGML_NATIVE=OFF/);
+  assert.match(script, /-DGGML_CUDA=OFF/);
+  assert.match(script, /-DGGML_VULKAN=OFF/);
+  assert.match(script, /-DGGML_METAL=OFF/);
   const parsed = spawnSync('sh', ['-n', scriptPath], { encoding: 'utf8' });
   assert.equal(parsed.status, 0, parsed.stderr || parsed.stdout);
 });

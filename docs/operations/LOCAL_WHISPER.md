@@ -26,6 +26,9 @@ The backend image installs [whisper.cpp](https://github.com/ggerganov/whisper.cp
 `ffmpeg` converts any accepted MIME (`audio/ogg`, `audio/opus`, `application/ogg`,
 m4a, mp3, wav, mp4, …) to 16 kHz mono WAV before Whisper.
 
+Alpine musl needs OpenMP off (`-DGGML_OPENMP=OFF`) plus no-gpu (`-ng` / `-t 1`);
+OpenMP + GPU init segfault after `whisper_model_load`.
+
 ## Publish / Lenovo host
 
 Rebuild the backend image so the Dockerfile install runs:

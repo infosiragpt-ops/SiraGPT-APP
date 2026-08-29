@@ -79,6 +79,9 @@ RUN addgroup -S appgroup 2>/dev/null || true; \
 # Alpine has no bash — invoke the installer with sh. Do not attach `|| true`
 # to the install itself (that previously turned a missing-bash no-op into
 # a green layer). apk del is grouped so its failure cannot mask the install.
+# Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load.
+# install-local-whisper.sh builds with -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF
+# -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DBUILD_SHARED_LIBS=OFF.
 ENV WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
     WHISPER_CPP_MODEL=/usr/local/share/whisper/ggml-base.bin \
     WHISPER_LANGUAGE=es \
@@ -88,7 +91,13 @@ RUN sh /tmp/install-local-whisper.sh \
     && { apk del --no-network cmake make g++ linux-headers || true; } \
     && rm -f /tmp/install-local-whisper.sh \
     && whisper-cli -h >/dev/null \
-    && test -s "${WHISPER_CPP_MODEL}"
+    && test -s "${WHISPER_CPP_MODEL}" \
+    && ffmpeg -hide_banner -loglevel error -nostdin -y \
+        -f lavfi -i sine=frequency=440:duration=1 \
+        -ar 16000 -ac 1 -c:a pcm_s16le /tmp/whisper-smoke.wav \
+    && whisper-cli -m "${WHISPER_CPP_MODEL}" -f /tmp/whisper-smoke.wav \
+        -ng -t 1 -nt --no-prints -otxt -of /tmp/whisper-smoke \
+    && rm -f /tmp/whisper-smoke.wav /tmp/whisper-smoke.txt /tmp/whisper-smoke.json
 
 # Copy only runtime production assets
 COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules

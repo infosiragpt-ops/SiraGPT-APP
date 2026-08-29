@@ -110,11 +110,19 @@ register_dynamic_libs() {
 
 rm -rf "${SRC_DIR}"
 git clone --depth 1 --branch "${REF}" https://github.com/ggerganov/whisper.cpp.git "${SRC_DIR}"
+# Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load
+# (n_langs = 99). Static CPU-only binary avoids /usr/lib ggml and libgomp.
 cmake -S "${SRC_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="${PREFIX}" \
   -DCMAKE_INSTALL_RPATH="${LIB_DIR}" \
   -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_OPENMP=OFF \
+  -DGGML_NATIVE=OFF \
+  -DGGML_CUDA=OFF \
+  -DGGML_VULKAN=OFF \
+  -DGGML_METAL=OFF \
   -DWHISPER_BUILD_EXAMPLES=ON \
   -DWHISPER_SDL2=OFF
 cmake --build "${BUILD_DIR}" --target whisper-cli -j"$(nproc 2>/dev/null || echo 2)"
