@@ -10,26 +10,51 @@ function joinPath(prefix, extra) {
   return (left + (right.startsWith('/') ? right : `/${right}`)) || '/';
 }
 
-function proxyHttp(req, res, { hostname, port, path }) {
-  const headers = { ...req.headers, host: `${hostname}:${port}` };
-  delete headers['content-length'];
-  const upstream = http.request({
-    hostname,
-    port,
-    path,
-    method: req.method,
-    headers,
-  }, (pres) => {
-    res.writeHead(pres.statusCode || 502, pres.headers);
-    pres.pipe(res);
-  });
-  upstream.on('error', (err) => {
-    if (!res.headersSent) {
-      res.writeHead(502, { 'Content-Type': 'application/json' });
+function isRefused(err) {
+  const code = err && err.code;
+  return code === 'ECONNREFUSED' || code === 'ECONNRESET';
+}
+
+function proxyHttp(req, res, { hostname, port, path, retries = 0, retryDelayMs = 200 }) {
+  let attempt = 0;
+  const method = req.method;
+  const replayable = method === 'GET' || method === 'HEAD';
+
+  const tryOnce = () => {
+    const headers = { ...req.headers, host: `${hostname}:${port}` };
+    delete headers['content-length'];
+    const upstream = http.request({
+      hostname,
+      port,
+      path,
+      method,
+      headers,
+    }, (pres) => {
+      res.writeHead(pres.statusCode || 502, pres.headers);
+      pres.pipe(res);
+    });
+    upstream.on('error', (err) => {
+      const canRetry = replayable
+        && attempt < retries
+        && !res.headersSent
+        && isRefused(err);
+      if (canRetry) {
+        attempt += 1;
+        setTimeout(tryOnce, retryDelayMs);
+        return;
+      }
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+      }
+      res.end(JSON.stringify({ error: 'proxy_failed', message: String(err && err.message || err) }));
+    });
+    if (replayable) {
+      upstream.end();
+    } else {
+      req.pipe(upstream);
     }
-    res.end(JSON.stringify({ error: 'proxy_failed', message: String(err && err.message || err) }));
-  });
-  req.pipe(upstream);
+  };
+  tryOnce();
 }
 
 function proxyUpgrade(req, socket, head, { hostname, port, path }) {
