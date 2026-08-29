@@ -37,7 +37,7 @@ docker compose -f docker-compose.prod.yml build backend
 To install (or repair) on a running Linux host / container without rebuilding:
 
 ```bash
-bash backend/scripts/install-local-whisper.sh
+sh backend/scripts/install-local-whisper.sh
 ```
 
 Optional Python fallback (Debian/Ubuntu, not required in Alpine):

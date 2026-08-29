@@ -76,14 +76,19 @@ RUN addgroup -S appgroup 2>/dev/null || true; \
 # Local Whisper (whisper.cpp + ggml-base). No API key. Used when OpenAI
 # Whisper is unset or returns 401/403. See scripts/install-local-whisper.sh
 # and docs/operations/LOCAL_WHISPER.md.
-COPY scripts/install-local-whisper.sh /tmp/install-local-whisper.sh
-RUN bash /tmp/install-local-whisper.sh \
-    && apk del --no-network cmake make g++ || true; \
-    rm -f /tmp/install-local-whisper.sh
-
+# Alpine has no bash — invoke the installer with sh. Do not attach `|| true`
+# to the install itself (that previously turned a missing-bash no-op into
+# a green layer). apk del is grouped so its failure cannot mask the install.
 ENV WHISPER_CPP_BIN=/usr/local/bin/whisper-cli \
     WHISPER_CPP_MODEL=/usr/local/share/whisper/ggml-base.bin \
-    WHISPER_LANGUAGE=es
+    WHISPER_LANGUAGE=es \
+    LD_LIBRARY_PATH=/usr/local/lib
+COPY scripts/install-local-whisper.sh /tmp/install-local-whisper.sh
+RUN sh /tmp/install-local-whisper.sh \
+    && { apk del --no-network cmake make g++ linux-headers || true; } \
+    && rm -f /tmp/install-local-whisper.sh \
+    && whisper-cli -h >/dev/null \
+    && test -s "${WHISPER_CPP_MODEL}"
 
 # Copy only runtime production assets
 COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
