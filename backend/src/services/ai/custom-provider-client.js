@@ -15,9 +15,12 @@
  * point the OpenAI SDK at `connection.url`. Never api.openai.com.
  *
  * Public picker: Sira Mini never exposes Ollama / HuggingFace / moondream /
- * gemma4. Upstream (Lenovo, docker network iliagpt-app): siragpt-ollama:11434/v1,
- * model id `SIRA_MINI_UPSTREAM_ID` (default sira-mini → gemma4:26b), auth None.
- * Host bind is loopback-only. moondream remains a recognized fallback alias.
+ * gemma4. Upstream (Lenovo, docker network iliagpt-app): siragpt-ollama:11434,
+ * model id `SIRA_MINI_UPSTREAM_ID` (default sira-mini → gemma4:26b, num_ctx 4096,
+ * num_thread 16), auth None. Mini chat uses native POST /api/chat with
+ * think:false and keep_alive:-1 — Ollama 0.33.1 /v1/chat/completions ignores
+ * think:false and dumps Gemma 4 reasoning. Host bind is loopback-only.
+ * moondream remains a recognized fallback alias.
  */
 
 const KEY_PREFIX = 'enc:v1:';
@@ -26,6 +29,9 @@ const SIRA_MINI_DISPLAY_NAME = 'SiraGPT Mini';
 const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
 const SIRA_MINI_UPSTREAM_DEFAULT = 'sira-mini';
 const SIRA_MINI_DEFAULT_BASE_URL = 'http://siragpt-ollama:11434/v1';
+const SIRA_MINI_NATIVE_CHAT_PATH = '/api/chat';
+const SIRA_MINI_KEEP_ALIVE = -1;
+const SIRA_MINI_THINK = false;
 const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
 const SIRA_MINI_UNAVAILABLE_MESSAGE =
   'SiraGPT Mini no está disponible ahora. No cambié el modelo. Revisa la conexión Custom en Admin → Conexiones e inténtalo de nuevo.';
@@ -138,6 +144,176 @@ function publicSiraMiniName() {
 function rewriteCustomChatModel(model, env = process.env) {
   if (isSiraMiniAlias(model, env)) return resolveSiraMiniUpstreamId(env);
   return String(model || '').trim();
+}
+
+function ollamaNativeBaseUrl(openaiCompatibleUrl) {
+  return normalizeOpenAiCompatibleUrl(openaiCompatibleUrl).replace(/\/v1$/i, '');
+}
+
+function ollamaNativeChatUrl(openaiCompatibleUrl) {
+  const base = ollamaNativeBaseUrl(openaiCompatibleUrl);
+  return base ? `${base}${SIRA_MINI_NATIVE_CHAT_PATH}` : '';
+}
+
+function flattenChatContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === 'string') return part;
+      if (part && typeof part.text === 'string') return part.text;
+      return '';
+    }).filter(Boolean).join('\n');
+  }
+  if (content == null) return '';
+  return String(content);
+}
+
+function toOllamaNativeMessages(messages) {
+  return (Array.isArray(messages) ? messages : []).map((message) => ({
+    role: String((message && message.role) || 'user'),
+    content: flattenChatContent(message && message.content),
+  }));
+}
+
+function buildOllamaNativeChatBody(openaiBody, env = process.env) {
+  const stream = !!(openaiBody && openaiBody.stream);
+  return {
+    model: rewriteCustomChatModel(openaiBody && openaiBody.model, env),
+    messages: toOllamaNativeMessages(openaiBody && openaiBody.messages),
+    stream,
+    think: SIRA_MINI_THINK,
+    keep_alive: SIRA_MINI_KEEP_ALIVE,
+  };
+}
+
+function miniUpstreamError(status) {
+  const err = new Error(SIRA_MINI_UNAVAILABLE_MESSAGE);
+  err.status = status || 503;
+  err.code = 'SIRA_MINI_UNAVAILABLE';
+  return err;
+}
+
+function openAiChunkFromOllama(content, { done = false } = {}) {
+  return {
+    id: SIRA_MINI_PUBLIC_NAME,
+    object: 'chat.completion.chunk',
+    choices: [{
+      index: 0,
+      delta: done ? {} : { content: content || '' },
+      finish_reason: done ? 'stop' : null,
+    }],
+  };
+}
+
+function openAiCompletionFromOllama(json) {
+  const content = json && json.message && typeof json.message.content === 'string'
+    ? json.message.content
+    : '';
+  return {
+    id: SIRA_MINI_PUBLIC_NAME,
+    object: 'chat.completion',
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content },
+      finish_reason: 'stop',
+    }],
+  };
+}
+
+async function* iterResponseTextChunks(response) {
+  if (!response) return;
+  const body = response.body;
+  if (body && typeof body[Symbol.asyncIterator] === 'function') {
+    for await (const chunk of body) {
+      yield typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    }
+    return;
+  }
+  if (body && typeof body.getReader === 'function') {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      yield decoder.decode(value, { stream: true });
+    }
+    return;
+  }
+  if (typeof response.text === 'function') {
+    yield await response.text();
+  }
+}
+
+async function* iterateOllamaNativeChatStream(response) {
+  let buf = '';
+  for await (const chunk of iterResponseTextChunks(response)) {
+    buf += chunk;
+    let idx = buf.indexOf('\n');
+    while (idx !== -1) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (line) {
+        let parsed;
+        try { parsed = JSON.parse(line); } catch { parsed = null; }
+        if (parsed) {
+          const content = parsed.message && parsed.message.content;
+          if (typeof content === 'string' && content) {
+            yield openAiChunkFromOllama(content);
+          }
+          if (parsed.done) {
+            yield openAiChunkFromOllama('', { done: true });
+            return;
+          }
+        }
+      }
+      idx = buf.indexOf('\n');
+    }
+  }
+  const tail = buf.trim();
+  if (tail) {
+    try {
+      const parsed = JSON.parse(tail);
+      const content = parsed && parsed.message && parsed.message.content;
+      if (typeof content === 'string' && content) yield openAiChunkFromOllama(content);
+    } catch { /* ignore trailing noise */ }
+  }
+  yield openAiChunkFromOllama('', { done: true });
+}
+
+async function createOllamaNativeChat(connection, openaiBody, { fetchImpl, signal, env } = {}) {
+  const url = ollamaNativeChatUrl(connection && connection.url);
+  if (!url || /\/v1\/chat\/completions/i.test(url)) {
+    throw miniUpstreamError(503);
+  }
+  const payload = buildOllamaNativeChatBody(openaiBody, env);
+  const fetcher = typeof fetchImpl === 'function' ? fetchImpl : globalThis.fetch;
+  if (typeof fetcher !== 'function') throw miniUpstreamError(503);
+  let response;
+  try {
+    const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
+    if (connection && connection.apiKey && connection.authType !== 'None') {
+      headers.Authorization = `Bearer ${connection.apiKey}`;
+    }
+    response = await fetcher(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      signal,
+    });
+  } catch (err) {
+    if (err && err.name === 'AbortError') throw err;
+    throw miniUpstreamError(503);
+  }
+  if (!response || !response.ok) {
+    throw miniUpstreamError(response && response.status);
+  }
+  if (payload.stream) return iterateOllamaNativeChatStream(response);
+  try {
+    const json = typeof response.json === 'function' ? await response.json() : {};
+    return openAiCompletionFromOllama(json);
+  } catch {
+    throw miniUpstreamError(502);
+  }
 }
 
 function preferSiraMiniRow(rows) {
@@ -347,7 +523,7 @@ async function resolveCustomConnectionForTurn({
  * OpenAI SDK client pointed at the admin Custom connection.
  * Auth None → placeholder key (Ollama ignores it). Never defaults to api.openai.com.
  */
-function createCustomProviderClient(connection, { OpenAI } = {}) {
+function createCustomProviderClient(connection, { OpenAI, fetchImpl } = {}) {
   const url = normalizeOpenAiCompatibleUrl(connection && connection.url);
   if (!url) {
     const err = new Error('Conexión Custom sin URL');
@@ -369,6 +545,12 @@ function createCustomProviderClient(connection, { OpenAI } = {}) {
     ? client.chat.completions.create.bind(client.chat.completions)
     : null;
   client.chat.completions.create = function create(body, options) {
+    if (body && typeof body === 'object' && isSiraMiniAlias(body.model)) {
+      return createOllamaNativeChat(connection, body, {
+        fetchImpl,
+        signal: options && options.signal,
+      });
+    }
     if (body && typeof body === 'object' && body.model) {
       const rewritten = rewriteCustomChatModel(body.model);
       if (rewritten !== body.model) body = { ...body, model: rewritten };
@@ -440,6 +622,9 @@ module.exports = {
     return resolveSiraMiniUpstreamId();
   },
   SIRA_MINI_DEFAULT_BASE_URL,
+  SIRA_MINI_NATIVE_CHAT_PATH,
+  SIRA_MINI_KEEP_ALIVE,
+  SIRA_MINI_THINK,
   SIRA_MINI_UNAVAILABLE_MESSAGE,
   isCustomProvider,
   isCustomConnectionRow,
@@ -455,6 +640,8 @@ module.exports = {
   defaultCustomDisplayName,
   resolveSiraMiniUpstreamId,
   rewriteCustomChatModel,
+  ollamaNativeChatUrl,
+  buildOllamaNativeChatBody,
   defaultSiraMiniBaseUrl,
   unwrapStoredKey,
   shapeConnection,
