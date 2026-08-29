@@ -20,8 +20,10 @@ const {
   shapeConnection,
   resolveCustomConnectionForTurn,
   createCustomProviderClient,
+  collapseSiraMiniRows,
+  resolveSiraMiniUpstreamId,
   SIRA_MINI_DEFAULT_BASE_URL,
-  SIRA_MINI_UPSTREAM_ID,
+  SIRA_MINI_UPSTREAM_DEFAULT,
   SIRA_MINI_PUBLIC_NAME,
 } = require('../src/services/ai/custom-provider-client');
 
@@ -51,7 +53,32 @@ test('isSiraMiniAlias: public + upstream ids', () => {
   assert.equal(isSiraMiniAlias('SiraGPT Mini'), true);
   assert.equal(isSiraMiniAlias('moondream'), true);
   assert.equal(isSiraMiniAlias('moondream:latest'), true);
+  assert.equal(isSiraMiniAlias('gemma4'), true);
+  assert.equal(isSiraMiniAlias('gemma4:26b'), true);
   assert.equal(isSiraMiniAlias('deepseek-v4-flash'), false);
+  assert.equal(isSiraMiniAlias('google/gemma-3-27b-it'), false);
+});
+
+test('SIRA_MINI_UPSTREAM_ID defaults to sira-mini and honors env override', () => {
+  const previous = process.env.SIRA_MINI_UPSTREAM_ID;
+  try {
+    delete process.env.SIRA_MINI_UPSTREAM_ID;
+    assert.equal(SIRA_MINI_UPSTREAM_DEFAULT, 'sira-mini');
+    assert.equal(resolveSiraMiniUpstreamId({}), 'sira-mini');
+    assert.equal(resolveSiraMiniUpstreamId({ SIRA_MINI_UPSTREAM_ID: '' }), 'sira-mini');
+    assert.equal(rewriteCustomChatModel('sira-mini', {}), 'sira-mini');
+    assert.equal(rewriteCustomChatModel('moondream', {}), 'sira-mini');
+    assert.equal(rewriteCustomChatModel('gemma4:26b', {}), 'sira-mini');
+    assert.equal(resolveSiraMiniUpstreamId({ SIRA_MINI_UPSTREAM_ID: 'gemma4:26b' }), 'gemma4:26b');
+    assert.equal(rewriteCustomChatModel('sira-mini', { SIRA_MINI_UPSTREAM_ID: 'gemma4:26b' }), 'gemma4:26b');
+    process.env.SIRA_MINI_UPSTREAM_ID = 'moondream:latest';
+    assert.equal(resolveSiraMiniUpstreamId(), 'moondream:latest');
+    assert.equal(rewriteCustomChatModel('sira-mini'), 'moondream:latest');
+    assert.equal(isSiraMiniAlias('moondream:latest'), true);
+  } finally {
+    if (previous === undefined) delete process.env.SIRA_MINI_UPSTREAM_ID;
+    else process.env.SIRA_MINI_UPSTREAM_ID = previous;
+  }
 });
 
 test('isCustomConnectionRow: custom key or unknown /v1 host; never DeepSeek/OpenAI', () => {
@@ -73,7 +100,7 @@ test('publicPickerProvider hides Ollama / HuggingFace / Custom API', () => {
   assert.equal(publicPickerProvider('OpenAI'), 'OpenAI');
 });
 
-test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace', () => {
+test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace / gemma4', () => {
   const publicModel = publicPickerModel({
     id: 'row-1',
     name: 'moondream:latest',
@@ -91,6 +118,37 @@ test('publicPickerModel: Sira Mini never leaks moondream / Ollama / HuggingFace'
   assert.equal(blob.includes('moondream'), false);
   assert.equal(blob.includes('ollama'), false);
   assert.equal(blob.includes('huggingface'), false);
+  const gemmaPublic = publicPickerModel({
+    id: 'row-2',
+    name: 'gemma4:26b',
+    displayName: 'Gemma 4',
+    provider: 'Ollama',
+    description: 'gemma4:26b via Ollama',
+    type: 'TEXT',
+    isActive: true,
+  });
+  assert.equal(gemmaPublic.name, SIRA_MINI_PUBLIC_NAME);
+  assert.equal(gemmaPublic.displayName, 'SiraGPT Mini');
+  const gemmaBlob = JSON.stringify(gemmaPublic).toLowerCase();
+  assert.equal(gemmaBlob.includes('gemma4'), false);
+  assert.equal(gemmaBlob.includes('ollama'), false);
+});
+
+test('collapseSiraMiniRows keeps one Mini row and prefers sira-mini over gemma4/moondream', () => {
+  const collapsed = collapseSiraMiniRows([
+    { name: 'gemma4:26b', displayName: 'SiraGPT Mini' },
+    { name: 'sira-mini', displayName: 'SiraGPT Mini' },
+    { name: 'moondream', displayName: 'SiraGPT Mini' },
+    { name: 'deepseek-v4-flash', displayName: 'Sira Rápido' },
+  ]);
+  assert.equal(collapsed.length, 2);
+  assert.equal(collapsed[0].name, 'sira-mini');
+  assert.equal(collapsed[1].name, 'deepseek-v4-flash');
+  const onlyMoondream = collapseSiraMiniRows([
+    { name: 'moondream:latest', displayName: 'SiraGPT Mini' },
+    { name: 'gpt-4o', displayName: 'GPT-4o' },
+  ]);
+  assert.equal(onlyMoondream[0].name, 'moondream:latest');
 });
 
 test('catalogProviderForConnection canonicalises custom → Custom', () => {
@@ -98,10 +156,12 @@ test('catalogProviderForConnection canonicalises custom → Custom', () => {
   assert.equal(catalogProviderForConnection('openai', 'OpenAI'), 'OpenAI');
 });
 
-test('defaultCustomDisplayName: moondream → Sira Mini without a vendor display_name', () => {
+test('defaultCustomDisplayName: moondream / gemma4 → Sira Mini without a vendor display_name', () => {
   assert.equal(defaultCustomDisplayName('moondream', ''), 'SiraGPT Mini');
   assert.equal(defaultCustomDisplayName('moondream:latest', 'Moondream'), 'SiraGPT Mini');
   assert.equal(defaultCustomDisplayName('moondream', 'Sira Mini'), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('sira-mini', ''), 'SiraGPT Mini');
+  assert.equal(defaultCustomDisplayName('gemma4:26b', 'Gemma 4'), 'SiraGPT Mini');
   assert.equal(defaultCustomDisplayName('llama3.2', 'Llama 3.2'), 'Llama 3.2');
 });
 
@@ -135,7 +195,7 @@ test('createCustomProviderClient uses connection.url, never api.openai.com', () 
   assert.equal(captured.length, 1);
 });
 
-test('createCustomProviderClient rewrites sira-mini → moondream:latest on chat.completions', async () => {
+test('createCustomProviderClient rewrites Mini aliases to the configured upstream on chat.completions', async () => {
   const calls = [];
   class FakeOpenAI {
     constructor(opts) {
@@ -150,14 +210,22 @@ test('createCustomProviderClient rewrites sira-mini → moondream:latest on chat
       };
     }
   }
-  const client = createCustomProviderClient(
-    { url: SIRA_MINI_DEFAULT_BASE_URL, apiKey: null, authType: 'None' },
-    { OpenAI: FakeOpenAI },
-  );
-  await client.chat.completions.create({ model: 'sira-mini', messages: [{ role: 'user', content: 'hola' }] });
-  assert.equal(calls[0].model, SIRA_MINI_UPSTREAM_ID);
-  assert.equal(rewriteCustomChatModel('moondream'), SIRA_MINI_UPSTREAM_ID);
-  assert.equal(client.opts.baseURL, 'http://siragpt-ollama:11434/v1');
+  const previous = process.env.SIRA_MINI_UPSTREAM_ID;
+  try {
+    delete process.env.SIRA_MINI_UPSTREAM_ID;
+    const client = createCustomProviderClient(
+      { url: SIRA_MINI_DEFAULT_BASE_URL, apiKey: null, authType: 'None' },
+      { OpenAI: FakeOpenAI },
+    );
+    await client.chat.completions.create({ model: 'sira-mini', messages: [{ role: 'user', content: 'hola' }] });
+    assert.equal(calls[0].model, 'sira-mini');
+    assert.equal(rewriteCustomChatModel('moondream'), SIRA_MINI_UPSTREAM_DEFAULT);
+    assert.equal(rewriteCustomChatModel('gemma4:26b'), 'sira-mini');
+    assert.equal(client.opts.baseURL, 'http://siragpt-ollama:11434/v1');
+  } finally {
+    if (previous === undefined) delete process.env.SIRA_MINI_UPSTREAM_ID;
+    else process.env.SIRA_MINI_UPSTREAM_ID = previous;
+  }
 });
 
 test('createCustomProviderClient: Bearer key is forwarded; None does not decrypt', () => {
@@ -180,6 +248,8 @@ test('pickCustomConnectionRow prefers modelIds match over newest catch-all', () 
   const picked = pickCustomConnectionRow(rows, 'moondream:latest');
   assert.equal(picked.id, 'match');
   assert.equal(picked.url, 'http://siragpt-ollama:11434/v1');
+  const miniAlias = pickCustomConnectionRow(rows, 'sira-mini');
+  assert.equal(miniAlias.id, 'match');
 });
 
 test('shapeConnection: auth None drops the key even if a leftover blob exists', () => {

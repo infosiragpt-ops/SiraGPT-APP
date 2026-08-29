@@ -293,6 +293,7 @@ const {
   isLocalVisionModel,
   isSiraMiniAlias,
   publicPickerModel,
+  collapseSiraMiniRows,
   resolveCustomConnectionForTurn,
   createCustomProviderClient,
   SIRA_MINI_PUBLIC_NAME,
@@ -989,12 +990,12 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       return modelRouter.isPlanEligible(catalogEntry.plans, userPlan);
     });
 
-    models = models.map((m) => {
+    models = collapseSiraMiniRows(models.map((m) => {
       const catalogEntry = modelRouter.getModel(m.name);
       const publicModel = publicPickerModel(m);
       return {
         ...publicModel,
-        // Picker: displayName SiraGPT Mini. Never leak Ollama / HuggingFace / moondream.
+        // Picker: displayName SiraGPT Mini. Never leak Ollama / HuggingFace / moondream / gemma4.
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
         planAccess: {
@@ -1005,7 +1006,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
           reason: catalogEntry ? 'plan_eligible' : 'not_catalogued',
         },
       };
-    });
+    }));
 
     // Provider key gating disabled (per user request: show ALL active
     // models). Providers without an API key configured will surface

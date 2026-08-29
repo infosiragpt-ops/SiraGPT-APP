@@ -34,8 +34,13 @@ describe("chat brand model labels", () => {
     assert.equal(brandModelLabel("sira-mini"), "SiraGPT Mini")
     assert.equal(brandModelLabel("moondream"), "SiraGPT Mini")
     assert.equal(brandModelLabel({ name: "moondream" }), "SiraGPT Mini")
+    assert.equal(brandModelLabel("gemma4"), "SiraGPT Mini")
+    assert.equal(brandModelLabel("gemma4:26b"), "SiraGPT Mini")
+    assert.equal(brandModelLabel({ name: "gemma4:26b" }), "SiraGPT Mini")
+    assert.equal(brandModelLabel({ name: "gemma4:26b", displayName: "Gemma 4" }), "SiraGPT Mini")
     assert.notEqual(brandModelLabel({ name: "moondream", displayName: "SiraGPT Mini" }), SIRA_RAPIDO_LABEL)
-    assert.doesNotMatch(brandModelLabel({ name: "moondream" }), /moondream|Ollama|HuggingFace|DeepSeek/i)
+    assert.doesNotMatch(brandModelLabel({ name: "moondream" }), /moondream|Ollama|HuggingFace|DeepSeek|gemma4/i)
+    assert.doesNotMatch(brandModelLabel({ name: "gemma4:26b" }), /gemma4|Ollama|DeepSeek/i)
   })
 
   it("maps DeepSeek provider headings to Sira and leaves other vendors intact", () => {

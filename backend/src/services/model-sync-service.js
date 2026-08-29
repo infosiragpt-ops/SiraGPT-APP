@@ -873,12 +873,12 @@ class ModelSyncService {
 
     if (providerKey === 'custom') {
       try {
-        const { defaultCustomDisplayName } = require('./ai/custom-provider-client');
-        res.models = res.models.map((m) => ({
+        const { defaultCustomDisplayName, collapseSiraMiniRows } = require('./ai/custom-provider-client');
+        res.models = collapseSiraMiniRows(res.models.map((m) => ({
           ...m,
           provider: 'Custom',
           displayName: defaultCustomDisplayName(m.name, m.displayName),
-        }));
+        })));
       } catch (_) { /* keep discovered rows */ }
     }
 

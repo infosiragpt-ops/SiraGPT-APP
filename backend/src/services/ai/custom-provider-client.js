@@ -14,16 +14,17 @@
  * Live chat must therefore read the AdminConnection row at request time and
  * point the OpenAI SDK at `connection.url`. Never api.openai.com.
  *
- * Public picker: Sira Mini never exposes Ollama / HuggingFace / moondream.
- * Upstream (Lenovo, docker network iliagpt-app): siragpt-ollama:11434/v1,
- * model id moondream:latest, auth None. Host bind is loopback-only.
+ * Public picker: Sira Mini never exposes Ollama / HuggingFace / moondream /
+ * gemma4. Upstream (Lenovo, docker network iliagpt-app): siragpt-ollama:11434/v1,
+ * model id `SIRA_MINI_UPSTREAM_ID` (default sira-mini → gemma4:26b), auth None.
+ * Host bind is loopback-only. moondream remains a recognized fallback alias.
  */
 
 const KEY_PREFIX = 'enc:v1:';
 
 const SIRA_MINI_DISPLAY_NAME = 'SiraGPT Mini';
 const SIRA_MINI_PUBLIC_NAME = 'sira-mini';
-const SIRA_MINI_UPSTREAM_ID = 'moondream:latest';
+const SIRA_MINI_UPSTREAM_DEFAULT = 'sira-mini';
 const SIRA_MINI_DEFAULT_BASE_URL = 'http://siragpt-ollama:11434/v1';
 const SIRA_MINI_DESCRIPTION = 'Modelo rápido multimodal de SiraGPT.';
 const SIRA_MINI_UNAVAILABLE_MESSAGE =
@@ -35,6 +36,15 @@ const SIRA_MINI_ALIASES = Object.freeze([
   'siragpt-mini',
   'moondream',
   'moondream:latest',
+  'gemma4',
+  'gemma4:26b',
+]);
+const SIRA_MINI_CATALOG_NAMES = Object.freeze([
+  'sira-mini',
+  'moondream',
+  'moondream:latest',
+  'gemma4',
+  'gemma4:26b',
 ]);
 
 const KNOWN_CLOUD_PROVIDER_KEYS = Object.freeze(new Set([
@@ -55,7 +65,8 @@ const KNOWN_CLOUD_PROVIDER_KEYS = Object.freeze(new Set([
   'meta',
 ]));
 
-const HIDDEN_VENDOR_RE = /ollama|hugging\s*face|huggingface|moondream/i;
+const HIDDEN_VENDOR_RE = /ollama|hugging\s*face|huggingface|moondream|gemma4/i;
+const VENDOR_MINI_DISPLAY_RE = /^(moondream|gemma4|gemma\s*4)\b/i;
 
 function normalizeOpenAiCompatibleUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -88,32 +99,66 @@ function namesMatch(a, b) {
   return !!left && left === right;
 }
 
-function isSiraMiniAlias(name) {
+function resolveSiraMiniUpstreamId(env = process.env) {
+  const override = String((env && env.SIRA_MINI_UPSTREAM_ID) || '').trim();
+  return override || SIRA_MINI_UPSTREAM_DEFAULT;
+}
+
+function isGemma4MiniId(name) {
+  const bare = normalizeModelName(name);
+  return bare === 'gemma4' || bare.startsWith('gemma4:');
+}
+
+function isSiraMiniAlias(name, env = process.env) {
   const raw = String(name || '').trim().toLowerCase();
   if (!raw) return false;
   if (SIRA_MINI_ALIASES.includes(raw)) return true;
-  return normalizeModelName(raw) === 'moondream' || normalizeModelName(raw) === 'sira-mini';
+  const bare = normalizeModelName(raw);
+  if (bare === 'moondream' || bare === 'sira-mini' || isGemma4MiniId(raw)) return true;
+  const upstream = normalizeModelName(resolveSiraMiniUpstreamId(env));
+  return !!upstream && (bare === upstream || raw === String(resolveSiraMiniUpstreamId(env)).toLowerCase());
 }
 
-function catalogNameCandidates(model) {
+function catalogNameCandidates(model, env = process.env) {
   const raw = String(model || '').trim();
   if (!raw) return [];
   const out = [raw];
   const bare = raw.replace(/:latest$/i, '');
   if (bare && bare !== raw) out.push(bare);
-  if (isSiraMiniAlias(raw)) {
-    out.push(SIRA_MINI_PUBLIC_NAME, 'moondream', SIRA_MINI_UPSTREAM_ID);
+  if (isSiraMiniAlias(raw, env)) {
+    out.push(SIRA_MINI_PUBLIC_NAME, ...SIRA_MINI_CATALOG_NAMES, resolveSiraMiniUpstreamId(env));
   }
-  return [...new Set(out)];
+  return [...new Set(out.filter(Boolean))];
 }
 
 function publicSiraMiniName() {
   return SIRA_MINI_PUBLIC_NAME;
 }
 
-function rewriteCustomChatModel(model) {
-  if (isSiraMiniAlias(model)) return SIRA_MINI_UPSTREAM_ID;
+function rewriteCustomChatModel(model, env = process.env) {
+  if (isSiraMiniAlias(model, env)) return resolveSiraMiniUpstreamId(env);
   return String(model || '').trim();
+}
+
+function preferSiraMiniRow(rows) {
+  const list = Array.isArray(rows) ? rows.filter(Boolean) : [];
+  if (list.length <= 1) return list[0] || null;
+  return list.find((row) => normalizeModelName(row.name) === SIRA_MINI_PUBLIC_NAME)
+    || list.find((row) => normalizeModelName(row.name) === 'moondream')
+    || list[0];
+}
+
+function collapseSiraMiniRows(models) {
+  const list = Array.isArray(models) ? models : [];
+  const mini = [];
+  const rest = [];
+  for (const model of list) {
+    if (model && isSiraMiniAlias(model.name || model.displayName)) mini.push(model);
+    else rest.push(model);
+  }
+  if (mini.length <= 1) return list;
+  const preferred = preferSiraMiniRow(mini);
+  return preferred ? [preferred, ...rest] : rest;
 }
 
 function defaultSiraMiniBaseUrl(env = process.env) {
@@ -176,10 +221,11 @@ function pickCustomConnectionRow(rows, model) {
   const customish = (Array.isArray(rows) ? rows : []).filter(isCustomConnectionRow);
   if (!customish.length) return null;
   const wanted = normalizeModelName(model);
+  const wantedIsMini = isSiraMiniAlias(model);
   if (wanted) {
     const listed = customish.find((row) => (
       Array.isArray(row.modelIds)
-      && row.modelIds.some((id) => namesMatch(id, wanted))
+      && row.modelIds.some((id) => namesMatch(id, wanted) || (wantedIsMini && isSiraMiniAlias(id)))
     ));
     if (listed) return listed;
   }
@@ -203,7 +249,7 @@ async function findAiModelByName(prisma, model) {
       return await prisma.aiModel.findFirst({
         where: {
           OR: [
-            { name: { in: ['moondream', SIRA_MINI_UPSTREAM_ID, SIRA_MINI_PUBLIC_NAME] } },
+            { name: { in: [...new Set([...SIRA_MINI_CATALOG_NAMES, resolveSiraMiniUpstreamId()])] } },
             { displayName: SIRA_MINI_DISPLAY_NAME },
             { displayName: 'Sira Mini' },
           ],
@@ -378,7 +424,7 @@ function catalogProviderForConnection(providerKey, providerLabel) {
 function defaultCustomDisplayName(name, currentDisplayName) {
   const rawName = String(name || '').trim();
   const current = String(currentDisplayName || '').trim();
-  if (isSiraMiniAlias(rawName) && (!current || isSiraMiniAlias(current) || /^moondream\b/i.test(current))) {
+  if (isSiraMiniAlias(rawName) && (!current || isSiraMiniAlias(current) || VENDOR_MINI_DISPLAY_RE.test(current))) {
     return SIRA_MINI_DISPLAY_NAME;
   }
   return current || rawName;
@@ -389,7 +435,10 @@ module.exports = {
   KNOWN_CLOUD_PROVIDER_KEYS,
   SIRA_MINI_DISPLAY_NAME,
   SIRA_MINI_PUBLIC_NAME,
-  SIRA_MINI_UPSTREAM_ID,
+  SIRA_MINI_UPSTREAM_DEFAULT,
+  get SIRA_MINI_UPSTREAM_ID() {
+    return resolveSiraMiniUpstreamId();
+  },
   SIRA_MINI_DEFAULT_BASE_URL,
   SIRA_MINI_UNAVAILABLE_MESSAGE,
   isCustomProvider,
@@ -401,8 +450,10 @@ module.exports = {
   normalizeModelName,
   publicPickerProvider,
   publicPickerModel,
+  collapseSiraMiniRows,
   catalogProviderForConnection,
   defaultCustomDisplayName,
+  resolveSiraMiniUpstreamId,
   rewriteCustomChatModel,
   defaultSiraMiniBaseUrl,
   unwrapStoredKey,

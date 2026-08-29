@@ -72,6 +72,7 @@ function inferProviderFromModelId(modelId) {
   if (
     m === 'sira-mini' || m === 'siragpt-mini' || m === 'sira mini' || m === 'siragpt mini'
     || m === 'moondream' || m.startsWith('moondream:')
+    || m === 'gemma4' || m.startsWith('gemma4:')
   ) return 'Custom';
 
   // 1) Direct-API providers we explicitly route to.
@@ -126,9 +127,9 @@ function inferProviderFromModelId(modelId) {
   //    that doesn't exist.
   if (m === 'gpt-oss' || m.startsWith('gpt-oss-') || /^llama-3(\.|-)/.test(m) || m.startsWith('zai-glm-')) return 'Cerebras';
 
-  // 10) Admin-local Custom (Ollama / HuggingFace / moondream). Must not
+  // 10) Admin-local Custom (Ollama / HuggingFace / moondream / gemma4). Must not
   //     fall through to OpenAI — that silently swaps the user's pick.
-  if (/\bmoondream\b/.test(m) || m.includes('ollama') || m.includes('huggingface')) return 'Custom';
+  if (/\bmoondream\b/.test(m) || /\bgemma4\b/.test(m) || m.includes('ollama') || m.includes('huggingface')) return 'Custom';
 
   return 'OpenAI';
 }

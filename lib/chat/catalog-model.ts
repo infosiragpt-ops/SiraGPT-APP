@@ -23,6 +23,7 @@ function looksLikeLocalCustomModel(name?: string): boolean {
   const raw = String(name || "").trim().toLowerCase()
   if (!raw) return false
   return /\bmoondream\b/.test(raw)
+    || /^gemma4(?::|$)/.test(raw)
     || raw.includes("ollama")
     || raw.includes("huggingface")
     || raw.includes("sira-gpt-mini")
