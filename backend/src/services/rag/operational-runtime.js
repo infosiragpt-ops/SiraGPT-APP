@@ -13,6 +13,7 @@
  */
 
 const crypto = require('crypto');
+const { isAudioTranscriptionPlaceholder } = require('../rag-audio-placeholder-filter');
 
 const DEFAULT_COLLECTION = 'default';
 const MAX_DOC_CHARS = Number.parseInt(process.env.SIRAGPT_RAG_MAX_DOC_CHARS || '1000000', 10);
@@ -71,6 +72,7 @@ function normaliseDocs(files = []) {
         : (typeof file.content === 'string' ? file.content : '');
       const raw = rawSource.trim();
       if (raw.length < MIN_DOC_CHARS) return null;
+      if (isAudioTranscriptionPlaceholder(raw)) return null;
       const truncated = raw.length > MAX_DOC_CHARS;
       return {
         text: truncated ? raw.slice(0, MAX_DOC_CHARS) : raw,

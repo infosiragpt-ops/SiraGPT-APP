@@ -75,6 +75,10 @@ const EXTENSION_MIME_HINTS = new Map([
   ['.tex', 'application/x-tex'],
   ['.latex', 'application/x-latex'],
   ['.zip', 'application/zip'],
+  ['.ogg', 'audio/ogg'],
+  ['.oga', 'audio/ogg'],
+  ['.opus', 'audio/opus'],
+  ['.m4a', 'audio/mp4'],
 ]);
 
 async function assertReadableDocxZip(filePath) {
@@ -320,8 +324,12 @@ class FileProcessor {
         case 'audio/mpeg':
         case 'audio/wav':
         case 'audio/ogg':
+        case 'audio/opus':
+        case 'application/ogg':
         case 'audio/webm':
         case 'audio/mp4':
+        case 'audio/m4a':
+        case 'audio/x-m4a':
         case 'video/mp4':
         case 'video/mpeg':
         case 'video/quicktime':
@@ -1112,8 +1120,8 @@ class FileProcessor {
 async processAudio(filePath, mimeType, originalName) {
     try {
       const result = await audioTranscriber.transcribe(filePath, mimeType, originalName);
-      if (result.method === 'whisper') {
-        console.log(`[fileProcessor] Audio transcribed via Whisper: ${originalName}, ${result.text?.length || 0} chars`);
+      if (result.method === 'whisper' || result.method === 'local-whisper') {
+        console.log(`[fileProcessor] Audio transcribed via ${result.method}: ${originalName}, ${result.text?.length || 0} chars`);
       }
       return result.text || '';
     } catch (error) {
