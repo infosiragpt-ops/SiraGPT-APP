@@ -104,6 +104,17 @@ function hasOpenAiKey(options = {}) {
   return Boolean(String(envOf(options).OPENAI_API_KEY || '').trim());
 }
 
+function isAbortError(err, signal) {
+  if (signal?.aborted) return true;
+  const name = String(err?.name || '');
+  const code = String(err?.code || '');
+  const message = String(err?.message || '');
+  return name === 'AbortError'
+    || code === 'ABORT_ERR'
+    || code === 'LOCAL_WHISPER_ABORTED'
+    || /abort(ed)? by user|aborted|The operation was aborted/i.test(message);
+}
+
 function isInvalidKeyError(err) {
   const status = Number(err?.status || err?.statusCode || err?.response?.status || 0);
   const code = String(err?.code || err?.error?.code || '');
@@ -256,6 +267,7 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
         segments: cloud.segments,
       });
     } catch (err) {
+      if (isAbortError(err, options.signal)) throw err;
       const safe = sanitizeProviderError(err);
       if (isInvalidKeyError(err)) {
         logSafe(`OpenAI Whisper rejected the key (${safe}); falling back to local`);
@@ -279,7 +291,7 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
       segments: local.segments,
     });
   } catch (err) {
-    if (err?.code === 'LOCAL_WHISPER_ABORTED' || options.signal?.aborted) throw err;
+    if (isAbortError(err, options.signal)) throw err;
     logSafe(`Local Whisper failed: ${sanitizeProviderError(err)}`);
     return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
   }
@@ -291,6 +303,7 @@ module.exports = {
   sanitizeProviderError,
   normalizeAudioMime,
   resolveLanguage,
+  isAbortError,
   isInvalidKeyError,
   hasOpenAiKey,
   AUDIO_MIME_MAP,

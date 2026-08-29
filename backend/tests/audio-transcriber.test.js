@@ -105,6 +105,36 @@ test('when local also fails the placeholder is Spanish and secret-safe', async (
   assert.doesNotMatch(result.text, /Set OPENAI/);
 });
 
+test('aborted OpenAI calls do not fall back to local', async (t) => {
+  const filePath = tempAudio(t);
+  let localCalls = 0;
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(
+    audioTranscriber.transcribe(filePath, 'audio/ogg', 'nota.ogg', {
+      env: { OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_abort' },
+      signal: controller.signal,
+      openai: {
+        audio: {
+          transcriptions: {
+            async create() {
+              const err = new Error('aborted by user');
+              err.name = 'AbortError';
+              throw err;
+            },
+          },
+        },
+      },
+      async localTranscribe() {
+        localCalls += 1;
+        return { text: 'should not run' };
+      },
+    }),
+    /aborted by user/,
+  );
+  assert.equal(localCalls, 0);
+});
+
 test('sanitizeProviderError redacts key-shaped provider text', () => {
   const err = new Error('401 Incorrect API key provided: sk-proj-TESTKEY_NOT_A_REAL_SECRET_zzzzzz');
   err.status = 401;
