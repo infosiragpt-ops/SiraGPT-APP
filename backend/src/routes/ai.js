@@ -235,34 +235,37 @@ const { use } = require('passport');
 // // const openai = new OpenAI({
 // //   apiKey: process.env.OPENAI_API_KEY
 // // });
-/** OpenRouter slug — kept in sync with prisma/seed.js */
-const KIMI_K26_OPENROUTER = {
+/** Moonshot native Kimi — not the OpenRouter mixer. */
+const KIMI_K26_NATIVE = {
   name: 'moonshotai/kimi-k2.6',
   displayName: 'Kimi K2.6',
-  provider: 'OpenRouter',
+  provider: 'Kimi',
   type: 'TEXT',
   icon: 'KimiLogo',
-  description: 'Moonshot Kimi K2.6 via OpenRouter: long context, multimodal, coding & agents.',
+  description: 'Kimi K2.6 de Moonshot: contexto largo, multimodal, codigo y agentes.',
 };
 
 const DEEPSEEK_TEXT_MODELS = [
   {
     name: 'deepseek-v4-flash',
-    displayName: 'DeepSeek V4 Flash',
+    displayName: 'Sira Rápido',
     provider: 'DeepSeek',
     type: 'TEXT',
     icon: 'DeepseekLogo',
-    description: 'DeepSeek direct API fast V4 model. Uses the official deepseek-v4-flash API identifier.',
+    description: 'Modelo rápido de SiraGPT para chat cotidiano y tareas cortas.',
   },
   {
     name: 'deepseek-v4-pro',
-    displayName: 'DeepSeek V4 Pro',
+    displayName: 'Sira Pro',
     provider: 'DeepSeek',
     type: 'TEXT',
     icon: 'DeepseekLogo',
-    description: 'DeepSeek direct API V4 Pro model for complex tasks. Uses the official deepseek-v4-pro API identifier.',
+    description: 'Modelo profesional de SiraGPT para razonamiento, codigo y documentos.',
   },
 ];
+
+const MINI_SHORT_CHITCHAT_SYSTEM =
+  'Eres SiraGPT Mini. Responde saludos de forma breve y natural, en el mismo idioma del usuario. No razones en voz alta. No uses herramientas.';
 
 const ADMIN_MANAGED_IMAGE_MODELS = listManifestModels({ type: 'IMAGE' });
 const ADMIN_MANAGED_IMAGE_MODEL_NAMES = new Set(ADMIN_MANAGED_IMAGE_MODELS.map(model => model.name));
@@ -287,7 +290,12 @@ function hasEnv(name) {
 // Map a model id to its expected provider name. Delegates to the
 // dedicated, testable helper in services/ai/provider-inference.js — keeps
 // this file lean and gives a single place to maintain the heuristic.
-const { inferProviderFromModelId } = require('../services/ai/provider-inference');
+const {
+  inferProviderFromModelId,
+  resolveGenerateProvider,
+  providerConnectionReady,
+  CONNECTION_UNAVAILABLE_MESSAGE,
+} = require('../services/ai/provider-inference');
 const {
   isCustomProvider,
   isLocalVisionModel,
@@ -298,6 +306,20 @@ const {
   createCustomProviderClient,
   SIRA_MINI_PUBLIC_NAME,
 } = require('../services/ai/custom-provider-client');
+const {
+  createAnthropicStreamingClient,
+  createMoonshotClient,
+  createXaiClient,
+} = require('../services/ai/first-party-chat-clients');
+const { isShortChitchatPrompt } = require('../services/agents/intent-triage');
+
+function throwConnectionUnavailable(provider) {
+  const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+  err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
+  err.status = 503;
+  err.provider = provider;
+  throw err;
+}
 
 function createProviderClient(provider, opts = {}) {
   // Custom / Ollama OpenAI-compatible: read the AdminConnection at request
@@ -311,18 +333,20 @@ function createProviderClient(provider, opts = {}) {
   }
 
   if (provider === "Anthropic") {
-    const { createAnthropicOpenAIAdapter } = require('../services/providers/anthropic-openai-adapter');
-    return createAnthropicOpenAIAdapter();
+    if (!providerConnectionReady('Anthropic')) throwConnectionUnavailable('Anthropic');
+    return createAnthropicStreamingClient();
   }
 
   if (provider === "Gemini") {
+    if (!providerConnectionReady('Gemini')) throwConnectionUnavailable('Gemini');
     return new OpenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: process.env.GEMINI_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY,
       baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
     });
   }
 
   if (provider === "OpenRouter") {
+    if (!providerConnectionReady('OpenRouter')) throwConnectionUnavailable('OpenRouter');
     // afford-guard: low-credit 402s retry once with a clamped max_tokens
     // instead of dead-ending the turn. See services/ai/openrouter-afford-guard.
     const { wrapOpenRouterClient } = require('../services/ai/openrouter-afford-guard');
@@ -333,6 +357,7 @@ function createProviderClient(provider, opts = {}) {
   }
 
   if (provider === "DeepSeek") {
+    if (!providerConnectionReady('DeepSeek')) throwConnectionUnavailable('DeepSeek');
     return new OpenAI({
       apiKey: process.env.DEEPSEEK_API_KEY,
       baseURL: "https://api.deepseek.com",
@@ -343,49 +368,50 @@ function createProviderClient(provider, opts = {}) {
   // env when the admin saves the connection). Each branch only activates when
   // its key is present, so an unconfigured provider falls through to the OpenAI
   // default exactly as before — no behaviour change for existing routing.
-  if (provider === "Cerebras" && process.env.CEREBRAS_API_KEY) {
+  if (provider === "Cerebras") {
+    if (!providerConnectionReady('Cerebras')) throwConnectionUnavailable('Cerebras');
     return new OpenAI({
       apiKey: process.env.CEREBRAS_API_KEY,
       baseURL: process.env.CEREBRAS_BASE_URL || "https://api.cerebras.ai/v1",
     });
   }
 
-  if ((provider === "Z.ai" || provider === "ZAI") && process.env.ZAI_API_KEY) {
+  if (provider === "Z.ai" || provider === "ZAI") {
+    if (!providerConnectionReady('Z.ai')) throwConnectionUnavailable('Z.ai');
     return new OpenAI({
       apiKey: process.env.ZAI_API_KEY,
       baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
     });
   }
 
-  if ((provider === "Kimi" || provider === "Moonshot") && (process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY)) {
-    return new OpenAI({
-      apiKey: process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY,
-      baseURL: process.env.MOONSHOT_BASE_URL || process.env.KIMI_BASE_URL || "https://api.moonshot.ai/v1",
-    });
+  if (provider === "Kimi" || provider === "Moonshot") {
+    if (!providerConnectionReady('Kimi')) throwConnectionUnavailable('Kimi');
+    return createMoonshotClient();
   }
 
-  if (provider === "Groq" && process.env.GROQ_API_KEY) {
+  if (provider === "Groq") {
+    if (!providerConnectionReady('Groq')) throwConnectionUnavailable('Groq');
     return new OpenAI({
       apiKey: process.env.GROQ_API_KEY,
       baseURL: process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1",
     });
   }
 
-  if (provider === "Mistral" && process.env.MISTRAL_API_KEY) {
+  if (provider === "Mistral") {
+    if (!providerConnectionReady('Mistral')) throwConnectionUnavailable('Mistral');
     return new OpenAI({
       apiKey: process.env.MISTRAL_API_KEY,
       baseURL: process.env.MISTRAL_BASE_URL || "https://api.mistral.ai/v1",
     });
   }
 
-  if ((provider === "xAI" || provider === "XAI" || provider === "Grok") && process.env.XAI_API_KEY) {
-    return new OpenAI({
-      apiKey: process.env.XAI_API_KEY,
-      baseURL: process.env.XAI_BASE_URL || "https://api.x.ai/v1",
-    });
+  if (provider === "xAI" || provider === "XAI" || provider === "Grok") {
+    if (!providerConnectionReady('xAI')) throwConnectionUnavailable('xAI');
+    return createXaiClient();
   }
 
-  if ((provider === "Meta" || provider === "Llama") && (process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY)) {
+  if (provider === "Meta" || provider === "Llama") {
+    if (!providerConnectionReady('Meta')) throwConnectionUnavailable('Meta');
     return new OpenAI({
       apiKey: process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY,
       baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || "https://api.meta.ai/v1",
@@ -858,18 +884,18 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     }
 
     __dbg('after-deepseek-block');
-    if (wantText && hasEnv('OPENROUTER_API_KEY')) {
-      const alreadyListed = models.some((m) => m.name === KIMI_K26_OPENROUTER.name);
+    if (wantText && (hasEnv('MOONSHOT_API_KEY') || hasEnv('KIMI_API_KEY'))) {
+      const alreadyListed = models.some((m) => m.name === KIMI_K26_NATIVE.name);
       if (!alreadyListed) {
         const kimiRow = await prisma.aiModel.findFirst({
-          where: { name: KIMI_K26_OPENROUTER.name },
+          where: { name: KIMI_K26_NATIVE.name },
           select: { id: true },
         });
         if (!kimiRow) {
           models = [
             {
-              id: '__virtual_openrouter_kimi_k26__',
-              ...KIMI_K26_OPENROUTER,
+              id: '__virtual_kimi_k26__',
+              ...KIMI_K26_NATIVE,
             },
             ...models,
           ];
@@ -1504,8 +1530,16 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  try { res.setHeader('X-Model-Actual', String(actualModel || '')); } catch { /* noop */ }
+  // Brand only — never leak raw model_id (sira-mini / deepseek-v4-flash).
+  const branded = isSiraMiniAlias(actualModel) ? 'SiraGPT Mini' : '';
+  if (branded) {
+    try { res.setHeader('X-Model-Actual', branded); } catch { /* noop */ }
+  }
   if (typeof res.flushHeaders === 'function') res.flushHeaders();
+  // text_delta first so a client whose onReplace no-ops (Safari abort) still paints.
+  if (content) {
+    res.write(`data: ${JSON.stringify({ type: 'text_delta', content })}\n\n`);
+  }
   res.write(`data: ${JSON.stringify({
     replace: true,
     content,
@@ -2943,7 +2977,7 @@ router.post(
         prisma,
       }).catch(() => ({ language: (req.user && req.user.locale) || uiLocale || 'es', detected: null, source: 'fallback', shouldPersist: false }));
 
-      let actualProvider = provider; // ✅ NEW: track actual provider
+      let actualProvider = resolveGenerateProvider(provider, model);
       let customConnection = null;
       let _customResolution = { isCustom: false, connection: null };
       try {
@@ -2958,6 +2992,13 @@ router.post(
         return res.status(503).json({
           error: 'custom_connection_unavailable',
           message: 'El modelo local no tiene una conexión Custom activa. Configúrala en Admin → Conexiones.',
+        });
+      }
+      if (!_customResolution.isCustom && !providerConnectionReady(actualProvider)) {
+        controller.abort();
+        return res.status(503).json({
+          error: 'connection_unavailable',
+          message: CONNECTION_UNAVAILABLE_MESSAGE,
         });
       }
       let _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
@@ -3328,7 +3369,7 @@ router.post(
         customGpt = _chatPrefetch.customGpt;
         actualModel = _chatPrefetch.model || customGpt.modelName || model;
         actualTemperature = customGpt.temperature ?? actualTemperature;
-        actualProvider = inferProviderFromModelId(actualModel);
+        actualProvider = resolveGenerateProvider(actualProvider, actualModel);
         // Prefer the GPT's configured maxTokens when set; otherwise use a
         // higher default so complete trained deliverables are not cut short.
         const gptMax = Number(customGpt.maxTokens);
@@ -3356,7 +3397,7 @@ router.post(
             if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
               actualProvider = ai.preferredProvider.trim();
             } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
-              actualProvider = inferProviderFromModelId(actualModel);
+              actualProvider = resolveGenerateProvider(actualProvider, actualModel);
             }
           }
           if (Number.isFinite(Number(ai.maxCostPerRequestUSD)) && Number(ai.maxCostPerRequestUSD) > 0) {
@@ -3385,6 +3426,17 @@ router.post(
         }
       } catch (customLookupErr) {
         console.warn('[ai/generate] custom connection re-lookup failed:', customLookupErr && customLookupErr.message);
+      }
+
+      if (actualProvider !== 'Custom') {
+        actualProvider = resolveGenerateProvider(actualProvider, actualModel);
+      }
+      if (actualProvider !== 'Custom' && !providerConnectionReady(actualProvider)) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: 'error', error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE, recovered: false })}\n\n`);
+        } catch { /* socket gone */ }
+        if (!res.writableEnded) res.end();
+        return;
       }
 
       // ✅ Re-initialize OpenAI client with actualProvider
@@ -5431,9 +5483,15 @@ router.post(
           // cheap. On by default; disable with SIRAGPT_TEST_TIME_COMPUTE=0|off.
           // Fail-open.
           req._reasoningKernelBlock = '';
+          req._miniShortChitchat = isSiraMiniAlias(actualModel) && (
+            (intentTriageDecision && intentTriageDecision.reason === 'short_chitchat')
+            || isShortChitchatPrompt(prompt)
+          );
           try {
             const __ttcFlag = String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase();
-            if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
+            if (req._miniShortChitchat) {
+              console.log('[test-time-compute] skipped Mini short_chitchat');
+            } else if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
               const testTimeCompute = require('../services/test-time-compute');
               req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
                 language: (langResolution && langResolution.language) || 'es',
@@ -6002,6 +6060,13 @@ router.post(
         }
       } catch (__budgetErr) {
         console.warn('[prompt-budget] allocation failed (continuing without):', __budgetErr?.message || __budgetErr);
+      }
+
+      if (req._miniShortChitchat) {
+        systemInstruction.content = MINI_SHORT_CHITCHAT_SYSTEM;
+        systemBlocks.length = 0;
+        systemBlocks.push({ kind: 'mini-short-chitchat', text: MINI_SHORT_CHITCHAT_SYSTEM, cacheable: true });
+        console.log(`[mini-short-chitchat] slim system prompt ${MINI_SHORT_CHITCHAT_SYSTEM.length}c`);
       }
 
       const __cacheableBlockCount = systemBlocks.filter((b) => b.cacheable).length;

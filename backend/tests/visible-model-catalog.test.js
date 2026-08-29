@@ -18,6 +18,10 @@ test('no allowlist → returns the full curated catalog', () => {
   const names = all.map((m) => m.name);
   assert.ok(names.includes('gpt-4o'));
   assert.ok(names.includes('openai/gpt-5.5'));
+  const pro = all.find((m) => m.name === 'deepseek/deepseek-v4-pro');
+  assert.ok(pro);
+  assert.equal(pro.displayName, 'Sira Pro');
+  assert.equal(/deepseek/i.test(String(pro.displayName)), false);
 });
 
 test('VISIBLE_MODELS_ALLOWLIST restricts the catalog to listed names', () => {

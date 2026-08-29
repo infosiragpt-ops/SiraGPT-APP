@@ -1884,9 +1884,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               // the user sees progress even if they navigated away.
               bg.appendChunk(activeChat.id, chunk);
 
-              // Check if we should stop processing chunks for the
-              // foreground chat view.
-              if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
+              // User Stop still drops foreground tokens. Safari abort after a
+              // completed Mini turn must still paint replayed content.
+              if (pendingStopsRef.current.has(activeChat.id)) {
                 return;
               }
 
@@ -2055,7 +2055,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
               }),
               onReplace: (replacement) => {
-                if (controller.signal.aborted || pendingStopsRef.current.has(activeChat.id)) {
+                if (pendingStopsRef.current.has(activeChat.id)) {
                   return;
                 }
                 // Drop any queued tokens — the replacement is authoritative.
@@ -3083,7 +3083,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
+            if (pendingStopsRef.current.has(currentChat.id)) {
               return;
             }
             regenBuffer.dispose();
@@ -3472,7 +3472,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
           onReplace: (replacement) => {
-            if (controller.signal.aborted || pendingStopsRef.current.has(currentChat.id)) {
+            if (pendingStopsRef.current.has(currentChat.id)) {
               return;
             }
             editBuffer.dispose();
