@@ -45,6 +45,7 @@ describe("SiraCode /agentes Phase 1", () => {
     const svc = source("lib/opencode/opencode-service.ts")
     assert.match(svc, /\/opencode/)
     assert.match(svc, /switchAgent/)
+    assert.match(svc, /return json\.result\n  \},\n\n  \/\*\* Switch/)
     assert.match(svc, /SiraCode native engine/)
     assert.doesNotMatch(svc, /OPENCODE_SERVER_URL/)
     assert.doesNotMatch(svc, /vendor\/opencode/)
