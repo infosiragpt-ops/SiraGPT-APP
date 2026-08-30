@@ -159,6 +159,8 @@ test('Mini short_chitchat skips test-time-compute and slims the system prompt', 
 
 test('trivial turns skip Extra/Max effort so greetings stay fast', () => {
   assert.match(aiRoute, /trivial turn kept on direct mode; Extra\/Max skipped/);
+  assert.match(aiRoute, /applyTrivialTurnGuards\(req, prompt\)/);
+  assert.match(aiRoute, /skipped trivial turn/);
 });
 
 test('duplicate Mini replay emits text_delta and omits raw model_id', () => {

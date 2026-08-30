@@ -312,6 +312,10 @@ const {
   createXaiClient,
 } = require('../services/ai/first-party-chat-clients');
 const { isShortChitchatPrompt } = require('../services/agents/intent-triage');
+const {
+  isTrivialChatTurn,
+  applyTrivialTurnGuards,
+} = require('../services/trivial-turn');
 
 function throwConnectionUnavailable(provider) {
   const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
@@ -2270,6 +2274,7 @@ router.post(
       }
 
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
+      applyTrivialTurnGuards(req, prompt);
       const __publicWebReadonly = req.body.enableWebGrounding === true;
       const __publicWebQuery = __publicWebReadonly
         && typeof req.body.webGroundingQuery === 'string'
@@ -5411,8 +5416,11 @@ router.post(
           try {
             const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
             if (__effortOverride && cognitiveDecision) {
-              const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial';
+              const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial'
+                || req._trivialTurn === true
+                || isTrivialChatTurn(prompt);
               if (__defaultMediumOnTrivial) {
+                cognitiveDecision.compute = { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false };
                 console.log('[reasoning-effort] trivial turn kept on direct mode; Extra/Max skipped');
               } else {
                 cognitiveDecision.compute = __effortOverride;
@@ -5486,10 +5494,18 @@ router.post(
             (intentTriageDecision && intentTriageDecision.reason === 'short_chitchat')
             || isShortChitchatPrompt(prompt)
           );
+          req._trivialTurn = req._trivialTurn === true || isTrivialChatTurn(prompt);
+          if (req._trivialTurn) {
+            req.body.disableAgentic = true;
+            req._thinkingLevel = 'disabled';
+          }
           try {
             const __ttcFlag = String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase();
-            if (req._miniShortChitchat) {
-              console.log('[test-time-compute] skipped Mini short_chitchat');
+            if (req._trivialTurn || req._miniShortChitchat) {
+              req._reasoningKernelBlock = '';
+              console.log(req._miniShortChitchat && !req._trivialTurn
+                ? '[test-time-compute] skipped Mini short_chitchat'
+                : '[test-time-compute] skipped trivial turn');
             } else if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
               const testTimeCompute = require('../services/test-time-compute');
               req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
@@ -7199,6 +7215,7 @@ router.post(
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
               maxOutputTokens: actualMaxOutputTokens,
+              thinkingLevel: req._thinkingLevel || undefined,
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't

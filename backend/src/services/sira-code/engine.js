@@ -20,7 +20,7 @@ const {
   publicSession,
   _resetForTests,
 } = require('./session-store');
-const { runPrompt } = require('./loop');
+const { runPrompt, shouldStartSiraCodeRun } = require('./loop');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
 
 function sidecarRequested(env = process.env) {
@@ -154,5 +154,6 @@ module.exports = {
   streamEvents,
   agentCanWrite,
   sidecarRequested,
+  shouldStartSiraCodeRun,
   _resetForTests,
 };

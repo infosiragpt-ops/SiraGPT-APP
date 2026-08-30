@@ -39,7 +39,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
-- Computer orchestrator image build no longer fails with `useradd: UID 1000
+- `hola` / saludos ya no entran a Extra/Max, thinking extendido ni al
+  bucle de SiraCode (Construir/Planificar), aunque esos toggles estén
+  activos. Respuesta directa, `disableAgentic`, sin test-time-compute.
+  Instrucciones permanentes en `AGENTS.md` (raíz; no sustituye `.agents/`).
+- Computer orchestrator image build no longer fails with `useradd: UID 1000`
   is not unique` on `node:22-bookworm` (that image already owns uid 1000).
   `compuser` is created by name; `docker exec -u compuser` is unchanged.
 - `/agentes` computer pane («Pantalla de Siragpt») no longer shows raw
@@ -88,6 +92,11 @@ and improvement cycles follow a sequential number with the date the work landed.
   are published until the listings exist.
 
 ### Changed
+
+- `AGENTS.md` raíz reescrito en telégrafo (política dura + enrutado). Guía
+  scoped en `ui/upstream/openclaw/AGENTS.md` para la Control UI vendored.
+  Doctrina adaptada a SiraGPT (núcleo chico, caché de prompt, hola directo,
+  un flujo canónico). No toca UI.
 
 - Canonical product URL is `/agentes` (https://siragpt.com/agentes). Authenticated `/` redirects to `/agentes` so guests still see marketing on `/`; `/chat` and `/chat/:id` keep query/hash/id and land on `/agentes`. Same chat chrome; per-conversation computer overlay fail-closes if isolation is missing.
 - Engine 3H60 (no UI): 32 fail-open helpers after 3H59 — tool-arg coerce/fence/enum

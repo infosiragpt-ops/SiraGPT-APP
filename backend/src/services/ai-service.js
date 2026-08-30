@@ -55,6 +55,7 @@ const {
     createXaiClient,
     stripVendorPrefix,
 } = require('./ai/first-party-chat-clients');
+const { resolveThinkingLevelForTurn, isTrivialChatTurn } = require('./trivial-turn');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -551,7 +552,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -771,6 +772,17 @@ class AIService {
                 // we restore the old behaviour for gpt-oss (exclude, so the
                 // user isn't staring at silence until the final answer).
                 const extraPayload = { temperature: normalizedTemperature };
+                const turnThinkingLevel = resolveThinkingLevelForTurn({
+                    thinkingLevel,
+                    userPrompt,
+                    fallback: currentThinkingLevel(),
+                });
+                if (isTrivialChatTurn(userPrompt) || String(turnThinkingLevel).toLowerCase() === 'disabled') {
+                    extraPayload.reasoning = { exclude: true };
+                    if (currentProvider === 'Anthropic') {
+                        extraPayload.thinking = { type: 'disabled' };
+                    }
+                }
                 if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
                 }
@@ -788,7 +800,7 @@ class AIService {
                     model: currentRuntimeModel,
                     messages: workingMessages,
                     stream: true,
-                    thinkingLevel: currentThinkingLevel(),
+                    thinkingLevel: turnThinkingLevel,
                     extra: extraPayload,
                     maxOutputTokens: effectiveMaxOutput,
                 });
@@ -1091,7 +1103,10 @@ class AIService {
                 model,
                 messages,
                 stream: false,
-                thinkingLevel: currentThinkingLevel(),
+                thinkingLevel: resolveThinkingLevelForTurn({
+                    userPrompt,
+                    fallback: currentThinkingLevel(),
+                }),
                 extra: { temperature: normalizeTemperature(temperature) },
                 maxOutputTokens: Math.min(getCompletionLimit(model), 16384),
             });
@@ -1633,6 +1648,8 @@ service.__test = {
     getFallbackChain,
     isPinnedLocalGenerate,
     isPinnedUserGenerate,
+    resolveThinkingLevelForTurn,
+    currentThinkingLevel,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

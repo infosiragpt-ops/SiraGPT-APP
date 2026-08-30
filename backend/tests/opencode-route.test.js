@@ -81,12 +81,29 @@ test('POST /session/:id/prompt runs the native loop', async () => {
   const created = await request(app).post('/api/opencode/session').send({});
   const res = await request(app)
     .post(`/api/opencode/session/${created.body.session.id}/prompt`)
-    .send({ text: 'hola' });
+    .send({ text: 'escribe app.py' });
   assert.equal(res.status, 200);
   assert.equal(res.body.result.text, 'Listo.');
   assert.ok(!JSON.stringify(res.body).includes('DeepSeek'));
   assert.ok(!JSON.stringify(res.body).includes('OpenRouter'));
   assert.ok(!JSON.stringify(res.body).includes('model_id'));
+});
+
+test('POST /session/:id/prompt skips the SiraCode loop for hola', async () => {
+  let llmCalls = 0;
+  const app = buildApp(async () => {
+    llmCalls += 1;
+    return { text: 'no-debes-correr', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({});
+  const res = await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/prompt`)
+    .send({ text: 'hola' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.result.skipped, true);
+  assert.equal(res.body.result.reason, 'trivial_turn');
+  assert.equal(llmCalls, 0);
+  assert.equal((res.body.result.toolResults || []).length, 0);
 });
 
 test('POST /session/:id/agent switches to planificar', async () => {
