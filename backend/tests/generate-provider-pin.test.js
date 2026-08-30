@@ -15,6 +15,7 @@ const service = require('../src/services/ai-service');
 
 const aiRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
 
+
 const LIVE = [
   { model: 'sira-mini', provider: 'Custom' },
   { model: 'google/gemini-3.5-flash', provider: 'Gemini' },
@@ -26,6 +27,9 @@ const LIVE = [
   { model: 'openai/gpt-5.6-terra', provider: 'OpenAI' },
   { model: 'moonshotai/kimi-k2.6', provider: 'Kimi' },
   { model: 'moonshotai/kimi-k2.7-code', provider: 'Kimi' },
+  { model: 'x-ai/grok-4', provider: 'xAI' },
+  { model: 'x-ai/grok-4.5', provider: 'xAI' },
+  { model: 'Grok 4.5', provider: 'xAI' },
 ];
 
 test('inferProviderFromModelId: live catalog families hit their own API', () => {
@@ -47,6 +51,8 @@ test('resolveGenerateProvider: OpenRouter mixer label cannot steal first-party m
   assert.equal(resolveGenerateProvider('DeepSeek', 'google/gemini-3.5-flash'), 'Gemini');
   assert.equal(resolveGenerateProvider('Anthropic', 'anthropic/claude-fable-5'), 'Anthropic');
   assert.equal(resolveGenerateProvider('Kimi', 'moonshotai/kimi-k2.7-code'), 'Kimi');
+  assert.equal(resolveGenerateProvider('OpenRouter', 'x-ai/grok-4'), 'xAI');
+  assert.equal(resolveGenerateProvider('DeepSeek', 'Grok 4.5'), 'xAI');
 });
 
 test('ai-service providerForModel / normalizeChatProvider match the same first-party map', () => {
@@ -149,6 +155,10 @@ test('Mini short_chitchat skips test-time-compute and slims the system prompt', 
   const { isShortChitchatPrompt } = require('../src/services/agents/intent-triage');
   assert.equal(isShortChitchatPrompt('Hola'), true);
   assert.equal(isShortChitchatPrompt('hola necesito el reporte'), false);
+});
+
+test('trivial turns skip Extra/Max effort so greetings stay fast', () => {
+  assert.match(aiRoute, /trivial turn kept on direct mode; Extra\/Max skipped/);
 });
 
 test('duplicate Mini replay emits text_delta and omits raw model_id', () => {

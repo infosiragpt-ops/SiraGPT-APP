@@ -32,12 +32,28 @@ function looksLikeLocalCustomModel(name?: string): boolean {
     || raw === "sira mini"
 }
 
+function inferFamilyProvider(name?: string): string {
+  const m = String(name || "").trim().toLowerCase()
+  if (!m) return ""
+  if (/\bgrok\b/.test(m) || m.includes("x-ai/") || m.includes("xai/")) return "xAI"
+  if (m.includes("claude") || m.startsWith("anthropic/")) return "Anthropic"
+  if (m.includes("gemini") || m.includes("imagen")) return "Gemini"
+  if (m.includes("kimi") || m.includes("moonshot")) return "Kimi"
+  if (m.startsWith("muse-") || m.startsWith("llama-4")) return "Meta"
+  if (looksLikeLocalCustomModel(name)) return "Custom"
+  if (/deepseek-v4/.test(m)) return "DeepSeek"
+  return ""
+}
+
 function pickProvider(model: CatalogModelLike | undefined, fallback = "", wantedName = ""): string {
   const fromModel = String(model?.provider || "").trim()
+  const inferred = inferFamilyProvider(model?.name || wantedName)
+  if (inferred && (!fromModel || /^(openrouter|deepseek)$/i.test(fromModel))) return inferred
   if (fromModel) return fromModel
   if (looksLikeLocalCustomModel(model?.name || wantedName)) return "Custom"
   const raw = String(fallback || "").trim()
-  return raw || "DeepSeek"
+  if (inferred && /^(openrouter|deepseek)$/i.test(raw)) return inferred
+  return raw || inferred || "DeepSeek"
 }
 
 /**

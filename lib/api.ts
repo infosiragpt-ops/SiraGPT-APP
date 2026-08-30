@@ -1802,10 +1802,14 @@ class ApiClient {
           // `turn_in_progress`, where replaying the same key attaches to the
           // existing owner. Payload-mismatch 409s remain single-attempt.
           const retryableConflict = response.status === 409 && details.retryable === true;
+          const connectionDead = response.status === 503 && /connection_unavailable/i.test(String(details.error || details.message || ""));
           // Retriable transport failures: 429 (rate-limit), 5xx server,
           // 408 timeout, and the explicit retryable 409 above — only BEFORE
-          // any content has reached the user. Anything else bubbles up.
+          // any content has reached the user. Missing provider keys are
+          // terminal: retrying 503 connection_unavailable for ~1 min looks
+          // like Pensando… on a greeting.
           const retriable = !hasDeliveredAnyContent
+            && !connectionDead
             && (response.status === 429 || response.status >= 500 || response.status === 408 || retryableConflict)
             && attempt < MAX_CONNECT_ATTEMPTS;
           if (retriable) {
