@@ -27,6 +27,7 @@ describe("generate stream persist-then-poll recovery", () => {
     assert.match(apiSource, /readWithIdle/)
     assert.match(apiSource, /GENERATE_STREAM_IDLE_MS/)
     assert.match(apiSource, /GENERATE_STREAM_CONNECT_MS/)
+    assert.match(apiSource, /connectionDead/)
     assert.doesNotMatch(
       block.slice(0, 250),
       /if \(error\?\.name === 'AbortError' \|\| signal\?\.aborted\)/,

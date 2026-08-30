@@ -23,6 +23,7 @@ interface Props {
   compact?: boolean
   className?: string
   steps?: IncomingStep[]
+  tokens?: { total?: number; tokensIn?: number; tokensOut?: number } | null
 }
 
 function incomingToRow(step: IncomingStep, idx: number, elapsedSec: number, isLastActive: boolean): ClaudeTimelineStep {
@@ -45,8 +46,12 @@ function incomingToRow(step: IncomingStep, idx: number, elapsedSec: number, isLa
   }
 }
 
-export const ThinkingPlaceholder = ({ stage, compact = false, className, steps }: Props) => {
-  const label = (typeof stage === "string" && stage.trim()) ? stage.trim() : "Pensando…"
+export const ThinkingPlaceholder = ({ stage, compact = false, className, steps, tokens }: Props) => {
+  const tokenTotal = tokens
+    ? Number(tokens.total || (tokens.tokensIn || 0) + (tokens.tokensOut || 0))
+    : 0
+  const tokenHint = tokenTotal > 0 ? ` · ${tokenTotal.toLocaleString()} tokens` : ""
+  const label = ((typeof stage === "string" && stage.trim()) ? stage.trim() : "Pensando…") + tokenHint
   const [history, setHistory] = useState<string[]>([])
   const lastRef = useRef<string | null>(null)
   const elapsedSec = useClaudeElapsedSec(true)
