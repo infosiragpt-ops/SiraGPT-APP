@@ -93,6 +93,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Changed
 
+- `AGENTS.md` raíz reescrito en telégrafo (política dura + enrutado). Guía
+  scoped en `ui/upstream/openclaw/AGENTS.md` para la Control UI vendored.
+  Doctrina adaptada a SiraGPT (núcleo chico, caché de prompt, hola directo,
+  un flujo canónico). No toca UI.
+
 - Canonical product URL is `/agentes` (https://siragpt.com/agentes). Authenticated `/` redirects to `/agentes` so guests still see marketing on `/`; `/chat` and `/chat/:id` keep query/hash/id and land on `/agentes`. Same chat chrome; per-conversation computer overlay fail-closes if isolation is missing.
 - Engine 3H60 (no UI): 32 fail-open helpers after 3H59 — tool-arg coerce/fence/enum
   + transient retry, A-B-A-B oscillation cut, faithful compact + query prune +
