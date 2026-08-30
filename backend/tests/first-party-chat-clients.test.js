@@ -8,6 +8,8 @@ const {
   createAnthropicStreamingClient,
   createMoonshotClient,
   createXaiClient,
+  anthropicSupportsThinkingToggle,
+  applyAnthropicThinkingControls,
 } = require('../src/services/ai/first-party-chat-clients');
 const { CONNECTION_UNAVAILABLE_MESSAGE } = require('../src/services/ai/provider-inference');
 
@@ -61,4 +63,13 @@ test('missing first-party keys throw Conexión no disponible', () => {
       else process.env[key] = value;
     }
   }
+});
+
+test('Anthropic thinking toggle covers Claude 4/5 and disables on trivial payloads', () => {
+  assert.equal(anthropicSupportsThinkingToggle('claude-sonnet-5'), true);
+  assert.equal(anthropicSupportsThinkingToggle('claude-fable-5'), true);
+  assert.equal(anthropicSupportsThinkingToggle('claude-3-5-sonnet'), false);
+  const body = { model: 'claude-sonnet-5' };
+  applyAnthropicThinkingControls(body, { thinking: { type: 'disabled' } }, 'claude-sonnet-5');
+  assert.deepEqual(body.thinking, { type: 'disabled' });
 });

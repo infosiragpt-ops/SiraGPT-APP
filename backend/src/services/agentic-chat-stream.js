@@ -484,6 +484,10 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   const text = String(prompt || '').trim();
   if (!text) return false;
   if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  try {
+    const { isTrivialChatTurn } = require('./trivial-turn');
+    if (isTrivialChatTurn(text)) return false;
+  } catch (_) { /* optional at load */ }
   if (DIRECT_ONLY_PROMPT.test(text)) return false;
   try {
     const { shouldRunAgentRunner } = require('./agent-runner');

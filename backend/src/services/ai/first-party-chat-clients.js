@@ -46,6 +46,22 @@ function extractAnthropicText(event) {
   return '';
 }
 
+function anthropicSupportsThinkingToggle(model) {
+  return /claude-(?:3-7|(?:sonnet|opus|haiku)-[4-9]|[4-9]|fable)/i.test(String(model || ''));
+}
+
+function applyAnthropicThinkingControls(body, payload, model) {
+  if (!body || typeof body !== 'object') return body;
+  const thinking = payload && payload.thinking;
+  const reasoningExcluded = payload && payload.reasoning && payload.reasoning.exclude === true;
+  if ((thinking && thinking.type === 'disabled') || reasoningExcluded) {
+    if (anthropicSupportsThinkingToggle(model || body.model)) {
+      body.thinking = { type: 'disabled' };
+    }
+  }
+  return body;
+}
+
 function createAnthropicStreamingClient({
   apiKey = process.env.ANTHROPIC_API_KEY || process.env.SIRA_ANTHROPIC_API_KEY,
   fetchImpl,
@@ -85,6 +101,7 @@ function createAnthropicStreamingClient({
             messages: transcript,
             ...(system ? { system } : {}),
           };
+          applyAnthropicThinkingControls(body, payload, model);
           if (!payload.stream) {
             const resp = await client.messages.create(body, {
               signal: requestOptions && requestOptions.signal,
@@ -147,4 +164,6 @@ module.exports = {
   createMoonshotClient,
   createXaiClient,
   stripVendorPrefix,
+  anthropicSupportsThinkingToggle,
+  applyAnthropicThinkingControls,
 };

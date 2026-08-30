@@ -14,6 +14,7 @@ const { authorizeTool } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
+const { shouldStartSiraCodeRun } = require('../trivial-turn');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -41,7 +42,6 @@ async function runPrompt(session, text, {
   signal,
 } = {}) {
   const agent = getAgent(session.agentId);
-  session.status = 'running';
   session.model = model || session.model;
   const controller = session.abort || new AbortController();
   session.abort = controller;
@@ -53,6 +53,22 @@ async function runPrompt(session, text, {
     parts: [{ type: 'text', text: String(text || '') }],
   });
   appendEvent(session, 'message', { role: 'user', content: String(text || '') });
+
+  if (!shouldStartSiraCodeRun(text)) {
+    session.status = 'idle';
+    session.abort = null;
+    stageEvent(session, 'done', { label: 'Listo' });
+    return {
+      status: 'idle',
+      skipped: true,
+      reason: 'trivial_turn',
+      text: '',
+      toolResults: [],
+      parts: [],
+    };
+  }
+
+  session.status = 'running';
   stageEvent(session, 'thinking', { label: 'Pensando' });
 
   const transcript = [
@@ -195,5 +211,6 @@ async function runPrompt(session, text, {
 module.exports = {
   runPrompt,
   defaultLlmTurn,
+  shouldStartSiraCodeRun,
   MAX_STEPS_DEFAULT,
 };

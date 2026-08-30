@@ -143,6 +143,22 @@ test('health is always native; sidecar stay off by default', () => {
   assert.ok(!FORBIDDEN_DISPLAY.test(JSON.stringify(h)));
 });
 
+test('trivial greeting never starts a SiraCode tool loop', async () => {
+  const session = await siraCode.create({ userId: 'u-1', agent: 'construir' });
+  let calls = 0;
+  const result = await siraCode.prompt(session.id, 'Hola', {
+    userId: 'u-1',
+    llmTurn: async () => {
+      calls += 1;
+      return { text: 'no', toolCalls: [{ name: 'write', arguments: { path: 'x.txt', content: 'x' } }] };
+    },
+  });
+  assert.equal(siraCode.shouldStartSiraCodeRun('Hola'), false);
+  assert.equal(result.skipped, true);
+  assert.equal(calls, 0);
+  assert.equal((result.toolResults || []).length, 0);
+});
+
 test('public payloads never mention DeepSeek, OpenRouter or model_id', async () => {
   const session = await siraCode.create({ userId: 'u-1', model: 'deepseek-v4-flash' });
   const result = await siraCode.prompt(session.id, 'hola', {

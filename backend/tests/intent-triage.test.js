@@ -69,6 +69,7 @@ test('triage: short greeting → execute even with high ambiguity score (no clar
 test('isShortChitchatPrompt: Hola is chitchat, a real request is not', () => {
   assert.equal(isShortChitchatPrompt('Hola'), true);
   assert.equal(isShortChitchatPrompt('hola'), true);
+  assert.equal(isShortChitchatPrompt('hola!'), true);
   assert.equal(isShortChitchatPrompt('hola necesito el reporte'), false);
   assert.equal(isShortChitchatPrompt(''), false);
 });
