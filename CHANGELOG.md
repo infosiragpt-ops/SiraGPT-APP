@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode Phase 1: native coding-agent core at `backend/src/services/sira-code/`
+  (independent rewrite inspired by anomalyco/opencode, MIT — not affiliated).
+  `/api/opencode` now serves sessions natively (create, prompt, SSE, switch
+  agent, cancel). Agents: Construir (write+bash) and Planificar (read-only;
+  bash asks permission). `/agentes` composer has a Construir | Planificar
+  tab. OPENCODE_SERVER_URL sidecar stays off. No F7 enable, no `/code` revival.
+
 - SiraComputer F7.2 (IN_PROGRESS — waiting on CI frontend + desktop-f71 +
   desktop-f72): full Desktop
   Control Plane on `127.0.0.1:9000` (click/type/scroll/launch/navigate/exec/

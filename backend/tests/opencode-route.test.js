@@ -1,17 +1,17 @@
 'use strict';
 
 /**
- * Tests for /api/opencode/* — the bridge to the OpenCode engine.
- * Auth is stubbed via the require cache; the upstream engine is simulated by
- * stubbing global fetch. No network, no Bun, no running server.
+ * Tests for /api/opencode/* — native SiraCode engine.
+ * Auth is stubbed via the require cache. No network, no Bun, no sidecar.
  */
 
-const { test, after, beforeEach, afterEach } = require('node:test');
+const { test, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
 const request = require('supertest');
 
 const { mockResolvedModule } = require('./http-test-utils');
+const siraCode = require('../src/services/sira-code');
 
 const authPath = require.resolve('../src/middleware/auth');
 const restoreAuth = mockResolvedModule(authPath, {
@@ -19,91 +19,135 @@ const restoreAuth = mockResolvedModule(authPath, {
 });
 
 const opencodeRoutes = require('../src/routes/opencode');
-after(() => restoreAuth());
+after(() => {
+  restoreAuth();
+  siraCode._resetForTests();
+});
 
-function buildApp() {
+function buildApp(llmTurn) {
   const app = express();
   app.use(express.json());
+  if (llmTurn) app.set('siraCodeLlmTurn', llmTurn);
   app.use('/api/opencode', opencodeRoutes);
   return app;
 }
 
-const URL_ENV = 'OPENCODE_SERVER_URL';
-let savedUrl;
-let savedFetch;
-
-beforeEach(() => { savedUrl = process.env[URL_ENV]; savedFetch = globalThis.fetch; });
-afterEach(() => {
-  if (savedUrl === undefined) delete process.env[URL_ENV];
-  else process.env[URL_ENV] = savedUrl;
-  globalThis.fetch = savedFetch;
+beforeEach(() => {
+  siraCode._resetForTests();
 });
 
-function stubFetch(body = {}) {
-  const calls = [];
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url, init });
-    return { ok: true, status: 200, json: async () => body };
-  };
-  return calls;
-}
-
-test('GET /health reports unconfigured without a server URL', async () => {
-  delete process.env[URL_ENV];
+test('GET /health reports the native SiraCode engine without a sidecar URL', async () => {
+  delete process.env.OPENCODE_SERVER_URL;
   const res = await request(buildApp()).get('/api/opencode/health');
   assert.equal(res.status, 200);
-  assert.equal(res.body.configured, false);
+  assert.equal(res.body.configured, true);
+  assert.equal(res.body.native, true);
+  assert.equal(res.body.engine, 'sira-code');
   assert.equal(res.body.baseUrl, null);
+  assert.equal(res.body.sidecar, false);
 });
 
-test('GET /health reports the baseUrl when configured', async () => {
-  process.env[URL_ENV] = 'http://127.0.0.1:4096';
+test('GET /health ignores OPENCODE_SERVER_URL by default', async () => {
+  process.env.OPENCODE_SERVER_URL = 'http://127.0.0.1:4096';
   const res = await request(buildApp()).get('/api/opencode/health');
   assert.equal(res.body.configured, true);
-  assert.equal(res.body.baseUrl, 'http://127.0.0.1:4096');
+  assert.equal(res.body.baseUrl, null);
+  assert.ok(!JSON.stringify(res.body).includes('4096'));
 });
 
-test('POST /session returns 503 when the engine is not configured', async () => {
-  delete process.env[URL_ENV];
-  const res = await request(buildApp()).post('/api/opencode/session').send({});
-  assert.equal(res.status, 503);
-  assert.equal(res.body.error, 'opencode_not_configured');
-});
-
-test('POST /session forwards to the engine when configured', async () => {
-  process.env[URL_ENV] = 'http://127.0.0.1:4096';
-  const calls = stubFetch({ id: 'sess-1' });
+test('POST /session creates a native construir session', async () => {
   const res = await request(buildApp()).post('/api/opencode/session').send({});
   assert.equal(res.status, 200);
-  assert.deepEqual(res.body.session, { id: 'sess-1' });
-  assert.equal(calls[0].url, 'http://127.0.0.1:4096/session');
-  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(res.body.session.agent, 'construir');
+  assert.equal(res.body.session.agentLabel, 'Construir');
+  assert.match(res.body.session.id, /^sc_/);
+});
+
+test('POST /session accepts planificar', async () => {
+  const res = await request(buildApp()).post('/api/opencode/session').send({ agent: 'planificar' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.session.agent, 'planificar');
 });
 
 test('POST /session/:id/prompt validates that text is present', async () => {
-  process.env[URL_ENV] = 'http://127.0.0.1:4096';
-  const res = await request(buildApp()).post('/api/opencode/session/s1/prompt').send({});
+  const created = await request(buildApp()).post('/api/opencode/session').send({});
+  const res = await request(buildApp()).post(`/api/opencode/session/${created.body.session.id}/prompt`).send({});
   assert.equal(res.status, 400);
   assert.equal(res.body.error, 'validation_failed');
 });
 
-test('POST /session/:id/abort forwards the abort to the engine', async () => {
-  process.env[URL_ENV] = 'http://127.0.0.1:4096';
-  const calls = stubFetch({ ok: true });
-  const res = await request(buildApp()).post('/api/opencode/session/s1/abort').send({});
+test('POST /session/:id/prompt runs the native loop', async () => {
+  const app = buildApp(async () => ({ text: 'Listo.', toolCalls: [] }));
+  const created = await request(app).post('/api/opencode/session').send({});
+  const res = await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/prompt`)
+    .send({ text: 'hola' });
   assert.equal(res.status, 200);
-  assert.equal(res.body.ok, true);
-  assert.equal(calls[0].url, 'http://127.0.0.1:4096/session/s1/abort');
-  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(res.body.result.text, 'Listo.');
+  assert.ok(!JSON.stringify(res.body).includes('DeepSeek'));
+  assert.ok(!JSON.stringify(res.body).includes('OpenRouter'));
+  assert.ok(!JSON.stringify(res.body).includes('model_id'));
 });
 
-test('POST /session/:id/prompt forwards the prompt to the engine', async () => {
-  process.env[URL_ENV] = 'http://127.0.0.1:4096';
-  const calls = stubFetch({ id: 'msg-1' });
-  const res = await request(buildApp()).post('/api/opencode/session/s1/prompt').send({ text: 'hola' });
+test('POST /session/:id/agent switches to planificar', async () => {
+  const created = await request(buildApp()).post('/api/opencode/session').send({});
+  const res = await request(buildApp())
+    .post(`/api/opencode/session/${created.body.session.id}/agent`)
+    .send({ agent: 'planificar' });
   assert.equal(res.status, 200);
-  assert.equal(calls[0].url, 'http://127.0.0.1:4096/session/s1/message');
-  assert.deepEqual(JSON.parse(calls[0].init.body).parts, [{ type: 'text', text: 'hola' }]);
+  assert.equal(res.body.session.agent, 'planificar');
+});
+
+test('POST /session/:id/abort cancels the session', async () => {
+  const created = await request(buildApp()).post('/api/opencode/session').send({});
+  const res = await request(buildApp()).post(`/api/opencode/session/${created.body.session.id}/abort`).send({});
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+});
+
+test('planificar prompt cannot write via the HTTP API', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'write', arguments: { path: 'x.txt', content: 'nope' } }] };
+    }
+    return { text: 'Plan.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'planificar' });
+  const res = await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/prompt`)
+    .send({ text: 'escribe' });
+  assert.equal(res.status, 200);
+  const write = res.body.result.toolResults.find((t) => t.tool === 'write');
+  assert.equal(write.ok, false);
+  assert.equal(write.code, 'permission_denied');
+});
+
+test('GET /events streams SSE and abort emits Cancelado', async () => {
+  const app = buildApp();
+  const created = await request(app).post('/api/opencode/session').send({});
+  const id = created.body.session.id;
+  const stream = request(app)
+    .get(`/api/opencode/events?sessionId=${id}`)
+    .set('Accept', 'text/event-stream')
+    .buffer(true)
+    .parse((res, cb) => {
+      let data = '';
+      res.on('data', (c) => { data += c.toString(); });
+      res.on('end', () => cb(null, data));
+    });
+
+  await new Promise((r) => setTimeout(r, 40));
+  await request(app).post(`/api/opencode/session/${id}/abort`).send({});
+  setTimeout(() => stream.abort(), 80);
+  try {
+    const res = await stream;
+    const body = String(res.body || res.text || '');
+    assert.match(body, /Cancelado|cancelled/);
+  } catch (err) {
+    if (err.code !== 'ECONNRESET' && err.code !== 'ABORTED') throw err;
+  }
 });
 
 test('upstreamFail returns a generic 502 and never leaks the raw upstream message', () => {

@@ -4,17 +4,16 @@ import { authenticatedFetch } from "../authenticated-fetch"
 import { fetchResumeHeaders, persistLastEventId, readLastEventId } from "../sse-client"
 
 /**
- * Frontend client for /api/opencode — siraGPT's bridge to the OpenCode engine
- * (vendor/opencode, run as a Bun sidecar). Mirrors lib/builder/intake-service:
- * localStorage JWT, credentials:include, thin fetch wrappers.
- *
- * The engine is optional: `health()` reports whether it's configured so the UI
- * can show an "engine offline" state instead of erroring.
+ * Frontend client for /api/opencode — SiraCode native engine.
+ * Independent rewrite inspired by OpenCode; not a Bun sidecar.
  */
 
 export interface OpencodeHealth {
   ok: boolean
   configured: boolean
+  native?: boolean
+  engine?: string
+  sidecar?: boolean
   baseUrl: string | null
 }
 
@@ -60,7 +59,7 @@ export const opencodeService = {
     return handle<OpencodeHealth>(res)
   },
 
-  /** Create an agent session on the engine. */
+  /** Create a SiraCode session (construir | planificar). */
   async createSession(seed: OpencodeSession = {}): Promise<OpencodeSession> {
     const res = await authenticatedFetch(`${baseUrl}/session`, {
       method: "POST",
@@ -72,16 +71,28 @@ export const opencodeService = {
     return json.session
   },
 
-  /** Send a text prompt to a session. Returns the engine's response object. */
-  async prompt(sessionId: string, text: string): Promise<unknown> {
+  /** Send a text prompt to a session. The picker model is forwarded, not displayed. */
+  async prompt(sessionId: string, text: string, opts: { model?: string; agent?: string } = {}): Promise<unknown> {
     const res = await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, model: opts.model, agent: opts.agent }),
     })
     const json = await handle<{ result: unknown }>(res)
     return json.result
+  },
+
+  /** Switch Construir / Planificar on an existing session. */
+  async switchAgent(sessionId: string, agent: string): Promise<OpencodeSession> {
+    const res = await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/agent`, {
+      method: "POST",
+      credentials: "include",
+      headers: authHeaders(),
+      body: JSON.stringify({ agent }),
+    })
+    const json = await handle<{ session: OpencodeSession }>(res)
+    return json.session
   },
 
   /** Stop an in-flight OpenCode session so Detener actually halts engine writes. */
@@ -132,7 +143,7 @@ export const opencodeService = {
         // not configured; 502 = runner sidecar unreachable).
         const friendly =
           body.error === "opencode_not_configured"
-            ? "El motor de código no está configurado (OPENCODE_SERVER_URL). Levanta el stack con `docker compose --profile opencode up` para usar ▶ Ejecutar."
+            ? "El motor de código no está disponible ahora. Inténtalo de nuevo."
             : body.message || body.error || `HTTP ${res.status}`
         return { error: friendly }
       }
