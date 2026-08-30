@@ -22,6 +22,7 @@ describe("recover persisted generate turn", () => {
   it("recovers Cloudflare 520 and failed-to-fetch cuts", () => {
     assert.equal(shouldRecoverPersistedGenerate({ status: 520, message: "error code: 520" }), true)
     assert.equal(shouldRecoverPersistedGenerate({ name: "TypeError", message: "Failed to fetch" }), true)
+    assert.equal(shouldRecoverPersistedGenerate({ code: "stream_stall", message: "Stream stalled" }), true)
     assert.equal(shouldRecoverPersistedGenerate({ status: 429, message: "quota" }), false)
   })
 

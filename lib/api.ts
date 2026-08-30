@@ -1,5 +1,13 @@
 // Frontend API client for backend integration
 import { fetchResumeHeaders, streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
+import {
+  GENERATE_STREAM_CONNECT_MS,
+  GENERATE_STREAM_IDLE_MS,
+  createGenerateStreamStallError,
+  isGenerateStreamStall,
+  readWithIdle,
+  withTimeout,
+} from "./sse-idle"
 import { sanitizeFetchHeaders } from "./fetch-sanitize"
 import {
   authenticatedFetch,
@@ -1758,10 +1766,18 @@ class ApiClient {
         // Leftover: fresh POST must not send Last-Event-ID (would resume a prior turn).
         const extraHeaders = attempt === 1 ? freshGenerateHeaders() : fetchResumeHeaders(lastEventId);
         for (const [key, value] of Object.entries(extraHeaders)) requestHeaders.set(key, value);
-        const response = await this.authenticatedFetch(url, {
-          ...baseConfig,
-          headers: requestHeaders,
-        });
+        const response = await withTimeout(
+          (connectSignal) => this.authenticatedFetch(url, {
+            ...baseConfig,
+            headers: requestHeaders,
+            signal: connectSignal,
+          }),
+          {
+            ms: GENERATE_STREAM_CONNECT_MS,
+            signal,
+            createError: () => createGenerateStreamStallError("connect"),
+          },
+        );
         if (signal?.aborted) { onError(new Error('Request aborted')); return; }
 
         if (!response.ok) {
@@ -1854,7 +1870,19 @@ class ApiClient {
         while (true) {
           if (signal?.aborted) { reader.cancel(); throw new Error('Request aborted'); }
 
-          const { done, value } = await reader.read();
+          let done: boolean
+          let value: Uint8Array | undefined
+          try {
+            ({ done, value } = await readWithIdle(() => reader.read(), {
+              idleMs: GENERATE_STREAM_IDLE_MS,
+              signal,
+            }))
+          } catch (idleErr: any) {
+            if (isGenerateStreamStall(idleErr)) {
+              try { reader.cancel() } catch { /* already closed */ }
+            }
+            throw idleErr
+          }
           if (done) {
             flushBatch();
             if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
@@ -2076,7 +2104,8 @@ class ApiClient {
         const isBrowserAbort = error?.name === 'AbortError';
         const isNetworkError = isBrowserAbort
           || error?.name === 'TypeError'
-          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520/i.test(error?.message || '');
+          || isGenerateStreamStall(error)
+          || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
         const canResume = Boolean(lastEventId);
         if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);
