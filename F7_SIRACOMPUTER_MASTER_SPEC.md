@@ -139,7 +139,7 @@ Do not add `computer.siragpt.com`. Do not change DNS.
 Login / captcha handoff already exists on the live orch
 (`backend/src/services/computer/login-handoff.js`). The SiraComputer
 handoff **FSM** (pause CU-loop, yield the desktop to the member, resume)
-is F7.5. F7.0 does not implement or replace it.
+is F7.4. F7.0 does not implement or replace it.
 
 ---
 
@@ -239,9 +239,45 @@ desktop. Abort is never reported as success.
 
 ### 8.5 Out of scope (do not start in F7.3)
 
-Handoff FSM (`handoff-fsm.js`) · network policy · LocalGvisor `runsc`
-flags · Prisma `DesktopSession` · replacing the live computer
-orchestrator.
+Handoff FSM (`handoff-fsm.js`) landed in F7.4. Network policy ·
+LocalGvisor `runsc` flags · Prisma `DesktopSession` · replacing the
+live computer orchestrator remain later.
+
+---
+
+## 11. Handoff / takeover FSM (F7.4)
+
+This is the **hard leak gate** before SiraComputer is exposed to users.
+Screen and web content are DATA. The model never sees credentials.
+
+```
+AGENT_CONTROL → HANDOFF_REQUESTED → HUMAN_CONTROL → RESUMING → AGENT_CONTROL
+```
+
+- `handoff-fsm.js` is in-memory (Prisma `HandoffEvent` is optional; not
+  required for the unit gate). No Drizzle.
+- Events: `handoff_requested` / `granted` / `returned` / `timeout`.
+- The member may **force takeover** (`grant`) from `AGENT_CONTROL`.
+- On `HUMAN_CONTROL`: every agent DCP action (`/click` `/type` `/key` …)
+  returns **423 Locked**. Screenshots to the LLM are paused or masked.
+  `looksLikeSecret` still blocks `type`. Password field values are not
+  logged.
+- On `handoff_returned`: one **new** screenshot; the CU-loop continues;
+  secrets are not re-typed.
+- Abort / timeout **pause** the task. They never declare success.
+- REST sketched at `POST /api/desktop/session/:id/handoff`
+  `{action: grant|return|request, reason?}`.
+- SSE `handoff_*` rides the existing generate/trace stage channel.
+  Do not rewrite F3.
+- UI (Spanish): `HandoffBanner` + toggle «El agente controla ↔ Tú
+  controlas». Overlay: «El agente no verá lo que escribas».
+  `viewOnly=false` only while `HUMAN_CONTROL`.
+- Do not couple to one LLM. Do not print `model_id` / DeepSeek /
+  OpenRouter in the UI.
+- Do not replace the live computer orchestrator.
+
+F7.4 green is **not** a license to expose SiraComputer to every user.
+F7.5 (egress allowlist) is still required. F7 itself stays IN_PROGRESS.
 
 ---
 
@@ -253,14 +289,40 @@ orchestrator.
 | **F7.1** | `E2BDesktopProvider` real + in-memory `DesktopSessionManager` warm pool. acquire() p50 < 800 ms when pool is warm. Frontend never shows the generic provision error while starting or when pool>0. | **COMPLETED** (unit gate) | §22.1 provision (unit) |
 | **F7.2** | Full DCP + authenticated same-origin WS proxy + DesktopScreen first frame | **COMPLETED** (merged #488) | §22.2 |
 | **F7.3** | `computer_*` / `computer` tool + Anthropic/OpenAI/Gemini → SiraAction + CU-loop (vision, grounding, verification, budget, AbortSignal) | **COMPLETED** (CI desktop-f73) | §22.3 |
-| F7.4 | Handoff FSM (beyond DCP input_mode / `request_handoff` action) | no | pause / yield / resume |
-| F7.5 | — reserved; do not start | no | — |
+| **F7.4** | Handoff / takeover FSM (HARD leak gate) | **COMPLETED** (CI `desktop-f74`) | §22.4 |
+| F7.5 | Egress allowlist — do not start | no | — |
 | F7.6 | LocalGvisor full flags (`runsc`, `--network none`) | no | fail-closed like F5 `resolveSandboxRuntime` |
 | F7.7 | Prisma `DesktopSession` tables | no | migrate deploy |
 | F7.8 | Frontend panel rewrite | no | UI lock; no `model_id` / DeepSeek |
 
-F7.4–F7.8 detail will grow **in this file** when that sub-phase becomes
+F7.5–F7.8 detail will grow **in this file** when that sub-phase becomes
 active. Do not implement them early.
+
+### F7.4 row (normative)
+
+- Path: `backend/src/services/desktop/handoff-fsm.js` (in-memory).
+- States: `AGENT_CONTROL → HANDOFF_REQUESTED → HUMAN_CONTROL → RESUMING → AGENT_CONTROL`.
+- Events: `handoff_requested` / `handoff_granted` / `handoff_returned` / `handoff_timeout`.
+- Member can **force grant** without the agent asking.
+- DCP `input_mode=human` already 423s agent mutations (F7.2). Session
+  manager syncs DCP + FSM. CU-loop `waitForResume` on HUMAN_CONTROL.
+- During HUMAN_CONTROL: screenshots to the model are **paused**
+  (placeholder / mask). No live password form reaches the LLM.
+  `looksLikeSecret` stays. Do not log password field values.
+- After `handoff_returned`: one **new** screenshot; loop continues;
+  secrets are never re-typed.
+- REST: `POST /api/desktop/sessions/:id/handoff` and alias
+  `/api/desktop/session/:id/handoff` `{action: grant|return|request, reason?}`.
+- SSE: `handoff_*` on the existing generate/trace `type:'stage'` channel.
+- UI: `HandoffBanner` + toggle «El agente controla ↔ Tú controlas».
+  Overlay: «El agente no verá lo que escribas».
+  `DesktopScreen` `viewOnly=false` **only** in `HUMAN_CONTROL`.
+- Tests: `backend/tests/desktop-f7-handoff.test.js` — no Docker / no E2B.
+- CI job `desktop-f74` with `npm ci` (same as desktop-f71/f72/f73).
+- Kill switch `SIRAGPT_DESKTOP_ENABLED` fail-closed.
+- Out of scope: `network-policy.js`, `secrets/vault.js`, LocalGvisor
+  `runsc`, Prisma `DesktopSession`, replacing the live computer
+  orchestrator. F7.4 green ≠ expose to all users (F7.5 still required).
 
 ### F7.3 row (normative)
 
@@ -393,8 +455,24 @@ Always-on without Docker / E2B:
 5. Scripted “abre chromium y busca X” → `verifyGoal` ok / done.
 6. Abort (Detener) calls `release` / `destroy`; no leftover session.
 7. Kill switch unset/0 fails closed.
-8. No `handoff-fsm.js` / `network-policy.js`. Live E2B / Docker skip
-   honestly if a later test adds them.
+8. No `network-policy.js`. Live E2B / Docker skip honestly if a later
+   test adds them. `handoff-fsm.js` is F7.4.
+
+### 22.4 Handoff leak gate (F7.4)
+
+Always-on without Docker / E2B:
+
+1. FSM walks AGENT_CONTROL → HANDOFF_REQUESTED → HUMAN_CONTROL →
+   RESUMING → AGENT_CONTROL. Force `grant` is allowed.
+2. During HUMAN_CONTROL, POST DCP `/click` `/type` `/key` return **423**.
+   `executeComputer` returns locked and does not type.
+3. A mock LLM inspects every payload: no secret string, no unmasked
+   password screenshot. Screenshots are paused or `/mask`.
+4. After `handoff_returned` the CU-loop continues with a **new**
+   screenshot and does not re-type secrets.
+5. Abort / timeout → `ok:false`, never `done`.
+6. Kill switch unset/0 fails closed on `/handoff`.
+7. No `network-policy.js` / `secrets/vault.js`. No live E2B / Docker.
 
 ---
 

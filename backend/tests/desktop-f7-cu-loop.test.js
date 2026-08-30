@@ -11,7 +11,7 @@
  *   (e) "abre chromium y busca X" with a fake LLM → verified done;
  *   (f) Abort/Detener releases the session (destroy called);
  *   (g) kill switch fail-closed;
- *   (h) no F7.4+ files (handoff-fsm / network-policy);
+ *   (h) no F7.5+ files (network-policy);
  *   (i) source never names the live computer orchestrator hostname.
  *
  * Live E2B / Docker paths are skipped honestly if someone adds them later.
@@ -374,6 +374,7 @@ describe('F7.3 CU-loop', () => {
       chatId: 'chat-ho',
       sessionManager: mgr,
       env: enabledEnv(),
+      waitForHandoff: false,
       llm: scriptedLlm([
         { actions: [{ type: 'type', text: 'password: hunter2' }] },
         { actions: [{ type: 'request_handoff', reason: 'login' }] },
@@ -427,14 +428,13 @@ describe('F7.3 CU-loop', () => {
 });
 
 describe('F7.3 honesty / scope', () => {
-  test('F7.3(h): no F7.4+ files', () => {
+  test('F7.3(h): no F7.5+ files', () => {
     const desktopDir = path.join(__dirname, '../src/services/desktop');
     const runnerDir = path.join(__dirname, '../src/services/agent-runner');
     const names = [
       ...fs.readdirSync(desktopDir),
       ...fs.readdirSync(runnerDir),
     ];
-    assert.ok(!names.includes('handoff-fsm.js'));
     assert.ok(!names.includes('network-policy.js'));
     assert.ok(fs.existsSync(path.join(runnerDir, 'cu-loop.js')));
     assert.ok(fs.existsSync(path.join(runnerDir, 'tools.computer.js')));

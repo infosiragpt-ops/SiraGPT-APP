@@ -13,7 +13,7 @@ const {
   getDesktopSessionManager,
 } = require('../services/desktop/session-manager');
 const { DesktopProviderError } = require('../services/desktop/provider/DesktopProvider');
-const { isGenericProvisionError } = require('../services/desktop/desktop-errors');
+const { isGenericProvisionError, DESKTOP_DISABLED_ES } = require('../services/desktop/desktop-errors');
 const { attachDesktopWebSocketProxy } = require('../services/desktop/ws-proxy');
 
 const router = express.Router();
@@ -109,6 +109,34 @@ router.post('/sessions/:id/input_mode', authenticateToken, (req, res) => {
   }
 });
 
+function handleHandoff(req, res) {
+  try {
+    const mgr = getDesktopSessionManager();
+    if (!mgr.enabled()) {
+      return failDesktop(res, Object.assign(new Error(DESKTOP_DISABLED_ES), {
+        code: 'desktop_disabled',
+        status: 503,
+      }));
+    }
+    const rec = mgr.getRecord(req.params.id);
+    if (rec) assertSessionOwner(req, rec);
+    const action = req.body && req.body.action;
+    const reason = req.body && req.body.reason;
+    const lease = mgr.applyHandoff(req.params.id, action, { reason, actor: 'user' });
+    const fsm = mgr.getHandoff(req.params.id);
+    const last = fsm && fsm.events.length ? fsm.events[fsm.events.length - 1] : null;
+    return res.json({
+      ...lease,
+      event: last ? { type: last.type, at: last.at, reason: last.reason } : null,
+    });
+  } catch (err) {
+    return failDesktop(res, err);
+  }
+}
+
+router.post('/sessions/:id/handoff', authenticateToken, handleHandoff);
+router.post('/session/:id/handoff', authenticateToken, handleHandoff);
+
 function attachDesktopViewerProxy(server, opts = {}) {
   return attachDesktopWebSocketProxy(server, {
     getManager: () => getDesktopSessionManager(),
@@ -120,5 +148,6 @@ function attachDesktopViewerProxy(server, opts = {}) {
 
 module.exports = {
   router,
+  handleHandoff,
   attachDesktopWebSocketProxy: attachDesktopViewerProxy,
 };

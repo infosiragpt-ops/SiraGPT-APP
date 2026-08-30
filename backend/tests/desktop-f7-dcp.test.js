@@ -9,7 +9,7 @@
  *   (c) WS token rejected for the wrong user;
  *   (d) kill switch fail-closed; loopback-only upstream;
  *   (e) live computer orchestrator is still in the tree and not rerouted;
- *   (f) no F7.3+ files (cu-loop / tools.computer / handoff-fsm).
+ *   (f) no F7.5+ files (network-policy) in the desktop dir.
  *
  * Optional (skip honestly):
  *   (g) screenshot-diff inside a real sira-desktop container.
@@ -416,11 +416,11 @@ describe('F7.2 scope fences', () => {
     }
   });
 
-  test('F7.2(f): F7.3+ files are not started', () => {
+  test('F7.2(f): F7.5+ files are not started', () => {
     const desktopDir = path.join(__dirname, '../src/services/desktop');
     const names = fs.readdirSync(desktopDir);
     assert.ok(!names.includes('cu-loop.js'));
-    assert.ok(!names.includes('handoff-fsm.js'));
+    assert.ok(!names.includes('network-policy.js'));
     assert.ok(!names.includes('tools.computer.js'));
     const tools = fs.readFileSync(
       path.join(__dirname, '../src/services/agents/agent-tools.js'),

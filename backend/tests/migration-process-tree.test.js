@@ -107,13 +107,25 @@ test('timed-out Prisma command kills a stubborn descendant process', {
       DATABASE_URL: '',
       PRISMA_DATABASE_URL: '',
     },
-    timeoutMs: 150,
+    timeoutMs: 400,
     killGraceMs: 50,
     pipe: false,
   });
 
   assert.equal(result.migrationCode, MIGRATION_COMMAND_TIMEOUT_CODE);
   assert.equal(prismaCommandExitStatus(result), 124);
+  assert.equal(
+    await waitUntil(() => {
+      try {
+        const n = Number(fs.readFileSync(pidFile, 'utf8'));
+        return Number.isInteger(n) && n > 0;
+      } catch {
+        return false;
+      }
+    }, 1_000),
+    true,
+    'leader never wrote the descendant pid before timeout',
+  );
   descendantPid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.ok(Number.isInteger(descendantPid) && descendantPid > 0);
   assert.equal(

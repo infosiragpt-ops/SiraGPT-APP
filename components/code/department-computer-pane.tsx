@@ -18,6 +18,7 @@ import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { ComputerViewer } from "@/components/code/ComputerViewer"
 import { PensandoBars } from "@/components/pensando-bars"
 import { emitLoginHandoff } from "@/lib/computer-login-handoff"
+import { HandoffBanner, HandoffOverlay } from "@/components/desktop/HandoffBanner"
 
 function DesktopScreenLoading() {
   return (
@@ -129,6 +130,7 @@ type DesktopLease = {
   expiresAt?: string
   status?: string
   inputMode?: string
+  handoffState?: string
   fromPool?: boolean
 }
 
@@ -167,6 +169,39 @@ async function acquireDesktopLease(chatId: string): Promise<DesktopLease> {
     )
   }
   return body
+}
+
+async function postDesktopHandoff(sessionId: string, action: "grant" | "return" | "request") {
+  const res = await authenticatedFetch(`${computerApiBase()}/desktop/sessions/${encodeURIComponent(sessionId)}/handoff`, {
+    method: "POST",
+    credentials: "include",
+    headers: authHeaders(),
+    body: JSON.stringify({ action }),
+    signal: AbortSignal.timeout(12_000),
+  })
+  const body = await res.json().catch(() => ({})) as DesktopLease & { message?: string }
+  if (!res.ok) {
+    throw Object.assign(new Error(body.message || "No se pudo cambiar el control del escritorio."), {
+      status: res.status,
+      body,
+    })
+  }
+  return body
+}
+
+async function getDesktopSession(sessionId: string): Promise<DesktopLease | null> {
+  try {
+    const res = await authenticatedFetch(`${computerApiBase()}/desktop/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "GET",
+      credentials: "include",
+      headers: authHeaders(),
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) return null
+    return await res.json() as DesktopLease
+  } catch {
+    return null
+  }
 }
 
 function embedFrom(session: AgentSession): string {
@@ -378,6 +413,7 @@ export function DepartmentComputerPane({
 
   const attachUrl = bound || !chatId ? embedUrl : ""
   const hasLiveDesktop = Boolean(attachUrl || desktopLease)
+  const humanOwns = desktopLease?.handoffState === "HUMAN_CONTROL"
 
   React.useEffect(() => {
     if (!expanded) return
@@ -392,6 +428,35 @@ export function DepartmentComputerPane({
       window.removeEventListener("keydown", onKey)
     }
   }, [expanded])
+
+  React.useEffect(() => {
+    if (!desktopLease?.sessionId) return
+    let cancelled = false
+    const tick = async () => {
+      const next = await getDesktopSession(desktopLease.sessionId)
+      if (cancelled || !next) return
+      setDesktopLease((prev) => {
+        if (!prev || prev.sessionId !== next.sessionId) return prev
+        if (prev.handoffState === next.handoffState && prev.inputMode === next.inputMode) return prev
+        return { ...prev, ...next }
+      })
+    }
+    const id = window.setInterval(() => { void tick() }, 2500)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [desktopLease?.sessionId])
+
+  const applyHandoff = React.useCallback((action: "grant" | "return" | "request") => {
+    if (!desktopLease?.sessionId) return
+    void postDesktopHandoff(desktopLease.sessionId, action)
+      .then((next) => {
+        setDesktopLease((prev) => prev ? { ...prev, ...next } : next)
+        setStatusLine(action === "return" ? "En vivo" : "Tú controlas")
+      })
+      .catch(() => undefined)
+  }, [desktopLease?.sessionId])
 
   React.useEffect(() => {
     if (!onStatusChange) return
@@ -444,6 +509,14 @@ export function DepartmentComputerPane({
 
       <span className="sr-only" data-testid="chat-computer-isolation-gap" />
 
+      {desktopLease && !attachUrl ? (
+        <HandoffBanner
+          state={desktopLease.handoffState || "AGENT_CONTROL"}
+          onGrant={() => applyHandoff("grant")}
+          onReturn={() => applyHandoff("return")}
+        />
+      ) : null}
+
       {expanded ? (
         <div
           className="fixed inset-0 z-[80] bg-black/60"
@@ -462,6 +535,7 @@ export function DepartmentComputerPane({
         data-desktop-pool-warm={poolWarm}
         data-desktop-preparing={loading && !attachUrl ? "1" : "0"}
         data-desktop-first-frame={desktopLease && !attachUrl ? "1" : "0"}
+        data-desktop-handoff={desktopLease?.handoffState || ""}
         data-computer-expanded={expanded ? "1" : "0"}
       >
         <div
@@ -474,15 +548,18 @@ export function DepartmentComputerPane({
           {attachUrl ? (
             <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
           ) : desktopLease ? (
-            <DesktopScreen
-              key={desktopLease.sessionId}
-              sessionId={desktopLease.sessionId}
-              wsUrl={desktopLease.wsUrl}
-              viewerToken={desktopLease.viewerToken}
-              viewOnly={desktopLease.inputMode !== "human"}
-              className="absolute inset-0 h-full w-full min-h-0"
-              onFirstFrame={() => setStatusLine("En vivo")}
-            />
+            <>
+              <DesktopScreen
+                key={desktopLease.sessionId}
+                sessionId={desktopLease.sessionId}
+                wsUrl={desktopLease.wsUrl}
+                viewerToken={desktopLease.viewerToken}
+                viewOnly={!humanOwns}
+                className="absolute inset-0 h-full w-full min-h-0"
+                onFirstFrame={() => setStatusLine("En vivo")}
+              />
+              <HandoffOverlay active={humanOwns} />
+            </>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
               <div className="flex flex-col items-center gap-3">
