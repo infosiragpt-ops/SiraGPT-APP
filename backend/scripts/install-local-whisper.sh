@@ -108,6 +108,48 @@ register_dynamic_libs() {
   fi
 }
 
+# Alpine busybox `install` exits 1 when src and dest are the same file
+# (`cmake --install` already placed whisper-cli in BIN_DIR). GNU install
+# does the same. Skip the copy in that case; a missing dest still installs.
+same_file() {
+  src="${1:-}"
+  dest="${2:-}"
+  [ -n "${src}" ] && [ -n "${dest}" ] || return 1
+  [ "${src}" = "${dest}" ] && return 0
+
+  src_c=""
+  dest_c=""
+  if command -v realpath >/dev/null 2>&1; then
+    src_c=$(realpath "${src}" 2>/dev/null || true)
+    dest_c=$(realpath "${dest}" 2>/dev/null || true)
+  elif command -v readlink >/dev/null 2>&1; then
+    src_c=$(readlink -f "${src}" 2>/dev/null || true)
+    dest_c=$(readlink -f "${dest}" 2>/dev/null || true)
+  fi
+  if [ -n "${src_c}" ] && [ -n "${dest_c}" ] && [ "${src_c}" = "${dest_c}" ]; then
+    return 0
+  fi
+
+  if [ -e "${src}" ] && [ -e "${dest}" ]; then
+    if stat -c '%d:%i' "${src}" >/dev/null 2>&1; then
+      src_id=$(stat -c '%d:%i' "${src}")
+      dest_id=$(stat -c '%d:%i' "${dest}")
+      [ -n "${src_id}" ] && [ "${src_id}" = "${dest_id}" ] && return 0
+    fi
+  fi
+  return 1
+}
+
+install_cli() {
+  src="$1"
+  dest="$2"
+  if same_file "${src}" "${dest}"; then
+    echo "install-local-whisper: whisper-cli already at ${dest}; skipping same-file copy" >&2
+    return 0
+  fi
+  install -m 0755 "${src}" "${dest}"
+}
+
 rm -rf "${SRC_DIR}"
 git clone --depth 1 --branch "${REF}" https://github.com/ggerganov/whisper.cpp.git "${SRC_DIR}"
 # Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load
@@ -149,7 +191,12 @@ if [ -z "${CLI}" ]; then
   exit 1
 fi
 
-install -m 0755 "${CLI}" "${BIN_DIR}/whisper-cli"
+DEST="${BIN_DIR}/whisper-cli"
+install_cli "${CLI}" "${DEST}"
+if [ ! -x "${DEST}" ]; then
+  echo "install-local-whisper: whisper-cli missing at ${DEST} after install" >&2
+  exit 1
+fi
 copy_shared_libs
 register_dynamic_libs
 
