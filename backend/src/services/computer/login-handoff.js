@@ -92,6 +92,7 @@ const HAS_COMPUTER_POLICY_ES = [
   'POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):',
   '- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.',
   '- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.',
+  '- Cuando el usuario pide crear, editar o guardar un archivo en la computadora: usa computer_list_files, computer_read_file, computer_write_file y computer_edit_file sobre /workspace. NUNCA digas que no puedes editar archivos.',
   '- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.',
   '- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.',
 ].join('\n');

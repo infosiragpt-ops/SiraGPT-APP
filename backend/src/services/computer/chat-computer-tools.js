@@ -15,12 +15,17 @@ const { agentComputerEnabled } = require('./flags');
 const f7Flags = require('../agent-runner/multimodal/flags');
 const { COMPUTER_TOOL_DEFINITIONS, makeComputerExecutors } = require('../agent-runner/multimodal/computer');
 const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
+const { createWorkspaceFileApi } = require('./workspace-files');
 
 const COMPUTER_TOOL_NAMES = Object.freeze([
   'computer_screenshot',
   'computer_click',
   'computer_type',
   'computer_navigate',
+  'computer_list_files',
+  'computer_read_file',
+  'computer_write_file',
+  'computer_edit_file',
 ]);
 
 function shouldOfferComputerTools(env = process.env) {
@@ -113,6 +118,116 @@ function buildNavigateTool({ userId, conversationId, env }) {
   };
 }
 
+function failToResult(err) {
+  return {
+    ok: false,
+    error: (err && err.code) || 'computer_file_failed',
+    message: err && err.message ? String(err.message).slice(0, 240) : 'No se pudo editar el archivo en la computadora.',
+  };
+}
+
+function buildWorkspaceFileTools({ userId, conversationId, env, persistent } = {}) {
+  const files = createWorkspaceFileApi({ persistent });
+  const ctxOf = (args, ctx) => ({
+    userId: (ctx && ctx.userId) || userId,
+    conversationId: (ctx && ctx.chatId) || conversationId,
+    env: env || process.env,
+    signal: ctx && ctx.signal,
+    path: args.path || args.file_path || args.rel,
+    content: args.content || args.text || '',
+    old_string: args.old_string || args.oldString,
+    new_string: args.new_string || args.newString,
+  });
+  return [
+    {
+      name: 'computer_list_files',
+      description:
+        'Lista archivos y carpetas en /workspace de la computadora EN VIVO de ESTE chat. Úsala antes de editar.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Ruta relativa a /workspace. Vacío = raíz.' },
+        },
+        additionalProperties: false,
+      },
+      async execute(args = {}, ctx = {}) {
+        try {
+          return await files.listFiles(ctxOf(args, ctx));
+        } catch (err) {
+          return failToResult(err);
+        }
+      },
+    },
+    {
+      name: 'computer_read_file',
+      description:
+        'Lee un archivo de /workspace en la computadora EN VIVO de ESTE chat.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Ruta relativa a /workspace, p.ej. notas/todo.txt' },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      },
+      async execute(args = {}, ctx = {}) {
+        try {
+          return await files.readFile(ctxOf(args, ctx));
+        } catch (err) {
+          return failToResult(err);
+        }
+      },
+    },
+    {
+      name: 'computer_write_file',
+      description:
+        'Crea o sobrescribe un archivo en /workspace de la computadora EN VIVO de ESTE chat y lo abre en pantalla.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Ruta relativa a /workspace' },
+          content: { type: 'string', description: 'Contenido UTF-8 del archivo' },
+        },
+        required: ['path', 'content'],
+        additionalProperties: false,
+      },
+      async execute(args = {}, ctx = {}) {
+        try {
+          const out = await files.writeFile(ctxOf(args, ctx));
+          ctx.onEvent?.({ type: 'tool_output', tool: 'computer_write_file', ok: true, preview: `Escrito ${out.path}` });
+          return out;
+        } catch (err) {
+          return failToResult(err);
+        }
+      },
+    },
+    {
+      name: 'computer_edit_file',
+      description:
+        'Reemplaza un fragmento exacto en un archivo de /workspace de la computadora EN VIVO de ESTE chat.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          old_string: { type: 'string' },
+          new_string: { type: 'string' },
+        },
+        required: ['path', 'old_string', 'new_string'],
+        additionalProperties: false,
+      },
+      async execute(args = {}, ctx = {}) {
+        try {
+          const out = await files.editFile(ctxOf(args, ctx));
+          ctx.onEvent?.({ type: 'tool_output', tool: 'computer_edit_file', ok: true, preview: `Editado ${out.path}` });
+          return out;
+        } catch (err) {
+          return failToResult(err);
+        }
+      },
+    },
+  ];
+}
+
 function openaiDefToReactTool(def, executors, extras) {
   const fn = def && def.function ? def.function : def;
   const name = fn && fn.name;
@@ -147,6 +262,7 @@ function buildChatComputerTools({ userId, conversationId, env = process.env, ses
   });
   const tools = COMPUTER_TOOL_DEFINITIONS.map((def) => openaiDefToReactTool(def, built.executors, { userId, conversationId }));
   tools.push(buildNavigateTool({ userId, conversationId, env }));
+  tools.push(...buildWorkspaceFileTools({ userId, conversationId, env }));
   tools._cleanup = built.cleanup;
   return tools;
 }

@@ -128,12 +128,12 @@ describe("live computer-use · shopping prompt must not cop out", () => {
     assert.equal(isAgentComputerEnabled({}), false)
 
     const offered = chatComputer.offeredComputerToolNames(on)
-    for (const name of ["computer_screenshot", "computer_click", "computer_type", "computer_navigate"]) {
+    for (const name of ["computer_screenshot", "computer_click", "computer_type", "computer_navigate", "computer_list_files", "computer_read_file", "computer_write_file", "computer_edit_file"]) {
       assert.ok(offered.includes(name), name)
     }
     const tools = chatComputer.buildChatComputerTools({ env: on, userId: "u1" })
     const names = tools.map((t) => t.name)
-    for (const name of ["computer_screenshot", "computer_click", "computer_type", "computer_navigate"]) {
+    for (const name of ["computer_screenshot", "computer_click", "computer_type", "computer_navigate", "computer_list_files", "computer_read_file", "computer_write_file", "computer_edit_file"]) {
       assert.ok(names.includes(name), `buildChatComputerTools missing ${name}`)
     }
     const f7 = extraToolDefinitions({ env: { ...on, SIRAGPT_AGENT_VISION: "0", SIRAGPT_AGENT_VOICE: "0" } })
