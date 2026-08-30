@@ -30,7 +30,7 @@ export function shouldRecoverPersistedGenerate(
   if (error?.name === "AbortError") return true
 
   if (!Number.isFinite(status) || status === 0) {
-    return /failed to fetch|fetch failed|network|socket|ECONN|ETIMEDOUT|520|502|incomplete|empty model stream|stream ended|internal server error/i.test(text)
+    return /failed to fetch|fetch failed|network|socket|ECONN|ETIMEDOUT|520|502|incomplete|empty model stream|stream ended|stream stalled|stream connect timeout|stream_stall|internal server error/i.test(text)
   }
 
   return status === 408
