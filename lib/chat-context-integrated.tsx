@@ -1219,7 +1219,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         : {
             provider: catalogModel.provider,
             model: catalogModel.name,
-            reasoningEffort: lightweightTurn ? "low" : selectedEffort,
+            reasoningEffort: selectedEffort,
             ...(lightweightTurn ? { disableAgentic: true } : {}),
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
