@@ -11,7 +11,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
-import { aiService, buildProfessionalCapabilityPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
+import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
@@ -345,6 +345,17 @@ function createReasoningHandlers(opts: {
       if (payload.argsDelta) existing.args += payload.argsDelta
       toolCalls.set(payload.index, existing)
       patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
+    },
+    onUsage: (payload: { tokensIn: number; tokensOut: number; model?: string }) => {
+      if (isCancelled()) return
+      patchMessage({
+        generationUsage: {
+          tokensIn: payload.tokensIn,
+          tokensOut: payload.tokensOut,
+          total: payload.tokensIn + payload.tokensOut,
+          model: payload.model,
+        },
+      })
     },
   }
 }
@@ -1202,12 +1213,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       const requestedStreamId = typeof options?.streamId === 'string' && options.streamId.trim()
         ? options.streamId.trim()
         : safeUUID();
+      const lightweightTurn = isLightweightConversationalPrompt(content)
       const requestEnvelope: PendingAIRequestEnvelope = options?.requestEnvelope
         ? { ...options.requestEnvelope }
         : {
             provider: catalogModel.provider,
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
+            ...(lightweightTurn ? { disableAgentic: true } : {}),
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
               ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }

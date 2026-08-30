@@ -57,10 +57,12 @@ test('inferProviderFromModelId: Meta Muse Spark / Llama 4 vs Cerebras llama-3 an
   assert.equal(inferProviderFromModelId('meta-llama/llama-3.3-70b'), 'OpenRouter');
 });
 
-test('inferProviderFromModelId: bare grok ids go to xAI, slugs stay OpenRouter', () => {
+test('inferProviderFromModelId: grok ids including x-ai slugs go to xAI', () => {
   assert.equal(inferProviderFromModelId('grok-4'), 'xAI');
   assert.equal(inferProviderFromModelId('grok-2'), 'xAI');
-  assert.equal(inferProviderFromModelId('x-ai/grok-4'), 'OpenRouter');
+  assert.equal(inferProviderFromModelId('Grok 4.5'), 'xAI');
+  assert.equal(inferProviderFromModelId('x-ai/grok-4'), 'xAI');
+  assert.equal(inferProviderFromModelId('x-ai/grok-4.5'), 'xAI');
 });
 
 test('listKnownProviders includes Meta and xAI', () => {

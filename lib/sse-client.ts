@@ -67,6 +67,7 @@ export function isFirstPartyCatalogModel(model?: string | null): boolean {
   if (/claude/.test(lower) || lower.startsWith("anthropic/")) return true
   if (/kimi|moonshot/.test(lower)) return true
   if (/terra/.test(lower) || /gpt-5\.\d/.test(lower)) return true
+  if (/\bgrok\b/.test(lower) || lower.includes("x-ai/") || lower.includes("xai/")) return true
   if (bare === FLASH || bare === PRO) return true
   if (/^deepseek[-/_\s]?v?4[-/_\s]?(flash|pro)$/.test(bare)) return true
   return false

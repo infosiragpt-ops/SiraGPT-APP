@@ -117,10 +117,21 @@ function inferProviderFromModelId(modelId) {
   ) return 'Kimi';
   if (m.startsWith('openai/') && !m.includes('gpt-oss')) return 'OpenAI';
 
-  // 3) Leftover OpenRouter mixer prefixes only (not first-party families).
+  // 3) xAI Grok — including OpenRouter-style `x-ai/grok-*` slugs. The picker
+  //    label "Grok 4.5" must hit xAI, not the mixer and not DeepSeek.
+  if (
+    m.includes('x-ai/')
+    || m.includes('xai/')
+    || m === 'grok'
+    || m.startsWith('grok-')
+    || m.startsWith('grok_')
+    || /\bgrok\b/.test(m)
+  ) return 'xAI';
+
+  // 4) Leftover OpenRouter mixer prefixes only (not first-party families).
   if (
     m.startsWith('openrouter/')
-    || m.includes('x-ai/') || m.includes('meta-llama/') || m.includes('deepseek/')
+    || m.includes('meta-llama/') || m.includes('deepseek/')
     || m.includes('/gpt-oss') || m.includes('qwen/') || m.includes('mistralai/')
     || m.includes('z-ai/') || m.includes('cohere/') || m.includes('nousresearch/')
     || m.includes('openai/gpt-oss')
@@ -141,10 +152,7 @@ function inferProviderFromModelId(modelId) {
   //    FlashGPT ids stay Cerebras below; do not steal those.
   if (m.startsWith('muse-') || m.startsWith('llama-4')) return 'Meta';
 
-  // 8) xAI Grok direct (slug `x-ai/...` already → OpenRouter).
-  if (m === 'grok' || m.startsWith('grok-') || m.startsWith('grok_')) return 'xAI';
-
-  // 9) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
+  // 8) Cerebras / FlashGPT (free tier + cross-plan fallback). BARE ids only —
   //    the OpenRouter slug forms (`meta-llama/...`, `*/gpt-oss*`, `z-ai/...`)
   //    already matched above. The model served varies per deployment
   //    (gpt-oss-120b, llama-3.x, zai-glm-*) but all go through the Cerebras

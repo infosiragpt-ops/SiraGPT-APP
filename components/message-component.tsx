@@ -3349,6 +3349,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 stage={(message as any).progressStage || null}
                                 pct={(message as any).progressPct ?? null}
                                 steps={(message as any).agentSteps || (message as any).reasoningToolCalls || []}
+                                tokens={(message as any).generationUsage || null}
                             />
                         ) : (
                             <>

@@ -39,6 +39,15 @@ describe("user-selected model always wins", () => {
     assert.equal(clampDeepSeekModel(resolved.name), "sira-gpt-mini")
   })
 
+  it("keeps Grok 4.5 on xAI even if the leftover provider is DeepSeek", () => {
+    const grok = { name: "x-ai/grok-4.5", displayName: "Grok 4.5", provider: "OpenRouter" }
+    const resolved = resolveCatalogModel(grok.name, [grok], "DeepSeek")
+    assert.equal(resolved.name, "x-ai/grok-4.5")
+    assert.equal(resolved.provider, "xAI")
+    assert.equal(clampDeepSeekModel(resolved.name), "x-ai/grok-4.5")
+    assert.equal(brandModelLabel(grok), "Grok 4.5")
+  })
+
   it("does not fall back to Sira Rápido when a valid selection exists", () => {
     const resolved = resolveCatalogModel("sira-gpt-mini", catalog, "DeepSeek")
     assert.equal(resolved.replaced, false)

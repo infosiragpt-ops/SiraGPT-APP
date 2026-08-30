@@ -60,10 +60,19 @@ describe("chat catalog model", () => {
 
   it("keeps an OpenRouter pick even if that is the only catalog row", () => {
     assert.deepEqual(
-      resolveCatalogModel("moonshotai/kimi-k2.6", [
-        { name: "moonshotai/kimi-k2.6", provider: "OpenRouter" },
+      resolveCatalogModel("qwen/qwen-2.5-72b-instruct", [
+        { name: "qwen/qwen-2.5-72b-instruct", provider: "OpenRouter" },
       ], "OpenRouter"),
-      { name: "moonshotai/kimi-k2.6", provider: "OpenRouter", replaced: false },
+      { name: "qwen/qwen-2.5-72b-instruct", provider: "OpenRouter", replaced: false },
+    )
+  })
+
+  it("does not let OpenRouter steal Grok from xAI", () => {
+    assert.deepEqual(
+      resolveCatalogModel("x-ai/grok-4.5", [
+        { name: "x-ai/grok-4.5", provider: "OpenRouter" },
+      ], "DeepSeek"),
+      { name: "x-ai/grok-4.5", provider: "xAI", replaced: false },
     )
   })
 
