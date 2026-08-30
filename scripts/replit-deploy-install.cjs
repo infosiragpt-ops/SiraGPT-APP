@@ -86,7 +86,7 @@ async function main() {
   const reuseRoot = rootDependenciesReady();
   console.log(
     reuseRoot
-      ? '[replit-deploy-install] reusing hosting-installed root dependencies; installing backend production dependencies'
+      ? '[replit-deploy-install] reusing validated root dependencies; installing backend production dependencies'
       : '[replit-deploy-install] root dependencies missing; running root + backend installs in parallel',
   );
   const started = Date.now();

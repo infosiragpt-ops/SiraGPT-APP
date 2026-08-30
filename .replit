@@ -10,10 +10,9 @@ channel = "stable-25_05"
 
 [deployment]
 deploymentTarget = "gce"
-# Replit's GCE builder performs a root npm install before this command. Keep that
-# root tree so it is not duplicated in a second image layer. The installer
-# verifies the root build packages and falls back to npm ci if they are absent;
-# backend production dependencies are installed separately.
+# Keep package installation inside the custom build layer. The installer reuses
+# a valid workspace root tree when available and falls back to npm ci otherwise;
+# postbuild slimming removes root build dependencies before the image snapshot.
 #
 # MEMORY: the builder is an 8 GiB e2-standard-2. `next build` was intermittently
 # OOM-killed (SIGKILL, no error in the build log — it died right as next build
@@ -21,16 +20,17 @@ deploymentTarget = "gce"
 # native allocs + static-generation workers + OS. We pin NODE_OPTIONS=
 # --max-old-space-size=4096 here (explicit, so an external NODE_OPTIONS can't
 # bypass it) and enable experimental.webpackMemoryOptimizations in next.config.
-build = "rm -rf backend/node_modules .next && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 NODE_OPTIONS=--max-old-space-size=4096 npm run build"
+build = "rm -rf backend/node_modules .next SiraGPT-APP siraGPT && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 HUSKY=0 node scripts/replit-deploy-install.cjs && NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 REPLIT_DEPLOYMENT=1 NODE_OPTIONS=--max-old-space-size=4096 npm run build"
 # start-all waits 50s for both children after SIGTERM/SIGINT. Override with
 # SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS (clamped to 40000-120000ms / 40-120s).
 # Windows relays backend drain over IPC; process-tree force kill is deadline-only.
 run = "NEXT_PUBLIC_API_URL=/api BACKEND_INTERNAL_URL=http://localhost:5050 REPLIT_BACKEND_MODE=sidecar BACKEND_PORT=5050 FRONTEND_PORT=3000 SIRAGPT_PARENT_SHUTDOWN_TIMEOUT_MS=50000 REPLIT_DEPLOYMENT=1 npm start"
 
 [packager.features]
-# The GCE builder owns the root install. The custom installer validates and reuses
-# that tree, avoiding a duplicate multi-GB image layer while retaining a safe fallback.
-enabledForHosting = true
+# A separate hosting npm-install layer remains in the final image even after
+# postbuild cleanup. Disable it so temporary root build dependencies can be
+# removed inside the custom build layer before Replit snapshots the image.
+enabledForHosting = false
 
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix", "package.json"]
