@@ -31,11 +31,15 @@ for large dirs that survive the build and add them to the `junk` list in
 `scripts/postbuild-slim.js`. Both `libreoffice` and `playwright-driver` are
 heavy but load-bearing — cutting them breaks features, not the right lever.
 
+Use `.replitignore` as the first boundary for generated workspace trees. Exclude
+dependency directories, build output, caches, and duplicate project copies so
+Reserved VM's automatic install starts from a clean context instead of
+overlaying npm onto stale pnpm artifacts.
+
 **Layering note:** deletion does not reclaim a separate automatic hosting layer.
-Here the root dependency tree alone is too large to coexist with the required
-Nix and backend runtime layers, so automatic hosting installation must remain
-disabled. Install or reuse root build dependencies inside the custom build
-layer, then prune them before its final snapshot. Never trust a retained
-workspace tree from package presence alone: require the installed Next version
-to match the lockfile and a clean top-level `npm ls`; otherwise fall back to a
-clean install.
+Reserved VM may still run its automatic install even when the documented
+hosting flag is disabled. Keep the flag disabled, but rely on `.replitignore`
+to prevent local dependency trees entering that layer. Never trust a retained
+tree from package presence alone: require the installed Next version to match
+the lockfile and a clean top-level `npm ls`; otherwise fall back to a clean
+install.
