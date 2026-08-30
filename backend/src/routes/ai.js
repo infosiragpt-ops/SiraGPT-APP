@@ -5411,8 +5411,8 @@ router.post(
           try {
             const __effortOverride = reasoningOrchestrator.computeForEffort(req.body && req.body.reasoningEffort);
             if (__effortOverride && cognitiveDecision) {
-              const __trivial = cognitiveDecision.difficulty?.bucket === 'trivial';
-              if (__trivial) {
+              const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial';
+              if (__defaultMediumOnTrivial) {
                 console.log('[reasoning-effort] trivial turn kept on direct mode; Extra/Max skipped');
               } else {
                 cognitiveDecision.compute = __effortOverride;
