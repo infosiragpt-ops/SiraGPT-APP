@@ -149,7 +149,15 @@ if [ -z "${CLI}" ]; then
   exit 1
 fi
 
-install -m 0755 "${CLI}" "${BIN_DIR}/whisper-cli"
+# cmake --install may already have placed the binary at $BIN_DIR/whisper-cli.
+# BusyBox/GNU install refuse a same-file copy ("are the same file") and that
+# aborted the Lenovo publish of #499. Skip the copy when source == dest.
+dest="${BIN_DIR}/whisper-cli"
+if [ "${CLI}" = "${dest}" ]; then
+  echo "install-local-whisper: whisper-cli already at ${dest}; skipping copy" >&2
+else
+  install -m 0755 "${CLI}" "${dest}"
+fi
 copy_shared_libs
 register_dynamic_libs
 
