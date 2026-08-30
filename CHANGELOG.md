@@ -39,7 +39,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
-- Computer orchestrator image build no longer fails with `useradd: UID 1000
+- `hola` / saludos ya no entran a Extra/Max, thinking extendido ni al
+  bucle de SiraCode (Construir/Planificar), aunque esos toggles estén
+  activos. Respuesta directa, `disableAgentic`, sin test-time-compute.
+  Instrucciones permanentes en `AGENTS.md` (raíz; no sustituye `.agents/`).
+- Computer orchestrator image build no longer fails with `useradd: UID 1000`
   is not unique` on `node:22-bookworm` (that image already owns uid 1000).
   `compuser` is created by name; `docker exec -u compuser` is unchanged.
 - `/agentes` computer pane («Pantalla de Siragpt») no longer shows raw
