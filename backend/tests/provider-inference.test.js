@@ -37,7 +37,6 @@ test('inferProviderFromModelId: DeepSeek direct-API ids', () => {
 
 test('inferProviderFromModelId: leftover OpenRouter mixer prefixes only', () => {
   const cases = [
-    'x-ai/grok-4',
     'openrouter/auto',
     'meta-llama/llama-3.3-70b',
     'deepseek/deepseek-r1',
@@ -51,6 +50,8 @@ test('inferProviderFromModelId: leftover OpenRouter mixer prefixes only', () => 
     assert.equal(inferProviderFromModelId(id), 'OpenRouter', `expected OpenRouter for "${id}"`);
     assert.equal(inferProviderFromModelId(id.toUpperCase()), 'OpenRouter', `expected OpenRouter for "${id.toUpperCase()}"`);
   }
+  assert.equal(inferProviderFromModelId('x-ai/grok-4'), 'xAI');
+  assert.equal(inferProviderFromModelId('x-ai/grok-4.5'), 'xAI');
 });
 
 test('inferProviderFromModelId: Google Gemini family', () => {
