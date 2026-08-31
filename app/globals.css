@@ -6131,6 +6131,133 @@ footer {
   background-color: hsl(220 10% 94% / 0.82);
 }
 
+/* OpenClaw-style professional composer chips */
+.composer-permission-chip,
+.composer-effort-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 1.75rem;
+  max-width: min(42vw, 11rem);
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: hsl(220 10% 38%);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.composer-permission-chip:hover,
+.composer-effort-chip:hover,
+.composer-permission-chip[data-state="open"],
+.composer-effort-chip[data-state="open"] {
+  background: hsl(220 10% 94% / 0.9);
+}
+.composer-permission-chip.is-full {
+  color: #dc2626;
+}
+.composer-effort-chip.is-high {
+  color: hsl(220 12% 22%);
+}
+.composer-effort-caret {
+  font-size: 9px;
+  opacity: 0.55;
+}
+.composer-effort-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+.composer-effort-ring {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  border: 1px solid hsl(220 12% 84%);
+  background: transparent;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+.composer-effort-ring-meter {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 999px;
+  border: 1.5px solid hsl(220 10% 62%);
+  background:
+    conic-gradient(hsl(220 12% 22%) calc(var(--effort, 0) * 360deg), transparent 0);
+}
+.composer-permission-menu-kicker,
+.composer-effort-menu .effort-title {
+  padding: 0.15rem 0.4rem 0.4rem;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: hsl(220 8% 46%);
+}
+.composer-permission-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  width: 100%;
+  border-radius: 0.7rem;
+  padding: 0.55rem 0.55rem;
+  text-align: left;
+  color: inherit;
+}
+.composer-permission-row:hover,
+.composer-permission-row.is-selected {
+  background: hsl(220 14% 96%);
+}
+.composer-fast-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid hsl(220 12% 90%);
+}
+.composer-fast-switch {
+  width: 2.1rem;
+  height: 1.2rem;
+  border-radius: 999px;
+  border: 0;
+  background: hsl(220 10% 82%);
+  position: relative;
+  flex-shrink: 0;
+}
+.composer-fast-switch::after {
+  content: "";
+  position: absolute;
+  top: 0.12rem;
+  left: 0.12rem;
+  width: 0.96rem;
+  height: 0.96rem;
+  border-radius: 999px;
+  background: white;
+  transition: transform 140ms ease;
+}
+.composer-fast-switch.is-on {
+  background: #0d0d0d;
+}
+.composer-fast-switch.is-on::after {
+  transform: translateX(0.9rem);
+}
+.composer-input-row .composer-model-inline .chat-model-trigger {
+  min-height: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  padding-inline: 0.55rem;
+  border: 1px solid hsl(220 12% 86%);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.composer-input-row .composer-toolbar-actions {
+  gap: 0.2rem !important;
+}
+
 .composer-inline-active-tools {
   flex: 0 1 auto;
   align-self: flex-end;

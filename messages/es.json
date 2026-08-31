@@ -459,7 +459,7 @@
     "feedbackBad": "Respuesta poco útil"
   },
   "composer": {
-    "placeholderDefault": "¿Cómo puedo ayudarte hoy?",
+    "placeholderDefault": "Escribe un mensaje",
     "placeholderImage": "Describe la imagen que quieres crear",
     "placeholderVideo": "Describe el video que quieres crear",
     "placeholderWebSearch": "Busca en la web",

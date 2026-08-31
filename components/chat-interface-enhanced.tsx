@@ -140,6 +140,8 @@ import {
   ChatComposerPrimaryAction,
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
+import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
+import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
 import { SiraCodeAgentToggle } from "@/components/sira-code-agent-toggle"
 import {
   COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
@@ -3782,116 +3784,6 @@ const getNavbarModelSelectorChatSignature = (chat: any) => [
   chat?.project?._count?.documents,
 ].map((part) => String(part ?? "")).join("\u0001")
 
-// Reasoning-effort picker rendered at the bottom of the model dropdown.
-// The four stops mirror the backend contract exactly: reasoning-orchestrator's
-// EFFORT_ALIASES maps Bajo→low (direct pass), Medio→medium (extended),
-// Extra→high (extended+reflection) and Max→max (self-consistency ×3), so the
-// slider never offers a level the compute planner would ignore.
-const EFFORT_LEVELS = [
-  { value: "Bajo", caption: "Rápido y directo. Menos profundidad." },
-  { value: "Medio", caption: "Equilibrado. Ideal para el día a día." },
-  { value: "Extra", caption: "Más profundidad y reflexión. Más lento." },
-  { value: "Max", caption: "Máxima profundidad. Mayor costo y latencia." },
-] as const
-
-function EffortSection({ selectedEffort, setSelectedEffort }: {
-  selectedEffort: string
-  setSelectedEffort: (effort: string) => void
-}) {
-  const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((l) => l.value === selectedEffort))
-  const active = EFFORT_LEVELS[activeIndex]
-  const trackRef = React.useRef<HTMLDivElement | null>(null)
-  const draggingRef = React.useRef(false)
-  const moveTo = (index: number) => {
-    const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
-    if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
-  }
-  // Real dragging, not just stop-clicks: any x on the track maps to the
-  // nearest stop, and pointer capture keeps the drag alive even when the
-  // finger/cursor leaves the dropdown. Pointer events cover mouse + touch.
-  const indexFromPointer = (clientX: number) => {
-    const track = trackRef.current
-    if (!track) return activeIndex
-    const rect = track.getBoundingClientRect()
-    if (rect.width <= 0) return activeIndex
-    const fraction = (clientX - rect.left) / rect.width
-    return Math.round(Math.min(1, Math.max(0, fraction)) * (EFFORT_LEVELS.length - 1))
-  }
-  return (
-    <div className="effort-section" onClick={(e) => e.stopPropagation()}>
-      <div className="effort-header">
-        <span className="effort-title">Effort</span>
-        <span className="effort-value">{active.value}</span>
-      </div>
-      <div
-        ref={trackRef}
-        className="effort-track"
-        role="slider"
-        tabIndex={0}
-        aria-label="Nivel de esfuerzo de razonamiento"
-        aria-valuemin={0}
-        aria-valuemax={EFFORT_LEVELS.length - 1}
-        aria-valuenow={activeIndex}
-        aria-valuetext={active.value}
-        onPointerDown={(e) => {
-          // Primary button / touch only; capture so the drag survives leaving
-          // the track and the dropdown never sees these events as item picks.
-          if (e.button !== 0 && e.pointerType === "mouse") return
-          draggingRef.current = true
-          try { e.currentTarget.setPointerCapture(e.pointerId) } catch { /* older browsers */ }
-          moveTo(indexFromPointer(e.clientX))
-        }}
-        onPointerMove={(e) => {
-          if (!draggingRef.current) return
-          moveTo(indexFromPointer(e.clientX))
-        }}
-        onPointerUp={(e) => {
-          draggingRef.current = false
-          try { e.currentTarget.releasePointerCapture(e.pointerId) } catch { /* noop */ }
-        }}
-        onPointerCancel={() => { draggingRef.current = false }}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowRight" || e.key === "ArrowUp") { e.preventDefault(); moveTo(activeIndex + 1) }
-          else if (e.key === "ArrowLeft" || e.key === "ArrowDown") { e.preventDefault(); moveTo(activeIndex - 1) }
-          else if (e.key === "Home") { e.preventDefault(); moveTo(0) }
-          else if (e.key === "End") { e.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
-        }}
-      >
-        <div className="effort-track-line" aria-hidden />
-        <div
-          className="effort-track-fill"
-          aria-hidden
-          /* Width is the fraction of the span between first and last stop
-             centers (100% - stop size). That keeps the fill end exact on the
-             active dot instead of overshooting a full-track percentage. */
-          style={{
-            width:
-              activeIndex <= 0
-                ? "0px"
-                : `calc((100% - var(--effort-stop-size, 1.75rem)) * ${activeIndex / (EFFORT_LEVELS.length - 1)})`,
-          }}
-        />
-        {EFFORT_LEVELS.map((level, index) => (
-          <button
-            key={level.value}
-            type="button"
-            tabIndex={-1}
-            aria-hidden
-            title={level.value}
-            className={cn(
-              "effort-stop",
-              index <= activeIndex && "effort-stop-reached",
-              index === activeIndex && "effort-stop-active",
-            )}
-            onClick={() => moveTo(index)}
-          />
-        ))}
-      </div>
-      <p className="effort-caption">{active.caption}</p>
-    </div>
-  )
-}
-
 function areNavbarModelSelectorPropsEqual(prev: any, next: any) {
   return (
     prev.selectedModel === next.selectedModel &&
@@ -5105,12 +4997,6 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
             </div>
           )}
         </ScrollArea>
-        {typeof setSelectedEffort === "function" && (
-          <EffortSection
-            selectedEffort={selectedEffort}
-            setSelectedEffort={setSelectedEffort}
-          />
-        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -8210,6 +8096,7 @@ But first, you need to connect your Spotify account securely using the button be
       leading={
         <>
           <ActionsDropdown {...actionsDropdownProps} />
+          <ComposerPermissionMenu />
           {appPins.enabled && (
             <PinnedAppRail
               chips={pinnedAppChips}
@@ -8324,6 +8211,10 @@ But first, you need to connect your Spotify account securely using the button be
       toolbar={
         <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
           <ComposerCharCounter input={input} />
+          <ComposerEffortMenu
+            selectedEffort={selectedEffort}
+            setSelectedEffort={setSelectedEffort}
+          />
           {renderComposerModelControls()}
           {!isStopButtonVisible && (
             renderDictationButton()
