@@ -480,13 +480,21 @@ function isHandledAgenticChatResult(result) {
  *     into the prompt; the loop adds latency without adding capability).
  * Operators can restore agent-first behavior with SIRAGPT_AGENT_FIRST=1.
  */
-function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null, hasPriorArtifacts = false } = {}) {
+function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapabilities = null, hasPriorArtifacts = false, chip = null } = {}) {
   const text = String(prompt || '').trim();
   if (!text) return false;
-  if (SIMPLE_CHAT_PROMPT.test(text)) return false;
+  try {
+    const { routeTurn } = require('./turn-router');
+    const decision = routeTurn({ text: prompt, attachments: files, chip });
+    if (decision.trivial === true || decision.rule_id === 'R_TRIVIAL' || decision.rule_id === 'R_CHIP') {
+      return false;
+    }
+  } catch (_) { /* optional at load */ }
+  const hasFiles = Array.isArray(files) && files.length > 0;
+  if (SIMPLE_CHAT_PROMPT.test(text) && !hasFiles && !chip) return false;
   try {
     const { isTrivialChatTurn } = require('./trivial-turn');
-    if (isTrivialChatTurn(text)) return false;
+    if (isTrivialChatTurn(text, { attachments: files, chip })) return false;
   } catch (_) { /* optional at load */ }
   if (DIRECT_ONLY_PROMPT.test(text)) return false;
   try {

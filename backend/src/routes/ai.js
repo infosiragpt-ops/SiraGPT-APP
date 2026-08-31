@@ -5418,7 +5418,7 @@ router.post(
             if (__effortOverride && cognitiveDecision) {
               const __defaultMediumOnTrivial = cognitiveDecision.difficulty?.bucket === 'trivial'
                 || req._trivialTurn === true
-                || isTrivialChatTurn(prompt);
+                || (req._turnDecision ? req._turnDecision.trivial === true : isTrivialChatTurn(prompt));
               if (__defaultMediumOnTrivial) {
                 cognitiveDecision.compute = { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false };
                 console.log('[reasoning-effort] trivial turn kept on direct mode; Extra/Max skipped');
@@ -5494,7 +5494,9 @@ router.post(
             (intentTriageDecision && intentTriageDecision.reason === 'short_chitchat')
             || isShortChitchatPrompt(prompt)
           );
-          req._trivialTurn = req._trivialTurn === true || isTrivialChatTurn(prompt);
+          req._trivialTurn = req._turnDecision
+            ? req._turnDecision.trivial === true
+            : (req._trivialTurn === true || isTrivialChatTurn(prompt));
           if (req._trivialTurn) {
             req.body.disableAgentic = true;
             req._thinkingLevel = 'disabled';
@@ -6914,6 +6916,7 @@ router.post(
                 history: priorHistory,
                 files: processedFiles || [],
                 customGptCapabilities: customGpt ? (customGpt.capabilities || null) : null,
+                chip: req.body && (req.body.chip || req.body.modality || req.body.generationLane || req.body.lane),
               });
               let createDocRequested = false;
               try {
@@ -7214,8 +7217,12 @@ router.post(
               qualityGuard: true,
               skipDoneSentinel: true,
               reasoningSink: __reasoningSink,
-              maxOutputTokens: actualMaxOutputTokens,
+              maxOutputTokens: req._trivialTurn
+                ? Math.min(256, actualMaxOutputTokens || 256)
+                : actualMaxOutputTokens,
               thinkingLevel: req._thinkingLevel || undefined,
+              trivialTurn: req._trivialTurn === true,
+              toolChoice: req._trivialTurn === true ? 'none' : undefined,
             });
             // Annotate the span with tokensIn / tokensOut now that we
             // have a final completion. Best-effort: failures don't

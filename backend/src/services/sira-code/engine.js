@@ -68,6 +68,8 @@ async function prompt(id, text, opts = {}) {
     model: opts.model,
     maxSteps: opts.maxSteps,
     signal: opts.signal,
+    chip: opts.chip,
+    attachments: opts.attachments,
   });
   return sanitizePublicObject({
     ...result,

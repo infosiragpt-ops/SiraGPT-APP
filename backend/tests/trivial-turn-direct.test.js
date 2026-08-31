@@ -29,7 +29,8 @@ test('hola / Hola / hola! force direct non-agentic mode', () => {
     assert.equal(shouldStartSiraCodeRun(prompt), false, prompt);
   }
   assert.equal(isTrivialChatTurn('hola necesito el reporte'), false);
-  assert.equal(shouldStartSiraCodeRun('escribe app.py'), true);
+  assert.equal(shouldStartSiraCodeRun('escribe app.py'), false);
+  assert.equal(shouldStartSiraCodeRun('escribe app.py', { confirmedConstruir: true }), true);
 });
 
 test('trivial turns disable thinking and do not inject test-time-compute', () => {

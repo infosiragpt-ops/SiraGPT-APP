@@ -86,6 +86,8 @@ router.post(
         agent: req.body.agent,
         model: req.body.model,
         llmTurn: req.app.get('siraCodeLlmTurn'),
+        chip: req.body.chip || req.body.modality || req.body.generationLane || req.body.lane,
+        attachments: req.body.attachments || req.body.files,
       });
       return res.json({ result });
     } catch (err) {
