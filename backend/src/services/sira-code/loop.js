@@ -14,7 +14,7 @@ const { authorizeTool } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
-const { shouldStartSiraCodeRun } = require('../trivial-turn');
+const { shouldStartSiraCodeRun, routeTurn } = require('../trivial-turn');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -40,6 +40,8 @@ async function runPrompt(session, text, {
   model = '',
   maxSteps = MAX_STEPS_DEFAULT,
   signal,
+  chip,
+  attachments,
 } = {}) {
   const agent = getAgent(session.agentId);
   session.model = model || session.model;
@@ -54,14 +56,27 @@ async function runPrompt(session, text, {
   });
   appendEvent(session, 'message', { role: 'user', content: String(text || '') });
 
-  if (!shouldStartSiraCodeRun(text)) {
+  const routerSignals = {
+    toggleConstruir: session.agentId === 'construir',
+    togglePlanificar: session.agentId === 'planificar',
+    chip,
+    attachments,
+  };
+  const turnDecision = routeTurn({ text, ...routerSignals });
+  try {
+    console.log(`[turn-router] plane=${turnDecision.plane} rule_id=${turnDecision.rule_id}`);
+  } catch (_err) { /* internal trace only */ }
+
+  if (!shouldStartSiraCodeRun(text, routerSignals)) {
     session.status = 'idle';
     session.abort = null;
     stageEvent(session, 'done', { label: 'Listo' });
     return {
       status: 'idle',
       skipped: true,
-      reason: 'trivial_turn',
+      reason: turnDecision.trivial ? 'trivial_turn' : 'plane_gate',
+      plane: turnDecision.plane,
+      rule_id: turnDecision.rule_id,
       text: '',
       toolResults: [],
       parts: [],

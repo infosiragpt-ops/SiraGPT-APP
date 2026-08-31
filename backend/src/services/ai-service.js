@@ -552,7 +552,7 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined }) {
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -777,7 +777,8 @@ class AIService {
                     userPrompt,
                     fallback: currentThinkingLevel(),
                 });
-                if (isTrivialChatTurn(userPrompt) || String(turnThinkingLevel).toLowerCase() === 'disabled') {
+                const isTrivial = trivialTurn === true || isTrivialChatTurn(userPrompt);
+                if (isTrivial || String(turnThinkingLevel).toLowerCase() === 'disabled') {
                     extraPayload.reasoning = { exclude: true };
                     if (currentProvider === 'Anthropic') {
                         extraPayload.thinking = { type: 'disabled' };
@@ -789,12 +790,14 @@ class AIService {
                 // Custom GPTs / long-form trained deliverables may pass a higher
                 // maxOutputTokens so the model can finish a full chapter in one
                 // turn instead of stopping mid-outline. Still hard-capped by the
-                // model completion limit.
+                // model completion limit. Trivial §3.2 turns stay ≤256.
                 const requestedMax = Number(maxOutputTokens);
                 const modelCap = getCompletionLimit(currentRuntimeModel);
-                const effectiveMaxOutput = Number.isFinite(requestedMax) && requestedMax > 0
-                    ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
-                    : Math.min(modelCap, 16384);
+                const effectiveMaxOutput = isTrivial
+                    ? Math.min(256, modelCap || 256)
+                    : (Number.isFinite(requestedMax) && requestedMax > 0
+                        ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
+                        : Math.min(modelCap, 16384));
                 const providerPayload = buildProviderChatPayload({
                     provider: currentProvider,
                     model: currentRuntimeModel,
@@ -803,6 +806,8 @@ class AIService {
                     thinkingLevel: turnThinkingLevel,
                     extra: extraPayload,
                     maxOutputTokens: effectiveMaxOutput,
+                    tools: Array.isArray(tools) ? tools : [],
+                    toolChoice: isTrivial ? 'none' : toolChoice,
                 });
                 const payload = providerPayload.payload;
 
