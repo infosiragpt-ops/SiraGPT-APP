@@ -7988,7 +7988,7 @@ But first, you need to connect your Spotify account securely using the button be
           aria-label={isDictationTranscribing ? "Transcribiendo dictado" : isRecording ? "Detener dictado" : "Dictar al chat"}
           aria-pressed={isRecording}
           className={cn(
-            "relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
+            "composer-dictation-button relative h-9 w-9 rounded-full p-0 transition-all duration-fast ease-smooth active:scale-[0.96]",
             "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
             isRecording
               ? "bg-red-500/10 text-red-500 hover:bg-red-500/15 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
@@ -8096,7 +8096,7 @@ But first, you need to connect your Spotify account securely using the button be
       leading={
         <>
           <ActionsDropdown {...actionsDropdownProps} />
-          <ComposerPermissionMenu />
+          <ComposerPermissionMenu agentToggle={<SiraCodeAgentToggle />} />
           {appPins.enabled && (
             <PinnedAppRail
               chips={pinnedAppChips}
@@ -8216,9 +8216,7 @@ But first, you need to connect your Spotify account securely using the button be
             setSelectedEffort={setSelectedEffort}
           />
           {renderComposerModelControls()}
-          {!isStopButtonVisible && (
-            renderDictationButton()
-          )}
+          {renderDictationButton()}
           <ChatComposerPrimaryAction
             input={input}
             hasAttachment={uploadedFiles.length > 0}
@@ -8235,7 +8233,6 @@ But first, you need to connect your Spotify account securely using the button be
           />
         </div>
       }
-      agentToggle={<SiraCodeAgentToggle />}
       footer={
         hasActiveTools && !shouldInlineActiveTools ? (
           <div className="composer-footer-active-tools flex items-center gap-1.5 sm:gap-2 overflow-x-auto">

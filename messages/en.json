@@ -459,7 +459,7 @@
     "feedbackBad": "Unhelpful response"
   },
   "composer": {
-    "placeholderDefault": "How can I help you today?",
+    "placeholderDefault": "Message Assistant",
     "placeholderImage": "Describe the image you want to create",
     "placeholderVideo": "Describe the video you want to create",
     "placeholderWebSearch": "Search the web",

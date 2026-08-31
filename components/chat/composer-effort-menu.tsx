@@ -7,10 +7,10 @@ import { readComposerFastMode, writeComposerFastMode } from "@/lib/chat/composer
 import { cn } from "@/lib/utils"
 
 export const EFFORT_LEVELS = [
-  { value: "Bajo", caption: "Rápido y directo. Menos profundidad." },
-  { value: "Medio", caption: "Equilibrado. Ideal para el día a día." },
-  { value: "Extra", caption: "Más profundidad y reflexión. Más lento." },
-  { value: "Max", caption: "Máxima profundidad. Mayor costo y latencia." },
+  { value: "Bajo", label: "Bajo", caption: "Rápido y directo. Menos profundidad." },
+  { value: "Medio", label: "Medio", caption: "Equilibrado. Ideal para el día a día." },
+  { value: "Extra", label: "Extra high", caption: "Más profundidad y reflexión. Más lento." },
+  { value: "Max", label: "Max", caption: "Máxima profundidad. Mayor costo y latencia." },
 ] as const
 
 export function EffortSection({ selectedEffort, setSelectedEffort }: {
@@ -37,7 +37,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
     <div className="effort-section" onClick={(event) => event.stopPropagation()}>
       <div className="effort-header">
         <span className="effort-title">Esfuerzo</span>
-        <span className="effort-value">{active.value}</span>
+        <span className="effort-value">{active.label}</span>
       </div>
       <div
         ref={trackRef}
@@ -48,7 +48,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
         aria-valuemin={0}
         aria-valuemax={EFFORT_LEVELS.length - 1}
         aria-valuenow={activeIndex}
-        aria-valuetext={active.value}
+        aria-valuetext={active.label}
         onPointerDown={(event) => {
           if (event.button !== 0 && event.pointerType === "mouse") return
           draggingRef.current = true
@@ -88,7 +88,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
             type="button"
             tabIndex={-1}
             aria-hidden
-            title={level.value}
+            title={level.label}
             className={cn(
               "effort-stop",
               index <= activeIndex && "effort-stop-reached",
@@ -126,7 +126,7 @@ export function ComposerEffortMenu({
           <button
             type="button"
             aria-label="Esfuerzo de razonamiento"
-            title={`${active.value}${fast ? " · Modo rápido" : ""}`}
+            title={`${active.label}${fast ? " · Modo rápido" : ""}`}
             className="composer-effort-ring"
             data-testid="composer-effort-ring"
           >
@@ -137,11 +137,11 @@ export function ComposerEffortMenu({
           <button
             type="button"
             data-testid="composer-effort-chip"
-            aria-label={`Esfuerzo: ${active.value}`}
+            aria-label={`Esfuerzo: ${active.label}`}
             className={cn("composer-effort-chip", (active.value === "Extra" || active.value === "Max") && "is-high")}
           >
             <Zap className="h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
-            <span className="truncate">{active.value}</span>
+            <span className="truncate">{active.label}</span>
             <span aria-hidden className="composer-effort-caret">▾</span>
           </button>
         </PopoverTrigger>

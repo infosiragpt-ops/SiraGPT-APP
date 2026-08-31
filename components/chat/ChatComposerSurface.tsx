@@ -248,18 +248,16 @@ export function ChatComposerPrimaryAction({
       disabled={pendingStop && isCurrentChatStreaming}
       className={cn(
         "composer-stop-button h-9 w-9 rounded-full p-0 transition-all duration-200",
-        "bg-foreground text-white",
-        "shadow-[0_1px_2px_rgba(0,0,0,0.06),0_2px_6px_-2px_rgba(0,0,0,0.10)]",
-        "hover:bg-foreground/90 active:scale-[0.96]",
+        "active:scale-[0.96]",
         "disabled:opacity-70 disabled:cursor-not-allowed disabled:active:scale-100",
       )}
     >
       {pendingStop ? (
-        <ThinkingIndicator size="sm" className="h-[15px] w-[15px] text-white" />
+        <ThinkingIndicator size="sm" className="relative z-[1] h-[15px] w-[15px] text-red-600" />
       ) : (
         <span
           aria-hidden
-          className="composer-stop-icon block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white"
+          className="composer-stop-icon relative z-[1] block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-red-600"
         />
       )}
     </Button>

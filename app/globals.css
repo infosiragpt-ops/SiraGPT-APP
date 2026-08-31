@@ -471,8 +471,9 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   --chat-textarea-max-height: 200px;
   --chat-mobile-gutter: 1rem;
   /* Single source of truth for the readable conversation rail and composer.
-     --content-max (46rem) keeps messages + composer at ~65–75ch. */
-  --content-max: 46rem;
+     --content-max (48rem) matches the approved reference while keeping
+     messages + composer on one readable rail. */
+  --content-max: 48rem;
   --chat-content-max-width: var(--content-max);
   width: 100%;
   height: 100dvh;
@@ -5821,20 +5822,45 @@ footer {
 }
 .dark .canvas-ambient > * { position: relative; z-index: 1; }
 
-/* Stop control: black disc, pure white stop square (never inherits muted fg). */
+/* Stop keeps a 44px hit target while matching the compact 32px red reference. */
 .composer-stop-button {
-  color: #fff !important;
+  position: relative;
+  isolation: isolate;
+  order: 50;
+  color: #dc2626 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.composer-stop-button::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 0;
+  width: 2rem;
+  height: 2rem;
+  transform: translate(-50%, -50%);
+  border-radius: 999px;
+  background: #fee2e2;
+  transition: background-color 160ms ease-out, box-shadow 160ms ease-out;
+}
+.composer-stop-button:hover:not(:disabled)::before {
+  background: #fecaca;
+}
+.composer-stop-button:focus-visible {
+  outline: 2px solid hsl(0 72% 51% / 0.42);
+  outline-offset: 1px;
 }
 .composer-stop-button .composer-stop-icon {
-  background-color: #fff !important;
+  background-color: #dc2626 !important;
   box-shadow: none;
 }
 
 /* ─── Composer — quiet, minimal surface ──────────────────────────── */
 .composer-surface {
   isolation: isolate;
-  border: 1px solid hsl(220 10% 86% / 0.96);
-  border-radius: 1.75rem;
+  border: 1px solid hsl(220 10% 89% / 0.96);
+  border-radius: 1.25rem;
   background-color: hsl(0 0% 100%);
   box-shadow:
     0 1px 2px hsl(220 20% 12% / 0.035),
@@ -5884,13 +5910,13 @@ footer {
 }
 
 .composer-surface:hover {
-  border-color: hsl(220 10% 82% / 0.98);
+  border-color: hsl(220 10% 86% / 0.98);
 }
 
 .composer-surface:focus-within {
-  border-color: hsl(220 9% 72% / 0.98);
+  border-color: hsl(220 10% 84% / 0.98);
   box-shadow:
-    inset 0 0 0 1px hsl(220 9% 72% / 0.22),
+    inset 0 0 0 1px hsl(220 10% 80% / 0.12),
     0 1px 2px hsl(220 20% 12% / 0.04),
     0 10px 28px -20px hsl(220 24% 14% / 0.28);
 }
@@ -5989,8 +6015,8 @@ footer {
     "text text text"
     "leading leading actions";
   align-items: center;
-  row-gap: 0.55rem;
-  padding: 0.7rem 0.7rem 0.4rem 0.45rem !important;
+  row-gap: 1.05rem;
+  padding: 1rem 0.15rem 0.1rem 0.1rem !important;
 }
 
 .composer-surface[data-composer-layout="stacked"] .composer-input-row {
@@ -5998,8 +6024,8 @@ footer {
     "text text text"
     "leading leading actions";
   align-items: center;
-  row-gap: 0.55rem;
-  padding: 0.7rem 0.7rem 0.4rem 0.45rem !important;
+  row-gap: 1.05rem;
+  padding: 1rem 0.15rem 0.1rem 0.1rem !important;
 }
 
 .composer-surface[data-composer-stacked="true"] .composer-textarea-shell,
@@ -6022,7 +6048,7 @@ footer {
 .composer-surface[data-composer-stacked="true"] .composer-textarea-highlights,
 .composer-surface[data-composer-layout="stacked"] .composer-textarea-shell .composer-textarea,
 .composer-surface[data-composer-layout="stacked"] .composer-textarea-highlights {
-  padding: 0.1rem 0.35rem 0.45rem 0.55rem !important;
+  padding: 0.1rem 0.35rem 0.45rem 0.9rem !important;
 }
 
 .composer-surface[data-composer-stacked="true"] .composer-inline-active-tools,
@@ -6123,6 +6149,10 @@ footer {
   padding-inline: 0.5rem;
   background-color: transparent;
   box-shadow: none;
+  color: hsl(220 8% 46%);
+}
+.composer-input-row .composer-model-inline .chat-model-label {
+  font-weight: 400;
 }
 
 .composer-input-row .composer-model-inline .chat-model-trigger:hover,
@@ -6145,7 +6175,7 @@ footer {
   background: transparent;
   color: hsl(220 10% 38%);
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1;
   white-space: nowrap;
 }
@@ -6159,34 +6189,51 @@ footer {
   color: #dc2626;
 }
 .composer-effort-chip.is-high {
-  color: hsl(220 12% 22%);
+  color: hsl(220 8% 46%);
+}
+.composer-effort-chip.is-high svg {
+  color: #e89a96;
 }
 .composer-effort-caret {
   font-size: 9px;
   opacity: 0.55;
 }
 .composer-effort-cluster {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
+  display: contents;
 }
 .composer-effort-ring {
+  order: 10;
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 999px;
-  border: 1px solid hsl(220 12% 84%);
+  border: 0;
   background: transparent;
   padding: 0;
   display: grid;
   place-items: center;
 }
+.composer-model-inline {
+  order: 20;
+}
+.composer-effort-chip {
+  order: 30;
+}
+.composer-dictation-button {
+  order: 40;
+}
+.composer-send-button {
+  order: 50;
+}
 .composer-effort-ring-meter {
   width: 0.7rem;
   height: 0.7rem;
   border-radius: 999px;
-  border: 1.5px solid hsl(220 10% 62%);
+  border: 1.5px solid hsl(220 8% 66%);
   background:
-    conic-gradient(hsl(220 12% 22%) calc(var(--effort, 0) * 360deg), transparent 0);
+    conic-gradient(hsl(220 10% 38%) calc(var(--effort, 0) * 360deg), transparent 0);
+}
+.composer-dictation-button:not([aria-pressed="true"]) {
+  color: hsl(220 8% 64%) !important;
 }
 .composer-permission-menu-kicker,
 .composer-effort-menu .effort-title {
@@ -6196,6 +6243,14 @@ footer {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: hsl(220 8% 46%);
+}
+.composer-permission-agent-mode {
+  margin-top: 0.5rem;
+  padding-top: 0.65rem;
+  border-top: 1px solid hsl(220 12% 90%);
+}
+.composer-permission-agent-mode .composer-permission-menu-kicker {
+  padding-bottom: 0.5rem;
 }
 .composer-permission-row {
   display: flex;
@@ -6250,9 +6305,11 @@ footer {
   height: 1.75rem;
   border-radius: 999px;
   padding-inline: 0.55rem;
-  border: 1px solid hsl(220 12% 86%);
+  border: 1px solid transparent;
+  background-color: transparent;
+  box-shadow: none;
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 400;
 }
 .composer-input-row .composer-toolbar-actions {
   gap: 0.2rem !important;
@@ -6389,7 +6446,7 @@ footer {
   max-height: min(12.5rem, 42vh) !important;
   overflow-y: hidden;
   padding: 0.2rem 0.35rem 0.2rem 0.2rem !important;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   line-height: 1.5;
   vertical-align: top;
 }
@@ -6406,7 +6463,7 @@ footer {
   /* Must match .composer-textarea padding so caret/highlights stay locked. */
   padding: 0.2rem 0.35rem 0.2rem 0.2rem;
   color: hsl(var(--foreground));
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.5;
@@ -6584,7 +6641,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
 }
 @media (max-width: 640px) {
   .composer-surface {
-    border-radius: 1.75rem;
+    border-radius: 1.25rem;
   }
   .composer-input-row {
     column-gap: 0.3rem;
@@ -6673,6 +6730,14 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-input-row .composer-model-inline .chat-model-trigger[data-state="open"] {
   border-color: transparent;
   background-color: hsl(0 0% 100% / 0.08);
+}
+.dark .composer-input-row .composer-model-inline .chat-model-trigger,
+.dark .composer-effort-chip.is-high,
+.dark .composer-dictation-button:not([aria-pressed="true"]) {
+  color: hsl(216 14% 72%) !important;
+}
+.dark .composer-effort-chip.is-high svg {
+  color: #fca5a5;
 }
 
 /* ────────────────────────────────────────────────────────────

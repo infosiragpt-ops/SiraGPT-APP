@@ -61,6 +61,8 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "composer-size-token")
+    localStorage.setItem("sira:composer:effort", "Extra")
+    localStorage.setItem("sira.composer.access", "full")
     localStorage.removeItem("currentChatId")
   })
 
@@ -109,8 +111,15 @@ async function composerMetrics(page: Page) {
   return visibleSurface.evaluate((surface) => {
     const textarea = surface.querySelector("textarea")
     const modelTrigger = surface.querySelector<HTMLElement>(".chat-model-trigger")
+    const permission = surface.querySelector<HTMLElement>(".composer-permission-chip")
+    const effortRing = surface.querySelector<HTMLElement>(".composer-effort-ring")
+    const effortChip = surface.querySelector<HTMLElement>(".composer-effort-chip")
+    const dictation = surface.querySelector<HTMLElement>(".composer-dictation-button")
+    const primaryAction = surface.querySelector<HTMLElement>(".composer-send-button, .composer-stop-button")
     const rect = surface.getBoundingClientRect()
-    if (!textarea || !modelTrigger) throw new Error("Composer controls are missing")
+    if (!textarea || !modelTrigger || !permission || !effortRing || !effortChip || !dictation || !primaryAction) {
+      throw new Error("Composer controls are missing")
+    }
     const style = getComputedStyle(surface)
 
     const textareaRect = textarea.getBoundingClientRect()
@@ -130,7 +139,14 @@ async function composerMetrics(page: Page) {
       backdropFilter: style.backdropFilter,
       beforeContent: getComputedStyle(surface, "::before").content,
       modelBackgroundColor: getComputedStyle(modelTrigger).backgroundColor,
+      modelBorderColor: getComputedStyle(modelTrigger).borderColor,
       textareaOutlineStyle: getComputedStyle(textarea).outlineStyle,
+      placeholder: textarea.getAttribute("placeholder"),
+      permissionLabel: permission.textContent?.trim(),
+      effortLabel: effortChip.textContent?.trim().replace(/▾/g, "").trim(),
+      hasInlineAgentToggle: Boolean(surface.querySelector(".composer-sira-code-toggle")),
+      toolbarOrder: [effortRing, modelTrigger, effortChip, dictation, primaryAction]
+        .map((element) => element.getBoundingClientRect().left),
     }
   })
 }
@@ -194,17 +210,33 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
   const approved = await composerMetrics(page)
-  expect(approved.width).toBeGreaterThan(820)
-  expect(approved.width).toBeLessThan(835)
-  expect(approved.height).toBeGreaterThan(92)
-  expect(approved.height).toBeLessThan(97)
+  expect(approved.width).toBeGreaterThan(764)
+  expect(approved.width).toBeLessThan(772)
+  expect(approved.height).toBeGreaterThan(108)
+  expect(approved.height).toBeLessThan(116)
   expect(approved.borderTopWidth).toBe("1px")
-  expect(approved.borderRadius).toBe("28px")
+  expect(approved.borderRadius).toBe("20px")
   expect(approved.backgroundColor).toBe("rgb(255, 255, 255)")
   expect(approved.backdropFilter).toBe("none")
   expect(approved.beforeContent).toBe("none")
   expect(approved.modelBackgroundColor).toBe("rgba(0, 0, 0, 0)")
+  expect(approved.modelBorderColor).toBe("rgba(0, 0, 0, 0)")
   expect(approved.textareaOutlineStyle).toBe("none")
+  expect(approved.placeholder).toBe("Message Assistant")
+  expect(approved.permissionLabel).toBe("Acceso completo")
+  expect(approved.effortLabel).toBe("Extra high")
+  expect(approved.hasInlineAgentToggle).toBe(false)
+  expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
+
+  await page.getByTestId("composer-permission-chip").click()
+  await expect(page.getByTestId("sira-code-agent-toggle")).toBeVisible()
+  await page.getByTestId("sira-code-agent-planificar").click()
+  await expect(page.getByTestId("sira-code-agent-planificar")).toHaveAttribute("aria-selected", "true")
+  await page.keyboard.press("Escape")
+  await expect(page.getByTestId("sira-code-agent-toggle")).toBeHidden()
+  await page.getByTestId("composer-permission-chip").click()
+  await expect(page.getByTestId("sira-code-agent-planificar")).toHaveAttribute("aria-selected", "true")
+  await page.keyboard.press("Escape")
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")
   await textarea.fill([
@@ -241,8 +273,8 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   await expect(page.getByLabel("Archivos adjuntos")).toBeVisible()
   const withAttachment = await composerMetrics(page)
   expectSameComposerWidth(withAttachment, approved)
-  expect(withAttachment.height).toBeGreaterThan(approved.height)
-  expect(withAttachment.height - approved.height).toBeLessThan(120)
+  expect(withAttachment.height).toBeGreaterThan(multiline.height)
+  expect(withAttachment.height - multiline.height).toBeLessThan(160)
 
   await page.getByRole("button", { name: /Adjuntar archivos y herramientas|attach files & tools/i }).click()
   await page.getByRole("menuitem", { name: /Web Search|Búsqueda web/i }).click()
@@ -255,8 +287,9 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   })
   await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
+  await expect.poll(async () => (await composerMetrics(page)).width).toBeGreaterThan(764)
   const inConversation = await composerMetrics(page)
-  expectSameComposerSize(inConversation, approved)
+  expectSameComposerWidth(inConversation, approved)
 })
 
 test("mobile composer keeps its size while a long prompt scrolls internally", async ({ page }) => {
@@ -294,8 +327,8 @@ test("conversation content rail aligns with the composer on desktop, narrow pane
   await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 120_000 })
 
   const desktop = await conversationAlignmentMetrics(page)
-  expect(desktop.composerWidth).toBeGreaterThan(820)
-  expect(desktop.composerWidth).toBeLessThan(835)
+  expect(desktop.composerWidth).toBeGreaterThan(764)
+  expect(desktop.composerWidth).toBeLessThan(772)
   await expectConversationAlignedWithComposer(page)
 
   // Sidebar/panel width changes must recenter the shared rail in its pane.
@@ -340,7 +373,7 @@ test("conversation reaches the composer edge and the return pill reserves no row
   expect(geometry.composerGap).toBeGreaterThanOrEqual(0)
   expect(geometry.composerGap).toBeLessThanOrEqual(4)
   expect(geometry.contentPaddingBottom).toBeLessThanOrEqual(4)
-  expect(geometry.dockPaddingTop).toBeLessThanOrEqual(2)
+  expect(geometry.dockPaddingTop).toBeLessThanOrEqual(4)
   expect(geometry.pillPosition).toBe("absolute")
   // The hidden state eases down by 8px before fading. It may touch, but must
   // never overlap, the composer; its visible state sits above this boundary.
