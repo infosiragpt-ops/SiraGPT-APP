@@ -9,6 +9,7 @@ const {
   PLANES,
   RULES,
   OFFER_CONSTRUIR,
+  OFFER_CHIP,
   routeTurn,
   allowsSiraCode,
   isTrivialPhrase,
@@ -100,14 +101,67 @@ test('I8: Construir + Planificar on → CONSTRUIR', () => {
 });
 
 test('I9: H1 never enters CONSTRUIR without the ask', () => {
-  const decision = routeTurn(fixture.h1NoAsk);
-  assert.equal(decision.plane, PLANES.CONVERSAR);
-  assert.equal(decision.rule_id, RULES.H1);
-  assert.equal(decision.offer, OFFER_CONSTRUIR);
-  assert.equal(allowsSiraCode(decision), false);
+  for (const text of [fixture.h1Implement, fixture.h1Arregla]) {
+    const decision = routeTurn({ text });
+    assert.equal(decision.plane, PLANES.CONVERSAR, text);
+    assert.equal(decision.rule_id, RULES.H1, text);
+    assert.equal(decision.offer, OFFER_CONSTRUIR, text);
+    assert.equal(allowsSiraCode(decision), false, text);
+  }
+  const withFile = routeTurn(fixture.h1NoAsk);
+  assert.equal(withFile.plane, PLANES.CONVERSAR);
+  assert.equal(withFile.rule_id, RULES.H1);
+  assert.equal(withFile.offer, OFFER_CONSTRUIR);
+  assert.equal(allowsSiraCode(withFile), false);
   assert.equal(shouldStartSiraCodeRun(fixture.h1NoAsk.text, {
     attachments: fixture.h1NoAsk.attachments,
   }), false);
+
+  const confirmed = routeTurn(fixture.h1Confirmed);
+  assert.equal(confirmed.plane, PLANES.CONSTRUIR);
+  assert.equal(confirmed.rule_id, RULES.H1);
+  assert.equal(allowsSiraCode(confirmed), true);
+
+  const viaToggle = routeTurn({
+    text: fixture.h1Implement,
+    toggleConstruir: true,
+  });
+  assert.equal(viaToggle.plane, PLANES.CONSTRUIR);
+  assert.equal(viaToggle.rule_id, RULES.R_TOGGLE_CONSTRUIR);
+});
+
+test('H2: plan request → PLANIFICAR, never a CONSTRUIR label', () => {
+  const decision = routeTurn({ text: fixture.h2Plan });
+  assert.equal(decision.plane, PLANES.PLANIFICAR);
+  assert.equal(decision.rule_id, RULES.H2);
+  assert.notEqual(decision.rule_id, RULES.H1);
+  assert.equal(allowsSiraCode(decision), true);
+});
+
+test('H3: multi-step / deliverable → PLANIFICAR (not H4)', () => {
+  const multi = routeTurn({ text: fixture.h3MultiStep });
+  assert.equal(multi.plane, PLANES.PLANIFICAR);
+  assert.equal(multi.rule_id, RULES.H3);
+  const docs = routeTurn({
+    text: 'compara estos archivos',
+    attachments: [
+      { name: 'a.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
+      { name: 'b.pdf', mimeType: 'application/pdf' },
+    ],
+  });
+  assert.equal(docs.plane, PLANES.PLANIFICAR);
+  assert.equal(docs.rule_id, RULES.H3);
+});
+
+test('H4: gen-lane request without chip → CONVERSAR + offer, lane unmarked', () => {
+  const decision = routeTurn({ text: fixture.h4Image });
+  assert.equal(decision.plane, PLANES.CONVERSAR);
+  assert.equal(decision.rule_id, RULES.H4);
+  assert.equal(decision.lane, null);
+  assert.equal(decision.offer, OFFER_CHIP.image);
+  assert.notEqual(decision.plane, PLANES.PLANIFICAR);
+  assert.notEqual(decision.plane, PLANES.CONSTRUIR);
+  assert.equal(allowsSiraCode(decision), false);
 });
 
 test('H5: explica este código → CONVERSAR', () => {

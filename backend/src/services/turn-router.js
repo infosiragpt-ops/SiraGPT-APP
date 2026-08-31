@@ -40,6 +40,12 @@ const TRIVIAL_MAX_OUTPUT = 256;
 
 const OFFER_CONSTRUIR = 'Esto toca el repo. ¿Abro Construir y preparo el PR?';
 const OFFER_PLANIFICAR = 'Esto son varios pasos sobre tus archivos. ¿Lo hago en modo Planificar?';
+const OFFER_CHIP = Object.freeze({
+  image: '¿Lo hago con el chip de Imágenes?',
+  voice: '¿Lo hago con el chip de Voz?',
+  video: '¿Lo hago con el chip de Video?',
+  music: '¿Lo hago con el chip de Música?',
+});
 
 const CHIP_ALIASES = Object.freeze({
   image: 'image',
@@ -60,14 +66,20 @@ const CODE_EXT_RE = /\.(?:js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|rb|php|swift|kt|kt
 const CODE_MIME_RE = /^(?:text\/(?:javascript|typescript|x-python|x-sh|x-java|css)|application\/(?:javascript|typescript|x-python|json))/i;
 const SOURCE_PATH_RE = /\b[\w./@-]+\.(?:js|jsx|ts|tsx|mjs|cjs|py|go|rs|java|rb|php|swift|kt|cs|c|cc|cpp|h|hpp|sh|sql|vue|svelte)\b/i;
 const CODE_SIGNAL_RE = /\b(?:diff|stacktrace|traceback|stack\s*trace|git\s+(?:diff|status|log|clone|commit|push|rebase)|repositorio|repo\b|pull\s*request)\b/i;
-const CHANGE_VERB_RE = /\b(?:arregla|arreglar|implementa|implementar|refactoriza|refactorizar|haz(?:me)?\s+pr|abre\s+pr|pull\s*request|escribe|escribir|edita|editar|modifica|modificar|cambia|cambiar|corrige|corregir|fix(?:es|ing)?|implement|refactor|crea|crear|anade|añade|agrega|agregar|elimina|eliminar|borra|borrar|delete|patch)\b/i;
-const REPO_CHANGE_RE = /\b(?:arregla|arreglar|implementa|implementar|refactoriza|refactorizar|haz(?:me)?\s+pr|abre\s+pr|pull\s*request|fix(?:es|ing)?|implement|refactor)\b/i;
+const H1_VERB_RE = /\b(?:arregla|arreglar|implementa|implementar|refactoriza|refactorizar|haz(?:me)?\s+pr|abre\s+pr|pull\s*request|fix(?:es|ing)?|implement|refactor|cambia(?:r)?\s+el\s+archivo|edita(?:r)?\s+el\s+archivo|corrige|corregir)\b/i;
+const PLAN_REQUEST_RE = /\b(?:haz(?:me)?\s+un\s+plan|arma(?:me)?\s+un\s+plan|planifica(?:r)?|un\s+plan\s+para|plan\s+para|prepara(?:me)?\s+un\s+plan)\b/i;
 const EXPLAIN_CODE_RE = /\b(?:explica|explique|explicame|expl[ií]came|explain|describe|describ(?:e|ir)|qu[eé]\s+hace|c[oó]mo\s+funciona|what\s+does|how\s+does|walk\s+me\s+through)\b/i;
 const CODE_NOUN_RE = /\b(?:c[oó]digo|codigo|code|archivo\s+fuente|source(?:\s+file)?|este\s+archivo|this\s+(?:code|file))\b/i;
 const DELIVERABLE_RE = /\b(?:informe|reporte|deck|presentaci[oó]n|pptx|powerpoint|excel|xlsx|hoja\s+de\s+c[aá]lculo|whitepaper|documento\s+largo|tesis|ensayo|memoria)\b/i;
 const MULTI_STEP_RE = /\b(?:primero[\s\S]{0,48}luego|investiga\s+y\s+compara|revisa\s+todos|paso\s+a\s+paso|multi[- ]?paso|then\s+.+\s+then)\b/i;
 const QUESTION_RE = /^(?:[¿¡]\s*)?(?:qu[eé]|c[oó]mo|por\s+qu[eé]|why|what|how|cu[aá]ndo|d[oó]nde|qui[eé]n)\b|[?？]\s*$/i;
 const SHORT_WRITE_RE = /\b(?:redacta|resume|resumir|traduce|traducir|parafras)\b/i;
+const GEN_LANE_PATTERNS = Object.freeze([
+  { lane: 'image', re: /\b(?:una?\s+imagen|genera(?:r)?\s+(?:una?\s+)?imagen|dibuja|ilustra|foto\s+de|im[aá]genes?\s+de)\b/i },
+  { lane: 'voice', re: /\b(?:genera(?:r)?\s+(?:una?\s+)?voz|sintetiza(?:r)?\s+voz|audio\s+hablado|locuci[oó]n)\b/i },
+  { lane: 'video', re: /\b(?:un\s+v[ií]deo|genera(?:r)?\s+(?:un\s+)?v[ií]deo|v[ií]deo\s+de)\b/i },
+  { lane: 'music', re: /\b(?:una?\s+canci[oó]n|m[uú]sica(?:\s+de)?|genera(?:r)?\s+m[uú]sica)\b/i },
+]);
 
 const TRIVIAL_PHRASES = Object.freeze([
   'buenos dias',
@@ -287,12 +299,17 @@ function decision({
 function hasH1Signals(text, attachments) {
   if (countCodeAttachments(attachments) > 0) return true;
   const raw = String(text || '');
-  return SOURCE_PATH_RE.test(raw) || CODE_SIGNAL_RE.test(raw);
+  return H1_VERB_RE.test(raw)
+    || SOURCE_PATH_RE.test(raw)
+    || CODE_SIGNAL_RE.test(raw);
 }
 
-function hasChangeAsk(text, confirmed) {
-  if (confirmed) return true;
-  return CHANGE_VERB_RE.test(String(text || ''));
+function detectGenLaneHint(text) {
+  const raw = String(text || '');
+  for (const row of GEN_LANE_PATTERNS) {
+    if (row.re.test(raw)) return row.lane;
+  }
+  return null;
 }
 
 function isExplainCode(text) {
@@ -307,20 +324,19 @@ function applyHeuristics(signals) {
   const nFiles = countAttachments(attachments);
   const explain = isExplainCode(text);
   const h1 = hasH1Signals(text, attachments);
-  const ask = hasChangeAsk(text, signals.confirmedConstruir);
+  const confirmed = signals.confirmedConstruir === true;
 
-  // H5 explain-code beats silent CONSTRUIR (AGENTS.md §3.3 + §7).
+  // H5 explain-code beats H1 (AGENTS.md §3.3: explicar código es CONVERSAR).
   if (explain) {
     return decision({ plane: PLANES.CONVERSAR, rule_id: RULES.H5 });
   }
 
-  if (h1 && ask) {
-    return decision({ plane: PLANES.CONSTRUIR, rule_id: RULES.H2 });
-  }
-  if (REPO_CHANGE_RE.test(text)) {
-    return decision({ plane: PLANES.CONSTRUIR, rule_id: RULES.H2 });
-  }
-  if (h1 && !ask) {
+  // H1: repo/code signal. Change verbs in the same message are the signal,
+  // not the §7 ask. CONSTRUIR only after confirmedConstruir / construirAsk.
+  if (h1) {
+    if (confirmed) {
+      return decision({ plane: PLANES.CONSTRUIR, rule_id: RULES.H1 });
+    }
     return decision({
       plane: PLANES.CONVERSAR,
       rule_id: RULES.H1,
@@ -328,13 +344,29 @@ function applyHeuristics(signals) {
     });
   }
 
+  // H2: explicit plan request → PLANIFICAR. Never a CONSTRUIR label.
+  if (PLAN_REQUEST_RE.test(text)) {
+    return decision({ plane: PLANES.PLANIFICAR, rule_id: RULES.H2 });
+  }
+
+  // H3: multi-step or multi-doc deliverable → PLANIFICAR.
   const docCount = Math.max(0, nFiles - countCodeAttachments(attachments));
-  if (docCount >= 2 || DELIVERABLE_RE.test(text)) {
+  if (docCount >= 2 || DELIVERABLE_RE.test(text) || MULTI_STEP_RE.test(text)) {
     return decision({ plane: PLANES.PLANIFICAR, rule_id: RULES.H3 });
   }
-  if (MULTI_STEP_RE.test(text)) {
-    return decision({ plane: PLANES.PLANIFICAR, rule_id: RULES.H4 });
+
+  // H4: single gen-lane request without chip → CONVERSAR + offer.
+  // Do not mark lane as if the chip were on.
+  const hintedLane = detectGenLaneHint(text);
+  if (hintedLane) {
+    return decision({
+      plane: PLANES.CONVERSAR,
+      rule_id: RULES.H4,
+      lane: null,
+      offer: OFFER_CHIP[hintedLane] || OFFER_CHIP.image,
+    });
   }
+
   if (QUESTION_RE.test(text.trim()) || SHORT_WRITE_RE.test(text) || EXPLAIN_CODE_RE.test(text)) {
     return decision({ plane: PLANES.CONVERSAR, rule_id: RULES.H5 });
   }
@@ -342,7 +374,7 @@ function applyHeuristics(signals) {
   return decision({
     plane: PLANES.CONVERSAR,
     rule_id: RULES.H6,
-    offer: h1 ? OFFER_CONSTRUIR : OFFER_PLANIFICAR,
+    offer: OFFER_PLANIFICAR,
   });
 }
 
@@ -470,6 +502,7 @@ module.exports = {
   TRIVIAL_MAX_TOKENS,
   OFFER_CONSTRUIR,
   OFFER_PLANIFICAR,
+  OFFER_CHIP,
   routeTurn,
   extractSignals,
   extractSignalsFromReq,
