@@ -275,18 +275,40 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       chatInterface,
-      /<ComposerPermissionMenu agentToggle=\{<SiraCodeAgentToggle \/>\} \/>/,
-      "Construir and Planificar must remain reachable from the existing permission control",
+      /<ComposerPermissionMenu\s*\/>/,
+      "the composer should expose the permission menu without injecting agent-mode controls",
     )
-    assert.match(
+    assert.doesNotMatch(
+      chatInterface,
+      /<ComposerPermissionMenu[^>]*agentToggle/,
+      "the permission menu must not receive Construir or Planificar controls",
+    )
+
+    const levelBlock = permissionMenu.match(/const LEVELS[\s\S]*?= \[([\s\S]*?)\n\]/)?.[1]
+    assert.ok(levelBlock, "the permission menu should declare its five permission levels")
+    const permissionLevels = [...levelBlock.matchAll(/\{\s*id: "([^"]+)",\s*label: "([^"]+)"/g)].map(
+      ([, id, label]) => ({ id, label }),
+    )
+    assert.deepEqual(
+      permissionLevels,
+      [
+        { id: "default", label: "Default" },
+        { id: "read", label: "Solo lectura" },
+        { id: "protected", label: "Protegido" },
+        { id: "workspace", label: "Workspace" },
+        { id: "full", label: "Acceso completo" },
+      ],
+      "the popover must contain exactly the five approved permission levels in order",
+    )
+    assert.doesNotMatch(
       permissionMenu,
-      /composer-permission-agent-mode[\s\S]{0,180}Modo del agente[\s\S]{0,180}\{agentToggle\}/,
-      "the mode controls should move into the existing popover instead of adding a third composer row",
+      /agentToggle|Modo del agente|Construir|Planificar|composer-permission-agent-mode/,
+      "agent-mode controls must not appear anywhere in the permission menu",
     )
     assert.match(
       permissionMenu,
       /<PopoverContent\s+forceMount\s+hidden=\{!open\}/,
-      "the agent mode must stay mounted while the permission popover is closed",
+      "the five permission levels must stay mounted while the popover is closed",
     )
     assert.match(
       popover,

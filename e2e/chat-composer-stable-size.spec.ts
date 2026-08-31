@@ -241,13 +241,28 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
 
   await page.getByTestId("composer-permission-chip").click()
-  await expect(page.getByTestId("sira-code-agent-toggle")).toBeVisible()
-  await page.getByTestId("sira-code-agent-planificar").click()
-  await expect(page.getByTestId("sira-code-agent-planificar")).toHaveAttribute("aria-selected", "true")
+  const permissionMenu = page.locator(".composer-permission-menu:not([hidden])")
+  const permissionOptions = permissionMenu.getByTestId("composer-permission-option")
+  await expect(permissionOptions).toHaveCount(5)
+  await expect.poll(async () => permissionOptions.evaluateAll((rows) => (
+    rows.map((row) => row.getAttribute("data-permission-level"))
+  ))).toEqual(["default", "read", "protected", "workspace", "full"])
+  for (const [index, label] of [
+    "Default",
+    "Solo lectura",
+    "Protegido",
+    "Workspace",
+    "Acceso completo",
+  ].entries()) {
+    await expect(permissionOptions.nth(index).getByText(label, { exact: true })).toBeVisible()
+  }
+  await expect(permissionMenu.getByText("Modo del agente", { exact: true })).toHaveCount(0)
+  await expect(permissionMenu.getByText("Construir", { exact: true })).toHaveCount(0)
+  await expect(permissionMenu.getByText("Planificar", { exact: true })).toHaveCount(0)
+  await expect(permissionMenu.getByTestId("sira-code-agent-toggle")).toHaveCount(0)
   await page.keyboard.press("Escape")
-  await expect(page.getByTestId("sira-code-agent-toggle")).toBeHidden()
   await page.getByTestId("composer-permission-chip").click()
-  await expect(page.getByTestId("sira-code-agent-planificar")).toHaveAttribute("aria-selected", "true")
+  await expect(permissionOptions).toHaveCount(5)
   await page.keyboard.press("Escape")
 
   const textarea = page.getByTestId("chat-composer-surface").locator("textarea")

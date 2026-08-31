@@ -6196,14 +6196,6 @@ footer {
   text-transform: uppercase;
   color: hsl(220 8% 46%);
 }
-.composer-permission-agent-mode {
-  margin-top: 0.5rem;
-  padding-top: 0.65rem;
-  border-top: 1px solid hsl(220 12% 90%);
-}
-.composer-permission-agent-mode .composer-permission-menu-kicker {
-  padding-bottom: 0.5rem;
-}
 .composer-permission-row {
   display: flex;
   align-items: flex-start;
