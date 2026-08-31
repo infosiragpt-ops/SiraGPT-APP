@@ -30,12 +30,14 @@ npm run type-check     # TSC completo
 ```
 
 ## Reglas para Claude
-1. **No modificar la UI/componentes visuales** — solo funcionalidad interna
-2. **Trabajar en:** agentes, herramientas de generación, pipelines, sistema de archivos, backend
-3. **Push directo a main** en `https://github.com/SiraGPT-ORg/siraGPT`
-4. **Cada cambio debe mantener CI verde** — correr `npm test` y `npm run lint` antes de push
-5. **Hacer `git pull --rebase` antes de push** para evitar conflictos
-6. **Priorizar:** estabilidad, rendimiento, cobertura de errores, calidad de código
+La constitución es `AGENTS.md` + `VISION.md`. Si chocan con este inventario, gana `AGENTS.md`.
+
+1. Producto canónico: `/agentes`. No revivir `/code`. No cambiar UI salvo pedido explícito de Luis.
+2. Rama `production-main` (nunca `main`). PR + CI verde + squash-merge. Nunca push directo.
+3. El modelo del compositor usa su propia API. No swap silencioso a DeepSeek.
+4. Nunca imprimas `.env`, keys, cookies ni passphrases.
+5. Live-verify en `/agentes` antes de aterrizar. CI rojo no se mergea.
+6. El inventario de tools/archivos debajo es referencia, no licencia para ampliar superficie.
 
 ## Visual Tools Inventory (34 tools)
 | Tool | File | Description |

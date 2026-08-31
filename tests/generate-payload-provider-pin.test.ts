@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
 import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { lockGeneratePayload, withLockedGenerateModel } from "../lib/chat/generate-payload"
 import { clampDeepSeekModel } from "../lib/sse-client"
 
 describe("generate payload keeps the selected catalog model", () => {
@@ -49,5 +50,27 @@ describe("generate payload keeps the selected catalog model", () => {
       clampDeepSeekModel("openrouter/gpt-4o", ["openrouter/gpt-4o", ...catalog.map((item) => item.name)]),
       "openrouter/gpt-4o",
     )
+  })
+
+  it("empty catalog snapshot still routes GPT 5.6 Terra to OpenAI", () => {
+    const locked = lockGeneratePayload("gpt-5.6-terra", "DeepSeek")
+    assert.equal(locked.model, "gpt-5.6-terra")
+    assert.equal(locked.provider, "OpenAI")
+  })
+
+  it("does not overwrite a Grok generate body with DeepSeek", () => {
+    const body = withLockedGenerateModel({
+      prompt: "hola",
+      model: "x-ai/grok-4.5",
+      provider: "DeepSeek",
+    })
+    assert.equal(body.model, "x-ai/grok-4.5")
+    assert.equal(body.provider, "xAI")
+  })
+
+  it("leftover gpt-5 without catalog becomes Flash on DeepSeek", () => {
+    const locked = lockGeneratePayload("gpt-5", "OpenAI")
+    assert.equal(locked.model, "deepseek-v4-flash")
+    assert.equal(locked.provider, "DeepSeek")
   })
 })

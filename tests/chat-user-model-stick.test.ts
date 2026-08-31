@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 
 import { brandModelLabel, SIRA_RAPIDO_LABEL } from "../lib/chat/brand-label"
 import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { lockGeneratePayload } from "../lib/chat/generate-payload"
 import { clampDeepSeekModel } from "../lib/sse-client"
 
 describe("user-selected model always wins", () => {
@@ -46,6 +47,9 @@ describe("user-selected model always wins", () => {
     assert.equal(resolved.provider, "xAI")
     assert.equal(clampDeepSeekModel(resolved.name), "x-ai/grok-4.5")
     assert.equal(brandModelLabel(grok), "Grok 4.5")
+    const locked = lockGeneratePayload(grok.name, "DeepSeek")
+    assert.equal(locked.model, "x-ai/grok-4.5")
+    assert.equal(locked.provider, "xAI")
   })
 
   it("does not fall back to Sira Rápido when a valid selection exists", () => {
