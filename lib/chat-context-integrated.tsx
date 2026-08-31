@@ -15,6 +15,7 @@ import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversation
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { composerGenerateFlags } from "./chat/composer-session"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -1220,7 +1221,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             provider: catalogModel.provider,
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
-            ...(lightweightTurn ? { disableAgentic: true } : {}),
+            ...((lightweightTurn || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
               ? { pinnedAppIds: options.pinnedAppIds.slice(0, 4) }
@@ -2950,6 +2951,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           provider: regenCatalogModel.provider,
           model: regenCatalogModel.name,
           reasoningEffort: selectedEffort,
+          ...composerGenerateFlags(),
           prompt: originalUserMessage.content,
           ...mentionPayloadForGenerate(originalUserMessage.content),
           chatId: currentChat.id,
@@ -3344,6 +3346,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           provider: editCatalogModel.provider,
           model: editCatalogModel.name,
           reasoningEffort: selectedEffort,
+          ...composerGenerateFlags(),
           prompt: newContent,
           ...mentionPayloadForGenerate(newContent),
           chatId: currentChat.id,
