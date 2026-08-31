@@ -30,6 +30,8 @@ const LIVE = [
   { model: 'x-ai/grok-4', provider: 'xAI' },
   { model: 'x-ai/grok-4.5', provider: 'xAI' },
   { model: 'Grok 4.5', provider: 'xAI' },
+  { model: 'Claude Sonnet 3', provider: 'Anthropic' },
+  { model: 'claude-3-sonnet', provider: 'Anthropic' },
 ];
 
 test('inferProviderFromModelId: live catalog families hit their own API', () => {
@@ -53,6 +55,7 @@ test('resolveGenerateProvider: OpenRouter mixer label cannot steal first-party m
   assert.equal(resolveGenerateProvider('Kimi', 'moonshotai/kimi-k2.7-code'), 'Kimi');
   assert.equal(resolveGenerateProvider('OpenRouter', 'x-ai/grok-4'), 'xAI');
   assert.equal(resolveGenerateProvider('DeepSeek', 'Grok 4.5'), 'xAI');
+  assert.equal(resolveGenerateProvider('DeepSeek', 'Claude Sonnet 3'), 'Anthropic');
 });
 
 test('ai-service providerForModel / normalizeChatProvider match the same first-party map', () => {

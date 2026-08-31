@@ -82,14 +82,14 @@ export function brandModelLabel(source: BrandLabelSource): string {
   const raw = typeof source === "string"
     ? source
     : firstString(source?.displayName, source?.name)
-  if (!raw) return SIRA_RAPIDO_LABEL
+  if (!raw) return ""
   if (looksLikeRawVendorModelId(raw) && display && isExplicitProductLabel(display)) return display
   return hideForbiddenVendorLabel(raw)
 }
 
 function hideForbiddenVendorLabel(label: string): string {
   const trimmed = String(label || "").trim()
-  if (!trimmed) return SIRA_RAPIDO_LABEL
+  if (!trimmed) return ""
   if (/\bmoondream\b/i.test(trimmed)) return "SiraGPT Mini"
   if (/\bgemma4\b/i.test(trimmed) || /\bgemma\s*4\b/i.test(trimmed)) return "SiraGPT Mini"
   if (/^sira[- ]?mini$/i.test(trimmed) || /^siragpt[- ]?mini$/i.test(trimmed)) return "SiraGPT Mini"

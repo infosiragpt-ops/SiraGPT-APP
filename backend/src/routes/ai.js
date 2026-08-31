@@ -297,6 +297,9 @@ const {
   CONNECTION_UNAVAILABLE_MESSAGE,
 } = require('../services/ai/provider-inference');
 const {
+  honorPickerModel,
+} = require('../services/ai/honor-picker-model');
+const {
   isCustomProvider,
   isLocalVisionModel,
   isSiraMiniAlias,
@@ -1787,6 +1790,14 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           streamId: streamId || null,
           turnFingerprint,
         };
+        if (!turnMetadata.publicLabel && model) {
+          try {
+            const { publicBadgeLabel } = require('../services/ai/honor-picker-model');
+            const label = publicBadgeLabel(turnMetadata.pickerModel || model);
+            if (label) turnMetadata.publicLabel = label;
+          } catch { /* badge label is best-effort */ }
+        }
+        if (!turnMetadata.model && model) turnMetadata.model = model;
 
         if (!regenerate && !existingTurn?.userMessage) {
           await persistUserMessageOnce(
@@ -2274,6 +2285,12 @@ router.post(
       }
 
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
+      const __pickerHonor = honorPickerModel(model);
+      req._pickerHonor = __pickerHonor;
+      if (__pickerHonor.honored && __pickerHonor.model) {
+        model = __pickerHonor.model;
+        if (__pickerHonor.provider) provider = __pickerHonor.provider;
+      }
       applyTrivialTurnGuards(req, prompt);
       const __publicWebReadonly = req.body.enableWebGrounding === true;
       const __publicWebQuery = __publicWebReadonly
@@ -3396,12 +3413,17 @@ router.post(
           // Honor the /agentes picker. Org preferredModel is only a default
           // when the client did not send a model — never an auto-redirect.
           if (!customGpt && !String(model || '').trim()) {
-            if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
-              actualModel = ai.preferredModel.trim();
+            const preferredHonor = honorPickerModel('', {
+              preferredModel: typeof ai.preferredModel === 'string' ? ai.preferredModel.trim() : '',
+              preferredProvider: typeof ai.preferredProvider === 'string' ? ai.preferredProvider.trim() : '',
+            });
+            if (preferredHonor.model) {
+              actualModel = preferredHonor.model;
+              req._pickerHonor = preferredHonor;
             }
-            if (typeof ai.preferredProvider === 'string' && ai.preferredProvider.trim()) {
-              actualProvider = ai.preferredProvider.trim();
-            } else if (typeof ai.preferredModel === 'string' && ai.preferredModel.trim()) {
+            if (preferredHonor.provider) {
+              actualProvider = preferredHonor.provider;
+            } else if (preferredHonor.model) {
               actualProvider = resolveGenerateProvider(actualProvider, actualModel);
             }
           }
@@ -7628,6 +7650,13 @@ router.post(
                 regenerate,
                 {
                   stoppedByUser: true,
+                  ...(actualModel ? { model: actualModel } : {}),
+                  ...(req._pickerHonor && req._pickerHonor.pickerModel
+                    ? { pickerModel: req._pickerHonor.pickerModel }
+                    : {}),
+                  ...(req._pickerHonor && req._pickerHonor.publicLabel
+                    ? { publicLabel: req._pickerHonor.publicLabel }
+                    : {}),
                   ...(idempotencyKey ? { idempotencyKey } : {}),
                   ...(streamId ? { streamId } : {}),
                   ...(generateIdempotencyRequestHash
@@ -7945,6 +7974,13 @@ router.post(
           : null;
         const assistantMeta = {
           ...(codexMeta || {}),
+          ...(actualModel ? { model: actualModel } : {}),
+          ...(req._pickerHonor && req._pickerHonor.pickerModel
+            ? { pickerModel: req._pickerHonor.pickerModel }
+            : {}),
+          ...(req._pickerHonor && req._pickerHonor.publicLabel
+            ? { publicLabel: req._pickerHonor.publicLabel }
+            : {}),
           ...(normalizedRegenerationAttempt ? { regeneration: { attempt: normalizedRegenerationAttempt } } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
