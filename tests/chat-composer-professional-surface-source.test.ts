@@ -11,12 +11,22 @@ const composerSurfacePath = path.join(process.cwd(), "components", "chat", "Chat
 const composerSurface = fs.readFileSync(composerSurfacePath, "utf8")
 const composerLayoutPath = path.join(process.cwd(), "lib", "composer-layout.ts")
 const composerLayout = fs.readFileSync(composerLayoutPath, "utf8")
+const effortMenuPath = path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx")
+const effortMenu = fs.readFileSync(effortMenuPath, "utf8")
+const contextMenuPath = path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx")
+const contextMenu = fs.readFileSync(contextMenuPath, "utf8")
+const permissionMenuPath = path.join(process.cwd(), "components", "chat", "composer-permission-menu.tsx")
+const permissionMenu = fs.readFileSync(permissionMenuPath, "utf8")
+const popoverPath = path.join(process.cwd(), "components", "ui", "popover.tsx")
+const popover = fs.readFileSync(popoverPath, "utf8")
+const esMessages = JSON.parse(fs.readFileSync(path.join(process.cwd(), "messages", "es.json"), "utf8"))
+const enMessages = JSON.parse(fs.readFileSync(path.join(process.cwd(), "messages", "en.json"), "utf8"))
 
 describe("professional chat composer surface source contract", () => {
   it("uses one neutral solid surface without stacked rings or glass", () => {
     assert.match(
       globals,
-      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 86% \/ 0\.96\)/,
+      /\.composer-surface\s*\{[\s\S]{0,180}border: 1px solid hsl\(220 10% 89% \/ 0\.96\)/,
       "the light composer should use a crisp neutral one-pixel outline"
     )
     assert.match(
@@ -42,7 +52,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 9% 72% \/ 0\.22\)/,
+      /\.composer-surface:focus-within\s*\{[\s\S]{0,180}inset 0 0 0 1px hsl\(220 10% 80% \/ 0\.12\)/,
       "focused text should strengthen the complete neutral contour"
     )
     assert.match(
@@ -183,7 +193,7 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.75rem;[\s\S]{0,220}min-height: 3\.25rem;/,
+      /@media \(max-width: 640px\)[\s\S]{0,320}\.composer-surface\s*\{\s*border-radius: 1\.25rem;[\s\S]{0,220}min-height: 3\.25rem;/,
       "phones should keep the same compact single-row hierarchy"
     )
     assert.match(
@@ -203,11 +213,128 @@ describe("professional chat composer surface source contract", () => {
     )
   })
 
+  it("matches the approved two-row reference without replacing live controls", () => {
+    assert.equal(esMessages.composer.placeholderDefault, "Message Assistant")
+    assert.equal(enMessages.composer.placeholderDefault, "Message Assistant")
+    assert.match(
+      globals,
+      /\.composer-surface\s*\{[\s\S]{0,180}border-radius: 1\.25rem;/,
+      "the reference uses a restrained 20px surface radius",
+    )
+    assert.match(
+      globals,
+      /\.composer-surface\[data-composer-layout="stacked"\] \.composer-input-row\s*\{[\s\S]{0,260}row-gap: 1\.05rem;[\s\S]{0,100}padding: 1rem 0\.15rem 0\.1rem 0\.1rem !important;/,
+      "the placeholder and footer must occupy the same vertical positions as the reference",
+    )
+    for (const [selector, order] of [
+      ["composer-context-trigger", 10],
+      ["composer-model-inline", 20],
+      ["composer-effort-chip", 30],
+      ["composer-dictation-button", 40],
+      ["composer-stop-button", 50],
+    ] as const) {
+      assert.match(
+        globals,
+        new RegExp(`\\.${selector}\\s*\\{[^}]*order: ${order};`),
+        `${selector} must preserve the reference toolbar order`,
+      )
+    }
+    assert.match(
+      effortMenu,
+      /value: "Max", label: "Extra high"/,
+      "the far-right Max compute value should expose the reference's Extra high label",
+    )
+    assert.equal(
+      (effortMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "effort owns only its lightning-chip trigger",
+    )
+    assert.equal(
+      (contextMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "context owns an independent progress-ring trigger",
+    )
+    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
+    assert.match(contextMenu, /data-testid="composer-context-menu"/)
+    assert.match(contextMenu, /role="progressbar"/)
+    assert.doesNotMatch(
+      effortMenu,
+      /composer-context-trigger|composer-effort-ring/,
+      "the effort popover must not reclaim the context trigger",
+    )
+    assert.match(chatInterface, /composer-dictation-button/)
+    assert.match(
+      chatInterface,
+      /<ComposerContextMenu[\s\S]{0,260}\{renderComposerModelControls\(\)\}[\s\S]{0,120}<ComposerEffortMenu[\s\S]{0,180}\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
+      "context, model, effort, microphone and primary action must keep the approved order",
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /!isStopButtonVisible\s*&&\s*\(\s*renderDictationButton\(\)/,
+      "the reference keeps microphone and Stop visible together",
+    )
+    assert.match(
+      chatInterface,
+      /<ComposerPermissionMenu agentToggle=\{<SiraCodeAgentToggle \/>\} \/>/,
+      "Construir and Planificar must remain reachable from the existing permission control",
+    )
+    assert.match(
+      permissionMenu,
+      /composer-permission-agent-mode[\s\S]{0,180}Modo del agente[\s\S]{0,180}\{agentToggle\}/,
+      "the mode controls should move into the existing popover instead of adding a third composer row",
+    )
+    assert.match(
+      permissionMenu,
+      /<PopoverContent\s+forceMount\s+hidden=\{!open\}/,
+      "the agent mode must stay mounted while the permission popover is closed",
+    )
+    assert.match(
+      popover,
+      /<PopoverPrimitive\.Portal forceMount=\{forceMount\}>[\s\S]{0,180}forceMount=\{forceMount\}/,
+      "the shared popover wrapper must preserve forced content through its portal",
+    )
+    assert.doesNotMatch(
+      chatInterface,
+      /^\s{6}agentToggle=\{<SiraCodeAgentToggle \/>\}/m,
+      "the closed composer surface must stay two rows tall",
+    )
+    assert.match(
+      globals,
+      /\.composer-input-row \.composer-model-inline \.chat-model-trigger\s*\{[\s\S]{0,220}border: 1px solid transparent;/,
+      "the live model selector must remain dynamic without drawing a nested capsule",
+    )
+    assert.match(
+      globals,
+      /\.composer-stop-button::before\s*\{[\s\S]{0,260}background: #fee2e2;/,
+      "the accessible stop target should contain the reference's pale-red visual disc",
+    )
+    assert.match(
+      globals,
+      /\.composer-stop-button \.composer-stop-icon\s*\{[\s\S]{0,120}background-color: #dc2626 !important;/,
+      "the stop glyph should remain solid red",
+    )
+    assert.match(
+      globals,
+      /\.composer-context-trigger\s*\{[^}]*border: 0;/,
+      "only the compact context meter should be visible, not a second outer ring",
+    )
+    assert.match(
+      globals,
+      /\.composer-effort-chip\.is-high svg\s*\{\s*color: #e89a96;/,
+      "the high-effort lightning should use the reference's restrained warm accent",
+    )
+    assert.match(
+      globals,
+      /\.composer-dictation-button:not\(\[aria-pressed="true"\]\)\s*\{\s*color: hsl\(220 8% 64%\) !important;/,
+      "the idle microphone should stay visually quiet",
+    )
+  })
+
   it("preserves the approved width and height across chat states", () => {
     assert.match(
       globals,
-      /\.chat-viewport\s*\{[^}]{0,1600}--content-max: 46rem;[\s\S]{0,80}--chat-content-max-width: var\(--content-max\);/,
-      "the chat viewport should own one 46rem width token for messages and composer"
+      /\.chat-viewport\s*\{[^}]{0,1600}--content-max: 48rem;[\s\S]{0,80}--chat-content-max-width: var\(--content-max\);/,
+      "the chat viewport should own one 48rem width token for messages and composer"
     )
     assert.match(
       globals,

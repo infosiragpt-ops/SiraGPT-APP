@@ -11,6 +11,10 @@ const effortMenu = fs.readFileSync(
   path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx"),
   "utf8",
 )
+const contextMenu = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx"),
+  "utf8",
+)
 const globals = fs.readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8")
 const orchestrator = fs.readFileSync(
   path.join(process.cwd(), "backend", "src", "services", "reasoning-orchestrator.js"),
@@ -61,6 +65,35 @@ describe("composer effort picker source contract", () => {
     )
   })
 
+  it("keeps context and effort as separate one-trigger popovers", () => {
+    assert.match(
+      chatInterface,
+      /<ComposerContextMenu\s+messages=\{currentChat\?\.messages \|\| \[\]\}\s+selectedModel=\{currentChat\?\.model \|\| selectedModel\}\s+availableModels=\{availableModels\}/,
+      "the context popover must receive the active chat and selected model",
+    )
+    assert.equal((contextMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
+    assert.equal((effortMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
+    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
+    assert.match(effortMenu, /data-testid="composer-effort-chip"/)
+    assert.doesNotMatch(effortMenu, /composer-context-trigger|composer-effort-ring/)
+  })
+
+  it("uses the exact four labels and copy from the approved effort reference", () => {
+    const labels = [...effortMenu.matchAll(/value: "([^"]+)", label: "([^"]+)"/g)]
+      .map((match) => [match[1], match[2]])
+    assert.deepEqual(labels, [
+      ["Bajo", "Low"],
+      ["Medio", "Medium"],
+      ["Extra", "High"],
+      ["Max", "Extra high"],
+    ])
+    for (const copy of ["Esfuerzo", "Más rápido", "Más inteligente", "Modo rápido", "Respuestas más rápidas, mayor uso de los límites."]) {
+      assert.ok(effortMenu.includes(copy), `missing approved effort copy: ${copy}`)
+    }
+    assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
+    assert.doesNotMatch(effortMenu, /effort-value/, "the selected value stays in the toolbar chip, not the popover header")
+  })
+
   it("supports real dragging, not just stop clicks", () => {
     const section = effortMenu.match(
       /export function EffortSection\(([\s\S]*?)\nexport function ComposerEffortMenu/,
@@ -86,9 +119,10 @@ describe("composer effort picker source contract", () => {
   })
 
   it("ships the effort styles in the curated stylesheet", () => {
-    for (const cls of [".effort-section", ".effort-track-fill", ".effort-stop-active", ".effort-caption"]) {
+    for (const cls of [".effort-section", ".effort-track-line", ".effort-stop-active", ".effort-ends"]) {
       assert.ok(globals.includes(`${cls} {`), `${cls} must exist in globals.css`)
     }
+    assert.ok(!globals.includes(".effort-caption {"), "the removed caption must not keep stale layout CSS")
     assert.match(
       globals,
       /\.effort-track:focus-visible \{[\s\S]{0,120}outline: 2px solid/,

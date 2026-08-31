@@ -8,7 +8,7 @@ import "katex/dist/katex.min.css"
 import React from "react"
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef } from "react"
 import { useAuth } from "./auth-context-integrated"
-import { apiClient } from "./api"
+import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
@@ -233,6 +233,7 @@ interface Message {
   agentRun?: AgentRunClient | null
   agentPermission?: AgentPermissionClient | null
   agentMetadata?: any
+  generationUsage?: AIUsagePayload & { total: number }
 }
 
 export interface AgentStepClient {
@@ -347,14 +348,12 @@ function createReasoningHandlers(opts: {
       toolCalls.set(payload.index, existing)
       patchMessage({ reasoningToolCalls: Array.from(toolCalls.values()) })
     },
-    onUsage: (payload: { tokensIn: number; tokensOut: number; model?: string }) => {
+    onUsage: (payload: AIUsagePayload) => {
       if (isCancelled()) return
       patchMessage({
         generationUsage: {
-          tokensIn: payload.tokensIn,
-          tokensOut: payload.tokensOut,
+          ...payload,
           total: payload.tokensIn + payload.tokensOut,
-          model: payload.model,
         },
       })
     },

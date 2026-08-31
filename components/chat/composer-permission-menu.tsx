@@ -48,7 +48,7 @@ const LEVELS: Array<{
   },
 ]
 
-export function ComposerPermissionMenu() {
+export function ComposerPermissionMenu({ agentToggle = null }: { agentToggle?: React.ReactNode }) {
   const [open, setOpen] = React.useState(false)
   const [level, setLevel] = React.useState<ComposerPermissionId>("full")
 
@@ -74,6 +74,8 @@ export function ComposerPermissionMenu() {
         </button>
       </PopoverTrigger>
       <PopoverContent
+        forceMount
+        hidden={!open}
         align="start"
         side="top"
         sideOffset={8}
@@ -111,6 +113,12 @@ export function ComposerPermissionMenu() {
             )
           })}
         </ul>
+        {agentToggle ? (
+          <div className="composer-permission-agent-mode">
+            <p className="composer-permission-menu-kicker">Modo del agente</p>
+            {agentToggle}
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   )
