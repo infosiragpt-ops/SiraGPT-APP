@@ -15,15 +15,17 @@ const UI_FILES = [
 ]
 
 describe("SiraCode /agentes Phase 1", () => {
-  it("exposes Construir | Planificar on the composer without reviving /code", () => {
+  it("keeps the native modes without exposing them in the chat permission menu", () => {
     const toggle = source("components/sira-code-agent-toggle.tsx")
     const chat = source("components/chat-interface-enhanced.tsx")
     const composer = source("components/chat/ChatComposerSurface.tsx")
+    const permissionMenu = source("components/chat/composer-permission-menu.tsx")
     const codePage = source("app/code/page.tsx")
     assert.match(toggle, /Construir/)
     assert.match(toggle, /Planificar/)
     assert.match(toggle, /data-testid="sira-code-agent-toggle"/)
-    assert.match(chat, /SiraCodeAgentToggle/)
+    assert.doesNotMatch(chat, /SiraCodeAgentToggle/)
+    assert.doesNotMatch(permissionMenu, /agentToggle|Modo del agente|Construir|Planificar/)
     assert.match(composer, /agentToggle/)
     assert.match(codePage, /redirect\(/)
     assert.doesNotMatch(codePage, /CodeWorkspaceGate|CodeWorkspaceProvider/)

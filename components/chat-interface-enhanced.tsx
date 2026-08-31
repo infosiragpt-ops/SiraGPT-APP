@@ -143,7 +143,6 @@ import {
 import { ComposerContextMenu } from "@/components/chat/composer-context-menu"
 import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
 import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
-import { SiraCodeAgentToggle } from "@/components/sira-code-agent-toggle"
 import {
   COMPOSER_TEXTAREA_EXPANDED_MIN_PX,
   COMPOSER_TEXTAREA_MIN_PX,
@@ -8097,7 +8096,7 @@ But first, you need to connect your Spotify account securely using the button be
       leading={
         <>
           <ActionsDropdown {...actionsDropdownProps} />
-          <ComposerPermissionMenu agentToggle={<SiraCodeAgentToggle />} />
+          <ComposerPermissionMenu />
           {appPins.enabled && (
             <PinnedAppRail
               chips={pinnedAppChips}
