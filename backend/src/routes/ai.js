@@ -862,6 +862,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
         type: true, // Type bhi select karein
         icon: true, // Icon bhi select karein
         isActive: true,
+        contextLength: true,
       },
       orderBy: { createdAt: 'asc' }
     });
@@ -7693,6 +7694,59 @@ router.post(
       const MIN_VISIBLE_CHARS = 5;
       let finalContent = fullResponseContent;
       let newFiles = [];
+      let generationUsage = null;
+
+      // Build one canonical usage snapshot and reuse it for persistence and
+      // the terminal SSE frame. `fittedContext.totalTokens` is the best local
+      // estimate of the complete provider input (history + current turn), so
+      // costs are based on that instead of the current prompt alone.
+      const buildGenerationUsage = (assistantContent) => {
+        const fittedInputTokens = Number(fittedContext && fittedContext.totalTokens);
+        const tokensIn = Number.isFinite(fittedInputTokens) && fittedInputTokens >= 0
+          ? fittedInputTokens
+          : usageService.calculateTextTokens(prompt || '', actualModel);
+        const tokensOut = usageService.calculateTextTokens(assistantContent || '', actualModel);
+        let resolvedContextWindow = null;
+        try {
+          const value = Number(contextWindow.getContextLimit(actualModel));
+          if (Number.isFinite(value) && value > 0) resolvedContextWindow = value;
+        } catch { /* model context unknown */ }
+
+        const snapshot = {
+          tokensIn,
+          tokensOut,
+          total: tokensIn + tokensOut,
+          model: actualModel,
+          contextTokens: tokensIn,
+          ...(resolvedContextWindow != null ? { contextWindow: resolvedContextWindow } : {}),
+        };
+        try {
+          const estimated = tokenBudget.estimateCost(actualModel, tokensIn, tokensOut);
+          if (Number.isFinite(estimated && estimated.totalUSD)) {
+            let appliedCost = estimated.totalUSD;
+            let appliedInputCost = estimated.inputUSD;
+            let appliedOutputCost = estimated.outputUSD;
+            try {
+              const { applyPlanPricing } = require('../services/codex/pricing-policy');
+              const userPlan = req.user?.plan || 'FREE';
+              const priced = applyPlanPricing(userPlan, estimated.totalUSD);
+              if (Number.isFinite(priced && priced.costAppliedUsd)) appliedCost = priced.costAppliedUsd;
+              if (Number.isFinite(estimated.inputUSD)) {
+                appliedInputCost = applyPlanPricing(userPlan, estimated.inputUSD).costAppliedUsd;
+              }
+              if (Number.isFinite(estimated.outputUSD)) {
+                appliedOutputCost = applyPlanPricing(userPlan, estimated.outputUSD).costAppliedUsd;
+              }
+            } catch { /* pricing policy unavailable: applied equals list */ }
+            snapshot.costTotalUsd = estimated.totalUSD;
+            snapshot.costOriginalUsd = estimated.totalUSD;
+            snapshot.costAppliedUsd = appliedCost;
+            if (Number.isFinite(appliedInputCost)) snapshot.costInputUsd = appliedInputCost;
+            if (Number.isFinite(appliedOutputCost)) snapshot.costOutputUsd = appliedOutputCost;
+          }
+        } catch { /* pricing unknown */ }
+        return snapshot;
+      };
 
       if (isAuth && !__publicWebReadonly) {
         // Tolerant CREATE_DOCUMENT matcher. The canonical contract is the
@@ -7940,6 +7994,7 @@ router.post(
           finalContent = req._agentPersistedContent;
         }
 
+        generationUsage = buildGenerationUsage(finalContent);
         const codexMeta = req._codexRunId
           ? { codexRunId: req._codexRunId, taskId: req._codexRunId, type: 'codex_delegated' }
           : null;
@@ -7958,6 +8013,7 @@ router.post(
           ...(__reasoningSink && __reasoningSink.durationMs
             ? { reasoningDurationMs: __reasoningSink.durationMs }
             : {}),
+          generationUsage,
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
         };
@@ -8015,6 +8071,7 @@ router.post(
         if (!finalContent || finalContent.trim().length < MIN_VISIBLE_CHARS) {
           finalContent = fullResponseContent || finalContent;
         }
+        generationUsage = buildGenerationUsage(finalContent);
         await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
       }
 
@@ -8075,16 +8132,15 @@ router.post(
       try {
         if (!res.writableEnded) {
           const finalForUsage = (typeof finalContent === 'string' && finalContent) ? finalContent : fullResponseContent;
-          const inTokens = usageService.calculateTextTokens(prompt || '', actualModel);
-          const outTokens = usageService.calculateTextTokens(finalForUsage || '', actualModel);
-          let costUSD = 0;
-          try {
-            const c = tokenBudget.estimateCost(actualModel, inTokens, outTokens);
-            costUSD = c.totalUSD;
-          } catch { /* pricing unknown */ }
+          const canonicalUsage = generationUsage || buildGenerationUsage(finalForUsage);
+          const inTokens = canonicalUsage.tokensIn;
+          const outTokens = canonicalUsage.tokensOut;
+          const costUSD = Number.isFinite(canonicalUsage.costTotalUsd)
+            ? canonicalUsage.costTotalUsd
+            : 0;
           const usagePayload = {
             type: 'usage',
-            model: actualModel,
+            ...canonicalUsage,
             tokens: { in: inTokens, out: outTokens, total: inTokens + outTokens },
             costUSD,
           };

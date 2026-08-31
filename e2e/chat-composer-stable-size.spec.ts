@@ -21,6 +21,7 @@ const model = {
   displayName: "Claude Sonnet 5",
   provider: "Anthropic",
   type: "TEXT",
+  contextLength: 500_000,
 }
 
 const chat = {
@@ -46,6 +47,17 @@ const chat = {
         (_, index) => `Párrafo ${index + 1}. Contenido de lectura suficiente para comprobar el borde inferior del chat sin ocultar ni desvanecer las últimas líneas.`
       ).join("\n\n"),
       timestamp: "2026-07-22T00:00:01.000Z",
+      generationUsage: {
+        tokensIn: 263_000,
+        tokensOut: 1_100,
+        total: 264_100,
+        contextTokens: 262_800,
+        contextWindow: 500_000,
+        model: model.name,
+        costTotalUsd: 0.926,
+        costInputUsd: 0.0003,
+        costOutputUsd: 0.0017,
+      },
     },
   ],
 }
@@ -61,7 +73,7 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "composer-size-token")
-    localStorage.setItem("sira:composer:effort", "Extra")
+    localStorage.setItem("sira:composer:effort", "Max")
     localStorage.setItem("sira.composer.access", "full")
     localStorage.removeItem("currentChatId")
   })
@@ -112,12 +124,12 @@ async function composerMetrics(page: Page) {
     const textarea = surface.querySelector("textarea")
     const modelTrigger = surface.querySelector<HTMLElement>(".chat-model-trigger")
     const permission = surface.querySelector<HTMLElement>(".composer-permission-chip")
-    const effortRing = surface.querySelector<HTMLElement>(".composer-effort-ring")
+    const contextTrigger = surface.querySelector<HTMLElement>(".composer-context-trigger")
     const effortChip = surface.querySelector<HTMLElement>(".composer-effort-chip")
     const dictation = surface.querySelector<HTMLElement>(".composer-dictation-button")
     const primaryAction = surface.querySelector<HTMLElement>(".composer-send-button, .composer-stop-button")
     const rect = surface.getBoundingClientRect()
-    if (!textarea || !modelTrigger || !permission || !effortRing || !effortChip || !dictation || !primaryAction) {
+    if (!textarea || !modelTrigger || !permission || !contextTrigger || !effortChip || !dictation || !primaryAction) {
       throw new Error("Composer controls are missing")
     }
     const style = getComputedStyle(surface)
@@ -143,9 +155,9 @@ async function composerMetrics(page: Page) {
       textareaOutlineStyle: getComputedStyle(textarea).outlineStyle,
       placeholder: textarea.getAttribute("placeholder"),
       permissionLabel: permission.textContent?.trim(),
-      effortLabel: effortChip.textContent?.trim().replace(/▾/g, "").trim(),
+      effortLabel: effortChip.textContent?.trim().replace(/[▾⌃]/g, "").trim(),
       hasInlineAgentToggle: Boolean(surface.querySelector(".composer-sira-code-toggle")),
-      toolbarOrder: [effortRing, modelTrigger, effortChip, dictation, primaryAction]
+      toolbarOrder: [contextTrigger, modelTrigger, effortChip, dictation, primaryAction]
         .map((element) => element.getBoundingClientRect().left),
     }
   })
@@ -316,6 +328,109 @@ test("mobile composer keeps its size while a long prompt scrolls internally", as
   expect(multiline.height).toBeGreaterThan(approved.height)
   expect(multiline.stacked).toBe(true)
   expect(multiline.modelBelowText).toBe(true)
+})
+
+test("context and effort open as separate professional popovers with real data", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const state = { hasConversation: true }
+  await mockChatApi(page, state)
+
+  await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  const contextTrigger = page.getByTestId("composer-context-trigger")
+  const effortTrigger = page.getByTestId("composer-effort-chip")
+  await expect(contextTrigger).toBeVisible({ timeout: 120_000 })
+
+  await contextTrigger.click()
+  const contextMenu = page.getByTestId("composer-context-menu")
+  await expect(contextMenu).toBeVisible()
+  await expect(contextMenu.getByText("Ventana de contexto", { exact: true })).toBeVisible()
+  await expect(page.getByTestId("composer-context-metric")).toHaveText("262.8k / 500k · 53%")
+  await expect(contextMenu.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "53")
+  await expect(contextMenu.getByText(/Entrada 263k · Salida 1\.1k ·/)).toBeVisible()
+  await expect(contextMenu.getByText(/Costo est\. \$0\.926/)).toBeVisible()
+  await expect(contextMenu.getByText(/Entrada \$0\.0003 · Salida \$0\.0017 ·/)).toBeVisible()
+  await expect(contextMenu.getByText(/Lectura de caché —/)).toBeVisible()
+
+  const contextGeometry = await contextMenu.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return { width: rect.width, height: rect.height, radius: getComputedStyle(element).borderRadius }
+  })
+  expect(contextGeometry.width).toBeGreaterThanOrEqual(288)
+  expect(contextGeometry.width).toBeLessThanOrEqual(306)
+  expect(contextGeometry.height).toBeGreaterThanOrEqual(190)
+  expect(contextGeometry.height).toBeLessThanOrEqual(245)
+  expect(contextGeometry.radius).toBe("16px")
+
+  await effortTrigger.click()
+  await expect(contextMenu).toBeHidden()
+  const effortMenu = page.getByTestId("composer-effort-menu")
+  await expect(effortMenu).toBeVisible()
+  await expect(effortMenu.getByText("Esfuerzo", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Más rápido", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Más inteligente", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Modo rápido", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Respuestas más rápidas, mayor uso de los límites.", { exact: true })).toBeVisible()
+
+  const effortGeometry = await effortMenu.evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return { width: rect.width, height: rect.height, radius: getComputedStyle(element).borderRadius }
+  })
+  expect(effortGeometry.width).toBeGreaterThanOrEqual(312)
+  expect(effortGeometry.width).toBeLessThanOrEqual(334)
+  expect(effortGeometry.height).toBeGreaterThanOrEqual(145)
+  expect(effortGeometry.height).toBeLessThanOrEqual(194)
+  expect(effortGeometry.radius).toBe("16px")
+
+  const slider = effortMenu.getByRole("slider", { name: "Nivel de esfuerzo de razonamiento" })
+  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
+  await slider.focus()
+  await page.keyboard.press("Home")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Low")
+  await page.keyboard.press("End")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
+  await expect(effortTrigger).toContainText("Extra high")
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe("Max")
+
+  const fastMode = effortMenu.getByRole("switch", { name: "Modo rápido" })
+  await expect(fastMode).toHaveAttribute("aria-checked", "false")
+  await fastMode.press("Space")
+  await expect(fastMode).toHaveAttribute("aria-checked", "true")
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("sira.composer.fast"))).toBe("1")
+
+  await page.keyboard.press("Escape")
+  await expect(effortMenu).toBeHidden()
+  await expect(effortTrigger).toBeFocused()
+
+  await page.reload({ waitUntil: "domcontentloaded" })
+  await page.getByTestId("composer-effort-chip").click()
+  await expect(page.getByRole("switch", { name: "Modo rápido" })).toHaveAttribute("aria-checked", "true")
+})
+
+test("composer popovers remain inside a mobile viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  const state = { hasConversation: true }
+  await mockChatApi(page, state)
+
+  await page.goto("/agentes?id=composer-size-chat", { waitUntil: "domcontentloaded", timeout: 120_000 })
+  await page.getByTestId("composer-context-trigger").press("Enter")
+  const contextMenu = page.getByTestId("composer-context-menu")
+  await expect(contextMenu).toBeVisible({ timeout: 120_000 })
+
+  for (const menu of [contextMenu]) {
+    const rect = await menu.boundingBox()
+    expect(rect).not.toBeNull()
+    expect(rect!.x).toBeGreaterThanOrEqual(8)
+    expect(rect!.x + rect!.width).toBeLessThanOrEqual(382)
+  }
+
+  await page.getByTestId("composer-effort-chip").press("Enter")
+  const effortMenu = page.getByTestId("composer-effort-menu")
+  await expect(effortMenu).toBeVisible()
+  const effortRect = await effortMenu.boundingBox()
+  expect(effortRect).not.toBeNull()
+  expect(effortRect!.x).toBeGreaterThanOrEqual(8)
+  expect(effortRect!.x + effortRect!.width).toBeLessThanOrEqual(382)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
 })
 
 test("conversation content rail aligns with the composer on desktop, narrow panes, and mobile", async ({ page }) => {

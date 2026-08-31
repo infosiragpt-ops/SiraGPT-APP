@@ -1311,13 +1311,10 @@ details[open] > summary .think-chevron,
 }
 
 
-/* ─── Effort — phone-scale minimal slider in the model picker ───────
-   Four stops (Bajo/Medio/Extra/Max). The <button> is ONLY a hit target;
-   the visible dot lives on ::after. Never paint the button itself as a
-   circle — Safari/iOS + global button rules balloon that into ~24–44px. */
+/* ─── Effort — four-stop reasoning control ────────────────────────── */
 .effort-section {
-  padding: 0.5rem 0.75rem 0.55rem;
-  border-top: 1px solid hsl(var(--border) / 0.48);
+  padding: 1rem 1.1rem 0.65rem;
+  border: 0;
   background: transparent;
 }
 
@@ -1326,36 +1323,27 @@ details[open] > summary .think-chevron,
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.65rem;
 }
 
 .effort-title {
-  color: hsl(var(--foreground) / 0.72);
-  font-size: 0.6875rem;
+  color: hsl(var(--foreground) / 0.9);
+  font-size: 0.75rem;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
   line-height: 1.1;
-}
-
-.effort-value {
-  color: hsl(var(--foreground) / 0.92);
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.1;
-  font-variant-numeric: tabular-nums;
 }
 
 .effort-track {
-  --effort-stop-size: 1.75rem;
+  --effort-stop-size: 2.25rem;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: var(--effort-stop-size); /* roomy drag/tap strip; dots stay tiny inside */
+  height: var(--effort-stop-size);
   margin: 0;
   padding: 0;
-  border-radius: 0.5rem;
+  border-radius: 999px;
   outline: none;
   cursor: pointer;
   touch-action: none;
@@ -1368,33 +1356,18 @@ details[open] > summary .think-chevron,
   outline-offset: 2px;
 }
 
-/* Line and fill sit on the stop centers: half a stop in from each end so
-   the rail ends exactly under the first/last dots (not floating past them). */
-.effort-track-line,
-.effort-track-fill {
+.effort-track-line {
   position: absolute;
   top: 50%;
-  left: calc(var(--effort-stop-size) / 2);
-  right: calc(var(--effort-stop-size) / 2);
-  height: 2px;
+  left: 0;
+  right: 0;
+  height: 1.55rem;
   transform: translateY(-50%);
   border-radius: 999px;
   pointer-events: none;
+  background: hsl(40 4% 91%);
 }
 
-.effort-track-line {
-  /* A bit grayer so the inactive rail is readable against the popover. */
-  background: hsl(220 8% 62% / 0.55);
-}
-
-.effort-track-fill {
-  right: auto;
-  width: 0;
-  background: hsl(220 10% 28% / 0.72);
-  transition: width 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-/* Hit target only — transparent, no min size from global button UA. */
 .effort-stop {
   position: relative;
   z-index: 1;
@@ -1422,11 +1395,11 @@ details[open] > summary .think-chevron,
 
 .effort-stop::after {
   content: "";
-  width: 0.375rem;  /* 6px — sits centered on the rail */
-  height: 0.375rem;
+  width: 0.25rem;
+  height: 0.25rem;
   border-radius: 999px;
-  background: hsl(220 8% 58% / 0.72);
-  box-shadow: 0 0 0 1.5px hsl(var(--popover));
+  background: hsl(40 2% 69%);
+  box-shadow: none;
   transition:
     width 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
     height 140ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -1435,76 +1408,55 @@ details[open] > summary .think-chevron,
 }
 
 .effort-stop:hover::after {
-  background: hsl(220 8% 42% / 0.85);
+  background: hsl(220 8% 45% / 0.8);
 }
 
-.effort-stop-reached::after {
-  background: hsl(220 10% 28% / 0.78);
-}
-
-/* Keep the bare class for contract tests / selectors; the paint is on ::after. */
 .effort-stop-active {
   background: transparent;
 }
 
 .effort-stop-active::after {
-  width: 0.5625rem;   /* 9px thumb — exact center of the stop hit target */
-  height: 0.5625rem;
-  background: hsl(220 12% 12%);
+  width: 1.55rem;
+  height: 1.55rem;
+  background: hsl(40 3% 11%);
   box-shadow:
-    0 0 0 1.5px hsl(var(--popover)),
-    0 0 0 2.5px hsl(220 12% 12% / 0.14);
+    0 0 0 1px hsl(40 2% 30% / 0.2),
+    0 1px 3px hsl(0 0% 0% / 0.22);
 }
 
 .effort-stop-active:hover::after {
   background: hsl(var(--foreground));
 }
 
-/* End labels removed — value lives in the header; on phones they collided. */
 .effort-ends {
-  display: none;
-}
-
-.effort-caption {
-  margin: 0.15rem 0 0;
-  color: hsl(var(--muted-foreground) / 0.86);
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.1rem;
+  color: hsl(var(--muted-foreground));
   font-size: 0.625rem;
-  font-weight: 450;
-  letter-spacing: -0.005em;
-  line-height: 1.35;
+  font-weight: 600;
+  line-height: 1.2;
 }
 
 .dark .effort-section {
-  border-top-color: hsl(0 0% 100% / 0.08);
   background: transparent;
 }
 
 .dark .effort-track-line {
-  background: hsl(0 0% 100% / 0.28);
-}
-
-.dark .effort-track-fill {
-  background: hsl(0 0% 100% / 0.62);
+  background: hsl(0 0% 100% / 0.13);
 }
 
 .dark .effort-stop::after {
-  background: hsl(0 0% 100% / 0.42);
-  box-shadow: 0 0 0 1.5px hsl(var(--popover));
-}
-
-.dark .effort-stop-reached::after {
-  background: hsl(0 0% 100% / 0.62);
+  background: hsl(0 0% 100% / 0.35);
+  box-shadow: none;
 }
 
 .dark .effort-stop-active::after {
-  background: hsl(0 0% 98%);
+  background: hsl(0 0% 96%);
   box-shadow:
-    0 0 0 1.5px hsl(var(--popover)),
-    0 0 0 2.5px hsl(0 0% 100% / 0.18);
-}
-
-.dark .effort-value {
-  color: hsl(0 0% 98% / 0.92);
+    0 0 0 1px hsl(0 0% 100% / 0.18),
+    0 1px 3px hsl(0 0% 0% / 0.35);
 }
 
 .model-provider-section {
@@ -6198,10 +6150,7 @@ footer {
   font-size: 9px;
   opacity: 0.55;
 }
-.composer-effort-cluster {
-  display: contents;
-}
-.composer-effort-ring {
+.composer-context-trigger {
   order: 10;
   width: 1.75rem;
   height: 1.75rem;
@@ -6211,6 +6160,10 @@ footer {
   padding: 0;
   display: grid;
   place-items: center;
+}
+.composer-context-trigger:hover,
+.composer-context-trigger[data-state="open"] {
+  background: hsl(220 10% 94% / 0.9);
 }
 .composer-model-inline {
   order: 20;
@@ -6224,19 +6177,18 @@ footer {
 .composer-send-button {
   order: 50;
 }
-.composer-effort-ring-meter {
+.composer-context-ring-meter {
   width: 0.7rem;
   height: 0.7rem;
   border-radius: 999px;
   border: 1.5px solid hsl(220 8% 66%);
   background:
-    conic-gradient(hsl(220 10% 38%) calc(var(--effort, 0) * 360deg), transparent 0);
+    conic-gradient(hsl(220 10% 38%) calc(var(--context-ratio, 0) * 360deg), transparent 0);
 }
 .composer-dictation-button:not([aria-pressed="true"]) {
   color: hsl(220 8% 64%) !important;
 }
-.composer-permission-menu-kicker,
-.composer-effort-menu .effort-title {
+.composer-permission-menu-kicker {
   padding: 0.15rem 0.4rem 0.4rem;
   font-size: 11px;
   font-weight: 600;
@@ -6270,9 +6222,12 @@ footer {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  margin-top: 0.85rem;
-  padding-top: 0.75rem;
+  margin: 0;
+  padding: 0.8rem 1rem 0.9rem;
   border-top: 1px solid hsl(220 12% 90%);
+}
+.composer-fast-icon {
+  color: #d83a30;
 }
 .composer-fast-switch {
   width: 2.1rem;
@@ -6295,10 +6250,135 @@ footer {
   transition: transform 140ms ease;
 }
 .composer-fast-switch.is-on {
-  background: #0d0d0d;
+  background: #e99a91;
 }
 .composer-fast-switch.is-on::after {
   transform: translateX(0.9rem);
+  background: #302b29;
+}
+
+.composer-effort-menu,
+.composer-context-menu {
+  overflow: hidden;
+  border: 1px solid hsl(36 12% 84%);
+  border-radius: 1rem;
+  background: hsl(40 25% 99% / 0.99);
+  color: hsl(35 7% 20%);
+  box-shadow: 0 8px 28px hsl(30 8% 10% / 0.12), 0 1px 3px hsl(30 8% 10% / 0.06);
+}
+
+.composer-context-menu section {
+  padding: 0.8rem 0.9rem 0.85rem;
+}
+
+.composer-context-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: hsl(35 7% 38%);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.composer-context-header > span {
+  max-width: 6rem;
+}
+
+.composer-context-header strong {
+  color: hsl(35 7% 19%);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 1.1;
+  text-align: right;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.composer-context-progress {
+  position: relative;
+  width: 100%;
+  height: 0.25rem;
+  margin: 0.5rem 0 0.8rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: hsl(35 6% 87%);
+}
+
+.composer-context-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: hsl(35 5% 43%);
+  transition: width 180ms ease;
+}
+
+.composer-context-section {
+  padding: 0.65rem 0 0;
+  border-top: 1px solid hsl(35 9% 88%);
+}
+
+.composer-context-section h3 {
+  margin: 0 0 0.35rem;
+  color: hsl(35 7% 43%);
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.composer-context-section p {
+  margin: 0.2rem 0 0;
+  color: hsl(35 6% 48%);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
+.composer-context-section strong {
+  color: hsl(35 7% 22%);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.composer-context-costs {
+  margin-top: 0.15rem;
+}
+
+.dark .composer-effort-menu,
+.dark .composer-context-menu {
+  border-color: hsl(0 0% 100% / 0.12);
+  background: hsl(220 12% 10% / 0.99);
+  color: hsl(0 0% 96%);
+  box-shadow: 0 12px 32px hsl(0 0% 0% / 0.4);
+}
+
+.dark .composer-context-header,
+.dark .composer-context-section h3,
+.dark .composer-context-section p {
+  color: hsl(0 0% 72%);
+}
+
+.dark .composer-context-header strong,
+.dark .composer-context-section strong {
+  color: hsl(0 0% 96%);
+}
+
+.dark .composer-context-progress {
+  background: hsl(0 0% 100% / 0.15);
+}
+
+.dark .composer-context-progress > span {
+  background: hsl(0 0% 78%);
+}
+
+.dark .composer-context-section,
+.dark .composer-fast-row {
+  border-top-color: hsl(0 0% 100% / 0.1);
 }
 .composer-input-row .composer-model-inline .chat-model-trigger {
   min-height: 1.75rem;

@@ -575,6 +575,154 @@ const AGENT_STREAM_EVENT_TYPES = new Set([
   'cowork_run_finished',
 ])
 
+/**
+ * Canonical token/cost telemetry emitted by an AI stream.
+ *
+ * Providers and older SiraGPT routes use two wire shapes: flat
+ * (`tokensIn`/`tokensOut`) and nested (`tokens: { in, out }`). Consumers
+ * should only depend on this normalized shape. Cache cost is deliberately
+ * optional: most providers do not expose it and the client must never invent
+ * a zero-cost cache hit.
+ */
+export type AIUsagePayload = {
+  tokensIn: number
+  tokensOut: number
+  model?: string
+  contextTokens?: number
+  contextWindow?: number
+  costTotalUsd?: number
+  costInputUsd?: number
+  costOutputUsd?: number
+  costCacheReadUsd?: number
+  costOriginalUsd?: number
+  costAppliedUsd?: number
+}
+
+type UnknownRecord = Record<string, unknown>
+
+function asUnknownRecord(value: unknown): UnknownRecord | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as UnknownRecord
+    : null
+}
+
+function firstFiniteNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) return value
+  }
+  return undefined
+}
+
+/** Normalize both legacy flat and current nested `usage` SSE frames. */
+export function normalizeAIUsageFrame(frame: unknown): AIUsagePayload | null {
+  const root = asUnknownRecord(frame)
+  if (!root || root.type !== 'usage') return null
+
+  const tokens = asUnknownRecord(root.tokens) || {}
+  const usage = asUnknownRecord(root.usage) || {}
+  const usageTokens = asUnknownRecord(usage.tokens) || {}
+  const costs = asUnknownRecord(root.costs) || asUnknownRecord(root.cost) || {}
+  const usageCosts = asUnknownRecord(usage.costs) || asUnknownRecord(usage.cost) || {}
+
+  const tokensIn = firstFiniteNumber(
+    root.tokensIn,
+    root.inputTokens,
+    tokens.in,
+    tokens.input,
+    usage.tokensIn,
+    usage.inputTokens,
+    usageTokens.in,
+    usageTokens.input,
+  )
+  if (tokensIn === undefined) return null
+
+  const tokensOut = firstFiniteNumber(
+    root.tokensOut,
+    root.outputTokens,
+    tokens.out,
+    tokens.output,
+    usage.tokensOut,
+    usage.outputTokens,
+    usageTokens.out,
+    usageTokens.output,
+  ) ?? 0
+
+  const model = [root.model, usage.model]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+  const contextTokens = firstFiniteNumber(
+    root.contextTokens,
+    tokens.context,
+    usage.contextTokens,
+    usageTokens.context,
+  )
+  const contextWindow = firstFiniteNumber(
+    root.contextWindow,
+    root.contextLength,
+    usage.contextWindow,
+    usage.contextLength,
+  )
+  const costOriginalUsd = firstFiniteNumber(root.costOriginalUsd, usage.costOriginalUsd)
+  const costAppliedUsd = firstFiniteNumber(root.costAppliedUsd, usage.costAppliedUsd)
+  const costTotalUsd = firstFiniteNumber(
+    root.costTotalUsd,
+    root.costUSD,
+    root.costUsd,
+    usage.costTotalUsd,
+    usage.costUSD,
+    usage.costUsd,
+    costs.totalUsd,
+    costs.totalUSD,
+    usageCosts.totalUsd,
+    usageCosts.totalUSD,
+    costAppliedUsd,
+    costOriginalUsd,
+  )
+  const costInputUsd = firstFiniteNumber(
+    root.costInputUsd,
+    root.inputCostUsd,
+    usage.costInputUsd,
+    usage.inputCostUsd,
+    costs.inputUsd,
+    costs.inputUSD,
+    usageCosts.inputUsd,
+    usageCosts.inputUSD,
+  )
+  const costOutputUsd = firstFiniteNumber(
+    root.costOutputUsd,
+    root.outputCostUsd,
+    usage.costOutputUsd,
+    usage.outputCostUsd,
+    costs.outputUsd,
+    costs.outputUSD,
+    usageCosts.outputUsd,
+    usageCosts.outputUSD,
+  )
+  const costCacheReadUsd = firstFiniteNumber(
+    root.costCacheReadUsd,
+    root.cacheReadCostUsd,
+    usage.costCacheReadUsd,
+    usage.cacheReadCostUsd,
+    costs.cacheReadUsd,
+    costs.cacheReadUSD,
+    usageCosts.cacheReadUsd,
+    usageCosts.cacheReadUSD,
+  )
+
+  return {
+    tokensIn,
+    tokensOut,
+    ...(model ? { model: model.trim() } : {}),
+    ...(contextTokens !== undefined ? { contextTokens } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(costTotalUsd !== undefined ? { costTotalUsd } : {}),
+    ...(costInputUsd !== undefined ? { costInputUsd } : {}),
+    ...(costOutputUsd !== undefined ? { costOutputUsd } : {}),
+    ...(costCacheReadUsd !== undefined ? { costCacheReadUsd } : {}),
+    ...(costOriginalUsd !== undefined ? { costOriginalUsd } : {}),
+    ...(costAppliedUsd !== undefined ? { costAppliedUsd } : {}),
+  }
+}
+
 type AIStreamOptions = {
   onReplace?: (content: string) => void
   onSources?: (payload: WebSourcesPayload) => void
@@ -596,7 +744,7 @@ type AIStreamOptions = {
   // caller can show an honest "Agent Usage" figure. costOriginalUsd is the
   // provider list price; costAppliedUsd is after the plan policy (struck-through
   // original → applied when they differ).
-  onUsage?: (payload: { tokensIn: number; tokensOut: number; model?: string; costOriginalUsd?: number; costAppliedUsd?: number }) => void
+  onUsage?: (payload: AIUsagePayload) => void
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -2038,17 +2186,10 @@ class ApiClient {
                 if (options.onAgentEvent) {
                   options.onAgentEvent(jsonData as AgentStreamEvent);
                 }
-              } else if (jsonData.type === 'usage' && typeof jsonData.tokensIn === 'number') {
+              } else if (jsonData.type === 'usage') {
                 // Real token usage (+ optional USD cost) for the Worked Summary.
-                if (options.onUsage) {
-                  options.onUsage({
-                    tokensIn: jsonData.tokensIn,
-                    tokensOut: typeof jsonData.tokensOut === 'number' ? jsonData.tokensOut : 0,
-                    ...(typeof jsonData.model === 'string' ? { model: jsonData.model } : {}),
-                    ...(typeof jsonData.costOriginalUsd === 'number' ? { costOriginalUsd: jsonData.costOriginalUsd } : {}),
-                    ...(typeof jsonData.costAppliedUsd === 'number' ? { costAppliedUsd: jsonData.costAppliedUsd } : {}),
-                  })
-                }
+                const usage = normalizeAIUsageFrame(jsonData)
+                if (usage && options.onUsage) options.onUsage(usage)
               } else if (jsonData.type === 'web_sources' && Array.isArray(jsonData.sources)) {
                 // ChatGPT-style searched-sources frame. Surface to the UI
                 // so it can render the "Fuentes" chip + Activity panel.

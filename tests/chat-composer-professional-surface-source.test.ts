@@ -13,6 +13,8 @@ const composerLayoutPath = path.join(process.cwd(), "lib", "composer-layout.ts")
 const composerLayout = fs.readFileSync(composerLayoutPath, "utf8")
 const effortMenuPath = path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx")
 const effortMenu = fs.readFileSync(effortMenuPath, "utf8")
+const contextMenuPath = path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx")
+const contextMenu = fs.readFileSync(contextMenuPath, "utf8")
 const permissionMenuPath = path.join(process.cwd(), "components", "chat", "composer-permission-menu.tsx")
 const permissionMenu = fs.readFileSync(permissionMenuPath, "utf8")
 const popoverPath = path.join(process.cwd(), "components", "ui", "popover.tsx")
@@ -224,13 +226,8 @@ describe("professional chat composer surface source contract", () => {
       /\.composer-surface\[data-composer-layout="stacked"\] \.composer-input-row\s*\{[\s\S]{0,260}row-gap: 1\.05rem;[\s\S]{0,100}padding: 1rem 0\.15rem 0\.1rem 0\.1rem !important;/,
       "the placeholder and footer must occupy the same vertical positions as the reference",
     )
-    assert.match(
-      globals,
-      /\.composer-effort-cluster\s*\{[\s\S]{0,100}display: contents;/,
-      "the two effort triggers must participate in the shared toolbar order",
-    )
     for (const [selector, order] of [
-      ["composer-effort-ring", 10],
+      ["composer-context-trigger", 10],
       ["composer-model-inline", 20],
       ["composer-effort-chip", 30],
       ["composer-dictation-button", 40],
@@ -244,14 +241,32 @@ describe("professional chat composer surface source contract", () => {
     }
     assert.match(
       effortMenu,
-      /value: "Extra", label: "Extra high"/,
-      "the visible high-effort label should match the reference while the backend value stays Extra",
+      /value: "Max", label: "Extra high"/,
+      "the far-right Max compute value should expose the reference's Extra high label",
+    )
+    assert.equal(
+      (effortMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "effort owns only its lightning-chip trigger",
+    )
+    assert.equal(
+      (contextMenu.match(/<PopoverTrigger asChild>/g) || []).length,
+      1,
+      "context owns an independent progress-ring trigger",
+    )
+    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
+    assert.match(contextMenu, /data-testid="composer-context-menu"/)
+    assert.match(contextMenu, /role="progressbar"/)
+    assert.doesNotMatch(
+      effortMenu,
+      /composer-context-trigger|composer-effort-ring/,
+      "the effort popover must not reclaim the context trigger",
     )
     assert.match(chatInterface, /composer-dictation-button/)
     assert.match(
       chatInterface,
-      /\{renderComposerModelControls\(\)\}\s*\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
-      "the microphone must remain beside Stop while a response is running",
+      /<ComposerContextMenu[\s\S]{0,260}\{renderComposerModelControls\(\)\}[\s\S]{0,120}<ComposerEffortMenu[\s\S]{0,180}\{renderDictationButton\(\)\}\s*<ChatComposerPrimaryAction/,
+      "context, model, effort, microphone and primary action must keep the approved order",
     )
     assert.doesNotMatch(
       chatInterface,
@@ -300,8 +315,8 @@ describe("professional chat composer surface source contract", () => {
     )
     assert.match(
       globals,
-      /\.composer-effort-ring\s*\{[^}]*border: 0;/,
-      "only the compact progress meter should be visible, not a second outer ring",
+      /\.composer-context-trigger\s*\{[^}]*border: 0;/,
+      "only the compact context meter should be visible, not a second outer ring",
     )
     assert.match(
       globals,

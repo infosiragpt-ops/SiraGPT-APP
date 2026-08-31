@@ -140,6 +140,7 @@ import {
   ChatComposerPrimaryAction,
   ChatComposerSurface,
 } from "@/components/chat/ChatComposerSurface"
+import { ComposerContextMenu } from "@/components/chat/composer-context-menu"
 import { ComposerEffortMenu } from "@/components/chat/composer-effort-menu"
 import { ComposerPermissionMenu } from "@/components/chat/composer-permission-menu"
 import { SiraCodeAgentToggle } from "@/components/sira-code-agent-toggle"
@@ -8211,11 +8212,16 @@ But first, you need to connect your Spotify account securely using the button be
       toolbar={
         <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
           <ComposerCharCounter input={input} />
+          <ComposerContextMenu
+            messages={currentChat?.messages || []}
+            selectedModel={currentChat?.model || selectedModel}
+            availableModels={availableModels}
+          />
+          {renderComposerModelControls()}
           <ComposerEffortMenu
             selectedEffort={selectedEffort}
             setSelectedEffort={setSelectedEffort}
           />
-          {renderComposerModelControls()}
           {renderDictationButton()}
           <ChatComposerPrimaryAction
             input={input}
