@@ -1,5 +1,7 @@
 # Control UI — SiraGPT (scoped)
 
+Planos, enrutador, jobs y marca viven en el `AGENTS.md` raíz. Este archivo sigue siendo solo Control UI scoped.
+
 Este árbol es la Control UI de OpenClaw vendida bajo `ui/upstream/openclaw/`.
 No es un segundo chat. El producto canónico es `/agentes`.
 Git, prod, F7 y política dura viven en el `AGENTS.md` de la raíz.
