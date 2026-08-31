@@ -1,5 +1,5 @@
 // Frontend API client for backend integration
-import { fetchResumeHeaders, streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
+import { fetchResumeHeaders, streamSseJson, freshGenerateHeaders } from "./sse-client"
 import {
   GENERATE_STREAM_CONNECT_MS,
   GENERATE_STREAM_IDLE_MS,
@@ -15,7 +15,7 @@ import {
 } from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
-import { resolveCatalogModel } from "./chat/catalog-model"
+import { lockGeneratePayload, withLockedGenerateModel } from "./chat/generate-payload"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
@@ -1695,14 +1695,14 @@ class ApiClient {
     signal?: AbortSignal,
     options: AIStreamOptions = {}
   ) {
-    const locked = resolveCatalogModel(data.model, [], data.provider);
+    const locked = lockGeneratePayload(data.model, data.provider);
     const turnKey = typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()
       ? data.idempotencyKey.trim()
       : safeUUID();
     data = {
       ...data,
       provider: locked.provider,
-      model: clampDeepSeekModel(locked.name) || locked.name,
+      model: locked.model,
       idempotencyKey: turnKey,
     };
     const url = `${this.baseURL}/ai/generate`;
@@ -2321,7 +2321,7 @@ class ApiClient {
     const response = await this.request('/ai/generate-gmail', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model }),
+      body: JSON.stringify(withLockedGenerateModel(data)),
     });
 
     return response;
@@ -2341,7 +2341,7 @@ class ApiClient {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
-        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+        body: JSON.stringify(withLockedGenerateModel(data)),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -2450,7 +2450,7 @@ class ApiClient {
       const config = await this.prepareMutatingFetch({
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
-        body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+        body: JSON.stringify(withLockedGenerateModel(data)),
         ...(signal && { signal }),
       });
       const response = await this.authenticatedFetch(url, config);
@@ -3654,7 +3654,7 @@ class ApiClient {
     return this.request('/plan/generate', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+      body: JSON.stringify(withLockedGenerateModel(data)),
     });
   }
 
@@ -3753,11 +3753,7 @@ class ApiClient {
           'Content-Type': 'application/json',
           ...freshGenerateHeaders(),
         },
-        body: JSON.stringify({
-          ...data,
-          model: clampDeepSeekModel(data?.model) || data?.model,
-          provider: data?.provider,
-        }),
+        body: JSON.stringify(withLockedGenerateModel(data)),
         signal: opts.signal,
       });
       res = await this.authenticatedFetch(`${this.baseURL}${path}`, config);
@@ -3777,11 +3773,7 @@ class ApiClient {
                 'Content-Type': 'application/json',
                 ...freshGenerateHeaders(),
               },
-              body: JSON.stringify({
-                ...data,
-                model: clampDeepSeekModel(data?.model) || data?.model,
-                provider: data?.provider,
-              }),
+              body: JSON.stringify(withLockedGenerateModel(data)),
               signal: opts.signal,
             });
             const retryRes = await this.authenticatedFetch(`${this.baseURL}${path}`, retryConfig);
@@ -3848,7 +3840,7 @@ class ApiClient {
     const config = await this.prepareMutatingFetch({
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+      body: JSON.stringify(withLockedGenerateModel(data)),
     });
 
     try {
@@ -3897,7 +3889,7 @@ class ApiClient {
     return this.request('/ai/generate-vector-ppt', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+      body: JSON.stringify(withLockedGenerateModel(data)),
     });
   }
 
@@ -3912,7 +3904,7 @@ class ApiClient {
     return this.request('/ai/generate-ppt', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...data, model: clampDeepSeekModel(data.model) || data.model, provider: 'DeepSeek' }),
+      body: JSON.stringify(withLockedGenerateModel(data)),
     });
   }
 
@@ -4044,7 +4036,7 @@ class ApiClient {
     return this.request('/ai/generate-google-services', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify({ ...payload, model: clampDeepSeekModel(payload.model) || payload.model }),
+      body: JSON.stringify(withLockedGenerateModel(payload)),
     });
   }
 

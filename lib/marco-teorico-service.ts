@@ -1,7 +1,8 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
+import { streamSseJson, freshGenerateHeaders } from "./sse-client"
+import { withLockedGenerateModel } from "./chat/generate-payload"
 
 /**
  * marco-teorico-service — client for the SSE generation pipeline.
@@ -76,7 +77,7 @@ export async function* generate({ projectId, signal, ...body }: GenerateArgs): A
     method: "POST",
     credentials: "include",
     headers: { "Content-Type": "application/json", ...freshGenerateHeaders(), ...authHeader() },
-    body: JSON.stringify({ ...body, model: clampDeepSeekModel(body.model) }),
+    body: JSON.stringify(withLockedGenerateModel(body)),
     cache: "no-store",
     signal,
   })

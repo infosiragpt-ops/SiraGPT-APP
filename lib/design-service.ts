@@ -1,7 +1,8 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson, freshGenerateHeaders, clampDeepSeekModel } from "./sse-client"
+import { streamSseJson, freshGenerateHeaders } from "./sse-client"
+import { lockGeneratePayload } from "./chat/generate-payload"
 
 /**
  * design-service — client for /api/design.
@@ -125,8 +126,7 @@ export const designService = {
    * the `final` event carries the complete HTML document, which
    * the iframe then renders.
    *
-   * `model` is clamped to DeepSeek V4 Flash/Pro. Fresh POST does not send
-   * Last-Event-ID (a new run must not skip events).
+   * Fresh POST does not send Last-Event-ID (a new run must not skip events).
    */
   async *generate(
     id: string,
@@ -138,7 +138,7 @@ export const designService = {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json", ...freshGenerateHeaders(), ...authHeader() },
-      body: JSON.stringify({ instruction, model: clampDeepSeekModel(model), effort }),
+      body: JSON.stringify({ instruction, ...lockGeneratePayload(model), effort }),
       cache: "no-store",
       signal,
     })

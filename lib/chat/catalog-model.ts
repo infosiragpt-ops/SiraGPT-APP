@@ -42,6 +42,7 @@ function inferFamilyProvider(name?: string): string {
   if (m.startsWith("muse-") || m.startsWith("llama-4")) return "Meta"
   if (looksLikeLocalCustomModel(name)) return "Custom"
   if (/deepseek-v4/.test(m)) return "DeepSeek"
+  if (m.startsWith("openai/") || /gpt-5/.test(m) || /\bterra\b/.test(m)) return "OpenAI"
   return ""
 }
 
