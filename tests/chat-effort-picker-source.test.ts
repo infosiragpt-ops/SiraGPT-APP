@@ -7,6 +7,10 @@ const chatInterface = fs.readFileSync(
   path.join(process.cwd(), "components", "chat-interface-enhanced.tsx"),
   "utf8",
 )
+const effortMenu = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx"),
+  "utf8",
+)
 const globals = fs.readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8")
 const orchestrator = fs.readFileSync(
   path.join(process.cwd(), "backend", "src", "services", "reasoning-orchestrator.js"),
@@ -15,7 +19,7 @@ const orchestrator = fs.readFileSync(
 
 describe("composer effort picker source contract", () => {
   it("offers only levels the backend compute planner accepts", () => {
-    const levelsBlock = chatInterface.match(/const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
+    const levelsBlock = effortMenu.match(/export const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
     assert.ok(levelsBlock, "EFFORT_LEVELS must exist")
     const values = [...levelsBlock![1].matchAll(/value: "([^"]+)"/g)].map((m) => m[1])
     assert.deepEqual(values, ["Bajo", "Medio", "Extra", "Max"])
@@ -44,11 +48,11 @@ describe("composer effort picker source contract", () => {
     assert.match(comparator![1], /prev\.setSelectedEffort === next\.setSelectedEffort/)
   })
 
-  it("renders the effort section inside the model dropdown and wires the context state", () => {
+  it("renders the effort menu on the composer toolbar and wires the context state", () => {
     assert.match(
       chatInterface,
-      /<EffortSection\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
-      "the dropdown must render the effort slider",
+      /<ComposerEffortMenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
+      "the composer toolbar must render the effort menu",
     )
     assert.match(
       chatInterface,
@@ -58,10 +62,8 @@ describe("composer effort picker source contract", () => {
   })
 
   it("supports real dragging, not just stop clicks", () => {
-    // Anchor the end at the next top-level declaration: the component's typed
-    // destructure closes with "\n}" too, which a lazy match stops at.
-    const section = chatInterface.match(
-      /function EffortSection\(([\s\S]*?)\nfunction areNavbarModelSelectorPropsEqual/,
+    const section = effortMenu.match(
+      /export function EffortSection\(([\s\S]*?)\nexport function ComposerEffortMenu/,
     )
     assert.ok(section, "EffortSection must exist")
     assert.match(section![1], /onPointerDown=/, "the track must start drags on pointer down")
