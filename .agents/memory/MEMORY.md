@@ -50,6 +50,7 @@
 - [OpenClaw agentic already integrated](openclaw-agentic-state.md) — OpenClaw tools/skills/agentic loop already live: agentic-chat-stream isEnabled() defaults true, buildDefaultTools wires broad real toolset; map "covered", don't re-port.
 - [Document chunk persistence](docintel-chunk-persistence.md) — createMany must whitelist DocumentChunk columns; raw `...chunk` spread throws Unknown argument sectionLevel and hangs analysis; stored chunks keep sectionPath in metadata.
 - [Deploy promote frontend gating](deploy-promote-frontend-gating.md) — Reserved VM promote health-checks frontend port 3000, not backend; backend-only deltas can't fail promote → a "waiting for ready" fail is transient, just republish.
+- [GCE VM provisioning failure](gce-vm-provisioning-failure.md) — image push can succeed while VM creation fails with no app logs; retry before changing startup code, then treat repeats as platform trouble.
 - [Curated IMAGE activation](curated-image-activation.md) — ensureStaticCatalogModels is hot-path; gate any "reactivate curated rows" write behind a per-instance once-per-process flag, never unconditional.
 - [Filter config override](filter-config-override.md) — FILTERS_CONFIG.enabled overrides each filter module's own enabled flag; change both or they silently disagree.
 - [Post-deploy warmup window](post-deploy-warmup-window.md) — frontend live ~90s before backend; /api/* gives raw 500; gate auth actions on HEAD /api/health/ready (204/503) via useBackendReady.
