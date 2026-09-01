@@ -438,7 +438,7 @@ export default function ModelsPage() {
     try {
       const token = localStorage.getItem('auth-token')
       const response = await authenticatedFetch(`${API_ROOT}/admin/models/${modelId}`, {
-        method: 'PATCH',
+        method: 'PUT',
         headers: adminAuthHeaders(token, true),
         body: JSON.stringify({ isActive: next })
       })

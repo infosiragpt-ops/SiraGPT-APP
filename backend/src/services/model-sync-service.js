@@ -4,7 +4,6 @@ const {
   getProviderCatalogDiagnostics,
   listManifestModels,
   mergeProviderModels,
-  DEFAULT_ACTIVE_IMAGE_MODEL_NAMES,
 } = require('./model-catalog-manifest');
 const {
   listFalVideoModels,
@@ -59,11 +58,6 @@ class ModelSyncService {
       deepseek: { data: null, lastFetch: 0, ttl: 3600000 },
       falVideo: { data: null, lastFetch: 0, ttl: 3600000 }
     };
-    // Guards the one-time reactivation of the curated default IMAGE set so it
-    // does NOT override admin deactivations on every read. See
-    // ensureStaticCatalogModels below. Per-instance so prod (singleton) runs it
-    // once per process, while tests (fresh instances) each exercise it.
-    this._curatedImageActivationDone = false;
     this._staticCatalogSyncFlights = new Map();
   }
 
@@ -547,10 +541,10 @@ class ModelSyncService {
   /**
    * Upsert a list of normalised models into the AiModel catalog.
    *
-   * New rows are created with the model's own `isActive` flag (generic
-   * discovery always passes `false` so admins curate visibility). Existing
-   * rows only get metadata refreshed via buildModelSyncUpdateData, which
-   * deliberately omits `isActive` so a manual admin activation survives.
+   * New rows are always created inactive so discovery can never publish a
+   * model without an explicit admin decision. Existing rows only get metadata
+   * refreshed via buildModelSyncUpdateData, which deliberately omits
+   * `isActive` so a manual admin activation survives.
    */
   // Persist discovered models. Batched for speed: the previous implementation
   // ran TWO sequential DB round-trips per model (findUnique + create/update),
@@ -606,7 +600,7 @@ class ModelSyncService {
           description: model.description,
           provider: model.provider,
           type: model.type,
-          isActive: model.isActive === true,
+          isActive: false,
           icon: this.getModelIcon(model),
           lastSynced: new Date(),
           syncSource: model.syncSource || 'api',
@@ -1023,8 +1017,6 @@ class ModelSyncService {
         tags: model.tags && model.tags.length ? model.tags : this.generateTags(model),
         lastSynced: new Date(),
       };
-      const modelType = String(model.type || '').toUpperCase();
-
       if (existingNames.has(model.name)) {
         await this.prisma.aiModel.update({
           where: { name: model.name },
@@ -1039,13 +1031,9 @@ class ModelSyncService {
           data: {
             name: model.name,
             ...data,
-            // Curated IMAGE models seed ACTIVE; other IMAGE models stay inactive
-            // until an admin enables them. VIDEO/AUDIO/MUSIC rows also stay
-            // inactive on import; activating an AI Models row is the explicit
-            // user-visible publish action.
-            isActive: modelType === 'IMAGE'
-              ? DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name)
-              : false,
+            // Catalog discovery is never a publishing action. Every new row
+            // stays private until an admin explicitly activates it.
+            isActive: false,
           },
         });
       } catch (err) {
@@ -1062,27 +1050,6 @@ class ModelSyncService {
       }
       created++;
       existingNames.add(model.name);
-    }
-
-    // One-time-per-process reactivation of the curated default IMAGE set, even
-    // for rows that already existed inactive (e.g. seeded by a previous deploy
-    // or disabled long ago). These are shipped defaults the user (sole admin)
-    // explicitly wants enabled; without this, pre-existing inactive rows would
-    // never surface in the picker. Guarded by `_curatedImageActivationDone` so
-    // it runs once and does NOT silently override a deliberate admin
-    // deactivation on every subsequent /models read or /generate-image call.
-    if ((!types || types.has('IMAGE')) && !this._curatedImageActivationDone) {
-      const defaultActiveImageNames = catalogModels
-        .filter(model => String(model.type || '').toUpperCase() === 'IMAGE'
-          && DEFAULT_ACTIVE_IMAGE_MODEL_NAMES.has(model.name))
-        .map(model => model.name);
-      if (defaultActiveImageNames.length) {
-        await this.prisma.aiModel.updateMany({
-          where: { name: { in: defaultActiveImageNames }, type: 'IMAGE', isActive: false },
-          data: { isActive: true },
-        });
-      }
-      this._curatedImageActivationDone = true;
     }
 
     return { created, updated, existing: existingRows.length, count: dedupedCatalogModels.length };

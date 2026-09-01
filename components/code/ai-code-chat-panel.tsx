@@ -840,11 +840,7 @@ export type AICodeChatPanelProps = {
 
 export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
-  const {
-    selectedModel,
-    selectProvider,
-    availableModels,
-  } = useChat()
+  const { availableModels } = useChat()
   const {
     files,
     activePath,
@@ -947,39 +943,6 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
     }
   }, [])
 
-  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
-  // policy.fallbackModel it will route to. Surface it so the composer never gets
-  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
-  // LLM-free and works even with no model at all.)
-  const [fallbackModel, setFallbackModel] = React.useState<{
-    name: string
-    provider?: string
-    displayName?: string
-  } | null>(null)
-
-  React.useEffect(() => {
-    if ((availableModels && availableModels.length > 0) || fallbackModel) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const res = await apiClient.getAIModels("TEXT")
-        const fb = (
-          res as {
-            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
-          }
-        )?.policy?.fallbackModel
-        if (!cancelled && fb?.name) {
-          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
-        }
-      } catch {
-        /* best-effort: deterministic Agent build still works without a model */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [availableModels, fallbackModel])
-
   React.useEffect(() => {
     if (codeModel || !availableModels || availableModels.length === 0) return
     let restored: { name: string; provider?: string } | null = null
@@ -1005,44 +968,44 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
     }
   }, [])
 
-  // If a real catalog loads later (e.g. an admin activates models) and our
-  // persisted choice is the policy fallback — which isn't in the catalog — drop
-  // it so the picker reflects the real list instead of pinning "Gema4".
+  // Remove persisted selections as soon as the admin catalog no longer lists
+  // them. An empty active catalog must leave /code without a selected model;
+  // policy fallbacks are not selectable admin models.
   React.useEffect(() => {
-    if (!availableModels || availableModels.length === 0 || !codeModel) return
-    if (availableModels.some((m) => m.name === codeModel.name)) return
+    if (!codeModel) return
+    if (availableModels?.some((m) => m.name === codeModel.name)) return
+    if (!availableModels || availableModels.length === 0) {
+      setCodeModel(null)
+      try {
+        window.localStorage.removeItem("code-workspace:model")
+      } catch {
+        /* quota / private mode */
+      }
+      return
+    }
     const next = recommendFastModel(availableModels) || availableModels[0]
     if (next) chooseCodeModel({ name: next.name, provider: next.provider })
   }, [availableModels, codeModel, chooseCodeModel])
 
-  // Resolved model the code chat actually uses. Priority:
-  //  1. an explicit code-chat choice (codeModel),
-  //  2. a fast model derived inline from the catalog (so the FIRST request is
-  //     already fast even before the auto-pick effect has run),
-  //  3. the main-chat selection as a last resort (may be a slow model).
+  // Resolve only from the live active catalog. This deliberately excludes the
+  // main-chat selection and backend policy fallback because either may have
+  // been deactivated since it was persisted.
+  const activeCodeModel = React.useMemo(
+    () => codeModel && availableModels?.some((model) => model.name === codeModel.name)
+      ? codeModel
+      : null,
+    [availableModels, codeModel],
+  )
   const autoFastModel = React.useMemo(
     () => recommendFastModel(availableModels || []),
     [availableModels],
   )
-  const activeModelName =
-    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
-  const activeProvider =
-    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
-  // What the model picker shows: the real catalog when present, else the single
-  // policy fallback so the user sees "Gema4" rather than an endless spinner.
-  const pickerModels = React.useMemo<ModelOption[]>(() => {
-    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
-    if (fallbackModel) {
-      return [
-        {
-          name: fallbackModel.name,
-          displayName: fallbackModel.displayName,
-          provider: fallbackModel.provider,
-        } as ModelOption,
-      ]
-    }
-    return []
-  }, [availableModels, fallbackModel])
+  const activeModelName = activeCodeModel?.name || autoFastModel?.name || ""
+  const activeProvider = activeCodeModel?.provider || autoFastModel?.provider
+  const pickerModels = React.useMemo<ModelOption[]>(
+    () => Array.isArray(availableModels) ? availableModels as ModelOption[] : [],
+    [availableModels],
+  )
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -1843,7 +1806,7 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
         return { applied: [] as Array<{ path: string; content: string }> }
       }
       if (!activeModelName) {
-        toast.error("Cargando modelos… intenta de nuevo en un momento.")
+        toast.error("No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.")
         return { applied: [] as Array<{ path: string; content: string }> }
       }
 
@@ -5978,7 +5941,7 @@ function ModelPickerInline({
   }, [grouped, query])
 
   const active = models.find((m) => m.name === selectedModel)
-  const label = active?.displayName || active?.name || selectedModel || "Modelo"
+  const label = active?.displayName || active?.name || "Sin modelos activos"
 
   React.useEffect(() => {
     if (!open) setQuery("")
@@ -6032,7 +5995,7 @@ function ModelPickerInline({
         <div className="max-h-[min(280px,calc(100vh-240px))] overflow-y-auto p-1">
           {models.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-              Cargando modelos…
+              Sin modelos activos
             </div>
           ) : filtered.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">

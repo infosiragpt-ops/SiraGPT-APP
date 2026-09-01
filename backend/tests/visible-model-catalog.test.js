@@ -77,12 +77,14 @@ test('curateVisibleTextModels surfaces admin-activated TEXT models even when not
   const out = curateVisibleTextModels([
     { id: 'custom-1', name: 'CustomCorp/llama-99b', displayName: 'Llama 99B', provider: 'OpenRouter', type: 'TEXT', isActive: true },
     { id: 'off-1', name: 'CustomCorp/off', type: 'TEXT', isActive: false },
+    { id: 'unset-1', name: 'CustomCorp/unset', type: 'TEXT' },
     { id: 'img-1', name: 'SomeImage', type: 'IMAGE', isActive: true },
     { id: '__virtual_x__', name: 'VirtualOne', type: 'TEXT' },
   ], {}); // no allowlist
   const names = out.map((m) => m.name);
   assert.ok(names.includes('CustomCorp/llama-99b'), 'active uncatalogued TEXT model is surfaced');
   assert.ok(!names.includes('CustomCorp/off'), 'inactive model stays hidden');
+  assert.ok(!names.includes('CustomCorp/unset'), 'rows without an explicit active state stay hidden');
   assert.ok(!names.includes('SomeImage'), 'non-TEXT model is not surfaced by the TEXT curator');
   assert.ok(!names.includes('VirtualOne'), 'virtual rows are excluded');
   const passthrough = out.find((m) => m.name === 'CustomCorp/llama-99b');
