@@ -13392,19 +13392,6 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                 ) : null}
               </div>
               <div className="chat-header-actions flex shrink-0 items-center gap-0.5">
-                {currentChat?.id && (
-                  <Button
-                    variant={coworkPanelOpen ? "secondary" : "ghost"}
-                    size="icon"
-                    onClick={() => coworkPanelOpen ? setCoworkPanelOpen(false) : openCoworkPanel()}
-                    title={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-label={coworkPanelOpen ? "Cerrar workspace" : "Abrir workspace y tareas"}
-                    aria-pressed={coworkPanelOpen}
-                    className="chat-header-icon-btn h-11 w-11 rounded-full"
-                  >
-                    <BriefcaseBusiness className="h-5 w-5" />
-                  </Button>
-                )}
                 <Button
                   variant={computerPanelOpen ? "secondary" : "ghost"}
                   size="icon"
