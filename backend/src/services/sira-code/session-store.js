@@ -57,6 +57,7 @@ async function createSession({
     workspace,
     abort: null,
     pendingPermissions: new Map(),
+    permission: 'default',
   };
   sessions.set(id, session);
   return session;

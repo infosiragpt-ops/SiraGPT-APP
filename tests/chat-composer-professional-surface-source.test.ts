@@ -300,6 +300,15 @@ describe("professional chat composer surface source contract", () => {
       ],
       "the popover must contain exactly the five approved permission levels in order",
     )
+    for (const copy of [
+      "Seguir la política configurada del agente.",
+      "Lectura dentro de la raíz de la sesión; se bloquean las escrituras y los comandos.",
+      "Sin tools de escritura hasta que exista un revisor de aprobación.",
+      "La computadora sigue acotada a /workspace de esta conversación.",
+      "Sin revisor; los archivos y comandos no tienen restricciones extra.",
+    ]) {
+      assert.ok(permissionMenu.includes(copy), `missing permission description: ${copy}`)
+    }
     assert.doesNotMatch(
       permissionMenu,
       /agentToggle|Modo del agente|Construir|Planificar|composer-permission-agent-mode/,
@@ -309,6 +318,21 @@ describe("professional chat composer surface source contract", () => {
       permissionMenu,
       /<PopoverContent\s+forceMount\s+hidden=\{!open\}/,
       "the five permission levels must stay mounted while the popover is closed",
+    )
+    assert.match(
+      permissionMenu,
+      /aria-label=\{`Permisos: \$\{active\.label\}`\}/,
+      "the icon trigger must name the level for assistive tech",
+    )
+    assert.match(
+      permissionMenu,
+      /title=\{active\.label\}/,
+      "hover can name the level without putting the title in the bar",
+    )
+    assert.doesNotMatch(
+      permissionMenu,
+      /<span className="truncate">\{active\.label\}<\/span>/,
+      "the toolbar trigger must stay icon-only — no Acceso completo / Permisos label",
     )
     assert.match(
       popover,

@@ -10,6 +10,10 @@
  */
 
 const { getAgent } = require('./agents');
+const {
+  authorizeComposerTool,
+  resolveComposerPermission,
+} = require('../composer-permission');
 
 const TOOL_ALIASES = Object.freeze({
   read_file: 'read',
@@ -41,8 +45,36 @@ function permissionFor(agentId, toolName) {
   return 'deny';
 }
 
-function authorizeTool(agentId, toolName) {
+function authorizeTool(agentId, toolName, opts = {}) {
   const tool = canonicalTool(toolName);
+  const composer = authorizeComposerTool(
+    opts.permission != null ? opts.permission : resolveComposerPermission(opts),
+    toolName,
+    opts,
+  );
+  if (composer.permission === 'full') {
+    return {
+      tool,
+      verdict: 'allow',
+      allowed: true,
+      needsPermission: false,
+      denied: false,
+      writable: WRITE_TOOLS.has(tool) || composer.writable,
+      composer: composer.permission,
+    };
+  }
+  if (composer.denied || composer.needsPermission) {
+    return {
+      tool,
+      verdict: composer.verdict,
+      allowed: false,
+      needsPermission: composer.needsPermission,
+      denied: composer.denied,
+      writable: WRITE_TOOLS.has(tool) || composer.writable,
+      reason: composer.reason,
+      composer: composer.permission,
+    };
+  }
   const verdict = permissionFor(agentId, toolName);
   const writable = WRITE_TOOLS.has(tool);
   return {
@@ -52,6 +84,7 @@ function authorizeTool(agentId, toolName) {
     needsPermission: verdict === 'ask',
     denied: verdict === 'deny',
     writable,
+    composer: composer.permission,
   };
 }
 

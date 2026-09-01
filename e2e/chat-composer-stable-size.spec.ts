@@ -155,6 +155,9 @@ async function composerMetrics(page: Page) {
       textareaOutlineStyle: getComputedStyle(textarea).outlineStyle,
       placeholder: textarea.getAttribute("placeholder"),
       permissionLabel: permission.textContent?.trim(),
+      permissionAria: permission.getAttribute("aria-label") || "",
+      permissionTitle: permission.getAttribute("title") || "",
+      permissionLevel: permission.getAttribute("data-level") || "",
       effortLabel: effortChip.textContent?.trim().replace(/[▾⌃]/g, "").trim(),
       hasInlineAgentToggle: Boolean(surface.querySelector(".composer-sira-code-toggle")),
       toolbarOrder: [contextTrigger, modelTrigger, effortChip, dictation, primaryAction]
@@ -235,7 +238,10 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.modelBorderColor).toBe("rgba(0, 0, 0, 0)")
   expect(approved.textareaOutlineStyle).toBe("none")
   expect(approved.placeholder).toBe("Message Assistant")
-  expect(approved.permissionLabel).toBe("Acceso completo")
+  expect(approved.permissionLabel).toBe("")
+  expect(approved.permissionAria).toBe("Permisos: Acceso completo")
+  expect(approved.permissionTitle).toBe("Acceso completo")
+  expect(approved.permissionLevel).toBe("full")
   expect(approved.effortLabel).toBe("Extra high")
   expect(approved.hasInlineAgentToggle).toBe(false)
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))

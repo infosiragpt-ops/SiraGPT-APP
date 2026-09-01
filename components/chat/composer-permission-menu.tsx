@@ -67,10 +67,10 @@ export function ComposerPermissionMenu() {
           data-testid="composer-permission-chip"
           data-level={active.id}
           aria-label={`Permisos: ${active.label}`}
-          className={cn("composer-permission-chip", active.id === "full" && "is-full")}
+          title={active.label}
+          className={cn("composer-permission-chip", `is-${active.id}`)}
         >
-          <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} />
-          <span className="truncate">{active.label}</span>
+          <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden />
         </button>
       </PopoverTrigger>
       <PopoverContent

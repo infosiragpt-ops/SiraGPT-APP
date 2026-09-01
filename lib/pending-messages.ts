@@ -25,6 +25,7 @@ export interface PendingAIRequestEnvelope {
   provider: string
   model: string
   reasoningEffort?: string
+  permission?: string
   regenerate?: boolean
   regenerationAttempt?: number
   disableAgentic?: boolean

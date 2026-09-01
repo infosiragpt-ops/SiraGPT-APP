@@ -140,10 +140,16 @@ const EXECUTORS = {
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
-  const auth = authorizeTool(session.agentId, toolName);
+  const auth = authorizeTool(session.agentId, toolName, {
+    permission: session.permission || ctx.permission,
+    approved: ctx.approved === true,
+  });
   if (auth.denied) {
+    const detail = auth.reason === 'composer_read_only'
+      ? 'Solo lectura: se bloquean las escrituras y los comandos.'
+      : `la herramienta ${auth.tool} no está permitida en ${session.agentId}`;
     return {
-      ...toolError('permission_denied', `la herramienta ${auth.tool} no está permitida en ${session.agentId}`),
+      ...toolError(auth.reason || 'permission_denied', detail),
       permission: auth,
     };
   }

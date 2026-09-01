@@ -74,7 +74,10 @@ router.post('/session', authenticateToken, async (req, res) => {
 router.post(
   '/session/:id/prompt',
   authenticateToken,
-  [body('text').isString().withMessage('text must be a string').bail().trim().notEmpty().withMessage('text is required')],
+  [
+    body('text').isString().withMessage('text must be a string').bail().trim().notEmpty().withMessage('text is required'),
+    body('permission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
+  ],
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -88,6 +91,7 @@ router.post(
         llmTurn: req.app.get('siraCodeLlmTurn'),
         chip: req.body.chip || req.body.modality || req.body.generationLane || req.body.lane,
         attachments: req.body.attachments || req.body.files,
+        permission: req.body.permission || req.body.toolPermission || req.body.composerPermission,
       });
       return res.json({ result });
     } catch (err) {

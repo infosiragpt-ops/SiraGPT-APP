@@ -42,9 +42,11 @@ async function runPrompt(session, text, {
   signal,
   chip,
   attachments,
+  permission,
 } = {}) {
   const agent = getAgent(session.agentId);
   session.model = model || session.model;
+  if (permission != null) session.permission = permission;
   const controller = session.abort || new AbortController();
   session.abort = controller;
   const combined = signal || controller.signal;
@@ -130,7 +132,9 @@ async function runPrompt(session, text, {
         }
         const name = call.name || call.tool || '';
         const args = call.arguments || call.args || {};
-        const auth = authorizeTool(session.agentId, name);
+        const auth = authorizeTool(session.agentId, name, {
+          permission: session.permission,
+        });
 
         if (auth.needsPermission) {
           const pid = permissionId();

@@ -113,8 +113,15 @@ describe("composer effort picker source contract", () => {
     )
     assert.match(
       globals,
-      /\.effort-track \{[\s\S]{0,400}touch-action: none/,
-      "touch drags must move the thumb, not scroll the dropdown"
+      /\.effort-track \{[\s\S]{0,520}overflow: hidden/,
+      "neon fill and glow must stay clipped inside the track",
+    )
+    assert.match(effortMenu, /data-effort=\{String\(activeIndex\)\}/)
+    assert.match(effortMenu, /className="effort-track-fill"/)
+    assert.match(
+      globals,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,220}\.effort-track-fill/,
+      "reduced motion must keep a static fill without flicker",
     )
   })
 
