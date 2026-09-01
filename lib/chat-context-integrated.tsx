@@ -16,6 +16,7 @@ import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
 import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
+import { brandModelLabel } from "./chat/brand-label"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
 import { toast } from "sonner"
@@ -223,6 +224,7 @@ interface Message {
   reasoning?: string
   reasoningStreaming?: boolean
   reasoningDurationMs?: number | null
+  model?: string
   reasoningToolCalls?: Array<{ index: number; name?: string; args?: string }>
   // Agent harness (AgentTrace). Live streams accumulate `agentSteps` from the
   // typed tool_call_start / tool_executing / tool_result frames (ordered by
@@ -1203,6 +1205,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         setSelectedModel(catalogModel.name);
         if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
       }
+      const pickerRow = availableModels.find((m: any) => m.name === catalogModel.name);
+      const pickerBadgeLabel = brandModelLabel(pickerRow || { name: catalogModel.name });
 
       const requestedIdempotencyKey = typeof options?.idempotencyKey === 'string'
         ? options.idempotencyKey.trim()
@@ -1291,6 +1295,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             error: undefined,
             metadata: turnMetadata,
+            ...(pickerBadgeLabel ? { model: pickerBadgeLabel } : {}),
           }
         : {
             id: `msg-ai-${activeChat.id}-${safeUUID()}`,
@@ -1299,6 +1304,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             timestamp: new Date().toISOString(),
             metadata: turnMetadata,
+            ...(pickerBadgeLabel ? { model: pickerBadgeLabel } : {}),
           };
       const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
 
@@ -2894,6 +2900,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    const regenPickerRow = availableModels.find((m: any) => m.name === selectedModel);
+    const regenBadgeLabel = brandModelLabel(regenPickerRow || { name: selectedModel });
     const aiMessagePlaceholder: Message = {
       id: `ai-regen-${safeUUID()}`,
       chatId: currentChat.id,
@@ -2903,6 +2911,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       timestamp: new Date().toISOString(),
       files: undefined,
       metadata: JSON.stringify({ regeneration: { attempt: nextRegenerationAttempt } }),
+      ...(regenBadgeLabel ? { model: regenBadgeLabel } : {}),
     };
 
     // Update chat to include messages before regeneration + new placeholder
@@ -3167,12 +3176,15 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       files: updatedFiles,
     };
 
+    const editPickerRow = availableModels.find((m: any) => m.name === selectedModel);
+    const editBadgeLabel = brandModelLabel(editPickerRow || { name: selectedModel });
     const aiMessagePlaceholder: Message = {
       id: `ai-regen-${safeUUID()}`,
       chatId: currentChat.id,
       role: 'ASSISTANT',
       content: "",
       timestamp: new Date().toISOString(),
+      ...(editBadgeLabel ? { model: editBadgeLabel } : {}),
     };
 
     // Update UI state in one go to prevent race conditions

@@ -131,7 +131,16 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
     type: 'TEXT',
     icon: 'ClaudeLogo',
     description: 'Claude Sonnet 4.5 de Anthropic: razonamiento equilibrado, escritura y codigo.',
-    aliases: ['claude-sonnet-4.5', 'claude-3-5-sonnet', 'claude-3.5-sonnet', 'anthropic/claude-3.5-sonnet'],
+    aliases: [
+      'claude-sonnet-4.5',
+      'claude-3-5-sonnet',
+      'claude-3.5-sonnet',
+      'anthropic/claude-3.5-sonnet',
+      'claude-sonnet-3',
+      'claude-3-sonnet',
+      'Claude Sonnet 3',
+      'anthropic/claude-3-sonnet',
+    ],
   },
   {
     name: 'claude-3-haiku',

@@ -103,6 +103,18 @@ describe('domain serializers', () => {
     assert.deepEqual(serializeMessage({ id: 'm2', tokens: null }), { id: 'm2', tokens: null });
   });
 
+  test('serializeMessage copies metadata.publicLabel onto model for the badge', () => {
+    const hydrated = serializeMessage({
+      id: 'm-badge',
+      tokens: 2n,
+      metadata: { publicLabel: 'Claude Sonnet 3' },
+    });
+    assert.equal(hydrated.model, 'Claude Sonnet 3');
+    assert.notEqual(hydrated.model, 'Sira Rápido');
+    const empty = serializeMessage({ id: 'm-empty', tokens: 1 });
+    assert.equal(empty.model, undefined);
+  });
+
   test('serializeChat normalizes nested messages and user when present', () => {
     assert.deepEqual(
       serializeChat({

@@ -43,6 +43,18 @@ describe("chat brand model labels", () => {
     assert.doesNotMatch(brandModelLabel({ name: "gemma4:26b" }), /gemma4|Ollama|DeepSeek/i)
   })
 
+  it("does not invent Sira Rápido for an empty source", () => {
+    assert.equal(brandModelLabel(""), "")
+    assert.equal(brandModelLabel(undefined), "")
+    assert.equal(brandModelLabel(null), "")
+  })
+
+  it("keeps Claude Sonnet 3 as the public picker badge", () => {
+    assert.equal(brandModelLabel("Claude Sonnet 3"), "Claude Sonnet 3")
+    assert.equal(brandModelLabel({ name: "Claude Sonnet 3", displayName: "Claude Sonnet 3" }), "Claude Sonnet 3")
+    assert.notEqual(brandModelLabel("Claude Sonnet 3"), SIRA_RAPIDO_LABEL)
+  })
+
   it("maps DeepSeek provider headings to Sira and leaves other vendors intact", () => {
     assert.equal(brandProviderLabel("DeepSeek"), "Sira")
     assert.equal(brandProviderLabel("Ollama"), "Sira")

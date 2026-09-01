@@ -78,16 +78,37 @@ function serializeUser(user) {
   };
 }
 
+function parseMessageMetadata(metadata) {
+  if (!metadata) return {};
+  if (typeof metadata === 'string') {
+    try {
+      const parsed = JSON.parse(metadata);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof metadata === 'object' ? metadata : {};
+}
+
 /**
- * Convert message object BigInt fields to numbers
+ * Convert message object BigInt fields to numbers.
+ * Surface the picker public label as `model` so /agentes badges match
+ * the composer selection (never invent Sira Rápido for an empty field).
  */
 function serializeMessage(message) {
   if (!message) return message;
-  
-  return {
+
+  const meta = parseMessageMetadata(message.metadata);
+  const publicLabel = typeof meta.publicLabel === 'string' ? meta.publicLabel.trim() : '';
+  const next = {
     ...message,
     tokens: message.tokens ? Number(message.tokens) : null
   };
+  if (publicLabel && !next.model) {
+    next.model = publicLabel;
+  }
+  return next;
 }
 
 /**

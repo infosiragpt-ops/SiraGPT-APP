@@ -80,6 +80,8 @@ test('inferProviderFromModelId: Anthropic direct (bare claude-* and anthropic/ s
   assert.equal(inferProviderFromModelId('anthropic/claude-opus-4.7'), 'Anthropic');
   assert.equal(inferProviderFromModelId('anthropic/claude-sonnet-5'), 'Anthropic');
   assert.equal(inferProviderFromModelId('claude-fable-5'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('Claude Sonnet 3'), 'Anthropic');
+  assert.equal(inferProviderFromModelId('claude-3-sonnet'), 'Anthropic');
 });
 
 test('inferProviderFromModelId: Groq direct (-versatile suffix)', () => {

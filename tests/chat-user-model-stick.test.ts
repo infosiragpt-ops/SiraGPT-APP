@@ -48,6 +48,17 @@ describe("user-selected model always wins", () => {
     assert.equal(brandModelLabel(grok), "Grok 4.5")
   })
 
+  it("keeps Claude Sonnet 3 on Anthropic and does not remap the badge to Sira Rápido", () => {
+    const claude = { name: "Claude Sonnet 3", displayName: "Claude Sonnet 3", provider: "Anthropic" }
+    const resolved = resolveCatalogModel(claude.name, [claude], "DeepSeek")
+    assert.equal(resolved.name, "Claude Sonnet 3")
+    assert.equal(resolved.provider, "Anthropic")
+    assert.equal(resolved.replaced, false)
+    assert.equal(clampDeepSeekModel(resolved.name), "Claude Sonnet 3")
+    assert.equal(brandModelLabel(claude), "Claude Sonnet 3")
+    assert.notEqual(brandModelLabel(claude), SIRA_RAPIDO_LABEL)
+  })
+
   it("does not fall back to Sira Rápido when a valid selection exists", () => {
     const resolved = resolveCatalogModel("sira-gpt-mini", catalog, "DeepSeek")
     assert.equal(resolved.replaced, false)

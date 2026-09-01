@@ -107,7 +107,11 @@ function inferProviderFromModelId(modelId) {
   // 2) First-party catalog families — their own connection, never the
   //    OpenRouter mixer. Slug prefixes (anthropic/, google/, openai/,
   //    moonshotai/) used to dump Claude/Gemini/GPT/Kimi onto OpenRouter.
-  if (m.startsWith('anthropic/') || /^claude(-|_)/.test(m)) return 'Anthropic';
+  if (
+    m.startsWith('anthropic/')
+    || /^claude(-|_)/.test(m)
+    || /\bclaude\b/.test(m)
+  ) return 'Anthropic';
   if (m.includes('gemini') || m.includes('imagen') || (m.startsWith('google/') && /gemini|imagen/.test(m))) {
     return 'Gemini';
   }
