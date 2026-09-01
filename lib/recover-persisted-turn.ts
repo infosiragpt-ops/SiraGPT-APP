@@ -24,6 +24,20 @@ export function shouldRecoverPersistedGenerate(
   const status = Number(error?.status ?? error?.statusCode)
   const text = [error?.message, error?.name, error?.code].filter(Boolean).join(" ")
 
+  // Missing-key / fail-closed generate never persisted an assistant row.
+  // Polling after 503 connection_unavailable keeps Pensando spinning.
+  if (
+    /connection_unavailable/i.test(text)
+    || /conexión no disponible/i.test(text)
+    || status === 503
+  ) {
+    return false
+  }
+
+  if (Number.isFinite(status) && status >= 400 && status < 500 && status !== 408) {
+    return false
+  }
+
   // Safari/Cloudflare abort the fetch without aborting our Stop controller.
   // That is a transport cut, not user Stop — the backend often already
   // persisted the assistant row.
@@ -37,7 +51,8 @@ export function shouldRecoverPersistedGenerate(
     || status === 520
     || status === 522
     || status === 524
-    || (status >= 500 && status <= 599)
+    || status === 502
+    || status === 504
 }
 
 export async function pollPersistedAssistantTurn(options: {

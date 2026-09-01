@@ -496,6 +496,12 @@ describe("checkModelProvidersConfigured", () => {
       OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY,
       DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
       XAI_API_KEY: process.env.XAI_API_KEY,
+      KIMI_API_KEY: process.env.KIMI_API_KEY,
+      MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
+      CEREBRAS_API_KEY: process.env.CEREBRAS_API_KEY,
+      MODEL_API_KEY: process.env.MODEL_API_KEY,
+      META_API_KEY: process.env.META_API_KEY,
+      LLAMA_API_KEY: process.env.LLAMA_API_KEY,
     };
     try {
       for (const k of Object.keys(originals)) delete process.env[k];
@@ -520,6 +526,9 @@ describe("checkModelProvidersConfigured", () => {
       "openrouter",
       "deepseek",
       "xai",
+      "kimi",
+      "cerebras",
+      "meta",
     ]) {
       assert.equal(r.details.providers[name], false, `${name} missing from model_providers`);
     }

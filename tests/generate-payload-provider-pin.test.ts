@@ -43,6 +43,17 @@ describe("generate payload keeps the selected catalog model", () => {
     })
   }
 
+  it("does not let a leftover Kimi provider steal Claude or Grok", () => {
+    assert.deepEqual(
+      resolveCatalogModel("anthropic/claude-sonnet-5", catalog, "Kimi"),
+      { name: "anthropic/claude-sonnet-5", provider: "Anthropic", replaced: false },
+    )
+    assert.deepEqual(
+      resolveCatalogModel("x-ai/grok-4.5", catalog, "Kimi"),
+      { name: "x-ai/grok-4.5", provider: "xAI", replaced: false },
+    )
+  })
+
   it("clamps leftover openrouter/gpt-4o only when it is not in the live catalog", () => {
     assert.equal(clampDeepSeekModel("openrouter/gpt-4o", catalog.map((item) => item.name)), "deepseek-v4-flash")
     assert.equal(

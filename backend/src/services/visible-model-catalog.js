@@ -34,7 +34,7 @@ const VISIBLE_TEXT_MODEL_DEFINITIONS = Object.freeze([
   {
     name: 'x-ai/grok-4.20',
     displayName: 'Grok 4.2',
-    provider: 'OpenRouter',
+    provider: 'xAI',
     type: 'TEXT',
     icon: 'GrokLogo',
     description: 'Grok 4.2 via OpenRouter para razonamiento, busqueda conversacional y tareas generales.',

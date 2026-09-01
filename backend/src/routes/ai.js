@@ -266,6 +266,7 @@ const {
   providerConnectionReady,
   CONNECTION_UNAVAILABLE_MESSAGE,
 } = require('../services/ai/provider-inference');
+const { honorPickerModel } = require('../services/ai/honor-picker-model');
 const {
   isCustomProvider,
   isLocalVisionModel,
@@ -453,6 +454,18 @@ function createProviderClientForRequest(provider, req, opts = {}) {
     },
     { name: 'DeepSeek', envKey: 'DEEPSEEK_API_KEY' },
     { name: 'OpenRouter', envKey: 'OPENROUTER_API_KEY' },
+    {
+      name: 'Kimi',
+      present: !!(process.env.MOONSHOT_API_KEY || process.env.KIMI_API_KEY),
+      envKey: 'MOONSHOT_API_KEY (or KIMI_API_KEY)',
+    },
+    { name: 'xAI', envKey: 'XAI_API_KEY' },
+    { name: 'Cerebras', envKey: 'CEREBRAS_API_KEY' },
+    {
+      name: 'Meta',
+      present: !!(process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY),
+      envKey: 'MODEL_API_KEY (or META_API_KEY)',
+    },
   ];
   const missing = checks.filter((c) => (c.present === undefined ? !process.env[c.envKey] : !c.present));
   if (missing.length > 0) {
@@ -876,11 +889,13 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     models = collapseSiraMiniRows(models.map((m) => {
       const catalogEntry = modelRouter.getModel(m.name);
       const publicModel = publicPickerModel(m);
+      const connectionProvider = resolveGenerateProvider(publicModel.provider, publicModel.name);
       return {
         ...publicModel,
         // Picker: displayName SiraGPT Mini. Never leak Ollama / HuggingFace / moondream / gemma4.
         isDefault: !!modelPolicy.defaultModel && modelPolicy.defaultModel.name === m.name,
         isFallback: modelPolicy.fallbackModel.name === m.name,
+        connected: providerConnectionReady(connectionProvider),
         planAccess: {
           currentPlan: modelPolicy.currentPlan,
           allowed: true,
@@ -2131,6 +2146,11 @@ router.post(
 
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
       applyTrivialTurnGuards(req, prompt);
+      const honoredPick = honorPickerModel(model, { provider });
+      if (honoredPick.model) {
+        model = honoredPick.model;
+        provider = honoredPick.provider || provider;
+      }
       const __publicWebReadonly = req.body.enableWebGrounding === true;
       const __publicWebQuery = __publicWebReadonly
         && typeof req.body.webGroundingQuery === 'string'

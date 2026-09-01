@@ -17,6 +17,10 @@ import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { resolveCatalogModel } from "./chat/catalog-model"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
+import {
+  attachGenerateHttpError,
+  shouldRetryGenerateHttp,
+} from "./generate-stream-errors"
 export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 // Codegen'd from backend/src/schemas/* — DO NOT edit by hand. Regenerate
@@ -1931,7 +1935,7 @@ class ApiClient {
         if (!response.ok) {
           let details: any = {};
           try { details = await response.json(); } catch { }
-          const message = details.error || `HTTP ${response.status}`;
+          const message = details.message || details.error || `HTTP ${response.status}`;
 
           try {
             if (typeof window !== 'undefined' && message && (/free (monthly|daily)/.test(message.toLowerCase()))) {
@@ -1941,25 +1945,19 @@ class ApiClient {
             console.warn('Failed to dispatch open-upgrade-modal event', e);
           }
 
-          const err: any = new Error(message);
-          err.status = response.status;
-          if (details.code) err.code = details.code;
+          const err = attachGenerateHttpError(response.status, details);
 
-          // A 409 is normally a terminal identity/payload conflict. The sole
-          // exception is an explicit `{ retryable: true }` response such as
-          // `turn_in_progress`, where replaying the same key attaches to the
-          // existing owner. Payload-mismatch 409s remain single-attempt.
-          const retryableConflict = response.status === 409 && details.retryable === true;
-          const connectionDead = response.status === 503 && /connection_unavailable/i.test(String(details.error || details.message || ""));
-          // Retriable transport failures: 429 (rate-limit), 5xx server,
-          // 408 timeout, and the explicit retryable 409 above — only BEFORE
-          // any content has reached the user. Missing provider keys are
-          // terminal: retrying 503 connection_unavailable for ~1 min looks
-          // like Pensando… on a greeting.
-          const retriable = !hasDeliveredAnyContent
-            && !connectionDead
-            && (response.status === 429 || response.status >= 500 || response.status === 408 || retryableConflict)
-            && attempt < MAX_CONNECT_ATTEMPTS;
+          // Empty-body 503 / connection_unavailable stop Pensando now.
+          // 5xx that is not a dead connection, 429, 408, and an explicit
+          // retryable 409 still use the provider reconnect budget. CSRF
+          // 403 is force-refreshed once in authenticatedFetch and must
+          // not land here as a spent attempt.
+          const retriable = shouldRetryGenerateHttp(response.status, details, {
+            hasDeliveredAnyContent,
+            hasResumeCursor: Boolean(lastEventId),
+            attempt,
+            maxAttempts: MAX_CONNECT_ATTEMPTS,
+          });
           if (retriable) {
             // Honor Retry-After header if the server set one (RFC 7231
             // §7.1.3). Value can be either an integer seconds or an
@@ -2252,6 +2250,10 @@ class ApiClient {
           || isGenerateStreamStall(error)
           || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
         const canResume = Boolean(lastEventId);
+        // Cookie/CSRF transport reconnect: first-byte Failed to fetch
+        // (and mid-stream resume WITH a cursor) stay retryable.
+        // User Stop (signal.aborted) already returned above. HTTP 503
+        // connection_unavailable is handled in the !response.ok path.
         if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);
           console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — ${canResume ? 'resuming' : 'reconnecting'} in ${delay}ms`);
@@ -2261,8 +2263,6 @@ class ApiClient {
 
         console.error('API stream failed:', error);
         // Convert raw "Failed to fetch" into a human-friendly message.
-        // The model wasn't able to reply after every retry — surface
-        // an actionable hint instead of a meaningless browser error.
         if (isNetworkError && !hasDeliveredAnyContent) {
           deliverStreamError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
           return;
