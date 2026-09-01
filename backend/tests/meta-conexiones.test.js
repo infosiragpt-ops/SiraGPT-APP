@@ -20,6 +20,7 @@ const modelSync = fs.readFileSync(path.join(root, 'src', 'services', 'model-sync
 test('admin connections treat meta as a first-class provider key', () => {
   assert.match(connectionsRoute, /'meta'/);
   assert.match(connectionsRoute, /meta: 'Meta Model API'/);
+  assert.match(connectionsRoute, /shaped.enabled && shaped.apiKeySet/);
 });
 
 test('connections bridge maps Meta to MODEL_API_KEY and probes api.meta.ai', () => {

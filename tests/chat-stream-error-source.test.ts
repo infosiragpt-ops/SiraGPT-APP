@@ -29,6 +29,12 @@ describe("chat stream error preservation contract", () => {
     assert.doesNotMatch(errorBlock, /bg\.complete\(/,
       "the error callback must not mark the background stream done")
 
+    assert.match(
+      source,
+      /waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped && !streamFailed/,
+      "a generate 503 / streamFailed turn must not poll getChat and keep Pensando",
+    )
+
     const successStart = source.indexOf('// Synchronous intent endpoints are terminal')
     const successEnd = source.indexOf('      } catch (error: any) {', successStart)
     assert.ok(successStart >= 0 && successEnd > successStart)

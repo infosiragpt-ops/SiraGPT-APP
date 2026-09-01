@@ -75,6 +75,11 @@ test('user-selected catalog models never walk the fallback chain', () => {
   assert.ok(Array.isArray(leftover));
 });
 
+test('boot audit lists Kimi when MOONSHOT/KIMI keys are missing', () => {
+  assert.match(aiRoute, /name: 'Kimi'/);
+  assert.match(aiRoute, /MOONSHOT_API_KEY \(or KIMI_API_KEY\)/);
+});
+
 test('missing first-party key is Conexión no disponible, not a vendor swap', () => {
   assert.equal(CONNECTION_UNAVAILABLE_MESSAGE, 'Conexión no disponible');
   const env = {};
@@ -88,6 +93,7 @@ test('missing first-party key is Conexión no disponible, not a vendor swap', ()
 
 test('generate route pins the picker model and fails closed without a connection', () => {
   assert.match(aiRoute, /resolveGenerateProvider\(provider, model\)/);
+  assert.match(aiRoute, /honorPickerModel\(model, \{ provider \}\)/);
   assert.match(aiRoute, /providerConnectionReady\(actualProvider\)/);
   assert.match(aiRoute, /CONNECTION_UNAVAILABLE_MESSAGE/);
   assert.match(aiRoute, /error: 'connection_unavailable'/);

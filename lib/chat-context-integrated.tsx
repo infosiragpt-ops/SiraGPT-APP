@@ -85,6 +85,9 @@ const normalizeChatError = (raw: string): string => {
   if (/timeout|timed.?out|ETIMEDOUT/i.test(raw)) {
     return "La solicitud tardó demasiado. Intenta de nuevo."
   }
+  if (/conexión no disponible|connection_unavailable/i.test(raw)) {
+    return "Conexión no disponible"
+  }
   if (/failed to fetch|network|ECONN|ETIMEDOUT|ENOTFOUND/i.test(raw)) {
     return "No se pudo conectar con el modelo. Verifica tu conexión e intenta de nuevo."
   }
@@ -2151,7 +2154,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           throwIfTurnCancelled();
         }
         const userStopped = controller.signal.aborted || pendingStopsRef.current.has(activeChat.id);
-        if (waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped) {
+        if (waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped && !streamFailed) {
           const recovered = await pollPersistedAssistantTurn({
             getChat: (id) => apiClient.getChat(id),
             chatId: activeChat.id,

@@ -24,6 +24,12 @@ describe("recover persisted generate turn", () => {
     assert.equal(shouldRecoverPersistedGenerate({ name: "TypeError", message: "Failed to fetch" }), true)
     assert.equal(shouldRecoverPersistedGenerate({ code: "stream_stall", message: "Stream stalled" }), true)
     assert.equal(shouldRecoverPersistedGenerate({ status: 429, message: "quota" }), false)
+    assert.equal(
+      shouldRecoverPersistedGenerate({ status: 503, code: "connection_unavailable", message: "Conexión no disponible" }),
+      false,
+    )
+    assert.equal(shouldRecoverPersistedGenerate({ status: 503 }), false)
+    assert.equal(shouldRecoverPersistedGenerate({ status: 401, message: "unauthorized" }), false)
   })
 
   it("polls getChat until the assistant row for this turn exists", async () => {

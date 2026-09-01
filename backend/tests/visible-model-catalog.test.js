@@ -140,6 +140,8 @@ test('grok catalog entry uses the valid OpenRouter id (not the 400-ing x-ai/grok
   const names = listVisibleTextModelDefinitions({}).map((m) => m.name);
   assert.ok(names.includes('x-ai/grok-4.20'), 'expected the corrected grok id in the catalog');
   assert.ok(!names.includes('x-ai/grok-4.2'), 'x-ai/grok-4.2 is NOT a valid OpenRouter model id');
+  const grok = listVisibleTextModelDefinitions({}).find((m) => m.name === 'x-ai/grok-4.20');
+  assert.equal(grok.provider, 'xAI');
 });
 
 test('legacy grok ids still resolve via the allowlist alias path', () => {

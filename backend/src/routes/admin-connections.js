@@ -192,7 +192,8 @@ router.get('/', async (req, res) => {
       }
       const shaped = shapeConnection(r);
       grouped[k].connections.push(shaped);
-      if (shaped.enabled) grouped[k].enabled = true;
+      // A row without a key must not make the provider look Conectada.
+      if (shaped.enabled && shaped.apiKeySet) grouped[k].enabled = true;
     }
     res.json({ providers: Object.values(grouped), total: rows.length });
   } catch (err) {
