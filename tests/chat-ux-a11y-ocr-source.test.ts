@@ -69,7 +69,8 @@ describe("chat UX / a11y / OCR source contracts", () => {
     const rail = source("components/MessageActionRail.tsx")
     assert.match(chat, /brandModelLabel/)
     assert.match(chat, /brandProviderLabel/)
-    assert.match(rail, /brandModelLabel\(model\)/)
+    assert.match(rail, /resolveReplyBadgeLabel/)
+    assert.doesNotMatch(rail, /brandModelLabel\(undefined\)/)
     assert.doesNotMatch(chat, /prettifyModelId/)
   })
 

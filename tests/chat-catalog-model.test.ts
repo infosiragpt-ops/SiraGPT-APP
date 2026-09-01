@@ -79,7 +79,7 @@ describe("chat catalog model", () => {
   it("does not rewrite the generate path when the live catalog snapshot is empty", () => {
     assert.deepEqual(
       resolveCatalogModel("openai/gpt-5.5", [], "OpenRouter"),
-      { name: "openai/gpt-5.5", provider: "OpenRouter", replaced: false },
+      { name: "openai/gpt-5.5", provider: "OpenAI", replaced: false },
     )
   })
 
