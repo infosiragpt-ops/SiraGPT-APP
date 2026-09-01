@@ -39,6 +39,17 @@ describe("visible text model catalog", () => {
     assert.deepEqual(curateVisibleTextModels([]), [])
   })
 
+  it("surfaces active Meta Model API rows with direct Meta routing", () => {
+    const models = curateVisibleTextModels([
+      { id: "meta-12", name: "muse-spark-1.2", displayName: "old", provider: "OpenRouter", type: "TEXT", isActive: true },
+      { id: "meta-11", name: "muse-spark-1.1", displayName: "old", provider: "OpenRouter", type: "TEXT", isActive: true },
+    ])
+
+    assert.deepEqual(models.map((model: any) => model.name), ["muse-spark-1.2", "muse-spark-1.1"])
+    assert.deepEqual(models.map((model: any) => model.provider), ["Meta", "Meta"])
+    assert.deepEqual(models.map((model: any) => model.icon), ["MetaLogo", "MetaLogo"])
+  })
+
   it("keeps admin-enabled flagship models FREE-eligible in the router catalog", () => {
     // The admin row for Grok uses the legacy id "x-ai/grok-4.2" on purpose:
     // OpenRouter rejects that slug (400), so the catalog canonicalises it to

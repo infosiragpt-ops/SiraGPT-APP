@@ -900,11 +900,13 @@ class ModelSyncService {
       { providerLabel: 'xAI', providerKey: 'xai', envVar: 'XAI_API_KEY', url: 'https://api.x.ai/v1/models' },
       { providerLabel: 'Together', providerKey: 'together', envVar: 'TOGETHER_API_KEY', url: 'https://api.together.xyz/v1/models' },
       { providerLabel: 'Fireworks', providerKey: 'fireworks', envVar: 'FIREWORKS_API_KEY', url: 'https://api.fireworks.ai/inference/v1/models' },
-      { providerLabel: 'Meta', providerKey: 'meta', envVar: 'MODEL_API_KEY', url: 'https://api.meta.ai/v1/models' },
+      { providerLabel: 'Meta', providerKey: 'meta', envVars: ['MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY'], url: 'https://api.meta.ai/v1/models' },
     ];
     const out = [];
     await Promise.all(providers.map(async (p) => {
-      const apiKey = process.env[p.envVar];
+      const apiKey = Array.isArray(p.envVars)
+        ? p.envVars.map((name) => process.env[name]).find(Boolean)
+        : process.env[p.envVar];
       if (!apiKey) return;
       const res = await this.fetchModelsFromEndpoint({
         url: p.url,
