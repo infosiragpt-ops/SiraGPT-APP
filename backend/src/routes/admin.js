@@ -287,8 +287,9 @@ router.put('/models/:id', [
   }
 });
 
-// Dedicated Estado switch: one model, one isActive write. PATCH is the
-// admin UI contract; PUT above still accepts isActive for the edit dialog.
+// Alias for the Estado switch. PUT /models/:id is the admin UI contract
+// (Express + admin-route-policy). PATCH stays mapped so a leftover client
+// does not fail closed as admin_route_policy_unmapped.
 router.patch('/models/:id', [
   body('isActive').exists().withMessage('isActive is required'),
 ], async (req, res) => {

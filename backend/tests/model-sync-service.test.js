@@ -22,7 +22,7 @@ test('model sync update payload preserves existing admin activation', () => {
   assert.ok(payload.updatedAt instanceof Date);
 });
 
-test('default inactive guard disables existing models once and preserves later manual activation', async () => {
+test('default inactive guard stamps the marker and never re-disables restored actives', async () => {
   const calls = [];
   let marker = null;
   const service = new ModelSyncService({
@@ -52,19 +52,16 @@ test('default inactive guard disables existing models once and preserves later m
 
   assert.deepEqual(first, {
     applied: true,
-    count: 378,
-    reason: 'default_inactive_enforced',
+    count: 0,
+    reason: 'marker_stamped_without_disable',
   });
   assert.deepEqual(second, {
     applied: false,
     count: 0,
     reason: 'already_applied',
   });
-  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 1);
-  assert.deepEqual(calls.find(([name]) => name === 'updateMany')[1], {
-    where: { isActive: true },
-    data: { isActive: false },
-  });
+  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 0);
+  assert.equal(calls.filter(([name]) => name === 'upsert').length, 1);
 });
 
 test('persistModels batches DB work: one findMany, createMany for new, parallel updates', async () => {

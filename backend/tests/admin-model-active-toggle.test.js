@@ -17,6 +17,7 @@ const {
   ADMIN_ROUTE_POLICIES,
   createAdminRoutePermissionMiddleware,
 } = require('../src/services/admin-route-policy');
+const { ROLE_PERMISSIONS } = require('../src/services/rbac-catalog');
 
 const MIGRATIONS_DIR = path.resolve(__dirname, '../prisma/migrations');
 const DISABLE_ALL_MIGRATION = '20260831235900_disable_all_ai_models_by_admin_request';
@@ -135,6 +136,11 @@ describe('picker catalog follows isActive', () => {
 });
 
 describe('admin route policy for the Estado switch', () => {
+  test('Administrador (PLATFORM_ADMIN) keeps models.manage with models.read', () => {
+    assert.ok(ROLE_PERMISSIONS.PLATFORM_ADMIN.includes('admin.models.read'));
+    assert.ok(ROLE_PERMISSIONS.PLATFORM_ADMIN.includes('admin.models.manage'));
+  });
+
   test('PATCH and PUT share admin.models.manage', () => {
     assert.equal(
       matchAdminRoutePolicy('PATCH', '/api/admin/models/model-123')?.routeKey,

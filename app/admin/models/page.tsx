@@ -98,12 +98,17 @@ function adminAuthHeaders(token: string | null, includeJson = false): HeadersIni
   return headers
 }
 
-function toggleErrorMessage(payload: { error?: string; code?: string } | null, fallback: string): string {
+function toggleErrorMessage(payload: { error?: string; code?: string; missingPermission?: string } | null, fallback: string): string {
   const code = payload?.code || payload?.error
   if (code === 'auth required' || payload?.error === 'auth required') {
     return 'Debes iniciar sesión como administrador'
   }
-  if (code === 'forbidden' || payload?.error === 'forbidden') {
+  if (
+    code === 'forbidden'
+    || payload?.error === 'forbidden'
+    || payload?.missingPermission === 'admin.models.manage'
+    || code === 'admin_route_policy_unmapped'
+  ) {
     return 'Solo los administradores pueden activar o desactivar modelos'
   }
   if (code === 'csrf_invalid') {
@@ -113,6 +118,14 @@ function toggleErrorMessage(payload: { error?: string; code?: string } | null, f
     return payload.error
   }
   return fallback
+}
+
+async function adminToggleHeaders(token: string | null): Promise<HeadersInit> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const csrf = await authenticatedFetch.csrfManager.getToken()
+  if (csrf) headers['X-CSRF-Token'] = csrf
+  return headers
 }
 
 /** Compact iOS-style switch + Activo/Inactivo label. One control, one click. */
@@ -465,8 +478,8 @@ export default function ModelsPage() {
     try {
       const token = localStorage.getItem('auth-token')
       const response = await authenticatedFetch(`${API_ROOT}/admin/models/${encodeURIComponent(modelId)}`, {
-        method: 'PATCH',
-        headers: adminAuthHeaders(token, true),
+        method: 'PUT',
+        headers: await adminToggleHeaders(token),
         body: JSON.stringify({ isActive: next })
       })
       const payload = await response.json().catch(() => null) as {
@@ -474,6 +487,7 @@ export default function ModelsPage() {
         stats?: { total?: number; active?: number; inactive?: number }
         error?: string
         code?: string
+        missingPermission?: string
       } | null
       if (!response.ok) {
         throw new Error(toggleErrorMessage(payload, 'No se pudo actualizar el modelo'))

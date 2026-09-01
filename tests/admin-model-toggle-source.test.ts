@@ -13,13 +13,17 @@ function toggleHandlerSource() {
 }
 
 describe("admin model activation contract", () => {
-  it("uses same-origin PATCH with an explicit boolean payload", () => {
+  it("uses same-origin PUT with an explicit boolean payload", () => {
     assert.match(pageSource, /getSameOriginApiBaseUrl/)
     const handler = toggleHandlerSource()
 
     assert.match(handler, /authenticatedFetch\(`\$\{API_ROOT\}\/admin\/models\/\$\{encodeURIComponent\(modelId\)\}`/)
-    assert.match(handler, /method:\s*["']PATCH["']/)
+    assert.match(handler, /method:\s*["']PUT["']/)
+    assert.doesNotMatch(handler, /method:\s*["']PATCH["']/)
     assert.match(handler, /body:\s*JSON\.stringify\(\{\s*isActive:\s*next\s*\}\)/)
+    assert.match(handler, /adminToggleHeaders\(token\)/)
+    assert.match(pageSource, /csrfManager\.getToken/)
+    assert.match(pageSource, /X-CSRF-Token/)
   })
 
   it("keeps the optimistic update, in-flight disable, rollback, and Spanish error", () => {

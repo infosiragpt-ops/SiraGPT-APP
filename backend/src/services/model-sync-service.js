@@ -919,18 +919,19 @@ class ModelSyncService {
   }
 
   /**
-   * One-time production guard for the admin catalog.
+   * Historical one-shot marker for the admin catalog default-inactive
+   * migration. GET /admin/models used to call this on every visit.
    *
-   * Earlier builds seeded/provider-synced models as active. The SQL
-   * migration handles normal deploys, but this runtime guard covers hosts
-   * where migrations are skipped or delayed. It runs once, then preserves
-   * future manual admin activations.
+   * If the marker is missing after a catalog restore, the old body
+   * bulk-set isActive=false and unpublished every restored active.
+   * This must stay a no-op on isActive: stamp the marker if absent,
+   * never updateMany, never re-disable restored actives.
    */
   async ensureDefaultInactiveOnce() {
     const markerKey = 'ai_models_default_inactive_v1_applied';
     const markerValue = JSON.stringify({
       appliedAt: new Date().toISOString(),
-      reason: 'admin_models_default_inactive',
+      reason: 'admin_models_default_inactive_marker_only',
     });
 
     const existingMarker = await this.prisma.systemSettings.findUnique({
@@ -942,18 +943,13 @@ class ModelSyncService {
       return { applied: false, count: 0, reason: 'already_applied' };
     }
 
-    const result = await this.prisma.aiModel.updateMany({
-      where: { isActive: true },
-      data: { isActive: false },
-    });
-
     await this.prisma.systemSettings.upsert({
       where: { key: markerKey },
       update: { value: markerValue },
       create: { key: markerKey, value: markerValue },
     });
 
-    return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
+    return { applied: true, count: 0, reason: 'marker_stamped_without_disable' };
   }
 
   _getStaticCatalogSyncFlightKey(options = {}) {
