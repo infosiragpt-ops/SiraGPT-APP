@@ -1947,11 +1947,14 @@ class ApiClient {
 
           const err = attachGenerateHttpError(response.status, details);
 
-          // Non-SSE 4xx/5xx (including empty-body 503) stop Pensando now.
-          // Only 429 and an explicit retryable 409 may reconnect. Missing
-          // provider keys used to retry for ~1 min and look hung.
+          // Empty-body 503 / connection_unavailable stop Pensando now.
+          // 5xx that is not a dead connection, 429, 408, and an explicit
+          // retryable 409 still use the provider reconnect budget. CSRF
+          // 403 is force-refreshed once in authenticatedFetch and must
+          // not land here as a spent attempt.
           const retriable = shouldRetryGenerateHttp(response.status, details, {
             hasDeliveredAnyContent,
+            hasResumeCursor: Boolean(lastEventId),
             attempt,
             maxAttempts: MAX_CONNECT_ATTEMPTS,
           });
@@ -2247,21 +2250,21 @@ class ApiClient {
           || isGenerateStreamStall(error)
           || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
         const canResume = Boolean(lastEventId);
-        // Resume only when tokens already reached the user (mid-stream cut).
-        // A first-byte abort / network miss must not retry for a minute —
-        // that is the live Pensando hang on 503 / iPhone Safari.
-        if (isNetworkError && hasDeliveredAnyContent && canResume && attempt < MAX_CONNECT_ATTEMPTS) {
+        // Cookie/CSRF transport reconnect: first-byte Failed to fetch
+        // (and mid-stream resume WITH a cursor) stay retryable.
+        // User Stop (signal.aborted) already returned above. HTTP 503
+        // connection_unavailable is handled in the !response.ok path.
+        if (isNetworkError && attempt < MAX_CONNECT_ATTEMPTS && (canResume || !hasDeliveredAnyContent)) {
           const delay = computeBackoff(attempt);
-          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — resuming in ${delay}ms`);
+          console.warn(`[ai-stream] network error on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS}: "${error.message}" — ${canResume ? 'resuming' : 'reconnecting'} in ${delay}ms`);
           await new Promise(r => setTimeout(r, delay));
           continue;
         }
 
         console.error('API stream failed:', error);
         // Convert raw "Failed to fetch" into a human-friendly message.
-        // First-byte failures stop thinking immediately — no retry budget.
         if (isNetworkError && !hasDeliveredAnyContent) {
-          deliverStreamError(new Error('No se pudo conectar con el modelo. Verifica tu conexión o reintenta en unos segundos.'));
+          deliverStreamError(new Error('No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.'));
           return;
         }
         deliverStreamError(error);
