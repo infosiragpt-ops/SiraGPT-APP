@@ -32,6 +32,8 @@
     "../lib/composer-layout.ts",
     "../lib/chat/brand-label.ts",
     "../lib/chat/catalog-model.ts",
+    "../lib/chat/reply-badge-model.ts",
+    "../lib/generate-stream-complete.ts",
     "../lib/chat/model-preference.ts",
     "../lib/chat/code-block-utils.ts",
     "../lib/chat/ocr-preprocess.ts",

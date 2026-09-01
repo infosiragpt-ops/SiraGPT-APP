@@ -30,6 +30,18 @@ describe("generate stream persist-then-poll recovery", () => {
     assert.match(apiSource, /shouldRetryGenerateHttp/)
     assert.match(apiSource, /attachGenerateHttpError/)
     assert.match(apiSource, /canResume \? 'resuming' : 'reconnecting'/)
+    assert.match(apiSource, /tryRecoverPersistedTurn/)
+    assert.match(apiSource, /decideEmptyGenerateStreamAction/)
+    assert.match(apiSource, /isSseKeepaliveComment/)
+    assert.match(apiSource, /shouldRecoverOnKeepalive/)
+    assert.match(apiSource, /text_delta/)
+    assert.match(chatSource, /tryRecoverPersistedTurn: recoverPersistedTurnNow/)
+    assert.match(chatSource, /shouldPollPersistedTurnOnStreamClose/)
+    assert.match(chatSource, /delayMs: 0/)
+    assert.doesNotMatch(
+      chatSource,
+      /if \(!prev \|\| prev\.id !== activeChat\.id \|\| activeStreamingChatIdsRef\.current\.has\(activeChat\.id\)\) return prev;/,
+    )
     assert.doesNotMatch(
       block.slice(0, 250),
       /if \(error\?\.name === 'AbortError' \|\| signal\?\.aborted\)/,
@@ -60,5 +72,6 @@ describe("generate stream persist-then-poll recovery", () => {
     assert.match(block, /data: \[DONE\]/)
     assert.match(block, /streamCompleted/)
     assert.match(block, /clientGone/)
+    assert.match(generateSource, /typeof res\.flush === 'function'/)
   })
 })

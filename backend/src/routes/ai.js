@@ -266,7 +266,7 @@ const {
   providerConnectionReady,
   CONNECTION_UNAVAILABLE_MESSAGE,
 } = require('../services/ai/provider-inference');
-const { honorPickerModel } = require('../services/ai/honor-picker-model');
+const { honorPickerModel, lookupPickerDisplayName } = require('../services/ai/honor-picker-model');
 const {
   isCustomProvider,
   isLocalVisionModel,
@@ -2128,7 +2128,13 @@ router.post(
       const rawWrite = res.write.bind(res);
       res.write = (...args) => {
         if (clientGone || res.destroyed || res.writableEnded) return true;
-        try { return rawWrite(...args); } catch { return true; }
+        try {
+          const ok = rawWrite(...args);
+          if (typeof res.flush === 'function') {
+            try { res.flush(); } catch { /* already flushed / proxy closed */ }
+          }
+          return ok;
+        } catch { return true; }
       };
       const rawEnd = res.end.bind(res);
       res.end = (...args) => {
@@ -2147,6 +2153,8 @@ router.post(
       let { model, prompt, chatId, files, provider, regenerate, webSearchMode, regenerationAttempt, idempotencyKey } = req.body;
       applyTrivialTurnGuards(req, prompt);
       const honoredPick = honorPickerModel(model, { provider });
+      const pickerModel = honoredPick.model || String(model || '').trim();
+      const pickerDisplayName = lookupPickerDisplayName(pickerModel);
       if (honoredPick.model) {
         model = honoredPick.model;
         provider = honoredPick.provider || provider;
@@ -7890,6 +7898,8 @@ router.post(
             ? { reasoningDurationMs: __reasoningSink.durationMs }
             : {}),
           generationUsage,
+          ...(pickerModel ? { pickerModel } : {}),
+          ...(pickerDisplayName ? { pickerDisplayName } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
           ...(streamId ? { streamId } : {}),
         };
@@ -8509,7 +8519,8 @@ router.post(
     const regenerate = req.body.regenerate === true;
     const voiceId = String(req.body.voiceId || '').trim();
     const modelId = String(req.body.modelId || '').trim();
-    const selectedModel = String(req.body.model || '').trim();
+    const honoredSpeech = honorPickerModel(req.body.model, { provider: req.body.provider });
+    const selectedModel = honoredSpeech.model || String(req.body.model || '').trim();
     const language = String(req.body.language || 'Spanish').trim();
     const accent = String(req.body.accent || 'Latino').trim();
     const effect = String(req.body.effect || 'Studio Clean').trim();
@@ -8667,7 +8678,8 @@ router.post(
     const text = String(req.body.text || '').trim();
     const chatId = typeof req.body.chatId === 'string' && req.body.chatId.trim() ? req.body.chatId.trim() : null;
     const durationSeconds = Number.isFinite(Number(req.body.durationSeconds)) ? Number(req.body.durationSeconds) : 30;
-    const selectedModel = String(req.body.model || '').trim();
+    const honoredMusic = honorPickerModel(req.body.model, { provider: req.body.provider });
+    const selectedModel = honoredMusic.model || String(req.body.model || '').trim();
     const wantsLyria = /lyria/i.test(selectedModel);
     const requestAbort = bindRequestAbort(req, res);
 
@@ -9508,6 +9520,11 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
       let { prompt, chatId, provider, model, fileId, aspectRatio, quality, imageCount } = req.body;
+      const honoredImagePick = honorPickerModel(model, { provider });
+      if (honoredImagePick.model) {
+        model = honoredImagePick.model;
+        provider = honoredImagePick.provider || provider;
+      }
       aspectRatio = normalizeImageAspectRatio(aspectRatio);
       quality = normalizeImageQuality(quality);
       imageCount = normalizeImageCount(imageCount);

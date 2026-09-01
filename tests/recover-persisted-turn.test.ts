@@ -32,6 +32,31 @@ describe("recover persisted generate turn", () => {
     assert.equal(shouldRecoverPersistedGenerate({ status: 401, message: "unauthorized" }), false)
   })
 
+  it("can poll immediately when the stream already finished", async () => {
+    const pending = { idempotencyKey: "turn-done", turnKey: "turn-done", streamId: "s" }
+    let calls = 0
+    const recovered = await pollPersistedAssistantTurn({
+      chatId: "chat-1",
+      pending,
+      attempts: 2,
+      delayMs: 0,
+      getChat: async () => {
+        calls += 1
+        return {
+          chat: {
+            id: "chat-1",
+            messages: [
+              { role: "USER", content: "hola", metadata: { idempotencyKey: "turn-done" } },
+              { role: "ASSISTANT", content: "Hola, Luis.", metadata: { idempotencyKey: "turn-done" } },
+            ],
+          },
+        }
+      },
+    })
+    assert.equal(calls, 1)
+    assert.equal(recovered?.chat.messages.at(-1).content, "Hola, Luis.")
+  })
+
   it("polls getChat until the assistant row for this turn exists", async () => {
     const pending = { idempotencyKey: "turn-1", turnKey: "turn-1", streamId: "stream-1" }
     let calls = 0

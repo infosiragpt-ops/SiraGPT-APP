@@ -32,6 +32,8 @@ function looksLikeLocalCustomModel(name?: string): boolean {
     || raw === "sira mini"
 }
 
+const LEFTOVER_MIXER_RE = /^(openrouter|deepseek|kimi)$/i
+
 function inferFamilyProvider(name?: string): string {
   const m = String(name || "").trim().toLowerCase()
   if (!m) return ""
@@ -42,17 +44,20 @@ function inferFamilyProvider(name?: string): string {
   if (m.startsWith("muse-") || m.startsWith("llama-4")) return "Meta"
   if (looksLikeLocalCustomModel(name)) return "Custom"
   if (/deepseek-v4/.test(m)) return "DeepSeek"
+  if ((m.startsWith("openai/") && !m.includes("gpt-oss")) || /^(gpt-[45]|o1\b|o3\b|o4-)/.test(m)) {
+    return "OpenAI"
+  }
   return ""
 }
 
 function pickProvider(model: CatalogModelLike | undefined, fallback = "", wantedName = ""): string {
   const fromModel = String(model?.provider || "").trim()
   const inferred = inferFamilyProvider(model?.name || wantedName)
-  if (inferred && (!fromModel || /^(openrouter|deepseek)$/i.test(fromModel))) return inferred
+  if (inferred && (!fromModel || LEFTOVER_MIXER_RE.test(fromModel))) return inferred
   if (fromModel) return fromModel
   if (looksLikeLocalCustomModel(model?.name || wantedName)) return "Custom"
   const raw = String(fallback || "").trim()
-  if (inferred && /^(openrouter|deepseek)$/i.test(raw)) return inferred
+  if (inferred && LEFTOVER_MIXER_RE.test(raw)) return inferred
   return raw || inferred || "DeepSeek"
 }
 
@@ -169,4 +174,18 @@ export function assertGenerateRequestModel(model?: string): GenerateRequestModel
   if (bare === PRO) return PRO
   if (bare === FLASH) return FLASH
   return wanted
+}
+
+/**
+ * Pin the composer picker id onto any generate payload (text / image /
+ * video / audio). Leftover mixer labels (Kimi, OpenRouter, DeepSeek)
+ * cannot steal a first-party Grok / Claude / Gemini / OpenAI pick.
+ */
+export function pinGenerateRequest<T extends { model?: string; provider?: string }>(data: T): T {
+  const locked = resolveCatalogModel(String(data.model || ""), [], String(data.provider || ""))
+  return {
+    ...data,
+    model: locked.name,
+    provider: locked.provider,
+  }
 }

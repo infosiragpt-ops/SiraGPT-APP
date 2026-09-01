@@ -15,7 +15,12 @@ import {
 } from "./authenticated-fetch"
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
-import { resolveCatalogModel } from "./chat/catalog-model"
+import { pinGenerateRequest } from "./chat/catalog-model"
+import {
+  decideEmptyGenerateStreamAction,
+  isSseKeepaliveComment,
+  shouldRecoverOnKeepalive,
+} from "./generate-stream-complete"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 import {
   attachGenerateHttpError,
@@ -749,6 +754,9 @@ type AIStreamOptions = {
   // provider list price; costAppliedUsd is after the plan policy (struck-through
   // original → applied when they differ).
   onUsage?: (payload: AIUsagePayload) => void
+  // When the model already persisted but this tab painted no tokens
+  // ([DONE] / socket close), recover that row immediately.
+  tryRecoverPersistedTurn?: () => Promise<boolean>
 }
 
 export type GrokVoiceSessionSnapshot = {
@@ -1847,14 +1855,14 @@ class ApiClient {
     signal?: AbortSignal,
     options: AIStreamOptions = {}
   ) {
-    const locked = resolveCatalogModel(data.model, [], data.provider);
+    const locked = pinGenerateRequest({ model: data.model, provider: data.provider });
     const turnKey = typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()
       ? data.idempotencyKey.trim()
       : safeUUID();
     data = {
       ...data,
       provider: locked.provider,
-      model: clampDeepSeekModel(locked.name) || locked.name,
+      model: clampDeepSeekModel(locked.model) || locked.model,
       idempotencyKey: turnKey,
     };
     const url = `${this.baseURL}/ai/generate`;
@@ -2035,6 +2043,26 @@ class ApiClient {
           }
           if (done) {
             flushBatch();
+            if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+              try {
+                if (await options.tryRecoverPersistedTurn()) {
+                  streamFinished = true;
+                  onClose();
+                  return;
+                }
+              } catch { /* persist poll failed; fall through */ }
+            }
+            const emptyAction = decideEmptyGenerateStreamAction({
+              seenDone: doneMessageSeen,
+              hasDeliveredAnyContent,
+              persistedAssistant: false,
+              hasResumeCursor: Boolean(lastEventId),
+            });
+            if (emptyAction === "close" || hasDeliveredAnyContent) {
+              streamFinished = true;
+              onClose();
+              return;
+            }
             if (!doneMessageSeen && lastEventId && attempt < MAX_CONNECT_ATTEMPTS) {
               const delay = computeBackoff(attempt);
               console.warn(`[ai-stream] stream ended before [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — resuming in ${delay}ms`);
@@ -2047,18 +2075,17 @@ class ApiClient {
               return;
             }
             if (!hasDeliveredAnyContent) {
-              // The stream ended before producing any token. Treat as
-              // retriable transport failure if we still have attempts
-              // left — provider may have rate-limited mid-handshake or
-              // hit a transient 5xx that the reverse-proxy swallowed.
-              if (attempt < MAX_CONNECT_ATTEMPTS) {
+              // Persist poll already ran. Do not spend the 3–4 min
+              // reconnect budget on a contentless [DONE].
+              if (emptyAction === "retry" && attempt < MAX_CONNECT_ATTEMPTS && Boolean(lastEventId)) {
                 const delay = computeBackoff(attempt);
                 console.warn(`[ai-stream] empty stream on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
                 await new Promise(r => setTimeout(r, delay));
                 lastError = new Error('Empty model stream');
-                break; // jump to outer `for` to retry
+                break;
               }
-              deliverStreamError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              streamFinished = true;
+              onClose();
               return;
             }
             streamFinished = true;
@@ -2077,11 +2104,14 @@ class ApiClient {
             const eventLines = line.split(/\r?\n/);
             let eventId: string | null = null;
             let dataLine: string | null = null;
+            let isKeepalive = false;
             for (const eventLine of eventLines) {
               if (eventLine.startsWith('id:')) {
                 eventId = eventLine.substring(3).trim();
               } else if (eventLine.startsWith('data: ')) {
                 dataLine = eventLine.substring(6);
+              } else if (isSseKeepaliveComment(eventLine)) {
+                isKeepalive = true;
               }
             }
             if (eventId) {
@@ -2092,7 +2122,24 @@ class ApiClient {
                 }
               } catch { /* quota / private mode */ }
             }
-            if (dataLine == null) continue;
+            if (dataLine == null) {
+              // `: ping` keeps the socket open after persist. Recover the
+              // saved assistant now — do not wait for [DONE] + 5 reconnects.
+              if (
+                isKeepalive
+                && shouldRecoverOnKeepalive({ hasDeliveredAnyContent, streamFailed: false })
+                && options.tryRecoverPersistedTurn
+              ) {
+                try {
+                  if (await options.tryRecoverPersistedTurn()) {
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                } catch { /* persist not ready yet; keep reading tokens */ }
+              }
+              continue;
+            }
             const payload = dataLine;
             // Sentinel the backend emits at the very end of every stream,
             // including error / recovered cases. Flush pending buffer,
@@ -2101,26 +2148,36 @@ class ApiClient {
             if (payload === '[DONE]') {
               flushBatch();
               doneMessageSeen = true;
-              if (!hasDeliveredAnyContent) {
-                // A clean [DONE] with zero tokens means the PROVIDER produced
-                // nothing (transient provider error the backend closed over).
-                // Retry with the same backoff budget as an abrupt close —
-                // dying on the first empty stream while retrying empty
-                // closes was an inconsistency.
-                if (attempt < MAX_CONNECT_ATTEMPTS) {
-                  // Release the previous connection before reconnecting —
-                  // unlike the abrupt-close path (stream already ended),
-                  // here the body may still be open.
-                  try { await reader.cancel(); } catch { /* already closed */ }
-                  const delay = computeBackoff(attempt);
-                  console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
-                  await new Promise(r => setTimeout(r, delay));
-                  lastError = new Error('Empty model stream');
-                  retryEmptyStream = true;
-                  break;
-                }
-                deliverStreamError(new Error('No se recibió respuesta del modelo. Intenta regenerar la respuesta.'));
+              if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+                try {
+                  if (await options.tryRecoverPersistedTurn()) {
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                } catch { /* persist poll failed; still close — [DONE] is terminal */ }
+              }
+              const doneAction = decideEmptyGenerateStreamAction({
+                seenDone: true,
+                hasDeliveredAnyContent,
+                persistedAssistant: false,
+                hasResumeCursor: Boolean(lastEventId),
+              });
+              // [DONE] is emitted after persist. Never spend the reconnect
+              // budget on a contentless terminator — recover or close now.
+              if (doneAction !== "retry" || hasDeliveredAnyContent || !lastEventId) {
+                streamFinished = true;
+                onClose();
                 return;
+              }
+              if (attempt < MAX_CONNECT_ATTEMPTS) {
+                try { await reader.cancel(); } catch { /* already closed */ }
+                const delay = computeBackoff(attempt);
+                console.warn(`[ai-stream] contentless [DONE] on attempt ${attempt}/${MAX_CONNECT_ATTEMPTS} — auto-reconnecting in ${delay}ms`);
+                await new Promise(r => setTimeout(r, delay));
+                lastError = new Error('Empty model stream');
+                retryEmptyStream = true;
+                break;
               }
               streamFinished = true;
               onClose();
@@ -2141,7 +2198,11 @@ class ApiClient {
                 }
                 hasDeliveredAnyContent = true;
                 lastProcessTime = Date.now();
-              } else if (jsonData.content) {
+              } else if (
+                (jsonData.type === 'text_delta' || jsonData.type === 'token' || jsonData.content)
+                && typeof jsonData.content === 'string'
+                && jsonData.content
+              ) {
                 batchBuffer += jsonData.content;
                 processedChunks++;
 
@@ -2293,7 +2354,7 @@ class ApiClient {
     const imageRequestStartedAt = Date.now();
     const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Image generation routinely takes 60-180s (gpt-image-2, Seedream,
       // Imagen). The backend enforces its own 200s deadline and answers
@@ -2330,7 +2391,7 @@ class ApiClient {
     const imageRequestStartedAt = Date.now();
     const requestPromise = this.request('/ai/generate-image', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       timeoutMs, // > backend 200s deadline; see generateImage
       maxRetries: 0,     // non-idempotent paid generation — never auto-retry
       suppressFailureLog: true,
@@ -3349,7 +3410,7 @@ class ApiClient {
     return this.request('/ai/generate-speech', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Long narrations can legitimately take longer than the generic 30s
       // API ceiling. Keep the browser alive slightly longer than the
@@ -3383,7 +3444,7 @@ class ApiClient {
     return this.request('/ai/generate-music', {
       method: 'POST',
       headers: { ...freshGenerateHeaders() },
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest(data)),
       signal: options.signal,
       // Music generation runs synchronously inside the request and can take a
       // while for long (3–4 min) tracks. Give it a generous ceiling and never
@@ -3548,7 +3609,11 @@ class ApiClient {
   }, opts?: { signal?: AbortSignal }) {
     return this.request('/ai/generate-video', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify(pinGenerateRequest({
+        ...data,
+        model: data.model,
+        provider: (data as { provider?: string }).provider,
+      })),
       signal: opts?.signal,
       timeoutMs: 120000, // video submit + first-frame can exceed 30s
     });

@@ -38,6 +38,55 @@ function remapStaleClaudeId(value) {
   return raw;
 }
 
+function versionToken(id) {
+  const match = String(id || '').toLowerCase().match(/(\d+(?:\.\d+)+)/);
+  return match ? match[1] : '';
+}
+
+function prettyFallbackLabel(model) {
+  const raw = String(model || '').trim();
+  if (!raw) return '';
+  if (/openrouter/i.test(raw)) return '';
+  if (/deepseek/i.test(raw) && !/v4[-_ ]?(flash|pro)/i.test(raw)) return '';
+  const stripped = raw.replace(/^(x-ai|xai|anthropic|google|openai|moonshotai|meta|z-ai)\//i, '').trim();
+  if (!stripped) return '';
+  return stripped
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((token) => (/^\d/.test(token) ? token : token.charAt(0).toUpperCase() + token.slice(1)))
+    .join(' ');
+}
+
+function lookupPickerDisplayName(model) {
+  const picked = remapStaleClaudeId(String(model || '').trim());
+  if (!picked) return '';
+  try {
+    const { listVisibleTextModelDefinitions } = require('../visible-model-catalog');
+    const foldId = fold(picked);
+    const pickedVersion = versionToken(picked);
+    const match = listVisibleTextModelDefinitions().find((row) => {
+      const names = [row.name, row.displayName, ...(row.aliases || [])];
+      return names.some((name) => {
+        if (fold(name) !== foldId) return false;
+        const otherVersion = versionToken(name) || versionToken(row.name);
+        if (pickedVersion && otherVersion && pickedVersion !== otherVersion) return false;
+        return true;
+      });
+    });
+    const catalogName = String(match?.displayName || '').trim();
+    if (catalogName) {
+      const catalogVersion = versionToken(match.name) || versionToken(catalogName);
+      if (pickedVersion && catalogVersion && pickedVersion !== catalogVersion) {
+        return prettyFallbackLabel(picked);
+      }
+      return catalogName;
+    }
+  } catch {
+    /* catalog unavailable — fall through to pretty id */
+  }
+  return prettyFallbackLabel(picked);
+}
+
 function honorPickerModel(model, opts = {}) {
   const picked = remapStaleClaudeId(String(model || '').trim());
   const requestedProvider = String(opts.provider || opts.requestedProvider || '').trim();
@@ -67,5 +116,6 @@ function honorPickerModel(model, opts = {}) {
 module.exports = {
   honorPickerModel,
   remapStaleClaudeId,
+  lookupPickerDisplayName,
   ANTHROPIC_SONNET_ID,
 };

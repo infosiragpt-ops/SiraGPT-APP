@@ -3,6 +3,7 @@ import { describe, it } from "node:test"
 
 import { brandModelLabel, SIRA_RAPIDO_LABEL } from "../lib/chat/brand-label"
 import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { resolveReplyBadgeLabel } from "../lib/chat/reply-badge-model"
 import { clampDeepSeekModel } from "../lib/sse-client"
 
 describe("user-selected model always wins", () => {
@@ -46,6 +47,17 @@ describe("user-selected model always wins", () => {
     assert.equal(resolved.provider, "xAI")
     assert.equal(clampDeepSeekModel(resolved.name), "x-ai/grok-4.5")
     assert.equal(brandModelLabel(grok), "Grok 4.5")
+    assert.equal(
+      resolveReplyBadgeLabel({
+        model: grok,
+        generationUsage: { model: grok.name },
+      }, [grok]),
+      "Grok 4.5",
+    )
+    assert.notEqual(
+      resolveReplyBadgeLabel({ generationUsage: { model: grok.name } }, [grok]),
+      SIRA_RAPIDO_LABEL,
+    )
   })
 
   it("does not fall back to Sira Rápido when a valid selection exists", () => {

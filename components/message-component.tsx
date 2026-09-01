@@ -102,7 +102,7 @@ import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
 import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
-import { brandModelLabel } from "@/lib/chat/brand-label"
+import { resolveReplyBadgeLabel } from "@/lib/chat/reply-badge-model"
 import {
     copyMarkdownToWordClipboard,
     createWordClipboardPayloadFromSelection,
@@ -3416,13 +3416,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             on pure-code; everything hides during
                             streaming-only state). See MessageActionRail
                             for telemetry contract. */}
-                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && (message as any).model ? (
+                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && resolveReplyBadgeLabel(message) ? (
                             <div
                                 className="mt-1 mb-0.5 text-[11px] leading-none text-muted-foreground/70 select-none"
-                                title={`Respondido con ${brandModelLabel((message as any).model)}`}
-                                aria-label={`Respondido con ${brandModelLabel((message as any).model)}`}
+                                title={`Respondido con ${resolveReplyBadgeLabel(message)}`}
+                                aria-label={`Respondido con ${resolveReplyBadgeLabel(message)}`}
                             >
-                                {brandModelLabel((message as any).model)}
+                                {resolveReplyBadgeLabel(message)}
                             </div>
                         ) : null}
                         {!isVideoMessage && (
@@ -3430,7 +3430,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 <MessageActionRail
                                     messageId={message.id}
                                     chatId={message.chatId}
-                                    model={(message as any).model}
+                                    model={resolveReplyBadgeLabel(message) || undefined}
                                     content={stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || ""))}
                                     hasError={!!message.error}
                                     regenerationAttempt={regenerationAttempt}
