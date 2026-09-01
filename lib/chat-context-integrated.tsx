@@ -11,6 +11,8 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
+import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete"
+import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
@@ -237,6 +239,7 @@ interface Message {
   agentPermission?: AgentPermissionClient | null
   agentMetadata?: any
   generationUsage?: AIUsagePayload & { total: number }
+  model?: { name?: string | null; displayName?: string | null; provider?: string | null } | string
 }
 
 export interface AgentStepClient {
@@ -358,6 +361,7 @@ function createReasoningHandlers(opts: {
           ...payload,
           total: payload.tokensIn + payload.tokensOut,
         },
+        ...(payload.model ? { model: payload.model } : {}),
       })
     },
   }
@@ -1217,6 +1221,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       // Offline/reload retries pass reusePending=true and reuse this exact key
       // instead of replacing the durable draft with a fresh stream identity.
       const catalogModel = resolveCatalogModel(selectedModel, availableModels, selectProvider);
+      const pickerBadge = resolvePickerBadgeSource(catalogModel.name, availableModels, catalogModel.provider);
       if (catalogModel.replaced) {
         setSelectedModel(catalogModel.name);
         if (catalogModel.provider) setSelectedProivder(catalogModel.provider);
@@ -1310,6 +1315,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             error: undefined,
             metadata: turnMetadata,
+            model: pickerBadge,
           }
         : {
             id: `msg-ai-${activeChat.id}-${safeUUID()}`,
@@ -1318,6 +1324,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             content: '',
             timestamp: new Date().toISOString(),
             metadata: turnMetadata,
+            model: pickerBadge,
           };
       const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
 
@@ -1899,6 +1906,30 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           });
           streamBuffersRef.current.set(activeChat.id, fgBuffer);
 
+          const recoverPersistedTurnNow = async () => {
+            const recovered = await pollPersistedAssistantTurn({
+              getChat: (id) => apiClient.getChat(id),
+              chatId: activeChat.id,
+              pending: {
+                idempotencyKey: turnIdempotencyKey,
+                turnKey: turnIdempotencyKey,
+                streamId,
+              },
+              attempts: 4,
+              delayMs: 0,
+              isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+            });
+            if (!recovered?.chat) return false;
+            setCurrentChat((prev) => {
+              if (!prev || prev.id !== activeChat.id) return prev;
+              return mergeChatPreservingUserMessages(recovered.chat, prev);
+            });
+            setChats((prev) => prev.filter((c) => c && c.id).map((c) => (
+              c.id === activeChat.id ? mergeChatPreservingUserMessages(recovered.chat, c) : c
+            )));
+            return true;
+          };
+
           // STEP 3: Nayi streaming API call karein
           throwIfTurnCancelled();
           await apiClient.generateAIStream(
@@ -1947,6 +1978,13 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   }),
                 );
               }
+              if (shouldPollPersistedTurnOnStreamClose({
+                deliveredContent: finalPartial,
+                seenDone: true,
+                streamFailed,
+              })) {
+                try { await recoverPersistedTurnNow(); } catch { /* getChat failed; finally still idles */ }
+              }
               if (!controller.signal.aborted && !pendingStopsRef.current.has(activeChat.id)) {
                 // Do NOT force setIsStreaming(false) — sibling chats may still
                 // stream. markChatIdle in `finally` re-syncs aggregates.
@@ -1958,12 +1996,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 }
                 // Persist ID sync + cache update even for background chats.
                 const syncIds = async (attempt = 1) => {
-                  if (activeStreamingChatIdsRef.current.has(activeChat.id)) return;
                   try {
                     const resp = await apiClient.getChat(activeChat.id);
                     const serverChat = resp.chat;
                     setCurrentChat(prev => {
-                      if (!prev || prev.id !== activeChat.id || activeStreamingChatIdsRef.current.has(activeChat.id)) return prev;
+                      if (!prev || prev.id !== activeChat.id) return prev;
                       return mergeChatPreservingUserMessages(serverChat, prev);
                     });
                     setChats((prev) =>
@@ -2149,6 +2186,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                   return { ...prevChat, messages: newMessages };
                 });
               },
+              tryRecoverPersistedTurn: recoverPersistedTurnNow,
             }
           );
           throwIfTurnCancelled();
@@ -2463,11 +2501,12 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             case 'image':
               await handleNewChatWithPlaceholder(newChat, initialContent, '[GENERATING_IMAGE]', uploadedFiles);
 
+              const imageCatalog = resolveCatalogModel(chatModel, availableModels, selectProvider);
               const imageGenerationPayload = {
                 prompt: initialContent,
                 chatId: newChat.id,
-                provider: selectProvider,
-                model: chatModel,
+                provider: imageCatalog.provider,
+                model: imageCatalog.name,
               };
               if (initialFiles && initialFiles.length > 0) {
                 (imageGenerationPayload as any).fileId = resolveAttachmentId(initialFiles[0]);
@@ -3728,7 +3767,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     const duration = options?.duration || 8;
     const resolution = options?.resolution || '720p';
     const audio = options?.audio ?? true;
-    const model = options?.model || selectedModel;
+    const videoCatalog = resolveCatalogModel(options?.model || selectedModel, availableModels, selectProvider);
+    const model = videoCatalog.name;
 
     setIsLoading(true);
     try {
@@ -3861,7 +3901,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Auth transport intentionally omitted — apiClient reads the latest
     // bearer state or browser cookie at call time, so transport changes do
     // not need to recreate this callback.
-  }, [currentChat, user, selectedModel, uploadedFiles, selectChat, pollVideoStatus]);
+  }, [currentChat, user, selectedModel, availableModels, selectProvider, uploadedFiles, selectChat, pollVideoStatus]);
 
   const addThesisMessage = useCallback(async (topics: string[], chat?: any) => {
     const activeChat = chat || currentChat;

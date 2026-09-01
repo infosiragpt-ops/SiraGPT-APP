@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 
-const { honorPickerModel, remapStaleClaudeId, ANTHROPIC_SONNET_ID } = require('../src/services/ai/honor-picker-model');
+const { honorPickerModel, remapStaleClaudeId, lookupPickerDisplayName, ANTHROPIC_SONNET_ID } = require('../src/services/ai/honor-picker-model');
 
 test('honorPickerModel keeps Anthropic / xAI ids off Kimi', () => {
   assert.deepEqual(
@@ -47,6 +47,11 @@ test('empty picker may use org preferred; never remaps a live pick to Kimi', () 
   assert.equal(empty.honored, false);
 });
 
+test('lookupPickerDisplayName uses the visible catalog label, not a raw id', () => {
+  assert.equal(lookupPickerDisplayName('x-ai/grok-4.20'), 'Grok 4.2');
+  assert.equal(lookupPickerDisplayName('anthropic/claude-opus-4.7'), 'Opus 4.7');
+});
+
 test('stale Claude Sonnet 3 labels resolve to current Anthropic Sonnet', () => {
   assert.equal(remapStaleClaudeId('Claude Sonnet 3'), ANTHROPIC_SONNET_ID);
   assert.equal(remapStaleClaudeId('claude-3.5-sonnet'), ANTHROPIC_SONNET_ID);
@@ -58,5 +63,10 @@ test('stale Claude Sonnet 3 labels resolve to current Anthropic Sonnet', () => {
 test('generate route honors the picker before provider resolution', () => {
   const aiRoute = fs.readFileSync(path.join(__dirname, '..', 'src', 'routes', 'ai.js'), 'utf8');
   assert.match(aiRoute, /honorPickerModel\(model, \{ provider \}\)/);
+  assert.match(aiRoute, /pickerModel/);
+  assert.match(aiRoute, /pickerDisplayName/);
+  assert.match(aiRoute, /honorPickerModel\(model, \{ provider \}\)/);
   assert.match(aiRoute, /connected: providerConnectionReady\(connectionProvider\)/);
+  assert.match(aiRoute, /honoredImagePick = honorPickerModel\(model, \{ provider \}\)/);
+  assert.match(aiRoute, /honorPickerModel\(req\.body\.model, \{ provider: req\.body\.provider \}\)/);
 });

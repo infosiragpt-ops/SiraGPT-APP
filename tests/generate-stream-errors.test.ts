@@ -40,7 +40,7 @@ describe("generate HTTP errors stop thinking", () => {
     const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
     assert.match(apiSource, /attachGenerateHttpError/)
     assert.match(apiSource, /shouldRetryGenerateHttp/)
-    assert.match(apiSource, /resolveCatalogModel\(data\.model, \[\], data\.provider\)/)
+    assert.match(apiSource, /pinGenerateRequest\(\{ model: data\.model, provider: data\.provider \}\)/)
 
     const { resolveCatalogModel } = await import("../lib/chat/catalog-model")
     assert.deepEqual(

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
+import fs from "node:fs"
+import path from "node:path"
 
-import { resolveCatalogModel } from "../lib/chat/catalog-model"
+import { pinGenerateRequest, resolveCatalogModel } from "../lib/chat/catalog-model"
 import { clampDeepSeekModel } from "../lib/sse-client"
 
 describe("generate payload keeps the selected catalog model", () => {
@@ -42,6 +44,32 @@ describe("generate payload keeps the selected catalog model", () => {
       assert.notEqual(resolved.provider, "DeepSeek")
     })
   }
+
+  it("pins image / video / audio generate payloads to the picker id", () => {
+    assert.deepEqual(
+      pinGenerateRequest({ model: "x-ai/grok-4.5", provider: "Kimi", prompt: "hola" }),
+      { model: "x-ai/grok-4.5", provider: "xAI", prompt: "hola" },
+    )
+    assert.deepEqual(
+      pinGenerateRequest({ model: "anthropic/claude-sonnet-5", provider: "DeepSeek" }),
+      { model: "anthropic/claude-sonnet-5", provider: "Anthropic" },
+    )
+    assert.notEqual(
+      pinGenerateRequest({ model: "google/gemini-3.5-flash", provider: "OpenRouter" }).provider,
+      "OpenRouter",
+    )
+    assert.deepEqual(
+      pinGenerateRequest({ model: "gpt-5.6-terra", provider: "Kimi" }),
+      { model: "gpt-5.6-terra", provider: "OpenAI" },
+    )
+
+    const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
+    assert.match(apiSource, /pinGenerateRequest\(data\)/)
+    assert.match(apiSource, /\/ai\/generate-image/)
+    assert.match(apiSource, /\/ai\/generate-video/)
+    assert.match(apiSource, /\/ai\/generate-speech/)
+    assert.match(apiSource, /\/ai\/generate-music/)
+  })
 
   it("does not let a leftover Kimi provider steal Claude or Grok", () => {
     assert.deepEqual(

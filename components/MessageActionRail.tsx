@@ -20,7 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { brandModelLabel } from "@/lib/chat/brand-label"
+import { resolveReplyBadgeLabel } from "@/lib/chat/reply-badge-model"
 import {
   Tooltip,
   TooltipContent,
@@ -291,7 +291,10 @@ export function MessageActionRail({
 
   // #99 — prettify model id for the trailing pill (kept inline so we
   // don't ship another import for ~10 lines of mapping).
-  const prettyModel = React.useMemo(() => brandModelLabel(model), [model])
+  const prettyModel = React.useMemo(
+    () => (typeof model === "string" && model.trim() ? model.trim() : resolveReplyBadgeLabel({ model })),
+    [model],
+  )
   const showModelBadge = !isLive && !hasError && hasText && !!prettyModel
 
   // Nothing to render? Don't render the container either — keeps the

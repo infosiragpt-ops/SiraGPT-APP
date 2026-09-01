@@ -38,6 +38,22 @@ function remapStaleClaudeId(value) {
   return raw;
 }
 
+function lookupPickerDisplayName(model) {
+  const picked = remapStaleClaudeId(String(model || '').trim());
+  if (!picked) return '';
+  try {
+    const { listVisibleTextModelDefinitions } = require('../visible-model-catalog');
+    const foldId = fold(picked);
+    const match = listVisibleTextModelDefinitions().find((row) => {
+      const names = [row.name, row.displayName, ...(row.aliases || [])];
+      return names.some((name) => fold(name) === foldId);
+    });
+    return String(match?.displayName || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 function honorPickerModel(model, opts = {}) {
   const picked = remapStaleClaudeId(String(model || '').trim());
   const requestedProvider = String(opts.provider || opts.requestedProvider || '').trim();
@@ -67,5 +83,6 @@ function honorPickerModel(model, opts = {}) {
 module.exports = {
   honorPickerModel,
   remapStaleClaudeId,
+  lookupPickerDisplayName,
   ANTHROPIC_SONNET_ID,
 };
