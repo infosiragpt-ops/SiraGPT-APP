@@ -2107,6 +2107,9 @@ router.post(
     // Composer effort picker (Bajo/Medio/Extra/Max → low/medium/high/max).
     // Optional; when present it overrides the auto-decided reasoning depth.
     body('reasoningEffort').optional().isString().isLength({ max: 16 }),
+    // Composer permission chip (#513 / #519): default|read|protected|workspace|full.
+    body('permission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
+    body('toolPermission').optional().isString().isIn(['default', 'read', 'protected', 'workspace', 'full']),
   ],
   authenticateToken,
   requireScope('ai:generate'),
@@ -7112,6 +7115,7 @@ router.post(
                   },
                   toolContext: {
                     userId,
+                    permission: (req.body && (req.body.permission || req.body.toolPermission)) || 'default',
                     requestedOrganizationId: __requestedOrgIdForAi,
                     activeOrganizationId: __orgIdForAi,
                     chatId: canPersist ? chatId : null,

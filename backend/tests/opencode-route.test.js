@@ -122,6 +122,26 @@ test('POST /session/:id/abort cancels the session', async () => {
   assert.equal(res.body.ok, true);
 });
 
+test('POST /session/:id/prompt honors composer permission=read', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'write', arguments: { path: 'x.txt', content: 'nope' } }] };
+    }
+    return { text: 'Listo.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({});
+  const res = await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/prompt`)
+    .send({ text: 'escribe', permission: 'read' });
+  assert.equal(res.status, 200);
+  const write = res.body.result.toolResults.find((t) => t.tool === 'write');
+  assert.ok(write);
+  assert.equal(write.ok, false);
+  assert.equal(write.code, 'composer_read_only');
+});
+
 test('planificar prompt cannot write via the HTTP API', async () => {
   let calls = 0;
   const app = buildApp(async () => {

@@ -63,6 +63,7 @@ function switchAgent(id, agentId, userId) {
 async function prompt(id, text, opts = {}) {
   const session = requireOwnedSession(id, opts.userId);
   if (opts.agent) switchStoredAgent(session, opts.agent);
+  if (opts.permission != null) session.permission = opts.permission;
   const result = await runPrompt(session, text, {
     llmTurn: opts.llmTurn,
     model: opts.model,
@@ -70,6 +71,7 @@ async function prompt(id, text, opts = {}) {
     signal: opts.signal,
     chip: opts.chip,
     attachments: opts.attachments,
+    permission: opts.permission != null ? opts.permission : session.permission,
   });
   return sanitizePublicObject({
     ...result,

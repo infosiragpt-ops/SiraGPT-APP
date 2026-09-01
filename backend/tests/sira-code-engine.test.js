@@ -72,6 +72,34 @@ test('construir can write a file in the session workspace', async () => {
   assert.equal(file.content, 'hola mundo');
 });
 
+test('composer Solo lectura rejects writes even in construir', async () => {
+  const session = await siraCode.create({ userId: 'u-read' });
+  const result = await siraCode.prompt(session.id, 'escribe hola.txt', {
+    userId: 'u-read',
+    permission: 'read',
+    llmTurn: scriptedWriteLlm('blocked.txt', 'no'),
+  });
+  const written = result.toolResults.find((t) => t.tool === 'write');
+  assert.ok(written, 'write was attempted');
+  assert.equal(written.ok, false);
+  assert.equal(written.code, 'composer_read_only');
+  const root = siraCode.getSession(session.id).workspace.root;
+  assert.equal(fs.existsSync(path.join(root, 'blocked.txt')), false);
+});
+
+test('composer Acceso completo does not fall back to a write deny', async () => {
+  const session = await siraCode.create({ userId: 'u-full', agent: 'planificar' });
+  const result = await siraCode.prompt(session.id, 'escribe hola.txt', {
+    userId: 'u-full',
+    permission: 'full',
+    llmTurn: scriptedWriteLlm('libre.txt', 'ok'),
+  });
+  const written = result.toolResults.find((t) => t.tool === 'write');
+  assert.ok(written && written.ok, 'full must not silently inherit planificar deny');
+  const file = await siraCode.readFile(session.id, 'libre.txt', 'u-full');
+  assert.equal(file.content, 'ok');
+});
+
 test('planificar cannot write; workspace file is absent', async () => {
   const session = await siraCode.create({ userId: 'u-1', agent: 'planificar' });
   const result = await siraCode.prompt(session.id, 'escribe hola.txt', {

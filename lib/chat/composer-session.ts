@@ -54,7 +54,13 @@ export function composerBlocksTools(id: ComposerPermissionId = readComposerPermi
   return id === "read" || id === "protected"
 }
 
-export function composerGenerateFlags(): { disableAgentic?: true } {
-  if (composerBlocksTools() || readComposerFastMode()) return { disableAgentic: true }
-  return {}
+export function composerGenerateFlags(): {
+  permission: ComposerPermissionId
+  disableAgentic?: true
+} {
+  const permission = readComposerPermission()
+  if (composerBlocksTools(permission) || readComposerFastMode()) {
+    return { permission, disableAgentic: true }
+  }
+  return { permission }
 }

@@ -16,6 +16,7 @@ const f7Flags = require('../agent-runner/multimodal/flags');
 const { COMPUTER_TOOL_DEFINITIONS, makeComputerExecutors } = require('../agent-runner/multimodal/computer');
 const { HAS_COMPUTER_POLICY_ES, POLICY_ES } = require('./login-handoff');
 const { createWorkspaceFileApi } = require('./workspace-files');
+const { authorizeComposerTool, composerDeniedResult } = require('../composer-permission');
 
 const COMPUTER_TOOL_NAMES = Object.freeze([
   'computer_screenshot',
@@ -118,6 +119,13 @@ function buildNavigateTool({ userId, conversationId, env }) {
   };
 }
 
+function composerGate(toolName, ctx = {}) {
+  const permission = ctx.permission || ctx.toolPermission || (ctx.toolAuthCtx && ctx.toolAuthCtx.permission);
+  const auth = authorizeComposerTool(permission, toolName, ctx);
+  if (auth.denied || auth.needsPermission) return composerDeniedResult(auth);
+  return null;
+}
+
 function failToResult(err) {
   return {
     ok: false,
@@ -192,6 +200,8 @@ function buildWorkspaceFileTools({ userId, conversationId, env, persistent } = {
         additionalProperties: false,
       },
       async execute(args = {}, ctx = {}) {
+        const blocked = composerGate('computer_write_file', ctx);
+        if (blocked) return blocked;
         try {
           const out = await files.writeFile(ctxOf(args, ctx));
           ctx.onEvent?.({ type: 'tool_output', tool: 'computer_write_file', ok: true, preview: `Escrito ${out.path}` });
@@ -216,6 +226,8 @@ function buildWorkspaceFileTools({ userId, conversationId, env, persistent } = {
         additionalProperties: false,
       },
       async execute(args = {}, ctx = {}) {
+        const blocked = composerGate('computer_edit_file', ctx);
+        if (blocked) return blocked;
         try {
           const out = await files.editFile(ctxOf(args, ctx));
           ctx.onEvent?.({ type: 'tool_output', tool: 'computer_edit_file', ok: true, preview: `Editado ${out.path}` });

@@ -1650,7 +1650,12 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
     // for any ai:generate user. Low-risk tools are allow-by-default so the
     // ~80 web/RAG/visual tools keep working untouched.
     const { createChatToolGate } = require('./agents/chat-tool-policy');
+    const composerPermission = toolContext.permission
+      || toolContext.toolPermission
+      || toolContext.composerPermission
+      || 'default';
     const toolGate = createChatToolGate({
+      permission: composerPermission,
       onAudit: (info) => { try { onEvent({ type: 'tool_authorized', tool: info.tool }); } catch (_) { /* noop */ } },
     });
 
@@ -1798,6 +1803,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           toolAuthCtx: {
             userId: toolContext.userId || null,
             clearance: toolContext.clearance || null,
+            permission: composerPermission,
           },
         },
         finalizeGuard: composedFinalizeGuard,

@@ -1836,7 +1836,7 @@ class ApiClient {
   // the server cursor when content was already rendered. Mid-stream
   // interruptions surface only after the cursor retry budget is exhausted.
   async generateAIStream(
-    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
+    data: { provider: string; model: string; prompt: string; chatId?: string; files?: string[], streamId: string, regenerate?: boolean, regenerationAttempt?: number, disableAgentic?: boolean, enableWebGrounding?: boolean, webGroundingQuery?: string, webSearchMode?: string, reasoningEffort?: string, permission?: string, idempotencyKey?: string, mentionedApps?: string[], pinnedAppIds?: string[] },
     onData: (chunk: string) => void,
     onClose: () => void,
     onError: (error: Error) => void,

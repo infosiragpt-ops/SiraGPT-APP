@@ -72,12 +72,17 @@ export const opencodeService = {
   },
 
   /** Send a text prompt to a session. The picker model is forwarded, not displayed. */
-  async prompt(sessionId: string, text: string, opts: { model?: string; agent?: string } = {}): Promise<unknown> {
+  async prompt(sessionId: string, text: string, opts: { model?: string; agent?: string; permission?: string } = {}): Promise<unknown> {
     const res = await authenticatedFetch(`${baseUrl}/session/${encodeURIComponent(sessionId)}/prompt`, {
       method: "POST",
       credentials: "include",
       headers: authHeaders(),
-      body: JSON.stringify({ text, model: opts.model, agent: opts.agent }),
+      body: JSON.stringify({
+        text,
+        model: opts.model,
+        agent: opts.agent,
+        ...(opts.permission ? { permission: opts.permission } : {}),
+      }),
     })
     const json = await handle<{ result: unknown }>(res)
     return json.result

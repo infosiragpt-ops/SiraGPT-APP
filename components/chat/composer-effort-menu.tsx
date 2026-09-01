@@ -41,6 +41,8 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
       <div
         ref={trackRef}
         className="effort-track"
+        data-effort={String(activeIndex)}
+        data-testid="composer-effort-track"
         role="slider"
         tabIndex={0}
         aria-label="Nivel de esfuerzo de razonamiento"
@@ -70,7 +72,9 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
           else if (event.key === "End") { event.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
         }}
       >
-        <div className="effort-track-line" aria-hidden />
+        <div className="effort-track-line" aria-hidden>
+          <span className="effort-track-fill" />
+        </div>
         {EFFORT_LEVELS.map((level, index) => (
           <button
             key={level.value}
@@ -132,6 +136,7 @@ export function ComposerEffortMenu({
         sideOffset={10}
         collisionPadding={10}
         data-testid="composer-effort-menu"
+        data-effort={String(activeIndex)}
         className="composer-effort-menu w-[min(calc(100vw-1.25rem),20.75rem)] p-0"
       >
         <EffortSection selectedEffort={selectedEffort} setSelectedEffort={setSelectedEffort} />

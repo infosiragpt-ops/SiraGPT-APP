@@ -1220,6 +1220,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             provider: catalogModel.provider,
             model: catalogModel.name,
             reasoningEffort: selectedEffort,
+            ...composerGenerateFlags(),
             ...((lightweightTurn || composerGenerateFlags().disableAgentic) ? { disableAgentic: true } : {}),
             ...mentionPayloadForGenerate(content, options?.mentionedApps || []),
             ...(Array.isArray(options?.pinnedAppIds) && options.pinnedAppIds.length
