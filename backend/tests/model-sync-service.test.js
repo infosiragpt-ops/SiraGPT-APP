@@ -94,10 +94,10 @@ test('persistModels batches DB work: one findMany, createMany for new, parallel 
   });
 
   const result = await service.persistModels([
-    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: false },
+    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: true },
     { name: 'new-2', provider: 'Z.ai', type: 'TEXT' },
     { name: 'existing-model', provider: 'OpenAI', type: 'TEXT' },
-    { name: 'new-1', provider: 'Cerebras', type: 'TEXT' }, // duplicate → deduped
+    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: true }, // duplicate → last wins, still forced inactive
   ]);
 
   assert.equal(result.created, 2);
@@ -113,8 +113,12 @@ test('persistModels batches DB work: one findMany, createMany for new, parallel 
   assert.ok(createMany, 'used createMany for new rows');
   assert.equal(createMany[1].data.length, 2);
   assert.equal(createMany[1].skipDuplicates, true);
-  // Discovered rows stay inactive unless explicitly true.
-  assert.equal(createMany[1].data.every((d) => d.isActive === false), true);
+  // Discovered rows always stay inactive until an admin explicitly publishes them.
+  assert.equal(
+    createMany[1].data.every((d) => d.isActive === false),
+    true,
+    'provider discovery must never auto-publish new models, even when upstream marks one active',
+  );
   // One update for the single existing row.
   assert.equal(calls.filter(([n]) => n === 'update').length, 1);
 });

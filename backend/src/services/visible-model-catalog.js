@@ -323,7 +323,7 @@ function curateVisibleTextModels(models = [], env = process.env) {
   for (const model of Array.isArray(models) ? models : []) {
     const name = String(model?.name || '').trim();
     if (!name) continue;
-    if (model?.isActive === false) continue;
+    if (model?.isActive !== true) continue;
     if (model?.virtual === true) continue;
     const id = String(model?.id || '').trim();
     if (id.startsWith('__virtual_')) continue;

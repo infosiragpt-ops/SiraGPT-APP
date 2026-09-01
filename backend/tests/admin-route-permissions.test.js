@@ -121,6 +121,16 @@ test('every mounted admin method+route pattern has exactly one declarative polic
   assert.deepEqual(mappedRoutes, sourceRoutes);
 });
 
+test('static bulk model update route is registered before the parameter route', () => {
+  const source = fs.readFileSync(ADMIN_SOURCE_PATH, 'utf8');
+  const bulkRoute = source.indexOf("router.put('/models/bulk'");
+  const modelRoute = source.indexOf("router.put('/models/:id'");
+
+  assert.ok(bulkRoute >= 0, 'bulk model route must be registered');
+  assert.ok(modelRoute >= 0, 'single-model route must be registered');
+  assert.ok(bulkRoute < modelRoute, 'Express must match /models/bulk before /models/:id');
+});
+
 test('every admin policy references a canonical permission', () => {
   const feature = requireFeature(policyModule, 'admin route policy');
   const source = requireFeature(catalog, 'RBAC catalog');

@@ -112,9 +112,23 @@ export type PreferredModelOptions = {
   last?: string
 }
 
+export function isActiveCatalogSelection(
+  selectedModel: string,
+  availableModels: CatalogModelLike[] = [],
+): boolean {
+  const wanted = String(selectedModel || "").trim()
+  if (!wanted || !Array.isArray(availableModels)) return false
+  return availableModels.some((model) => (
+    model && typeof model.name === "string" && sameModel(model.name, wanted)
+  ))
+}
+
 /**
  * Pick the catalog row to show on a new / reloaded chat.
- * Current selection wins, then the pinned default, then last pick, then [0].
+ * Current selection wins only while it is still present in the active
+ * catalog, then the pinned default, then last pick, then [0]. Persisted rows
+ * that disappeared from the catalog are inactive (or no longer eligible) and
+ * must never remain selected in the UI.
  */
 export function pickPreferredCatalogModel(
   availableModels: CatalogModelLike[] = [],
@@ -133,7 +147,6 @@ export function pickPreferredCatalogModel(
   if (current) {
     const match = find(current)
     if (match?.name) return { name: match.name, provider: pickProvider(match, "", current) }
-    return { name: current, provider: pickProvider(undefined, "", current) }
   }
 
   const pinned = find(opts.pinned)

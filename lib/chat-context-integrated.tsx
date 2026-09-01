@@ -14,7 +14,7 @@ import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./re
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
 import { buildDocumentChatRequest } from "./document-chat-request"
 import { collectMessageFileIds, snapshotComposerFilesForMessage } from "./chat/composer-files"
-import { pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
+import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "./chat/catalog-model"
 import { composerGenerateFlags } from "./chat/composer-session"
 import { getLastModel, getPinnedModel } from "./chat/model-preference"
 import { hasCompletedAgentTaskAssistantContent, mergeChatPreservingUserMessages } from "./message-preservation"
@@ -924,9 +924,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
       )
       devLog("modelsResponse", modelsResponse);
 
-      setAvailableModels(modelsResponse.models)
+      const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : []
+      setAvailableModels(activeModels)
 
-      const preferred = pickPreferredCatalogModel(modelsResponse.models, {
+      const preferred = pickPreferredCatalogModel(activeModels, {
         current: selectedModelRef.current,
         pinned: getPinnedModel(),
         last: getLastModel(),
@@ -935,6 +936,9 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         devLog("default model selected:", preferred)
         setSelectedModel(preferred.name)
         if (preferred.provider) setSelectedProivder(preferred.provider)
+      } else {
+        setSelectedModel("")
+        setSelectedProivder("")
       }
 
       // Load chats
@@ -957,22 +961,20 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
           chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
         );
 
-        if (modelsResponse.models && modelsResponse.models.length > 0) {
-          setAvailableModels(modelsResponse.models);
-          devLog(`${modelsResponse.models.length} models loaded.`, modelsResponse.models);
-
-          const preferred = pickPreferredCatalogModel(modelsResponse.models, {
-            current: selectedModelRef.current,
-            pinned: getPinnedModel(),
-            last: getLastModel(),
-          })
-          if (preferred?.name) {
-            setSelectedModel(preferred.name);
-            if (preferred.provider) setSelectedProivder(preferred.provider);
-          }
+        const activeModels = Array.isArray(modelsResponse?.models) ? modelsResponse.models : [];
+        setAvailableModels(activeModels);
+        const preferred = pickPreferredCatalogModel(activeModels, {
+          current: selectedModelRef.current,
+          pinned: getPinnedModel(),
+          last: getLastModel(),
+        });
+        if (preferred?.name) {
+          setSelectedModel(preferred.name);
+          setSelectedProivder(preferred.provider || "");
+          devLog(`${activeModels.length} models loaded.`, activeModels);
         } else {
-          setAvailableModels([]);
-          if (!selectedModelRef.current) setSelectedModel("");
+          setSelectedModel("");
+          setSelectedProivder("");
           console.warn(`>>> Is type (${chatType}) ke liye koi models nahi mile.`);
         }
       } catch (e) {
@@ -984,17 +986,26 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   }, [chatType, hasInitialized]);
 
   // Re-fetch the available models on demand (used when the picker opens and
-  // when the tab regains focus) so a model an admin just activated shows up
-  // WITHOUT a full page reload. Updates the list only — never disturbs the
-  // user's current selection. getAIModels sends Cache-Control: no-cache, so
-  // this reads the live DB, not the 5-min server cache.
+  // when the tab regains focus) so admin changes show up WITHOUT a full page
+  // reload. Reconcile the selected row too: a model removed from this active
+  // catalog must disappear from the selector immediately.
   const refreshModels = useCallback(async () => {
     if (!hasInitialized) return;
     try {
       const r = await apiClient.getAIModels(
         chatType.toString().toUpperCase() as 'TEXT' | 'IMAGE' | 'VIDEO'
       );
-      if (Array.isArray(r?.models)) setAvailableModels(r.models);
+      if (Array.isArray(r?.models)) {
+        const activeModels = r.models;
+        setAvailableModels(activeModels);
+        const preferred = pickPreferredCatalogModel(activeModels, {
+          current: selectedModelRef.current,
+          pinned: getPinnedModel(),
+          last: getLastModel(),
+        });
+        setSelectedModel(preferred?.name || "");
+        setSelectedProivder(preferred?.provider || "");
+      }
     } catch {
       /* best-effort: keep the existing list on a transient failure */
     }
@@ -1183,6 +1194,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     async (content: string, fileIds?: any[], chat?: any, skipUserMessage?: boolean, intentOverride?: ChatIntent, options?: AddMessageOptions) => { // Added skipUserMessage and forceFlowChartDiagram parameters
       const activeChat = chat || currentChat; // Use provided chat or fallback to currentChat
       if (!activeChat || !user || !isAuthenticated) return false;
+      if (chatType === 'text' && !isActiveCatalogSelection(selectedModel, availableModels)) {
+        toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+        return false;
+      }
       const displayFiles = Array.isArray(fileIds)
         ? fileIds.filter(Boolean).map(normalizeMessageAttachment)
         : [];
@@ -2308,7 +2323,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // per render. The hook is scoped to the user-facing inputs
     // (chat, auth, model, files) that matter for the send action.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, markChatStreaming, markChatIdle]
+    [currentChat, user, isAuthenticated, selectedModel, selectedEffort, selectProvider, availableModels, uploadedFiles, chatType, markChatStreaming, markChatIdle]
   );
 
   const retryPendingMessage = useCallback(async (msg: PendingMessage): Promise<PendingRetryResult> => {
@@ -2572,9 +2587,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
 
   const applyChatModelSelection = useCallback((chat: { model?: string | null } | null | undefined) => {
     const name = String(chat?.model || "").trim()
-    if (!name) return
-    setSelectedModel(name)
-  }, [])
+    const preferred = pickPreferredCatalogModel(availableModels, {
+      current: name,
+      pinned: getPinnedModel(),
+      last: getLastModel(),
+    })
+    setSelectedModel(preferred?.name || "")
+    setSelectedProivder(preferred?.provider || "")
+  }, [availableModels])
 
   const selectChat = useCallback(
     async (chatId: string) => {
@@ -2790,6 +2810,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Per-chat guard (NOT the global isLoading aggregate): regenerating in an
     // idle chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
+    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
+      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     let targetAiMessageIndex = -1;
 
@@ -3154,6 +3178,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
     // Per-chat guard (NOT the global isLoading aggregate): editing in an idle
     // chat must work even while another chat streams in the background.
     if (!currentChat || activeStreamingChatIdsRef.current.has(currentChat.id)) return;
+    if (!isActiveCatalogSelection(selectedModel, availableModels)) {
+      toast.error('No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     const messageIndex = currentChat.messages.findIndex(m => m.id === messageId);
     if (messageIndex === -1) return;

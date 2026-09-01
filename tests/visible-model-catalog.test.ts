@@ -17,6 +17,7 @@ describe("visible text model catalog", () => {
       { id: "kimi-db", name: "moonshotai/kimi-k2.6", displayName: "Kimi old", provider: "OpenRouter", type: "TEXT", isActive: true },
       { id: "gpt-db", name: "openai/gpt-5.5", displayName: "GPT old", provider: "OpenRouter", type: "TEXT", isActive: true },
       { id: "inactive-opus", name: "anthropic/claude-opus-4.7", displayName: "Opus disabled", provider: "OpenRouter", type: "TEXT", isActive: false },
+      { id: "unset-row", name: "custom/unset", displayName: "Unset", provider: "Custom", type: "TEXT" },
       { id: "__virtual_gemini__", name: "google/gemini-3.5", displayName: "Gemini virtual", provider: "OpenRouter", type: "TEXT" },
       { id: "old", name: "gpt-4o", displayName: "GPT-4o", provider: "OpenAI", type: "TEXT", isActive: true },
     ])

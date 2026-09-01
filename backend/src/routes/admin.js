@@ -184,6 +184,48 @@ router.post('/models', [
   }
 });
 
+// Keep this static route before /models/:id. Express resolves routes in
+// registration order, so placing it later makes "bulk" look like a model id
+// and silently sends the request through the single-model handler.
+router.put('/models/bulk', async (req, res) => {
+  try {
+    const { action, modelIds, provider } = req.body;
+
+    if (!action || !['enable', 'disable'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid action. Use enable or disable.' });
+    }
+
+    const isActive = action === 'enable';
+    let whereClause = {};
+
+    if (modelIds && Array.isArray(modelIds)) {
+      whereClause.id = { in: modelIds };
+    } else if (provider) {
+      whereClause.provider = provider;
+    } else {
+      return res.status(400).json({ error: 'Either modelIds or provider must be specified' });
+    }
+
+    const result = await prisma.aiModel.updateMany({
+      where: whereClause,
+      data: { isActive }
+    });
+    invalidateAiModelsCache();
+
+    res.json({
+      success: true,
+      message: `Successfully ${action}d ${result.count} models`,
+      count: result.count
+    });
+  } catch (error) {
+    console.error('❌ Error in bulk update:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update models'
+    });
+  }
+});
+
 router.put('/models/:id', [
   body('displayName').optional().trim().isLength({ min: 1 }),
   // AiModel.provider is a plain String column and the catalog already
@@ -368,46 +410,6 @@ router.post('/models/clear-cache', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Failed to clear cache' 
-    });
-  }
-});
-
-// Bulk enable/disable models
-router.put('/models/bulk', async (req, res) => {
-  try {
-    const { action, modelIds, provider } = req.body;
-    
-    if (!action || !['enable', 'disable'].includes(action)) {
-      return res.status(400).json({ error: 'Invalid action. Use enable or disable.' });
-    }
-
-    const isActive = action === 'enable';
-    let whereClause = {};
-
-    if (modelIds && Array.isArray(modelIds)) {
-      whereClause.id = { in: modelIds };
-    } else if (provider) {
-      whereClause.provider = provider;
-    } else {
-      return res.status(400).json({ error: 'Either modelIds or provider must be specified' });
-    }
-
-    const result = await prisma.aiModel.updateMany({
-      where: whereClause,
-      data: { isActive }
-    });
-    invalidateAiModelsCache();
-
-    res.json({ 
-      success: true, 
-      message: `Successfully ${action}d ${result.count} models`,
-      count: result.count 
-    });
-  } catch (error) {
-    console.error('❌ Error in bulk update:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to update models' 
     });
   }
 });

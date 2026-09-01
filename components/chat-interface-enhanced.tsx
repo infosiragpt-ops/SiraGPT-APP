@@ -361,7 +361,6 @@ import {
   IMAGE_COUNT_OPTIONS,
   IMAGE_QUALITY_OPTIONS,
   MUSIC_EFFECT_OPTIONS,
-  MUSIC_MODEL_OPTIONS,
   MUSIC_MOOD_OPTIONS,
   MUSIC_STYLE_OPTIONS,
   MUSIC_STYLE_PROFILES,
@@ -371,7 +370,6 @@ import {
   VOICE_COMPOSER_PLACEHOLDER,
   VOICE_EFFECT_OPTIONS,
   VOICE_LANGUAGE_OPTIONS,
-  VOICE_MODEL_OPTIONS,
   filterAdminVisibleVideoModels,
   isAdminVisibleVideoModel,
   isImageModelEntry,
@@ -2702,9 +2700,13 @@ const ActiveToolsDisplay = ({
 
   const mediaModelOptions = React.useMemo(() => {
     const models = Array.isArray(availableModels) ? availableModels : [];
-    const pickByKind = (kind: "image" | "video") => {
+    const pickByKind = (kind: "image" | "video" | "voice" | "music") => {
       // Video: admin catalog only (type=VIDEO + isActive). Hidden/unknown = omit.
-      const predicate = kind === "image" ? isImageModelEntry : isAdminVisibleVideoModel;
+      const predicate = kind === "image"
+        ? isImageModelEntry
+        : kind === "video"
+          ? isAdminVisibleVideoModel
+          : (model: any) => model?.type === kind.toUpperCase() && model?.isActive === true;
       return models.filter(predicate);
     };
     const normalize = (model: any) => ({
@@ -2718,22 +2720,14 @@ const ActiveToolsDisplay = ({
 
     const imageModels = pickByKind("image").map(normalize);
     const videoModels = pickByKind("video").map(normalize);
+    const voiceModels = pickByKind("voice").map(normalize);
+    const musicModels = pickByKind("music").map(normalize);
 
     return {
       image: imageModels,
       video: videoModels,
-      voice: VOICE_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "ElevenLabs" ? "ElevenLabs" : "Google",
-        iconName: name.startsWith("Gemini") ? "GeminiLogo" : "Bot",
-      })),
-      music: MUSIC_MODEL_OPTIONS.map((name) => ({
-        name,
-        displayName: name,
-        provider: name === "Lyria 3 Pro" ? "Google" : name === "ElevenLabs" ? "ElevenLabs" : "Mimo",
-        iconName: name === "Lyria 3 Pro" ? "GeminiLogo" : "Bot",
-      })),
+      voice: voiceModels,
+      music: musicModels,
     };
   }, [availableModels]);
 
@@ -2760,6 +2754,30 @@ const ActiveToolsDisplay = ({
       setSelectedVideoModel(videoOptions[0].name);
     }
   }, [isVideoGenerationActive, mediaModelOptions.video, selectedVideoModel, setSelectedVideoModel]);
+
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    const voiceOptions = mediaModelOptions.voice;
+    if (!voiceOptions.length) {
+      if (selectedVoiceModel) setSelectedVoiceModel("" as VoiceModel);
+      return;
+    }
+    if (!voiceOptions.some((option: any) => option.name === selectedVoiceModel)) {
+      setSelectedVoiceModel(voiceOptions[0].name as VoiceModel);
+    }
+  }, [isVoiceGenerationActive, mediaModelOptions.voice, selectedVoiceModel, setSelectedVoiceModel]);
+
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    const musicOptions = mediaModelOptions.music;
+    if (!musicOptions.length) {
+      if (selectedMusicModel) setSelectedMusicModel("" as MusicModel);
+      return;
+    }
+    if (!musicOptions.some((option: any) => option.name === selectedMusicModel)) {
+      setSelectedMusicModel(musicOptions[0].name as MusicModel);
+    }
+  }, [isMusicGenerationActive, mediaModelOptions.music, selectedMusicModel, setSelectedMusicModel]);
 
   React.useEffect(() => {
     const fal = (availableModels || []).find((model: any) => model?.name === selectedVideoModel)?.apiData?.fal
@@ -2797,7 +2815,7 @@ const ActiveToolsDisplay = ({
     const selected = options.find((option: any) => option.name === value) || options[0];
     const label = selected
       ? brandModelLabel(selected)
-      : (["image", "video"].includes(tool) ? "Sin modelos" : value || "Modelo");
+      : "Sin modelos activos";
     const disabled = options.length === 0;
 
     return (
@@ -3230,12 +3248,15 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {VOICE_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedVoiceModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.voice.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedVoiceModel(option.name as VoiceModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedVoiceModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.voice.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3383,12 +3404,15 @@ const ActiveToolsDisplay = ({
                   </DropdownMenuSubTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuSubContent sideOffset={8} collisionPadding={12} className="liquid-menu-surface max-h-[min(18rem,calc(100vh-2rem))] w-44 overflow-y-auto p-1">
-                      {MUSIC_MODEL_OPTIONS.map(option => (
-                        <DropdownMenuItem key={option} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option)}>
-                          <span className="min-w-0 flex-1 truncate">{option}</span>
-                          {selectedMusicModel === option && <Check className="h-3.5 w-3.5" />}
+                      {mediaModelOptions.music.map((option: any) => (
+                        <DropdownMenuItem key={option.name} className="chat-active-apps-menu-item text-[12px]" onClick={() => setSelectedMusicModel(option.name as MusicModel)}>
+                          <span className="min-w-0 flex-1 truncate">{option.displayName}</span>
+                          {selectedMusicModel === option.name && <Check className="h-3.5 w-3.5" />}
                         </DropdownMenuItem>
                       ))}
+                      {mediaModelOptions.music.length === 0 && (
+                        <div className="px-3 py-4 text-center text-xs text-muted-foreground">Sin modelos activos</div>
+                      )}
                     </DropdownMenuSubContent>
                   </DropdownMenuPortal>
                 </DropdownMenuSub>
@@ -3824,10 +3848,10 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
     lastGoodSelectedModelRef.current = liveSelectedModelData;
   } else if (
     lastGoodSelectedModelRef.current &&
-    lastGoodSelectedModelRef.current.name !== selectedModel
+    (availableModels.length === 0 || lastGoodSelectedModelRef.current.name !== selectedModel)
   ) {
-    // User picked a genuinely different model not yet in the list: drop the
-    // stale entry so we never show a logo for the wrong model.
+    // A confirmed empty catalog or a genuinely different selection invalidates
+    // the old row. Never preserve an admin-disabled model as visual fallback.
     lastGoodSelectedModelRef.current = undefined;
   }
   const selectedModelData = liveSelectedModelData || lastGoodSelectedModelRef.current;
@@ -4965,7 +4989,9 @@ const NavbarModelSelector = React.memo(function NavbarModelSelector({
         )}
       >
         {selectedModelData && <ModelLogo model={selectedModelData} compact />}
-        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">{selectedModelData ? getModelDisplayLabel(selectedModelData) : brandModelLabel(selectedModel)}</span>
+        <span className="chat-model-label min-w-0 max-w-[180px] truncate font-medium">
+          {selectedModelData ? getModelDisplayLabel(selectedModelData) : selectedModel ? brandModelLabel(selectedModel) : "Sin modelos activos"}
+        </span>
         <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-55 transition-transform duration-200 group-data-[state=open]/model:rotate-180" strokeWidth={2} />
       </DropdownMenuTrigger>
 
@@ -5277,7 +5303,7 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("Gemini 2.5 Flash TTS")
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("" as VoiceModel)
   const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
   const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
   const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
@@ -5305,7 +5331,7 @@ function ChatInterfaceContent() {
   }, [])
   const [isMusicGenerationActive, setIsMusicGenerationActive] = React.useState(false)
   const [isGeneratingMusic, setIsGeneratingMusic] = React.useState(false)
-  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("ElevenLabs")
+  const [selectedMusicModel, setSelectedMusicModel] = React.useState<MusicModel>("" as MusicModel)
   const [selectedMusicStyle, setSelectedMusicStyle] = React.useState<MusicStyle>("Auto")
   const [selectedMusicMood, setSelectedMusicMood] = React.useState<MusicMood>("Balanced")
   const [selectedMusicDuration, setSelectedMusicDuration] = React.useState(30)
@@ -5333,6 +5359,8 @@ function ChatInterfaceContent() {
   const [isGeneratingWebDev, setIsGeneratingWebDev] = React.useState(false)
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
+  const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
+  const [musicCatalogModels, setMusicCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
     const models = Array.isArray(modelsResponse?.models)
@@ -5349,6 +5377,30 @@ function ChatInterfaceContent() {
     setVideoCatalogModels(models);
     return models;
   }, []);
+  const refreshVoiceModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('VOICE');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter((model: any) => model?.type === 'VOICE' && model?.isActive === true)
+      : [];
+    setVoiceCatalogModels(models);
+    return models;
+  }, []);
+  const refreshMusicModels = React.useCallback(async () => {
+    const modelsResponse = await apiClient.getAIModels('MUSIC');
+    const models = Array.isArray(modelsResponse?.models)
+      ? modelsResponse.models.filter((model: any) => model?.type === 'MUSIC' && model?.isActive === true)
+      : [];
+    setMusicCatalogModels(models);
+    return models;
+  }, []);
+  React.useEffect(() => {
+    if (!isVoiceGenerationActive) return;
+    void refreshVoiceModels();
+  }, [isVoiceGenerationActive, refreshVoiceModels]);
+  React.useEffect(() => {
+    if (!isMusicGenerationActive) return;
+    void refreshMusicModels();
+  }, [isMusicGenerationActive, refreshMusicModels]);
   const imageModelsForComposer = React.useMemo(() => {
     const source = imageCatalogModels.length ? imageCatalogModels : availableModels;
     return (Array.isArray(source) ? source : []).filter(isImageModelEntry);
@@ -5372,11 +5424,19 @@ function ChatInterfaceContent() {
       const name = String(model?.name || '').trim();
       if (name) byName.set(name, model);
     }
-    if (!imageCatalogModels.length && !videoCatalogModels.length) {
+    for (const model of voiceCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    for (const model of musicCatalogModels) {
+      const name = String(model?.name || '').trim();
+      if (name) byName.set(name, model);
+    }
+    if (!imageCatalogModels.length && !videoCatalogModels.length && !voiceCatalogModels.length && !musicCatalogModels.length) {
       return availableModels;
     }
     return Array.from(byName.values());
-  }, [availableModels, imageCatalogModels, videoCatalogModels]);
+  }, [availableModels, imageCatalogModels, musicCatalogModels, videoCatalogModels, voiceCatalogModels]);
   const resolveFreshActiveImageModel = React.useCallback(async (candidate?: string) => {
     const models = await refreshImageModels();
     const requestedName = String(candidate || '').trim();
@@ -12663,6 +12723,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       toast.error('Escribe el texto que quieres convertir en voz');
       return;
     }
+    if (!selectedVoiceModel || !voiceCatalogModels.some((model: any) => model?.name === selectedVoiceModel && model?.isActive === true)) {
+      toast.error('No hay modelos de voz activos. Activa uno desde Administración e inténtalo de nuevo.');
+      return;
+    }
 
     let activeChat = currentChat;
     if (!activeChat) {
@@ -12920,6 +12984,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     const description = (msg || '').trim();
     if (!description) {
       toast.error('Describe la música que quieres crear');
+      return;
+    }
+    if (!selectedMusicModel || !musicCatalogModels.some((model: any) => model?.name === selectedMusicModel && model?.isActive === true)) {
+      toast.error('No hay modelos de música activos. Activa uno desde Administración e inténtalo de nuevo.');
       return;
     }
 

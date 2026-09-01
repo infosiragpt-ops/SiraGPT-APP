@@ -2632,7 +2632,7 @@ class ApiClient {
   // async getAIModels() {
   //   return this.request('/ai/models');
   // }
-  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO') { // type ko optional parameter banayein
+  async getAIModels(type?: 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'MUSIC' | 'VOICE') { // type ko optional parameter banayein
     const endpoint = type ? `/ai/models?type=${type}` : '/ai/models';
     // Always read the live list: the picker must reflect an admin model
     // activation immediately, so bypass the 5-min server response-cache

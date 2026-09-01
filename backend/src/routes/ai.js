@@ -87,7 +87,6 @@ const { enqueueCodexRun, detectCodeTaskIntent } = require('../services/codex/cod
 const autonomousGoalEscalation = require('../services/autonomous-goal-escalation');
 const { runParaphrasePipeline } = require('../services/paraphrase-engine');
 const {
-  buildGema4VirtualModel,
   buildModelQuotaPolicy,
   resolveModelForUser,
   persistModelPreference,
@@ -235,35 +234,6 @@ const { use } = require('passport');
 // // const openai = new OpenAI({
 // //   apiKey: process.env.OPENAI_API_KEY
 // // });
-/** Moonshot native Kimi — not the OpenRouter mixer. */
-const KIMI_K26_NATIVE = {
-  name: 'moonshotai/kimi-k2.6',
-  displayName: 'Kimi K2.6',
-  provider: 'Kimi',
-  type: 'TEXT',
-  icon: 'KimiLogo',
-  description: 'Kimi K2.6 de Moonshot: contexto largo, multimodal, codigo y agentes.',
-};
-
-const DEEPSEEK_TEXT_MODELS = [
-  {
-    name: 'deepseek-v4-flash',
-    displayName: 'Sira Rápido',
-    provider: 'DeepSeek',
-    type: 'TEXT',
-    icon: 'DeepseekLogo',
-    description: 'Modelo rápido de SiraGPT para chat cotidiano y tareas cortas.',
-  },
-  {
-    name: 'deepseek-v4-pro',
-    displayName: 'Sira Pro',
-    provider: 'DeepSeek',
-    type: 'TEXT',
-    icon: 'DeepseekLogo',
-    description: 'Modelo profesional de SiraGPT para razonamiento, codigo y documentos.',
-  },
-];
-
 const MINI_SHORT_CHITCHAT_SYSTEM =
   'Eres SiraGPT Mini. Responde saludos de forma breve y natural, en el mismo idioma del usuario. No razones en voz alta. No uses herramientas.';
 
@@ -824,10 +794,21 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
     __dbg(`after-quota-policy type=${type}`);
+    // VOICE is not a Prisma ModelType yet. Keep the contract explicit and
+    // empty instead of querying PostgreSQL with an invalid enum or inventing
+    // virtual rows that an admin cannot deactivate.
+    if (type === 'VOICE') {
+      return res.json({ models: [], policy: modelPolicy });
+    }
+
+    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'];
+    if (type && !VALID_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Invalid model type' });
+    }
+
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
-    const wantVoice = !type || type === 'VOICE';
     const wantAudio = !type || type === 'AUDIO';
     const wantMusic = !type || type === 'MUSIC';
 
@@ -844,8 +825,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       isActive: true,
     };
 
-    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC', 'VOICE'];
-    if (type && VALID_TYPES.includes(type)) {
+    if (type) {
       whereClause.type = type;
     }
 
@@ -868,46 +848,6 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     });
     __dbg(`after-main-findMany count=${models.length}`);
 
-    // If OpenRouter is configured but Kimi was never seeded (or DB is empty),
-    // expose Kimi K2.6 anyway so the picker always shows it. Skip when a DB row
-    // exists (active or inactive) so admin disable/delete is respected.
-    if (wantText && hasEnv('DEEPSEEK_API_KEY')) {
-      const listed = new Set(models.map((m) => m.name));
-      const deepseekNames = DEEPSEEK_TEXT_MODELS.map((m) => m.name);
-      const existingRows = await prisma.aiModel.findMany({
-        where: { name: { in: deepseekNames } },
-        select: { name: true },
-      });
-      const rowsInDb = new Set(existingRows.map((m) => m.name));
-      const virtualDeepSeekModels = DEEPSEEK_TEXT_MODELS
-        .filter((m) => !listed.has(m.name) && !rowsInDb.has(m.name))
-        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
-
-      if (virtualDeepSeekModels.length > 0) {
-        models = [...virtualDeepSeekModels, ...models];
-      }
-    }
-
-    __dbg('after-deepseek-block');
-    if (wantText && (hasEnv('MOONSHOT_API_KEY') || hasEnv('KIMI_API_KEY'))) {
-      const alreadyListed = models.some((m) => m.name === KIMI_K26_NATIVE.name);
-      if (!alreadyListed) {
-        const kimiRow = await prisma.aiModel.findFirst({
-          where: { name: KIMI_K26_NATIVE.name },
-          select: { id: true },
-        });
-        if (!kimiRow) {
-          models = [
-            {
-              id: '__virtual_kimi_k26__',
-              ...KIMI_K26_NATIVE,
-            },
-            ...models,
-          ];
-        }
-      }
-    }
-
     if (type === 'IMAGE') {
       models = curateVisibleAdminMediaModels(models, 'IMAGE', {
         allowedNames: VERIFIED_CHAT_IMAGE_MODEL_NAMES,
@@ -919,94 +859,6 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       models = sortFalVideoModels(models);
     }
 
-    if (wantVoice) {
-      const listed = new Set(models.map((m) => m.name));
-      const VIRTUAL_VOICE_DEFINITIONS = [
-        {
-          name: 'elevenlabs-tts',
-          displayName: 'ElevenLabs TTS',
-          provider: 'ElevenLabs',
-          type: 'VOICE',
-          description: 'Texto a voz premium con ElevenLabs: vozes naturales y expresivas.',
-          icon: 'Microphone',
-        },
-        {
-          name: 'elevenlabs-multilingual',
-          displayName: 'ElevenLabs Multilingual',
-          provider: 'ElevenLabs',
-          type: 'VOICE',
-          description: 'Texto a voz multilingue con ElevenLabs: soporte para 29 idiomas.',
-          icon: 'Microphone',
-        },
-        {
-          name: 'elevenlabs-scribe',
-          displayName: 'ElevenLabs Scribe',
-          provider: 'ElevenLabs',
-          type: 'VOICE',
-          description: 'Voz a texto con ElevenLabs Scribe: transcripción de alta precisión.',
-          icon: 'Microphone',
-        },
-        {
-          name: 'elevenlabs-music',
-          displayName: 'ElevenLabs Music',
-          provider: 'ElevenLabs',
-          type: 'VOICE',
-          description: 'Generación de música con ElevenLabs: crea pistas originales.',
-          icon: 'Music',
-        },
-        {
-          name: 'elevenlabs-sound-effects',
-          displayName: 'ElevenLabs Sound Effects',
-          provider: 'ElevenLabs',
-          type: 'VOICE',
-          description: 'Efectos de sonido con ElevenLabs: genera sonidos personalizados.',
-          icon: 'Music',
-        },
-      ];
-
-      // Only inject a virtual voice model when the name is NOT already in the
-      // active results AND no DB row exists at all (active or inactive).
-      // If admin has a row (even disabled), their setting must be respected.
-      const voiceNamesNotListed = VIRTUAL_VOICE_DEFINITIONS
-        .filter((m) => !listed.has(m.name))
-        .map((m) => m.name);
-
-      let voiceNamesInDb = new Set();
-      if (voiceNamesNotListed.length > 0) {
-        const dbRows = await prisma.aiModel.findMany({
-          where: { name: { in: voiceNamesNotListed } },
-          select: { name: true },
-        });
-        voiceNamesInDb = new Set(dbRows.map((r) => r.name));
-      }
-
-      const virtualVoiceModels = VIRTUAL_VOICE_DEFINITIONS
-        .filter((m) => !listed.has(m.name) && !voiceNamesInDb.has(m.name))
-        .map((m) => ({ id: `__virtual_${m.name.replace(/[^a-z0-9]+/gi, '_').toLowerCase()}__`, ...m }));
-
-      if (virtualVoiceModels.length > 0) {
-        models = [...virtualVoiceModels, ...models];
-      }
-    }
-
-    __dbg('after-openrouter-block');
-    if (wantText) {
-      const fallbackModel = buildGema4VirtualModel();
-      const alreadyListed = models.some((m) => m.name === fallbackModel.name);
-      if (!alreadyListed) {
-        const fallbackRow = await prisma.aiModel.findFirst({
-          where: { name: fallbackModel.name },
-          select: { id: true },
-        });
-        if (!fallbackRow) {
-          models = modelPolicy.currentPlan === 'FREE'
-            ? [fallbackModel, ...models]
-            : [...models, fallbackModel];
-        }
-      }
-    }
-
-    __dbg('after-fallback-block');
     if (wantText) {
       models = curateVisibleTextModels(models);
     }

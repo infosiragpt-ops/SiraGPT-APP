@@ -84,10 +84,14 @@ async function main() {
     console.log(`Starting to seed ${modelsToSeed.length} curated models...`);
 
     for (const modelData of modelsToSeed) {
+        // Seeding refreshes catalog metadata only. Publication is an explicit
+        // administrator decision, so a seed run must neither reactivate an
+        // existing row nor publish a newly introduced model.
+        const { isActive: _legacySeedDefault, ...metadata } = modelData;
         const model = await prisma.aiModel.upsert({
             where: { name: modelData.name },
-            update: modelData,
-            create: modelData,
+            update: metadata,
+            create: { ...metadata, isActive: false },
         });
         console.log(`[${model.type}] Upserted model: ${model.displayName}`);
     }

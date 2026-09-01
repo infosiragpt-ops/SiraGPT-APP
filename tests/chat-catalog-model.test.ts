@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
+import { isActiveCatalogSelection, pickPreferredCatalogModel, resolveCatalogModel } from "../lib/chat/catalog-model"
 
 describe("chat catalog model", () => {
   it("keeps Flash when it is the selected generation model", () => {
@@ -101,5 +101,21 @@ describe("chat catalog model", () => {
       pickPreferredCatalogModel(catalog, { last: "deepseek-v4-pro" }),
       { name: "deepseek-v4-pro", provider: "DeepSeek" },
     )
+  })
+
+  it("rejects stale selections and never invents a model for an empty active catalog", () => {
+    const catalog = [
+      { name: "muse-spark-1.2", provider: "Meta" },
+      { name: "deepseek-v4-pro", provider: "DeepSeek" },
+    ]
+
+    assert.equal(isActiveCatalogSelection("muse-spark-1.2", catalog), true)
+    assert.equal(isActiveCatalogSelection("disabled-model", catalog), false)
+    assert.equal(isActiveCatalogSelection("muse-spark-1.2", []), false)
+    assert.deepEqual(
+      pickPreferredCatalogModel(catalog, { current: "disabled-model", pinned: "deepseek-v4-pro" }),
+      { name: "deepseek-v4-pro", provider: "DeepSeek" },
+    )
+    assert.equal(pickPreferredCatalogModel([], { current: "disabled-model" }), null)
   })
 })
