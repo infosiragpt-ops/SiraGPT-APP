@@ -14,6 +14,11 @@ const axios = require('axios');
 const { serializeUser, serializeBigIntFields } = require('../utils/bigint-serializer');
 const modelSyncService = require('../services/model-sync-service');
 const modelSyncScheduler = require('../services/model-sync-scheduler');
+const {
+  parseIsActive,
+  countPublication,
+  setAiModelActive,
+} = require('../services/ai-model-publication');
 const { responseCache, invalidate: invalidateResponseCache } = require('../middleware/response-cache');
 const adminStats = require('../services/admin-stats-aggregator');
 const webhookDispatcher = require('../services/webhook-dispatcher');
@@ -252,7 +257,8 @@ router.put('/models/:id', [
     if (icon !== undefined) updateData.icon = icon;
     if (description !== undefined) updateData.description = description;
     if (apiKey !== undefined) updateData.apiKey = apiKey;
-    if (typeof isActive === 'boolean') updateData.isActive = isActive;
+    const parsedActive = parseIsActive(isActive);
+    if (typeof parsedActive === 'boolean') updateData.isActive = parsedActive;
     // The admin page already sends these two — they were silently dropped,
     // making renames/context edits a no-op that looked successful.
     if (name) updateData.name = name;
@@ -264,7 +270,11 @@ router.put('/models/:id', [
     });
 
     invalidateAiModelsCache();
-    res.json({ model });
+    const payload = { model };
+    if (typeof parsedActive === 'boolean') {
+      payload.stats = await countPublication(prisma);
+    }
+    res.json(payload);
   } catch (error) {
     console.error('Update model error:', error);
     if (error.code === 'P2002') {
@@ -274,6 +284,39 @@ router.put('/models/:id', [
       return res.status(404).json({ error: 'Modelo no encontrado' });
     }
     res.status(500).json({ error: 'Failed to update model' });
+  }
+});
+
+// Alias for the Estado switch. PUT /models/:id is the admin UI contract
+// (Express + admin-route-policy). PATCH stays mapped so a leftover client
+// does not fail closed as admin_route_policy_unmapped.
+router.patch('/models/:id', [
+  body('isActive').exists().withMessage('isActive is required'),
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        error: 'isActive debe ser un booleano',
+        code: 'E_PARAMS',
+        errors: errors.array(),
+      });
+    }
+    const { model, stats } = await setAiModelActive(prisma, {
+      id: req.params.id,
+      isActive: req.body.isActive,
+      invalidateCache: invalidateAiModelsCache,
+    });
+    res.json({ model, stats });
+  } catch (error) {
+    if (error.status === 400) {
+      return res.status(400).json({ error: error.message, code: error.code || 'E_PARAMS' });
+    }
+    if (error.status === 404 || error.code === 'P2025') {
+      return res.status(404).json({ error: 'Modelo no encontrado' });
+    }
+    console.error('Toggle model error:', error);
+    res.status(500).json({ error: 'No se pudo actualizar el modelo' });
   }
 });
 

@@ -33,7 +33,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { toast } from "sonner"
 import { IconProvider } from "@/components/icon-provider"
-import { getNormalizedApiBaseUrl } from "@/lib/api-base-url"
+import { getSameOriginApiBaseUrl } from "@/lib/api-base-url"
 import { authenticatedFetch } from "@/lib/authenticated-fetch"
 import { resolveModelIconName } from "@/lib/model-icons"
 import { devLog } from "@/lib/dev-log"
@@ -89,7 +89,7 @@ const initialFormData = {
   apiKey: ''
 };
 
-const API_ROOT = getNormalizedApiBaseUrl()
+const API_ROOT = getSameOriginApiBaseUrl()
 
 function adminAuthHeaders(token: string | null, includeJson = false): HeadersInit {
   const headers: Record<string, string> = {}
@@ -98,7 +98,37 @@ function adminAuthHeaders(token: string | null, includeJson = false): HeadersIni
   return headers
 }
 
-/** Compact iOS-style switch: 32px track, 28px thumb, 44px tap target. */
+function toggleErrorMessage(payload: { error?: string; code?: string; missingPermission?: string } | null, fallback: string): string {
+  const code = payload?.code || payload?.error
+  if (code === 'auth required' || payload?.error === 'auth required') {
+    return 'Debes iniciar sesión como administrador'
+  }
+  if (
+    code === 'forbidden'
+    || payload?.error === 'forbidden'
+    || payload?.missingPermission === 'admin.models.manage'
+    || code === 'admin_route_policy_unmapped'
+  ) {
+    return 'Solo los administradores pueden activar o desactivar modelos'
+  }
+  if (code === 'csrf_invalid') {
+    return 'No se pudo verificar la sesión. Recarga la página e inténtalo de nuevo.'
+  }
+  if (typeof payload?.error === 'string' && payload.error.trim() && payload.error !== 'toggle failed') {
+    return payload.error
+  }
+  return fallback
+}
+
+async function adminToggleHeaders(token: string | null): Promise<HeadersInit> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const csrf = await authenticatedFetch.csrfManager.getToken()
+  if (csrf) headers['X-CSRF-Token'] = csrf
+  return headers
+}
+
+/** Compact iOS-style switch + Activo/Inactivo label. One control, one click. */
 function ModelActiveSwitch({
   checked,
   disabled,
@@ -113,12 +143,12 @@ function ModelActiveSwitch({
   return (
     <button
       type="button"
-      role="switch"
-      aria-checked={checked}
+      aria-pressed={checked}
       aria-label={ariaLabel}
       disabled={disabled}
+      data-model-active-toggle="true"
       onClick={() => onCheckedChange(!checked)}
-      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-md disabled:opacity-60"
+      className="modelos-ia-active-toggle inline-flex min-h-[44px] shrink-0 items-center gap-2 rounded-md disabled:cursor-wait disabled:opacity-60"
     >
       <span
         aria-hidden
@@ -126,6 +156,7 @@ function ModelActiveSwitch({
         style={{
           width: 52,
           height: 32,
+          pointerEvents: "none",
           backgroundColor: checked ? "#34C759" : "#D1D5DB",
           transition: "background-color 160ms ease",
         }}
@@ -140,6 +171,9 @@ function ModelActiveSwitch({
           }}
         />
       </span>
+      <span className={checked ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
+        {checked ? "Activo" : "Inactivo"}
+      </span>
     </button>
   )
 }
@@ -148,6 +182,7 @@ export default function ModelsPage() {
   const [models, setModels] = useState<AIModel[]>([])
   const [providers, setProviders] = useState<string[]>([])
   const [stats, setStats] = useState<ProviderStats | null>(null)
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set())
   const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isSyncing, setIsSyncing] = useState(false)
@@ -428,6 +463,11 @@ export default function ModelsPage() {
   const toggleModelStatus = async (modelId: string, currentStatus: boolean) => {
     if (togglingIdsRef.current.has(modelId)) return
     togglingIdsRef.current.add(modelId)
+    setTogglingIds((prev) => {
+      const nextIds = new Set(prev)
+      nextIds.add(modelId)
+      return nextIds
+    })
     const next = !currentStatus
     setModels((prev) => prev.map((m) => (m.id === modelId ? { ...m, isActive: next } : m)))
     setStats((prev) => prev ? {
@@ -437,12 +477,31 @@ export default function ModelsPage() {
     } : prev)
     try {
       const token = localStorage.getItem('auth-token')
-      const response = await authenticatedFetch(`${API_ROOT}/admin/models/${modelId}`, {
+      const response = await authenticatedFetch(`${API_ROOT}/admin/models/${encodeURIComponent(modelId)}`, {
         method: 'PUT',
-        headers: adminAuthHeaders(token, true),
+        headers: await adminToggleHeaders(token),
         body: JSON.stringify({ isActive: next })
       })
-      if (!response.ok) throw new Error('toggle failed')
+      const payload = await response.json().catch(() => null) as {
+        model?: { isActive?: boolean }
+        stats?: { total?: number; active?: number; inactive?: number }
+        error?: string
+        code?: string
+        missingPermission?: string
+      } | null
+      if (!response.ok) {
+        throw new Error(toggleErrorMessage(payload, 'No se pudo actualizar el modelo'))
+      }
+      if (payload?.model && typeof payload.model.isActive === 'boolean' && payload.model.isActive !== next) {
+        throw new Error('No se pudo actualizar el modelo')
+      }
+      const nextStats = payload?.stats
+      if (nextStats && typeof nextStats.active === 'number' && typeof nextStats.inactive === 'number') {
+        const active = nextStats.active
+        const inactive = nextStats.inactive
+        const total = typeof nextStats.total === 'number' ? nextStats.total : active + inactive
+        setStats((prev) => prev ? { ...prev, total, active, inactive } : prev)
+      }
       toast.success(next ? 'Modelo activado' : 'Modelo desactivado')
     } catch (error) {
       setModels((prev) => prev.map((m) => (m.id === modelId ? { ...m, isActive: currentStatus } : m)))
@@ -451,9 +510,14 @@ export default function ModelsPage() {
         active: Math.max(0, prev.active + (currentStatus ? 1 : -1)),
         inactive: Math.max(0, prev.inactive + (currentStatus ? -1 : 1)),
       } : prev)
-      toast.error('No se pudo actualizar el modelo')
+      toast.error(error instanceof Error && error.message ? error.message : 'No se pudo actualizar el modelo')
     } finally {
       togglingIdsRef.current.delete(modelId)
+      setTogglingIds((prev) => {
+        const nextIds = new Set(prev)
+        nextIds.delete(modelId)
+        return nextIds
+      })
     }
   }
 
@@ -737,7 +801,7 @@ export default function ModelsPage() {
             ) : (
               <ul className="divide-y">
                 {activosVisible.map((model) => (
-                  <li key={model.id} className="flex items-center gap-3 py-2">
+                  <li key={model.id} className={`flex items-center gap-3 py-2 ${togglingIds.has(model.id) ? "opacity-60" : ""}`}>
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-sm font-medium">{model.displayName || model.name}</div>
                       <div className="truncate text-xs text-muted-foreground">
@@ -748,10 +812,10 @@ export default function ModelsPage() {
                     <div className="flex shrink-0 items-center gap-2">
                       <ModelActiveSwitch
                         checked={model.isActive}
+                        disabled={togglingIds.has(model.id)}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
                         ariaLabel="Desactivar modelo"
                       />
-                      <span className="text-xs font-medium text-green-600 dark:text-green-500">Activo</span>
                     </div>
                   </li>
                 ))}
@@ -916,7 +980,7 @@ export default function ModelsPage() {
             </TableHeader>
             <TableBody>
               {paginatedModels.map((model) => (
-                <TableRow key={model.id}>
+                <TableRow key={model.id} className={togglingIds.has(model.id) ? "opacity-60" : undefined}>
                   <TableCell>
                     <div className="flex items-center space-x-2">
                       <IconProvider
@@ -977,12 +1041,10 @@ export default function ModelsPage() {
                     <div className="flex items-center gap-2">
                       <ModelActiveSwitch
                         checked={model.isActive}
+                        disabled={togglingIds.has(model.id)}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
                         ariaLabel={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
-                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
-                        {model.isActive ? "Activo" : "Inactivo"}
-                      </span>
                     </div>
                   </TableCell>
                   
@@ -1054,7 +1116,7 @@ export default function ModelsPage() {
                 : model.type === 'MUSIC' ? 'Música'
                 : model.type
               return (
-                <div key={model.id} className="rounded-lg border bg-card p-3">
+                <div key={model.id} className={`rounded-lg border bg-card p-3 ${togglingIds.has(model.id) ? "opacity-60" : ""}`}>
                   <div className="flex items-start gap-2">
                     <IconProvider name={resolveModelIconName(model)} className="h-6 w-6 shrink-0" />
                     <div className="min-w-0 flex-1">
@@ -1086,12 +1148,10 @@ export default function ModelsPage() {
                     <div className="flex items-center gap-2">
                       <ModelActiveSwitch
                         checked={model.isActive}
+                        disabled={togglingIds.has(model.id)}
                         onCheckedChange={() => toggleModelStatus(model.id, model.isActive)}
                         ariaLabel={model.isActive ? "Desactivar modelo" : "Activar modelo"}
                       />
-                      <span className={model.isActive ? "text-xs font-medium text-green-600 dark:text-green-500" : "text-xs font-medium text-muted-foreground"}>
-                        {model.isActive ? "Activo" : "Inactivo"}
-                      </span>
                     </div>
                     <span className="whitespace-nowrap text-xs text-muted-foreground">{cost.main}</span>
                   </div>
