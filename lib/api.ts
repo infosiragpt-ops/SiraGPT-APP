@@ -16,7 +16,11 @@ import {
 import { reportClientLog } from "./client-logs"
 import { safeUUID } from "./safe-uuid"
 import { pinGenerateRequest } from "./chat/catalog-model"
-import { decideEmptyGenerateStreamAction } from "./generate-stream-complete"
+import {
+  decideEmptyGenerateStreamAction,
+  isSseKeepaliveComment,
+  shouldRecoverOnKeepalive,
+} from "./generate-stream-complete"
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 import {
   attachGenerateHttpError,
@@ -2100,11 +2104,14 @@ class ApiClient {
             const eventLines = line.split(/\r?\n/);
             let eventId: string | null = null;
             let dataLine: string | null = null;
+            let isKeepalive = false;
             for (const eventLine of eventLines) {
               if (eventLine.startsWith('id:')) {
                 eventId = eventLine.substring(3).trim();
               } else if (eventLine.startsWith('data: ')) {
                 dataLine = eventLine.substring(6);
+              } else if (isSseKeepaliveComment(eventLine)) {
+                isKeepalive = true;
               }
             }
             if (eventId) {
@@ -2115,7 +2122,24 @@ class ApiClient {
                 }
               } catch { /* quota / private mode */ }
             }
-            if (dataLine == null) continue;
+            if (dataLine == null) {
+              // `: ping` keeps the socket open after persist. Recover the
+              // saved assistant now — do not wait for [DONE] + 5 reconnects.
+              if (
+                isKeepalive
+                && shouldRecoverOnKeepalive({ hasDeliveredAnyContent, streamFailed: false })
+                && options.tryRecoverPersistedTurn
+              ) {
+                try {
+                  if (await options.tryRecoverPersistedTurn()) {
+                    streamFinished = true;
+                    onClose();
+                    return;
+                  }
+                } catch { /* persist not ready yet; keep reading tokens */ }
+              }
+              continue;
+            }
             const payload = dataLine;
             // Sentinel the backend emits at the very end of every stream,
             // including error / recovered cases. Flush pending buffer,
@@ -2174,7 +2198,11 @@ class ApiClient {
                 }
                 hasDeliveredAnyContent = true;
                 lastProcessTime = Date.now();
-              } else if (jsonData.content) {
+              } else if (
+                (jsonData.type === 'text_delta' || jsonData.type === 'token' || jsonData.content)
+                && typeof jsonData.content === 'string'
+                && jsonData.content
+              ) {
                 batchBuffer += jsonData.content;
                 processedChunks++;
 

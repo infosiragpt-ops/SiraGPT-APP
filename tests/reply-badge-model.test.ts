@@ -17,6 +17,26 @@ describe("reply badge follows the picker, not Sira Rápido", () => {
     { name: "deepseek-v4-pro", displayName: "Sira Pro", provider: "DeepSeek" },
   ]
 
+  it("labels persisted grok-4.5 (DB passthrough) Grok 4.5, not curated Grok 4.2", () => {
+    const catalog42 = [
+      { name: "x-ai/grok-4.20", displayName: "Grok 4.2", provider: "xAI" },
+    ]
+    assert.equal(
+      resolveReplyBadgeLabel({ generationUsage: { model: "grok-4.5" } }, catalog42),
+      "Grok 4.5",
+    )
+    assert.equal(
+      resolveReplyBadgeLabel({
+        metadata: { generationUsage: { model: "grok-4.5" } },
+      }, catalog42),
+      "Grok 4.5",
+    )
+    assert.notEqual(
+      resolveReplyBadgeLabel({ generationUsage: { model: "grok-4.5" } }, catalog42),
+      "Grok 4.2",
+    )
+  })
+
   it("labels a Grok reply Grok 4.5, never Sira Rápido", () => {
     const label = resolveReplyBadgeLabel({
       generationUsage: { model: "x-ai/grok-4.5" },

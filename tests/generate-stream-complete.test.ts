@@ -3,7 +3,9 @@ import { describe, it } from "node:test"
 
 import {
   decideEmptyGenerateStreamAction,
+  isSseKeepaliveComment,
   shouldPollPersistedTurnOnStreamClose,
+  shouldRecoverOnKeepalive,
 } from "../lib/generate-stream-complete"
 import { shouldRecoverPersistedGenerate } from "../lib/recover-persisted-turn"
 
@@ -75,6 +77,14 @@ describe("generate stream close recovers a persisted turn immediately", () => {
       }),
       "retry",
     )
+  })
+
+  it("recovers on SSE keep-alives when tokens never painted", () => {
+    assert.equal(isSseKeepaliveComment(": ping 1710000000000"), true)
+    assert.equal(isSseKeepaliveComment("data: {\"content\":\"Hola\"}"), false)
+    assert.equal(shouldRecoverOnKeepalive({ hasDeliveredAnyContent: false }), true)
+    assert.equal(shouldRecoverOnKeepalive({ hasDeliveredAnyContent: true }), false)
+    assert.equal(shouldRecoverOnKeepalive({ streamFailed: true }), false)
   })
 
   it("does not recover a fail-closed 503 / connection_unavailable", () => {

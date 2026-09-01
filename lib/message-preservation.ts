@@ -251,6 +251,9 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
       if (shouldPreserveLocalAssistantContent(incomingText, localText)) {
         next.content = localText as TMessage['content'];
       }
+      if (!(next as { model?: unknown }).model && (localMatch as { model?: unknown }).model) {
+        (next as { model?: unknown }).model = (localMatch as { model?: unknown }).model;
+      }
       if (parseMessageFiles(localMatch.files).length > 0 || parseMessageFiles(next.files).length > 0) {
         next.files = mergeMessageFileLists(next.files, localMatch.files) as TMessage['files'];
       }
@@ -342,10 +345,31 @@ export function mergeMessagesPreservingUserContent<TMessage extends ChatMessageL
 
 const OPTIMISTIC_ID_RE = /^msg-(?:user|ai|temp)-/;
 
+function parseTurnMetadata(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function turnIdentityKey(message?: { metadata?: unknown } | null): string {
+  const metadata = parseTurnMetadata(message?.metadata);
+  const key = metadata.idempotencyKey || metadata.streamId || metadata.turnKey;
+  return typeof key === 'string' ? key.trim() : '';
+}
+
 // Minimal structural shape for dedupe — deliberately WITHOUT ChatMessageLike's
 // `[key: string]: unknown` index signature, so concrete app message types
 // (e.g. the frontend `Message`) are assignable without a cast.
 type DedupeMessageLike = {
+  metadata?: unknown;
   id?: string;
   role?: string;
   content?: unknown;
@@ -378,12 +402,17 @@ const richerMessage = <T extends DedupeMessageLike>(a: T, b: T): T => {
     winner = aOptimistic && !bOptimistic ? b : a;
   }
   const other = winner === a ? b : a
-  if (parseMessageFiles(a?.files).length === 0 && parseMessageFiles(b?.files).length === 0) {
+  const winnerModel = (winner as { model?: unknown }).model
+  const otherModel = (other as { model?: unknown }).model
+  const graftedModel = winnerModel || otherModel
+  const needsFiles = parseMessageFiles(a?.files).length > 0 || parseMessageFiles(b?.files).length > 0
+  if (!needsFiles && !(!winnerModel && otherModel)) {
     return winner
   }
   return {
     ...winner,
-    files: mergeMessageFileLists(winner.files, other.files),
+    ...(graftedModel ? { model: graftedModel } : {}),
+    ...(needsFiles ? { files: mergeMessageFileLists(winner.files, other.files) } : {}),
   } as T
 };
 
@@ -448,6 +477,12 @@ export function dedupeMessages<TMessage extends DedupeMessageLike>(
   const isStableTwinOf = (candidate: TMessage, other: TMessage) => {
     if (!other?.id || OPTIMISTIC_ID_RE.test(String(other.id))) return false;
     if (String(other.role || '').toUpperCase() !== String(candidate.role || '').toUpperCase()) return false;
+    const candidateKey = turnIdentityKey(candidate);
+    const otherKey = turnIdentityKey(other);
+    // Live placeholder is `msg-ai-…` (empty). DB row is `cmti…` with the
+    // same idempotencyKey. Match by turn identity even when content differs
+    // so getChat replaces Pensando without a reload.
+    if (candidateKey && otherKey && candidateKey === otherKey) return true;
     return sameContentNormalized(other, candidate);
   };
 

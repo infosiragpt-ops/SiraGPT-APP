@@ -52,6 +52,13 @@ test('lookupPickerDisplayName uses the visible catalog label, not a raw id', () 
   assert.equal(lookupPickerDisplayName('anthropic/claude-opus-4.7'), 'Opus 4.7');
 });
 
+test('grok-4.5 DB passthrough badges as Grok 4.5, never curated Grok 4.2', () => {
+  assert.equal(lookupPickerDisplayName('grok-4.5'), 'Grok 4.5');
+  assert.equal(lookupPickerDisplayName('x-ai/grok-4.5'), 'Grok 4.5');
+  assert.notEqual(lookupPickerDisplayName('grok-4.5'), 'Grok 4.2');
+  assert.doesNotMatch(lookupPickerDisplayName('grok-4.5'), /DeepSeek|OpenRouter|x-ai\//i);
+});
+
 test('stale Claude Sonnet 3 labels resolve to current Anthropic Sonnet', () => {
   assert.equal(remapStaleClaudeId('Claude Sonnet 3'), ANTHROPIC_SONNET_ID);
   assert.equal(remapStaleClaudeId('claude-3.5-sonnet'), ANTHROPIC_SONNET_ID);

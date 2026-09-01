@@ -32,3 +32,20 @@ export function shouldPollPersistedTurnOnStreamClose(options: {
   if (content) return false
   return true
 }
+
+/** SSE comment (`: ping`) — keeps the socket open but is not a token. */
+export function isSseKeepaliveComment(line: string): boolean {
+  return /^\s*:/.test(String(line || ""))
+}
+
+/**
+ * Heartbeats must not reset the persist-recover clock. If the model already
+ * wrote the assistant row and the client has painted nothing, recover now.
+ */
+export function shouldRecoverOnKeepalive(options: {
+  hasDeliveredAnyContent?: boolean
+  streamFailed?: boolean
+}): boolean {
+  if (options.streamFailed) return false
+  return !options.hasDeliveredAnyContent
+}

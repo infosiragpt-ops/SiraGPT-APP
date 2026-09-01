@@ -22,27 +22,19 @@ test('model sync update payload preserves existing admin activation', () => {
   assert.ok(payload.updatedAt instanceof Date);
 });
 
-test('default inactive guard disables existing models once and preserves later manual activation', async () => {
+test('default inactive guard never mass-deactivates the catalog', async () => {
   const calls = [];
-  let marker = null;
   const service = new ModelSyncService({
     prismaClient: {
       aiModel: {
         updateMany: async (payload) => {
           calls.push(['updateMany', payload]);
-          return { count: 378 };
+          return { count: 1031 };
         },
       },
       systemSettings: {
-        findUnique: async (payload) => {
-          calls.push(['findUnique', payload]);
-          return marker;
-        },
-        upsert: async (payload) => {
-          calls.push(['upsert', payload]);
-          marker = { id: payload.create.id || 'marker' };
-          return marker;
-        },
+        findUnique: async () => null,
+        upsert: async (payload) => payload,
       },
     },
   });
@@ -51,20 +43,12 @@ test('default inactive guard disables existing models once and preserves later m
   const second = await service.ensureDefaultInactiveOnce();
 
   assert.deepEqual(first, {
-    applied: true,
-    count: 378,
-    reason: 'default_inactive_enforced',
-  });
-  assert.deepEqual(second, {
     applied: false,
     count: 0,
-    reason: 'already_applied',
+    reason: 'mass_deactivate_removed',
   });
-  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 1);
-  assert.deepEqual(calls.find(([name]) => name === 'updateMany')[1], {
-    where: { isActive: true },
-    data: { isActive: false },
-  });
+  assert.deepEqual(second, first);
+  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 0);
 });
 
 test('persistModels batches DB work: one findMany, createMany for new, parallel updates', async () => {

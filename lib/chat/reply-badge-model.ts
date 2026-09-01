@@ -43,11 +43,20 @@ function parseMetadata(metadata: ReplyBadgeMessage["metadata"]): Record<string, 
   }
 }
 
+function versionToken(id: string): string {
+  const match = String(id || "").toLowerCase().match(/(\d+(?:\.\d+)+)/)
+  return match ? match[1] : ""
+}
+
 function sameModelId(a?: string | null, b?: string | null): boolean {
   const left = String(a || "").trim().toLowerCase()
   const right = String(b || "").trim().toLowerCase()
   if (!left || !right) return false
   if (left === right) return true
+  const leftVersion = versionToken(left)
+  const rightVersion = versionToken(right)
+  // DB passthrough grok-4.5 must not collapse onto curated Grok 4.2 / grok-4.20.
+  if (leftVersion && rightVersion && leftVersion !== rightVersion) return false
   const bare = (value: string) => (value.includes("/") ? value.split("/").pop() || value : value)
   return bare(left) === bare(right)
 }
