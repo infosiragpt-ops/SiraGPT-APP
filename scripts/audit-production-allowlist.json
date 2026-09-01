@@ -1,84 +1,12 @@
 {
-  "expiresOn": "2026-08-31",
+  "expiresOn": "2026-09-15",
   "level": "high",
   "allowed": [
-    {
-      "package": "next",
-      "source": 1112653,
-      "title": "Next.js HTTP request deserialization can lead to DoS when using insecure React Server Components",
-      "reason": "Next 15+ migration is blocked by the UI lock until app/layout dynamic client-only initializers are moved without visual changes."
-    },
-    {
-      "package": "next",
-      "source": 1116376,
-      "title": "Next.js has a Denial of Service with Server Components",
-      "reason": "Tracked as framework migration debt; no new UI-surface changes may be bundled into dependency-only hardening."
-    },
-    {
-      "package": "next",
-      "source": 1117931,
-      "title": "Next.js Vulnerable to Denial of Service with Server Components",
-      "reason": "Tracked as framework migration debt; upgrade requires a dedicated Next 15/16 compatibility PR."
-    },
-    {
-      "package": "next",
-      "source": 1118954,
-      "title": "Next.js vulnerable to server-side request forgery in applications using WebSocket upgrades",
-      "reason": "Tracked as framework migration debt; this exception prevents unrelated new advisories from being masked."
-    },
-    {
-      "package": "next",
-      "source": 1118962,
-      "title": "Next.js has a Middleware / Proxy bypass in Pages Router applications using i18n",
-      "reason": "Tracked as framework migration debt pending a zero-UI-change Next major migration."
-    },
     {
       "package": "sharp",
       "source": 1124066,
       "title": "sharp inherited vulnerabilities in libvips: CVE-2026-33327, CVE-2026-33328, CVE-2026-35590, CVE-2026-35591",
-      "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; keep this time-bounded exception visible until a dedicated compatibility upgrade is validated."
-    },
-    {
-      "package": "brace-expansion",
-      "source": 1130588,
-      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (GHSA-mh99-v99m-4gvg)",
-      "reason": "Advisory publicado 2026-07-31 (transitivo, sin fix en la rama); bloquea todos los merges. Fix real requiere bump de la sub-dependencia en PR dedicado."
-    },
-    {
-      "package": "brace-expansion",
-      "source": 1130589,
-      "title": "brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash (GHSA-mh99-v99m-4gvg)",
-      "reason": "Advisory publicado 2026-07-31 (transitivo, sin fix en la rama); bloquea todos los merges. Fix real requiere bump de la sub-dependencia en PR dedicado."
-    },
-    {
-      "package": "brace-expansion",
-      "source": 1130736,
-      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
-      "reason": "Nueva advisory transitiva (2026-08); sin fix estable en la rama de producción. Mantener excepción temporal hasta PR dedicado de bumps."
-    },
-    {
-      "package": "brace-expansion",
-      "source": 1130737,
-      "title": "brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",
-      "reason": "Nueva advisory transitiva (2026-08); sin fix estable en la rama de producción. Mantener excepción temporal hasta PR dedicado de bumps."
-    },
-    {
-      "package": "undici",
-      "source": 1130718,
-      "title": "undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives",
-      "reason": "Advisory transitiva en el grafo de Next/npm (2026-08). Fix real requiere bump coordinado de undici/next en PR de dependencias."
-    },
-    {
-      "package": "nanoid",
-      "source": 1138810,
-      "title": "nanoid: non-secure generators can loop indefinitely with negative size",
-      "reason": "Advisory transitiva en nanoid 3/5 (2026-08); sin fix estable en la rama. Mantener excepción temporal hasta PR dedicado de bumps — no bloquea i18n."
-    },
-    {
-      "package": "nanoid",
-      "source": 1138813,
-      "title": "nanoid: custom generators can loop indefinitely when size is zero",
-      "reason": "Advisory transitiva en nanoid 3/5 (2026-08); sin fix estable en la rama. Mantener excepción temporal hasta PR dedicado de bumps — no bloquea i18n."
+      "reason": "Sharp 0.35 is a breaking native-image upgrade and Next.js plus Transformers currently resolve 0.34.x; retain a 14-day exception while a dedicated compatibility upgrade is validated."
     }
   ]
 }

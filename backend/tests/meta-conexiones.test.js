@@ -15,6 +15,7 @@ const aiRoute = fs.readFileSync(path.join(root, 'src', 'routes', 'ai.js'), 'utf8
 const firstPartyClients = fs.readFileSync(path.join(root, 'src', 'services', 'ai', 'first-party-chat-clients.js'), 'utf8');
 const bridge = fs.readFileSync(path.join(root, 'src', 'services', 'admin-connections-bridge.js'), 'utf8');
 const connectionsRoute = fs.readFileSync(path.join(root, 'src', 'routes', 'admin-connections.js'), 'utf8');
+const modelSync = fs.readFileSync(path.join(root, 'src', 'services', 'model-sync-service.js'), 'utf8');
 
 test('admin connections treat meta as a first-class provider key', () => {
   assert.match(connectionsRoute, /'meta'/);
@@ -27,6 +28,10 @@ test('connections bridge maps Meta to MODEL_API_KEY and probes api.meta.ai', () 
   assert.match(bridge, /https:\/\/api\.meta\.ai\/v1\/models/);
   assert.match(bridge, /META_API_KEY/);
   assert.match(bridge, /LLAMA_API_KEY/);
+});
+
+test('Meta model discovery accepts every supported production env alias', () => {
+  assert.match(modelSync, /\['MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY'\]/);
 });
 
 test('createProviderClient can point at Meta Model API', () => {
