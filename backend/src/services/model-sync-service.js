@@ -919,13 +919,41 @@ class ModelSyncService {
   }
 
   /**
-   * Historical no-op. A previous boot/migration path
-   * (`disable_all_ai_models_by_admin_request` / updateMany isActive=false)
-   * unpublished the whole catalog including live picks like grok-4.5.
-   * Never mass-deactivate models from boot, admin GET, or sync.
+   * One-time production guard for the admin catalog.
+   *
+   * Earlier builds seeded/provider-synced models as active. The SQL
+   * migration handles normal deploys, but this runtime guard covers hosts
+   * where migrations are skipped or delayed. It runs once, then preserves
+   * future manual admin activations.
    */
   async ensureDefaultInactiveOnce() {
-    return { applied: false, count: 0, reason: 'mass_deactivate_removed' };
+    const markerKey = 'ai_models_default_inactive_v1_applied';
+    const markerValue = JSON.stringify({
+      appliedAt: new Date().toISOString(),
+      reason: 'admin_models_default_inactive',
+    });
+
+    const existingMarker = await this.prisma.systemSettings.findUnique({
+      where: { key: markerKey },
+      select: { id: true },
+    });
+
+    if (existingMarker) {
+      return { applied: false, count: 0, reason: 'already_applied' };
+    }
+
+    const result = await this.prisma.aiModel.updateMany({
+      where: { isActive: true },
+      data: { isActive: false },
+    });
+
+    await this.prisma.systemSettings.upsert({
+      where: { key: markerKey },
+      update: { value: markerValue },
+      create: { key: markerKey, value: markerValue },
+    });
+
+    return { applied: true, count: result.count || 0, reason: 'default_inactive_enforced' };
   }
 
   _getStaticCatalogSyncFlightKey(options = {}) {
