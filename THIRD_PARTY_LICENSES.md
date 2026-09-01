@@ -193,7 +193,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `bare-path` | 3.0.0 | Apache-2.0 | [link](https://github.com/holepunchto/bare-path) |
 | `bare-stream` | 2.7.0 | Apache-2.0 | [link](https://github.com/holepunchto/bare-stream) |
 | `bare-url` | 2.3.2 | Apache-2.0 | [link](https://github.com/holepunchto/bare-url) |
-| `baseline-browser-mapping` | 2.10.21 | Apache-2.0 | [link](https://github.com/web-platform-dx/baseline-browser-mapping) |
+| `baseline-browser-mapping` | 2.11.20 | Apache-2.0 | [link](https://github.com/web-platform-dx/baseline-browser-mapping) |
 | `before-after-hook` | 4.0.0 | Apache-2.0 | [link](https://github.com/gr2m/before-after-hook) |
 | `chromium-bidi` | 10.5.1 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/chromium-bidi) |
 | `class-variance-authority` | 0.7.1 | Apache-2.0 | [link](https://github.com/joe-bell/cva) |
@@ -327,7 +327,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
-| `caniuse-lite` | 1.0.30001790 | CC-BY-4.0 | [link](https://github.com/browserslist/caniuse-lite) |
+| `caniuse-lite` | 1.0.30001810 | CC-BY-4.0 | [link](https://github.com/browserslist/caniuse-lite) |
 | `spdx-exceptions` | 2.5.0 | CC-BY-3.0 | [link](https://github.com/kemitchell/spdx-exceptions.json) |
 
 ## CC0 (1)
@@ -414,7 +414,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `delaunator` | 5.1.0 | ISC | [link](https://github.com/mapbox/delaunator) |
 | `dezalgo` | 1.0.4 | ISC | [link](https://github.com/npm/dezalgo) |
 | `earcut` | 3.0.2 | ISC | [link](https://github.com/mapbox/earcut) |
-| `electron-to-chromium` | 1.5.343 | ISC | [link](https://github.com/Kilian/electron-to-chromium) |
+| `electron-to-chromium` | 1.5.419 | ISC | [link](https://github.com/Kilian/electron-to-chromium) |
 | `express-async-errors` | 3.1.1 | ISC | [link](https://github.com/davidbanham/express-async-errors) |
 | `fastq` | 1.20.1 | ISC | [link](https://github.com/mcollina/fastq) |
 | `foreground-child` | 3.3.1 | ISC | [link](https://github.com/tapjs/foreground-child) |
@@ -847,7 +847,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `brace-expansion` | 1.1.18, 2.1.4 | MIT | [link](https://github.com/juliangruber/brace-expansion) |
 | `braces` | 3.0.3 | MIT | [link](https://github.com/micromatch/braces) |
 | `brotli` | 1.3.3 | MIT | [link](https://github.com/devongovett/brotli.js) |
-| `browserslist` | 4.28.2 | MIT | [link](https://github.com/browserslist/browserslist) |
+| `browserslist` | 4.28.8 | MIT | [link](https://github.com/browserslist/browserslist) |
 | `buffer` | 5.7.1 | MIT | [link](https://github.com/feross/buffer) |
 | `buffer-crc32` | 0.2.13 | MIT | [link](https://github.com/brianloveswords/buffer-crc32) |
 | `buffer-from` | 1.1.2 | MIT | [link](https://github.com/LinusU/buffer-from) |
@@ -1261,7 +1261,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-gyp-build-optional-packages` | 5.2.2 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-readable-to-web-readable-stream` | 0.4.2 | MIT | [link](https://github.com/Borewit/node-readable-to-web-readable-stream) |
-| `node-releases` | 2.0.38 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
+| `node-releases` | 2.0.54 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
 | `nodemailer` | 9.0.1 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
 | `nopt` | 1.0.10, 7.2.1 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
@@ -1578,7 +1578,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `universal-github-app-jwt` | 2.2.2 | MIT | [link](https://github.com/gr2m/universal-github-app-jwt) |
 | `unpipe` | 1.0.0 | MIT | [link](https://github.com/stream-utils/unpipe) |
 | `unzipper` | 0.10.14 | MIT | [link](https://github.com/ZJONSSON/node-unzipper) |
-| `update-browserslist-db` | 1.2.3 | MIT | [link](https://github.com/browserslist/update-db) |
+| `update-browserslist-db` | 1.3.2 | MIT | [link](https://github.com/browserslist/update-db) |
 | `use-callback-ref` | 1.3.3 | MIT | [link](https://github.com/theKashey/use-callback-ref) |
 | `use-intl` | 4.12.0 | MIT | [link](https://github.com/amannn/next-intl) |
 | `use-sidecar` | 1.1.3 | MIT | [link](https://github.com/theKashey/use-sidecar) |
