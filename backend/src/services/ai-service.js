@@ -820,8 +820,12 @@ class AIService {
                 // model completion limit. Trivial §3.2 turns stay ≤256.
                 const requestedMax = Number(maxOutputTokens);
                 const modelCap = getCompletionLimit(currentRuntimeModel);
+                // Meta Muse Spark counts its reasoning tokens against max_tokens:
+                // at 256 a plain "hola" finished with `length` and no content.
+                // Keep a roomier trivial cap there (reasoning_effort is minimal).
+                const trivialCap = /^(meta|llama)$/i.test(String(currentProvider || '')) ? 1024 : 256;
                 const effectiveMaxOutput = isTrivial
-                    ? Math.min(256, modelCap || 256)
+                    ? Math.min(trivialCap, modelCap || trivialCap)
                     : (Number.isFinite(requestedMax) && requestedMax > 0
                         ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
                         : Math.min(modelCap, 16384));

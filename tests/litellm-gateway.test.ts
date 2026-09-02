@@ -68,7 +68,9 @@ describe("litellm gateway · provider normalization and route contracts", () => 
 
     assert.equal(built.provider, "meta")
     assert.equal("reasoning" in built.payload, false)
-    assert.equal("reasoning_effort" in built.payload, false)
+    // Meta takes OpenAI-style reasoning_effort; disabled thinking → minimal
+    // ("none" is rejected by Muse Spark and unset effort ate the token cap).
+    assert.equal(built.payload.reasoning_effort, "minimal")
   })
 
   it("strips reasoning content when a provider should not receive it", () => {
