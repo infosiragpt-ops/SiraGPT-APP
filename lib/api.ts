@@ -1897,14 +1897,23 @@ class ApiClient {
     const MAX_RECONNECT_DELAY_MS = 20000;
     let hasDeliveredAnyContent = false;
     let lastError: any = null;
+    // A fresh turn never starts from a stored cursor: resuming the PREVIOUS
+    // turn's stream on a reconnect replays only its [DONE] and closes this
+    // turn contentless. This turn's cursor comes from the response headers
+    // and `id:` frames below.
     let lastEventId: string | null = null;
-    try {
-      if (typeof sessionStorage !== "undefined" && data.chatId) {
-        lastEventId = sessionStorage.getItem(`siragpt:lastEventId:${data.chatId}`) || null;
-      }
-    } catch { /* private mode */ }
     let terminalErrorDelivered = false;
     let streamFinished = false;
+    // Short replies ("Hola, Luis…") used to sit in batchBuffer until [DONE],
+    // which the backend only emits after persistence. Paint the tail on a
+    // short timer so the answer shows as soon as the model stops talking.
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearFlushTimer = () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+    };
 
     const deliverStreamError = (error: Error) => {
       if (terminalErrorDelivered || streamFinished) return;
@@ -1993,7 +2002,7 @@ class ApiClient {
 
         const responseStreamId = getResponseHeader(response, 'x-stream-id');
         const responseCursor = getResponseHeader(response, 'x-stream-cursor');
-        if (responseCursor && !lastEventId) {
+        if (responseCursor) {
           lastEventId = responseCursor;
         } else if (responseStreamId && !lastEventId) {
           lastEventId = `${responseStreamId}:0`;
@@ -2021,6 +2030,7 @@ class ApiClient {
         let lastProcessTime = Date.now();
 
         const flushBatch = () => {
+          clearFlushTimer();
           if (batchBuffer.trim()) {
             onData(batchBuffer);
             hasDeliveredAnyContent = true;
@@ -2217,6 +2227,12 @@ class ApiClient {
                   jsonData.content.includes('\n');
 
                 if (shouldProcess) flushBatch();
+                else if (!flushTimer) {
+                  flushTimer = setTimeout(() => {
+                    flushTimer = null;
+                    if (!streamFinished && !terminalErrorDelivered) flushBatch();
+                  }, 40);
+                }
               } else if (jsonData.type === 'computer_login_handoff') {
                 consumeLoginHandoffSse(jsonData)
                 lastProcessTime = Date.now();
@@ -2298,6 +2314,7 @@ class ApiClient {
         }
       } catch (error: any) {
         lastError = error;
+        clearFlushTimer();
         if (signal?.aborted) {
           deliverStreamError(error);
           return;
@@ -2316,6 +2333,19 @@ class ApiClient {
           || isGenerateStreamStall(error)
           || /fetch failed|failed to fetch|network|socket|ECONN|ETIMEDOUT|ENOTFOUND|empty model stream|520|stream stalled|stream connect timeout/i.test(error?.message || '');
         const canResume = Boolean(lastEventId);
+        // A transport cut with nothing painted usually means the backend
+        // already persisted the reply (the run keeps going detached). Ask for
+        // it BEFORE spending a reconnect slot — that is what turns minutes of
+        // Pensando into about a second.
+        if (isNetworkError && !hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+          try {
+            if (await options.tryRecoverPersistedTurn()) {
+              streamFinished = true;
+              onClose();
+              return;
+            }
+          } catch { /* not persisted yet — keep reconnecting */ }
+        }
         // Cookie/CSRF transport reconnect: first-byte Failed to fetch
         // (and mid-stream resume WITH a cursor) stay retryable.
         // User Stop (signal.aborted) already returned above. HTTP 503
@@ -2343,6 +2373,15 @@ class ApiClient {
     // empty streams — surface the last captured error to the UI with
     // a clean message.
     if (lastError) {
+      if (!hasDeliveredAnyContent && options.tryRecoverPersistedTurn) {
+        try {
+          if (await options.tryRecoverPersistedTurn()) {
+            streamFinished = true;
+            onClose();
+            return;
+          }
+        } catch { /* fall through to the error below */ }
+      }
       const msg = lastError?.message || 'Stream failed';
       const isQuota = /429|too many|rate/i.test(msg);
       const friendly = isQuota

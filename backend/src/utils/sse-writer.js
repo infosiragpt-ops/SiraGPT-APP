@@ -173,19 +173,20 @@ function createSSEWriter(res, options = {}) {
   try {
     const adAttach = require('../services/agent-runner/engine-adapter');
     const w64 = require('../services/agent-runner/engine-3h64');
+    const { createClientGoneWriter } = require('../services/ai/sse-client-gone');
+    // `req.destroyed` / `req` 'close' fire once the body was consumed (socket
+    // still open on Node >= 16) — only a dead socket may close this writer.
+    const clientGoneWriter = createClientGoneWriter(options.req, res, function () {
+      closed = true;
+      try { if (!res.writableEnded) res.end(); } catch (_) { /* already closed */ }
+    });
     if (typeof adAttach.destroySseOnClientClose === 'function' && options.req) {
-      adAttach.destroySseOnClientClose(options.req, {
-        close: function () { closed = true; },
-        destroy: function () { closed = true; try { if (!res.writableEnded) res.end(); } catch (_) {} },
-      });
+      adAttach.destroySseOnClientClose(options.req, clientGoneWriter);
     }
     if (typeof w64.guardSseClientGoneClosed === 'function') {
       w64.guardSseClientGoneClosed({
         req: options.req,
-        writer: {
-          close: function () { closed = true; },
-          destroy: function () { closed = true; },
-        },
+        writer: clientGoneWriter,
         lastClientAt: options.lastClientAt,
         now: Date.now(),
         pendingEvent: options.pendingEvent,

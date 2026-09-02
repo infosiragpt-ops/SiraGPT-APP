@@ -682,13 +682,24 @@ export function preserveOrphanAssistantMessages<TMessage extends ChatMessageLike
     if (m?.id && m?.role && !isUserMessage(m)) incomingIds.add(String(m.id));
   }
 
+  const incomingAssistantTurnKeys = new Set<string>();
+  for (const m of enriched) {
+    if (!m?.role || isUserMessage(m)) continue;
+    const key = turnIdentityKey(m as { metadata?: unknown });
+    if (key) incomingAssistantTurnKeys.add(key);
+  }
+
   const orphans = localAssistants.slice(incomingAssistantCount).filter((local) => {
     if (!local) return false;
     // Skip orphans whose id already exists incoming (paranoid dedupe).
     if (local.id && incomingIds.has(String(local.id))) return false;
-    // Empty / placeholder messages aren't worth preserving — the next
-    // refresh will surface the real content.
-    return hasText(local.content) || hasFiles(local.files);
+    if (hasText(local.content) || hasFiles(local.files)) return true;
+    // An EMPTY placeholder is the live stream's landing spot. Drop it only
+    // once the server has an assistant row for the same turn; otherwise a
+    // refresh racing the first token deletes the message the chunks are
+    // addressed to and the UI sits on Pensando.
+    const turnKey = turnIdentityKey(local as { metadata?: unknown });
+    return Boolean(turnKey) && !incomingAssistantTurnKeys.has(turnKey);
   });
 
   if (orphans.length === 0) return enriched;

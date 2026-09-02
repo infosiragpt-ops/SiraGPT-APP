@@ -357,3 +357,46 @@ describe("mergeMessagesPreservingUserContent - assistant content / orphan preser
     assert.equal(merged.length, 2)
   })
 })
+
+describe("preserveOrphanAssistantMessages - keeps the live stream placeholder", () => {
+  const userTurn = {
+    id: "msg-user-2",
+    role: "USER",
+    content: "hola",
+    metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+  }
+  const placeholder = {
+    id: "msg-ai-chat-2",
+    role: "ASSISTANT",
+    content: "",
+    metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+  }
+  const seed = [
+    { id: "msg-user-1", role: "USER", content: "primer mensaje" },
+    { id: "asst_1", role: "ASSISTANT", content: "Primera respuesta." },
+  ]
+
+  it("keeps an empty placeholder while the server has no assistant row for that turn", () => {
+    const merged = mergeMessagesPreservingUserContent([...seed, userTurn], [...seed, userTurn, placeholder])
+    assert.ok(
+      merged.some((m) => (m as any).id === "msg-ai-chat-2"),
+      "the streaming placeholder must survive a refresh that races the first token",
+    )
+  })
+
+  it("drops the empty placeholder once the server persisted the same turn", () => {
+    const persisted = {
+      id: "asst_2",
+      role: "ASSISTANT",
+      content: "Hola, Luis. ¿En qué te ayudo hoy?",
+      metadata: JSON.stringify({ idempotencyKey: "turn-2" }),
+    }
+    const merged = mergeMessagesPreservingUserContent(
+      [...seed, userTurn, persisted],
+      [...seed, userTurn, placeholder],
+    )
+    const assistants = merged.filter((m) => String(m.role).toUpperCase() === "ASSISTANT")
+    assert.equal(assistants.length, 2)
+    assert.ok(!merged.some((m) => (m as any).id === "msg-ai-chat-2"))
+  })
+})

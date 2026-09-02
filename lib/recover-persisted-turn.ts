@@ -44,7 +44,10 @@ export function shouldRecoverPersistedGenerate(
   if (error?.name === "AbortError") return true
 
   if (!Number.isFinite(status) || status === 0) {
-    return /failed to fetch|fetch failed|network|socket|ECONN|ETIMEDOUT|520|502|incomplete|empty model stream|stream ended|stream stalled|stream connect timeout|stream_stall|internal server error/i.test(text)
+    // The friendly copy generateAIStream emits once its reconnect budget is
+    // spent must still poll: the backend keeps running detached and has
+    // usually persisted the reply by then.
+    return /failed to fetch|fetch failed|network|socket|ECONN|ETIMEDOUT|520|502|incomplete|empty model stream|stream ended|stream stalled|stream connect timeout|stream_stall|internal server error|no se pudo conectar con el modelo|no se pudo completar la respuesta|terminó antes de completar/i.test(text)
   }
 
   return status === 408

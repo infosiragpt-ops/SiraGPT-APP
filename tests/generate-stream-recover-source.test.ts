@@ -65,6 +65,29 @@ describe("generate stream persist-then-poll recovery", () => {
     assert.match(catchBlock, /shouldRecoverPersistedGenerate\(error/)
   })
 
+  it("asks for the persisted reply before spending reconnect slots and never resumes a stale cursor", () => {
+    const start = apiSource.indexOf("} catch (error: any) {\n        lastError = error;")
+    assert.ok(start >= 0)
+    const block = apiSource.slice(start, start + 2600)
+    assert.match(
+      block,
+      /if \(isNetworkError && !hasDeliveredAnyContent && options\.tryRecoverPersistedTurn\)/,
+      "a transport cut with nothing painted must poll the persisted turn before reconnecting",
+    )
+    assert.doesNotMatch(
+      apiSource,
+      /sessionStorage\.getItem\(`siragpt:lastEventId:\$\{data\.chatId\}`\)/,
+      "a fresh generate must not resume the previous turn's cursor",
+    )
+    assert.match(apiSource, /if \(responseCursor\) \{\s*lastEventId = responseCursor;/)
+    assert.match(apiSource, /flushTimer = setTimeout\(/, "short replies must paint without waiting for [DONE]")
+    assert.match(
+      generateSource,
+      /createClientGoneWriter\(req, res, function \(\) \{ clientGone = true; \}\)/,
+      "generate must only mark the client gone when the socket is really gone",
+    )
+  })
+
   it("emits [DONE] from generate finally when persist finished", () => {
     const idx = generateSource.indexOf("Safari/Cloudflare can drop the socket after persist")
     assert.ok(idx > 0, "generate finally must mention Safari persist-then-poll")
