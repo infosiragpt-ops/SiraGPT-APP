@@ -30,6 +30,8 @@ const LIVE = [
   { model: 'x-ai/grok-4', provider: 'xAI' },
   { model: 'x-ai/grok-4.5', provider: 'xAI' },
   { model: 'Grok 4.5', provider: 'xAI' },
+  { model: 'muse-spark-1.2-contributor', provider: 'Meta' },
+  { model: 'muse-spark-1.2', provider: 'Meta' },
 ];
 
 test('inferProviderFromModelId: live catalog families hit their own API', () => {
@@ -123,12 +125,16 @@ test('getClient factory wires Anthropic / Kimi / xAI — not OpenRouter or OpenA
   assert.match(src, /createAnthropicStreamingClient/);
   assert.match(src, /createMoonshotClient/);
   assert.match(src, /createXaiClient/);
+  assert.match(src, /api\.meta\.ai/);
   assert.doesNotMatch(src, /createAnthropicOpenAIAdapter/);
 
   const prev = {
     ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
     MOONSHOT_API_KEY: process.env.MOONSHOT_API_KEY,
     XAI_API_KEY: process.env.XAI_API_KEY,
+    META_API_KEY: process.env.META_API_KEY,
+    MODEL_API_KEY: process.env.MODEL_API_KEY,
+    LLAMA_API_KEY: process.env.LLAMA_API_KEY,
   };
   delete process.env.ANTHROPIC_API_KEY;
   delete process.env.SIRA_ANTHROPIC_API_KEY;
@@ -145,6 +151,10 @@ test('getClient factory wires Anthropic / Kimi / xAI — not OpenRouter or OpenA
     const xai = service.getClient('xAI');
     assert.ok(xai);
     assert.match(String(xai.baseURL || ''), /x\.ai/i);
+    process.env.META_API_KEY = 'meta-test-key';
+    const meta = service.getClient('Meta');
+    assert.ok(meta);
+    assert.match(String(meta.baseURL || ''), /api\.meta\.ai/i);
   } finally {
     for (const [key, value] of Object.entries(prev)) {
       if (value === undefined) delete process.env[key];

@@ -57,6 +57,20 @@ describe("litellm gateway · provider normalization and route contracts", () => 
     assert.equal(built.payload.messages[1].reasoning_content, "")
   })
 
+  it("strips OpenRouter reasoning from Meta Muse Spark payloads", () => {
+    const built = gateway.buildProviderChatPayload({
+      provider: "Meta",
+      model: "muse-spark-1.2-contributor",
+      thinkingLevel: "disabled",
+      extra: { reasoning: { exclude: true } },
+      messages: [{ role: "user", content: "hola" }],
+    })
+
+    assert.equal(built.provider, "meta")
+    assert.equal("reasoning" in built.payload, false)
+    assert.equal("reasoning_effort" in built.payload, false)
+  })
+
   it("strips reasoning content when a provider should not receive it", () => {
     const built = gateway.buildProviderChatPayload({
       provider: "OpenAI",

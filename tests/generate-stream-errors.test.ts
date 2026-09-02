@@ -67,6 +67,19 @@ describe("generate HTTP errors stop thinking", () => {
     assert.equal(isGenerateHttpTerminal(400, { error: "bad_request" }), true)
   })
 
+  it("surfaces Spanish SSE error text instead of HTTP 502 / vendor names", () => {
+    assert.equal(
+      friendlyGenerateHttpError(200, {
+        error: "connection_unavailable",
+        message: CONNECTION_UNAVAILABLE_MESSAGE,
+      }),
+      CONNECTION_UNAVAILABLE_MESSAGE,
+    )
+    const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
+    assert.match(apiSource, /jsonData\.message \|\| jsonData\.error/)
+    assert.match(apiSource, /connection_unavailable\|unknown parameter/)
+  })
+
   it("keeps cookie/CSRF reconnect and cursor resume in the generate client", () => {
     const apiSource = fs.readFileSync(path.join(process.cwd(), "lib", "api.ts"), "utf8")
     assert.match(

@@ -24,6 +24,7 @@ import {
 import { consumeLoginHandoffSse } from "./computer-login-handoff"
 import {
   attachGenerateHttpError,
+  CONNECTION_UNAVAILABLE_MESSAGE,
   shouldRetryGenerateHttp,
 } from "./generate-stream-errors"
 export { getNormalizedApiBaseUrl, getSameOriginApiBaseUrl } from "./api-base-url"
@@ -198,6 +199,9 @@ function sanitizeStreamError(raw: string): string {
   }
   if (/content.*policy|safety/i.test(raw)) {
     return "La solicitud no pudo ser procesada debido a las políticas de contenido."
+  }
+  if (/connection_unavailable|unknown parameter/i.test(raw)) {
+    return CONNECTION_UNAVAILABLE_MESSAGE
   }
   return raw
 }
@@ -2269,7 +2273,7 @@ class ApiClient {
                     items: jsonData.items,
                   });
                 }
-              } else if (jsonData.error) {
+              } else if (jsonData.error || jsonData.type === 'error') {
                 // When the backend recovered the turn with a localized
                 // fallback message, we've already delivered a useful
                 // reply to the user — don't surface a red toast on top.
@@ -2280,7 +2284,8 @@ class ApiClient {
                   // terminal error. Returning here is essential: a later
                   // [DONE]/reader close must not turn fail into complete.
                   flushBatch();
-                  deliverStreamError(new Error(sanitizeStreamError(jsonData.error)));
+                  const userFacing = String(jsonData.message || jsonData.error || '');
+                  deliverStreamError(new Error(sanitizeStreamError(userFacing)));
                   try { await reader.cancel('stream error'); } catch { /* already closed */ }
                   return;
                 }
