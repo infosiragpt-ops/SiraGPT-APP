@@ -75,6 +75,7 @@ const agentFilters = require('../services/agents/filters');
 const OpenAI = require('openai');
 const usageService = require("../services/usage-service");
 const contextWindow = require("../services/context-window");
+const conversationCompactor = require('../services/conversation-compactor');
 const { optionalAuth } = require('../middleware/optionalAuth');
 const { trackAnonUsage } = require('../middleware/trackAnonUsage');
 const { responseCache } = require('../middleware/response-cache');
@@ -440,6 +441,26 @@ function createProviderClientForRequest(provider, req, opts = {}) {
     // because the gateway helper crashed.
   }
   return { client: createProviderClient(provider, opts), via: 'direct' };
+}
+
+// Completion function for the rolling context compactor: one non-streaming
+// call on an OpenAI-compatible client. Returns null when no runtime is
+// configured so the compactor falls back to its extractive summary.
+function buildCompactionCompletion(runtime, req) {
+  if (!runtime || !runtime.model) return null;
+  return async (messages, { maxTokens } = {}) => {
+    const { client } = createProviderClientForRequest(runtime.provider, req, { model: runtime.model });
+    const response = await client.chat.completions.create({
+      model: runtime.model,
+      messages,
+      max_tokens: maxTokens || 1400,
+      temperature: 0.2,
+      stream: false,
+      // Meta reasoning tokens count against max_tokens — keep them minimal.
+      ...(runtime.provider === 'Meta' ? { reasoning_effort: 'minimal' } : {}),
+    });
+    return response?.choices?.[0]?.message?.content || '';
+  };
 }
 
 // One-shot boot-time provider-key audit. Logs a single WARN for each
@@ -5993,15 +6014,82 @@ router.post(
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
+      // Rolling context compaction state (services/conversation-compactor):
+      // rows already folded into the persisted summary are not replayed.
+      let __chatContextState = null;
       if (canPersist) {
+        __chatContextState = await conversationCompactor.loadChatSummaryState(prisma, chatId);
         historyMessages = await prisma.message.findMany({
-          where: { chatId },
+          where: conversationCompactor.historyWhere(chatId, __chatContextState),
           orderBy: { timestamp: 'asc' },
           // reasoningDetails: raw OpenRouter thinking blocks (incl. signed
           // Anthropic thinking) replayed verbatim on later turns — see the
           // history-mapping loop below.
-          select: { role: true, content: true, files: true, reasoningDetails: true }
+          select: { id: true, role: true, content: true, files: true, reasoningDetails: true, timestamp: true }
         });
+      }
+
+      // ─── Rolling context compaction ─────────────────────────────────
+      // When system + history + prompt no longer fit the model's real context
+      // window (or the verbatim history passes the absolute cap), fold the
+      // older turns into the chat's rolling summary BEFORE the prompt is
+      // assembled, keep the recent tail verbatim and inject the summary as a
+      // cacheable system block. Fail-open: any error → no compaction.
+      if (canPersist && !req._miniShortChitchat && historyMessages.length > 0) {
+        try {
+          const __attachmentTokens = (Array.isArray(processedFiles) ? processedFiles : [])
+            .reduce((acc, f) => acc + contextWindow.estimateTokens(String(f?.extractedText || '')), 0);
+          const __compactionPlan = conversationCompactor.planCompaction({
+            model: actualModel,
+            rows: historyMessages,
+            systemTokens: contextWindow.estimateTokens(systemInstruction.content),
+            promptTokens: contextWindow.estimateTokens(prompt) + __attachmentTokens,
+            reservedCompletionTokens: Math.min(actualMaxOutputTokens || 16384, contextWindow.getCompletionLimit(actualModel)),
+          });
+          req._contextCompactionPlan = __compactionPlan;
+          if (__compactionPlan.shouldCompact) {
+            const __runtime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
+            emitStage(`Comprimiendo el contexto (${__compactionPlan.rowsToCompact.length} mensajes)`, { tool: 'compact' });
+            const __result = await conversationCompactor.compactChat({
+              prisma,
+              chatId,
+              rows: __compactionPlan.rowsToCompact,
+              previousSummary: __chatContextState?.contextSummary || '',
+              previousMeta: __chatContextState?.contextSummaryMeta || null,
+              complete: buildCompactionCompletion(__runtime, req),
+              model: actualModel,
+              runtime: __runtime,
+            });
+            if (__result?.ok) {
+              historyMessages = __compactionPlan.rowsToKeep;
+              __chatContextState = {
+                contextSummary: __result.summary,
+                contextSummaryUntil: __result.until,
+                contextSummaryMeta: __result.meta,
+              };
+              req._contextCompaction = {
+                coveredMessages: __result.meta.coveredMessages,
+                foldedMessages: __result.coveredMessages,
+                summaryTokens: __result.meta.summaryTokens,
+                source: __result.source,
+                reason: __compactionPlan.reason,
+              };
+              emitStage(`Contexto comprimido · ${__result.coveredMessages} mensajes resumidos`, { tool: 'compact' });
+              console.log(`🗜️ context compaction: folded ${__result.coveredMessages} rows (${__compactionPlan.historyTokens} tokens) into a ${__result.meta.summaryTokens}-token summary via ${__result.source}${__runtime ? ` (${__runtime.provider}/${__runtime.model})` : ''}; ${historyMessages.length} rows kept verbatim`);
+            } else {
+              console.warn(`[context-compaction] not applied: ${__result?.reason || 'unknown'}`);
+            }
+          }
+        } catch (__compactErr) {
+          console.warn('[context-compaction] skipped:', __compactErr?.message || __compactErr);
+        }
+      }
+      if (__chatContextState?.contextSummary && !req._miniShortChitchat) {
+        const __summaryBlock = conversationCompactor.summaryBlock(__chatContextState.contextSummary, __chatContextState.contextSummaryMeta);
+        if (__summaryBlock) {
+          systemInstruction.content += __summaryBlock;
+          systemBlocks.push({ kind: 'context-summary', text: __summaryBlock, cacheable: true });
+        }
       }
       // Anthropic models via OpenRouter require the raw `reasoning_details`
       // of prior assistant turns replayed INTACT when the conversation
@@ -7917,6 +8005,7 @@ router.post(
             : {}),
           ...(webSearchSources ? { webSources: webSearchSources, webSearchMeta } : {}),
           ...(memoryItems ? { memory: memoryItems, memoryMeta } : {}),
+          ...(req._contextCompaction ? { contextCompaction: req._contextCompaction } : {}),
           // Thinking duration for the collapsed trace header ("Pensó durante
           // 12 s") on historically loaded messages.
           ...(__reasoningSink && __reasoningSink.durationMs
@@ -7945,6 +8034,25 @@ router.post(
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
+        }
+        // Pre-emptive compaction: the thread is past half the context budget
+        // but still fits — fold the older turns now, off the request path, so
+        // the next turn does not pay the summarisation latency inline.
+        if (canPersist && req._contextCompactionPlan?.preemptive && !req._contextCompaction) {
+          const __bgPlan = req._contextCompactionPlan;
+          const __bgRuntime = conversationCompactor.pickCompactionRuntime({ provider: actualProvider, model: actualModel });
+          setImmediate(() => {
+            conversationCompactor.maybeCompactInBackground({
+              prisma,
+              chatId,
+              model: actualModel,
+              systemTokens: Math.max(0, (__bgPlan.totalTokens || 0) - (__bgPlan.historyTokens || 0)),
+              complete: buildCompactionCompletion(__bgRuntime, req),
+              runtime: __bgRuntime,
+            }).then((r) => {
+              if (r?.ok) console.log(`🗜️ background context compaction: folded ${r.coveredMessages} rows via ${r.source}`);
+            }).catch(() => {});
+          });
         }
         if (savedChat?.assistantMessage?.id && operationalRagContext?.active) {
           operationalRag.scheduleQualityAudit({
