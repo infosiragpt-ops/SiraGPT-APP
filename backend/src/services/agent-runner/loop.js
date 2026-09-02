@@ -2,6 +2,7 @@
 
 const { throwIfAborted } = require('../../utils/abort-signals');
 const { parseReact, looksLikeToolUnsupportedError } = require('./react');
+const { normalizeToolTranscript, isToolTranscriptError } = require('./tool-transcript');
 const {
   MAX_VERIFICATION_RETRIES,
   needsVerification,
@@ -848,9 +849,18 @@ function asNativeCalls(calls, iteration) {
 
 async function callModel({ client, model, messages, tools, signal, maxTokens, onFirstToken }) {
   const max_tokens = maxTokens || resolveAgentRunnerMaxTokens();
+  // The request payload is a structurally valid copy of the transcript: the
+  // compaction / pruning hooks may leave orphan tool results or unanswered
+  // tool_calls behind, which strict providers (DeepSeek native, OpenAI,
+  // Gemini, xAI) reject with a 400. The runner's own `messages` state is
+  // never mutated here.
+  const normalized = normalizeToolTranscript(messages);
+  if (normalized.repaired > 0) {
+    try { console.warn(`[agent-runner] tool transcript repaired (${normalized.repaired} fix${normalized.repaired === 1 ? '' : 'es'}) before the LLM call`); } catch (_) { /* ignore */ }
+  }
   const create = (withTools) => client.chat.completions.create({
     model,
-    messages,
+    messages: normalized.messages,
     ...(withTools ? { tools, tool_choice: 'auto' } : {}),
     max_tokens,
   }, signal ? { signal } : undefined);
@@ -861,7 +871,9 @@ async function callModel({ client, model, messages, tools, signal, maxTokens, on
       return out;
     } catch (err) {
       if (signal && signal.aborted) throw err;
-      if (!looksLikeToolUnsupportedError(err)) throw err;
+      // A transcript-shape 400 mentions "tool_calls" but is NOT "this model
+      // has no tools": retrying without tools would fail identically.
+      if (isToolTranscriptError(err) || !looksLikeToolUnsupportedError(err)) throw err;
       const out = await create(false);
       if (typeof onFirstToken === 'function') { try { onFirstToken(); } catch { /* optional */ } }
       return out;
@@ -2800,6 +2812,7 @@ async function runAgentLoop({
 
 module.exports = {
   runAgentLoop,
+  callModel,
   MAX_ITERATIONS_DEFAULT,
   MAX_VERIFICATION_RETRIES,
   MAX_TOKENS_DEFAULT,
