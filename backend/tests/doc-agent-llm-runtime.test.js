@@ -60,13 +60,15 @@ describe('provider inference + model spec', () => {
 describe('candidate ladder', () => {
   test('DeepSeek leads by default and only configured providers are listed', () => {
     const c = rt.resolveDocAgentCandidates({ env: { DEEPSEEK_API_KEY: 'a', GEMINI_API_KEY: 'b' } });
-    assert.deepEqual(c.map((x) => [x.provider, x.model]), [['DeepSeek', 'deepseek-chat'], ['Gemini', 'gemini-3.5-flash']]);
+    assert.deepEqual(c.map((x) => [x.provider, x.model]), [['DeepSeek', 'deepseek-v4-pro'], ['Gemini', 'gemini-3.5-flash']]);
+    const pinned = rt.resolveDocAgentCandidates({ env: { DEEPSEEK_API_KEY: 'a', AGENT_PRO_MODEL: 'deepseek-v4-flash' } });
+    assert.equal(pinned[0].model, 'deepseek-v4-flash', 'AGENT_PRO_MODEL overrides the DeepSeek default');
     assert.equal(c[1].baseURL, 'https://generativelanguage.googleapis.com/v1beta/openai/');
   });
 
   test('the explicit model (arg or SIRAGPT_DOC_AGENT_MODEL) goes first on its provider, without duplicating it', () => {
     const fromArg = rt.resolveDocAgentCandidates({ model: 'muse-spark-1.2-contributor', env: ALL_KEYS });
-    assert.deepEqual(fromArg.slice(0, 2).map((x) => [x.provider, x.model]), [['Meta', 'muse-spark-1.2-contributor'], ['DeepSeek', 'deepseek-chat']]);
+    assert.deepEqual(fromArg.slice(0, 2).map((x) => [x.provider, x.model]), [['Meta', 'muse-spark-1.2-contributor'], ['DeepSeek', 'deepseek-v4-pro']]);
     assert.equal(fromArg.filter((x) => x.provider === 'Meta').length, 1);
     assert.deepEqual(fromArg[0].extra, { reasoning_effort: 'minimal' });
 
@@ -81,6 +83,11 @@ describe('candidate ladder', () => {
     const c = rt.resolveDocAgentCandidates({ model: 'gpt-5.6-sol', env: { DEEPSEEK_API_KEY: 'a' } });
     assert.deepEqual(c.map((x) => x.provider), ['DeepSeek']);
   });
+
+  test('placeholder keys (CI dummies) do not count as configured providers', () => {
+    const c = rt.resolveDocAgentCandidates({ env: { DEEPSEEK_API_KEY: 'your_deepseek_key', OPENROUTER_API_KEY: 'ci-dummy-key', GEMINI_API_KEY: 'real' } });
+    assert.deepEqual(c.map((x) => x.provider), ['Gemini']);
+  });
 });
 
 describe('failover client', () => {
@@ -94,7 +101,7 @@ describe('failover client', () => {
     const first = await client.chat.completions.create({ model: 'ignored', messages: [] });
     assert.equal(first.choices[0].message.content, 'ok from DeepSeek');
     assert.deepEqual(log.map((l) => l.provider), ['OpenRouter', 'DeepSeek']);
-    assert.equal(log[1].model, 'deepseek-chat', 'the candidate model replaces the payload model');
+    assert.equal(log[1].model, 'deepseek-v4-pro', 'the candidate model replaces the payload model');
     assert.equal(events.length, 1);
     assert.equal(events[0].from, 'OpenRouter');
     assert.equal(events[0].to, 'DeepSeek');
@@ -132,5 +139,42 @@ describe('failover client', () => {
     assert.equal(rt.isFailoverError(new Error('fetch failed')), true);
     assert.equal(rt.isFailoverError(new Error('ECONNRESET')), true);
     assert.equal(rt.isFailoverError(new Error('tool arguments invalid')), false);
+  });
+});
+
+describe('agent runner wiring (source contract)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const runner = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agent-runner', 'index.js'), 'utf8');
+  const orchestrator = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'agent-runner', 'orchestrator', 'index.js'), 'utf8');
+
+  test('the document runner and the orchestrator never build a bare OpenRouter client', () => {
+    assert.doesNotMatch(runner, /createOpenRouterClient\(\)/);
+    assert.doesNotMatch(orchestrator, /createOpenRouterClient\(\)/);
+    assert.match(runner, /if \(!llm\) llm = createRunnerLlmClient\(\{ onEvent \}\);/);
+    assert.match(orchestrator, /llm = createRunnerLlmClient\(\{ onEvent: emit \}\);/);
+  });
+
+  test('canCallLlm counts every configured provider and ignores CI placeholders', () => {
+    const { canCallLlm, explicitRunnerModel } = require('../src/services/agent-runner');
+    const saved = {};
+    for (const k of ['DEEPSEEK_API_KEY', 'MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY', 'GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'XAI_API_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'SIRAGPT_AGENT_RUNNER_MODEL', 'SIRAGPT_DOC_AGENT_MODEL', 'OPENROUTER_MODEL']) {
+      saved[k] = process.env[k];
+      delete process.env[k];
+    }
+    try {
+      assert.equal(canCallLlm({}), false);
+      process.env.OPENROUTER_API_KEY = 'ci-dummy';
+      assert.equal(canCallLlm({}), false, 'a dummy OpenRouter key is not a provider');
+      process.env.GEMINI_API_KEY = 'AIza-real-looking-key';
+      assert.equal(canCallLlm({}), true, 'any real provider unlocks the runner');
+      assert.equal(explicitRunnerModel(), null, 'the doc-agent default slug never pins OpenRouter first');
+      process.env.SIRAGPT_AGENT_RUNNER_MODEL = 'Gemini:gemini-3.5-pro';
+      assert.equal(explicitRunnerModel(), 'Gemini:gemini-3.5-pro');
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
   });
 });

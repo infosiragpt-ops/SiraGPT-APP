@@ -15,7 +15,8 @@
 const fs = require('fs');
 const path = require('path');
 const { createSandbox } = require('../doc-agent/sandbox');
-const { isValidOoxml, createOpenRouterClient, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
+const { isValidOoxml, DEFAULT_MODEL, resolveMaxRuntimeMs } = require('../doc-agent');
+const { resolveDocAgentCandidates, createFailoverClient } = require('../doc-agent/llm-runtime');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { buildAgentRunnerPrompt } = require('./prompt');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
@@ -164,13 +165,30 @@ function defaultModel() {
     || DEFAULT_MODEL;
 }
 
-/** Refuse to call OpenRouter with CI dummy keys (tests fall through). */
+/**
+ * Only the model explicitly pinned by the operator (env) is forced to the
+ * front of the provider ladder; the doc-agent DEFAULT_MODEL is an OpenRouter
+ * slug and must NOT pin OpenRouter first (its exhausted balance / data-policy
+ * 404s killed every "crea un word/ppt" turn in production).
+ */
+function explicitRunnerModel(env = process.env) {
+  return env.SIRAGPT_AGENT_RUNNER_MODEL || env.SIRAGPT_DOC_AGENT_MODEL || env.OPENROUTER_MODEL || null;
+}
+
+/** Production LLM for the runner: provider ladder with per-call failover. */
+function createRunnerLlmClient({ onEvent } = {}) {
+  return createFailoverClient(resolveDocAgentCandidates({ model: explicitRunnerModel() }), {
+    onFailover: (info) => {
+      try { console.warn('[agent-runner] llm failover:', info.from, '→', info.to, info.status || '', info.message); } catch (_) { /* ignore */ }
+      if (typeof onEvent === 'function') { try { onEvent({ type: 'llm_failover', ...info }); } catch (_) { /* ignore */ } }
+    },
+  });
+}
+
+/** A run needs at least one configured provider (CI dummy keys do not count). */
 function canCallLlm({ client } = {}) {
   if (client) return true;
-  const key = String(process.env.OPENROUTER_API_KEY || '').trim();
-  if (!key) return false;
-  if (/dummy|not-used|ci-dummy|test-key/i.test(key)) return false;
-  return true;
+  return resolveDocAgentCandidates({ model: explicitRunnerModel() }).length > 0;
 }
 
 function sanitizeUploadName(name, index) {
@@ -382,7 +400,7 @@ async function runAgentRunner({
       };
     }
 
-    if (!llm) llm = createOpenRouterClient();
+    if (!llm) llm = createRunnerLlmClient({ onEvent });
 
     // ── F7 (multimodal) hook ─────────────────────────────────────────────
     // Vision / voice / bounded computer-use extras. Kill switches:
@@ -839,6 +857,9 @@ function orchestratorEnabled(env) {
 
 module.exports = {
   shouldRunAgentRunner,
+  createRunnerLlmClient,
+  explicitRunnerModel,
+  canCallLlm,
   isRunnerOnlyDocumentTurn,
   shouldOrchestrate,
   steerAgentOrchestratorRun,

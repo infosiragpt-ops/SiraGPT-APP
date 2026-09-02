@@ -248,8 +248,10 @@ async function runOrchestrator({
     throwIfAborted(abortScope.signal);
     let llm = client || null;
     if (!llm) {
-      const { createOpenRouterClient } = require('../../doc-agent'); // eslint-disable-line global-require
-      llm = createOpenRouterClient();
+      // Same provider ladder + failover as the single runner — never a bare
+      // OpenRouter client (see agent-runner/index.js createRunnerLlmClient).
+      const { createRunnerLlmClient } = require('../index'); // eslint-disable-line global-require
+      llm = createRunnerLlmClient({ onEvent: emit });
     }
     const plannerClient = wrapClientWithBudgets(llm, [runTracker], { onExceeded: emitBudgetExceeded });
     const planner = plannerFn || defaultPlanner;
