@@ -11,6 +11,7 @@ import { useAuth } from "./auth-context-integrated"
 import { apiClient, type AIUsagePayload } from "./api"
 import { shouldRecoverImageGenerationViaPolling } from "./image-generation-recovery"
 import { pollPersistedAssistantTurn, shouldRecoverPersistedGenerate } from "./recover-persisted-turn"
+import { appendActivity, finalizeActivity, type ActivityStep } from "./chat/activity-log"
 import { shouldPollPersistedTurnOnStreamClose } from "./generate-stream-complete"
 import { resolvePickerBadgeSource } from "./chat/reply-badge-model"
 import { aiService, buildProfessionalCapabilityPrompt, isLightweightConversationalPrompt, shouldUseExistingDocumentFileContext, type ChatIntent } from "./ai-service"
@@ -229,6 +230,12 @@ interface Message {
   reasoningStreaming?: boolean
   reasoningDurationMs?: number | null
   reasoningToolCalls?: Array<{ index: number; name?: string; args?: string }>
+  // Claude-style live activity (backend `stage` frames: leyendo adjuntos,
+  // buscando en la web, analizando la imagen, pensando…). Live only — the
+  // persisted row keeps reasoningDurationMs in metadata instead.
+  activityLog?: ActivityStep[]
+  thinkingStartedAt?: number
+  thinkingEndedAt?: number | null
   // Agent harness (AgentTrace). Live streams accumulate `agentSteps` from the
   // typed tool_call_start / tool_executing / tool_result frames (ordered by
   // blockIndex+seq) until `agent_done` closes `agentRun`; historical messages
@@ -364,6 +371,46 @@ function createReasoningHandlers(opts: {
         ...(payload.model ? { model: payload.model } : {}),
       })
     },
+  }
+}
+
+/**
+ * Live activity handlers for the backend `stage` / `activity` SSE frames.
+ * Same functional-setChat discipline as createReasoningHandlers: the steps
+ * live on the placeholder message (`activityLog`) so the thinking timeline
+ * can show "Leyendo el archivo adjunto → Buscando en la web → Pensando".
+ */
+function createActivityHandlers(opts: {
+  setChat: (updater: (prev: any) => any) => void
+  messageId: string
+  isCancelled: () => boolean
+}) {
+  const { setChat, messageId, isCancelled } = opts
+  return {
+    onActivity: (text: string, event?: { type?: string; tool?: string; label?: string }) => {
+      if (isCancelled()) return
+      setChat((prevChat: any) => {
+        if (!prevChat) return prevChat
+        const newMessages = prevChat.messages.map((msg: any) => {
+          if (msg.id !== messageId) return msg
+          const label = String(event?.label || text || '').trim()
+          const activityLog = appendActivity(msg.activityLog, { label, tool: event?.tool, type: event?.type })
+          return { ...msg, activityLog, progressStage: label || msg.progressStage }
+        })
+        return { ...prevChat, messages: newMessages }
+      })
+    },
+  }
+}
+
+/** Nothing is "active" once text paints or the stream closes. */
+function settleActivity(msg: any, endedAt: number = Date.now()) {
+  const activityLog = finalizeActivity(msg?.activityLog)
+  if (activityLog === msg?.activityLog && msg?.thinkingEndedAt) return msg
+  return {
+    ...msg,
+    activityLog,
+    thinkingEndedAt: msg?.thinkingEndedAt || endedAt,
   }
 }
 
@@ -1325,6 +1372,8 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             timestamp: new Date().toISOString(),
             metadata: turnMetadata,
             model: pickerBadge,
+            activityLog: [],
+            thinkingStartedAt: Date.now(),
           };
       const reuseAssistantPlaceholder = Boolean(existingPlaceholder);
 
@@ -1893,10 +1942,10 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
                 const authoritative = bg.get(activeChat.id)?.partialContent;
                 const newMessages = prevChat.messages.map((msg) => {
                   if (msg.id === aiMessagePlaceholder.id) {
-                    return {
+                    return settleActivity({
                       ...msg,
                       content: authoritative ?? (msg.content + joined),
-                    };
+                    });
                   }
                   return msg;
                 });
@@ -1962,6 +2011,14 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
               fgBuffer.flush();
               fgBuffer.dispose();
               streamBuffersRef.current.delete(activeChat.id);
+              // The stream is over: no activity step stays "active".
+              setCurrentChat((prevChat) => {
+                if (!prevChat || prevChat.id !== activeChat.id) return prevChat;
+                return {
+                  ...prevChat,
+                  messages: prevChat.messages.map((msg) => (msg.id === aiMessagePlaceholder.id ? settleActivity(msg) : msg)),
+                };
+              });
               clearThisPendingTurn();
               bg.complete(activeChat.id);
               // Fold final partial into chats list so a background-finished
@@ -2114,6 +2171,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             controller.signal, // Pass the abort signal
             {
               ...createReasoningHandlers({
+                setChat: setCurrentChat,
+                messageId: aiMessagePlaceholder.id,
+                isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
+              }),
+              ...createActivityHandlers({
                 setChat: setCurrentChat,
                 messageId: aiMessagePlaceholder.id,
                 isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(activeChat.id),
@@ -3158,6 +3220,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
           }),
+          ...createActivityHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+          }),
           ...createAgentTraceHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
@@ -3548,6 +3615,11 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
         controller.signal, // Pass the abort signal
         {
           ...createReasoningHandlers({
+            setChat: setCurrentChat,
+            messageId: aiMessagePlaceholder.id,
+            isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
+          }),
+          ...createActivityHandlers({
             setChat: setCurrentChat,
             messageId: aiMessagePlaceholder.id,
             isCancelled: () => controller.signal.aborted || pendingStopsRef.current.has(currentChat.id),
