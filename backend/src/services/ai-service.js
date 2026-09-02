@@ -201,54 +201,13 @@ function normalizeModelForProvider(provider, model) {
     return m;
 }
 
-function modelSupportsVision(provider, model) {
-    const normalizedProvider = String(provider || '').toLowerCase();
-    const normalizedModel = String(model || '').toLowerCase();
-
-    if (normalizedProvider === 'deepseek') return false;
-    if (isSiraMiniAlias(model) || isSiraMiniAlias(normalizedModel)) return true;
-    if (/(^|\/)(moondream|llava|bakllava|minicpm-v)/i.test(normalizedModel)) return true;
-    if (normalizedProvider === 'gemini') return /^gemini/.test(normalizedModel);
-    if (normalizedProvider === 'openai') {
-        return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);
-    }
-    if (normalizedProvider === 'openrouter') {
-        return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/i.test(normalizedModel);
-    }
-    return false;
-}
-
-function selectVisionRuntime(provider, model) {
-    if (modelSupportsVision(provider, model)) {
-        return { provider, model, switched: false };
-    }
-    if (process.env.OPENAI_API_KEY) {
-        return {
-            provider: 'OpenAI',
-            model: process.env.VISION_MODEL || 'gpt-4o-mini',
-            switched: true,
-        };
-    }
-    if (process.env.GEMINI_API_KEY) {
-        return {
-            provider: 'Gemini',
-            model: process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            switched: true,
-        };
-    }
-    if (process.env.OPENROUTER_API_KEY) {
-        return {
-            provider: 'OpenRouter',
-            model: process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini',
-            switched: true,
-        };
-    }
-    return { provider, model, switched: false };
-}
-
-function shouldAttachVisionContent(provider, model, visionRuntime = selectVisionRuntime(provider, model)) {
-    return Boolean(visionRuntime && visionRuntime.switched) || modelSupportsVision(provider, model);
-}
+// Vision routing lives in ./ai/vision-runtime (shared with the file
+// processor). Kept as local names so the call sites below read unchanged.
+const {
+    modelSupportsVision,
+    selectVisionRuntime,
+    shouldAttachVisionContent,
+} = require('./ai/vision-runtime');
 
 /**
  * Classify a provider error as transient (safe to retry) vs terminal.
@@ -577,6 +536,12 @@ class AIService {
     }
 
     async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined }) {
+        // The route hands us a client for the provider it resolved. When an
+        // image turn has to leave a text-only model, `provider` changes below;
+        // that client must then NOT be reused (live 2026-09-02: Meta's client
+        // was asked for an OpenAI model → 404). Remember what it was built for.
+        const requestedProvider = provider;
+        let visionFallbackModels = [];
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -733,6 +698,7 @@ class AIService {
                                 console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
                                 provider = visionRuntime.provider;
                                 model = visionRuntime.model;
+                                visionFallbackModels = (visionRuntime.fallbacks || []).map((c) => c.model);
                             } else {
                                 console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
                             }
@@ -756,12 +722,15 @@ class AIService {
             // A user-selected catalog model (Mini / Gemini / Claude / GPT /
             // Kimi / Sira pair) never walks to another vendor.
             const pinnedUser = isPinnedUserGenerate(provider, model);
-            const fallbackModels = pinnedUser
-                ? []
-                : getFallbackChain(provider, model).filter(m => m !== model);
+            // A vision turn that left the selected (text-only) model may still
+            // hit a dead runtime (invalid key, retired model id): walk the
+            // remaining vision-capable runtimes before giving up.
+            const baseFallbacks = pinnedUser ? [] : getFallbackChain(provider, model);
+            const fallbackModels = [...visionFallbackModels, ...baseFallbacks]
+                .filter((m, i, arr) => m && m !== model && arr.indexOf(m) === i);
             const modelChain = [model, ...fallbackModels];
             const resolveAttemptClient = (currentProvider, currentModel) => {
-                if (client && (currentProvider === provider || isPinnedLocalGenerate(currentProvider, currentModel))) {
+                if (client && (currentProvider === requestedProvider || isPinnedLocalGenerate(currentProvider, currentModel))) {
                     return client;
                 }
                 if (customConnection && customConnection.url && isPinnedLocalGenerate(currentProvider, currentModel)) {

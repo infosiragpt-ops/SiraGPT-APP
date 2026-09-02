@@ -21,7 +21,11 @@ const assert = require('node:assert/strict');
 
 const service = require('../src/services/ai-service');
 
-const VISION_KEYS = ['OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'VISION_MODEL', 'GEMINI_VISION_MODEL', 'OPENROUTER_VISION_MODEL'];
+const VISION_KEYS = [
+  'OPENAI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'XAI_API_KEY',
+  'MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY',
+  'VISION_MODEL', 'GEMINI_VISION_MODEL', 'OPENROUTER_VISION_MODEL', 'META_VISION_MODEL', 'XAI_VISION_MODEL',
+];
 
 describe('ai-service vision routing', () => {
   let savedEnv;
@@ -57,6 +61,12 @@ describe('ai-service vision routing', () => {
       assert.equal(service.modelSupportsVision('Sira', 'moondream:latest'), true);
       assert.equal(service.modelSupportsVision('Custom', 'sira-mini'), true);
       assert.equal(service.modelSupportsVision('Sira', 'SiraGPT Mini'), true);
+      // Live 2026-09-02: Muse Spark and Grok 4.x take image_url parts natively —
+      // an image turn must stay on the selected model instead of detouring.
+      assert.equal(service.modelSupportsVision('Meta', 'muse-spark-1.2-contributor'), true);
+      assert.equal(service.modelSupportsVision('Meta', 'muse-spark-1.2'), true);
+      assert.equal(service.modelSupportsVision('xAI', 'grok-4.5'), true);
+      assert.equal(service.modelSupportsVision('OpenRouter', 'meta/muse-spark-1.2'), true);
     });
 
     test('rejects text-only models', () => {
@@ -76,12 +86,13 @@ describe('ai-service vision routing', () => {
       assert.equal(rt.model, 'gpt-4o');
     });
 
-    test('auto-routes a text model to OpenAI gpt-4o-mini when OPENAI key is set', () => {
+    test('auto-routes a text model to OpenAI (last resort) when only the OPENAI key is set', () => {
       process.env.OPENAI_API_KEY = 'sk-test';
       const rt = service.selectVisionRuntime('Cerebras', 'llama-3.1-8b');
       assert.equal(rt.switched, true);
       assert.equal(rt.provider, 'OpenAI');
-      assert.equal(rt.model, 'gpt-4o-mini');
+      assert.equal(rt.model, 'gpt-5.6-sol');
+      assert.deepEqual(rt.fallbacks, []);
     });
 
     test('honours the VISION_MODEL override', () => {
@@ -93,8 +104,25 @@ describe('ai-service vision routing', () => {
       assert.equal(rt.model, 'gpt-4o');
     });
 
-    test('falls back to Gemini when only a Gemini key is present', () => {
+    test('prefers Gemini, then Meta, then xAI, then OpenRouter, then OpenAI — with the rest as fallbacks', () => {
+      process.env.OPENAI_API_KEY = 'sk-test';
       process.env.GEMINI_API_KEY = 'g-test';
+      process.env.MODEL_API_KEY = 'meta-test';
+      process.env.XAI_API_KEY = 'xai-test';
+      process.env.OPENROUTER_API_KEY = 'or-test';
+      const rt = service.selectVisionRuntime('DeepSeek', 'deepseek-chat');
+      assert.equal(rt.switched, true);
+      assert.equal(rt.provider, 'Gemini');
+      assert.equal(rt.model, 'gemini-3.5-flash');
+      assert.deepEqual(
+        rt.fallbacks.map((c) => `${c.provider}:${c.model}`),
+        ['Meta:muse-spark-1.2', 'xAI:grok-4.5', 'OpenRouter:google/gemini-3.5-flash', 'OpenAI:gpt-5.6-sol'],
+      );
+    });
+
+    test('falls back to Gemini when only a Gemini key is present (env-overridable model)', () => {
+      process.env.GEMINI_API_KEY = 'g-test';
+      process.env.GEMINI_VISION_MODEL = 'gemini-2.5-flash';
       const rt = service.selectVisionRuntime('DeepSeek', 'deepseek-chat');
       assert.equal(rt.switched, true);
       assert.equal(rt.provider, 'Gemini');
@@ -106,7 +134,17 @@ describe('ai-service vision routing', () => {
       const rt = service.selectVisionRuntime('DeepSeek', 'deepseek-chat');
       assert.equal(rt.switched, true);
       assert.equal(rt.provider, 'OpenRouter');
-      assert.equal(rt.model, 'openai/gpt-4o-mini');
+      assert.equal(rt.model, 'google/gemini-3.5-flash');
+    });
+
+    test('a switched vision turn never reuses the client built for the requested provider', () => {
+      const fs = require('fs');
+      const path = require('path');
+      const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'ai-service.js'), 'utf8');
+      assert.match(src, /const requestedProvider = provider;/);
+      assert.match(src, /currentProvider === requestedProvider \|\| isPinnedLocalGenerate\(currentProvider, currentModel\)/);
+      assert.match(src, /visionFallbackModels = \(visionRuntime\.fallbacks \|\| \[\]\)\.map/);
+      assert.match(src, /const fallbackModels = \[\.\.\.visionFallbackModels, \.\.\.baseFallbacks\]/);
     });
 
     test('does not switch when no vision-provider key is available', () => {
@@ -158,6 +196,7 @@ describe('ai-service vision routing', () => {
 
     test('describes images through the selected vision runtime client', async () => {
       process.env.OPENAI_API_KEY = 'sk-test';
+      process.env.VISION_MODEL = 'gpt-4o-mini';
       const tmpImage = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sira-vision-')), 'logo.png');
       fs.writeFileSync(tmpImage, PNG_1PX);
       const calls = [];

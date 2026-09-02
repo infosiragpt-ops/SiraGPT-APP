@@ -957,7 +957,9 @@ class FileProcessor {
     // weak local OCR falls through to the vision model whenever an OpenAI
     // key is available. Opt out explicitly with SIRAGPT_VISION_FALLBACK_ENABLED=0.
     if (process.env.SIRAGPT_VISION_FALLBACK_ENABLED === '0') return false;
-    if (!options.openai && !process.env.OPENAI_API_KEY) return false;
+    // Any configured vision runtime qualifies (Gemini / Meta / xAI / OpenRouter /
+    // OpenAI) — see ai/vision-runtime.js. The OpenAI key alone is no longer the gate.
+    if (!options.openai && require('./ai/vision-runtime').visionRuntimeCandidates().length === 0) return false;
     const text = String(result?.text || '');
     const confidence = typeof result?.ocr?.confidence === 'number' ? result.ocr.confidence : 1;
     // NaN-only fallbacks: a configured 0 is meaningful (minChars=0 → never fall
@@ -985,9 +987,20 @@ class FileProcessor {
     const visionParser = require('./rag/vision-doc-parser');
 
     let openai = openaiClient;
+    const parseOptions = {};
     if (!openai) {
+      // Prefer a runtime that works in this deployment (Gemini first); the
+      // model id and the JSON-schema strictness follow the chosen provider.
+      const { visionRuntimeCandidates, visionClientConfig } = require('./ai/vision-runtime');
+      const explicitModel = process.env.SIRAGPT_VISION_DOC_MODEL;
+      const candidate = explicitModel
+        ? { provider: process.env.SIRAGPT_VISION_DOC_PROVIDER || 'OpenAI', model: explicitModel }
+        : (visionRuntimeCandidates()[0] || { provider: 'OpenAI', model: 'gpt-5.6-sol' });
+      const config = visionClientConfig(candidate.provider);
       const OpenAI = require('openai');
-      openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      openai = new OpenAI({ apiKey: config.apiKey, ...(config.baseURL ? { baseURL: config.baseURL } : {}) });
+      parseOptions.model = candidate.model;
+      parseOptions.useStrictSchema = config.strictJsonSchema;
     }
 
     const buf = await fs.promises.readFile(filePath);
@@ -995,6 +1008,7 @@ class FileProcessor {
     const layout = await visionParser.parseDocumentPage({
       openai,
       image: { base64, mediaType: mimeType || 'image/png' },
+      options: parseOptions,
     });
     return this._flattenLayoutToText(layout);
   }
