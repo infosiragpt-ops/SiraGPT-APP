@@ -336,6 +336,7 @@ import {
   getFileProcessingStage,
   isAudioComposerFile,
   isComposerFileProcessingPending,
+  collectProcessingFileIds,
   isComposerFileUploadFailed,
   isComposerFileUploadPending,
   isVideoComposerFile,
@@ -2324,6 +2325,16 @@ const ActiveOptionsDisplay = React.memo(function ActiveOptionsDisplay({
                           <span className="text-muted-foreground">{"\n"}… ({Intl.NumberFormat('es').format(longPasteMeta.originalCharCount)} caracteres en total)</span>
                         )}
                       </pre>
+                    )}
+                    {/* The "PEGADO" card renders no progress bar, but it still
+                        needs the headless poller: without it the chip stays
+                        "processing" after the backend is ready and the send
+                        button keeps asking to wait for the file. */}
+                    {!isFailed && longPasteMeta && !isUploading && file.id && (
+                      <FileProcessingStatusSync
+                        fileId={file.id}
+                        onStatusChange={(status) => onFileProcessingStatusChange?.(file, status)}
+                      />
                     )}
                     {!isFailed && !longPasteMeta && (isUploading || file.id) && (
                       <div className="mt-1">
@@ -5534,6 +5545,33 @@ function ChatInterfaceContent() {
       void hydrateUploadedFileFromBackend(fileId);
     }
   }, [hydrateUploadedFileFromBackend, updateUploadedFileById]);
+
+  // Safety net for every chip variant: while an attachment with a server id
+  // is still "processing", re-read it from the backend every 2 s until it is
+  // ready/failed. The per-chip pollers cover the common cases; this keeps a
+  // chip that mounts no poller from blocking the send forever.
+  const processingWatchKey = collectProcessingFileIds(uploadedFiles).join(',');
+  React.useEffect(() => {
+    const ids = processingWatchKey ? processingWatchKey.split(',') : [];
+    if (!ids.length) return undefined;
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts += 1;
+      for (const id of ids) {
+        if (cancelled) return;
+        await hydrateUploadedFileFromBackend(id);
+      }
+      if (!cancelled && attempts < 90) timer = setTimeout(tick, 2000);
+    };
+    timer = setTimeout(tick, 1500);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [processingWatchKey, hydrateUploadedFileFromBackend]);
 
   const handlePasteCaptureActionRef = React.useRef<(action: PasteCaptureAction, result: PasteCaptureResult) => void>(() => {})
 
