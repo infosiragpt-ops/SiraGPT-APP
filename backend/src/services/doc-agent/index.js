@@ -22,6 +22,7 @@ const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
 const { buildDocAgentSystemPrompt } = require('./skills');
 const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
+const { resolveDocAgentCandidates, createFailoverClient } = require('./llm-runtime');
 
 // Production 2026-09: gpt-4o-mini is retired and the OpenAI key answers 401;
 // the document agent writes python-docx / openpyxl / python-pptx code, so it
@@ -128,7 +129,7 @@ function sanitizeUploadName(name, index) {
 async function runDocumentAgent({
   files = [],
   instruction,
-  model = DEFAULT_MODEL,
+  model,
   client,
   onEvent = () => {},
   driver,
@@ -137,7 +138,15 @@ async function runDocumentAgent({
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runDocumentAgent: instruction is required');
-  const llm = client || createOpenRouterClient();
+  // Injected client (tests, callers with their own runtime): use it as-is.
+  // Otherwise build the production runtime: the explicit model on its
+  // provider first, then every configured provider of the ladder, with
+  // per-call failover (an exhausted OpenRouter balance no longer kills the
+  // run when DeepSeek/Meta/Gemini/xAI can take the same tool-calling loop).
+  const llm = client || createFailoverClient(resolveDocAgentCandidates({ model }), {
+    onFailover: (info) => onEvent({ type: 'llm_failover', ...info }),
+  });
+  const loopModel = model || DEFAULT_MODEL;
 
   const abortScope = composeAbortSignals([signal], {
     timeoutMs: resolveMaxRuntimeMs(),
@@ -164,7 +173,7 @@ async function runDocumentAgent({
     const executors = makeToolExecutors(sandbox);
 
     let result = await runDocAgentLoop({
-      client: llm, model, messages, tools: TOOL_DEFINITIONS, executors, maxIterations, onEvent,
+      client: llm, model: loopModel, messages, tools: TOOL_DEFINITIONS, executors, maxIterations, onEvent,
       signal: abortScope.signal,
     });
     throwIfAborted(abortScope.signal);
@@ -215,7 +224,14 @@ async function runDocumentAgent({
 
     throwIfAborted(abortScope.signal);
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name) });
-    return { ...result, outputs, driver: sandbox.driver };
+    return {
+      ...result,
+      outputs,
+      driver: sandbox.driver,
+      // Which provider/model actually answered (after any failover) — surfaced
+      // in logs/events so an exhausted provider is visible, not silent.
+      runtime: typeof llm.describe === 'function' ? llm.describe() : { provider: null, model: loopModel, failovers: [] },
+    };
   } finally {
     try {
       if (sandbox) await sandbox.destroy();
