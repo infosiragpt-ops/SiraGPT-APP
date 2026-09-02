@@ -244,7 +244,18 @@ test('_shouldApplyVisionFallback is ON by default when a key exists (opt-out wit
   await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: '0', OPENAI_API_KEY: 'sk-test' }, () => {
     assert.equal(fileProcessor._shouldApplyVisionFallback(weak, {}), false);
   });
-  await withEnv({ SIRAGPT_VISION_FALLBACK_ENABLED: undefined, OPENAI_API_KEY: undefined }, () => {
+  // Any vision runtime key qualifies now (Gemini/Meta/xAI/OpenRouter/OpenAI);
+  // clear all of them to assert the no-key branch.
+  await withEnv({
+    SIRAGPT_VISION_FALLBACK_ENABLED: undefined,
+    OPENAI_API_KEY: undefined,
+    GEMINI_API_KEY: undefined,
+    XAI_API_KEY: undefined,
+    OPENROUTER_API_KEY: undefined,
+    MODEL_API_KEY: undefined,
+    META_API_KEY: undefined,
+    LLAMA_API_KEY: undefined,
+  }, () => {
     assert.equal(fileProcessor._shouldApplyVisionFallback(weak, {}), false);
   });
 });
