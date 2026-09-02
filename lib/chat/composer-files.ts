@@ -153,6 +153,30 @@ export function isComposerFileProcessingPending(file: unknown): boolean {
   return shouldWaitForDocumentProcessing(file) && isActiveProcessingStage(getFileProcessingStage(file))
 }
 
+/**
+ * Attachments the composer must keep polling until the backend reports a
+ * terminal stage: anything still flagged as processing that already has a
+ * server id. Chip variants that render no status poller (the "PEGADO" long
+ * paste card) otherwise stay "processing" forever and block the send.
+ */
+export function collectProcessingFileIds(files: readonly unknown[] = []): string[] {
+  const ids: string[] = []
+  for (const file of files) {
+    const candidate = asComposerFile(file)
+    if (!candidate) continue
+    const id = resolveUploadFileId(candidate)
+    if (!id) continue
+    const stillProcessing = isComposerFileProcessingPending(candidate)
+      || (candidate.status === "processing" && !isTerminalProcessingStage(getFileProcessingStage(candidate)))
+    if (stillProcessing && !ids.includes(id)) ids.push(id)
+  }
+  return ids
+}
+
+function isTerminalProcessingStage(stage: FileProcessingStage | null): boolean {
+  return stage === "ready" || stage === "failed"
+}
+
 export function isComposerFileUploadFailed(file: unknown): boolean {
   const candidate = asComposerFile(file)
   return Boolean(candidate && (candidate.status === "failed" || getFileProcessingStage(candidate) === "failed"))
