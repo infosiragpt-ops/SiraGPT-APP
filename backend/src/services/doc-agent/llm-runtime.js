@@ -16,7 +16,9 @@
  */
 
 const LADDER = Object.freeze([
-  { provider: 'DeepSeek', model: 'deepseek-chat', keys: ['DEEPSEEK_API_KEY'], baseURL: 'https://api.deepseek.com/v1' },
+  // DeepSeek native: V4 pro by default for document quality (AGENT_PRO_MODEL /
+  // SIRAGPT_DOC_AGENT_DEEPSEEK_MODEL override); every V4 id accepts tool calls.
+  { provider: 'DeepSeek', model: 'deepseek-v4-pro', keys: ['DEEPSEEK_API_KEY'], baseURL: 'https://api.deepseek.com/v1', modelEnv: ['SIRAGPT_DOC_AGENT_DEEPSEEK_MODEL', 'AGENT_PRO_MODEL'] },
   { provider: 'Meta', model: 'muse-spark-1.2', keys: ['MODEL_API_KEY', 'META_API_KEY', 'LLAMA_API_KEY'], baseURL: 'https://api.meta.ai/v1', extra: { reasoning_effort: 'minimal' } },
   { provider: 'Gemini', model: 'gemini-3.5-flash', keys: ['GEMINI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'], baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/' },
   { provider: 'xAI', model: 'grok-4.5', keys: ['XAI_API_KEY'], baseURL: 'https://api.x.ai/v1' },
@@ -67,12 +69,24 @@ function parseModelSpec(spec) {
   return { provider: inferProvider(raw), model: raw };
 }
 
+// CI / local placeholders must not count as a configured provider (the
+// agent runner used to refuse OpenRouter dummy keys the same way).
+const PLACEHOLDER_KEY_RE = /dummy|not-used|ci-dummy|test-key|^your_|^sk-xxx|^changeme$/i;
+
 function keyFor(entry, env) {
   for (const name of entry.keys) {
     const value = env && env[name];
-    if (value && String(value).trim()) return String(value).trim();
+    if (value && String(value).trim() && !PLACEHOLDER_KEY_RE.test(String(value).trim())) return String(value).trim();
   }
   return null;
+}
+
+function defaultModelFor(entry, env) {
+  for (const name of entry.modelEnv || []) {
+    const value = env && env[name];
+    if (value && String(value).trim()) return String(value).trim();
+  }
+  return entry.model;
 }
 
 /**
@@ -94,7 +108,7 @@ function resolveDocAgentCandidates({ model, env = process.env } = {}) {
       : entry.baseURL;
     out.push({
       provider: entry.provider,
-      model: chosenModel || entry.model,
+      model: chosenModel || defaultModelFor(entry, env),
       apiKey,
       baseURL,
       extra: entry.extra || null,
