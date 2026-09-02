@@ -109,3 +109,23 @@ describe("recover persisted generate turn", () => {
     assert.equal(calls, 0)
   })
 })
+
+describe("recover persisted generate turn — exhausted client reconnect budget", () => {
+  it("polls after the friendly reconnect-exhausted errors so a persisted reply still paints", () => {
+    assert.equal(
+      shouldRecoverPersistedGenerate({
+        message: "No se pudo conectar con el modelo después de varios intentos. Verifica tu conexión o reintenta en unos segundos.",
+      }),
+      true,
+    )
+    assert.equal(
+      shouldRecoverPersistedGenerate({ message: "No se pudo completar la respuesta después de 5 intentos. Stream stalled" }),
+      true,
+    )
+    assert.equal(
+      shouldRecoverPersistedGenerate({ message: "El stream terminó antes de completar la respuesta." }),
+      true,
+    )
+    assert.equal(shouldRecoverPersistedGenerate({ status: 400, message: "No se pudo completar la respuesta" }), false)
+  })
+})

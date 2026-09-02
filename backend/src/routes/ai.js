@@ -272,6 +272,7 @@ const {
   endGenerateSse,
   publicGenerateErrorMessage,
 } = require('../services/ai/generate-sse-close');
+const { createClientGoneWriter } = require('../services/ai/sse-client-gone');
 const {
   isCustomProvider,
   isLocalVisionModel,
@@ -2099,22 +2100,22 @@ router.post(
     });
     let __lastClientAt = Date.now();
     let __pendingSseEvent = null;
+    // 3H64 client-gone hooks fire on `req` 'close' / `req.destroyed`, which on
+    // Node >= 16 happen as soon as express.json() consumed the body — with the
+    // socket still open. Marking `clientGone` there turned every SSE write into
+    // a no-op (Pensando until refresh). The writer below only trips when the
+    // socket is really gone; `res.on('close')` above stays the disconnect signal.
+    const __clientGoneWriter = createClientGoneWriter(req, res, function () { clientGone = true; });
     try {
       const adGone = require('../services/agent-runner/engine-adapter');
       const w64gone = require('../services/agent-runner/engine-3h64');
       if (typeof adGone.destroySseOnClientClose === 'function') {
-        adGone.destroySseOnClientClose(req, {
-          close: function () { clientGone = true; },
-          destroy: function () { clientGone = true; },
-        });
+        adGone.destroySseOnClientClose(req, __clientGoneWriter);
       }
       if (typeof w64gone.guardSseClientGoneClosed === 'function') {
         w64gone.guardSseClientGoneClosed({
           req: req,
-          writer: {
-            close: function () { clientGone = true; },
-            destroy: function () { clientGone = true; },
-          },
+          writer: __clientGoneWriter,
           lastClientAt: __lastClientAt,
           now: Date.now(),
           aborted: false,
@@ -8218,9 +8219,11 @@ router.post(
             });
           }
           if (typeof w64end.guardSseClientGoneClosed === 'function') {
+            // Never hand the real `res` here: with `req.destroyed` already true
+            // the helper would `res.destroy()` the socket before `[DONE]`/end().
             const gone = w64end.guardSseClientGoneClosed({
               req: req,
-              writer: res,
+              writer: __clientGoneWriter,
               lastClientAt: __lastClientAt,
               now: Date.now(),
               pendingEvent: __pendingSseEvent,

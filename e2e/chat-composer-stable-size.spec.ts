@@ -237,7 +237,7 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.modelBackgroundColor).toBe("rgba(0, 0, 0, 0)")
   expect(approved.modelBorderColor).toBe("rgba(0, 0, 0, 0)")
   expect(approved.textareaOutlineStyle).toBe("none")
-  expect(approved.placeholder).toBe("Message Assistant")
+  expect(approved.placeholder).toBe("Escribe un mensaje…")
   expect(approved.permissionLabel).toBe("")
   expect(approved.permissionAria).toBe("Permisos: Acceso completo")
   expect(approved.permissionTitle).toBe("Acceso completo")

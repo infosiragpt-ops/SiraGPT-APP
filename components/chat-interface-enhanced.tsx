@@ -8293,8 +8293,6 @@ But first, you need to connect your Spotify account securely using the button be
             isCurrentChatStreaming={isCurrentChatStreaming}
             onSend={handleSend}
             onStop={stopActiveGeneration}
-            onVoice={isSpeechSupported && !isDictationTranscribing ? handleMicClick : undefined}
-            voiceRecording={isRecording}
           />
         </div>
       }
