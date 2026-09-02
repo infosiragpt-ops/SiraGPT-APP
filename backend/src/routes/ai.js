@@ -813,14 +813,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
     __dbg(`after-quota-policy type=${type}`);
-    // VOICE is not a Prisma ModelType yet. Keep the contract explicit and
-    // empty instead of querying PostgreSQL with an invalid enum or inventing
-    // virtual rows that an admin cannot deactivate.
-    if (type === 'VOICE') {
-      return res.json({ models: [], policy: modelPolicy });
-    }
-
-    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'];
+    // VOICE is not a Prisma ModelType: the Voz composer chip lists the
+    // Admin-active AUDIO rows (TTS models) — an empty list here left the chip
+    // dead in production ("No hay modelos de voz activos") while the speech
+    // route itself worked.
+    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC', 'VOICE'];
     if (type && !VALID_TYPES.includes(type)) {
       return res.status(400).json({ error: 'Invalid model type' });
     }
@@ -828,7 +825,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
-    const wantAudio = !type || type === 'AUDIO';
+    const wantAudio = !type || type === 'AUDIO' || type === 'VOICE';
     const wantMusic = !type || type === 'MUSIC';
 
     const staticTypesToEnsure = [];

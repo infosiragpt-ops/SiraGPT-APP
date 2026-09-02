@@ -390,6 +390,7 @@ import {
   type VoiceLanguage,
   type VoiceModel,
 } from "@/lib/chat/media-composer-config"
+import { detectComposerAutoMode, type ComposerAutoMode } from "@/lib/chat/composer-auto-mode"
 import {
   MEDIA_MENU_DOT_CLASS,
   MEDIA_MENU_ICON_GLYPH_CLASS,
@@ -5379,8 +5380,9 @@ function ChatInterfaceContent() {
   }, []);
   const refreshVoiceModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('VOICE');
+    // The backend answers VOICE with the Admin-active AUDIO (TTS) rows.
     const models = Array.isArray(modelsResponse?.models)
-      ? modelsResponse.models.filter((model: any) => model?.type === 'VOICE' && model?.isActive === true)
+      ? modelsResponse.models.filter((model: any) => (model?.type === 'VOICE' || model?.type === 'AUDIO') && model?.isActive === true)
       : [];
     setVoiceCatalogModels(models);
     return models;
@@ -6872,6 +6874,97 @@ But first, you need to connect your Spotify account securely using the button be
     selectedVideoModel,
     selectedVideoResolution,
     setChatType,
+  ]);
+
+  // Auto mode for the other tools (Imágenes / Música / Voz / Búsqueda web):
+  // the text itself says which tool the user wants ("crea una imagen de…",
+  // "compón una canción…", "narra este texto…", "busca en internet…"), so the
+  // matching chip switches on with the settings the prompt implies — the
+  // user never has to open the "+" menu first. Same contract as the video
+  // auto-activation above: never overrides a tool the user already chose,
+  // and Nuevo chat / the chip's X are the manual way out. One flip per draft.
+  const autoModeActivationRef = React.useRef<{ mode: ComposerAutoMode; input: string } | null>(null);
+  React.useEffect(() => {
+    const draft = (input || "").trim();
+    if (draft.length < 6) return;
+    if (shouldAutoActivateVideoGeneration(draft)) return; // owned by the video effect
+    const decision = detectComposerAutoMode(draft, { attachments: uploadedFiles as any });
+    if (!decision) return;
+    const anyToolActive =
+      isWebSearchActive ||
+      isImageGenerationActive ||
+      isVoiceGenerationActive ||
+      isMusicGenerationActive ||
+      isVideoGenerationActive ||
+      isComputerUseActive ||
+      isGmailActive ||
+      isGoogleCalendarActive ||
+      isGoogleDriveActive ||
+      isSpotifyActive ||
+      isWordConnectorActive ||
+      isExcelConnectorActive ||
+      chatType !== 'text';
+    const alreadyFlipped = autoModeActivationRef.current?.input === draft;
+
+    if (decision.mode === 'image') {
+      if (!isImageGenerationActive) {
+        if (anyToolActive || alreadyFlipped) return;
+        closeAllToolsAndConnectors();
+        setIsImageGenerationActive(true);
+        setChatType('image');
+        autoModeActivationRef.current = { mode: 'image', input: draft };
+      }
+      const { imageAspectRatio, imageCount, imageQuality } = decision.settings;
+      if (imageAspectRatio && IMAGE_ASPECT_RATIO_OPTIONS.some((option) => option.value === imageAspectRatio) && selectedImageAspectRatio !== imageAspectRatio) {
+        setSelectedImageAspectRatio(imageAspectRatio as ImageAspectRatio);
+      }
+      if (imageCount && (IMAGE_COUNT_OPTIONS as readonly number[]).includes(imageCount) && selectedImageCount !== imageCount) {
+        setSelectedImageCount(imageCount as ImageGenerationCount);
+      }
+      if (imageQuality && (IMAGE_QUALITY_OPTIONS as readonly string[]).includes(imageQuality) && selectedImageQuality !== imageQuality) {
+        setSelectedImageQuality(imageQuality as ImageQuality);
+      }
+      return;
+    }
+    if (anyToolActive || alreadyFlipped) return;
+    if (decision.mode === 'music') {
+      closeAllToolsAndConnectors();
+      setIsMusicGenerationActive(true);
+      if (decision.settings.musicDurationSeconds) setSelectedMusicDuration(decision.settings.musicDurationSeconds);
+      autoModeActivationRef.current = { mode: 'music', input: draft };
+      return;
+    }
+    if (decision.mode === 'voice') {
+      closeAllToolsAndConnectors();
+      setIsVoiceGenerationActive(true);
+      autoModeActivationRef.current = { mode: 'voice', input: draft };
+      return;
+    }
+    if (decision.mode === 'web_search') {
+      setIsWebSearchActive(true);
+      autoModeActivationRef.current = { mode: 'web_search', input: draft };
+    }
+  }, [
+    chatType,
+    closeAllToolsAndConnectors,
+    input,
+    isComputerUseActive,
+    isExcelConnectorActive,
+    isGmailActive,
+    isGoogleCalendarActive,
+    isGoogleDriveActive,
+    isImageGenerationActive,
+    isMusicGenerationActive,
+    isSpotifyActive,
+    isVideoGenerationActive,
+    isVoiceGenerationActive,
+    isWebSearchActive,
+    isWordConnectorActive,
+    selectedImageAspectRatio,
+    selectedImageCount,
+    selectedImageQuality,
+    setChatType,
+    uploadedFiles,
   ]);
 
   React.useEffect(() => {
@@ -10657,7 +10750,16 @@ REWRITTEN TEXT:`;
           setChatType('video');
           break;
         case 'ppt':
-          await runClassifiedAgentTask();
+          // Creation from scratch runs the in-process document pipeline
+          // (docx-js / PptxGenJS / ExcelJS via /api/doc/generate): it needs no
+          // sandbox, which production does not have, and it renders the
+          // downloadable card in the chat. Attachment-based work keeps the
+          // durable agent task (source-preserving edits + validation).
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'webdev':
           await handleWebDevGeneration(msg);
@@ -10685,7 +10787,11 @@ REWRITTEN TEXT:`;
           }
           break;
         case 'doc':
-          await runClassifiedAgentTask();
+          if (filesToSend.length === 0) {
+            await runContextPipeline(intent);
+          } else {
+            await runClassifiedAgentTask();
+          }
           break;
         case 'text':
           if (shouldRouteTextPromptThroughAgenticRuntime(msg, filesToSend)) {
