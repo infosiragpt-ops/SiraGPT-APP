@@ -488,6 +488,13 @@ model Chat {
   // draft survives across devices.
   draftText String? @db.Text
 
+  // Rolling context compaction (services/conversation-compactor): summary of
+  // the turns older than `contextSummaryUntil`; those rows are no longer
+  // replayed verbatim. Cleared when a covered message is edited or deleted.
+  contextSummary      String?   @db.Text @map("context_summary")
+  contextSummaryUntil DateTime? @map("context_summary_until")
+  contextSummaryMeta  Json?     @map("context_summary_meta")
+
   // Persistent app pins for this conversation (Apps panel + composer
   // rail). Array of catalog app ids in visual order, max 4. Server-side
   // validation: only apps the user has an active connection for can be

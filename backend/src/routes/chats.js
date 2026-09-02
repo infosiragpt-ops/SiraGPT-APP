@@ -4,6 +4,7 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
 const prisma = require('../config/database');
+const conversationCompactor = require('../services/conversation-compactor');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
@@ -1367,12 +1368,15 @@ router.delete('/:id/messages', authenticateToken, async (req, res) => {
       where: { chatId: req.params.id }
     });
 
-    // Update chat
+    // Update chat (and drop the rolling context summary — nothing left to cover)
     await prisma.chat.update({
       where: { id: req.params.id },
       data: {
         title: 'New Chat',
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        contextSummary: null,
+        contextSummaryUntil: null,
+        contextSummaryMeta: null,
       }
     });
 
@@ -1495,6 +1499,8 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
         id: messageId,
       },
       select: {
+        chatId: true,
+        timestamp: true,
         chat: {
           select: {
             userId: true,
@@ -1519,6 +1525,9 @@ router.delete('/messages/:messageId/deleteMessage', authenticateToken, async (re
         id: messageId,
       },
     });
+    // A summary that covered this message would describe a reality that no
+    // longer exists — drop it so the next turn rebuilds from the live rows.
+    await conversationCompactor.invalidateSummaryIfCovered({ prisma, chatId: message.chatId, timestamp: message.timestamp });
 
     res.json({ message: 'Message cleared successfully' });
 
@@ -1682,6 +1691,9 @@ router.put('/messages/:messageId', authenticateToken, async (req, res) => {
         where: { id: messageId },
         data: { content: content.trim() }
       });
+
+      // Paso 3b: invalidar el resumen de contexto si cubría este mensaje
+      await conversationCompactor.invalidateSummaryIfCovered({ prisma: tx, chatId: messageToEdit.chatId, timestamp: messageToEdit.timestamp });
 
       // Paso 4: Actualizar también el timestamp 'updatedAt' del chat
       await tx.chat.update({
