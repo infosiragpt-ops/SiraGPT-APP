@@ -36,26 +36,6 @@ export function ComposerSendArrow({ className }: { className?: string }) {
   )
 }
 
-/** Voice waveform glyph — vertical bars, Claude-style, stroke only. */
-export function ComposerVoiceWaveform({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden
-      viewBox="0 0 24 24"
-      className={className}
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M4 10.5v3M8.5 7v10M12 4.5v15M15.5 7v10M20 10.5v3"
-        stroke="currentColor"
-        strokeWidth="2.1"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 export function ChatComposerSurface({
   overlayVisible = false,
   overlay = null,
@@ -132,8 +112,6 @@ export function ChatComposerPrimaryAction({
   isCurrentChatStreaming,
   onSend,
   onStop,
-  onVoice,
-  voiceRecording = false,
 }: {
   input: string
   hasAttachment: boolean
@@ -145,44 +123,14 @@ export function ChatComposerPrimaryAction({
   isCurrentChatStreaming: boolean
   onSend: () => void
   onStop: () => void
-  onVoice?: () => void
-  voiceRecording?: boolean
 }) {
   const hasText = input.trim().length > 0
   const needsPrompt = requiresPromptBeforePrimarySend && !hasText
   const canSend = requiresPromptBeforePrimarySend ? hasText : (hasText || hasAttachment)
 
-  // Empty composer + voice available → the primary disc becomes the voice
-  // entry point (Claude-style waveform) instead of a dead disabled arrow.
-  if (!isStopButtonVisible && !canSend && !busy && !needsPrompt && onVoice) {
-    const voiceLabel = voiceRecording ? "Detener dictado" : "Dictar por voz"
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            onClick={onVoice}
-            size="icon"
-            aria-label={voiceLabel}
-            aria-pressed={voiceRecording}
-            className={cn(
-              "composer-send-button composer-voice-button h-9 w-9 rounded-full p-0 transition-all duration-base ease-smooth",
-              "active:scale-[0.94]",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-              voiceRecording && "composer-voice-button--recording",
-            )}
-          >
-            {voiceRecording ? (
-              <span aria-hidden className="block h-2.5 w-2.5 shrink-0 rounded-[2px] bg-white" />
-            ) : (
-              <ComposerVoiceWaveform className="h-[17px] w-[17px]" />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="top"><p>{voiceLabel}</p></TooltipContent>
-      </Tooltip>
-    )
-  }
-
+  // The primary disc is always Send. Dictation stays on the dedicated mic
+  // button and voice mode lives in the "+" menu, so the bar never shows two
+  // adjacent speech affordances that behave the same way.
   if (!isStopButtonVisible) {
     const label = canSend
       ? "Enviar (⏎)"

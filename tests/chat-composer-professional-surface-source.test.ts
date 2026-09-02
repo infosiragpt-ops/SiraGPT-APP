@@ -132,8 +132,22 @@ describe("professional chat composer surface source contract", () => {
   it("keeps all primary composer controls at accessible stable dimensions", () => {
     assert.match(
       globals,
-      /\.composer-input-row \.composer-toolbar-actions > button\s*\{[\s\S]{0,240}width: 2\.75rem !important;[\s\S]{0,160}height: 2\.75rem !important;/,
+      /\.composer-input-row \.composer-toolbar-actions > button\.composer-dictation-button,\s*\.composer-input-row \.composer-toolbar-actions > button\.composer-send-button,\s*\.composer-input-row \.composer-toolbar-actions > button\.composer-stop-button\s*\{[\s\S]{0,240}width: 2\.75rem !important;[\s\S]{0,160}height: 2\.75rem !important;/,
       "send, stop and dictation controls should keep a 44px target"
+    )
+    const blanketToolbarButtonRule = globals.match(
+      /\.composer-input-row \.composer-toolbar-actions > button\s*\{([^}]*)\}/,
+    )?.[1]
+    assert.ok(blanketToolbarButtonRule, "the shared toolbar button rule should still exist for color")
+    assert.doesNotMatch(
+      blanketToolbarButtonRule,
+      /width:|height:/,
+      "the blanket toolbar rule must not force chips to 44px — it crushed the effort label to a bare glyph"
+    )
+    assert.match(
+      globals,
+      /\.composer-permission-chip,\s*\.composer-effort-chip\s*\{[\s\S]{0,160}height: 2rem;/,
+      "the compact chips keep their own 32px pill geometry"
     )
     assert.match(
       globals,
@@ -214,8 +228,8 @@ describe("professional chat composer surface source contract", () => {
   })
 
   it("matches the approved two-row reference without replacing live controls", () => {
-    assert.equal(esMessages.composer.placeholderDefault, "Message Assistant")
-    assert.equal(enMessages.composer.placeholderDefault, "Message Assistant")
+    assert.equal(esMessages.composer.placeholderDefault, "Escribe un mensaje…")
+    assert.equal(enMessages.composer.placeholderDefault, "Type a message…")
     assert.match(
       globals,
       /\.composer-surface\s*\{[\s\S]{0,180}border-radius: 1\.25rem;/,
