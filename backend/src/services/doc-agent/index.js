@@ -23,7 +23,11 @@ const { buildDocAgentSystemPrompt } = require('./skills');
 const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 
-const DEFAULT_MODEL = process.env.SIRAGPT_DOC_AGENT_MODEL || 'openai/gpt-4o-mini';
+// Production 2026-09: gpt-4o-mini is retired and the OpenAI key answers 401;
+// the document agent writes python-docx / openpyxl / python-pptx code, so it
+// needs a current coding model. DeepSeek V4 Pro (the "Sira Pro" tier) via
+// OpenRouter is the default; override with SIRAGPT_DOC_AGENT_MODEL.
+const DEFAULT_MODEL = process.env.SIRAGPT_DOC_AGENT_MODEL || 'deepseek/deepseek-v4-pro';
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000;
 
 function resolveMaxRuntimeMs(value = process.env.SIRAGPT_DOC_AGENT_MAX_RUNTIME_MS) {

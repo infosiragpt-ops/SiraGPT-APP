@@ -44,6 +44,7 @@ WORKDIR /app
 # git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
 RUN apk add --no-cache \
     chromium \
+    docker-cli \
     font-liberation \
     font-noto \
     freetype \
