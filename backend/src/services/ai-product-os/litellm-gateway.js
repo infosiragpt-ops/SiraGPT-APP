@@ -391,7 +391,9 @@ function stripUnsupportedThinkingFields(payload, runtime) {
     delete payload.reasoning_effort;
     return payload;
   }
-  if (provider === "xai") {
+  // Meta Model API (Muse Spark) takes OpenAI-style `reasoning_effort`
+  // (minimal…xhigh) — applyMetaReasoningControls sets it.
+  if (provider === "xai" || provider === "meta") {
     delete payload.thinking;
     return payload;
   }
@@ -400,9 +402,35 @@ function stripUnsupportedThinkingFields(payload, runtime) {
   return payload;
 }
 
+// ── Meta Model API reasoning ────────────────────────────────────────────────
+// Muse Spark is a reasoning model whose thinking tokens count against
+// max_tokens. Without `reasoning_effort` a trivial "hola" burned the whole
+// 256-token budget on reasoning and came back as `finish_reason: "length"`
+// with empty content (live probe 2026-09-02: 253/256 reasoning tokens).
+// `"none"` is rejected by Muse Spark, so disabled thinking maps to `minimal`.
+function resolveMetaReasoningEffort(thinkingLevel) {
+  const normalized = String(thinkingLevel || "").trim().toLowerCase();
+  if (isDisabledThinkingLevel(normalized) || normalized === "minimal") return "minimal";
+  if (normalized === "low") return "low";
+  if (normalized === "xhigh" || normalized === "max") return "xhigh";
+  if (normalized === "high") return "high";
+  return "medium";
+}
+
+function applyMetaReasoningControls(payload, runtime, thinkingLevel) {
+  if (!payload || !runtime || String(runtime.provider || "") !== "meta") return;
+  delete payload.reasoning;
+  delete payload.thinking;
+  payload.reasoning_effort = resolveMetaReasoningEffort(thinkingLevel);
+}
+
 function applyThinkingControls(payload, runtime, thinkingLevel) {
   if (runtime.thinkingFormat === "openrouter") {
     applyOpenRouterReasoningControls(payload, runtime, thinkingLevel);
+    return;
+  }
+  if (String(runtime.provider || "") === "meta") {
+    applyMetaReasoningControls(payload, runtime, thinkingLevel);
     return;
   }
   if (runtime.thinkingFormat !== "deepseek" || !isDeepSeekV4ModelId(runtime.model_id)) return;
@@ -929,4 +957,6 @@ module.exports = {
   openRouterModelSupportsReasoning,
   resolveOpenRouterReasoningEffort,
   stripUnsupportedThinkingFields,
+  resolveMetaReasoningEffort,
+  applyMetaReasoningControls,
 };

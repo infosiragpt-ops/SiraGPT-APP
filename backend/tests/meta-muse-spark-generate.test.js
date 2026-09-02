@@ -57,8 +57,35 @@ test('Meta/Muse Spark generate payload has no reasoning', () => {
   });
   assert.equal(built.provider, 'meta');
   assert.equal('reasoning' in built.payload, false);
-  assert.equal('reasoning_effort' in built.payload, false);
+  // Disabled thinking → Meta's lowest accepted effort ("none" 400s on Muse Spark).
+  assert.equal(built.payload.reasoning_effort, 'minimal');
   assert.equal('thinking' in built.payload, false);
+});
+
+test('Meta reasoning_effort follows the turn thinking level and the trivial cap leaves room for reasoning', () => {
+  assert.equal(gateway.resolveMetaReasoningEffort('disabled'), 'minimal');
+  assert.equal(gateway.resolveMetaReasoningEffort('off'), 'minimal');
+  assert.equal(gateway.resolveMetaReasoningEffort('low'), 'low');
+  assert.equal(gateway.resolveMetaReasoningEffort('high'), 'high');
+  assert.equal(gateway.resolveMetaReasoningEffort('max'), 'xhigh');
+  assert.equal(gateway.resolveMetaReasoningEffort('xhigh'), 'xhigh');
+  assert.equal(gateway.resolveMetaReasoningEffort(''), 'medium');
+  const max = gateway.buildProviderChatPayload({
+    provider: 'Meta',
+    model: 'muse-spark-1.2',
+    stream: true,
+    thinkingLevel: 'max',
+    maxOutputTokens: 1024,
+    messages: [{ role: 'user', content: 'explica' }],
+  });
+  assert.equal(max.payload.reasoning_effort, 'xhigh');
+  assert.equal(max.payload.max_tokens, 1024);
+  assert.equal('reasoning' in max.payload, false);
+  // Live probe 2026-09-02: max_tokens 256 → finish_reason "length", 253/256
+  // reasoning tokens, empty content. The trivial cap for Meta is 1024.
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'ai-service.js'), 'utf8');
+  assert.match(src, /const trivialCap = \/\^\(meta\|llama\)\$\/i\.test\(String\(currentProvider \|\| ''\)\) \? 1024 : 256;/);
+  assert.match(src, /Math\.min\(trivialCap, modelCap \|\| trivialCap\)/);
 });
 
 test('Anthropic keeps thinking; xAI keeps reasoning_effort; OpenRouter keeps reasoning', () => {
