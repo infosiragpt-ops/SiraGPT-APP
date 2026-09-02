@@ -529,7 +529,7 @@ export function shouldUseExistingDocumentFileContext(
     || shouldEditExistingDocument(prompt, conversationHistory)
 }
 
-const ROUTING_PATTERNS = {
+export const ROUTING_PATTERNS = {
   gmail: /\b(gmail|e-?mail|correo(s)?|mail|inbox|bandeja de entrada|redacta(r)? (un )?correo|envia(r)? (un )?correo|responde(r)? (un )?correo|lee(r)? (mis )?correos)\b/i,
   googleServices: /\b(google (calendar|calendario|drive)|calendar|calendario|evento|event|meeting|reunion|agenda|drive|carpeta|folder)\b/i,
   urlReference: /\bhttps?:\/\/\S+|\bwww\.\S+/i,

@@ -813,14 +813,11 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
       : null;
     const modelPolicy = buildModelQuotaPolicy(req.user, process.env, { freeDailyCallsUsed });
     __dbg(`after-quota-policy type=${type}`);
-    // VOICE is not a Prisma ModelType yet. Keep the contract explicit and
-    // empty instead of querying PostgreSQL with an invalid enum or inventing
-    // virtual rows that an admin cannot deactivate.
-    if (type === 'VOICE') {
-      return res.json({ models: [], policy: modelPolicy });
-    }
-
-    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC'];
+    // VOICE is not a Prisma ModelType: the Voz composer chip lists the
+    // Admin-active AUDIO rows (TTS models) — an empty list here left the chip
+    // dead in production ("No hay modelos de voz activos") while the speech
+    // route itself worked.
+    const VALID_TYPES = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC', 'VOICE'];
     if (type && !VALID_TYPES.includes(type)) {
       return res.status(400).json({ error: 'Invalid model type' });
     }
@@ -828,7 +825,7 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     const wantText = !type || type === 'TEXT';
     const wantImage = !type || type === 'IMAGE';
     const wantVideo = !type || type === 'VIDEO';
-    const wantAudio = !type || type === 'AUDIO';
+    const wantAudio = !type || type === 'AUDIO' || type === 'VOICE';
     const wantMusic = !type || type === 'MUSIC';
 
     const staticTypesToEnsure = [];
@@ -2951,6 +2948,13 @@ router.post(
       // `: ping` 15s is a different path). 5s interval keeps proxy/edge
       // from timing out during enrichment. Cleared in the outer finally.
       keepAlive = startGenerateSseHeartbeat(res, { intervalMs: 5000, signal });
+      // Claude-style live activity: one short Spanish line per phase. The
+      // client folds the sequence into the thinking timeline (done rows +
+      // the active row with its elapsed time) instead of a bare "Pensando…".
+      const emitStage = (label, extra = {}) => {
+        if (!label || clientGone || res.writableEnded) return;
+        try { res.write(`data: ${JSON.stringify({ type: 'stage', label, ...extra })}\n\n`); } catch (_) { /* socket gone */ }
+      };
       try {
         const adTtfb = require('../services/agent-runner/engine-adapter');
         if (typeof adTtfb.abortIfFirstByteOver45s === 'function') {
@@ -3001,6 +3005,7 @@ router.post(
       let openaiFiles = [];
       let uploadedFileContextForTurn = '';
       if (isAuth && files && files.length > 0) {
+        emitStage(files.length === 1 ? 'Leyendo el archivo adjunto' : `Leyendo ${files.length} archivos adjuntos`, { tool: 'read_file' });
         processedFiles = await Promise.all(
           files.map(async (fileRef) => {
             const processedFile = await loadUserFile(fileRef, userId);
@@ -5574,6 +5579,7 @@ router.post(
         // independent reads on the same prompt/userId.
         const _memoryAdapter = userId && !__publicWebReadonly ? getMemoryAdapter() : null;
         const _wsStart = Date.now();
+        if (_webSearchAllowed) emitStage('Buscando en la web', { tool: 'web_search' });
         const [_webCtx, _orchMem] = await Promise.all([
           _webSearchAllowed
             ? enrichWithWebSearch(_webGroundingPrompt, {
@@ -5590,6 +5596,7 @@ router.post(
         if (Array.isArray(_webCtx?.sources) && _webCtx.sources.length > 0) {
           const elapsedMs = Date.now() - _wsStart;
           webSearchSources = _webCtx.sources;
+          emitStage(webSearchSources.length === 1 ? 'Leyendo 1 fuente' : `Leyendo ${webSearchSources.length} fuentes`, { tool: 'web_fetch' });
           webSearchMeta = {
             provider: _webCtx.source || 'web',
             query: _webCtx.query || _webGroundingPrompt.slice(0, 200),
@@ -7096,6 +7103,13 @@ router.post(
               try { res.write(`data: ${JSON.stringify({ replace: true, content: '' })}\n\n`); } catch (_) { /* socket gone */ }
             }
 
+            {
+              const __imageCount = Array.isArray(processedFiles)
+                ? processedFiles.filter((f) => f && typeof f.mimeType === 'string' && f.mimeType.startsWith('image/')).length
+                : 0;
+              if (__imageCount > 0) emitStage(__imageCount === 1 ? 'Analizando la imagen' : `Analizando ${__imageCount} imágenes`, { tool: 'vision' });
+              emitStage('Pensando', { tool: 'model' });
+            }
             const out = await aiService.generateStream({
               provider: actualProvider,
               model: actualModel,

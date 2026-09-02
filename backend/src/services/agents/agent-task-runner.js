@@ -1339,6 +1339,25 @@ function detectAgentRuntimeProvider(modelId) {
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     };
   }
+  // Meta Model API (Muse Spark / Llama 4, bare ids). Live 2026-09-02: a
+  // Muse Spark chat that asked for a document was force-remapped to the
+  // retired OpenAI gpt-4o-mini (whose key answered 401) — the picker model
+  // must drive the agent runtime whenever its own key exists.
+  if (!id.includes('/') && /^(muse-|llama-4)/i.test(id)) {
+    return {
+      provider: 'Meta',
+      apiKeyEnv: process.env.MODEL_API_KEY ? 'MODEL_API_KEY' : (process.env.META_API_KEY ? 'META_API_KEY' : 'LLAMA_API_KEY'),
+      baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || 'https://api.meta.ai/v1',
+    };
+  }
+  // xAI Grok (bare grok-* ids) — OpenAI-compatible at api.x.ai.
+  if (!id.includes('/') && /^grok-/i.test(id)) {
+    return { provider: 'xAI', apiKeyEnv: 'XAI_API_KEY', baseURL: process.env.XAI_BASE_URL || 'https://api.x.ai/v1' };
+  }
+  // Moonshot Kimi (bare kimi-* ids).
+  if (!id.includes('/') && /^kimi-/i.test(id)) {
+    return { provider: 'Kimi', apiKeyEnv: process.env.MOONSHOT_API_KEY ? 'MOONSHOT_API_KEY' : 'KIMI_API_KEY', baseURL: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1' };
+  }
   // Any aggregator slug ("provider/model") routes through OpenRouter — this is
   // exactly how the main chat flow (provider-inference.js) maps openai/*,
   // google/*, anthropic/*, x-ai/*, qwen/*, mistralai/*, moonshotai/*, etc.
@@ -1488,8 +1507,10 @@ function resolveAgentRuntimeClient(profile) {
   const openAIFallbackModel = String(
     process.env.AGENT_TASK_OPENAI_MODEL || process.env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
   ).trim() || 'gpt-4o-mini';
+  // DeepSeek and OpenRouter first: both keys are healthy in production while
+  // the OpenAI key answers 401 — putting OpenAI first spent the run on a
+  // dead client before the runtime failover kicked in.
   const fallbackTargets = [
-    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
     {
       provider: 'OpenRouter',
@@ -1503,6 +1524,7 @@ function resolveAgentRuntimeClient(profile) {
       // otherwise drive a known OpenRouter default.
       model: profile?.detected?.provider === 'OpenRouter' ? profile.runtimeModel : 'moonshotai/kimi-k2.6',
     },
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
   ];
   for (const target of fallbackTargets) {
     const client = tryTarget(target);

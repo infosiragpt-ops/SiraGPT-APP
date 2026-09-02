@@ -89,6 +89,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import { activityDurationMs, activityToPlaceholderSteps } from "@/lib/chat/activity-log";
 import ThinkingTrace from "./thinking-trace"
 import AgentTrace from "./agent-trace"
 import MessageActionRail from "./MessageActionRail"
@@ -1261,6 +1262,11 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const agentTraceView = extractAgentTrace(message);
     const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
+    // Claude-style activity timeline (backend `stage` frames). Live only.
+    const activityLog: any[] = Array.isArray((message as any).activityLog) ? (message as any).activityLog : [];
+    const activityDuration = reasoningView.reasoningDurationMs
+        ?? activityDurationMs(activityLog, (message as any).thinkingEndedAt);
+    const hasActivityTrace = isAssistant && activityLog.some((step: any) => step && !/^pensando/i.test(String(step.label || '')));
     const isThinking = isAssistant && !message.error && !hasLiveReasoning && !message.content && (
       isStreaming || !!(message as any).progressStage
     );
@@ -3334,12 +3340,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 run={agentTraceView.run}
                                 permission={agentTraceView.permission}
                             />
-                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) ? (
+                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming || (hasActivityTrace && !isThinking)) ? (
                             <ThinkingTrace
                                 reasoning={reasoningView.reasoning}
                                 streaming={reasoningView.reasoningStreaming}
-                                durationMs={reasoningView.reasoningDurationMs}
+                                durationMs={activityDuration}
                                 toolCalls={reasoningView.reasoningToolCalls}
+                                activity={activityLog}
                             />
                         ) : null}
                         {message.error ? (
@@ -3348,7 +3355,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}
                                 pct={(message as any).progressPct ?? null}
-                                steps={(message as any).agentSteps || (message as any).reasoningToolCalls || []}
+                                steps={(message as any).agentSteps
+                                    || (activityLog.length > 0 ? activityToPlaceholderSteps(activityLog) : null)
+                                    || (message as any).reasoningToolCalls
+                                    || []}
                                 tokens={(message as any).generationUsage || null}
                             />
                         ) : (
