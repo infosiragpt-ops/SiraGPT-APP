@@ -56,6 +56,11 @@ const {
     stripVendorPrefix,
 } = require('./ai/first-party-chat-clients');
 const { resolveThinkingLevelForTurn, isTrivialChatTurn } = require('./trivial-turn');
+const {
+    publicGenerateErrorMessage,
+    isProviderClientError,
+    closeGenerateSseWithError,
+} = require('./ai/generate-sse-close');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -192,6 +197,7 @@ function normalizeModelForProvider(provider, model) {
     if (/^(kimi|moonshot)$/i.test(p)) return stripVendorPrefix(m, ['moonshotai/', 'moonshot/']);
     if (/^gemini$/i.test(p)) return stripVendorPrefix(m, ['google/']);
     if (/^openai$/i.test(p) && !/gpt-oss/i.test(m)) return stripVendorPrefix(m, ['openai/']);
+    if (/^(meta|llama)$/i.test(p)) return stripVendorPrefix(m, ['meta/', 'llama/', 'meta-llama/']);
     return m;
 }
 
@@ -368,6 +374,24 @@ class AIService {
             return createXaiClient({
                 fetchImpl: sharedFetch,
                 timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(meta|llama)$/i.test(String(provider || ''))) {
+            const apiKey = String(
+                process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY || '',
+            ).trim();
+            if (!apiKey) {
+                const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+                err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
+                err.status = 503;
+                err.provider = 'Meta';
+                throw err;
+            }
+            return new OpenAI({
+                ...baseOpts,
+                apiKey,
+                baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || 'https://api.meta.ai/v1',
             });
         }
 
@@ -778,11 +802,14 @@ class AIService {
                     fallback: currentThinkingLevel(),
                 });
                 const isTrivial = trivialTurn === true || isTrivialChatTurn(userPrompt);
-                if (isTrivial || String(turnThinkingLevel).toLowerCase() === 'disabled') {
+                const thinkingDisabled = isTrivial || String(turnThinkingLevel).toLowerCase() === 'disabled';
+                // OpenRouter-shaped `reasoning` 400s on Meta/Llama/Muse Spark
+                // ("unknown parameter reasoning"). Only attach it for OpenRouter.
+                if (thinkingDisabled && currentProvider === 'OpenRouter') {
                     extraPayload.reasoning = { exclude: true };
-                    if (currentProvider === 'Anthropic') {
-                        extraPayload.thinking = { type: 'disabled' };
-                    }
+                }
+                if (thinkingDisabled && currentProvider === 'Anthropic') {
+                    extraPayload.thinking = { type: 'disabled' };
                 }
                 if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
@@ -984,7 +1011,7 @@ class AIService {
                         // the external client abort (terminal) — both show
                         // up as AbortError from the SDK.
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
-                        const isClientCancel = !isOurTimeout && signal?.aborted;
+                        const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
                         if (isClientCancel) throw err;
                         // Empty-completion reset (above) already cleared
                         // hasStreamedAnyContent + fullResponseContent, so
@@ -1022,7 +1049,11 @@ class AIService {
             // All models exhausted with no content streamed.
             throw lastError || new Error('AI generation failed after exhausting fallback chain');
         } catch (apiError) {
-            if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+            const providerHttpError = isProviderClientError(apiError);
+            if (
+                apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError'
+                && !providerHttpError
+            ) {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
                 return fullResponseContent;
             }
@@ -1039,14 +1070,15 @@ class AIService {
 
             // User-selected catalog model: honest Spanish error. Never recover
             // by swapping to another vendor / DeepSeek Flash / Sira Rápido.
-            if (isPinnedUserGenerate(provider, model)) {
+            // Write error + [DONE] + end so Caddy does not turn an incomplete
+            // SSE body into HTTP 502 (Meta 400 unknown parameter reasoning).
+            if (isPinnedUserGenerate(provider, model) || providerHttpError) {
                 const mini = isPinnedLocalGenerate(provider, model);
-                const message = mini ? SIRA_MINI_UNAVAILABLE_MESSAGE : CONNECTION_UNAVAILABLE_MESSAGE;
+                const message = mini
+                    ? SIRA_MINI_UNAVAILABLE_MESSAGE
+                    : publicGenerateErrorMessage(apiError);
                 const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
-                try {
-                    res.write(`data: ${JSON.stringify({ type: 'error', error, message, recovered: false })}\n\n`);
-                    res.write(`data: ${JSON.stringify({ type: 'text_delta', content: message })}\n\n`);
-                } catch { /* socket may be gone */ }
+                closeGenerateSseWithError(res, { message, code: error, recovered: false });
                 return message;
             }
 
@@ -1655,6 +1687,9 @@ service.__test = {
     isPinnedUserGenerate,
     resolveThinkingLevelForTurn,
     currentThinkingLevel,
+    publicGenerateErrorMessage,
+    isProviderClientError,
+    closeGenerateSseWithError,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

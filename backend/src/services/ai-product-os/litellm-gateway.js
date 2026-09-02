@@ -32,6 +32,8 @@ const PROVIDER_ALIASES = Object.freeze({
   openrouter: "openrouter",
   openai: "openai",
   anthropic: "anthropic",
+  meta: "meta",
+  llama: "meta",
   custom: "custom",
 });
 
@@ -89,6 +91,15 @@ const PROVIDER_MANIFESTS = Object.freeze({
     request_format: "openai_chat_completions",
     supports: { text: true, multimodal: true, tools: true, structured_outputs: true, streaming: true },
     cost_per_1m_tokens_usd: { input: 0.6, output: 2.4 },
+  },
+  meta: {
+    provider: "meta",
+    display_name: "Meta",
+    api_key_env: "META_API_KEY",
+    base_url: "https://api.meta.ai/v1",
+    request_format: "openai_chat_completions",
+    supports: { text: true, multimodal: true, tools: true, structured_outputs: false, streaming: true },
+    cost_per_1m_tokens_usd: { input: null, output: null },
   },
   custom: {
     provider: "custom",
@@ -313,6 +324,7 @@ function buildProviderChatPayload({
   applyMaxTokens(payload, maxOutputTokens, runtime);
   applyStreamingUsage(payload, runtime);
   applyThinkingControls(payload, runtime, thinkingLevel);
+  stripUnsupportedThinkingFields(payload, runtime);
 
   return {
     schema_version: "sira.provider_chat_payload.v1",
@@ -356,6 +368,36 @@ function applyStreamingUsage(payload, runtime) {
     ...(payload.stream_options || {}),
     include_usage: true,
   };
+}
+
+function stripUnsupportedThinkingFields(payload, runtime) {
+  if (!payload || typeof payload !== "object" || !runtime) return payload;
+  const format = runtime.thinkingFormat;
+  const provider = String(runtime.provider || "");
+  if (format === "openrouter") {
+    delete payload.thinking;
+    delete payload.reasoning_effort;
+    return payload;
+  }
+  if (format === "deepseek") {
+    delete payload.reasoning;
+    return payload;
+  }
+  // OpenRouter-shaped `reasoning` 400s on Meta/Llama/Muse Spark and other
+  // first-party OpenAI-compat APIs. Anthropic keeps `thinking`; xAI keeps
+  // `reasoning_effort` when the caller actually set it.
+  delete payload.reasoning;
+  if (provider === "anthropic") {
+    delete payload.reasoning_effort;
+    return payload;
+  }
+  if (provider === "xai") {
+    delete payload.thinking;
+    return payload;
+  }
+  delete payload.reasoning_effort;
+  delete payload.thinking;
+  return payload;
 }
 
 function applyThinkingControls(payload, runtime, thinkingLevel) {
@@ -886,4 +928,5 @@ module.exports = {
   // OpenRouter unified reasoning (exported for tests).
   openRouterModelSupportsReasoning,
   resolveOpenRouterReasoningEffort,
+  stripUnsupportedThinkingFields,
 };

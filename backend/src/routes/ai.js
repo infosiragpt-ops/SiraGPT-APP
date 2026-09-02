@@ -268,6 +268,11 @@ const {
 } = require('../services/ai/provider-inference');
 const { honorPickerModel, lookupPickerDisplayName } = require('../services/ai/honor-picker-model');
 const {
+  closeGenerateSseWithError,
+  endGenerateSse,
+  publicGenerateErrorMessage,
+} = require('../services/ai/generate-sse-close');
+const {
   isCustomProvider,
   isLocalVisionModel,
   isSiraMiniAlias,
@@ -1165,6 +1170,9 @@ function sanitizeErrorForUser(error) {
   if (/model.?not.?found|unknown model|does not exist|invalid model|not found.*model/i.test(msg)) {
     return 'Este modelo no se pudo ejecutar. No cambié a otro modelo. Elige otro modelo o revisa la configuración.';
   }
+  if (/unknown parameter/i.test(msg)) {
+    return CONNECTION_UNAVAILABLE_MESSAGE;
+  }
   return 'Hubo un problema procesando tu solicitud. Por favor intenta de nuevo.';
 }
 
@@ -1421,7 +1429,7 @@ function streamDuplicateTurnReplay(res, duplicateTurn, actualModel = '') {
     assistantMessageId: duplicateTurn?.assistantMessage?.id || null,
   })}\n\n`);
   res.write('data: [DONE]\n\n');
-  res.end();
+  endGenerateSse(res);
 }
 
 function respondGenerateTurnError(res, {
@@ -2126,6 +2134,7 @@ router.post(
     // emit stream errors), without touching each of the many call sites.
     {
       const rawWrite = res.write.bind(res);
+      res._siraRawWrite = rawWrite;
       res.write = (...args) => {
         if (clientGone || res.destroyed || res.writableEnded) return true;
         try {
@@ -2137,8 +2146,11 @@ router.post(
         } catch { return true; }
       };
       const rawEnd = res.end.bind(res);
+      res._siraRawEnd = rawEnd;
       res.end = (...args) => {
-        if (clientGone || res.destroyed || res.writableEnded) return res;
+        // Never skip end() just because the client dropped — an unterminated
+        // SSE body is what Caddy turns into HTTP 502. Only skip if already ended.
+        if (res.writableEnded || res.destroyed) return res;
         try { return rawEnd(...args); } catch { return res; }
       };
     }
@@ -2443,10 +2455,7 @@ router.post(
           if (activeWait.error) {
             console.warn('[ai/generate] active duplicate turn wait failed:', activeWait.error.message);
           }
-          // Safari/Cloudflare abort the first POST then retry the same
-          // streamId. Returning 409 here left the UI stuck on Pensando.
-          // If the original owner finished we replayed above; otherwise
-          // drop the stale entry and continue as the new owner.
+          // start a fresh generate after that stream closed.
           if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
             activeGenerateTurns.delete(activeGenerateTurnKey);
           }
@@ -3321,10 +3330,11 @@ router.post(
         actualProvider = resolveGenerateProvider(actualProvider, actualModel);
       }
       if (actualProvider !== 'Custom' && !providerConnectionReady(actualProvider)) {
-        try {
-          res.write(`data: ${JSON.stringify({ type: 'error', error: 'connection_unavailable', message: CONNECTION_UNAVAILABLE_MESSAGE, recovered: false })}\n\n`);
-        } catch { /* socket gone */ }
-        if (!res.writableEnded) res.end();
+        closeGenerateSseWithError(res, {
+          message: CONNECTION_UNAVAILABLE_MESSAGE,
+          code: 'connection_unavailable',
+          recovered: false,
+        });
         return;
       }
 
@@ -8073,14 +8083,12 @@ router.post(
 
       if (!res.headersSent) {
         res.status(500).json({ error: sanitizedError });
-      } else {
-        try {
-          const code = (error && (error.code || error.name)) || 'stream_error';
-          res.write(`data: ${JSON.stringify({ type: 'error', code, error: sanitizedError })}\n\n`);
-          res.write('event: close\ndata: end\n\n');
-        } catch (writeError) {
-          console.error('Failed to write error to stream:', writeError);
-        }
+      } else if (!res._siraGenerateSseClosed) {
+        closeGenerateSseWithError(res, {
+          message: publicGenerateErrorMessage({ message: sanitizedError, code: error && (error.code || error.name) }) || sanitizedError,
+          code: (error && (error.code || error.name)) || 'stream_error',
+          recovered: false,
+        });
       }
     }
     finally {
