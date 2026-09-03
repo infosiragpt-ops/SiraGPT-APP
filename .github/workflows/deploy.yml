@@ -394,6 +394,30 @@ jobs:
               echo "[deploy-workflow] Release metadata commit=${GIT_COMMIT} version=${SIRAGPT_VERSION}"
             }
 
+            persist_release_env() {
+              # docker-compose.prod.yml interpolates GIT_COMMIT and
+              # SIRAGPT_VERSION with an "unknown" default (pinned by contract
+              # in backend/tests/release-provenance.test.js). The process env
+              # set above only lives inside this workflow run — any later
+              # compose invocation outside CI (manual recreate, host reboot
+              # with restart policy, restore) would interpolate "unknown" into
+              # the backend environment and break /api/version provenance.
+              # Writing the release values to the VPS .env makes every future
+              # interpolation resolve correctly until the next release rewrites
+              # them. Best-effort: failure here degrades provenance only.
+              local line_commit="GIT_COMMIT=${GIT_COMMIT}" line_version="SIRAGPT_VERSION=${SIRAGPT_VERSION}"
+              if [[ -f .env ]] && grep -qE '^GIT_COMMIT=' .env; then
+                sed -i "s|^GIT_COMMIT=.*|${line_commit}|" .env || return 1
+              else
+                printf '%s\n' "${line_commit}" >> .env || return 1
+              fi
+              if grep -qE '^SIRAGPT_VERSION=' .env; then
+                sed -i "s|^SIRAGPT_VERSION=.*|${line_version}|" .env || return 1
+              else
+                printf '%s\n' "${line_version}" >> .env || return 1
+              fi
+            }
+
             read_image_env() {
               local image="$1" key="$2"
               docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${image}" \
@@ -554,6 +578,10 @@ jobs:
                 echo "[deploy-workflow] Rollback metadata generation failed"
                 exit "${status}"
               fi
+              if ! persist_release_env; then
+                echo "[deploy-workflow] Could not persist rollback release env to .env"
+                exit "${status}"
+              fi
               if ! restore_rollback_images; then
                 echo "[deploy-workflow] Rollback image restoration failed"
                 exit "${status}"
@@ -618,6 +646,10 @@ jobs:
             git reset --hard "${TARGET_SHA}"
             verify_checkout "${TARGET_SHA}"
             set_release_metadata "${TARGET_SHA}"
+            if ! persist_release_env; then
+              echo "[deploy-workflow] Could not persist release env to .env; refusing deploy"
+              exit 1
+            fi
             echo "[deploy-workflow] Checked out ${TARGET_SHA}"
             ${COMPOSE} config -q
             echo "[deploy-workflow] Building runner image"

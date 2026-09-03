@@ -92,6 +92,20 @@ test('backend image receives immutable release provenance at build time', () => 
   );
 });
 
+test('deploy persists release provenance to the VPS .env for out-of-CI recreates', () => {
+  const workflow = read('.github/workflows/deploy.yml');
+
+  assert.match(workflow, /persist_release_env\(\)/);
+  assert.match(workflow, /sed -i "s\|\^GIT_COMMIT=\.\*\|\$\{line_commit\}\|" \.env/);
+  assert.match(workflow, /printf '%s\\n' "\$\{line_commit\}" >> \.env/);
+  assert.match(workflow, /sed -i "s\|\^SIRAGPT_VERSION=\.\*\|\$\{line_version\}\|" \.env/);
+  assert.match(workflow, /printf '%s\\n' "\$\{line_version\}" >> \.env/);
+  assert.match(workflow, /set_release_metadata "\$\{TARGET_SHA\}"\n\s+if ! persist_release_env; then/);
+  assert.match(workflow, /Could not persist release env to \.env; refusing deploy/);
+  assert.match(workflow, /set_release_metadata "\$\{PREV_SHA\}"; then[\s\S]{0,200}?if ! persist_release_env; then/);
+  assert.match(workflow, /Could not persist rollback release env to \.env/);
+});
+
 test('backend Docker build context excludes local secrets and dependencies', () => {
   const dockerignore = read('backend/.dockerignore');
 
