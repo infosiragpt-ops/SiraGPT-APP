@@ -17,7 +17,12 @@ const documentSummarizer = require('../services/document-summarizer');
 const anthropicCitations = require('../services/providers/anthropic-citations');
 const queryDecomposer = require('../services/rag/query-decomposer');
 const deepAsk = require('../services/rag/deep-ask');
-const { validateUploadPolicy } = require('../services/upload-security-policy');
+const {
+  validateUploadPolicy,
+  isMediaMime,
+  resolveUploadLimits,
+  isDeclaredUploadAllowed,
+} = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
 const ragStore = require('../services/rag-store');
@@ -305,6 +310,9 @@ function withTimeout(promise, ms, label) {
 // upstream is degraded. Overridable via env for ops tuning.
 const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
 const ASYNC_EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_TIMEOUT_MS || '900000', 10);
+// Audio/video transcription of long recordings (local whisper on CPU) needs
+// far more than the 15-minute document budget.
+const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS || '7200000', 10);
 const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
 const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
 const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
@@ -706,7 +714,8 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     let result;
     const extractStarted = Date.now();
     try {
-      result = await withTimeout(fileProcessor.processFile(file, extractProcessOptions()), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
+      const extractBudgetMs = /^(audio|video)\//i.test(String(file.mimetype || '')) ? ASYNC_EXTRACT_MEDIA_TIMEOUT_MS : ASYNC_EXTRACT_TIMEOUT_MS;
+      result = await withTimeout(fileProcessor.processFile(file, extractProcessOptions()), extractBudgetMs, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -868,6 +877,104 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 
 // Upload files — parallel batch processing
 router.post('/media-token', authenticateToken, uploadMediaTokenHandler);
+
+// ─── Chunked uploads (large audio/video) ──────────────────────────────
+// The production edge (Cloudflare proxy) rejects single request bodies over
+// 100 MB. Big media is split by the composer into ≤64 MB chunks that the
+// backend reassembles on disk (services/chunked-upload-store), then the file
+// enters the SAME async pipeline as a multipart upload (validation → text
+// extraction / transcription → RAG), returning the same response shape.
+const chunkedUploads = require('../services/chunked-upload-store');
+const CHUNK_BODY_LIMIT = chunkedUploads.MAX_CHUNK_BYTES + 64 * 1024;
+
+function chunkedUploadCap(mimeType, originalName) {
+  const limits = resolveUploadLimits();
+  const ext = String(originalName || '').split('.').pop();
+  const media = isMediaMime(mimeType) || /^(mp3|wav|ogg|oga|opus|m4a|mp4|mov|webm|mpeg|mpg)$/i.test(String(ext || ''));
+  return media ? limits.mediaFileSize : limits.fileSize;
+}
+
+function sendChunkedError(res, err) {
+  if (err && err.name === 'ChunkedUploadError') {
+    return res.status(err.status || 400).json({ error: err.message, code: err.code });
+  }
+  console.error('[files] chunked upload failed:', err && err.message ? err.message : err);
+  return res.status(500).json({ error: 'No se pudo completar la subida por trozos.', code: 'chunked_upload_failed' });
+}
+
+router.post('/upload/chunked/init', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
+  try {
+    const { name, size, mimeType, chunkSize } = req.body || {};
+    const originalName = upload.fixLatin1Filename(String(name || '').trim());
+    if (!originalName) return res.status(400).json({ error: 'Falta el nombre del archivo.', code: 'bad_name' });
+    const declared = { originalname: originalName, mimetype: String(mimeType || '').toLowerCase() || 'application/octet-stream' };
+    if (!isDeclaredUploadAllowed(declared)) {
+      return res.status(415).json({ error: `Tipo no permitido: ${declared.mimetype}`, code: 'unsupported_type' });
+    }
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    await fs.mkdir(userDir, { recursive: true });
+    chunkedUploads.sweepStaleChunkedUploads(userDir).catch(() => {});
+    const session = await chunkedUploads.initChunkedUpload({
+      userDir,
+      name: originalName,
+      size: Number(size),
+      mimeType: declared.mimetype,
+      chunkSize,
+      maxBytes: chunkedUploadCap(declared.mimetype, originalName),
+    });
+    return res.status(201).json({ ...session, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.put('/upload/chunked/:uploadId/:index', authenticateToken, requireScope('files:write'), express.raw({ type: () => true, limit: CHUNK_BODY_LIMIT }), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const result = await chunkedUploads.writeChunk({
+      userDir,
+      uploadId: req.params.uploadId,
+      index: Number(req.params.index),
+      buffer: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.delete('/upload/chunked/:uploadId', authenticateToken, requireScope('files:write'), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    await chunkedUploads.abortChunkedUpload({ userDir, uploadId: req.params.uploadId });
+    return res.json({ ok: true });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.post('/upload/chunked/:uploadId/complete', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const file = await chunkedUploads.completeChunkedUpload({ userDir, uploadId: req.params.uploadId });
+    const batchPolicy = validateDocumentBatch([file]);
+    if (!batchPolicy.ok) {
+      await unlinkQuiet(file.path);
+      return res.status(413).json({ error: batchPolicy.message, code: batchPolicy.code });
+    }
+    // Same async pipeline as POST /upload with asyncProcessing=1: the row is
+    // created now, extraction/transcription runs after this response and the
+    // composer polls /processing-status until `ready`.
+    const processedFiles = await processFilesForAsyncPreview([file], req.user.id, prisma);
+    return res.json({ files: processedFiles, chunked: true });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
 
 router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {

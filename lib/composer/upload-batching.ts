@@ -1,6 +1,12 @@
 export type UploadBatchLimits = Readonly<{
   maxFiles: number
   maxBytes: number
+  /**
+   * Files that must travel alone (e.g. large media on the chunked transport,
+   * which the proxy would reject inside a multipart batch). An isolated file
+   * always gets its own batch, flagged `isolated: true`.
+   */
+  isolate?: (file: UploadFileLike) => boolean
 }>
 
 export type UploadFileLike = Readonly<{
@@ -10,6 +16,7 @@ export type UploadFileLike = Readonly<{
 export type UploadChunk<TFile, TTemp> = {
   files: TFile[]
   temps: TTemp[]
+  isolated?: boolean
 }
 
 export const COMPOSER_UPLOAD_BATCH_LIMITS: UploadBatchLimits = Object.freeze({
@@ -51,6 +58,16 @@ export function buildComposerUploadChunks<TFile extends UploadFileLike, TTemp>(
   let currentBytes = 0
 
   files.forEach((file, index) => {
+    if (typeof limits.isolate === "function" && limits.isolate(file)) {
+      if (currentFiles.length > 0) {
+        chunks.push({ files: currentFiles, temps: currentTemps })
+        currentFiles = []
+        currentTemps = []
+        currentBytes = 0
+      }
+      chunks.push({ files: [file], temps: [tempFiles[index]], isolated: true })
+      return
+    }
     const fileBytes = normalizedFileBytes(file)
     const wouldOverflowCount = currentFiles.length >= limits.maxFiles
     const wouldOverflowBytes =

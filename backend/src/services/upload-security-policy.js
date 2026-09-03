@@ -6,6 +6,9 @@ const {
 
 const MB = 1024 * 1024;
 const DEFAULT_MAX_UPLOAD_MB = 100;
+// Audio/video travel in chunks (see chunked-upload-store) and are transcribed
+// server-side, so they get their own, much larger cap.
+const DEFAULT_MAX_MEDIA_UPLOAD_MB = 2048;
 const DEFAULT_MAX_UPLOAD_FILES = DEFAULT_MAX_SIMULTANEOUS_DOCUMENTS;
 
 const EXECUTABLE_EXTENSIONS = new Set([
@@ -174,7 +177,23 @@ function resolveUploadLimits(env = process.env) {
     positiveInteger(env.MAX_UPLOAD_FILES) || DEFAULT_MAX_UPLOAD_FILES,
     MAX_SAFE_SIMULTANEOUS_DOCUMENTS,
   );
-  return { fileSize, files };
+  const explicitMediaMb = positiveInteger(env.MAX_MEDIA_FILE_MB) || positiveInteger(env.UPLOAD_MAX_MEDIA_MB);
+  const mediaFileSize = explicitMediaMb
+    ? explicitMediaMb * MB
+    : (Number.isFinite(fileSize) ? Math.max(fileSize, DEFAULT_MAX_MEDIA_UPLOAD_MB * MB) : fileSize);
+  return { fileSize, files, mediaFileSize };
+}
+
+function isMediaMime(mime) {
+  return /^(audio|video)\//i.test(normalizeMime(mime));
+}
+
+function isMediaExtension(extension) {
+  const ext = String(extension || '').toLowerCase();
+  const accepted = EXTENSION_TO_MIMES.get(ext);
+  if (!accepted) return false;
+  for (const mime of accepted) if (isMediaMime(mime)) return true;
+  return false;
 }
 
 function extensionFromName(filename) {
@@ -279,12 +298,14 @@ function validateUploadPolicy({
   const declared = normalizeMime(declaredMime);
   const detected = normalizeMime(detectedMime);
   const limits = resolveUploadLimits(env);
+  const media = isMediaMime(detected) || isMediaMime(declared) || isMediaExtension(ext);
+  const sizeLimit = media ? limits.mediaFileSize : limits.fileSize;
 
-  if (Number.isFinite(limits.fileSize) && Number(size || 0) > limits.fileSize) {
+  if (Number.isFinite(sizeLimit) && Number(size || 0) > sizeLimit) {
     return {
       ok: false,
       code: 'file_too_large',
-      message: `El archivo supera el limite configurado de ${Math.round(limits.fileSize / MB)} MB.`,
+      message: `El archivo supera el limite configurado de ${Math.round(sizeLimit / MB)} MB.`,
       extension: ext,
       declaredMime: declared || null,
       detectedMime: detected || null,
@@ -383,6 +404,8 @@ function validateUploadPolicy({
 }
 
 module.exports = {
+  isMediaMime,
+  DEFAULT_MAX_MEDIA_UPLOAD_MB,
   ALLOWED_EXTENSIONS,
   ALLOWED_MIMES,
   ACTIVE_CONTENT_MIMES,

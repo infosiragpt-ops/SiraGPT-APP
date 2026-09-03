@@ -7,6 +7,8 @@ const {
   mimeMatchesExtension,
   resolveUploadLimits,
   validateUploadPolicy,
+  isMediaMime,
+  DEFAULT_MAX_MEDIA_UPLOAD_MB,
 } = require('../src/services/upload-security-policy');
 
 test('upload policy accepts extension fallback for octet-stream browser uploads', () => {
@@ -182,4 +184,30 @@ test('an SVG reported as generic XML is accepted (still active-content sanitized
   // The native image/svg+xml form still works too.
   const native = validateUploadPolicy({ originalName: 'logo.svg', declaredMime: 'image/svg+xml', size: 1000 });
   assert.equal(native.ok, true, native.code);
+});
+
+test('audio/video get their own cap (2 GB default) while documents keep 100 MB', () => {
+  const limits = resolveUploadLimits({});
+  assert.equal(limits.fileSize, 100 * 1024 * 1024);
+  assert.equal(limits.mediaFileSize, DEFAULT_MAX_MEDIA_UPLOAD_MB * 1024 * 1024);
+  assert.equal(resolveUploadLimits({ MAX_MEDIA_FILE_MB: '512' }).mediaFileSize, 512 * 1024 * 1024);
+  assert.equal(resolveUploadLimits({ MAX_FILE_SIZE: '4096' }).mediaFileSize, 4096 * 1024 * 1024, 'an explicit global cap above the media default wins');
+  assert.equal(isMediaMime('video/mp4'), true);
+  assert.equal(isMediaMime('audio/mpeg; codecs=1'), true);
+  assert.equal(isMediaMime('application/pdf'), false);
+
+  const bigVideo = validateUploadPolicy({
+    originalName: 'clase.mp4', declaredMime: 'video/mp4', detectedMime: 'video/mp4', detectionSource: 'magic-bytes', size: 900 * 1024 * 1024,
+  });
+  assert.equal(bigVideo.ok, true, JSON.stringify(bigVideo));
+  const bigPdf = validateUploadPolicy({
+    originalName: 'libro.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 900 * 1024 * 1024,
+  });
+  assert.equal(bigPdf.ok, false);
+  assert.equal(bigPdf.code, 'file_too_large');
+  const hugeVideo = validateUploadPolicy({
+    originalName: 'clase.mp4', declaredMime: 'video/mp4', detectedMime: 'video/mp4', detectionSource: 'magic-bytes', size: 3 * 1024 * 1024 * 1024,
+  });
+  assert.equal(hugeVideo.code, 'file_too_large');
+  assert.match(hugeVideo.message, /2048 MB/);
 });
