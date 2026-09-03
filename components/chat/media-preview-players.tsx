@@ -46,20 +46,16 @@ function playableSrc(raw: string): string {
 function useObjectUrl(src?: string | null, file?: MediaSourceFile): string {
   const [objectUrl, setObjectUrl] = React.useState("")
   React.useEffect(() => {
-    const direct = playableSrc(src || "")
-    if (direct) {
-      setObjectUrl(direct)
-      return
+    // Native File wins: composer / optimistic bubble must play immediately
+    // without waiting on /uploads auth (Safari often omits cookies on <video>).
+    if (file && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+      const created = URL.createObjectURL(file)
+      setObjectUrl(created)
+      return () => {
+        try { URL.revokeObjectURL(created) } catch { /* ignore */ }
+      }
     }
-    if (!file || typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
-      setObjectUrl("")
-      return
-    }
-    const created = URL.createObjectURL(file)
-    setObjectUrl(created)
-    return () => {
-      try { URL.revokeObjectURL(created) } catch { /* ignore */ }
-    }
+    setObjectUrl(playableSrc(src || ""))
   }, [src, file])
   return objectUrl
 }

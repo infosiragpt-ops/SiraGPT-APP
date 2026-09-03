@@ -2,7 +2,11 @@ import assert from "node:assert/strict"
 import path from "node:path"
 import { describe, it } from "node:test"
 
-const { backfillUserMessageFilesForTranscription } = require(path.join(
+const {
+  backfillUserMessageFilesForTranscription,
+  hydrateChatMessageAttachments,
+  messageFilesNeedHydration,
+} = require(path.join(
   process.cwd(),
   "backend/src/services/message-attachments",
 ))
@@ -10,6 +14,8 @@ const { backfillUserMessageFilesForTranscription } = require(path.join(
 import {
   isVideoComposerFile,
   mergeMessageFileLists,
+  resolveComposerMediaSrc,
+  shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
 } from "../lib/chat/composer-files"
 import { parseMessageFilesForRender } from "../lib/chat/message-rendering"
@@ -194,11 +200,56 @@ describe("transcription backfill keeps video on the persisted user turn", () => 
     assert.equal(updates.length, 1)
   })
 
-  it("never overwrites a user turn that already carries files", async () => {
+  it("upgrades id-only stubs that have no playable url", async () => {
     const { prisma, updates } = makePrisma([{ id: "file-video-1", name: "clase.mp4" }])
+    const written = await backfillUserMessageFilesForTranscription(prisma as any, baseArgs)
+    assert.equal(written, true)
+    assert.equal(updates.length, 1)
+    const files = updates[0].files as Array<{ url?: string; mimeType?: string }>
+    assert.equal(files[0].url, "/uploads/user-1/clase.mp4")
+    assert.equal(files[0].mimeType, "video/mp4")
+    assert.equal(isVideoComposerFile(files[0]), true)
+  })
+
+  it("does not overwrite a turn that already has a durable /uploads url", async () => {
+    const { prisma, updates } = makePrisma([{
+      id: "file-video-1",
+      name: "clase.mp4",
+      mimeType: "video/mp4",
+      url: "/uploads/user-1/clase.mp4",
+    }])
     const written = await backfillUserMessageFilesForTranscription(prisma as any, baseArgs)
     assert.equal(written, false)
     assert.equal(updates.length, 0)
+  })
+
+  it("creates the USER turn when persist never landed", async () => {
+    const creates: Array<{ files: unknown; content: string }> = []
+    const prisma = {
+      file: {
+        async findMany() {
+          return [videoRow]
+        },
+      },
+      message: {
+        async findFirst() {
+          return null
+        },
+        async create({ data }: { data: { files: unknown; content: string } }) {
+          creates.push({ files: data.files, content: data.content })
+          return { id: "msg-created", ...data }
+        },
+      },
+    }
+    const written = await backfillUserMessageFilesForTranscription(prisma as any, {
+      ...baseArgs,
+      content: "transcribir",
+    })
+    assert.equal(written, true)
+    assert.equal(creates.length, 1)
+    assert.equal(creates[0].content, "transcribir")
+    const files = creates[0].files as Array<{ url?: string }>
+    assert.equal(files[0].url, "/uploads/user-1/clase.mp4")
   })
 
   it("is a no-op without resolved file ids", async () => {
@@ -209,6 +260,69 @@ describe("transcription backfill keeps video on the persisted user turn", () => 
     })
     assert.equal(written, false)
     assert.equal(updates.length, 0)
+  })
+})
+
+describe("composer pick preview and GET hydration", () => {
+  it("creates a local media preview for WhatsApp/Safari octet-stream mp4", () => {
+    const file = typeof File === "function"
+      ? new File(["bytes"], "VID-20260903-WA0001.mp4", { type: "application/octet-stream" })
+      : { name: "VID-20260903-WA0001.mp4", type: "application/octet-stream" }
+    assert.equal(shouldCreateLocalMediaPreview(file), true)
+    assert.equal(isVideoComposerFile({ name: "VID-20260903-WA0001.mp4", type: "application/octet-stream" }), true)
+    assert.equal(shouldCreateLocalMediaPreview({ name: "notas.txt", type: "text/plain" }), false)
+  })
+
+  it("prefers a durable /uploads url over a dead blob preview", () => {
+    assert.equal(resolveComposerMediaSrc({
+      preview: "blob:https://siragpt.com/dead",
+      url: "/uploads/user-1/clase.mp4",
+    }), "/uploads/user-1/clase.mp4")
+  })
+
+  it("messageFilesNeedHydration is true for null, empty, and id-only stubs", () => {
+    assert.equal(messageFilesNeedHydration(null), true)
+    assert.equal(messageFilesNeedHydration([]), true)
+    assert.equal(messageFilesNeedHydration([{ id: "file-video-1", name: "clase.mp4" }]), true)
+    assert.equal(messageFilesNeedHydration([{
+      id: "file-video-1",
+      name: "clase.mp4",
+      mimeType: "video/mp4",
+      url: "/uploads/user-1/clase.mp4",
+    }]), false)
+  })
+
+  it("hydrateChatMessageAttachments upgrades stubs from the File table", async () => {
+    const prisma = {
+      file: {
+        async findMany() {
+          return [{
+            id: "file-video-1",
+            filename: "clase.mp4",
+            originalName: "clase.mp4",
+            mimeType: "video/mp4",
+            size: 8_388_608,
+            extractedText: "hola mundo",
+            openaiFileId: null,
+          }]
+        },
+      },
+    }
+    const [hydrated] = await hydrateChatMessageAttachments(prisma as any, {
+      userId: "user-1",
+      messages: [{
+        id: "msg-user-1",
+        role: "USER",
+        content: "transcribir",
+        files: [{ id: "file-video-1" }],
+      }],
+    })
+    const files = (hydrated as { files?: Array<{ url?: string; mimeType?: string; name?: string }> }).files || []
+    assert.equal(files.length, 1)
+    assert.equal(files[0].name, "clase.mp4")
+    assert.equal(files[0].mimeType, "video/mp4")
+    assert.equal(files[0].url, "/uploads/user-1/clase.mp4")
+    assert.equal(isVideoComposerFile(files[0]), true)
   })
 })
 
