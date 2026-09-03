@@ -1584,17 +1584,20 @@ const ActionsDropdown = ({
               <div className="min-w-0 flex-1">
                 <div className="liquid-label font-medium text-sm">Subir archivos</div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {isUploading ? 'Subiendo…' : 'Imágenes, PDFs, documentos'}
+                  {isUploading ? 'Subiendo…' : 'Cualquier formato: documentos, código, datos, imágenes, audio, video'}
                 </div>
               </div>
             </div>
           </DropdownMenuItem>
+          {/* No `accept` filter on purpose: the picker offers every file the OS
+              can hand us. Size caps, Office lock-file detection and the
+              backend byte-level policy still run on every selection. */}
           <input
             ref={fileInputRef}
             type="file"
             multiple
             className="hidden"
-            accept="image/*,audio/*,video/*,application/pdf,.doc,.docx,.xlsx,.ppt,.pptx,.txt,.csv,.tsv,.md,.markdown,.rtf,.odt,.ods,.odp,.json,.xml,.html,.htm,.eml,.msg,.mp3,.wav,.m4a,.aac,.ogg,.mp4,.mov,.webm,.mpeg"
+            data-accepts-any-format="true"
             onChange={handleFilesSelected}
           />
           {/* Web Search */}

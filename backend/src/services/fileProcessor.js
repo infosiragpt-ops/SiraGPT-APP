@@ -103,6 +103,55 @@ function resolveProcessMimeType(file = {}) {
   return declared;
 }
 
+// ── "Any format" fallback ──────────────────────────────────────────────
+// The upload policy accepts every file type. Types without a dedicated
+// parser land in the `default` branch below: anything that is plain text
+// (source code, configs, logs, data dumps, notebooks, subtitles…) is read as
+// text so the model can actually work with it; true binaries are stored
+// opaque and described by name/type (the placeholder sentence downstream
+// services already recognise).
+const GENERIC_TEXT_MAX_BYTES = Number.parseInt(
+  process.env.SIRAGPT_GENERIC_TEXT_MAX_BYTES || String(25 * 1024 * 1024),
+  10,
+);
+
+const TEXT_LIKE_MIME_RE = /^(?:text\/|application\/(?:x-)?(?:yaml|yml|toml|ini|sql|javascript|ecmascript|typescript|json5?|ld\+json|x-ndjson|ndjson|csv|x-sh|x-shellscript|x-python(?:-code)?|x-httpd-php|x-php|graphql|x-www-form-urlencoded|x-tex|x-latex|xml|xhtml\+xml|rss\+xml|atom\+xml|x-yaml|x-toml|x-ini|x-subrip|vnd\.api\+json|problem\+json|geo\+json|x-perl|x-ruby|x-lua|x-csh|x-tcl|x-r|x-julia|dart|x-httpd-cgi|postscript)|.*\+(?:json|xml|yaml)$)/i;
+
+function isTextLikeMime(mime) {
+  const normalized = String(mime || '').split(';')[0].trim().toLowerCase();
+  return Boolean(normalized) && TEXT_LIKE_MIME_RE.test(normalized);
+}
+
+/**
+ * Byte sniff: is the head of this file plain text? No NUL bytes and fewer
+ * than 5 % non-whitespace control characters in the first 8 KiB. Encoding is
+ * resolved later by readTextFile (UTF-8 / Latin-1 / UTF-16 detection).
+ */
+async function sniffTextLike(filePath) {
+  let handle;
+  try {
+    handle = await fs.open(filePath, 'r');
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    if (bytesRead === 0) return false;
+    let control = 0;
+    for (let i = 0; i < bytesRead; i += 1) {
+      const b = buf[i];
+      if (b === 0) return false;
+      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d && b !== 0x0c && b !== 0x1b) control += 1;
+    }
+    return control / bytesRead < 0.05;
+  } catch {
+    return false;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
+function opaqueBinaryPlaceholder(originalname, mimetype) {
+  return `File "${originalname}" uploaded successfully. Content type: ${mimetype}`;
+}
+
 class FileProcessor {
   async processFile(file, options = {}) {
     const timer = extractFastpath.createStageTimer('processFile');
@@ -346,9 +395,18 @@ class FileProcessor {
         case '__external_done':
           break;
 
-        default:
-          console.log(`Unsupported file type: ${mimetype}`);
-          extractedText = `File "${originalname}" uploaded successfully. Content type: ${effectiveMimeType || mimetype}`;
+        default: {
+          const typeLabel = effectiveMimeType || mimetype || 'application/octet-stream';
+          const textLike = isTextLikeMime(typeLabel) || await sniffTextLike(filePath);
+          if (textLike) {
+            console.log(`Generic text-like file (${typeLabel}): ${originalname} — reading as text`);
+            extractedText = await this.processGenericText(filePath, originalname, typeLabel, fileSize);
+          } else {
+            console.log(`Opaque binary upload (no text layer): ${originalname} (${typeLabel})`);
+            extractedText = opaqueBinaryPlaceholder(originalname, typeLabel);
+          }
+          break;
+        }
       }
 
       timer.mark('extract');
@@ -862,6 +920,42 @@ class FileProcessor {
     }
   }
 
+  /**
+   * Any text-like file without a dedicated parser (source code, configs,
+   * logs, data dumps, subtitles, notebooks…). Reads through the encoding
+   * detector, caps very large files at SIRAGPT_GENERIC_TEXT_MAX_BYTES and
+   * prefixes a one-line header so the model knows what it is looking at.
+   */
+  async processGenericText(filePath, originalname, mimetype, fileSize = 0) {
+    const ext = path.extname(String(originalname || filePath || '')).replace(/^\./, '').toLowerCase();
+    const kind = ext ? `.${ext}` : (mimetype || 'text');
+    const cap = Number.isFinite(GENERIC_TEXT_MAX_BYTES) && GENERIC_TEXT_MAX_BYTES > 0 ? GENERIC_TEXT_MAX_BYTES : Infinity;
+    let text = '';
+    let truncated = false;
+    if (Number(fileSize || 0) > cap) {
+      let handle;
+      try {
+        handle = await fs.open(filePath, 'r');
+        const buf = Buffer.alloc(cap);
+        const { bytesRead } = await handle.read(buf, 0, cap, 0);
+        text = buf.subarray(0, bytesRead).toString('utf8');
+        truncated = true;
+      } finally {
+        if (handle) await handle.close().catch(() => {});
+      }
+    } else {
+      try {
+        ({ text } = await readTextFile(filePath));
+      } catch {
+        text = await fs.readFile(filePath, 'utf8');
+      }
+    }
+    const lines = text ? text.split(/\r?\n/).length : 0;
+    const header = `Text file (${kind}) — ${lines} lines, ${text.length} chars${truncated ? ` (truncated at ${Math.round(cap / (1024 * 1024))} MB)` : ''}\n---\n`;
+    console.log(`Generic text processed: ${filePath}, kind=${kind}, chars=${text.length}${truncated ? ', truncated' : ''}`);
+    return header + text;
+  }
+
   async processImage(filePath, options = {}) {
     try {
       let result = await ocrEngine.extractFromImage(filePath, {
@@ -1177,3 +1271,5 @@ async processAudio(filePath, mimeType, originalName) {
 
 module.exports = new FileProcessor();
 module.exports.resolveProcessMimeType = resolveProcessMimeType;
+module.exports.isTextLikeMime = isTextLikeMime;
+module.exports.sniffTextLike = sniffTextLike;

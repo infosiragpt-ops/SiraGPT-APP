@@ -65,17 +65,48 @@ describe('HTTP file upload route', () => {
     assertContractResponse('files.upload', 400, res.body);
   });
 
-  test('rejects disallowed file types before persistence or extraction', async () => {
+  test('accepts any file type at the multer gate (executables included) — only the byte policy runs later', async () => {
+    // Without a database the route stops at the File row insert; reaching that
+    // point proves the pre-write gate no longer filters by type. The rejected
+    // temp file is unlinked, so the user directory ends up empty.
+    const prisma = require('../src/config/database');
+    const originalCreate = prisma.file.create;
+    prisma.file.create = async () => { throw new Error('offline test double'); };
+    try {
+      const res = await request(buildApp())
+        .post('/api/files/upload')
+        .set('Authorization', auth.authHeader)
+        .attach('files', Buffer.from('MZ fake binary'), {
+          filename: 'payload.exe',
+          contentType: 'application/x-msdownload',
+        });
+
+      assert.equal(res.status, 200);
+      assert.equal(res.body.files.length, 1);
+      assert.equal(res.body.files[0].name, 'payload.exe');
+      assert.equal(res.body.files[0].success, false);
+      assert.equal(res.body.files[0].code, 'db_create_failed');
+      assert.doesNotMatch(String(res.body.files[0].error || ''), /Tipo no permitido/i);
+      const userDir = path.join(uploadDir, 'http-user-1');
+      assert.ok(fs.existsSync(userDir), 'multer wrote the upload into the owner directory');
+      assert.equal(fs.readdirSync(userDir).length, 0, 'the temp file is unlinked when the row cannot be created');
+    } finally {
+      prisma.file.create = originalCreate;
+    }
+  });
+
+  test('rejects filenames with path separators or shell-hostile characters before persistence', async () => {
     const res = await request(buildApp())
       .post('/api/files/upload')
       .set('Authorization', auth.authHeader)
-      .attach('files', Buffer.from('MZ fake binary'), {
-        filename: 'payload.exe',
-        contentType: 'application/x-msdownload',
+      .attach('files', Buffer.from('hello'), {
+        filename: 'bad|name.txt',
+        contentType: 'text/plain',
       });
 
     assert.equal(res.status, 400);
-    assert.match(res.body.error, /Tipo no permitido/i);
+    assert.equal(res.body.code, 'invalid_filename');
+    assert.match(res.body.error, /Nombre de archivo no v/i);
     assert.equal(fs.readdirSync(uploadDir).length, 0);
     assertContractResponse('files.upload', 400, res.body);
   });
