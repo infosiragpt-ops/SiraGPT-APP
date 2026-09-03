@@ -862,6 +862,78 @@ async function buildUploadedFileContext(prisma, {
   ].filter(Boolean).join('\n');
 }
 
+function messageFilesValueHasEntries(value) {
+  if (!value) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed.length > 0 : parsed != null;
+    } catch {
+      return value.trim().length > 0;
+    }
+  }
+  return true;
+}
+
+/**
+ * Backfill the persisted USER turn of an agent transcription task.
+ *
+ * The user bubble is persisted before the transcription fallback runs. When
+ * the send raced the upload/processing (`files` empty at send time) the
+ * bubble is stored with `files: null` while the turn still resolves media
+ * via `resolveTranscriptionFileIds` — after any refresh the attachment
+ * (video/audio) vanishes from the bubble even though the transcript
+ * succeeded. Writing the resolved attachments back onto the turn keeps the
+ * media visible. Never overwrites a turn that already carries files.
+ * Returns true when files were written.
+ */
+async function backfillUserMessageFilesForTranscription(prisma, {
+  chatId,
+  userId,
+  taskId,
+  fileIds = [],
+  clientMetadata = [],
+} = {}) {
+  const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
+  if (!prisma || !chatId || !userId || !taskId || ids.length === 0) return false;
+  if (!prisma.message?.findFirst || !prisma.message?.update) return false;
+  let userTurn = null;
+  try {
+    userTurn = await prisma.message.findFirst({
+      where: {
+        chatId: String(chatId),
+        role: 'USER',
+        metadata: { path: ['taskId'], equals: String(taskId) },
+      },
+      orderBy: { timestamp: 'desc' },
+    });
+  } catch {
+    return false;
+  }
+  if (!userTurn || messageFilesValueHasEntries(userTurn.files)) return false;
+  let serialized = [];
+  try {
+    serialized = await serializeMessageAttachments(prisma, {
+      userId,
+      fileIds: ids,
+      clientMetadata,
+    });
+  } catch {
+    return false;
+  }
+  if (!serialized.length) return false;
+  try {
+    await prisma.message.update({
+      where: { id: userTurn.id },
+      data: { files: serialized },
+    });
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], maxChars = 120000 } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (ids.length === 0) return '';
@@ -900,6 +972,7 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 }
 
 module.exports = {
+  backfillUserMessageFilesForTranscription,
   buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
   parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
   buildTranscriptionTextFromFiles,
