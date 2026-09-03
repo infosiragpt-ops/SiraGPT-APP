@@ -469,7 +469,8 @@ const agentHarnessRoutes = require('./src/routes/agent-harness');
 const seAgentsRoutes = require('./src/routes/se-agents');
 const searchBrainRoutes = require('./src/routes/search-brain');
 const searchBrainUniversalRoutes = require('./src/routes/search-brain-universal');
-const { createUploadStaticAccessGuard, createUploadR2Fallback } = require('./src/middleware/upload-static-access');
+const { createUploadStaticAccessGuard, createUploadR2Fallback, uploadAttachmentDisposition } = require('./src/middleware/upload-static-access');
+const { shouldForceDownload: shouldForceUploadDownload } = require('./src/services/upload-security-policy');
 const searchAgenticRoutes = require('./src/routes/search-agentic');
 const artifactsRoutes = require('./src/routes/artifacts');
 const hooksRoutes = require('./src/routes/hooks');
@@ -999,15 +1000,21 @@ app.get('/uploads/presentations/:filename/download', async (req, res) => {
     }
 });
 
-app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
-app.use('/uploads', express.static(uploadsDir, {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
-        if (/\.pptx$/i.test(filePath)) {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-        }
+// Every format is accepted at upload time, so the serving layer is where
+// executables / scripts / HTML-like active content are neutralised: they are
+// always delivered as downloads, never rendered inline on this origin.
+// (`<img>` ignores Content-Disposition, so SVG image previews still work.)
+const setUploadStaticHeaders = (res, filePath) => {
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
+    if (/\.pptx$/i.test(filePath)) {
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
     }
-}));
+    if (shouldForceUploadDownload({ filename: filePath })) {
+        res.setHeader('Content-Disposition', uploadAttachmentDisposition(filePath));
+    }
+};
+app.use('/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
+app.use('/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
 // When the binary is not on local disk (R2-backed / scaled deploys), stream
 // the object through this origin. A 302 to a signed R2 URL breaks chat
 // preview (CORS / Failed to fetch). Auth already enforced by the guard above.
@@ -1016,14 +1023,7 @@ app.use('/uploads', createUploadR2Fallback());
 // `/api/uploads/<user>/<file>` (credentials + Bearer) when `/uploads` is
 // rewritten to a host the browser cannot follow. Same guard + stream.
 app.use('/api/uploads', createUploadStaticAccessGuard({ uploadsDir, prisma }));
-app.use('/api/uploads', express.static(uploadsDir, {
-    setHeaders: (res, filePath) => {
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition, Content-Length, Content-Type');
-        if (/\.pptx$/i.test(filePath)) {
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
-        }
-    }
-}));
+app.use('/api/uploads', express.static(uploadsDir, { setHeaders: setUploadStaticHeaders }));
 app.use('/api/uploads', createUploadR2Fallback());
 
 

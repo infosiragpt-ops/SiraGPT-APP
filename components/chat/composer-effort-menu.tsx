@@ -3,6 +3,7 @@
 import * as React from "react"
 import { Zap } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { EffortDitherTrack } from "@/components/chat/effort-dither-track"
 import { readComposerFastMode, writeComposerFastMode } from "@/lib/chat/composer-session"
 import { cn } from "@/lib/utils"
 
@@ -13,6 +14,19 @@ export const EFFORT_LEVELS = [
   { value: "Max", label: "Extra high" },
 ] as const
 
+/**
+ * Four-stop effort slider.
+ *
+ * Visual contract (see globals.css `.effort-track*`):
+ *   • fully rounded rail that starts grey and dissolves into violet through a
+ *     dithered pixel grid (`EffortDitherTrack`, pure SVG — no raster asset);
+ *   • the dither is anchored to the FULL rail and revealed up to the thumb
+ *     with `clip-path`, so a higher effort literally uncovers more violet;
+ *   • a white capsule thumb with a hairline border and a soft shadow marks
+ *     the active stop; the remaining stops show as faint tick dots.
+ * The track itself is the pointer target, so taps and drags anywhere on the
+ * rail snap to the nearest stop.
+ */
 export function EffortSection({ selectedEffort, setSelectedEffort }: {
   selectedEffort: string
   setSelectedEffort: (effort: string) => void
@@ -73,7 +87,9 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
         }}
       >
         <div className="effort-track-line" aria-hidden>
-          <span className="effort-track-fill" />
+          <span className="effort-track-fill">
+            <EffortDitherTrack className="effort-dither" />
+          </span>
         </div>
         {EFFORT_LEVELS.map((level, index) => (
           <button
@@ -82,6 +98,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
             tabIndex={-1}
             aria-hidden
             title={level.label}
+            data-stop={String(index)}
             className={cn(
               "effort-stop",
               index <= activeIndex && "effort-stop-reached",
@@ -90,6 +107,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
             onClick={() => moveTo(index)}
           />
         ))}
+        <span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden />
       </div>
       <div className="effort-ends" aria-hidden>
         <span>Más rápido</span>

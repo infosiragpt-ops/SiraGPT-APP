@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const {
   isDeclaredUploadAllowed,
+  shouldForceDownload,
   isOfficeTemporaryLockFile,
   mimeMatchesExtension,
   resolveUploadLimits,
@@ -112,7 +113,7 @@ test('upload policy rejects mismatched extension and magic bytes', () => {
   assert.equal(result.detectedMime, 'application/pdf');
 });
 
-test('upload policy rejects detected binary types outside the allowlist', () => {
+test('upload policy rejects a Windows binary disguised under a known text extension', () => {
   const result = validateUploadPolicy({
     originalName: 'payload.txt',
     declaredMime: 'text/plain',
@@ -122,7 +123,92 @@ test('upload policy rejects detected binary types outside the allowlist', () => 
   });
 
   assert.equal(result.ok, false);
-  assert.equal(result.code, 'detected_type_not_allowed');
+  assert.equal(result.code, 'extension_mime_mismatch');
+  assert.equal(result.detectedMime, 'application/x-msdownload');
+});
+
+test('upload policy accepts ANY format: unknown extensions, code, archives, binaries, no extension', () => {
+  const cases = [
+    ['dataset.parquet', 'application/octet-stream', 'application/octet-stream', 'fallback'],
+    ['model.safetensors', '', '', 'fallback'],
+    ['Dockerfile', '', '', 'fallback'],
+    ['notes.org', 'text/plain', 'text/plain', 'fallback'],
+    ['design.psd', 'image/vnd.adobe.photoshop', 'image/vnd.adobe.photoshop', 'magic-bytes'],
+    ['archive.7z', 'application/x-7z-compressed', 'application/x-7z-compressed', 'magic-bytes'],
+    ['drawing.dwg', 'application/acad', 'application/acad', 'fallback'],
+    ['db.sqlite', 'application/vnd.sqlite3', 'application/vnd.sqlite3', 'magic-bytes'],
+    ['app.py', 'text/x-python', 'text/x-python', 'fallback'],
+    ['bundle.js', 'application/javascript', 'application/javascript', 'fallback'],
+    ['deploy.sh', 'application/x-sh', 'application/x-sh', 'fallback'],
+    ['setup.exe', 'application/x-msdownload', 'application/x-msdownload', 'magic-bytes'],
+  ];
+  for (const [originalName, declaredMime, detectedMime, detectionSource] of cases) {
+    const result = validateUploadPolicy({ originalName, declaredMime, detectedMime, detectionSource, size: 2048 });
+    assert.equal(result.ok, true, `${originalName} must be accepted (${result.code}: ${result.message || ''})`);
+    assert.equal(result.code, 'accepted');
+    assert.ok(result.mimeType, `${originalName} must carry a mimeType`);
+  }
+  assert.equal(
+    validateUploadPolicy({ originalName: 'model.safetensors', declaredMime: '', detectedMime: '', detectionSource: 'fallback', size: 10 }).mimeType,
+    'application/octet-stream',
+    'type-less uploads normalise to octet-stream',
+  );
+});
+
+test('upload policy classifies executables and active content so they are served as downloads', () => {
+  const exe = validateUploadPolicy({
+    originalName: 'setup.exe', declaredMime: 'application/x-msdownload', detectedMime: 'application/x-msdownload', detectionSource: 'magic-bytes', size: 10,
+  });
+  assert.equal(exe.executable, true);
+  assert.equal(exe.forceDownload, true);
+  assert.equal(exe.knownType, false);
+
+  const script = validateUploadPolicy({
+    originalName: 'deploy.sh', declaredMime: 'text/plain', detectedMime: 'text/plain', detectionSource: 'fallback', size: 10,
+  });
+  assert.equal(script.executable, true, 'shell scripts are flagged by extension even when declared as text');
+  assert.equal(script.forceDownload, true);
+
+  const disguised = validateUploadPolicy({
+    originalName: 'firmware.bin', declaredMime: 'application/octet-stream', detectedMime: 'application/x-elf', detectionSource: 'magic-bytes', size: 10,
+  });
+  assert.equal(disguised.ok, true);
+  assert.equal(disguised.executable, true, 'magic bytes flag native binaries regardless of the name');
+
+  const page = validateUploadPolicy({
+    originalName: 'landing.html', declaredMime: 'text/html', detectedMime: 'text/html', detectionSource: 'fallback', size: 10,
+  });
+  assert.equal(page.executable, false);
+  assert.equal(page.activeContent, true);
+  assert.equal(page.forceDownload, true);
+  assert.equal(page.knownType, true);
+
+  const pdf = validateUploadPolicy({
+    originalName: 'report.pdf', declaredMime: 'application/pdf', detectedMime: 'application/pdf', detectionSource: 'magic-bytes', size: 10,
+  });
+  assert.equal(pdf.executable, false);
+  assert.equal(pdf.activeContent, false);
+  assert.equal(pdf.forceDownload, false);
+  assert.equal(pdf.knownType, true);
+});
+
+test('shouldForceDownload flags executables, scripts and HTML/SVG/XML but not documents or media', () => {
+  for (const filename of ['setup.exe', 'run.sh', 'tool.py', 'app.jar', 'page.html', 'logo.svg', 'feed.xml', 'a/b/nested.bat', 'x.cmd', 'lib.dll']) {
+    assert.equal(shouldForceDownload({ filename }), true, `${filename} must be forced as attachment`);
+  }
+  for (const filename of ['report.pdf', 'deck.pptx', 'photo.jpg', 'clip.mp4', 'song.mp3', 'sheet.xlsx', 'notes.txt', 'data.csv', 'dataset.parquet', 'README']) {
+    assert.equal(shouldForceDownload({ filename }), false, `${filename} must stay inline`);
+  }
+  assert.equal(shouldForceDownload({ filename: 'firmware.bin', mimeType: 'application/x-msdownload' }), true, 'mime hint wins when the extension is neutral');
+});
+
+test('multer pre-gate accepts every declared type and only rejects unsafe basenames', () => {
+  assert.equal(isDeclaredUploadAllowed({ originalname: 'weird.xyz', mimetype: 'application/x-unknown' }), true);
+  assert.equal(isDeclaredUploadAllowed({ originalname: 'setup.exe', mimetype: 'application/x-msdownload' }), true);
+  assert.equal(isDeclaredUploadAllowed({ originalname: 'Makefile', mimetype: '' }), true);
+  assert.equal(isDeclaredUploadAllowed({ originalname: '../../etc/passwd', mimetype: 'text/plain' }), false);
+  assert.equal(isDeclaredUploadAllowed({ originalname: 'bad|name.txt', mimetype: 'text/plain' }), false);
+  assert.equal(isDeclaredUploadAllowed({ originalname: 'nul\u0000byte.txt', mimetype: 'text/plain' }), false);
 });
 
 test('upload policy keeps text-ish extension fallbacks usable', () => {

@@ -81,9 +81,13 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter — accepts the full multimodal-ingestion allowlist.
-// The post-write route revalidates bytes and extension with
-// upload-security-policy before extraction/RAG/OpenAI upload.
+// File filter — EVERY format is accepted (documents, code, data, media,
+// archives, binaries, extension-less files). The only pre-write rejection is
+// a filename that is not a plain basename (path separators / control chars).
+// The post-write route revalidates bytes with upload-security-policy
+// (size, Office lock files, known-extension vs magic-byte integrity) before
+// extraction/RAG/OpenAI upload, and classifies executables / active content
+// so they are served as downloads instead of rendered inline.
 const fileFilter = (req, file, cb) => {
   // Normalise the filename encoding *here* — fileFilter runs before
   // storage.filename, so the extension parse and every downstream
@@ -93,9 +97,11 @@ const fileFilter = (req, file, cb) => {
   if (isDeclaredUploadAllowed(file)) {
     return cb(null, true);
   }
-  const mime = (file.mimetype || '').toLowerCase();
-  const ext = (file.originalname.split('.').pop() || '').toLowerCase();
-  return cb(new Error(`Tipo no permitido: ${mime || ext || 'desconocido'}`), false);
+  const rejection = new Error('Nombre de archivo no válido: contiene rutas o caracteres no permitidos.');
+  rejection.status = 400;
+  rejection.code = 'invalid_filename';
+  rejection.expose = true;
+  return cb(rejection, false);
 };
 
 // Per-file size policy:
@@ -126,8 +132,7 @@ module.exports.filesLimit = uploadLimits.files;
 module.exports.resolveUserUploadDir = resolveUserUploadDir;
 module.exports.safeStorageSegment = safeStorageSegment;
 module.exports.fixLatin1Filename = fixLatin1Filename;
-// Exposed so the post-magic-byte check in routes/files.js can re-validate
-// the *real* detected mime against the same allowlist the multer pre-gate
-// uses, without duplicating the list.
+// Known-type tables (canonicalisation / parser hints). Kept exported for
+// back-compat; they are no longer an allowlist — every format is accepted.
 module.exports.ALLOWED_MIMES = ALLOWED_MIMES;
 module.exports.ALLOWED_EXTENSIONS = ALLOWED_EXTENSIONS;

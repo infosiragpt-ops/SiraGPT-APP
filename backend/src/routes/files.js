@@ -256,9 +256,11 @@ function serializeAnalysisMeta(analysis = null) {
  *
  * Returns `{ mime, ext, source }`:
  *   - `source: 'magic-bytes'` — file-type identified the format from
- *     content. Caller MUST re-validate this against the allowlist
- *     because multer's pre-gate only saw the (potentially spoofed)
- *     declared mime/extension.
+ *     content. Caller MUST hand this to validateUploadPolicy: every
+ *     format is accepted, but a KNOWN extension whose bytes say
+ *     otherwise (`invoice.pdf` that is really a Windows binary) is
+ *     rejected there, and executables / active content are classified so
+ *     the static layer serves them as downloads.
  *   - `source: 'fallback'` — file-type returned null. This is normal
  *     for plain-text formats (md / csv / json / xml / txt / html) which
  *     have no magic bytes; trust the multer-reported mime.
