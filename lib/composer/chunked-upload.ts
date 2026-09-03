@@ -57,3 +57,14 @@ export function chunkedUploadPercent(
 export function isRetriableChunkStatus(status: number): boolean {
   return status === 0 || status === 408 || status === 425 || status === 429 || status === 502 || status === 503 || status === 504
 }
+
+/**
+ * Per-chunk request timeout. A hung PUT neither resolves nor rejects, so
+ * without this the composer chip sits at "uploading" forever with no error
+ * and no retry (seen in prod: session alive after init, chunks 0-2 stored,
+ * then silence). The timeout error is a plain Error — never an AbortError —
+ * so it flows into the normal retriable-chunk path instead of looking like
+ * a user cancel. 180s covers a 16 MB chunk down to ~90 KB/s uplinks.
+ */
+export const CHUNKED_UPLOAD_CHUNK_TIMEOUT_MS =
+  envInt(process.env.NEXT_PUBLIC_CHUNKED_UPLOAD_CHUNK_TIMEOUT_MS, 180_000)
