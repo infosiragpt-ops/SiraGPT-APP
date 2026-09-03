@@ -123,7 +123,7 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(source, /Modo de la barra lateral/)
     assert.match(source, /aria-label="Atrás"/)
     assert.match(source, /aria-label="Adelante"/)
-    assert.match(source, /aria-label="Nuevo chat ⌘N"/)
+    assert.match(source, /aria-label="Nuevo agente ⌘N"/)
     assert.match(source, /aria-label="Empresas"/)
     assert.doesNotMatch(source, /data-testid="sidebar-apps-tab"/)
     assert.doesNotMatch(source, /aria-label="Chats"/)

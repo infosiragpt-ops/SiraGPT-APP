@@ -71,7 +71,7 @@ const SHORTCUTS: Array<{ section: string; items: Shortcut[] }> = [
     section: "Navegación",
     items: [
       { combo: "Cmd/Ctrl + K", description: "Abrir paleta de comandos" },
-      { combo: "Cmd/Ctrl + N", description: "Nuevo chat" },
+      { combo: "Cmd/Ctrl + N", description: "Nuevo agente" },
       { combo: "Cmd/Ctrl + B", description: "Mostrar u ocultar la barra lateral" },
     ],
   },
@@ -207,7 +207,7 @@ export function KeyboardShortcutsProvider() {
               }}
             >
               <MessageSquarePlus className="mr-2 h-4 w-4" />
-              <span>Nuevo chat</span>
+              <span>Nuevo agente</span>
               <span className="ml-auto text-xs text-muted-foreground">Cmd/Ctrl+N</span>
             </CommandItem>
             <CommandItem
