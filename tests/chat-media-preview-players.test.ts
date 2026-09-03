@@ -162,6 +162,19 @@ describe("composer and bubbles render video/audio players not filename chips", (
     assert.doesNotMatch(videoDisplay, /<video[\s\S]*controls/)
   })
 
+  it("video frame carries an explicit width so it cannot collapse inside flex rows", () => {
+    // Regression: on the user bubble the player sits in a `flex-wrap` row and
+    // has no intrinsic content (absolutely positioned <video> in an
+    // aspect-ratio box). With only `maxWidth` it rendered 2 px wide — the
+    // uploaded video was in the DOM but invisible and impossible to play.
+    const start = playerSource.indexOf("export function ChatVideoPlayer")
+    const end = playerSource.indexOf("export function ChatAudioPlayer")
+    const videoPlayer = playerSource.slice(start, end)
+    assert.match(videoPlayer, /const frameWidth = variant === "composer" \? "min\(100%, 16\.5rem\)" : variant === "bubble" \? "min\(100%, 28rem\)" : "100%"/)
+    assert.match(videoPlayer, /style=\{\{ width: frameWidth, maxWidth: frameWidth \}\}/)
+    assert.doesNotMatch(videoPlayer, /style=\{\{ maxWidth \}\}/, "a ceiling alone lets the frame shrink to zero")
+  })
+
   it("unified viewer previews audio and video with the shared players", () => {
     assert.match(viewerSource, /case "video":/)
     assert.match(viewerSource, /case "audio":/)

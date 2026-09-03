@@ -94,7 +94,12 @@ export function ChatVideoPlayer({
   const aspectCss = mediaPreviewAspectCss(aspect)
   const posterSrc = playableSrc(poster || "") || capturedPoster
   const compact = variant === "composer"
-  const maxWidth = variant === "composer" ? "16.5rem" : variant === "bubble" ? "min(100%, 28rem)" : "100%"
+  // The frame has no intrinsic content (the <video> is absolutely positioned
+  // inside an aspect-ratio box), so as a flex item it would shrink to 0 px —
+  // that is exactly what happened on the user bubble, where the player sits in
+  // a `flex-wrap` row: the video existed in the DOM at 2 px wide. Give it an
+  // explicit width, not just a ceiling.
+  const frameWidth = variant === "composer" ? "min(100%, 16.5rem)" : variant === "bubble" ? "min(100%, 28rem)" : "100%"
 
   const toggle = React.useCallback((event?: React.SyntheticEvent) => {
     event?.stopPropagation()
@@ -110,7 +115,7 @@ export function ChatVideoPlayer({
       data-variant={variant}
       data-aspect={normalizeMediaPreviewAspect(aspect)}
       className={cn(VIDEO_PLAYER_FRAME_CLASS, className)}
-      style={{ maxWidth }}
+      style={{ width: frameWidth, maxWidth: frameWidth }}
       onClick={(event) => event.stopPropagation()}
       onKeyDown={(event) => event.stopPropagation()}
     >
