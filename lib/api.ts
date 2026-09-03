@@ -1759,11 +1759,9 @@ class ApiClient {
     const throwIfAborted = () => {
       if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
     };
-    const authed = async (path: string, init: RequestInit) => {
-      const url = `${this.baseURL}${path}`;
-      const prepared = await prepareAuthenticatedRequest(url, init, { bearerToken: this._getAccessTokenSnapshot() });
-      return fetch(url, { ...prepared, credentials: 'include', signal: opts.signal });
-    };
+    // Shared authenticated transport (bearer/CSRF/refresh handling) — the
+    // frontend contract forbids raw fetch for Sira endpoints.
+    const authed = (path: string, init: RequestInit) => this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal });
     const readError = async (res: Response, fallback: string) => {
       try { const j = await res.json(); return j?.error || fallback; } catch { return fallback; }
     };
