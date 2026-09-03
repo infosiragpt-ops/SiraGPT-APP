@@ -23,21 +23,52 @@ const { describeBackends } = require('../services/sandbox/router');
 const router = express.Router();
 
 // ── auth helper ─────────────────────────────────────────────────────────────
-// Reuse whatever auth middleware the app exports. Falls back to a no-op if
-// the module doesn't export the expected shape (tests / standalone).
-let requireAuth;
-try {
-  const auth = require('../middleware/auth');
-  requireAuth = auth.requireAuth || auth.authenticateToken || ((_req, _res, next) => next());
-} catch (_) {
-  requireAuth = (_req, _res, next) => next();
+// Reuse whatever auth middleware the app exports. Fail closed: a missing
+// module or an unexpected export shape must abort boot, never open the door.
+function resolveAuthMiddleware(loadAuth) {
+  let auth;
+  try {
+    auth = (loadAuth || (() => require('../middleware/auth')))();
+  } catch (err) {
+    throw new Error(`sandbox routes: auth middleware unavailable (${err.message}) — refusing to mount with auth disabled`);
+  }
+  const middleware = auth && (auth.requireAuth || auth.authenticateToken);
+  if (typeof middleware !== 'function') {
+    throw new Error('sandbox routes: auth middleware exports no recognizable shape (requireAuth/authenticateToken) — refusing to mount with auth disabled');
+  }
+  return middleware;
+}
+const requireAuth = resolveAuthMiddleware();
+
+// ── ownership guard ────────────────────────────────────────────────────────
+// 3H10 leftover: live sandbox handlers must not leak cross-user sessions.
+const requestId = (req) => req.user?.id ?? req.userId ?? null;
+
+function assertOwnedSession(req, res, sessionId) {
+  if (!requestId(req)) {
+    res.status(401).json({ ok: false, error: 'user_required' });
+    return null;
+  }
+  const sess = sessionManager.getSession(sessionId);
+  if (!sess) {
+    res.status(404).json({ ok: false, error: 'session_not_found' });
+    return null;
+  }
+  if (!sess.userId || String(sess.userId) !== String(requestId(req))) {
+    res.status(403).json({ ok: false, error: 'forbidden' });
+    return null;
+  }
+  return sess;
 }
 
 // ── POST /api/sandbox/session ───────────────────────────────────────────────
 router.post('/session', requireAuth, async (req, res) => {
   try {
     const { r2Key, filename, meta = {} } = req.body || {};
-    const userId = req.user?.id || req.userId || null;
+    const userId = requestId(req);
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'user_required' });
+    }
 
     const result = await sessionManager.createSession({
       userId,
@@ -60,8 +91,8 @@ router.post('/session', requireAuth, async (req, res) => {
 
 // ── GET /api/sandbox/session/:id ────────────────────────────────────────────
 router.get('/session/:id', requireAuth, (req, res) => {
-  const sess = sessionManager.getSession(req.params.id);
-  if (!sess) return res.status(404).json({ ok: false, error: 'session_not_found' });
+  const sess = assertOwnedSession(req, res, req.params.id);
+  if (!sess) return;
   return res.json({
     ok: true,
     sessionId: req.params.id,
@@ -73,12 +104,17 @@ router.get('/session/:id', requireAuth, (req, res) => {
 
 // ── DELETE /api/sandbox/session/:id ─────────────────────────────────────────
 router.delete('/session/:id', requireAuth, (req, res) => {
+  const sess = assertOwnedSession(req, res, req.params.id);
+  if (!sess) return;
   const destroyed = sessionManager.destroySession(req.params.id);
   return res.json({ ok: destroyed, sessionId: req.params.id });
 });
 
 // ── POST /api/sandbox/session/:id/finalize ───────────────────────────────────
 router.post('/session/:id/finalize', requireAuth, async (req, res) => {
+  const sess = assertOwnedSession(req, res, req.params.id);
+  if (!sess) return;
+
   const { filename, r2Prefix } = req.body || {};
   if (!filename) return res.status(400).json({ ok: false, error: 'filename required' });
 
@@ -92,8 +128,8 @@ router.post('/session/:id/finalize', requireAuth, async (req, res) => {
 
 // ── GET /api/sandbox/session/:id/download/:filename ──────────────────────────
 router.get('/session/:id/download/:filename', requireAuth, (req, res) => {
-  const sess = sessionManager.getSession(req.params.id);
-  if (!sess) return res.status(404).json({ ok: false, error: 'session_not_found' });
+  const sess = assertOwnedSession(req, res, req.params.id);
+  if (!sess) return;
 
   const safeName = path.basename(req.params.filename);
   const abs = path.join(sess.workdir, safeName);
@@ -131,3 +167,4 @@ router.get('/skills/:type', requireAuth, (req, res) => {
 });
 
 module.exports = router;
+module.exports.__resolveAuthMiddleware = resolveAuthMiddleware;
