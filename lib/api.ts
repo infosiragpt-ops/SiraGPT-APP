@@ -1738,6 +1738,84 @@ class ApiClient {
     });
   }
 
+  /**
+   * Chunked upload for large media. The production edge rejects request
+   * bodies over 100 MB, so the file is announced (init), sent in ≤64 MB
+   * chunks (PUT, each retried on transient failures) and assembled by the
+   * backend (complete), which then runs the same async pipeline as
+   * `uploadFiles` and answers with the same `{ files: [...] }` shape.
+   */
+  async uploadFileChunked(
+    file: File,
+    opts: {
+      sourceChannel?: string
+      chunkBytes?: number
+      onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
+      signal?: AbortSignal
+      maxRetries?: number
+    } = {}
+  ): Promise<FileUploadResponse> {
+    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES } = await import('./composer/chunked-upload');
+    const throwIfAborted = () => {
+      if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
+    };
+    // Shared authenticated transport (bearer/CSRF/refresh handling) — the
+    // frontend contract forbids raw fetch for Sira endpoints.
+    const authed = (path: string, init: RequestInit) => this.authenticatedFetch(`${this.baseURL}${path}`, { ...init, signal: opts.signal });
+    const readError = async (res: Response, fallback: string) => {
+      try { const j = await res.json(); return j?.error || fallback; } catch { return fallback; }
+    };
+
+    throwIfAborted();
+    const requestedChunk = opts.chunkBytes || CHUNKED_UPLOAD_CHUNK_BYTES;
+    const initRes = await authed('/files/upload/chunked/init', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: file.name, size: file.size, mimeType: file.type || 'application/octet-stream', chunkSize: requestedChunk, sourceChannel: opts.sourceChannel || null }),
+    });
+    if (!initRes.ok) throw new Error(await readError(initRes, `HTTP ${initRes.status}`));
+    const session = await initRes.json() as { uploadId: string; chunkSize: number; totalChunks: number };
+    const plans = planChunks(file.size, session.chunkSize);
+    const maxRetries = Math.max(0, opts.maxRetries ?? 3);
+    let completedBytes = 0;
+    opts.onProgress?.(0, 0, file.size);
+
+    for (const plan of plans) {
+      let attempt = 0;
+      for (;;) {
+        throwIfAborted();
+        let res: Response | null = null;
+        let networkError: unknown = null;
+        try {
+          res = await authed(`/files/upload/chunked/${session.uploadId}/${plan.index}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file.slice(plan.start, plan.end),
+          });
+        } catch (err) {
+          if ((err as any)?.name === 'AbortError') throw err;
+          networkError = err;
+        }
+        if (res && res.ok) break;
+        const status = res ? res.status : 0;
+        const retriable = networkError ? true : isRetriableChunkStatus(status);
+        if (!retriable || attempt >= maxRetries) {
+          try { await authed(`/files/upload/chunked/${session.uploadId}`, { method: 'DELETE' }); } catch { /* best effort */ }
+          throw new Error(res ? await readError(res, `HTTP ${status}`) : 'Network error during upload');
+        }
+        attempt += 1;
+        await new Promise((r) => setTimeout(r, Math.min(8000, 500 * 2 ** attempt)));
+      }
+      completedBytes += plan.bytes;
+      opts.onProgress?.(chunkedUploadPercent(file.size, completedBytes), completedBytes, file.size);
+    }
+
+    throwIfAborted();
+    const doneRes = await authed(`/files/upload/chunked/${session.uploadId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    if (!doneRes.ok) throw new Error(await readError(doneRes, `HTTP ${doneRes.status}`));
+    return await doneRes.json() as FileUploadResponse;
+  }
+
   async getFiles(params?: { page?: number; limit?: number; type?: string }) {
     const query = new URLSearchParams(params as any).toString();
     return this.request(`/files${query ? `?${query}` : ''}`);

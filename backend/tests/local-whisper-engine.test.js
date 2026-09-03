@@ -35,13 +35,18 @@ test('buildWhisperCppArgs always passes -ng and defaults -t 1', () => {
 });
 
 test('resolveThreadCount defaults to 1 and honors WHISPER_CPP_THREADS', () => {
-  assert.equal(engine.resolveThreadCount({ env: {} }), 1);
+  assert.equal(engine.resolveThreadCount({ env: {} }), engine.defaultThreadCount());
+  assert.ok(engine.defaultThreadCount() >= 1 && engine.defaultThreadCount() <= 8);
   assert.equal(engine.resolveThreadCount({ env: { WHISPER_CPP_THREADS: '4' } }), 4);
   assert.equal(engine.resolveThreadCount({ threads: 2, env: { WHISPER_CPP_THREADS: '8' } }), 2);
-  assert.equal(engine.resolveThreadCount({ env: { WHISPER_CPP_THREADS: 'nope' } }), 1);
+  assert.equal(engine.resolveThreadCount({ env: { WHISPER_CPP_THREADS: 'nope' } }), engine.defaultThreadCount());
+  // 1 hour of 16 kHz mono PCM = 115.2 MB → 2.5 s budget per audio second + 1 min headroom.
+  assert.equal(engine.whisperTimeoutForWav(3600 * 32000, { env: {} }), 3600 * 2500 + 60_000);
+  assert.equal(engine.whisperTimeoutForWav(10 * 32000, { env: {} }), 180_000, 'short clips keep the 3-minute floor');
+  assert.equal(engine.whisperTimeoutForWav(0, { env: { LOCAL_WHISPER_TIMEOUT_MS: '600000' } }), 600_000);
 });
 
-test('transcribeWithWhisperCpp mocks the bin and always sends -ng -t 1', async (t) => {
+test('transcribeWithWhisperCpp mocks the bin and always sends -ng with the default threads', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sira-whisper-cli-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const wavPath = path.join(dir, 'audio.wav');
@@ -72,7 +77,7 @@ test('transcribeWithWhisperCpp mocks the bin and always sends -ng -t 1', async (
   assert.match(result.text, /hola desde local/);
   assert.equal(seen.command, bin);
   assert.ok(seen.args.includes('-ng'));
-  assert.equal(seen.args[seen.args.indexOf('-t') + 1], '1');
+  assert.equal(seen.args[seen.args.indexOf('-t') + 1], String(engine.defaultThreadCount()));
   assert.doesNotMatch(JSON.stringify(seen.args), /sk-proj|OPENAI_API_KEY|OPENROUTER/);
   assert.equal(seen.env.OPENAI_API_KEY, undefined);
 });

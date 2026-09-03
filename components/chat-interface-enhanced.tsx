@@ -322,7 +322,8 @@ import { extractAudioMeta, extractVideoMeta } from "@/lib/attachments/media-meta
 import { defaultAttachmentRegistry } from "@/lib/attachments/registry"
 import { useChatDraft } from "@/hooks/use-chat-draft"
 import { useVisualViewportCssVars } from "@/hooks/use-visual-viewport-css-vars"
-import { buildComposerUploadChunks } from "@/lib/composer/upload-batching"
+import { buildComposerUploadChunks, COMPOSER_UPLOAD_BATCH_LIMITS } from "@/lib/composer/upload-batching"
+import { shouldUseChunkedUpload } from "@/lib/composer/chunked-upload"
 import {
   isAssistantMessage,
   parseMessageFilesForRender,
@@ -8821,7 +8822,12 @@ But first, you need to connect your Spotify account securely using the button be
         }
       }, 90);
 
-      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles);
+      // Large media (≥ 80 MB) never fits one proxied request: it is isolated
+      // in its own batch and sent through the chunked transport below.
+      const uploadChunks = buildComposerUploadChunks(filesToUpload, tempFiles, {
+        ...COMPOSER_UPLOAD_BATCH_LIMITS,
+        isolate: shouldUseChunkedUpload,
+      });
       let failedChunkCount = 0;
 
       for (let chunkIndex = 0; chunkIndex < uploadChunks.length; chunkIndex += 1) {
@@ -8833,18 +8839,24 @@ But first, you need to connect your Spotify account securely using the button be
           // Real upload progress via XHR (see lib/api.ts uploadFiles).
           // Large selections are split into bounded multipart requests so
           // 400 documents do not exceed the edge/body-size guard.
-          const response: any = await apiClient.uploadFiles(filesToFileList(chunk.files), {
-            sourceChannel,
-            idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
-            asyncProcessing: true,
-            onProgress: (pct) => {
-              setUploadProgress(prev => {
-                const next = { ...prev };
-                chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
-                return next;
-              });
-            },
-          });
+          const reportChunkProgress = (pct: number) => {
+            setUploadProgress(prev => {
+              const next = { ...prev };
+              chunkTemps.forEach(tf => { next[tf.tempId] = Math.max(next[tf.tempId] || 0, pct); });
+              return next;
+            });
+          };
+          const response: any = chunk.isolated && chunk.files.length === 1 && shouldUseChunkedUpload(chunk.files[0])
+            ? await apiClient.uploadFileChunked(chunk.files[0], {
+              sourceChannel,
+              onProgress: reportChunkProgress,
+            })
+            : await apiClient.uploadFiles(filesToFileList(chunk.files), {
+              sourceChannel,
+              idempotencyKey: `${idempotencyKey}-${chunkIndex + 1}`,
+              asyncProcessing: true,
+              onProgress: reportChunkProgress,
+            });
 
           if (!response.files) {
             failedChunkCount += 1;
@@ -13539,7 +13551,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
             </div>
             <p className="text-base font-semibold">Suelta tus archivos aquí</p>
             <p className="text-xs leading-5 text-muted-foreground">
-              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB c/u. Se conserva el orden en que los sueltes.
+              PDF, Office, imágenes, audio, video y datos — hasta 20 archivos, 100 MB por documento; audio y video hasta 2 GB. Se conserva el orden en que los sueltes.
             </p>
           </div>
         </div>

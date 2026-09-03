@@ -22,6 +22,7 @@
 const fsPromises = require('fs').promises;
 const path = require('path');
 const { redactString } = require('../utils/secret-redactor');
+const os = require('os');
 const localWhisper = require('./local-whisper-engine');
 
 const DEFAULT_AUDIO_MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -61,6 +62,17 @@ const EXT_MIME_FALLBACK = {
 };
 
 const SUCCESS_METHODS = new Set(['whisper', 'local-whisper']);
+// Cloud transcription ladder. OpenAI Whisper first when its key works, then
+// Meta's transcription model (same OpenAI-compatible `audio/transcriptions`
+// surface), then the local whisper.cpp engine which has no size limit.
+const DEFAULT_PROVIDER_ORDER = ['openai', 'meta', 'local'];
+const DEFAULT_META_TRANSCRIBE_MODEL = 'muse-voice-transcribe-1.0';
+const DEFAULT_META_BASE_URL = 'https://api.meta.ai/v1';
+// Cloud providers cap request bodies (25 MB on Whisper). Longer recordings
+// are re-encoded to mono 48 kbps MP3 and cut into 10-minute segments
+// (≈3.6 MB each) that are transcribed in order and stitched back together.
+const DEFAULT_SEGMENT_SECONDS = 600;
+const SEGMENT_AUDIO_BITRATE = '48k';
 const KEYISH_RE = /\bsk-[A-Za-z0-9._-]{3,}\b|\bBearer\s+\S+|OPENAI_API_KEY/i;
 
 function envOf(options = {}) {
@@ -175,6 +187,163 @@ function logSafe(message) {
   console.warn(`[audio-transcriber] ${redactString(String(message || ''))}`);
 }
 
+function providerOrder(options = {}) {
+  const raw = options.providers || envOf(options).TRANSCRIBE_PROVIDERS;
+  const list = Array.isArray(raw)
+    ? raw
+    : (typeof raw === 'string' && raw.trim() ? raw.split(',') : DEFAULT_PROVIDER_ORDER);
+  const cleaned = list.map((v) => String(v || '').trim().toLowerCase()).filter(Boolean);
+  return cleaned.length ? cleaned : DEFAULT_PROVIDER_ORDER;
+}
+
+function metaApiKey(options = {}) {
+  const env = envOf(options);
+  return String(env.MODEL_API_KEY || env.META_API_KEY || env.LLAMA_API_KEY || '').trim();
+}
+
+/** Cloud providers in ladder order, only those with a usable key. */
+function cloudProviders(options = {}) {
+  const env = envOf(options);
+  const out = [];
+  for (const name of providerOrder(options)) {
+    if (name === 'openai' && hasOpenAiKey(options)) {
+      out.push({
+        name: 'openai',
+        method: 'whisper',
+        model: options.model || env.WHISPER_MODEL || DEFAULT_OPENAI_MODEL,
+        verbose: true,
+        client: () => options.openai || (() => {
+          const OpenAI = require('openai');
+          return new OpenAI({ apiKey: env.OPENAI_API_KEY });
+        })(),
+      });
+    } else if (name === 'meta' && metaApiKey(options) && String(env.TRANSCRIBE_META_DISABLED || '') !== '1') {
+      out.push({
+        name: 'meta',
+        method: 'whisper',
+        model: env.META_TRANSCRIBE_MODEL || DEFAULT_META_TRANSCRIBE_MODEL,
+        verbose: false,
+        client: () => options.metaClient || (() => {
+          const OpenAI = require('openai');
+          return new OpenAI({ apiKey: metaApiKey(options), baseURL: env.META_BASE_URL || DEFAULT_META_BASE_URL });
+        })(),
+      });
+    }
+  }
+  return out;
+}
+
+function localEnabled(options = {}) {
+  return providerOrder(options).includes('local');
+}
+
+function runFfmpeg(args, options = {}) {
+  const spawnImpl = options.spawnImpl || require('child_process').spawn;
+  const bin = options.ffmpegPath || envOf(options).FFMPEG_PATH || 'ffmpeg';
+  const limitMs = Number(options.segmentTimeoutMs || envOf(options).TRANSCRIBE_SEGMENT_TIMEOUT_MS) || 10 * 60 * 1000;
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnImpl(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    let stderr = '';
+    if (child.stderr) child.stderr.on('data', (d) => { if (stderr.length < 4000) stderr += String(d); });
+    const timer = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch (_) { /* ignore */ }
+      reject(Object.assign(new Error('ffmpeg segmentation timed out'), { code: 'SEGMENT_TIMEOUT' }));
+    }, limitMs);
+    child.on('error', (err) => { clearTimeout(timer); reject(err); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(Object.assign(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(0, 300)}`), { code: 'SEGMENT_FAILED' }));
+    });
+  });
+}
+
+/**
+ * Cut a long recording into cloud-sized pieces. Returns
+ * { dir, segments: [{ path, index, offsetSeconds }] }. Injectable through
+ * options.segmentAudio for tests.
+ */
+async function segmentForCloud(filePath, options = {}) {
+  if (typeof options.segmentAudio === 'function') return options.segmentAudio(filePath, options);
+  const seconds = Number(options.segmentSeconds || envOf(options).TRANSCRIBE_SEGMENT_SECONDS) || DEFAULT_SEGMENT_SECONDS;
+  const dir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'sira-transcribe-seg-'));
+  const pattern = path.join(dir, 'seg-%04d.mp3');
+  await runFfmpeg([
+    '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+    '-i', filePath,
+    '-vn', '-sn', '-dn',
+    '-ac', '1', '-ar', '16000', '-b:a', SEGMENT_AUDIO_BITRATE,
+    '-f', 'segment', '-segment_time', String(seconds), '-reset_timestamps', '1',
+    pattern,
+  ], options);
+  const names = (await fsPromises.readdir(dir)).filter((n) => /^seg-\d+\.mp3$/.test(n)).sort();
+  if (!names.length) throw Object.assign(new Error('ffmpeg produced no segments'), { code: 'SEGMENT_EMPTY' });
+  return {
+    dir,
+    segments: names.map((name, index) => ({ path: path.join(dir, name), index, offsetSeconds: index * seconds })),
+  };
+}
+
+async function transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt) {
+  const client = provider.client();
+  const fileBuffer = await fsPromises.readFile(filePath);
+  const blob = typeof options.createFile === 'function'
+    ? options.createFile(fileBuffer, fileName, mimeType || 'audio/mpeg')
+    : new File([fileBuffer], fileName, { type: mimeType || 'audio/mpeg' });
+  const request = { model: provider.model, file: blob };
+  if (provider.verbose) {
+    request.response_format = 'verbose_json';
+    request.timestamp_granularities = ['segment'];
+  } else {
+    request.response_format = 'json';
+  }
+  if (language) request.language = language;
+  if (prompt) request.prompt = prompt;
+  const requestOptions = options.signal ? { signal: options.signal } : undefined;
+  const transcription = await client.audio.transcriptions.create(request, requestOptions);
+  const text = typeof transcription === 'string' ? transcription : (transcription.text || '');
+  return {
+    text,
+    segments: (transcription && Array.isArray(transcription.segments) ? transcription.segments : []).map((s) => ({
+      start: s.start,
+      end: s.end,
+      text: s.text,
+    })),
+    model: provider.model,
+    language: language || (transcription && transcription.language) || null,
+  };
+}
+
+/** Whole file when it fits the provider cap; otherwise segment → transcribe → stitch. */
+async function transcribeCloud(provider, filePath, mimeType, fileName, fileSize, maxBytes, options, language, prompt) {
+  if (fileSize <= maxBytes) {
+    return transcribeCloudFile(provider, filePath, mimeType, fileName, options, language, prompt);
+  }
+  const { dir, segments } = await segmentForCloud(filePath, options);
+  try {
+    const texts = [];
+    const stitched = [];
+    for (const seg of segments) {
+      if (options.signal && options.signal.aborted) throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      const part = await transcribeCloudFile(provider, seg.path, 'audio/mpeg', `segment-${seg.index + 1}.mp3`, options, language, prompt);
+      const text = String(part.text || '').trim();
+      if (text) texts.push(text);
+      for (const s of part.segments || []) {
+        stitched.push({ start: (s.start || 0) + seg.offsetSeconds, end: (s.end || 0) + seg.offsetSeconds, text: s.text });
+      }
+    }
+    return { text: texts.join('\n\n'), segments: stitched, model: provider.model, language: language || null, segmentCount: segments.length };
+  } finally {
+    if (dir) await fsPromises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function transcribeOpenAi(filePath, mimeType, fileName, options, language, prompt, model) {
   const openai = options.openai || (() => {
     const OpenAI = require('openai');
@@ -240,21 +409,11 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
     fileSize = 0;
   }
 
-  if (fileSize > maxBytes) {
-    return placeholderResult(fileName, label, normalizedMime, 'file_too_large');
-  }
-
-  if (hasOpenAiKey(options)) {
+  // Cloud ladder (OpenAI → Meta). Files above the provider cap are segmented,
+  // never rejected: a 500 MB lecture video is exactly the use case.
+  for (const provider of cloudProviders(options)) {
     try {
-      const cloud = await transcribeOpenAi(
-        filePath,
-        normalizedMime,
-        fileName,
-        options,
-        language,
-        prompt,
-        model,
-      );
+      const cloud = await transcribeCloud(provider, filePath, normalizedMime, fileName, fileSize, maxBytes, options, language, prompt);
       const text = String(cloud.text || '').trim();
       if (text.length < 10) {
         return placeholderResult(fileName, label, normalizedMime, 'no_speech');
@@ -270,11 +429,15 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
       if (isAbortError(err, options.signal)) throw err;
       const safe = sanitizeProviderError(err);
       if (isInvalidKeyError(err)) {
-        logSafe(`OpenAI Whisper rejected the key (${safe}); falling back to local`);
+        logSafe(`${provider.name} transcription rejected the key (${safe}); trying the next provider`);
       } else {
-        logSafe(`OpenAI Whisper failed (${safe}); falling back to local`);
+        logSafe(`${provider.name} transcription failed (${safe}); trying the next provider`);
       }
     }
+  }
+
+  if (!localEnabled(options)) {
+    return placeholderResult(fileName, label, normalizedMime, 'local_unavailable');
   }
 
   try {
@@ -298,6 +461,12 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
 }
 
 module.exports = {
+  cloudProviders,
+  providerOrder,
+  segmentForCloud,
+  transcribeCloud,
+  DEFAULT_META_TRANSCRIBE_MODEL,
+  DEFAULT_SEGMENT_SECONDS,
   transcribe,
   generatePlaceholder,
   sanitizeProviderError,

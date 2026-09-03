@@ -84,6 +84,19 @@ function envInt(value: string | undefined, fallback: number): number {
 }
 const DEFAULT_MAX_BYTES =
   envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILE_MB, 100) * 1024 * 1024
+// Audio / video are uploaded in chunks (lib/composer/chunked-upload) and
+// transcribed server-side, so they get a much larger cap than documents.
+export const DEFAULT_MAX_MEDIA_BYTES =
+  envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_MEDIA_MB, 2048) * 1024 * 1024
+const MEDIA_EXTENSIONS = new Set(["mp3", "wav", "ogg", "oga", "opus", "m4a", "mp4", "mov", "webm", "mpeg", "mpg"])
+
+export function isMediaUpload(file: { type?: string; name?: string } | null | undefined): boolean {
+  const mime = String(file?.type || "").toLowerCase()
+  if (/^(audio|video)\//.test(mime)) return true
+  const name = String(file?.name || "")
+  const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : ""
+  return MEDIA_EXTENSIONS.has(ext)
+}
 const DEFAULT_MAX_COUNT = envInt(process.env.NEXT_PUBLIC_COMPOSER_MAX_FILES, 400)
 
 export type IngestSource =
@@ -193,7 +206,7 @@ export function validateFile(
   file: File,
   opts: { maxBytes?: number } = {}
 ): IngestValidation {
-  const max = opts.maxBytes ?? DEFAULT_MAX_BYTES
+  const max = opts.maxBytes ?? (isMediaUpload(file) ? DEFAULT_MAX_MEDIA_BYTES : DEFAULT_MAX_BYTES)
   if (!file || file.size === 0) {
     return { ok: false, reason: "El archivo está vacío", code: "empty_file" }
   }

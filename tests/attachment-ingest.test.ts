@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import { blobToFile, validateFile } from "../lib/attachment-ingest"
+import { blobToFile, DEFAULT_MAX_MEDIA_BYTES, isMediaUpload, validateFile } from "../lib/attachment-ingest"
 
 const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 const XLS_MIME = "application/vnd.ms-excel"
@@ -30,4 +30,24 @@ test("client upload policy keeps pasted image blobs uploadable with a generated 
   assert.match(file.name, /^pasted-\d{4}-\d{2}-\d{2}T/)
   assert.match(file.name, /\.png$/)
   assert.equal(validateFile(file).ok, true)
+})
+
+test("audio and video are capped at 2 GB while documents keep the 100 MB cap", () => {
+  const MB = 1024 * 1024
+  assert.equal(DEFAULT_MAX_MEDIA_BYTES, 2048 * MB)
+  const video = { name: "clase.mp4", type: "video/mp4", size: 900 * MB } as unknown as File
+  const audio = { name: "charla.m4a", type: "", size: 300 * MB } as unknown as File
+  const pdf = { name: "libro.pdf", type: "application/pdf", size: 300 * MB } as unknown as File
+  assert.equal(isMediaUpload(video), true)
+  assert.equal(isMediaUpload(audio), true, "extension fallback when the browser reports no mime")
+  assert.equal(isMediaUpload(pdf), false)
+  assert.equal(validateFile(video).ok, true)
+  assert.equal(validateFile(audio).ok, true)
+  const rejected = validateFile(pdf)
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.code, "size_exceeded")
+  assert.match(String(rejected.reason), /100 MB/)
+  const huge = validateFile({ name: "x.mp4", type: "video/mp4", size: 3000 * MB } as unknown as File)
+  assert.equal(huge.code, "size_exceeded")
+  assert.match(String(huge.reason), /2048 MB/)
 })

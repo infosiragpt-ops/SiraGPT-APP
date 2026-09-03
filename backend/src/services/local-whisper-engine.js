@@ -41,11 +41,31 @@ function timeoutMs(options) {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_MS;
 }
 
+/** Default worker threads: up to 8, never more than the host exposes. */
+function defaultThreadCount() {
+  let cores = 1;
+  try { cores = Math.max(1, (os.cpus() || []).length || 1); } catch (_) { cores = 1; }
+  return Math.max(1, Math.min(8, cores));
+}
+
 function resolveThreadCount(options) {
   const env = envOf(options);
   const raw = options.threads ?? env.WHISPER_CPP_THREADS ?? env.WHISPER_THREADS;
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : 1;
+  return Number.isFinite(n) && n > 0 ? n : defaultThreadCount();
+}
+
+/**
+ * whisper.cpp runtime budget scales with the audio: a 16 kHz mono 16-bit WAV
+ * holds 32 000 bytes per second. Base model on a few threads runs several
+ * times faster than real time; 2.5 s of budget per audio second plus a
+ * minute of headroom covers slow hosts without letting a 2-hour lecture die
+ * at the old fixed 3-minute limit. LOCAL_WHISPER_TIMEOUT_MS is a floor.
+ */
+function whisperTimeoutForWav(wavBytes, options = {}) {
+  const seconds = Math.max(0, Number(wavBytes) || 0) / 32000;
+  const scaled = Math.ceil(seconds * 2500) + 60_000;
+  return Math.max(timeoutMs(options), scaled);
 }
 
 function buildWhisperCppArgs({ modelPath, wavPath, outBase, language, threads }) {
@@ -190,6 +210,9 @@ async function convertToWav(inputPath, wavPath, options = {}) {
   await runProcess(ffmpegPath(options), [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
     '-i', inputPath,
+    // Video containers: keep the audio track only (a WAV muxer cannot hold
+    // video/subtitle/data streams and ffmpeg would fail instead).
+    '-vn', '-sn', '-dn',
     '-ar', '16000',
     '-ac', '1',
     '-c:a', 'pcm_s16le',
@@ -230,6 +253,8 @@ async function readIfExists(filePath) {
 }
 
 async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
+  const wavStat = await fsPromises.stat(wavPath).catch(() => null);
+  const scopedOptions = { ...options, timeoutMs: whisperTimeoutForWav(wavStat ? wavStat.size : 0, options) };
   const bin = options.whisperBin || firstExistingFile(candidateBins(options)) || candidateBins(options)[0];
   const modelPath = firstExistingFile(candidateModels(options));
   if (!bin) {
@@ -252,7 +277,7 @@ async function transcribeWithWhisperCpp(wavPath, language, options = {}) {
     threads: resolveThreadCount(options),
   });
 
-  const spawned = await runProcess(bin, args, options);
+  const spawned = await runProcess(bin, args, scopedOptions);
   const txt = (await readIfExists(`${outBase}.txt`)).trim();
   const json = parseWhisperCppJson(await readIfExists(`${outBase}.json`));
   const text = txt || json.text || String(spawned.stdout || '').trim();
@@ -331,6 +356,8 @@ async function transcribeLocal(filePath, options = {}) {
 }
 
 module.exports = {
+  defaultThreadCount,
+  whisperTimeoutForWav,
   transcribeLocal,
   convertToWav,
   transcribeWithWhisperCpp,

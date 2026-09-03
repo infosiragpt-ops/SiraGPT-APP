@@ -142,3 +142,84 @@ test('sanitizeProviderError redacts key-shaped provider text', () => {
   assert.doesNotMatch(sanitized, /sk-proj/);
   assert.doesNotMatch(sanitized, /TESTKEY/);
 });
+
+function fakeSegments(t, count) {
+  return async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'siragpt-seg-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const segments = [];
+    for (let i = 0; i < count; i += 1) {
+      const p = path.join(dir, `seg-${String(i).padStart(4, '0')}.mp3`);
+      fs.writeFileSync(p, Buffer.from(`segment-${i}`));
+      segments.push({ path: p, index: i, offsetSeconds: i * 600 });
+    }
+    return { dir: null, segments };
+  };
+}
+
+test('a recording above the cloud cap is segmented, transcribed on Meta and stitched with offsets', async (t) => {
+  const filePath = tempAudio(t, 'clase.mp4');
+  const requests = [];
+  const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase.mp4', {
+    env: { MODEL_API_KEY: 'meta-test-key', WHISPER_LANGUAGE: 'es' },
+    maxFileBytes: 4,
+    segmentAudio: fakeSegments(t, 3),
+    createFile: (buffer, name, mime) => ({ name, mime, bytes: buffer.length }),
+    metaClient: {
+      audio: {
+        transcriptions: {
+          async create(request) {
+            requests.push(request);
+            const n = requests.length;
+            return { text: `parte ${n}`, segments: [{ start: 0, end: 5, text: `parte ${n}` }] };
+          },
+        },
+      },
+    },
+    async localTranscribe() { throw new Error('local must not run when the cloud ladder succeeds'); },
+  });
+  assert.equal(result.method, 'whisper');
+  assert.equal(result.model, audioTranscriber.DEFAULT_META_TRANSCRIBE_MODEL);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].file.name, 'segment-1.mp3');
+  assert.equal(requests[0].file.mime, 'audio/mpeg');
+  assert.equal(requests[0].response_format, 'json', 'Meta gets the plain json shape');
+  assert.equal(requests[0].language, 'es');
+  assert.match(result.text, /parte 1[\s\S]*parte 2[\s\S]*parte 3/);
+  assert.deepEqual(result.segments.map((s) => s.start), [0, 600, 1200]);
+});
+
+test('when every cloud provider fails, a big file still reaches local whisper (no size cap there)', async (t) => {
+  const filePath = tempAudio(t, 'clase.mp4');
+  let localCalls = 0;
+  const result = await audioTranscriber.transcribe(filePath, 'video/mp4', 'clase.mp4', {
+    env: { MODEL_API_KEY: 'meta-test-key', OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_x' },
+    maxFileBytes: 4,
+    segmentAudio: fakeSegments(t, 1),
+    createFile: (buffer, name, mime) => ({ name, mime }),
+    openai: { audio: { transcriptions: { async create() { const e = new Error('401 invalid api key'); e.status = 401; throw e; } } } },
+    metaClient: { audio: { transcriptions: { async create() { const e = new Error('404 not found'); e.status = 404; throw e; } } } },
+    async localTranscribe() { localCalls += 1; return { text: 'transcripción local completa de la clase', model: 'base' }; },
+  });
+  assert.equal(localCalls, 1);
+  assert.equal(result.method, 'local-whisper');
+  assert.match(result.text, /transcripción local completa/);
+});
+
+test('TRANSCRIBE_PROVIDERS orders the ladder and can skip the cloud entirely', async (t) => {
+  assert.deepEqual(audioTranscriber.providerOrder({ env: {} }), ['openai', 'meta', 'local']);
+  assert.deepEqual(audioTranscriber.providerOrder({ env: { TRANSCRIBE_PROVIDERS: 'meta, local' } }), ['meta', 'local']);
+  const providers = audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', OPENAI_API_KEY: 'sk-proj-TESTKEY_NOT_A_REAL_SECRET_y', TRANSCRIBE_PROVIDERS: 'meta,openai,local' } });
+  assert.deepEqual(providers.map((p) => p.name), ['meta', 'openai']);
+  assert.deepEqual(audioTranscriber.cloudProviders({ env: { MODEL_API_KEY: 'k', TRANSCRIBE_META_DISABLED: '1' } }).map((p) => p.name), []);
+
+  const filePath = tempAudio(t);
+  let cloudCalls = 0;
+  const result = await audioTranscriber.transcribe(filePath, 'audio/ogg', 'nota.ogg', {
+    env: { MODEL_API_KEY: 'k', TRANSCRIBE_PROVIDERS: 'local' },
+    metaClient: { audio: { transcriptions: { async create() { cloudCalls += 1; return { text: 'no' }; } } } },
+    async localTranscribe() { return { text: 'solo local, como pide el operador', model: 'base' }; },
+  });
+  assert.equal(cloudCalls, 0);
+  assert.equal(result.method, 'local-whisper');
+});
