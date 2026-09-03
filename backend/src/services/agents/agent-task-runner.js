@@ -46,6 +46,7 @@ const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 const { buildForbiddenToolNames } = require('./agent-tool-policy');
 const { buildIntegrationRuntimeProfile } = require('../ai-product-os/integration-runtime-profile');
 const {
+  backfillUserMessageFilesForTranscription,
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
   isImageFile,
@@ -2723,6 +2724,19 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           chatId,
           providedFileIds: files,
         });
+      // The USER bubble was persisted before this fallback ran. When the
+      // send raced the upload/processing, `files` is empty but the turn
+      // still resolved media — write it back so the video/audio stays
+      // visible in the bubble after a refresh instead of vanishing.
+      if ((!Array.isArray(files) || files.length === 0) && transcriptionFileIds.length > 0) {
+        await backfillUserMessageFilesForTranscription(prisma, {
+          chatId,
+          userId: user.id,
+          taskId,
+          fileIds: transcriptionFileIds,
+          clientMetadata: fileMetadata,
+        });
+      }
       const transcriptionText = await buildTranscriptionTextFromFiles(prisma, {
         userId: user.id,
         fileIds: transcriptionFileIds,
