@@ -86,8 +86,11 @@ describe("media preview helpers", () => {
     assert.equal(isVideoComposerFile(audioFile), false)
     assert.equal(isVideoComposerFile({ name: "demo.webm" }), true)
     assert.equal(isAudioComposerFile({ name: "demo.mp3" }), true)
-    assert.equal(resolveComposerMediaSrc(videoFile), "blob:https://siragpt.com/video-preview")
+    assert.equal(resolveComposerMediaSrc(videoFile), "/uploads/user/clip.mp4")
     assert.equal(resolveComposerMediaSrc({ url: "/uploads/user/clip.mp4" }), "/uploads/user/clip.mp4")
+    assert.equal(resolveComposerMediaSrc({
+      preview: "blob:https://siragpt.com/video-preview",
+    }), "blob:https://siragpt.com/video-preview")
   })
 
   it("normalizes waveform peaks without collapsing to empty", () => {
@@ -143,6 +146,7 @@ describe("composer and bubbles render video/audio players not filename chips", (
     assert.match(chatInterface, /<ChatAudioPlayer/)
     assert.match(chatInterface, /variant="composer"/)
     assert.match(chatInterface, /isVideo \? \(/)
+    assert.match(chatInterface, /shouldCreateLocalMediaPreview/)
   })
 
   it("user bubbles render players for video and audio attachments", () => {
@@ -150,6 +154,7 @@ describe("composer and bubbles render video/audio players not filename chips", (
     assert.match(messageComponent, /<ChatVideoPlayer/)
     assert.match(messageComponent, /<ChatAudioPlayer/)
     assert.match(messageComponent, /variant="bubble"/)
+    assert.match(messageComponent, /file=\{getAttachmentLocalFile\(file\)\}/)
     assert.doesNotMatch(messageComponent, /bg-pink-500\/10 text-pink-600/)
   })
 

@@ -876,6 +876,73 @@ function messageFilesValueHasEntries(value) {
   return true;
 }
 
+function parseMessageFilesValue(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function attachmentHasDurableSrc(entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const url = safeText(entry.url || entry.path || '', '');
+  return Boolean(url && !url.startsWith('blob:'));
+}
+
+/**
+ * True when persisted `message.files` cannot render a playable video/audio
+ * chip after refresh: null, empty, bare ids, or objects without a durable URL.
+ */
+function messageFilesNeedHydration(value) {
+  const files = parseMessageFilesValue(value);
+  if (files.length === 0) return true;
+  return files.some((entry) => {
+    if (typeof entry === 'string') return Boolean(safeText(entry, ''));
+    if (!entry || typeof entry !== 'object') return true;
+    return !attachmentHasDurableSrc(entry);
+  });
+}
+
+/**
+ * Re-serialize incomplete `message.files` snapshots from the File table so
+ * GET /chats/:id and a refresh still show a playable /uploads URL + mime.
+ */
+async function hydrateChatMessageAttachments(prisma, { userId, messages = [] } = {}) {
+  if (!prisma || !userId || !Array.isArray(messages) || messages.length === 0) {
+    return Array.isArray(messages) ? messages : [];
+  }
+  const out = [];
+  for (const message of messages) {
+    if (!message || !messageFilesNeedHydration(message.files)) {
+      out.push(message);
+      continue;
+    }
+    const ids = extractFileIdsFromMessageFiles(message.files);
+    if (ids.length === 0) {
+      out.push(message);
+      continue;
+    }
+    try {
+      const serialized = await serializeMessageAttachments(prisma, {
+        userId,
+        fileIds: ids,
+        clientMetadata: parseMessageFilesValue(message.files),
+      });
+      out.push(serialized.length ? { ...message, files: serialized } : message);
+    } catch {
+      out.push(message);
+    }
+  }
+  return out;
+}
+
 /**
  * Backfill the persisted USER turn of an agent transcription task.
  *
@@ -884,9 +951,11 @@ function messageFilesValueHasEntries(value) {
  * bubble is stored with `files: null` while the turn still resolves media
  * via `resolveTranscriptionFileIds` — after any refresh the attachment
  * (video/audio) vanishes from the bubble even though the transcript
- * succeeded. Writing the resolved attachments back onto the turn keeps the
- * media visible. Never overwrites a turn that already carries files.
- * Returns true when files were written.
+ * succeeded. The same happens when the turn was stored with id-only stubs
+ * (`[{ id, name }]`) that have no playable URL. Writing the resolved
+ * attachments back onto the turn (or creating the turn if persist never
+ * landed) keeps the media visible. Never overwrites a turn that already
+ * has a durable /uploads URL. Returns true when files were written.
  */
 async function backfillUserMessageFilesForTranscription(prisma, {
   chatId,
@@ -894,10 +963,11 @@ async function backfillUserMessageFilesForTranscription(prisma, {
   taskId,
   fileIds = [],
   clientMetadata = [],
+  content = '',
 } = {}) {
   const ids = uniqueFileIds(Array.isArray(fileIds) ? fileIds : []);
   if (!prisma || !chatId || !userId || !taskId || ids.length === 0) return false;
-  if (!prisma.message?.findFirst || !prisma.message?.update) return false;
+  if (!prisma.message?.findFirst) return false;
   let userTurn = null;
   try {
     userTurn = await prisma.message.findFirst({
@@ -911,7 +981,7 @@ async function backfillUserMessageFilesForTranscription(prisma, {
   } catch {
     return false;
   }
-  if (!userTurn || messageFilesValueHasEntries(userTurn.files)) return false;
+  if (userTurn && !messageFilesNeedHydration(userTurn.files)) return false;
   let serialized = [];
   try {
     serialized = await serializeMessageAttachments(prisma, {
@@ -923,6 +993,30 @@ async function backfillUserMessageFilesForTranscription(prisma, {
     return false;
   }
   if (!serialized.length) return false;
+  if (!userTurn) {
+    if (!prisma.message?.create || !safeText(content, '')) return false;
+    try {
+      await prisma.message.create({
+        data: {
+          chatId: String(chatId),
+          role: 'USER',
+          content: safeText(content, 'transcribir'),
+          files: serialized,
+          timestamp: new Date(),
+          metadata: {
+            source: 'agent-task-user',
+            taskId: String(taskId),
+            fileIds: ids,
+            backfilled: true,
+          },
+        },
+      });
+    } catch {
+      return false;
+    }
+    return true;
+  }
+  if (!prisma.message?.update) return false;
   try {
     await prisma.message.update({
       where: { id: userTurn.id },
@@ -973,6 +1067,8 @@ async function buildTranscriptionTextFromFiles(prisma, { userId, fileIds = [], m
 
 module.exports = {
   backfillUserMessageFilesForTranscription,
+  hydrateChatMessageAttachments,
+  messageFilesNeedHydration,
   buildFormatDirectiveLines: outputFormat.buildFormatDirectiveLines,
   parseOutputFormatRequest: outputFormat.parseOutputFormatRequest,
   buildTranscriptionTextFromFiles,

@@ -344,6 +344,7 @@ import {
   previewAttachmentKey,
   resolveComposerMediaSrc,
   resolveUploadFileId,
+  shouldCreateLocalMediaPreview,
   snapshotComposerFilesForMessage,
 } from "@/lib/chat/composer-files"
 import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
@@ -8743,7 +8744,7 @@ But first, you need to connect your Spotify account securely using the button be
     // Build temp objects with stable IDs we can map to per-file progress.
     const tempFiles = filesToUpload.map((file) => {
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      const preview = /^(image|audio|video)\//.test(file.type) ? URL.createObjectURL(file) : null;
+      const preview = shouldCreateLocalMediaPreview(file) ? URL.createObjectURL(file) : null;
       const longPasteMeta = getLongPasteMetadata(file);
       const contentHash = batchHashes?.get(file) || null;
       if (contentHash) {
@@ -8785,9 +8786,10 @@ But first, you need to connect your Spotify account securely using the button be
           return next;
         });
       };
-      if (mime.startsWith('audio/')) {
+      const chipHint = { name: tf.name, type: mime };
+      if (isAudioComposerFile(chipHint) || mime.startsWith('audio/')) {
         void extractAudioMeta(tf.file).then(applyMediaMeta).catch(() => {});
-      } else if (mime.startsWith('video/')) {
+      } else if (isVideoComposerFile(chipHint) || mime.startsWith('video/')) {
         void extractVideoMeta(tf.file).then(applyMediaMeta).catch(() => {});
       }
     });
