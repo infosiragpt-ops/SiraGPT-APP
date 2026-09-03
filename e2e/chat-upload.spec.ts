@@ -8,7 +8,7 @@ function isBootstrapOrAuthText(text: string) {
   return /cargando sira gpt|preparando tu espacio|welcome back|sign in|create account/i.test(text)
 }
 
-test("chat upload picker accepts .xlsx and excludes legacy .xls when the composer is mounted", async ({ page }) => {
+test("chat upload picker accepts any file format when the composer is mounted", async ({ page }) => {
   const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   expect(
@@ -35,10 +35,12 @@ test("chat upload picker accepts .xlsx and excludes legacy .xls when the compose
     return
   }
 
+  // The composer accepts every format the OS can hand us: the picker must not
+  // carry a restrictive `accept` filter (either absent or the wildcard).
   const accept = await fileInput.getAttribute("accept")
-  expect(accept || "").toContain(".xlsx")
-  expect(accept || "").not.toMatch(/(^|,)\.xls(,|$)/)
-  expect(accept || "").not.toContain("application/vnd.ms-excel")
+  expect(accept === null || accept.trim() === "" || accept.trim() === "*/*").toBe(true)
+  await expect(fileInput).toHaveAttribute("multiple", "")
+  await expect(fileInput).toHaveAttribute("data-accepts-any-format", "true")
 })
 
 test("chat route does not throw browser page errors during first paint", async ({ page }) => {
