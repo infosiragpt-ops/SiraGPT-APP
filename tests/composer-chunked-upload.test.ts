@@ -66,7 +66,9 @@ describe("chunked upload wiring (source contract)", () => {
   it("the API client announces, streams chunks with retries and completes on the backend endpoints", () => {
     assert.match(api, /async uploadFileChunked\(/)
     assert.match(api, /authed\('\/files\/upload\/chunked\/init', \{/)
-    assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/\$\{plan\.index\}`, \{\s*method: 'PUT',/)
+    assert.match(api, /withTimeout\(\s*\(chunkSignal\) => this\.authenticatedFetch\(`\$\{this\.baseURL\}\/files\/upload\/chunked\/\$\{session\.uploadId\}\/\$\{plan\.index\}`, \{\s*method: 'PUT',/)
+    assert.match(api, /signal: chunkSignal,/)
+    assert.match(api, /ms: opts\.chunkTimeoutMs \?\? CHUNKED_UPLOAD_CHUNK_TIMEOUT_MS,/)
     assert.match(api, /body: file\.slice\(plan\.start, plan\.end\),/)
     assert.match(api, /authed\(`\/files\/upload\/chunked\/\$\{session\.uploadId\}\/complete`, \{ method: 'POST'/)
     assert.match(api, /if \(!retriable \|\| attempt >= maxRetries\) \{/)

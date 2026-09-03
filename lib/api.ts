@@ -1753,9 +1753,10 @@ class ApiClient {
       onProgress?: (percent: number, loadedBytes: number, totalBytes: number) => void
       signal?: AbortSignal
       maxRetries?: number
+      chunkTimeoutMs?: number
     } = {}
   ): Promise<FileUploadResponse> {
-    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES } = await import('./composer/chunked-upload');
+    const { planChunks, chunkedUploadPercent, isRetriableChunkStatus, CHUNKED_UPLOAD_CHUNK_BYTES, CHUNKED_UPLOAD_CHUNK_TIMEOUT_MS } = await import('./composer/chunked-upload');
     const throwIfAborted = () => {
       if (opts.signal?.aborted) throw Object.assign(new Error('Upload aborted'), { name: 'AbortError' });
     };
@@ -1787,11 +1788,24 @@ class ApiClient {
         let res: Response | null = null;
         let networkError: unknown = null;
         try {
-          res = await authed(`/files/upload/chunked/${session.uploadId}/${plan.index}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: file.slice(plan.start, plan.end),
-          });
+          // A hung PUT neither resolves nor rejects, which used to leave
+          // the composer chip at "uploading" forever. Bound it with the
+          // shared withTimeout helper: the timeout surfaces as a plain
+          // Error (retriable below), while a real user abort still throws
+          // AbortError and cancels immediately.
+          res = await withTimeout(
+            (chunkSignal) => this.authenticatedFetch(`${this.baseURL}/files/upload/chunked/${session.uploadId}/${plan.index}`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: file.slice(plan.start, plan.end),
+              signal: chunkSignal,
+            }),
+            {
+              ms: opts.chunkTimeoutMs ?? CHUNKED_UPLOAD_CHUNK_TIMEOUT_MS,
+              signal: opts.signal ?? null,
+              createError: () => new Error(`Chunk ${plan.index} upload timed out`),
+            },
+          );
         } catch (err) {
           if ((err as any)?.name === 'AbortError') throw err;
           networkError = err;
