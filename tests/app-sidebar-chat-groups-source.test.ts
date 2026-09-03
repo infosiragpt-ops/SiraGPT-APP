@@ -36,7 +36,7 @@ describe("app sidebar single recent-chats collapse source contract", () => {
 })
 
 describe("app sidebar recent-chats toolbar source contract", () => {
-  it("removes the standalone Buscar chats row from the Nuevo chat / Library nav block", () => {
+  it("removes the standalone Buscar chats row from the Nuevo agente / Library nav block", () => {
     const navStart = source.indexOf("New Chat, Search, and Library")
     const libraryStart = source.indexOf('href="/library"')
     assert.ok(navStart > 0 && libraryStart > navStart, "nav block markers must exist")
@@ -123,7 +123,7 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.doesNotMatch(source, /Modo de la barra lateral/)
     assert.match(source, /aria-label="Atrás"/)
     assert.match(source, /aria-label="Adelante"/)
-    assert.match(source, /aria-label="Nuevo chat ⌘N"/)
+    assert.match(source, /aria-label="Nuevo agente ⌘N"/)
     assert.match(source, /aria-label="Empresas"/)
     assert.doesNotMatch(source, /data-testid="sidebar-apps-tab"/)
     assert.doesNotMatch(source, /aria-label="Chats"/)

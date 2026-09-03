@@ -12,9 +12,14 @@ describe("agentes sidebar chrome", () => {
     assert.doesNotMatch(sidebar, /role="tablist"/)
     assert.match(sidebar, /aria-label="Atrás"/)
     assert.match(sidebar, /aria-label="Adelante"/)
-    assert.match(sidebar, /aria-label="Nuevo chat ⌘N"/)
+    assert.match(sidebar, /aria-label="Nuevo agente ⌘N"/)
     assert.doesNotMatch(sidebar, /aria-label="Chats"/)
     assert.doesNotMatch(sidebar, />Chats</)
+  })
+
+  it("labels the new-conversation row «Nuevo agente» in Spanish", () => {
+    const es = JSON.parse(source("messages/es.json")) as { sidebar?: { newChat?: string } }
+    assert.equal(es.sidebar?.newChat, "Nuevo agente")
   })
 
   it("keeps Empresas reachable as a nav-row mode toggle in both modes", () => {
