@@ -60,8 +60,39 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
     for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-track {", ".dark .effort-thumb {"]) {
       assert.ok(globals.includes(cls), `${cls} must exist`)
     }
-    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,/, "reduced motion freezes fill + thumb")
+    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,\s*\.effort-dither-twinkle,/, "reduced motion freezes fill + thumb + pixels")
     assert.ok(!globals.includes(".effort-track-fill::after {"), "the old striped neon overlay must be gone")
+  })
+})
+
+describe("effort slider — living pixels", () => {
+  it("twinkles only the sparse layers with position-derived delays", () => {
+    assert.match(ditherTrack, /const TWINKLE_LAYERS = 3/, "dense grid + solid cap stay static")
+    assert.match(
+      ditherTrack,
+      /className=\{twinkle \? "effort-dither-px effort-dither-twinkle" : "effort-dither-px"\}/,
+    )
+    assert.match(
+      ditherTrack,
+      /style=\{twinkle \? \{ animationDelay: `\$\{twinkleDelayS\(col, row\)\.toFixed\(2\)\}s` \} : undefined\}/,
+      "delays come from grid position so the shimmer travels as a wave",
+    )
+    assert.match(
+      ditherTrack,
+      /return \(col \* 0\.35 \+ row \* 0\.13\) % TWINKLE_PERIOD_S/,
+    )
+  })
+
+  it("animates opacity only, on a fixed period", () => {
+    assert.match(
+      globals,
+      /\.effort-dither-twinkle \{\s*animation: effort-pixel-wave 3s ease-in-out infinite;/,
+    )
+    assert.match(
+      globals,
+      /@keyframes effort-pixel-wave \{\s*0%, 100% \{ opacity: 1; \}\s*50% \{ opacity: 0\.3; \}\s*\}/,
+      "opacity-only keyframes: no layout thrash",
+    )
   })
 })
 
