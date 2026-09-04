@@ -737,21 +737,24 @@ async function downloadToFile(pathname, outPath, { signal, timeoutMs } = {}, opt
   };
 }
 
-/** Dubbed video (mp4 with the dubbed track as default audio). */
-async function dubDownloadVideo({ jobId, outPath, defaultTrack = '', preserveBg = true, includeTracks = '', signal } = {}, options = {}) {
+/**
+ * Final dub export: mp4 (video jobs, dubbed track as default audio) or, for
+ * audio-only jobs, the container named by `outFormat` (wav|m4a|mp3|flac).
+ */
+async function dubDownloadVideo({ jobId, outPath, defaultTrack = '', preserveBg = true, includeTracks = '', outFormat = '', signal } = {}, options = {}) {
   const params = new URLSearchParams();
   params.set('preserve_bg', preserveBg ? 'true' : 'false');
   if (defaultTrack) params.set('default_track', defaultTrack);
   if (includeTracks) params.set('include_tracks', includeTracks);
+  if (outFormat) params.set('out_format', outFormat);
   return downloadToFile(`/dub/download/${encodeURIComponent(jobId)}?${params.toString()}`, outPath, { signal }, options);
 }
 
-/** Dubbed audio track only (audio-only jobs, or the audio of a video job). */
-async function dubDownloadAudio({ jobId, lang, outPath, preserveBg = true, outFormat = 'mp3', signal } = {}, options = {}) {
+/** Dubbed audio track of a job as WAV (mixed with the background bed when preserveBg). */
+async function dubDownloadAudio({ jobId, lang, outPath, preserveBg = true, signal } = {}, options = {}) {
   const params = new URLSearchParams();
   if (lang) params.set('lang', lang);
   params.set('preserve_bg', preserveBg ? 'true' : 'false');
-  if (outFormat) params.set('out_format', outFormat);
   return downloadToFile(`/dub/download-audio/${encodeURIComponent(jobId)}?${params.toString()}`, outPath, { signal }, options);
 }
 

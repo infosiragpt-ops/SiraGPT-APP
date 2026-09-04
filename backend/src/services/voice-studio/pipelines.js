@@ -210,7 +210,9 @@ async function runDubJob(ctx, input, options = {}) {
   } else {
     filename = outputName('doblaje', 'mp3');
     outputPath = path.join(audioDir, filename);
-    await voiceStudio.dubDownloadAudio({ jobId: vsJobId, lang: targetCode, outPath: outputPath, preserveBg: input.keepBackground !== false, outFormat: 'mp3', signal }, options);
+    // Audio-only jobs export through the same /dub/download endpoint with an
+    // `out_format` container (the -audio route only emits WAV).
+    await voiceStudio.dubDownloadVideo({ jobId: vsJobId, outPath: outputPath, defaultTrack: targetCode, preserveBg: input.keepBackground !== false, outFormat: 'mp3', signal }, options);
     mime = 'audio/mpeg';
     downloadUrl = `/api/elevenlabs/audio/${filename}`;
   }
