@@ -1,5 +1,16 @@
 # Skill: XLSX editing
 
+## Golden rule: SURGICAL edits — never rewrite the workbook
+Open the ORIGINAL file, touch ONLY the cells the user asked about, and return
+the SAME file. Text may live in sharedStrings.xml or inline; formulas keep a
+cached value that goes stale after edits → set fullCalcOnLoad="1" on calcPr
+or recalculate with headless LibreOffice. Charts, pivots, validations and
+conditional formatting survive ONLY if the workbook is not fully rewritten —
+for TEXT-ONLY changes prefer unpack + direct XML patch (lxml) preserving the
+cell style attribute "s", repacking with identical parts/order. With .xlsm
+keep vbaProject.bin byte-identical. FORBIDDEN unless "modo reformateo":
+xl/styles.xml, xl/theme, xl/workbook.xml, [Content_Types].xml.
+
 ## Preferred library
 Use `openpyxl`. Always import as:
 ```python
