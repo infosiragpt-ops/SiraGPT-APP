@@ -8406,16 +8406,26 @@ But first, you need to connect your Spotify account securely using the button be
       toolbar={
         <div className="composer-toolbar-actions flex shrink-0 items-center gap-1.5">
           <ComposerCharCounter input={input} />
-          <ComposerContextMenu
-            messages={currentChat?.messages || []}
-            selectedModel={currentChat?.model || selectedModel}
-            availableModels={availableModels}
-          />
+          {/* Text-reasoning controls stay out of generation modes (Imágenes /
+              Video / Voz / Música): those turns don't consume the text context
+              window and take no reasoningEffort, so token/cost meters and the
+              effort slider would show misleading numbers. The model picker
+              already hides itself via isMediaToolActive; state is preserved
+              and the chips return when the modality is closed. */}
+          {!isMediaToolActive && (
+            <ComposerContextMenu
+              messages={currentChat?.messages || []}
+              selectedModel={currentChat?.model || selectedModel}
+              availableModels={availableModels}
+            />
+          )}
           {renderComposerModelControls()}
-          <ComposerEffortMenu
-            selectedEffort={selectedEffort}
-            setSelectedEffort={setSelectedEffort}
-          />
+          {!isMediaToolActive && (
+            <ComposerEffortMenu
+              selectedEffort={selectedEffort}
+              setSelectedEffort={setSelectedEffort}
+            />
+          )}
           {renderDictationButton()}
           <ChatComposerPrimaryAction
             input={input}
