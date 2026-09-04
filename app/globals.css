@@ -891,6 +891,27 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   text-underline-offset: 2px;
 }
 
+/*
+ * Guard anti-píldora-invisible — la transcripción de imágenes suele
+ * devolver fences sin lenguaje (```\nsiragpt.com\n```). Si algún
+ * renderer futuro vuelve a emitir un <code> con fondo pill dentro de
+ * un <pre> oscuro de prose, el texto quedaría claro-sobre-claro
+ * (ilegible en ambos temas, ver /agentes). Esta regla fuerza al
+ * código dentro de bloques pre a heredar los colores del bloque.
+ */
+.prose pre code,
+.chat-assistant-message pre code,
+.sgpt-message-collapsible pre code {
+  background: transparent !important;
+  color: inherit !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  border: 0 !important;
+  font-size: inherit !important;
+  white-space: inherit;
+  word-break: inherit;
+}
+
 .chat-assistant-message :is(p, li, td, blockquote) {
   line-height: 1.6;
 }
