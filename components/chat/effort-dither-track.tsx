@@ -44,8 +44,11 @@ const LAYER_SIZES = [2, 5, 9, 10, 10, 12] as const
  */
 const TWINKLE_LAYERS = 3
 
-/** Wave period (s). Per-pixel delays spread over one full period. */
-const TWINKLE_PERIOD_S = 3
+/**
+ * Heartbeat period (s): one lub-dub + rest. Per-pixel delays spread over the
+ * full period so the thump travels along the bar instead of beating in sync.
+ */
+const TWINKLE_PERIOD_S = 2.4
 
 /**
  * Deterministic shimmer delay for a cell: grows with the column (plus a

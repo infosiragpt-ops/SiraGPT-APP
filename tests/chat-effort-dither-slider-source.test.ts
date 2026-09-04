@@ -83,15 +83,20 @@ describe("effort slider — living pixels", () => {
     )
   })
 
-  it("animates opacity only, on a fixed period", () => {
+  it("beats like a heart: scale + opacity around each pixel's own centre", () => {
     assert.match(
       globals,
-      /\.effort-dither-twinkle \{\s*animation: effort-pixel-wave 3s ease-in-out infinite;/,
+      /\.effort-dither-twinkle \{[^}]*transform-box: fill-box;[^}]*transform-origin: center;[^}]*animation: effort-pixel-wave 2\.4s ease-in-out infinite;/,
     )
     assert.match(
       globals,
-      /@keyframes effort-pixel-wave \{\s*0%, 100% \{ opacity: 1; \}\s*50% \{ opacity: 0\.3; \}\s*\}/,
-      "opacity-only keyframes: no layout thrash",
+      /@keyframes effort-pixel-wave \{\s*0%\s*\{ opacity: 0\.85; transform: scale\(1\); \}\s*10%\s*\{ opacity: 1;\s*transform: scale\(1\.5\); \}\s*20%/,
+      "lub at 10%",
+    )
+    assert.match(
+      globals,
+      /30%\s*\{ opacity: 1;\s*transform: scale\(1\.32\); \}\s*42%/,
+      "dub at 30%, then rest — no layout properties, GPU-cheap",
     )
   })
 })
