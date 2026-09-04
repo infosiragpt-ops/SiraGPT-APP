@@ -1420,6 +1420,17 @@ details[open] > summary .think-chevron,
 .effort-dither-px {
   shape-rendering: crispEdges;
 }
+/* Living pixels: the sparse layers breathe with a wave that travels left →
+   right (each pixel's delay is a function of its grid position — see
+   twinkleDelayS). Dense layers and the solid cap stay static so the bar
+   keeps reading as a solid control. Opacity-only: no layout, GPU-cheap. */
+.effort-dither-twinkle {
+  animation: effort-pixel-wave 3s ease-in-out infinite;
+}
+@keyframes effort-pixel-wave {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 /* Stops: invisible hit areas centred on each level + a faint tick dot on the
    part of the rail that is not yet revealed. */
@@ -1516,6 +1527,7 @@ details[open] > summary .think-chevron,
 @media (prefers-reduced-motion: reduce) {
   .effort-track-fill,
   .effort-thumb,
+  .effort-dither-twinkle,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;

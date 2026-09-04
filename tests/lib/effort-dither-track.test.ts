@@ -50,6 +50,30 @@ describe("EffortDitherTrack — dithered pixel dissolve", () => {
     expect(Math.abs(c1 - c2) + Math.abs(r1 - r2)).toBeGreaterThanOrEqual(6)
   })
 
+  it("twinkles only sparse layers with deterministic position-derived delays", () => {
+    const { twinkleLayers, twinklePeriodS, twinkleDelayS } = EFFORT_DITHER_SPEC
+    expect(twinkleLayers).toBeGreaterThan(0)
+    expect(twinkleLayers).toBeLessThan(EFFORT_DITHER_SPEC.layerSizes.length)
+    const markup = renderToStaticMarkup(createElement(EffortDitherTrack, { className: "effort-dither" }))
+    const twinkles = [...markup.matchAll(/class="effort-dither-px effort-dither-twinkle"[^>]*style="animation-delay:([\d.]+)s"/g)]
+    const expected = EFFORT_DITHER_SPEC.layerSizes
+      .slice(0, twinkleLayers)
+      .reduce((sum, n) => sum + n, 0)
+    expect(twinkles.length).toBe(expected)
+    // No other pixel rect carries the twinkle class or an animation delay.
+    expect((markup.match(/effort-dither-twinkle/g) || []).length).toBe(expected)
+    expect((markup.match(/animation-delay/g) || []).length).toBe(expected)
+    for (const [, delay] of twinkles) {
+      const seconds = Number(delay)
+      expect(seconds).toBeGreaterThanOrEqual(0)
+      expect(seconds).toBeLessThan(twinklePeriodS)
+    }
+    // Delay is a pure function of grid position: column-major wave.
+    expect(twinkleDelayS(0, 0)).toBe(0)
+    expect(twinkleDelayS(4, 0)).toBeCloseTo(1.4, 10)
+    expect(twinkleDelayS(0, 2)).toBeCloseTo(0.26, 10)
+  })
+
   it("keeps pixels square in user space and renders deterministic SVG markup", () => {
     const { cell, pixel } = EFFORT_DITHER_SPEC
     expect(pixel).toBeLessThan(cell)
@@ -65,8 +89,8 @@ describe("EffortDitherTrack — dithered pixel dissolve", () => {
     // Six pixel layers + the solid cap, each behind its own mask.
     expect((first.match(/<pattern /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length)
     expect((first.match(/<mask /g) || []).length).toBe(EFFORT_DITHER_SPEC.layerSizes.length + 1)
-    // Every pixel rect is exactly `pixel` wide/tall.
-    const sizes = [...first.matchAll(/class="effort-dither-px" x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
+    // Every pixel rect is exactly `pixel` wide/tall (twinkling or static).
+    const sizes = [...first.matchAll(/class="effort-dither-px(?: effort-dither-twinkle)?"(?: style="[^"]*")? x="[\d.]+" y="[\d.]+" width="(\d+)" height="(\d+)"/g)]
     expect(sizes.length).toBe(EFFORT_DITHER_SPEC.tile.cols * EFFORT_DITHER_SPEC.tile.rows)
     for (const [, w, h] of sizes) {
       expect(Number(w)).toBe(pixel)

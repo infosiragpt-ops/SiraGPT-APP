@@ -37,6 +37,26 @@ const TILE_H = TILE_ROWS * CELL
 /** Cells per layer — sums to TILE_COLS × TILE_ROWS (48). */
 const LAYER_SIZES = [2, 5, 9, 10, 10, 12] as const
 
+/**
+ * Layers whose pixels shimmer. Only the sparse, early layers twinkle — the
+ * dense grid and the solid cap stay rock-stable so the bar keeps reading as
+ * a solid control, not a loading spinner.
+ */
+const TWINKLE_LAYERS = 3
+
+/** Wave period (s). Per-pixel delays spread over one full period. */
+const TWINKLE_PERIOD_S = 3
+
+/**
+ * Deterministic shimmer delay for a cell: grows with the column (plus a
+ * small row offset so neighbours never pulse in lockstep), wrapped into one
+ * period. Because the delay is a function of position, the twinkle reads as
+ * a wave travelling left → right across the bar.
+ */
+function twinkleDelayS(col: number, row: number): number {
+  return (col * 0.35 + row * 0.13) % TWINKLE_PERIOD_S
+}
+
 /** Horizontal fade-in window (fractions of the fill width) per layer. */
 const LAYER_RAMPS: ReadonlyArray<readonly [number, number]> = [
   [0.0, 0.3], // particles: isolated pixels from the very start of the bar
@@ -115,16 +135,20 @@ export function EffortDitherTrack({ className }: { className?: string }) {
             height={TILE_H}
             patternUnits="userSpaceOnUse"
           >
-            {cells.map(([col, row]) => (
-              <rect
-                key={`${col}-${row}`}
-                className="effort-dither-px"
-                x={col * CELL + INSET}
-                y={row * CELL + INSET}
-                width={PIXEL}
-                height={PIXEL}
-              />
-            ))}
+            {cells.map(([col, row]) => {
+              const twinkle = index < TWINKLE_LAYERS
+              return (
+                <rect
+                  key={`${col}-${row}`}
+                  className={twinkle ? "effort-dither-px effort-dither-twinkle" : "effort-dither-px"}
+                  style={twinkle ? { animationDelay: `${twinkleDelayS(col, row).toFixed(2)}s` } : undefined}
+                  x={col * CELL + INSET}
+                  y={row * CELL + INSET}
+                  width={PIXEL}
+                  height={PIXEL}
+                />
+              )
+            })}
           </pattern>
         ))}
         {LAYERS.map((_, index) => {
@@ -186,4 +210,7 @@ export const EFFORT_DITHER_SPEC = Object.freeze({
   layerRamps: LAYER_RAMPS,
   solidRamp: SOLID_RAMP,
   layers: LAYERS,
+  twinkleLayers: TWINKLE_LAYERS,
+  twinklePeriodS: TWINKLE_PERIOD_S,
+  twinkleDelayS,
 })
