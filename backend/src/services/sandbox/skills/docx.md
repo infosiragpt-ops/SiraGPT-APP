@@ -1,5 +1,20 @@
 # Skill: DOCX editing
 
+## Golden rule: SURGICAL edits — never regenerate the document
+Open the ORIGINAL file inside the sandbox, locate the EXACT XML nodes to
+touch, modify them with scripts, validate nothing else changed, and return
+the SAME file. A .docx is a ZIP + XML: unpack, edit the exact text node
+preserving its formatting properties (w:rPr of the first affected run), and
+repack with the SAME parts in the SAME order.
+FORBIDDEN unless the user explicitly asked for "modo reformateo": touching
+styles.xml, numbering.xml, theme, margins/sectPr, or [Content_Types].xml.
+Libraries (python-docx) are for READING and structural edits; surgical text
+WRITES use direct XML (lxml), because python-docx can alter parts it does
+not know. A sentence may be split across several w:r (rsid, spell-check) —
+join runs, locate the string, rewrite preserving w:rPr. Text also lives in
+header*.xml, footer*.xml, footnotes.xml, comments.xml and drawings. Star
+option: return with tracked changes (w:del/w:ins + author/date).
+
 ## Contract: SURGICAL, FORMAT-PRESERVING edits
 When the user uploads a Word document and asks for a change, the deliverable
 MUST look like the original document with only the requested change applied.
