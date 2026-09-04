@@ -32,7 +32,7 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
     assert.match(effortMenu, /import \{ EffortDitherTrack \} from "@\/components\/chat\/effort-dither-track"/)
     assert.match(
       effortMenu,
-      /<span className="effort-track-fill">\s*<EffortDitherTrack className="effort-dither" \/>\s*<\/span>/,
+      /<span className="effort-track-fill">\s*<EffortDitherTrack className="effort-dither" \/>\s*<span className="effort-sheen" aria-hidden \/>\s*<\/span>/,
       "the dither is the fill's only child so clip-path reveals it up to the thumb",
     )
     assert.match(effortMenu, /<span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden \/>/)
@@ -60,7 +60,7 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
     for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-track {", ".dark .effort-thumb {"]) {
       assert.ok(globals.includes(cls), `${cls} must exist`)
     }
-    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,\s*\.effort-dither-twinkle,/, "reduced motion freezes fill + thumb + pixels")
+    assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,\s*\.effort-dither-twinkle,\s*\.effort-sheen,/, "reduced motion freezes fill + thumb + pixels + sheen")
     assert.ok(!globals.includes(".effort-track-fill::after {"), "the old striped neon overlay must be gone")
   })
 })
@@ -92,6 +92,29 @@ describe("effort slider — living pixels", () => {
       globals,
       /@keyframes effort-pixel-wave \{\s*0%, 100% \{ opacity: 1; \}\s*50% \{ opacity: 0\.3; \}\s*\}/,
       "opacity-only keyframes: no layout thrash",
+    )
+  })
+})
+
+describe("effort slider — constant sheen sweep", () => {
+  it("mounts a pointer-transparent sheen inside the clipped fill", () => {
+    assert.match(effortMenu, /<span className="effort-sheen" aria-hidden \/>/)
+  })
+
+  it("sweeps a light band across the fill in a responsive, layout-free loop", () => {
+    assert.match(
+      globals,
+      /\.effort-sheen \{\s*position: absolute;\s*inset: 0;\s*display: block;\s*border-radius: inherit;\s*pointer-events: none;/,
+    )
+    assert.match(
+      globals,
+      /background-size: 250% 100%;\s*background-repeat: no-repeat;\s*animation: effort-sheen-sweep 3\.2s linear infinite;/,
+      "oversized gradient: percentage positions stay responsive at any rail width",
+    )
+    assert.match(
+      globals,
+      /@keyframes effort-sheen-sweep \{\s*from \{ background-position: 120% 0; \}\s*to \{ background-position: -20% 0; \}\s*\}/,
+      "the band travels the full rail, left to right, then loops",
     )
   })
 })

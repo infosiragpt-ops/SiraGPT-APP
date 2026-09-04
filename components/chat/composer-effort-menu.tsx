@@ -23,7 +23,9 @@ export const EFFORT_LEVELS = [
  *   • the dither is anchored to the FULL rail and revealed up to the thumb
  *     with `clip-path`, so a higher effort literally uncovers more violet;
  *   • a white capsule thumb with a hairline border and a soft shadow marks
- *     the active stop; the remaining stops show as faint tick dots.
+ *     the active stop; the remaining stops show as faint tick dots;
+ *   • a light band travels the revealed region in a constant loop
+ *     (`.effort-sheen`) so the bar feels alive while open.
  * The track itself is the pointer target, so taps and drags anywhere on the
  * rail snap to the nearest stop.
  */
@@ -89,6 +91,7 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
         <div className="effort-track-line" aria-hidden>
           <span className="effort-track-fill">
             <EffortDitherTrack className="effort-dither" />
+            <span className="effort-sheen" aria-hidden />
           </span>
         </div>
         {EFFORT_LEVELS.map((level, index) => (

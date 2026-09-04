@@ -1431,6 +1431,25 @@ details[open] > summary .think-chevron,
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+/* Constant motion: a soft light band glides across the revealed region in a
+   loop (left → right, following the dissolve). Pure background-position
+   animation on an oversized gradient — percentages resolve against the fill
+   box, so it stays responsive at any rail width with zero layout cost. */
+.effort-sheen {
+  position: absolute;
+  inset: 0;
+  display: block;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 43%, hsl(0 0% 100% / 0.45) 50%, transparent 57%);
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: effort-sheen-sweep 3.2s linear infinite;
+}
+@keyframes effort-sheen-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -20% 0; }
+}
 
 /* Stops: invisible hit areas centred on each level + a faint tick dot on the
    part of the rail that is not yet revealed. */
@@ -1528,6 +1547,7 @@ details[open] > summary .think-chevron,
   .effort-track-fill,
   .effort-thumb,
   .effort-dither-twinkle,
+  .effort-sheen,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;
