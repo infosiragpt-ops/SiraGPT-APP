@@ -21,6 +21,7 @@ const { createSandbox } = require('./sandbox');
 const { TOOL_DEFINITIONS, makeToolExecutors } = require('./tools');
 const { buildDocAgentSystemPrompt } = require('./skills');
 const { runDocAgentLoop, MAX_ITERATIONS_DEFAULT } = require('./loop');
+const { validateEditedFile, MAX_ATTEMPTS } = require('./validate');
 const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 const { resolveDocAgentCandidates, createFailoverClient } = require('./llm-runtime');
 
@@ -120,10 +121,15 @@ function sanitizeUploadName(name, index) {
  * @param {string} opts.instruction the user's natural-language request
  * @param {string} [opts.model]
  * @param {object} [opts.client] OpenAI-compatible client (default: OpenRouter)
- * @param {Function} [opts.onEvent] SSE relay
+ * @param {Function} [opts.onEvent] SSE relay (phase/tool/output events)
  * @param {'auto'|'local'|'docker'} [opts.driver]
  * @param {number} [opts.maxIterations]
  * @param {AbortSignal} [opts.signal]
+ * @param {'auto'|'approval'} [opts.approvalMode] 'approval' emits approval_required with the plan before executing
+ * @param {Function} [opts.approvePlan] async (plan) => boolean — only used in approval mode
+ * @param {boolean} [opts.trackChanges] append tracked-changes (w:del/w:ins) instruction for DOCX
+ * @param {number} [opts.maxAttempts] validation rollback attempts (default 3, max 3)
+ * @param {'auto'|'anthropic'|'sandbox'} [opts.route] 'anthropic' uses Route A when ANTHROPIC_API_KEY is set
  * @returns {Promise<{ finalText: string, outputs: Array<{name:string,buffer:Buffer}>, steps: Array, iterations: number, stoppedReason: string, driver: string }>}
  */
 async function runDocumentAgent({
@@ -135,9 +141,27 @@ async function runDocumentAgent({
   driver,
   maxIterations = MAX_ITERATIONS_DEFAULT,
   signal,
+  approvalMode = 'auto',
+  approvePlan = null,
+  trackChanges = false,
+  maxAttempts,
+  route,
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runDocumentAgent: instruction is required');
+
+  // Route A (Anthropic sandbox) shares this orchestration interface so the
+  // frontend never changes when the engine is swapped. Explicit opt-in only.
+  const wantAnthropic = String(route || process.env.SIRAGPT_DOC_AGENT_ROUTE || 'auto').toLowerCase() === 'anthropic';
+  if (wantAnthropic) {
+    const { isAnthropicRouteAvailable, runAnthropicRoute } = require('./anthropic-route');
+    if (!isAnthropicRouteAvailable()) throw new Error('runDocumentAgent: route=anthropic but ANTHROPIC_API_KEY is not configured');
+    onEvent({ type: 'phase', phase: 'execute', route: 'anthropic' });
+    const r = await runAnthropicRoute({ files, instruction: task, system: buildDocAgentSystemPrompt(files.map((f) => f?.name).filter(Boolean), { instruction: task }) });
+    onEvent({ type: 'outputs', count: r.outputs.length, names: r.outputs.map((o) => o.name) });
+    return { finalText: r.finalText, outputs: r.outputs, steps: [], iterations: 0, stoppedReason: 'final', driver: r.driver };
+  }
+
   // Injected client (tests, callers with their own runtime): use it as-is.
   // Otherwise build the production runtime: the explicit model on its
   // provider first, then every configured provider of the ladder, with
@@ -166,63 +190,119 @@ async function runDocumentAgent({
       names.push(name);
     }
 
+    const userTask = trackChanges
+      ? `${task}\n\nReturn DOCX with tracked changes (w:del/w:ins + author/date) so the reviewer sees what changed.`
+      : task;
     const messages = [
-      { role: 'system', content: buildDocAgentSystemPrompt(names) },
-      { role: 'user', content: task },
+      { role: 'system', content: buildDocAgentSystemPrompt(names, { instruction: task }) },
+      { role: 'user', content: userTask },
     ];
     const executors = makeToolExecutors(sandbox);
 
+    // Five-phase loop over SSE: inspect → plan → execute → validate → report.
+    // The agent loop itself is the execute phase; the rest is orchestration.
+    onEvent({ type: 'phase', phase: 'inspect', files: names });
+    onEvent({ type: 'phase', phase: 'plan', approvalMode });
+
+    if (String(approvalMode || 'auto').toLowerCase() === 'approval') {
+      const plan = { instruction: task, files: names, trackChanges };
+      onEvent({ type: 'approval_required', plan });
+      if (typeof approvePlan === 'function') {
+        const approved = await approvePlan(plan);
+        if (!approved) {
+          return {
+            finalText: '', outputs: [], steps: [], iterations: 0, stoppedReason: 'awaiting_approval',
+            driver: sandbox.driver,
+            runtime: typeof llm.describe === 'function' ? llm.describe() : { provider: null, model: loopModel, failovers: [] },
+          };
+        }
+      }
+    }
+
+    onEvent({ type: 'phase', phase: 'execute' });
     let result = await runDocAgentLoop({
       client: llm, model: loopModel, messages, tools: TOOL_DEFINITIONS, executors, maxIterations, onEvent,
       signal: abortScope.signal,
     });
     throwIfAborted(abortScope.signal);
+    onEvent({ type: 'phase', phase: 'validate' });
     let outputs = await collectValidOutputs(sandbox, onEvent);
     throwIfAborted(abortScope.signal);
 
-    // An output byte-identical to an input is a copy, not an edit — a flaky
-    // model sometimes repacks the file without applying any change. Treat
-    // those as non-deliverables so the corrective retry fires.
     const crypto = require('crypto');
     const sha1 = (buf) => crypto.createHash('sha1').update(buf).digest('hex');
     const inputHashes = new Set(files.map((f) => f && Buffer.isBuffer(f.buffer) ? sha1(f.buffer) : null).filter(Boolean));
-    const markUneditedCopies = (outs) => {
+    // Single-file baseline for the milimetric diff (multi-file: no baseline).
+    const baseline = files.length === 1 && Buffer.isBuffer(files[0].buffer) ? files[0].buffer : null;
+
+    const reviewOutputs = (outs) => {
+      // An output byte-identical to an input is a copy, not an edit — a flaky
+      // model sometimes repacks the file without applying any change.
       for (const out of outs) {
         if (out.valid !== false && out.buffer.length > 0 && inputHashes.has(sha1(out.buffer))) {
           out.valid = false;
           onEvent({ type: 'output_invalid', name: out.name, reason: 'identical_to_input' });
         }
       }
+      // Milimetric validation (§7): same parts, forbidden parts reported.
+      // Forbidden touches stay ADVISORY (see validate.js): library round-trips
+      // re-serialize untouched parts, so a CRC touch proves nothing by itself.
+      for (const out of outs) {
+        if (out.valid === false) continue;
+        const ext = String(out.name).split('.').pop().toLowerCase();
+        if (!['docx', 'xlsx', 'pptx'].includes(ext)) continue;
+        const verdict = validateEditedFile({ originalBuffer: baseline, editedBuffer: out.buffer, instruction: task });
+        if (!verdict.ok) {
+          out.valid = false;
+          onEvent({ type: 'output_invalid', name: out.name, reason: verdict.reason, details: verdict.details || undefined });
+        } else if (verdict.unexpectedParts && verdict.unexpectedParts.length > 0) {
+          out.unexpectedParts = verdict.unexpectedParts;
+        }
+        if (verdict.diff) out.changeReport = { changed: verdict.diff.changed, added: verdict.diff.added };
+      }
     };
-    markUneditedCopies(outputs);
+    reviewOutputs(outputs);
 
-    // One corrective retry when the run produced no usable deliverable (a flaky
-    // model can burn its iterations on a wrong strategy — e.g. str_replace on
-    // the binary .docx). We nudge it with the failure and let it finish the job
-    // on the SAME sandbox (its scratch work + uploads are still there).
-    const needsRetry = !abortScope.signal.aborted && outputs.filter((o) => o.valid !== false).length === 0 && files.length > 0;
-    if (needsRetry) {
-      onEvent({ type: 'retry', reason: 'no_valid_output' });
+    // Rollback retries: discard, restart from the pristine copy and retry with
+    // the error as context (max 3 attempts total). Same sandbox — uploads are
+    // still pristine, so the model retries on a clean slate.
+    const attempts = Math.max(1, Math.min(MAX_ATTEMPTS, Number(maxAttempts) || MAX_ATTEMPTS));
+    let attempt = 1;
+    while (
+      !abortScope.signal.aborted
+      && outputs.filter((o) => o.valid !== false).length === 0
+      && files.length > 0
+      && attempt < attempts
+    ) {
+      attempt += 1;
+      const failures = outputs.map((o) => o.name).join(', ') || 'no deliverable';
+      onEvent({ type: 'retry', reason: 'no_valid_output', attempt, failures });
       messages.push({
         role: 'user',
         content:
-          'You have NOT yet produced a valid, EDITED deliverable in /workspace/outputs (it is missing, corrupt, or byte-identical to the ' +
-          'uploaded file — copying the file without applying the requested changes does not count). Remember: a .docx/.xlsx/.pptx is a binary ' +
-          'ZIP — NEVER edit it with str_replace or hand-written XML. Use the python3 libraries end to end: python-docx for .docx, openpyxl for ' +
-          '.xlsx, python-pptx for .pptx (load the uploaded file, APPLY every requested change, save to /workspace/outputs/). Then VERIFY by ' +
-          'loading the saved file again and printing the changed content. Do this now and finish.',
+          `Attempt ${attempt}/${attempts}: you have NOT yet produced a valid, EDITED deliverable in /workspace/outputs ` +
+          `(${failures} — missing, corrupt, byte-identical to the upload, or with removed parts). ` +
+          'Remember: a .docx/.xlsx/.pptx is a binary ZIP — NEVER edit it with str_replace directly. ' +
+          'For TEXT-ONLY changes prefer the surgical path: unpack, patch the XML with lxml preserving ' +
+          'w:rPr/a:rPr (join split runs first), repack with identical parts/order. For STRUCTURAL changes use ' +
+          'python-docx/openpyxl/python-pptx end to end. NEVER touch styles.xml, numbering.xml, theme, ' +
+          'layouts, masters or [Content_Types].xml. Then VERIFY by loading the saved file again and ' +
+          'printing the changed content. Do this now and finish.',
       });
+      onEvent({ type: 'phase', phase: 'execute', attempt });
       result = await runDocAgentLoop({
         client: llm, model, messages, tools: TOOL_DEFINITIONS, executors,
         maxIterations: Math.min(maxIterations, 12), onEvent, signal: abortScope.signal,
       });
       throwIfAborted(abortScope.signal);
+      onEvent({ type: 'phase', phase: 'validate', attempt });
       outputs = await collectValidOutputs(sandbox, onEvent);
       throwIfAborted(abortScope.signal);
-      markUneditedCopies(outputs);
+      reviewOutputs(outputs);
     }
 
     throwIfAborted(abortScope.signal);
+    onEvent({ type: 'phase', phase: 'report', count: outputs.length });
     onEvent({ type: 'outputs', count: outputs.length, names: outputs.map((o) => o.name) });
     return {
       ...result,
