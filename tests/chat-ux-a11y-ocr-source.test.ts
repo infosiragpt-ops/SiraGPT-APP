@@ -27,6 +27,24 @@ describe("chat UX / a11y / OCR source contracts", () => {
     assert.match(code, /aria-label=\{isCopied \? "Código copiado" : "Copiar código"\}/)
   })
 
+  it("routes language-less fenced blocks to the dark block renderer, never the inline pill", () => {
+    // Regression: la transcripción de imágenes devuelve fences sin lenguaje
+    // (```\nsiragpt.com\n```). Antes caían al pill `bg-muted` dentro de un
+    // <pre> oscuro de prose = texto invisible en /agentes (claro y oscuro).
+    const message = source("components/message-component.tsx")
+    assert.match(message, /codeTextForKind/)
+    assert.match(message, /const isBlock = inline === false \|\| match != null/)
+    assert.match(message, /const language = match \? match\[1\] : 'text'/)
+    assert.match(message, /className=\{blockClassName\}/)
+    assert.match(message, /const lang = \(\(match && match\[1\]\) \|\| 'text'\)\.toLowerCase\(\)/)
+  })
+
+  it("forces code inside prose pre to inherit block colors (no light-on-light pill)", () => {
+    const css = source("app/globals.css")
+    assert.match(css, /\.prose pre code,/)
+    assert.match(css, /Guard anti-píldora-invisible/)
+  })
+
   it("shares --content-max 46rem across messages, attachments, and composer", () => {
     const css = source("app/globals.css")
     assert.match(css, /--content-max: 46rem;/)

@@ -1595,8 +1595,21 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // place of the plain syntax-highlighted block.
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
         const match = /language-([\w-]+)/.exec(className || '');
-        if (!inline && match) {
-            const language = match[1];
+        // react-markdown v10 no longer sends a reliable `inline` flag (it is
+        // `undefined` for both inline spans and fenced blocks). A fenced
+        // block without language (```\nsiragpt.com\n``` — típico de la
+        // transcripción de imágenes) llegaba aquí sin `match` y caía al
+        // pill inline `bg-muted` dentro de un <pre> oscuro de prose:
+        // texto claro sobre pill claro = invisible en ambos temas.
+        // Heurística: es bloque si trae lenguaje, si react-markdown lo
+        // marcó explícito (inline === false), o si el contenido trae
+        // salto de línea (los fences siempre terminan en \n; el código
+        // inline nunca).
+        const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+        const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+        if (isBlock) {
+            const language = match ? match[1] : 'text';
+            const blockClassName = className || 'language-text';
             const codeString = String(children).replace(/\n$/, '');
             if (language === 'agent-task-state') {
                 try {
@@ -1621,7 +1634,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 return <ArtifactCard code={codeString} language={language} />;
             }
             return (
-                <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
+                <CustomCodeBlock className={blockClassName} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
                     {children}
                 </CustomCodeBlock>
             );
@@ -1720,8 +1733,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             ),
             code: ({ node, inline, className, children, ...props }: any) => {
                 const match = /language-([\w-]+)/.exec(className || '');
-                if (!inline && match) {
-                    const lang = (match[1] || '').toLowerCase();
+                // Misma heurística que CodeBlock (ver comentario ahí):
+                // en react-markdown v10 `inline` no es fiable y un fence
+                // sin lenguaje debe renderizar como bloque oscuro legible,
+                // nunca como pill inline dentro de un <pre>.
+                const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+                const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+                if (isBlock) {
+                    const lang = ((match && match[1]) || 'text').toLowerCase();
                     const codeString = String(children).replace(/\n$/, '');
                     if (lang === 'agent-task-state') {
                         try {
