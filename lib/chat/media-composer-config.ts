@@ -153,3 +153,71 @@ export function filterMediaModels<T extends { name?: string; provider?: string; 
 ): T[] {
   return (Array.isArray(models) ? models : []).filter((model) => !isForbiddenMediaTextModel(model?.name, model?.provider))
 }
+
+/**
+ * Voice composer settings persisted per browser (same pattern as the effort
+ * picker's `sira:composer:effort`): language/accent/effect/stability and the
+ * provider model survive reloads. Values are validated on read — a stale or
+ * foreign entry falls back to the default. The model name itself is dynamic
+ * (live catalog), so it is only re-validated against the catalog on open.
+ */
+export const VOICE_SETTINGS_STORAGE_KEYS = {
+  model: "sira:composer:voice:model",
+  language: "sira:composer:voice:language",
+  accent: "sira:composer:voice:accent",
+  stability: "sira:composer:voice:stability",
+  effect: "sira:composer:voice:effect",
+} as const
+
+export type VoiceSettingKey = keyof typeof VOICE_SETTINGS_STORAGE_KEYS
+
+const VOICE_SETTING_DEFAULTS: Record<VoiceSettingKey, string | number> = {
+  model: "",
+  language: "Spanish",
+  accent: "Latino",
+  stability: 100,
+  effect: "Studio Clean",
+}
+
+function readVoiceStorage(key: string): string | null {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return null
+    return window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function validatedVoiceSetting(key: VoiceSettingKey, raw: string | null): string | number {
+  const fallback = VOICE_SETTING_DEFAULTS[key]
+  if (raw == null || raw === "") return fallback
+  if (key === "stability") {
+    const n = Number.parseInt(raw, 10)
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : fallback
+  }
+  if (key === "language") return (VOICE_LANGUAGE_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  if (key === "accent") return (VOICE_ACCENT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  if (key === "effect") return (VOICE_EFFECT_OPTIONS as readonly string[]).includes(raw) ? raw : fallback
+  return raw
+}
+
+export function readStoredVoiceSetting(key: VoiceSettingKey, fallback: string | number): string | number {
+  const stored = readVoiceStorage(VOICE_SETTINGS_STORAGE_KEYS[key])
+  if (stored == null || stored === "") return fallback
+  return validatedVoiceSetting(key, stored)
+}
+
+export function writeStoredVoiceSettings(patch: Partial<Record<VoiceSettingKey, string | number>>): void {
+  try {
+    if (typeof window === "undefined" || !window.localStorage) return
+    for (const [key, value] of Object.entries(patch)) {
+      if (!(key in VOICE_SETTINGS_STORAGE_KEYS)) continue
+      window.localStorage.setItem(
+        VOICE_SETTINGS_STORAGE_KEYS[key as VoiceSettingKey],
+        String(value ?? ""),
+      )
+    }
+  } catch {
+    /* private mode / quota — settings simply don't persist */
+  }
+}

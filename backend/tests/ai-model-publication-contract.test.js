@@ -39,6 +39,10 @@ test('VOICE maps to the AUDIO (TTS) catalog before Prisma sees an unsupported en
   assert.ok(voiceMap < findMany, 'the VOICE→AUDIO mapping must happen before the Prisma query');
   assert.match(source, /const VALID_TYPES = \['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'MUSIC', 'VOICE'\]/);
   assert.match(source, /const wantAudio = !type \|\| type === 'AUDIO' \|\| type === 'VOICE';/);
+  // The where-clause itself must carry AUDIO when the UI asks VOICE —
+  // filtering 'VOICE' verbatim threw inside Prisma and emptied the Voz chip
+  // ("Sin modelos activos") while generation itself worked.
+  assert.match(source, /whereClause\.type = type === 'VOICE' \? 'AUDIO' : type;/);
   // Never send the non-Prisma enum value to the database.
   assert.doesNotMatch(source, /type: 'VOICE'/);
   assert.doesNotMatch(source, /in: \[[^\]]*'VOICE'/);

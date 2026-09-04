@@ -377,6 +377,8 @@ import {
   isImageModelEntry,
   isVideoModelEntry,
   providerForMediaModel,
+  readStoredVoiceSetting,
+  writeStoredVoiceSettings,
   type ImageAspectRatio,
   type ImageGenerationCount,
   type ImageQuality,
@@ -2718,11 +2720,15 @@ const ActiveToolsDisplay = ({
     const models = Array.isArray(availableModels) ? availableModels : [];
     const pickByKind = (kind: "image" | "video" | "voice" | "music") => {
       // Video: admin catalog only (type=VIDEO + isActive). Hidden/unknown = omit.
+      // Voice: the backend answers the Voz chip with AUDIO (TTS) rows — the
+      // VOICE alias never survives Prisma — so both shapes count as voice.
       const predicate = kind === "image"
         ? isImageModelEntry
         : kind === "video"
           ? isAdminVisibleVideoModel
-          : (model: any) => model?.type === kind.toUpperCase() && model?.isActive === true;
+          : kind === "voice"
+            ? (model: any) => (model?.type === "VOICE" || model?.type === "AUDIO") && model?.isActive === true
+            : (model: any) => model?.type === kind.toUpperCase() && model?.isActive === true;
       return models.filter(predicate);
     };
     const normalize = (model: any) => ({
@@ -5319,11 +5325,23 @@ function ChatInterfaceContent() {
   const [selectedImageModel, setSelectedImageModel] = React.useState(DEFAULT_IMAGE_MODEL)
   const [isVoiceGenerationActive, setIsVoiceGenerationActive] = React.useState(false)
   const [isGeneratingVoice, setIsGeneratingVoice] = React.useState(false)
-  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>("" as VoiceModel)
-  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>("Spanish")
-  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>("Latino")
-  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState(100)
-  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>("Studio Clean")
+  // Voice settings persist per browser (like the effort picker): choosing
+  // Spanish / Latino / Studio Clean once must survive reloads. The provider
+  // model itself is re-validated against the live catalog on every open.
+  const [selectedVoiceModel, setSelectedVoiceModel] = React.useState<VoiceModel>(() => readStoredVoiceSetting("model", "") as VoiceModel)
+  const [selectedVoiceLanguage, setSelectedVoiceLanguage] = React.useState<VoiceLanguage>(() => readStoredVoiceSetting("language", "Spanish") as VoiceLanguage)
+  const [selectedVoiceAccent, setSelectedVoiceAccent] = React.useState<VoiceAccent>(() => readStoredVoiceSetting("accent", "Latino") as VoiceAccent)
+  const [selectedVoiceStability, setSelectedVoiceStability] = React.useState<number>(() => Number(readStoredVoiceSetting("stability", 100)))
+  const [selectedVoiceEffect, setSelectedVoiceEffect] = React.useState<VoiceEffect>(() => readStoredVoiceSetting("effect", "Studio Clean") as VoiceEffect)
+  React.useEffect(() => {
+    writeStoredVoiceSettings({
+      model: selectedVoiceModel,
+      language: selectedVoiceLanguage,
+      accent: selectedVoiceAccent,
+      stability: selectedVoiceStability,
+      effect: selectedVoiceEffect,
+    })
+  }, [selectedVoiceModel, selectedVoiceLanguage, selectedVoiceAccent, selectedVoiceStability, selectedVoiceEffect])
   // Specific ElevenLabs voice chosen from the Voice Catalog. It is only sent
   // when ElevenLabs is selected; Gemini uses its own production voice.
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
@@ -5376,6 +5394,9 @@ function ChatInterfaceContent() {
   const [imageCatalogModels, setImageCatalogModels] = React.useState<any[]>([])
   const [videoCatalogModels, setVideoCatalogModels] = React.useState<any[]>([])
   const [voiceCatalogModels, setVoiceCatalogModels] = React.useState<any[]>([])
+  // Mirror of the catalog for the best-effort refresh below: a failed fetch
+  // must return the previous list (the useCallback closes over state).
+  const voiceCatalogModelsRef = React.useRef<any[]>([])
   const [musicCatalogModels, setMusicCatalogModels] = React.useState<any[]>([])
   const refreshImageModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('IMAGE');
@@ -5394,13 +5415,21 @@ function ChatInterfaceContent() {
     return models;
   }, []);
   const refreshVoiceModels = React.useCallback(async () => {
-    const modelsResponse = await apiClient.getAIModels('VOICE');
-    // The backend answers VOICE with the Admin-active AUDIO (TTS) rows.
-    const models = Array.isArray(modelsResponse?.models)
-      ? modelsResponse.models.filter((model: any) => (model?.type === 'VOICE' || model?.type === 'AUDIO') && model?.isActive === true)
-      : [];
-    setVoiceCatalogModels(models);
-    return models;
+    try {
+      const modelsResponse = await apiClient.getAIModels('VOICE');
+      // The backend answers VOICE with the Admin-active AUDIO (TTS) rows.
+      const models = Array.isArray(modelsResponse?.models)
+        ? modelsResponse.models.filter((model: any) => (model?.type === 'VOICE' || model?.type === 'AUDIO') && model?.isActive === true)
+        : [];
+      setVoiceCatalogModels(models);
+      voiceCatalogModelsRef.current = models;
+      return models;
+    } catch {
+      // Best-effort like refreshModels: a transient failure (expired JWT,
+      // offline blip) keeps the previous list instead of silently emptying
+      // the Voz picker. The send gate still toasts when nothing is active.
+      return voiceCatalogModelsRef.current;
+    }
   }, []);
   const refreshMusicModels = React.useCallback(async () => {
     const modelsResponse = await apiClient.getAIModels('MUSIC');
