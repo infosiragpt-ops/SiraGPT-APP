@@ -218,6 +218,10 @@ model User {
   deployEnvs            DeployEnv[]
   appConnections        AppConnection[]
 
+  // Sira Voz (VoiceStudio, local): cloned voices + studio jobs (dub, audiobook).
+  voiceProfiles   VoiceProfile[]
+  voiceStudioJobs VoiceStudioJob[]
+
   @@index([deletedAt])
   @@index([lastActiveAt])
   @@map("users")
@@ -4122,4 +4126,51 @@ model FileVersion {
   @@index([fileId])
   @@index([userId])
   @@map("file_versions")
+}
+
+// ── Sira Voz (VoiceStudio, open source, 100 % local) ─────────────────────────
+// VoiceStudio keeps one flat list of voice profiles; this table scopes each
+// cloned voice to the SiraGPT user who created it. `providerId` is the
+// VoiceStudio profile id (what its `voice` / `profile_id` fields accept).
+model VoiceProfile {
+  id         String    @id @default(cuid())
+  userId     String
+  providerId String    @unique
+  name       String
+  language   String?
+  kind       String    @default("clone")
+  sampleName String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("voice_profiles")
+}
+
+// Long-running studio work (dub a video, render an audiobook). Polled by the
+// UI through /api/voice-studio/jobs/:id; the result is persisted into the
+// chat as an assistant message when it finishes.
+model VoiceStudioJob {
+  id         String    @id @default(cuid())
+  userId     String
+  chatId     String?
+  kind       String
+  status     String    @default("queued")
+  stage      String?
+  progress   Int       @default(0)
+  title      String?
+  input      Json?
+  result     Json?
+  error      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("voice_studio_jobs")
 }

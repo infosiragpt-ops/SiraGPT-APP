@@ -389,6 +389,18 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     tags: ['openai', 'audio', 'text-to-speech', 'voice', 'hd', 'professional'],
   },
   {
+    // Sira Voz — VoiceStudio (AGPL-3.0, github.com/debpalash/VoiceStudio) running
+    // as a private container on the production host. Cloning, dubbing,
+    // transcription and audiobooks, 100 % local and free for every plan.
+    id: 'sira-voz',
+    name: 'sira-voz',
+    displayName: 'Sira Voz',
+    provider: 'VoiceStudio',
+    type: 'AUDIO',
+    description: 'Sira Voz: clona voces, dobla vídeos, transcribe y crea audiolibros. 100 % local, gratis, +600 idiomas (VoiceStudio, open source).',
+    tags: ['voicestudio', 'local', 'free', 'audio', 'text-to-speech', 'voice-clone', 'dubbing', 'audiobook', 'multilingual'],
+  },
+  {
     id: 'gemini-2.5-flash-tts',
     name: 'gemini-2.5-flash-tts',
     displayName: 'Gemini 2.5 Flash TTS',

@@ -6,6 +6,7 @@ import {
   Send,
   Paperclip,
   Mic,
+  Clapperboard,
   Square,
   FileText,
   Video,
@@ -228,6 +229,11 @@ const VoiceCatalogModal = dynamic(
   () => import("./voice/voice-catalog-modal"),
   { ssr: false, loading: () => null },
 )
+// Sira Voz — Estudio de voz (VoiceStudio, open source, local, gratis).
+const VoiceStudioModal = dynamic(
+  () => import("./voice/voice-studio-modal"),
+  { ssr: false, loading: () => null },
+)
 import { agenticSearchService, type AgenticEvent, type AgenticSource } from "@/lib/agentic-search-service"
 import { shouldUseDedicatedAcademicSearch } from "@/lib/academic-search-intent"
 import {
@@ -379,6 +385,9 @@ import {
   providerForMediaModel,
   readStoredVoiceSetting,
   writeStoredVoiceSettings,
+  isSiraVozModel,
+  readStoredVoiceStudioVoice,
+  writeStoredVoiceStudioVoice,
   type ImageAspectRatio,
   type ImageGenerationCount,
   type ImageQuality,
@@ -2435,6 +2444,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect,
   onOpenVoiceCatalog,
   selectedVoiceName,
+  onOpenVoiceStudio,
+  selectedSiraVoiceName,
   isMusicGenerationActive,
   setIsMusicGenerationActive,
   selectedMusicModel,
@@ -2526,6 +2537,8 @@ const ActiveToolsDisplay = ({
   setSelectedVoiceEffect: (effect: VoiceEffect) => void;
   onOpenVoiceCatalog: () => void;
   selectedVoiceName?: string | null;
+  onOpenVoiceStudio: (tab?: "voices" | "dub" | "transcribe" | "audiobook" | "jobs") => void;
+  selectedSiraVoiceName?: string | null;
   isMusicGenerationActive: boolean;
   setIsMusicGenerationActive: (value: boolean) => void;
   selectedMusicModel: MusicModel;
@@ -3223,7 +3236,7 @@ const ActiveToolsDisplay = ({
 
           {renderMediaModelPicker("voice", selectedVoiceModel, (name) => {
             setSelectedVoiceModel(name as VoiceModel);
-            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : "Google", surface: "voice-tool-picker" });
+            track("model.selected", { model: name, provider: name === "ElevenLabs" ? "ElevenLabs" : isSiraVozModel(name) ? "VoiceStudio" : "Google", surface: "voice-tool-picker" });
           })}
 
           {/* Spinning "Voice" disc — opens the Voice Catalog (voice picker +
@@ -3239,6 +3252,36 @@ const ActiveToolsDisplay = ({
             <Disc3 className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4 motion-safe:animate-spin" style={{ animationDuration: "3.5s" }} />
             <span className="relative z-10 max-w-[96px] truncate">{selectedVoiceName || "Voice"}</span>
           </button>}
+
+          {/* Sira Voz (VoiceStudio, local, gratis): the user's cloned voice +
+              the studio (clonar / doblar / transcribir / audiolibro). */}
+          {isSiraVozModel(selectedVoiceModel) && (
+            <>
+              <button
+                type="button"
+                data-testid="sira-voz-voice-pill"
+                onClick={() => onOpenVoiceStudio("voices")}
+                title="Elegir o clonar una voz"
+                aria-label={`Voz de Sira Voz: ${selectedSiraVoiceName || "predeterminada"}. Elegir o clonar una voz`}
+                className="group/voice-disc relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-200/78 bg-white/86 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-zinc-900 shadow-[inset_0_1px_0_rgba(255,255,255,0.84),0_10px_24px_-20px_rgba(15,23,42,0.42)] backdrop-blur-xl transition-all duration-200 hover:border-zinc-300 hover:bg-white dark:border-white/14 dark:bg-zinc-900/82 dark:text-white/90 dark:hover:bg-zinc-800/92"
+              >
+                <Mic className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 max-w-[110px] truncate">{selectedSiraVoiceName || "Voz de Sira"}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="sira-voz-studio-button"
+                onClick={() => onOpenVoiceStudio("dub")}
+                title="Estudio de voz: clonar, doblar vídeos, transcribir y crear audiolibros (gratis, 100 % local)"
+                aria-label="Abrir el estudio de voz"
+                className="group/voice-studio relative isolate flex h-7 sm:h-8 shrink-0 items-center gap-1.5 overflow-hidden rounded-full border border-zinc-950 bg-zinc-950 px-2 sm:px-3 text-[11px] sm:text-[14px] font-semibold text-white shadow-[0_10px_24px_-20px_rgba(15,23,42,0.6)] transition-all duration-200 hover:bg-zinc-800 dark:border-white dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+              >
+                <Clapperboard className="relative z-10 h-3.5 sm:h-4 w-3.5 sm:w-4" />
+                <span className="relative z-10 hidden sm:inline">Estudio de voz</span>
+                <span className="relative z-10 sm:hidden">Estudio</span>
+              </button>
+            </>
+          )}
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -5347,6 +5390,28 @@ function ChatInterfaceContent() {
   const [selectedVoiceId, setSelectedVoiceId] = React.useState<string>("")
   const [selectedVoiceName, setSelectedVoiceName] = React.useState<string>("")
   const [voiceCatalogOpen, setVoiceCatalogOpen] = React.useState(false)
+  // Sira Voz (VoiceStudio): the user's cloned voice for the local engine and
+  // the studio dialog (clone / dub / transcribe / audiobook / jobs).
+  const [selectedSiraVoiceId, setSelectedSiraVoiceId] = React.useState<string>("")
+  const [selectedSiraVoiceName, setSelectedSiraVoiceName] = React.useState<string>("")
+  const [voiceStudioOpen, setVoiceStudioOpen] = React.useState(false)
+  const [voiceStudioTab, setVoiceStudioTab] = React.useState<"voices" | "dub" | "transcribe" | "audiobook" | "jobs">("voices")
+  React.useEffect(() => {
+    const stored = readStoredVoiceStudioVoice()
+    if (stored.id) {
+      setSelectedSiraVoiceId(stored.id)
+      setSelectedSiraVoiceName(stored.name)
+    }
+  }, [])
+  const handleSelectSiraVoice = React.useCallback((voice: { id: string; name: string } | null) => {
+    setSelectedSiraVoiceId(voice?.id || "")
+    setSelectedSiraVoiceName(voice?.name || "")
+    writeStoredVoiceStudioVoice(voice && voice.id ? voice : null)
+  }, [])
+  const openVoiceStudio = React.useCallback((tab: "voices" | "dub" | "transcribe" | "audiobook" | "jobs" = "voices") => {
+    setVoiceStudioTab(tab)
+    setVoiceStudioOpen(true)
+  }, [])
   React.useEffect(() => {
     try {
       const id = localStorage.getItem("siragpt:selectedVoiceId") || ""
@@ -12119,6 +12184,8 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
     selectedVoiceEffect, setSelectedVoiceEffect,
     onOpenVoiceCatalog: () => setVoiceCatalogOpen(true),
     selectedVoiceName,
+    onOpenVoiceStudio: openVoiceStudio,
+    selectedSiraVoiceName,
     isMusicGenerationActive, setIsMusicGenerationActive,
     selectedMusicModel, setSelectedMusicModel,
     selectedMusicStyle, setSelectedMusicStyle,
@@ -12913,6 +12980,38 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   // "service unavailable" answer. Like image/video/music, Voice now uses a
   // dedicated, deterministic backend path that ALWAYS produces the MP3 and
   // persists it as a "Generation N" chat artifact via the same renderer.
+  // Files already attached in this chat (chunked uploads included) so the
+  // studio can dub/transcribe media above the direct-upload limit.
+  const voiceStudioChatFiles = React.useMemo(() => {
+    const out: Array<{ id: string; name: string; mimeType: string | null; size?: number | null }> = []
+    const seen = new Set<string>()
+    for (const message of currentChat?.messages || []) {
+      for (const file of parseMessageFilesForRender((message as any)?.files) as any[]) {
+        const id = typeof file?.id === "string" ? file.id : ""
+        if (!id || seen.has(id)) continue
+        seen.add(id)
+        out.push({
+          id,
+          name: String(file?.originalName || file?.name || file?.filename || "archivo"),
+          mimeType: typeof file?.mimeType === "string" ? file.mimeType : typeof file?.type === "string" ? file.type : null,
+          size: Number.isFinite(Number(file?.size)) ? Number(file.size) : null,
+        })
+      }
+    }
+    return out
+  }, [currentChat?.messages])
+  const ensureVoiceStudioChatId = React.useCallback(async (): Promise<string | null> => {
+    if (currentChat?.id) return currentChat.id
+    try {
+      const response = await apiClient.createChat({ title: "Estudio de voz", model: selectedModel })
+      const id = response?.chat?.id || null
+      if (id) await selectChat(id)
+      return id
+    } catch {
+      return null
+    }
+  }, [currentChat?.id, selectedModel, selectChat])
+
   const handleVoiceGeneration = async (msg: string, filesToSend: any[] = []) => {
     const narration = (msg || '').trim();
     if (!narration) {
@@ -13006,7 +13105,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13119,7 +13218,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
         accent: selectedVoiceAccent,
         effect: selectedVoiceEffect,
         stability: selectedVoiceStability,
-        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : undefined,
+        voiceId: selectedVoiceModel === 'ElevenLabs' ? (selectedVoiceId || undefined) : isSiraVozModel(selectedVoiceModel) ? (selectedSiraVoiceId || undefined) : undefined,
         voiceSettings: { stability: Math.min(1, Math.max(0, selectedVoiceStability / 100)) },
       }, { signal: controller.signal });
       if (resp?.content) {
@@ -13747,6 +13846,19 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
                   effectOptions={VOICE_EFFECT_OPTIONS}
                   stability={selectedVoiceStability}
                   onStabilityChange={setSelectedVoiceStability}
+                />
+                <VoiceStudioModal
+                  open={voiceStudioOpen}
+                  onOpenChange={setVoiceStudioOpen}
+                  initialTab={voiceStudioTab}
+                  selectedVoiceId={selectedSiraVoiceId || null}
+                  onSelectVoice={handleSelectSiraVoice}
+                  language={selectedVoiceLanguage}
+                  languageOptions={VOICE_LANGUAGE_OPTIONS}
+                  chatFiles={voiceStudioChatFiles}
+                  ensureChatId={ensureVoiceStudioChatId}
+                  onJobFinished={(job) => { if (job?.chatId) void selectChat(job.chatId) }}
+                  onInsertText={(text) => setInput((prev) => (prev ? `${prev}\n\n${text}` : text))}
                 />
                 <KeyboardShortcutsModal
                   open={shortcutsOpen}

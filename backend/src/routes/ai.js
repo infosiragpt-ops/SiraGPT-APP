@@ -67,6 +67,7 @@ const aiService = require('../services/ai-service');
 const imageEngine = require('../services/media/image-engine');
 const elevenLabsTts = require('../services/ai/elevenlabs-tts');
 const geminiTts = require('../services/ai/gemini-tts');
+const voiceStudio = require('../services/ai/voicestudio-client');
 const elevenLabsMusic = require('../services/ai/elevenlabs-music');
 const lyriaMusic = require('../services/ai/lyria-music');
 const { bindRequestAbort, isAbortError } = require('../utils/abort-signal');
@@ -8586,6 +8587,34 @@ function buildSpeechAgentState({ displayText, artifact, model }) {
   };
 }
 
+/**
+ * Sira Voz — VoiceStudio (open source, local). Same file contract as the
+ * ElevenLabs/Gemini services so /generate-speech treats it as one more
+ * provider; long narrations are chunked + joined by the client module.
+ */
+async function generateVoiceStudioSpeechFile({ text, voice, language, signal }) {
+  const filename = `siravoz_${Date.now()}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}.mp3`;
+  const audioPath = path.join(elevenLabsTts.audioDir, filename);
+  const out = await voiceStudio.synthesizeToFile({
+    text,
+    voice: voice || 'default',
+    language,
+    outputPath: audioPath,
+    signal,
+  });
+  return {
+    filename,
+    audioPath,
+    audioUrl: `/api/elevenlabs/audio/${filename}`,
+    sizeBytes: out.sizeBytes,
+    mime: 'audio/mpeg',
+    format: 'mp3',
+    voiceId: voice || 'default',
+    modelId: 'sira-voz',
+    characters: String(text || '').length,
+  };
+}
+
 function isRecoverableSpeechProviderError(error) {
   const status = Number(error?.status || error?.statusCode || 0);
   const code = String(error?.code || '').toLowerCase();
@@ -8636,14 +8665,23 @@ router.post(
     body('regenerate').optional().isBoolean(),
   ],
   authenticateToken,
-  requirePaidPlan({ feature: 'voice_generation' }),
+  // Sira Voz (VoiceStudio, 100 % local) is free on every plan; the cloud
+  // voices (ElevenLabs / Gemini) keep their paid gate.
+  (req, res, next) => (voiceStudio.isSiraVozModel(req.body?.model)
+    ? next()
+    : requirePaidPlan({ feature: 'voice_generation' })(req, res, next)),
   async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
 
     const elevenReady = elevenLabsTts.isElevenLabsConfigured();
     const geminiReady = geminiTts.isGeminiTtsConfigured();
-    if (!elevenReady && !geminiReady) {
+    const voiceStudioReady = voiceStudio.isConfigured();
+    const wantsSiraVoz = voiceStudio.isSiraVozModel(req.body?.model);
+    if (wantsSiraVoz && !voiceStudioReady) {
+      return res.status(503).json({ ok: false, error: 'Sira Voz todavía no está disponible en este servidor.', code: 'VOICESTUDIO_NOT_CONFIGURED' });
+    }
+    if (!elevenReady && !geminiReady && !voiceStudioReady) {
       return res.status(503).json({ ok: false, error: 'El servicio de voz no está configurado.' });
     }
 
@@ -8667,32 +8705,48 @@ router.post(
     const requestAbort = bindRequestAbort(req, res);
 
     try {
+      // Sira Voz voices are the user's own cloned profiles (voice_profiles);
+      // resolve the VoiceStudio profile id only for rows this user owns.
+      let siraVoice = 'default';
+      if (wantsSiraVoz && voiceId) {
+        const ownedVoice = await prisma.voiceProfile.findFirst({ where: { id: voiceId, userId: req.user.id, deletedAt: null } }).catch(() => null);
+        if (ownedVoice) siraVoice = ownedVoice.providerId;
+      }
       const wantsGemini = /gemini|mimo|minimax/i.test(selectedModel);
-      const providerOrder = wantsGemini
-        ? [geminiReady && 'gemini', elevenReady && 'elevenlabs'].filter(Boolean)
-        : [elevenReady && 'elevenlabs', geminiReady && 'gemini'].filter(Boolean);
+      const providerOrder = wantsSiraVoz
+        ? ['voicestudio']
+        : (wantsGemini
+          ? [geminiReady && 'gemini', elevenReady && 'elevenlabs', voiceStudioReady && 'voicestudio']
+          : [elevenReady && 'elevenlabs', geminiReady && 'gemini', voiceStudioReady && 'voicestudio']).filter(Boolean);
       let result = null;
       let usedProvider = null;
       let lastError = null;
 
       for (const provider of providerOrder) {
         try {
-          result = provider === 'gemini'
-            ? await geminiTts.generateGeminiSpeechFile({
+          result = provider === 'voicestudio'
+            ? await generateVoiceStudioSpeechFile({
               text,
+              voice: siraVoice,
               language,
-              accent,
-              effect,
-              stability,
               signal: requestAbort.signal,
             })
-            : await elevenLabsTts.generateSpeechFile({
-              text,
-              voiceId,
-              modelId,
-              voiceSettings,
-              signal: requestAbort.signal,
-            });
+            : provider === 'gemini'
+              ? await geminiTts.generateGeminiSpeechFile({
+                text,
+                language,
+                accent,
+                effect,
+                stability,
+                signal: requestAbort.signal,
+              })
+              : await elevenLabsTts.generateSpeechFile({
+                text,
+                voiceId,
+                modelId,
+                voiceSettings,
+                signal: requestAbort.signal,
+              });
           usedProvider = provider;
           break;
         } catch (providerError) {
@@ -8713,7 +8767,9 @@ router.post(
 
       const modelLabel = usedProvider === 'gemini'
         ? 'Gemini 2.5 Flash TTS'
-        : 'ElevenLabs';
+        : usedProvider === 'voicestudio'
+          ? 'Sira Voz'
+          : 'ElevenLabs';
       const audioFormat = String(result.format || path.extname(result.filename).slice(1) || 'mp3').toLowerCase();
 
       const artifact = {
@@ -8743,7 +8799,7 @@ router.post(
             text,
             content,
             text.length,
-            usedProvider === 'gemini' ? 'gemini-tts' : 'elevenlabs-tts',
+            usedProvider === 'gemini' ? 'gemini-tts' : usedProvider === 'voicestudio' ? 'sira-voz-tts' : 'elevenlabs-tts',
             [],
             [],
             regenerate,
@@ -8775,11 +8831,13 @@ router.post(
       }
       console.error('[ai/generate-speech] error:', error?.message || error);
       const status = error?.code === 'TEXT_REQUIRED' ? 400
-        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED') ? 503
+        : (error?.code === 'ELEVENLABS_NOT_CONFIGURED' || error?.code === 'GEMINI_TTS_NOT_CONFIGURED' || error?.code === 'VOICESTUDIO_NOT_CONFIGURED') ? 503
           : 502;
       return res.status(status).json({
         ok: false,
-        error: 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
+        error: error?.code === 'VOICESTUDIO_BUSY' || error?.code === 'VOICESTUDIO_TIMEOUT'
+          ? 'Sira Voz está ocupado con otra generación. Intenta de nuevo en unos segundos.'
+          : 'No se pudo generar el audio. Intenta de nuevo en unos segundos.',
       });
     } finally {
       requestAbort.cleanup();
