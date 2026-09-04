@@ -10,6 +10,7 @@ const FormData = require('form-data');
 const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
 const {
   contentDispositionHeader,
+  parseHttpByteRange,
   resolveConfinedFile,
 } = require('../middleware/file-response-safety');
 const {
@@ -429,11 +430,37 @@ router.get('/audio/:filename', (req, res) => {
       return res.status(404).json({ error: 'Audio file not found' });
     }
 
-    res.setHeader('Content-Type', audioContentType(resolved.filename));
-    res.setHeader('Content-Disposition', contentDispositionHeader('inline', resolved.filename));
-    res.setHeader('Content-Length', stat.size);
+    // Range support (same convention as /api/video/watch): seeking inside a
+    // long narration must not force a full re-download, and some mobile
+    // browsers stall duration without Accept-Ranges + 206.
+    const range = parseHttpByteRange(req.headers.range, stat.size);
+    if (range?.error) {
+      res.setHeader('Content-Range', range.contentRange);
+      return res.status(416).json({ error: 'Requested range not satisfiable' });
+    }
 
-    const stream = fs.createReadStream(resolved.filePath);
+    const contentType = audioContentType(resolved.filename);
+    const disposition = contentDispositionHeader('inline', resolved.filename);
+    const start = range ? range.start : 0;
+    const end = range ? range.end : stat.size - 1;
+    if (range) {
+      res.writeHead(206, {
+        'Content-Type': contentType,
+        'Content-Disposition': disposition,
+        'Content-Range': range.contentRange,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': range.contentLength,
+      });
+    } else {
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', disposition);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Length', stat.size);
+    }
+
+    const stream = (start === 0 && end === stat.size - 1)
+      ? fs.createReadStream(resolved.filePath)
+      : fs.createReadStream(resolved.filePath, { start, end });
     stream.on('error', (err) => {
       console.error('Error streaming audio file:', err);
       if (!res.headersSent) {
@@ -442,6 +469,8 @@ router.get('/audio/:filename', (req, res) => {
         res.destroy(err);
       }
     });
+    // Release the fd if the client aborts mid-download.
+    res.on('close', () => { if (!res.writableFinished) stream.destroy(); });
     stream.pipe(res);
 
   } catch (error) {

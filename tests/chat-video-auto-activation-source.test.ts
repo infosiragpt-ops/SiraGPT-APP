@@ -374,7 +374,7 @@ describe("chat video auto-activation source contract", () => {
   it("uses the working Gemini TTS provider and sends professional voice controls", () => {
     assert.match(mediaConfigSource, /export type VoiceModel = "Gemini 2\.5 Flash TTS" \| "ElevenLabs"/)
     assert.match(mediaConfigSource, /VOICE_MODEL_OPTIONS: readonly VoiceModel\[\] = \["Gemini 2\.5 Flash TTS", "ElevenLabs"\]/)
-    assert.match(source, /useState<VoiceModel>\("" as VoiceModel\)/)
+    assert.match(source, /useState<VoiceModel>\(\(\) => readStoredVoiceSetting\("model", ""\) as VoiceModel\)/)
     assert.match(source, /getAIModels\('VOICE'\)/)
     assert.match(source, /\(model\?\.type === 'VOICE' \|\| model\?\.type === 'AUDIO'\) && model\?\.isActive === true/)
     assert.match(source, /No hay modelos de voz activos\. Activa uno desde Administración/)

@@ -863,7 +863,10 @@ router.get('/models', optionalAuth, responseCache({ ttlMs: 5 * 60_000, namespace
     };
 
     if (type) {
-      whereClause.type = type;
+      // VOICE is a UI alias for the Voz chip, not a Prisma ModelType: the
+      // TTS rows live as AUDIO. Filtering 'VOICE' verbatim threw and left
+      // the chip empty ("Sin modelos activos") while generation worked.
+      whereClause.type = type === 'VOICE' ? 'AUDIO' : type;
     }
 
 
