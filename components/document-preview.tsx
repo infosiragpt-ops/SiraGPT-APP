@@ -3,7 +3,7 @@
 import React from "react"
 import { createPortal } from "react-dom"
 import dynamic from "next/dynamic"
-import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus, MoreHorizontal } from "lucide-react"
+import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -93,9 +93,11 @@ type State =
   | { kind: "unsupported"; message: string }
   | { kind: "error"; message: string }
 
-const MIN_PREVIEW_ZOOM = 0.75
-const MAX_PREVIEW_ZOOM = 1.75
+const MIN_PREVIEW_ZOOM = 0.25
+const MAX_PREVIEW_ZOOM = 2
 const PREVIEW_ZOOM_STEP = 0.1
+// Presets del selector de zoom del encabezado (25/50/100/150/200%).
+const ZOOM_PRESETS = [0.25, 0.5, 1, 1.5, 2] as const
 
 const previewHeaderClass =
   "border-b border-white/45 bg-white/72 shadow-[0_18px_50px_rgba(15,23,42,0.08)] backdrop-blur-2xl supports-[backdrop-filter]:bg-white/58 dark:border-white/10 dark:bg-zinc-950/72 dark:shadow-black/25"
@@ -406,6 +408,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const [pageCount, setPageCount] = React.useState(1)
   const isOverlay = useDocumentPreviewOverlay()
   const overlayRef = React.useRef<HTMLDivElement | null>(null)
+  const [isFullscreen, setIsFullscreen] = React.useState(false)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const docxRootRef = React.useRef<HTMLDivElement | null>(null)
   const docxStyleRef = React.useRef<HTMLDivElement | null>(null)
@@ -588,6 +591,42 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     if (typeof window === "undefined") return
     window.open(downloadUrl, "_blank", "noopener,noreferrer")
   }, [downloadUrl])
+
+  // Pantalla completa sobre el contenedor del visor. Si la Fullscreen API no
+  // está disponible o deniega el permiso, cae a abrir el binario en pestaña.
+  const toggleFullscreen = React.useCallback(() => {
+    if (typeof document === "undefined") return
+    const el = overlayRef.current
+    try {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen().catch(() => {})
+      } else if (el?.requestFullscreen) {
+        void el.requestFullscreen().catch(() => {
+          if (typeof window !== "undefined") window.open(downloadUrl, "_blank", "noopener,noreferrer")
+        })
+      } else if (typeof window !== "undefined") {
+        window.open(downloadUrl, "_blank", "noopener,noreferrer")
+      }
+    } catch {
+      if (typeof window !== "undefined") window.open(downloadUrl, "_blank", "noopener,noreferrer")
+    }
+  }, [downloadUrl])
+
+  React.useEffect(() => {
+    if (typeof document === "undefined") return
+    const onFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement)
+    document.addEventListener("fullscreenchange", onFullscreenChange)
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange)
+  }, [])
+
+  // Valor del <select> de zoom: preset exacto o el más cercano al zoom actual.
+  const zoomPresetValue = React.useMemo(() => {
+    let best: number = ZOOM_PRESETS[0]
+    for (const preset of ZOOM_PRESETS) {
+      if (Math.abs(preset - zoom) < Math.abs(best - zoom)) best = preset
+    }
+    return String(best)
+  }, [zoom])
 
   React.useEffect(() => {
     if (!isOverlay || typeof document === "undefined") return
@@ -926,8 +965,8 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
       </DropdownMenu>
     </div>
   ) : (
-    <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center px-4", previewHeaderClass)}>
-        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden pr-3">
+    <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center gap-2 px-4", previewHeaderClass)}>
+        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
           <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
             <FileText className="h-5 w-5" />
           </div>
@@ -938,12 +977,64 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
           </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+        {/* Paginador centrado: ‹ anterior · actual/total · siguiente ›.
+            Minimalista sobre fondo blanco; la flecha izquierda se deshabilita
+            en la primera página y la derecha en la última. */}
+        {canUsePreviewControls && (
+          <nav
+            aria-label="Navegación de páginas"
+            className="flex shrink-0 items-center gap-3 rounded-full border border-zinc-200 bg-white px-2 py-1 shadow-sm dark:border-white/10 dark:bg-zinc-950"
+          >
+            <button
+              type="button"
+              data-testid="ppt-nav-prev"
+              onClick={() => goToPreviewPage(activePage - 1)}
+              disabled={activePage <= 1}
+              title="Anterior"
+              aria-label="Diapositiva anterior"
+              className="grid h-8 w-8 place-items-center rounded-full text-zinc-600 transition hover:bg-zinc-100 disabled:pointer-events-none disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-white/10"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span data-testid="ppt-page-counter" aria-live="polite" className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">
+              {activePage}/{pageCount}
+            </span>
+            <button
+              type="button"
+              data-testid="ppt-nav-next"
+              onClick={() => goToPreviewPage(activePage + 1)}
+              disabled={activePage >= pageCount}
+              title="Siguiente"
+              aria-label="Diapositiva siguiente"
+              className="grid h-8 w-8 place-items-center rounded-full text-zinc-600 transition hover:bg-zinc-100 disabled:pointer-events-none disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-white/10"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </nav>
+        )}
+        <div className="flex flex-1 shrink-0 items-center justify-end gap-1">
+          {canUsePreviewControls && (
+            <select
+              data-testid="ppt-zoom-select"
+              aria-label="Nivel de zoom"
+              title="Nivel de zoom"
+              value={zoomPresetValue}
+              onChange={(e) => setBoundedZoom(Number(e.target.value))}
+              className={cn(previewMetricClass, "h-9 cursor-pointer appearance-none pr-2")}
+            >
+              {ZOOM_PRESETS.map((preset) => (
+                <option key={preset} value={String(preset)}>
+                  {Math.round(preset * 100)}%
+                </option>
+              ))}
+            </select>
+          )}
           <Button
             variant="ghost"
             size="icon"
             onClick={download}
             disabled={isDownloading}
+            data-testid="ppt-btn-download"
             className={cn("shrink-0", previewIconButtonClass)}
             title={isDownloading ? "Descargando" : "Descargar"}
             aria-label={isDownloading ? "Descargando" : "Descargar"}
@@ -953,17 +1044,19 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
           <Button
             variant="ghost"
             size="icon"
-            onClick={openInNewTab}
+            onClick={toggleFullscreen}
+            data-testid="ppt-btn-fullscreen"
             className={cn("shrink-0", previewIconButtonClass)}
-            title="Abrir en una pestaña"
-            aria-label="Abrir documento en una pestaña"
+            title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
+            aria-label={isFullscreen ? "Salir de pantalla completa" : "Ver en pantalla completa"}
           >
-            <ExternalLink className="h-4 w-4" />
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
             onClick={onClose}
+            data-testid="ppt-btn-close"
             className={cn("shrink-0", previewIconButtonClass)}
             title="Cerrar"
             aria-label="Cerrar previsualización"
