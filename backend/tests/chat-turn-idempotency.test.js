@@ -653,7 +653,7 @@ describe('chat turn idempotency', () => {
     assert.match(activeSource, /claimStreamController\([\s\S]*?\{ replaceOwner: true \}/);
     assert.match(
       activeSource,
-      /duplicateTurn\?\.idempotencyConflict[\s\S]*?continuing as new turn/,
+      /duplicateTurn\?\.idempotencyConflict[\s\S]*?generateLog\.warn\(\s*'idempotency\.payload_conflict'/,
     );
     assert.doesNotMatch(
       activeSource,
@@ -662,7 +662,7 @@ describe('chat turn idempotency', () => {
     assert.doesNotMatch(activeSource, /IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/);
     assert.match(
       activeSource,
-      /in-memory idempotency mismatch — dropping stale turn/,
+      /generateLog\.warn\(\s*'idempotency\.stale_turn_dropped'/,
     );
     assert.match(
       activeSource,

@@ -3,6 +3,11 @@ const { body, validationResult } = require('express-validator');
 const { authenticateToken } = require('../middleware/auth');
 const { requireScope } = require('../middleware/require-scope');
 const requirePaidPlan = require('../middleware/require-paid-plan');
+const {
+  createGenerateLogger,
+  summarizeGenerateRequest,
+} = require('../services/ai/generate-request-observability');
+const generatePersistenceLog = createGenerateLogger();
 
 // Lazy/safe enforce-org-quota middleware. Wrapped in a try/catch so a
 // crash in the middleware module (e.g. prisma model missing in dev) can
@@ -18,7 +23,8 @@ function enforceOrgQuotaSafe(req, res, next) {
     }
     return _enforceOrgQuotaMw(req, res, next);
   } catch (err) {
-    try { console.warn('[ai/generate] enforce-org-quota load/run failed:', err && err.message); } catch (_) {}
+    const middlewareLog = createGenerateLogger({ logger: req.log });
+    middlewareLog.warnError('middleware.organization_quota_failed', err);
     return next();
   }
 }
@@ -38,7 +44,8 @@ function enforceOrgRateLimitSafe(req, res, next) {
     }
     return _enforceOrgRateLimitMw(req, res, next);
   } catch (err) {
-    try { console.warn('[ai/generate] enforce-org-rate-limit load/run failed:', err && err.message); } catch (_) {}
+    const middlewareLog = createGenerateLogger({ logger: req.log });
+    middlewareLog.warnError('middleware.organization_rate_limit_failed', err);
     return next();
   }
 }
@@ -57,7 +64,8 @@ function enforceOrgBudgetSafe(req, res, next) {
     }
     return _enforceOrgBudgetMw(req, res, next);
   } catch (err) {
-    try { console.warn('[ai/generate] enforce-org-budget load/run failed:', err && err.message); } catch (_) {}
+    const middlewareLog = createGenerateLogger({ logger: req.log });
+    middlewareLog.warnError('middleware.organization_budget_failed', err);
     return next();
   }
 }
@@ -1608,7 +1616,10 @@ function deriveChatTitleFromPrompt(prompt) {
   return (lastSpace > 30 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…';
 }
 
-async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0) {
+async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles = [], regenerate = false, extraMetadata = null, userPlan = null, reasoningPayload = null, agentRun = null, _attempt = 0, { observabilityLog = generatePersistenceLog } = {}) {
+  const persistenceLog = observabilityLog && typeof observabilityLog.info === 'function'
+    ? observabilityLog
+    : generatePersistenceLog;
   const safeExtraMetadata = extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {};
   const idempotencyKey = safeExtraMetadata.idempotencyKey || null;
   const streamId = safeExtraMetadata.streamId || null;
@@ -1623,7 +1634,18 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
   return withGenerateTurnSaveLock(lockKey, async () => {
     let assistantMessage = null;
     try {
-      console.log("Background task: Saving to database...", { assistantFiles });
+      persistenceLog.info('persistence.started', {
+        attachmentCount: Array.isArray(processedFiles) ? processedFiles.length : 0,
+        assistantFileCount: Array.isArray(assistantFiles) ? assistantFiles.length : 0,
+        promptChars: String(prompt || '').length,
+        responseChars: normalizedResponseContent.length,
+        regenerate: regenerate === true,
+        hasChat: Boolean(chatId),
+        hasStream: Boolean(streamId),
+        hasIdempotencyKey: Boolean(idempotencyKey),
+        attempt: _attempt + 1,
+        maxAttempts: 3,
+      });
 
       // Post-response fidelity audit — fires only when files were attached
       // AND we have a non-empty assistant content. Pure deterministic check
@@ -1635,10 +1657,15 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         try {
           const audit = documentResponseFidelity.auditChatResponse(normalizedResponseContent, processedFiles);
           if (audit.total > 0 && (audit.unsupported > 0 || audit.contradicted > 0)) {
-            console.log(`[ai/fidelity] ${audit.summary} chatId=${chatId || 'none'} files=${processedFiles.length}`);
+            persistenceLog.warn('fidelity.warning', {
+              attachmentCount: processedFiles.length,
+              fidelityTotal: audit.total,
+              unsupportedCount: audit.unsupported,
+              contradictedCount: audit.contradicted,
+            });
           }
         } catch (fidelityErr) {
-          console.warn('[ai/fidelity] audit failed (continuing):', fidelityErr?.message || fidelityErr);
+          persistenceLog.warnError('fidelity.failed', fidelityErr);
         }
       }
 
@@ -1651,7 +1678,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       if (chatId) {
         const chat = await prisma.chat.findFirst({ where: { id: chatId, userId } });
         if (!chat) {
-          console.error("Chat not found for background save, skipping.");
+          persistenceLog.warn('persistence.chat_missing', { hasChat: true });
           return { assistantMessage: null };
         }
 
@@ -1663,18 +1690,18 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           allowAssistantOnly: regenerate,
         });
         if (existingTurn?.idempotencyConflict) {
-          console.warn('[ai/generate] idempotency payload conflict during save', {
-            chatId,
-            idempotencyKey: idempotencyKey || null,
-            streamId: streamId || null,
+          persistenceLog.warn('persistence.idempotency_conflict', {
+            hasChat: true,
+            hasIdempotencyKey: Boolean(idempotencyKey),
+            hasStream: Boolean(streamId),
           });
           return { assistantMessage: null, idempotencyConflict: true };
         }
         if (existingTurn?.assistantMessage) {
-          console.info('[ai/generate] duplicate turn save skipped', {
-            chatId,
-            idempotencyKey: idempotencyKey || null,
-            streamId: streamId || null,
+          persistenceLog.info('persistence.duplicate_skipped', {
+            hasChat: true,
+            hasIdempotencyKey: Boolean(idempotencyKey),
+            hasStream: Boolean(streamId),
           });
           return { assistantMessage: existingTurn.assistantMessage, duplicate: true };
         }
@@ -1700,10 +1727,10 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           ? turnMetadata
           : null;
         if (!normalizedResponseContent.trim() && !hasAssistantFiles) {
-          console.warn('[ai/generate] skipped empty assistant message save', {
-            chatId,
-            idempotencyKey: idempotencyKey || null,
-            streamId: streamId || null,
+          persistenceLog.warn('persistence.empty_assistant_skipped', {
+            hasChat: true,
+            hasIdempotencyKey: Boolean(idempotencyKey),
+            hasStream: Boolean(streamId),
           });
           return { assistantMessage: null, skippedEmptyAssistant: true };
         }
@@ -1751,7 +1778,7 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
           const { persistAgentRun } = require('../services/agent-harness/agent-steps-store');
           await persistAgentRun({ prisma, messageId: assistantMessage.id, run: agentRun, model });
         } catch (agentPersistErr) {
-          console.warn('[ai/generate] agent run persist failed:', agentPersistErr && agentPersistErr.message);
+          persistenceLog.warnError('persistence.agent_run_failed', agentPersistErr);
         }
       }
 
@@ -1768,14 +1795,24 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
         && Array.isArray(processedFiles)
         && processedFiles.length > 0;
       if (isFreeAttachmentTurn) {
-        console.log('[ai/quota] FREE attachment turn — exempt from the daily text cap (usage not counted)');
+        persistenceLog.info('quota.attachment_exempt', {
+          attachmentCount: processedFiles.length,
+        });
       } else {
         await usageService.recordUsage(userId, model, totalTokens, totalTokens * 0.001);
       }
 
-      console.log("Background task: Database save complete.");
+      persistenceLog.info('persistence.completed', {
+        attachmentCount: Array.isArray(processedFiles) ? processedFiles.length : 0,
+        assistantFileCount: Array.isArray(assistantFiles) ? assistantFiles.length : 0,
+        responseChars: normalizedResponseContent.length,
+        success: true,
+      });
     } catch (dbError) {
-      console.error("Error in background database save:", dbError);
+      persistenceLog.error('persistence.failed', dbError, {
+        attempt: _attempt + 1,
+        maxAttempts: 3,
+      });
       // Un blip transitorio de DB no debe perder el turno. Reintenta la
       // persistencia completa FUERA del lock (setTimeout corre cuando el
       // callback ya soltó withGenerateTurnSaveLock, así no hay deadlock) y
@@ -1784,17 +1821,22 @@ async function saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent
       // agotar intentos deja un registro inconfundible de pérdida de turno.
       if (_attempt < 2 && !assistantMessage) {
         const delayMs = 500 * (_attempt + 1);
-        console.warn(`[ai/persist] background save failed — retrying in ${delayMs}ms (attempt ${_attempt + 2}/3)`, { chatId, userId });
+        persistenceLog.warn('persistence.retry_scheduled', {
+          delayMs,
+          attempt: _attempt + 2,
+          maxAttempts: 3,
+        });
         setTimeout(() => {
-          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1)
-            .catch((retryErr) => console.error('[ai/persist] retry attempt crashed:', retryErr));
+          saveChatAndTrackUsage(userId, chatId, prompt, fullResponseContent, tokens, model, processedFiles, assistantFiles, regenerate, extraMetadata, userPlan, reasoningPayload, agentRun, _attempt + 1, { observabilityLog: persistenceLog })
+            .catch((retryErr) => persistenceLog.error('persistence.retry_crashed', retryErr, {
+              attempt: _attempt + 2,
+              maxAttempts: 3,
+            }));
         }, delayMs);
       } else if (!assistantMessage) {
-        console.error('[ai/persist] TURN LOST: database save failed after 3 attempts', {
-          chatId,
-          userId,
-          model,
-          promptPreview: String(prompt || '').slice(0, 80),
+        persistenceLog.error('persistence.exhausted', dbError, {
+          attempt: 3,
+          maxAttempts: 3,
         });
       }
       return { assistantMessage, persistError: true };
@@ -2016,6 +2058,7 @@ router.post(
   async (req, res) => {
     const controller = new AbortController();
     const signal = controller.signal;
+    const generateLog = createGenerateLogger({ logger: req.log });
     const { streamId } = req.body;
     const __lastEventIdHeader = req.get && req.get('Last-Event-ID');
     let __lastEventIdCookie = null;
@@ -2089,7 +2132,7 @@ router.post(
         controller,
       );
       if (__ownsStreamController) {
-        console.log(`Stream registered with ID: ${streamId}`);
+        generateLog.info('stream.registered', { hasStream: true });
       }
     }
 
@@ -2104,7 +2147,7 @@ router.post(
     res.on('close', () => {
       if (!res.writableEnded) {
         clientGone = true;
-        console.log(`Client response closed for chat: ${req.body.chatId}. Run continues in background (detached).`);
+        generateLog.info('client.detached', { source: 'response_close', hasChat: Boolean(req.body.chatId) });
         releaseIncompleteActiveGenerateTurn(
           req._activeGenerateTurn,
           'generate turn owner socket closed before completion',
@@ -2113,7 +2156,7 @@ router.post(
     });
     req.on('aborted', () => {
       clientGone = true;
-      console.log(`Client request aborted for chat: ${req.body.chatId}. Run continues in background (detached).`);
+      generateLog.info('client.detached', { source: 'request_abort', hasChat: Boolean(req.body.chatId) });
       releaseIncompleteActiveGenerateTurn(
         req._activeGenerateTurn,
         'generate turn owner aborted before completion',
@@ -2222,6 +2265,17 @@ router.post(
       const isAuth = !!req.user;
       const userId = isAuth ? req.user.id : null;
       const canPersist = isAuth && !!chatId;
+      generateLog.info('request.accepted', summarizeGenerateRequest({
+        prompt,
+        files,
+        chatId,
+        streamId,
+        idempotencyKey,
+        regenerate,
+        resume: __hasResumeRequest,
+        publicWeb: __publicWebReadonly,
+        authenticated: isAuth,
+      }));
 
       // 🔒 IDOR guard (read side): a supplied chatId must reference a chat THIS
       // user owns — or one that doesn't exist yet (brand-new chat). The
@@ -2244,7 +2298,7 @@ router.post(
             return res.status(404).json({ error: 'Chat not found' });
           }
         } catch (ownerErr) {
-          console.warn('[ai/generate] chat ownership pre-check failed (continuing):', ownerErr?.message || ownerErr);
+          generateLog.warnError('ownership.precheck_failed', ownerErr);
         }
       }
 
@@ -2298,9 +2352,8 @@ router.post(
             || fairCode === 'rate_limited'
             || fairCode === 'queue_wait'
             || fairCode === 'queue_fairness';
-          console.warn('[ai/generate] fair queue reject', {
-            chatId,
-            code: fairCode,
+          generateLog.warn('queue.rejected', {
+            reasonCode: fairCode,
             status,
             retryable: fairRetryable,
           });
@@ -2350,12 +2403,7 @@ router.post(
               if (requestedCatalogEntry && Array.isArray(requestedCatalogEntry.plans) && requestedCatalogEntry.plans.includes('FREE')) {
                 const requestedProvider = inferProviderFromModelId(requestedModelBeforeQuota);
                 if (agenticStream.modelSupportsFunctionCalling(requestedProvider, requestedModelBeforeQuota)) {
-                  console.log(
-                    '[agentic-override] restoring original tool-capable model',
-                    requestedModelBeforeQuota,
-                    'over',
-                    quotaRoutedModel
-                  );
+                  generateLog.info('routing.tool_capable_model_restored', { success: true });
                   model = requestedModelBeforeQuota;
                   provider = requestedProvider;
                 }
@@ -2461,7 +2509,7 @@ router.post(
         if (activeTurn && activeTurn.requestFingerprint !== generateIdempotencyRequestHash) {
           // Safari/Cloudflare can retry the same streamId with a new prompt.
           // A 409 here used to mix JSON onto the next generate finally SSE write.
-          console.warn('[ai/generate] in-memory idempotency mismatch — dropping stale turn', { chatId });
+          generateLog.warn('idempotency.stale_turn_dropped', { hasChat: Boolean(chatId) });
           if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
             activeGenerateTurns.delete(activeGenerateTurnKey);
           }
@@ -2471,11 +2519,11 @@ router.post(
           const activeWait = await waitForActiveTurn(activeTurn);
           if (activeWait.outcome === 'replay') {
             fullResponseContent = activeWait.turn.assistantMessage.content || '';
-            console.warn('[ai/generate] active duplicate turn replayed', { chatId });
+            generateLog.info('idempotency.active_turn_replayed', { hasChat: Boolean(chatId) });
             return streamDuplicateTurnReplay(res, activeWait.turn, model);
           }
           if (activeWait.error) {
-            console.warn('[ai/generate] active duplicate turn wait failed:', activeWait.error.message);
+            generateLog.warnError('idempotency.active_turn_wait_failed', activeWait.error);
           }
           // start a fresh generate after that stream closed.
           if (activeGenerateTurns.get(activeGenerateTurnKey) === activeTurn) {
@@ -2528,21 +2576,20 @@ router.post(
             allowAssistantOnly: regenerate,
           });
           if (duplicateTurn?.idempotencyConflict) {
-            console.warn('[ai/generate] idempotency payload conflict — continuing as new turn', { chatId });
+            generateLog.warn('idempotency.payload_conflict', { hasChat: Boolean(chatId) });
           } else if (duplicateTurn?.assistantMessage) {
             fullResponseContent = duplicateTurn.assistantMessage.content || '';
             if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
               req._activeGenerateTurn.resolve(duplicateTurn);
             }
-            console.warn('[ai/generate] duplicate completed turn replayed', {
-              chatId,
-              userMessageId: duplicateTurn.userMessage?.id || null,
-              assistantMessageId: duplicateTurn.assistantMessage.id,
+            generateLog.info('idempotency.completed_turn_replayed', {
+              hasChat: Boolean(chatId),
+              success: true,
             });
             return streamDuplicateTurnReplay(res, duplicateTurn, model);
           }
         } catch (duplicateErr) {
-          console.warn('[ai/generate] duplicate completed turn check failed:', duplicateErr && duplicateErr.message);
+          generateLog.warnError('idempotency.completed_turn_check_failed', duplicateErr);
         }
       }
 
@@ -2566,16 +2613,14 @@ router.post(
               confidence: injectionVerdict.confidence,
             });
           }
-          console.warn('[ai/generate] prompt_injection_suspected', JSON.stringify({
-            user_id: userId || null,
-            chat_id: chatId || null,
+          generateLog.warn('security.prompt_injection_suspected', {
             confidence: injectionVerdict.confidence,
-            patterns: injectionVerdict.patterns,
-          }));
+            patternCount: Array.isArray(injectionVerdict.patterns) ? injectionVerdict.patterns.length : 0,
+          });
         }
       } catch (injErr) {
         // never break the request path on detector errors
-        try { console.warn('[ai/generate] prompt-injection detector failed:', injErr && injErr.message); } catch (_) {}
+        generateLog.warnError('security.prompt_injection_detector_failed', injErr);
       }
 
         // Filter pipeline pre-hooks. Cross-cutting concerns
@@ -2605,7 +2650,7 @@ router.post(
           } catch (e) {
             // Was silently swallowed — that made thread context loss invisible.
             // Log so we can tell a real DB failure from a genuinely empty chat.
-            console.warn('[ai/generate] early history load failed', { chatId, err: e?.message });
+            generateLog.warnError('history.load_failed', e, { hasChat: Boolean(chatId) });
           }
         }
         // The public-web branch below is a strict context-free boundary. The
@@ -2619,7 +2664,7 @@ router.post(
             history: _filterHistory, req, res,
           };
           try { await agentFilters.runPre(req._filterCtx); }
-          catch (filtErr) { try { console.warn('[ai/generate] filter pre-hook failed:', filtErr && filtErr.message); } catch (_) {} }
+          catch (filtErr) { generateLog.warnError('filters.pre_hook_failed', filtErr); }
           if (req._filterCtx.aborted) {
             try {
               await agentFilters.runPost(req._filterCtx);
@@ -2765,7 +2810,7 @@ router.post(
             // Startup validation requires a signing secret in production. A
             // local/test process without one keeps chat working but does not
             // advertise or accept a resumable bearer cursor.
-            try { console.warn('[ai/generate] stream resume disabled: signing secret is not configured'); } catch (_) {}
+            generateLog.warn('resume.signing_secret_missing');
           }
         }
 
@@ -2858,7 +2903,7 @@ router.post(
           });
         }
       } catch (resumeErr) {
-        try { console.warn('[ai/generate] stream-resume open failed:', resumeErr && resumeErr.message); } catch (_) {}
+        generateLog.warnError('resume.open_failed', resumeErr);
         if (__hasResumeRequest) {
           return res.status(503).json({ error: 'stream_resume_unavailable' });
         }
@@ -2905,7 +2950,7 @@ router.post(
         customConnection = _customResolution.connection || null;
         if (customConnection) actualProvider = 'Custom';
       } catch (customLookupErr) {
-        console.warn('[ai/generate] custom connection lookup failed:', customLookupErr && customLookupErr.message);
+        generateLog.warnError('connections.custom_lookup_failed', customLookupErr);
       }
       if (_customResolution.isCustom && !customConnection) {
         controller.abort();
@@ -3017,10 +3062,10 @@ router.post(
           });
           if (Array.isArray(__reattachedDocs) && __reattachedDocs.length > 0) {
             files = __reattachedDocs;
-            console.log(`[ai/generate] reattached ${__reattachedDocs.length} prior chat document(s) for follow-up question`);
+            generateLog.info('documents.reattached', { documentCount: __reattachedDocs.length });
           }
         } catch (__reattachErr) {
-          console.warn('[ai/generate] document reattach failed (continuing without):', __reattachErr?.message || __reattachErr);
+          generateLog.warnError('documents.reattach_failed', __reattachErr);
         }
       }
 
@@ -3048,7 +3093,7 @@ router.post(
               { userId, processedFiles, prompt },
             );
           } catch (attachCtxErr) {
-            console.warn('[ai] uploaded file context build failed (continuing with raw extracts):', attachCtxErr.message);
+            generateLog.warnError('documents.uploaded_context_failed', attachCtxErr);
           }
         }
       }
@@ -3078,12 +3123,15 @@ router.post(
                 { userId, processedFiles, prompt },
               );
             } catch (recoverCtxErr) {
-              console.warn('[ai] recovered file context build failed (continuing with raw extracts):', recoverCtxErr.message);
+              generateLog.warnError('documents.recovered_context_failed', recoverCtxErr);
             }
-            console.log(`[ai] recovered ${processedFiles.length} document(s) from chat history for follow-up turn (chat ${chatId})`);
+            generateLog.info('documents.recovered_from_history', {
+              documentCount: processedFiles.length,
+              hasChat: Boolean(chatId),
+            });
           }
         } catch (recoverErr) {
-          console.warn('[ai] recent chat document recovery failed (continuing without):', recoverErr.message || recoverErr);
+          generateLog.warnError('documents.history_recovery_failed', recoverErr);
         }
       }
 
@@ -3113,7 +3161,7 @@ router.post(
           mode: 'auto',
           directUrlGrounding: true,
         }).catch((error) => {
-          console.warn('[ai/public-web] grounding unavailable:', error?.message || error);
+          generateLog.warnError('public_web.grounding_unavailable', error);
           return null;
         });
 
@@ -3193,7 +3241,7 @@ router.post(
         try {
           await usageService.recordUsage(userId, actualModel, totalTokens, totalTokens * 0.001);
         } catch (usageError) {
-          console.warn('[ai/public-web] usage record failed:', usageError?.message || usageError);
+          generateLog.warnError('public_web.usage_record_failed', usageError);
         }
         let costUSD = 0;
         try {
@@ -3291,7 +3339,10 @@ router.post(
       // Unpack chat result
       if (_chatPrefetch && _chatPrefetch.project) {
         project = _chatPrefetch.project;
-        console.log(`📁 Using Project: ${project.name} (${project.files?.length || 0} files, ${project.documents?.length || 0} documents, ${project.memories?.length || 0} memories)`);
+        generateLog.info('context.project_loaded', {
+          attachmentCount: project.files?.length || 0,
+          documentCount: project.documents?.length || 0,
+        });
       }
       if (_chatPrefetch && _chatPrefetch.customGpt) {
         customGpt = _chatPrefetch.customGpt;
@@ -3304,7 +3355,7 @@ router.post(
         actualMaxOutputTokens = Number.isFinite(gptMax) && gptMax > 0
           ? Math.min(32768, Math.max(4096, Math.floor(gptMax)))
           : 24576;
-        console.log(`🤖 Using Custom GPT: ${customGpt.name} with model: ${actualModel} via ${actualProvider} maxOut=${actualMaxOutputTokens}`);
+        generateLog.info('context.custom_gpt_loaded', { tokenCount: actualMaxOutputTokens });
       }
 
       // Unpack org settings result
@@ -3333,7 +3384,7 @@ router.post(
           }
         }
       } catch (orgAiErr) {
-        console.warn('[ai/generate] org AI preference lookup failed (open):', orgAiErr && orgAiErr.message);
+        generateLog.warnError('preferences.organization_lookup_failed', orgAiErr);
       }
 
       // Re-resolve Custom after Custom-GPT / org overrides may have changed the model.
@@ -3353,7 +3404,7 @@ router.post(
           customConnection = null;
         }
       } catch (customLookupErr) {
-        console.warn('[ai/generate] custom connection re-lookup failed:', customLookupErr && customLookupErr.message);
+        generateLog.warnError('connections.custom_relookup_failed', customLookupErr);
       }
 
       if (actualProvider !== 'Custom') {
@@ -3372,11 +3423,7 @@ router.post(
       _providerResolution = createProviderClientForRequest(actualProvider, req, { customConnection });
       openai = _providerResolution.client;
       if (_providerResolution.via === 'gateway') {
-        console.log('[ai/generate] via=gateway', JSON.stringify({
-          requested_provider: provider,
-          actual_provider: actualProvider,
-          model,
-        }));
+        generateLog.info('routing.gateway_selected', { success: true });
       }
 
       // Unpack user profile result
@@ -3395,7 +3442,7 @@ router.post(
             inferredProfile = loadInferredProfile(_userPrefetch);
           } catch (_inferErr) { /* keep null */ }
         } catch (profileErr) {
-          console.warn('[user-profile] failed to load, continuing without:', profileErr.message);
+          generateLog.warnError('profile.load_failed', profileErr);
         }
       }
 
@@ -3497,15 +3544,12 @@ router.post(
       // quota check + file loading + chat/user/org prefetch — so it's
       // usually already settled, and this await costs ~0ms.
       const langResolution = await _langResolutionPromise;
-      console.log('[language_policy_resolved]', JSON.stringify({
-        chat_id: chatId || null,
-        user_id: userId || null,
-        input_language: langResolution.detected,
-        resolved_language: langResolution.language,
+      generateLog.info('language.resolved', {
+        detectedLanguage: langResolution.detected,
+        resolvedLanguage: langResolution.language,
         source: langResolution.source,
-        provider,
-        model,
-      }));
+        hasChat: Boolean(chatId),
+      });
       if (langResolution.shouldPersist && canPersist) {
         langPolicy.persistThreadLanguage(prisma, chatId, langResolution.language)
           .catch(() => { /* non-fatal */ });
@@ -3548,7 +3592,7 @@ router.post(
         const _enrichmentBudgetMs = chatLatencyPolicy.enrichmentBudgetMs();
         const _memoryPromise = _useSemanticEnrichment
           ? longTermMemory.recallFacts(userId, prompt, 5).catch((e) => {
-              console.warn('[ai] memory recall failed (continuing without):', e.message); return [];
+              generateLog.warnError('memory.recall_failed', e); return [];
             })
           : Promise.resolve([]);
         const _crossChatPromise = _useSemanticEnrichment && _crossChatEnabled
@@ -3558,7 +3602,7 @@ router.post(
               excludeChatId: canPersist ? chatId : null,
               embedder: texts => rag.embed(texts),
               prismaClient: prisma,
-            }).catch((e) => { console.warn('[cross-chat] recall failed (continuing without):', e?.message || e); return []; })
+            }).catch((e) => { generateLog.warnError('memory.cross_chat_recall_failed', e); return []; })
           : Promise.resolve([]);
         const _feedbackPromise = _useSemanticEnrichment
           ? feedbackLedger.findExemplars({
@@ -3568,7 +3612,7 @@ router.post(
               k: 2,
               onlyHelpful: true,
               agent: 'chat',
-            }).catch((e) => { console.warn('[ai] feedback exemplars unavailable (continuing without):', e.message || e); return []; })
+            }).catch((e) => { generateLog.warnError('feedback.exemplars_unavailable', e); return []; })
           : Promise.resolve([]);
         const [_memRecalled, _crossChatTurns, _exemplars] = await Promise.all([
           chatLatencyPolicy.resolveWithinBudget(_memoryPromise, {
@@ -3629,13 +3673,13 @@ router.post(
           const _docBlock = memoryDocument.buildDocumentBlock(userId, { maxEntries: 12 });
           if (_docBlock) memoryBlock = `${memoryBlock}\n\n${_docBlock}`;
         } catch (e) {
-          console.warn(`[ai] memory-document block failed (continuing without): ${e.message}`);
+          generateLog.warnError('memory.document_block_failed', e);
         }
         crossChatTurnsForAttribution = Array.isArray(_crossChatTurns) ? _crossChatTurns : [];
         if (_crossChatEnabled && _crossChatMod) {
           crossChatBlock = _crossChatMod.buildCrossChatBlock(_crossChatTurns) || '';
           if (_crossChatTurns.length > 0) {
-            console.log(`[cross-chat] recalled ${_crossChatTurns.length} similar past turn(s) for user=${userId}`);
+            generateLog.info('memory.cross_chat_recalled', { historyMessageCount: _crossChatTurns.length });
           }
         }
         const _formatted = feedbackLedger.formatExemplarsBlock(_exemplars);
@@ -3665,7 +3709,7 @@ router.post(
             openai: rag.getOpenAI(),
           });
         } catch (ragErr) {
-          console.warn('[ai] operational RAG unavailable (continuing without):', ragErr.message || ragErr);
+          generateLog.warnError('rag.operational_unavailable', ragErr);
         }
       }
 
@@ -3690,12 +3734,15 @@ router.post(
             if (Array.isArray(operationalRagContext.chunks)) operationalRagContext.chunks = reordered;
             try {
               const top = ranked[0];
-              console.log(`[rag-reranker] reordered ${ranked.length} snippets; top combined=${top.combinedScore} (base=${top.baseScore} attr=${top.attributionScore})`);
+              generateLog.info('rag.reranked', {
+                sourceCount: ranked.length,
+                score: top.combinedScore,
+              });
             } catch (_logErr) { /* swallow */ }
           }
         }
       } catch (rerankErr) {
-        console.warn('[rag-reranker] failed (continuing without):', rerankErr?.message || rerankErr);
+        generateLog.warnError('rag.rerank_failed', rerankErr);
       }
 
       const evidenceBlock = operationalRagContext?.contextBlock
@@ -3747,7 +3794,11 @@ router.post(
             circuitAttributionBlock = `\n\n${bundle.systemPromptBlock}`;
             try {
               const t = bundle.telemetry;
-              console.log(`[attribution-suite] verdict=${t.verdict} intent="${t.primaryIntent || 'n/a'}" hops=${t.multiHopDepth} plan=${t.planNodes} conflicts=${t.conflicts} drift=${t.driftClass} beliefs=${t.beliefsObserved}(+${t.beliefsContradicted}c) faith=${t.faithfulnessGrade || '-'} latency=${t.latencyMs}ms`);
+              generateLog.info('attribution.completed', {
+                durationMs: t.latencyMs,
+                sourceCount: t.planNodes,
+                contradictedCount: t.beliefsContradicted,
+              });
             } catch (_logErr) { /* swallow */ }
             // Record per-turn telemetry into the metrics aggregator.
             try {
@@ -3792,7 +3843,11 @@ router.post(
               const extras = [confBlock, apBlock].filter(Boolean).join('\n\n');
               if (extras) circuitAttributionBlock += `\n\n${extras}`;
               try {
-                console.log(`[confidence] score=${confResult.score} grade=${confResult.grade} antipatterns=${apResult.patterns?.length || 0}`);
+                generateLog.info('attribution.confidence_calibrated', {
+                  score: confResult.score,
+                  grade: confResult.grade,
+                  patternCount: apResult.patterns?.length || 0,
+                });
               } catch (_l2) { /* swallow */ }
               // Record the full bundle into the trace recorder for
               // postmortem debugging via /api/circuit-attribution/admin/traces.
@@ -3814,7 +3869,7 @@ router.post(
           }
         }
       } catch (circuitErr) {
-        console.warn('[attribution-suite] failed (continuing without):', circuitErr?.message || circuitErr);
+        generateLog.warnError('attribution.failed', circuitErr);
       }
 
       // Intent Attribution Graph — full feature-level decomposition.
@@ -3855,7 +3910,12 @@ router.post(
             if (iagBlock) {
               intentAttributionGraphBlock = `\n\n${iagBlock}`;
               try {
-                console.log(`[intent-attr-graph] feats=${iagReport.stats.featureCount} themes=${iagReport.stats.supernodeCount} circuits=${iagReport.stats.circuitCount} conf=${iagReport.confidence.score} lang=${iagReport.language} dur=${iagReport.durationMs}ms${iagReport._adaptiveApplied ? ' (adaptive)' : ''}`);
+                generateLog.info('attribution.intent_graph_completed', {
+                  patternCount: iagReport.stats.featureCount,
+                  sourceCount: iagReport.stats.supernodeCount,
+                  score: iagReport.confidence.score,
+                  durationMs: iagReport.durationMs,
+                });
               } catch (_logErr) { /* swallow */ }
             }
             // Feed the per-turn feature activations into the saliency
@@ -3883,7 +3943,7 @@ router.post(
           }
         }
       } catch (iagErr) {
-        console.warn('[intent-attr-graph] failed (continuing without):', iagErr?.message || iagErr);
+        generateLog.warnError('attribution.intent_graph_failed', iagErr);
       }
 
       // Saliency block — derived from the in-memory feature tracker we
@@ -3906,7 +3966,7 @@ router.post(
           }
         }
       } catch (salClassErr) {
-        console.warn('[saliency] classify failed (continuing without):', salClassErr?.message || salClassErr);
+        generateLog.warnError('saliency.classification_failed', salClassErr);
       }
 
       // Adversarial-prompt safety block — analyses the raw user text for
@@ -3921,7 +3981,7 @@ router.post(
           adversarialBlock = adversarialDetector.buildSafetyBlock(adversarialDetector.analyzePrompt(String(prompt || ''))) || '';
         }
       } catch (advErr) {
-        console.warn('[adversarial] analyze failed (continuing without):', advErr?.message || advErr);
+        generateLog.warnError('security.adversarial_analysis_failed', advErr);
       }
 
       // Professional document analysis enrichment ─────────────────────────
@@ -3957,11 +4017,18 @@ router.post(
           if (documentEnrichment?.analyzerTelemetry) {
             const t = documentEnrichment.analyzerTelemetry;
             if (t.failCount > 0 || (t.slowBlocks && t.slowBlocks.length > 0)) {
-              const failNames = (t.failures || []).map((f) => f.name).slice(0, 5).join(',');
-              const slowNames = (t.slowBlocks || []).map((s) => `${s.name}=${s.elapsedMs}ms`).slice(0, 5).join(',');
-              console.warn(`[ai/enrichment] blocks=${t.blockCount} ok=${t.okCount} fail=${t.failCount} totalMs=${t.totalElapsedMs} failures=[${failNames}] slow=[${slowNames}]`);
+              generateLog.warn('documents.enrichment_degraded', {
+                sourceCount: t.blockCount,
+                recoveredCount: t.okCount,
+                unsupportedCount: t.failCount,
+                durationMs: t.totalElapsedMs,
+              });
             } else if (process.env.SIRAGPT_ANALYZER_LOG === '1') {
-              console.log(`[ai/enrichment] blocks=${t.blockCount} ok=${t.okCount} totalMs=${t.totalElapsedMs}`);
+              generateLog.info('documents.enrichment_completed', {
+                sourceCount: t.blockCount,
+                recoveredCount: t.okCount,
+                durationMs: t.totalElapsedMs,
+              });
             }
           }
           if (
@@ -5173,15 +5240,17 @@ router.post(
                 });
                 if (budgeted) {
                   documentEnrichmentBlock = `\n\n${budgeted}`;
-                  console.log(`[ai/enrichment] block-budget applied: ${parts.join('\n\n').length} → ${budgeted.length} chars (cap=${enrichmentSoftCap})`);
+                  generateLog.info('documents.enrichment_budget_applied', {
+                    systemPromptChars: budgeted.length,
+                  });
                 }
               } catch (budgetErr) {
-                console.warn('[ai/enrichment] block-budget failed (keeping full enrichment):', budgetErr?.message || budgetErr);
+                generateLog.warnError('documents.enrichment_budget_failed', budgetErr);
               }
             }
           }
         } catch (docErr) {
-          console.warn('[ai] document professional analyzer unavailable (continuing without):', docErr.message || docErr);
+          generateLog.warnError('documents.professional_analyzer_unavailable', docErr);
         }
       }
       let universalTaskContract = null;
@@ -5241,7 +5310,7 @@ router.post(
             const __typo = repairTypos(__routerPrompt);
             if (__typo.source === 'repaired') {
               __routerPrompt = __typo.repaired;
-              console.log(`[typo-repair] ${__typo.changes.map((c) => `${c.from}→${c.to}`).join(', ')}`);
+              generateLog.info('intent.typo_repaired', { patternCount: __typo.changes.length });
             }
           }
         } catch (_typoErr) { /* fallback: prompt literal */ }
@@ -5281,12 +5350,14 @@ router.post(
               recentTurns: __pr3RecentTurns || [],
               judge: __intentTriageJudge,
             });
-            try {
-              console.log(`[intent-triage] action=${intentTriageDecision.action} source=${intentTriageDecision.source} score=${intentTriageDecision.score?.toFixed?.(2) || intentTriageDecision.score} reason=${intentTriageDecision.reason}`);
-            } catch (_) { /* noop */ }
+            generateLog.info('routing.intent_triage_completed', {
+              action: intentTriageDecision.action,
+              source: intentTriageDecision.source,
+              score: intentTriageDecision.score,
+            });
           }
         } catch (triageErr) {
-          console.warn('[intent-triage] failed (continuing without):', triageErr && triageErr.message);
+          generateLog.warnError('routing.intent_triage_failed', triageErr);
           intentTriageDecision = null;
         }
 
@@ -5345,10 +5416,10 @@ router.post(
                 || (req._turnDecision ? req._turnDecision.trivial === true : isTrivialChatTurn(prompt));
               if (__defaultMediumOnTrivial) {
                 cognitiveDecision.compute = { mode: 'direct', samples: 1, reasoningEffort: 'low', reflection: false };
-                console.log('[reasoning-effort] trivial turn kept on direct mode; Extra/Max skipped');
+                generateLog.info('reasoning.trivial_kept_direct', { mode: 'direct' });
               } else {
                 cognitiveDecision.compute = __effortOverride;
-                console.log(`[reasoning-effort] user override "${req.body.reasoningEffort}" → mode=${__effortOverride.mode} effort=${__effortOverride.reasoningEffort}`);
+                generateLog.info('reasoning.user_override_applied', { mode: __effortOverride.mode });
               }
             }
           } catch (_) { /* effort override must never break the turn */ }
@@ -5359,10 +5430,10 @@ router.post(
             );
             if (__documentCompute.upgraded && cognitiveDecision) {
               cognitiveDecision.compute = __documentCompute.compute;
-              console.log(`[document-analysis-quality] upgraded compute: mode=${__documentCompute.compute.mode} effort=${__documentCompute.compute.reasoningEffort} reason=${__documentCompute.reason}`);
+              generateLog.info('reasoning.document_compute_upgraded', { mode: __documentCompute.compute.mode });
             }
           } catch (_) { /* document-analysis guard must never break the turn */ }
-          try { console.log(reasoningOrchestrator.summarizeForLog(cognitiveDecision)); } catch (_) { /* noop */ }
+          generateLog.info('reasoning.decision_completed', { mode: cognitiveDecision?.compute?.mode });
 
           // Instruction-following: extract the user's EXPLICIT constraints
           // (one paragraph, in English, include X, without Y, max N words) and
@@ -5379,7 +5450,7 @@ router.post(
               if (Array.isArray(__constraints) && __constraints.length > 0) {
                 req._constraints = __constraints;
                 req._constraintBlock = constraintAdherence.buildConstraintPromptBlock(__constraints);
-                console.log(`[constraint-adherence] extracted ${__constraints.length}: ${__constraints.map((c) => c.kind).join(',')}`);
+                generateLog.info('constraints.extracted', { patternCount: __constraints.length });
               }
             }
           } catch (_caErr) { /* fail-open: no constraint block */ }
@@ -5429,16 +5500,17 @@ router.post(
             const __ttcFlag = String(process.env.SIRAGPT_TEST_TIME_COMPUTE || '').trim().toLowerCase();
             if (req._trivialTurn || req._miniShortChitchat) {
               req._reasoningKernelBlock = '';
-              console.log(req._miniShortChitchat && !req._trivialTurn
-                ? '[test-time-compute] skipped Mini short_chitchat'
-                : '[test-time-compute] skipped trivial turn');
+              generateLog.info('reasoning.test_time_compute_skipped', { mode: 'direct' });
             } else if (__ttcFlag !== '0' && __ttcFlag !== 'off' && __ttcFlag !== 'false') {
               const testTimeCompute = require('../services/test-time-compute');
               req._reasoningKernelBlock = testTimeCompute.buildReasoningDirective(cognitiveDecision, {
                 language: (langResolution && langResolution.language) || 'es',
               });
               if (req._reasoningKernelBlock) {
-                console.log(`[test-time-compute] mode=${cognitiveDecision.compute.mode} effort=${cognitiveDecision.compute.reasoningEffort} injected=${req._reasoningKernelBlock.length}c`);
+                generateLog.info('reasoning.test_time_compute_applied', {
+                  mode: cognitiveDecision.compute.mode,
+                  systemPromptChars: req._reasoningKernelBlock.length,
+                });
               }
             }
           } catch (_ttcErr) { /* fail-open: no directive */ }
@@ -5463,15 +5535,22 @@ router.post(
               || modelRouter.isPlanEligible(__targetCatalog.plans, (req.user && req.user.plan) || 'FREE');
             const __targetProvider = inferProviderFromModelId(__targetModel) || __route.selectedProvider;
             if (__planOk && __targetProvider) {
-              console.log(`[reasoning-orchestrator] re-route ${actualProvider}:${actualModel} → ${__targetProvider}:${__targetModel} (${__route.action}/${__route.reason})`);
+              generateLog.info('routing.rerouted', {
+                action: __route.action,
+                reasonCode: __route.action === 'escalate' ? 'escalate' : 'auto_select',
+                success: true,
+              });
               actualModel = __targetModel;
               actualProvider = __targetProvider;
             } else {
-              console.log(`[reasoning-orchestrator] re-route skipped for ${__targetModel} (planOk=${__planOk} provider=${__targetProvider || 'none'})`);
+              generateLog.info('routing.reroute_skipped', {
+                reasonCode: 'not_applied',
+                success: false,
+              });
             }
           }
         } catch (orchErr) {
-          console.warn('[reasoning-orchestrator] decision failed (continuing without):', orchErr && orchErr.message);
+          generateLog.warnError('reasoning.orchestrator_failed', orchErr);
         }
 
         ciraRuntimeBundle = await ciraEngine.runUserMessage({
@@ -5542,7 +5621,7 @@ router.post(
         };
         enterpriseExecutionBlock = `\n\n${buildEnterpriseExecutionPrompt(enterpriseExecutionGraph)}\n\n${buildAgenticOperatingPrompt(agenticOperatingCore)}\n\nEnterprise runtime profile (policy summary, do not reveal to user):\n${JSON.stringify(enterpriseRuntimeProfile, null, 2)}${ciraRuntimeBlock}`;
       } catch (contractErr) {
-        console.warn('[ai] universal/enterprise task contract unavailable (continuing without):', contractErr.message || contractErr);
+        generateLog.warnError('tasks.enterprise_contract_unavailable', contractErr);
       }
 
       let coworkBlock = '';
@@ -5576,7 +5655,7 @@ router.post(
             }
           }
         } catch (coworkErr) {
-          console.warn('[ai] cowork enrichment failed (continuing without):', coworkErr.message);
+          generateLog.warnError('cowork.enrichment_failed', coworkErr);
         }
       }
 
@@ -5609,10 +5688,10 @@ router.post(
             ? enrichWithWebSearch(_webGroundingPrompt, {
                 mode: webSearchMode === 'dedicated' ? 'dedicated' : 'auto',
                 directUrlGrounding: _explicitWebGrounding,
-              }).catch((e) => { console.warn('[ai] web search unavailable (continuing without):', e && e.message ? e.message : e); return null; })
+              }).catch((e) => { generateLog.warnError('web_search.unavailable', e); return null; })
             : Promise.resolve(null),
           _memoryAdapter
-            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { console.warn('[ai] orchestration memory unavailable (continuing without):', e && e.message ? e.message : e); return null; })
+            ? _memoryAdapter.buildMemoryPrompt(userId, prompt).catch((e) => { generateLog.warnError('memory.orchestration_unavailable', e); return null; })
             : Promise.resolve(null),
         ]);
         if (_webCtx?.block) webSearchBlock = _webCtx.block;
@@ -5816,7 +5895,7 @@ router.post(
         });
         openclawRuntimeBlock = `\n\n${openclawCapabilityKernel.buildOpenClawPromptBlock(openclawRuntimeProfile)}`;
       } catch (openclawErr) {
-        console.warn('[ai] openclaw capability kernel unavailable (continuing without):', openclawErr && openclawErr.message);
+        generateLog.warnError('capabilities.openclaw_kernel_unavailable', openclawErr);
       }
 
       let llmUnderstandingBlock = '';
@@ -5865,7 +5944,7 @@ router.post(
         const __llmBlock = buildLLMUnderstandingPromptBlock(llmUnderstandingPacket);
         if (__llmBlock) llmUnderstandingBlock = `\n\n${__llmBlock}`;
       } catch (llmUnderstandingErr) {
-        console.warn('[ai] llm understanding packet unavailable (continuing without):', llmUnderstandingErr && llmUnderstandingErr.message);
+        generateLog.warnError('understanding.packet_unavailable', llmUnderstandingErr);
       }
 
       const reasoningEffortBlock = (req._reasoningKernelBlock || '');
@@ -5900,7 +5979,7 @@ router.post(
             });
           }
           req._calibration = __calib;
-          console.log(confidenceCalibration.summarizeForLog(__calib));
+          generateLog.info('reasoning.confidence_calibrated', { success: true });
         }
       } catch (_calibErr) { /* fail-open: no posture directive */ }
 
@@ -5971,11 +6050,14 @@ router.post(
             systemBlocks.length = 0;
             for (const b of __pruned) systemBlocks.push(b);
             systemInstruction.content = systemBlocks.map((b) => b.text || '').join('');
-            try { console.log(promptKernel.summarizeForLog(__kernelPlan)); } catch (_) { /* noop */ }
+            generateLog.info('prompt.kernel_pruned', {
+              systemBlockCount: systemBlocks.length,
+              systemPromptChars: systemInstruction.content.length,
+            });
           }
         }
       } catch (__kernelErr) {
-        console.warn('[prompt-kernel] pruning failed (continuing without):', __kernelErr && __kernelErr.message);
+        generateLog.warnError('prompt.kernel_pruning_failed', __kernelErr);
       }
 
       // Prompt-budget allocator — trims overflowing systemBlocks so the
@@ -5996,24 +6078,34 @@ router.post(
             // rebuild the flat systemInstruction.content so the gateway
             // sends the trimmed version (and not the original concat)
             systemInstruction.content = systemBlocks.map((b) => b.text || '').join('');
-            try {
-              console.log(budgetAllocator.buildBudgetSummaryLine(allocation));
-            } catch (_logErr) { /* swallow */ }
+            generateLog.info('prompt.budget_applied', {
+              systemBlockCount: systemBlocks.length,
+              systemPromptChars: systemInstruction.content.length,
+            });
           }
         }
       } catch (__budgetErr) {
-        console.warn('[prompt-budget] allocation failed (continuing without):', __budgetErr?.message || __budgetErr);
+        generateLog.warnError('prompt.budget_failed', __budgetErr);
       }
 
       if (req._miniShortChitchat) {
         systemInstruction.content = MINI_SHORT_CHITCHAT_SYSTEM;
         systemBlocks.length = 0;
         systemBlocks.push({ kind: 'mini-short-chitchat', text: MINI_SHORT_CHITCHAT_SYSTEM, cacheable: true });
-        console.log(`[mini-short-chitchat] slim system prompt ${MINI_SHORT_CHITCHAT_SYSTEM.length}c`);
+        generateLog.info('prompt.short_chitchat_slimmed', {
+          systemPromptChars: MINI_SHORT_CHITCHAT_SYSTEM.length,
+        });
       }
 
       const __cacheableBlockCount = systemBlocks.filter((b) => b.cacheable).length;
-      console.log(`📝 system prompt built: intent=${promptBundle.intent} lang=${promptBundle.language} chars=${systemInstruction.content.length} blocks=${systemBlocks.length} cacheable=${__cacheableBlockCount} profile=${userProfile ? 'yes' : 'no'} threadContext=${conversationUnderstandingBlock ? 'yes' : 'no'} threadTurns=${__conversationHistoryForUnderstanding.length} memory=${memoryBlock ? 'yes' : 'no'} orchMemory=${orchMemoryBlock ? 'yes' : 'no'} feedback=${feedbackBlock ? 'yes' : 'no'} rag=${operationalRagContext?.active ? 'yes' : 'no'} contract=${universalTaskContract?.pipeline || 'none'} graph=${enterpriseExecutionGraph?.graph_id || 'none'} cira=${ciraRuntimeBundle?.envelope?.request_id || 'none'} openclaw=${openclawRuntimeProfile?.routing?.reason || 'none'} docEnrichment=${documentEnrichment ? `${documentEnrichment.primaryDocType}/${documentEnrichment.perFileProfile.length}` : 'none'} webSearch=${webSearchBlock ? 'yes' : 'no'}`);
+      generateLog.info('prompt.built', {
+        language: promptBundle.language,
+        systemPromptChars: systemInstruction.content.length,
+        systemBlockCount: systemBlocks.length,
+        cacheableBlockCount: __cacheableBlockCount,
+        threadTurnCount: __conversationHistoryForUnderstanding.length,
+        hasFiles: processedFiles.length > 0,
+      });
 
       // ✅ IMPROVED: Get previous chat history with proper image handling
       let historyMessages = [];
@@ -6078,13 +6170,18 @@ router.post(
                 reason: __compactionPlan.reason,
               };
               emitStage(`Contexto comprimido · ${__result.coveredMessages} mensajes resumidos`, { tool: 'compact' });
-              console.log(`🗜️ context compaction: folded ${__result.coveredMessages} rows (${__compactionPlan.historyTokens} tokens) into a ${__result.meta.summaryTokens}-token summary via ${__result.source}${__runtime ? ` (${__runtime.provider}/${__runtime.model})` : ''}; ${historyMessages.length} rows kept verbatim`);
+              generateLog.info('context.compacted', {
+                historyMessageCount: __result.coveredMessages,
+                tokenCount: __result.meta.summaryTokens,
+                keptMessageCount: historyMessages.length,
+                source: __result.source,
+              });
             } else {
-              console.warn(`[context-compaction] not applied: ${__result?.reason || 'unknown'}`);
+              generateLog.warn('context.compaction_not_applied');
             }
           }
         } catch (__compactErr) {
-          console.warn('[context-compaction] skipped:', __compactErr?.message || __compactErr);
+          generateLog.warnError('context.compaction_failed', __compactErr);
         }
       }
       if (__chatContextState?.contextSummary && !req._miniShortChitchat) {
@@ -6127,7 +6224,7 @@ router.post(
                 parsedFiles = [];
               }
             } catch (e) {
-              console.warn("Could not parse files from history message:", e);
+              generateLog.warnError('history.files_parse_failed', e);
               parsedFiles = [];
             }
           }
@@ -6178,12 +6275,12 @@ router.post(
                       detail: 'high'
                     }
                   });
-                  console.log(`📸 Added image from history: ${imgFile.name || 'unknown'}`);
+                  generateLog.info('history.image_added', { imageCount: 1 });
                 } else {
-                  console.warn(`Image file not found in history: ${imagePath}`);
+                  generateLog.warn('history.image_missing', { imageCount: 1 });
                 }
               } catch (imgError) {
-                console.error('Error processing image from history:', imgError);
+                generateLog.warnError('history.image_processing_failed', imgError);
               }
             }
 
@@ -6366,7 +6463,10 @@ router.post(
       });
       messages = fittedContext.messages;
       if (fittedContext.droppedCount > 0) {
-        console.log(`✂️ route context fit: dropped ${fittedContext.droppedCount} message(s), ${fittedContext.totalTokens}/${fittedContext.budget} tokens before preflight`);
+        generateLog.info('context.fitted', {
+          droppedMessageCount: fittedContext.droppedCount,
+          tokenCount: fittedContext.totalTokens,
+        });
       }
 
       // SSE headers + flushHeaders were already sent during the early
@@ -6410,7 +6510,7 @@ router.post(
           return;
         }
       } catch (preflightErr) {
-        console.warn('[ai/generate] token-budget preflight failed (open):', preflightErr && preflightErr.message);
+        generateLog.warnError('prompt.token_preflight_failed', preflightErr);
       }
 
       // keepAlive interval was already started during the early SSE connection
@@ -6463,7 +6563,7 @@ router.post(
             } catch { /* socket gone */ }
           }
         } catch (goalErr) {
-          console.warn('[ai/generate] autonomous goal escalation failed:', goalErr && goalErr.message);
+          generateLog.warnError('autonomy.goal_escalation_failed', goalErr);
         }
       }
       req._autonomousGoalRunId = autonomousGoalRunId;
@@ -6485,7 +6585,7 @@ router.post(
               res.write(`data: ${JSON.stringify({ type: 'codex_run_started', runId: codexRunId, chatId })}\n\n`);
             } catch { /* headers may not be flushed yet in edge cases */ }
           } catch (codexErr) {
-            console.warn('[ai/generate] codex delegation failed:', codexErr && codexErr.message);
+            generateLog.warnError('autonomy.codex_delegation_failed', codexErr);
           }
         }
       }
@@ -6547,7 +6647,7 @@ router.post(
             res.write(frame);
           }
         } catch (replayErr) {
-          try { console.warn('[ai/generate] resume replay failed:', replayErr && replayErr.message); } catch (_) {}
+          generateLog.warnError('resume.replay_failed', replayErr);
         }
         // Wrap res.write to capture future content frames into resume store
         const prevWrite = res.write.bind(res);
@@ -6763,7 +6863,7 @@ router.post(
             }
           }
         } catch (persistErr) {
-          console.warn('[intent-triage] persistence failed (non-fatal):', persistErr && persistErr.message);
+          generateLog.warnError('routing.intent_triage_persistence_failed', persistErr);
         }
         try { siraMetrics.recordClarificationRequested(); } catch (_) { /* noop */ }
         try {
@@ -6810,7 +6910,7 @@ router.post(
                 imageDataUrls.push(`data:${f.mimeType};base64,${b64}`);
               }
             } catch (readErr) {
-              console.warn('[artifact] failed to read image for vision:', readErr.message);
+              generateLog.warnError('artifacts.vision_image_read_failed', readErr);
             }
           }
           // Vision-capable model only when provider is OpenAI; gpt-4o
@@ -6835,10 +6935,10 @@ router.post(
             artifactHandled = true;
             if (cacheHandle) cacheHandle.complete();
           } else {
-            console.log('[artifact] generator refused:', art.reason, '— falling through to text response');
+            generateLog.info('artifacts.generation_declined', { outcome: 'skipped' });
           }
         } catch (artifactErr) {
-          console.warn('[artifact] branch errored, falling through:', artifactErr.message);
+          generateLog.warnError('artifacts.generation_failed', artifactErr);
         }
       }
       // Collector filled by aiService.generateStream when the model streams
@@ -6858,10 +6958,11 @@ router.post(
           : processedFiles.filter(f => !isImageMime(f.mimeType));
         if (filesForVision.length < processedFiles.length) {
           const skippedImages = processedFiles.filter(f => isImageMime(f.mimeType));
-          const imageNames = skippedImages.map(f => f.name || f.originalName || 'imagen').join(', ');
-          console.log(`[vision] Stripping ${skippedImages.length} image(s) for non-vision turn ${actualProvider}:${actualModel}: ${imageNames}`);
+          generateLog.info('vision.images_stripped', { imageCount: skippedImages.length });
         } else if (keepImagesForVision && !nativeVisionForTurn && processedFiles.some(f => isImageMime(f.mimeType))) {
-          console.log(`[vision] Image turn on text model ${actualProvider}:${actualModel} — routing through a vision-capable runtime`);
+          generateLog.info('vision.runtime_selected', {
+            imageCount: processedFiles.filter(f => isImageMime(f.mimeType)).length,
+          });
         }
         const __aiSpanStartedAt = Date.now();
         // Per-user OTel attributes — userId is SHA-256 hashed (16 hex
@@ -7178,10 +7279,13 @@ router.post(
                 // reliable plain stream below; aiService.generateStream emits a
                 // `replace` frame that overwrites any agent-task-state sentinel
                 // already streamed, so the user always gets a real answer.
-                console.warn('[agentic-chat] degraded result (stoppedReason=' + (agenticResult && agenticResult.stoppedReason) + ', len=' + __agenticAnswer.length + ') — falling back to plain stream');
+                generateLog.warn('agentic.degraded', {
+                  responseChars: __agenticAnswer.length,
+                  outcome: 'degraded',
+                });
               }
             } catch (agenticErr) {
-              console.warn('[agentic-chat] loop failed, falling back to plain stream:', agenticErr && agenticErr.message);
+              generateLog.warnError('agentic.loop_failed', agenticErr);
               // Fall through to aiService.generateStream below.
             }
 
@@ -7292,10 +7396,10 @@ router.post(
                 res.write(`data: ${JSON.stringify({ replace: true, content: directAnswer })}\n\n`);
               }
               fullResponseContent = directAnswer;
-              console.log(`[ai] direct extracted-field recovery applied (${directAnswer.length} chars)`);
+              generateLog.info('recovery.extracted_field_applied', { responseChars: directAnswer.length });
             }
           } catch (directRecoveryErr) {
-            console.warn('[ai] direct extracted-field recovery failed:', directRecoveryErr.message);
+            generateLog.warnError('recovery.extracted_field_failed', directRecoveryErr);
           }
         }
 
@@ -7325,10 +7429,10 @@ router.post(
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
               }
               fullResponseContent = cleanRecovered;
-              console.log(`[ai] attachment recovery applied (${cleanRecovered.length} chars)`);
+              generateLog.info('recovery.attachment_applied', { responseChars: cleanRecovered.length });
             }
           } catch (recoveryErr) {
-            console.warn('[ai] attachment recovery failed:', recoveryErr.message);
+            generateLog.warnError('recovery.attachment_failed', recoveryErr);
           }
         }
 
@@ -7348,7 +7452,10 @@ router.post(
                 res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetDirect.answer })}\n\n`);
               }
               fullResponseContent = spreadsheetDirect.answer;
-              console.log(`[ai] spreadsheet direct recovery applied op=${spreadsheetDirect.operation} rows=${(spreadsheetDirect.rows || []).join(',')} column=${spreadsheetDirect.column || '-'} source=${spreadsheetDirect.source || '-'}`);
+              generateLog.info('recovery.spreadsheet_direct', {
+                action: spreadsheetDirect.operation,
+                recoveredCount: 1,
+              });
             }
             const spreadsheetFollowUp = documentAnalysisQuality.buildSpreadsheetFollowUpAnswer({
               prompt,
@@ -7361,10 +7468,10 @@ router.post(
                 res.write(`data: ${JSON.stringify({ replace: true, content: spreadsheetFollowUp.answer })}\n\n`);
               }
               fullResponseContent = spreadsheetFollowUp.answer;
-              console.log(`[ai] spreadsheet follow-up recovery applied row=${spreadsheetFollowUp.rowLabel} column=${spreadsheetFollowUp.column || '-'} source=${spreadsheetFollowUp.source || '-'}`);
+              generateLog.info('recovery.spreadsheet_follow_up', { recoveredCount: 1 });
             }
           } catch (spreadsheetRecoveryErr) {
-            console.warn('[ai] spreadsheet follow-up recovery failed:', spreadsheetRecoveryErr.message);
+            generateLog.warnError('recovery.spreadsheet_failed', spreadsheetRecoveryErr);
           }
         }
 
@@ -7379,10 +7486,10 @@ router.post(
                 res.write(`data: ${JSON.stringify({ replace: true, content: normalizedDirectAnswer })}\n\n`);
               }
               fullResponseContent = normalizedDirectAnswer;
-              console.log(`[ai] direct answer normalization applied (${normalizedDirectAnswer.length} chars)`);
+              generateLog.info('recovery.direct_normalization_applied', { responseChars: normalizedDirectAnswer.length });
             }
           } catch (normalizationErr) {
-            console.warn('[ai] direct answer normalization failed:', normalizationErr.message);
+            generateLog.warnError('recovery.direct_normalization_failed', normalizationErr);
           }
         }
 
@@ -7418,7 +7525,12 @@ router.post(
               },
             });
             if (__faith.ran) {
-              console.log(`[faithfulness-gate] ran action=${__faith.action} grade=${__faith.grade || '-'} score=${__faith.score ?? '-'} sources=${__faith.contextSources} model=${actualModel}`);
+              generateLog.info('faithfulness.completed', {
+                action: __faith.action,
+                grade: __faith.grade,
+                score: __faith.score,
+                sourceCount: __faith.contextSources,
+              });
               // Phase 6: faithfulness grade per model (observability).
               try { require('../services/cognitive-metrics').recordFaithfulness({ grade: __faith.grade, action: __faith.action, model: actualModel }); } catch (_) { /* noop */ }
               // Outcome learning: feed the faithfulness grade back into routing
@@ -7439,7 +7551,7 @@ router.post(
             }
           }
         } catch (faithErr) {
-          console.warn('[faithfulness-gate] check failed (continuing without):', faithErr && faithErr.message);
+          generateLog.warnError('faithfulness.check_failed', faithErr);
         }
 
         // Instruction-following audit: verify the final answer against the
@@ -7451,7 +7563,7 @@ router.post(
           if (Array.isArray(req._constraints) && req._constraints.length > 0 && fullResponseContent) {
             const constraintAdherence = require('../services/constraint-adherence');
             const __adh = constraintAdherence.verifyAdherence(fullResponseContent, req._constraints);
-            console.log(constraintAdherence.summarizeForLog(__adh));
+            generateLog.info('constraints.verification_completed', { success: __adh.satisfied === true });
             if (!__adh.satisfied) {
               // A constraint miss is a negative quality signal for the router.
               try {
@@ -7465,7 +7577,7 @@ router.post(
             }
           }
         } catch (caVerifyErr) {
-          console.warn('[constraint-adherence] verify failed (continuing without):', caVerifyErr && caVerifyErr.message);
+          generateLog.warnError('constraints.verification_failed', caVerifyErr);
         }
 
         if (cacheHandle) cacheHandle.complete();
@@ -7527,7 +7639,10 @@ router.post(
                       previousInferred: inferredProfile,
                     });
                     if (result && result.ok) {
-                      console.log(`[profile-inference] applied for user=${userId} domain=${result.inferred?.domain || ''} skill=${result.inferred?.skill_level || ''} conf=${result.inferred?.confidence || 0}`);
+                      generateLog.info('profile.inference_applied', {
+                        confidence: result.inferred?.confidence || 0,
+                        success: true,
+                      });
                     }
                   } catch (_piErr) { /* swallow */ }
                 });
@@ -7564,7 +7679,7 @@ router.post(
               }
             } catch (_ccOuterErr) { /* swallow */ }
           } catch (memErr) {
-            console.warn('[ai] memory extract schedule failed:', memErr.message);
+            generateLog.warnError('memory.extraction_schedule_failed', memErr);
           }
         }
 
@@ -7594,7 +7709,7 @@ router.post(
       } catch (apiError) {
         if (cacheHandle) cacheHandle.fail(apiError && apiError.message ? apiError.message : 'stream failed');
         if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
-          console.warn('AI Service stream aborted (explicit stop), no further content will be sent.');
+          generateLog.warn('stream.aborted', { outcome: 'aborted' });
           // PR-2: record abandoned_stream signal (fire-and-forget).
           try {
             const __misSignals = require('../services/agents/misunderstanding-signals');
@@ -7638,19 +7753,24 @@ router.post(
                 req.user?.plan || null,
                 null,
                 req._agentRun || null,
+                0,
+                { observabilityLog: generateLog },
               );
               if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
                 req._activeGenerateTurn.resolve(savedChat);
               }
-              console.log(`[ai] persist-on-abort saved ${abortedContent.length} chars for chat ${chatId}`);
+              generateLog.info('persistence.abort_saved', {
+                responseChars: abortedContent.length,
+                hasChat: Boolean(chatId),
+              });
             }
           } catch (saveErr) {
-            console.warn('[ai] persist-on-abort failed:', saveErr && saveErr.message);
+            generateLog.warnError('persistence.abort_save_failed', saveErr);
           }
           // Don't rethrow, just return, as client has already aborted and doesn't expect more data/error
           return;
         }
-        console.error('AI Service stream failed in route:', apiError.message);
+        generateLog.error('stream.failed', apiError, { outcome: 'failed' });
 
         if (processedFiles.length > 0 && userId) {
           try {
@@ -7670,13 +7790,13 @@ router.post(
               if (!res.writableEnded) {
                 res.write(`data: ${JSON.stringify({ replace: true, content: cleanRecovered })}\n\n`);
               }
-              console.log(`[ai] attachment recovery after stream error (${cleanRecovered.length} chars)`);
+              generateLog.info('recovery.attachment_after_stream_error', { responseChars: cleanRecovered.length });
             } else {
               throw apiError;
             }
           } catch (recoveryErr) {
             if (recoveryErr === apiError) throw apiError;
-            console.warn('[ai] attachment recovery after stream error failed:', recoveryErr.message);
+            generateLog.warnError('recovery.attachment_after_stream_error_failed', recoveryErr);
             throw apiError;
           }
         } else {
@@ -7811,7 +7931,7 @@ router.post(
 
           // If content is minimal/empty, extract from previous conversation
           if (chatContent.length < 100) {
-            console.log('📄 Document content too short, extracting from conversation history...');
+            generateLog.info('document.history_fallback_started', { responseChars: chatContent.length });
 
             // ✅ Get ALL assistant messages (not just last 2) for complete conversation
             const allAssistantMessages = messages.filter(msg =>
@@ -7826,13 +7946,16 @@ router.post(
               chatContent = allAssistantMessages
                 .map(msg => msg.content)
                 .join('\n\n---\n\n');
-              console.log(`✅ Extracted ${chatContent.length} characters from ${allAssistantMessages.length} messages`);
+              generateLog.info('document.history_fallback_completed', {
+                responseChars: chatContent.length,
+                historyMessageCount: allAssistantMessages.length,
+              });
             }
           }
 
           // ✅ AUTOMATICALLY include ALL charts and images in any document
           try {
-            console.log('📊 Checking for charts, graphs, and images in conversation history...');
+            generateLog.info('document.image_history_scan_started');
 
             // Find ALL messages with charts or images
             const imageMessages = historyMessages.filter(msg => {
@@ -7846,7 +7969,7 @@ router.post(
             });
 
             if (imageMessages.length > 0) {
-              console.log(`🖼️ Found ${imageMessages.length} image(s)/chart(s) - automatically including in document`);
+              generateLog.info('document.image_history_found', { imageCount: imageMessages.length });
 
               // Collect all image/chart markdowns
               const imageMarkdowns = [];
@@ -7861,20 +7984,20 @@ router.post(
                     imageMarkdowns.push(`${imageLabel}![${imageType} Visualization](${imageUrl})\n\n`);
                   }
                 } catch (e) {
-                  console.error('Error parsing image/chart file:', e);
+                  generateLog.warnError('document.image_history_parse_failed', e);
                 }
               });
 
               // Prepend all images/charts to content
               if (imageMarkdowns.length > 0) {
                 chatContent = imageMarkdowns.join('') + chatContent;
-                console.log(`✅ Automatically added ${imageMarkdowns.length} image(s)/chart(s) to document`);
+                generateLog.info('document.image_history_added', { imageCount: imageMarkdowns.length });
               }
             } else {
-              console.log('📄 No charts or images found in conversation history');
+              generateLog.info('document.image_history_empty', { imageCount: 0 });
             }
           } catch (imageError) {
-            console.error("Error processing images/charts for document:", imageError);
+            generateLog.warnError('document.image_history_failed', imageError);
           }
 
           // Strip the [CREATE_DOCUMENT] block from the visible chat
@@ -7895,7 +8018,10 @@ router.post(
               : `📄 **Documento listo:** \`${filename}\``;
           }
 
-          console.log(`📄 Creating document: ${filename} (${chatContent.length} chars)`);
+          generateLog.info('document.creation_started', {
+            responseChars: chatContent.length,
+            documentCount: 1,
+          });
 
           try {
             const createdDocument = await documentService.createDocument(userId, filename, chatContent);
@@ -7947,7 +8073,7 @@ router.post(
             newFiles[0].size = finalStats.size;
 
           } catch (fileError) {
-            console.error("Error creating document:", fileError);
+            generateLog.error('document.creation_failed', fileError);
             // NEVER overwrite the user's visible text with a bare
             // error string — that's what made the response look
             // "auto-deleted". Preserve whatever finalContent already
@@ -7980,7 +8106,9 @@ router.post(
         // ended up empty or near-empty, restore it from the raw stream
         // so the user never loses what they just read.
         if (!finalContent || finalContent.trim().length < MIN_VISIBLE_CHARS) {
-          console.warn(`⚠️ finalContent guard tripped (was ${finalContent?.length || 0} chars) — reverting to raw response`);
+          generateLog.warn('response.minimum_content_guard', {
+            responseChars: finalContent?.length || 0,
+          });
           finalContent = (fullResponseContent && fullResponseContent.trim().length > 0)
             ? fullResponseContent
             : finalContent;
@@ -8034,6 +8162,8 @@ router.post(
           req.user?.plan || null,
           __reasoningSink,
           req._agentRun || null,
+          0,
+          { observabilityLog: generateLog },
         );
         if (req._activeGenerateTurn && !req._activeGenerateTurn.settled) {
           req._activeGenerateTurn.resolve(savedChat);
@@ -8053,7 +8183,9 @@ router.post(
               complete: buildCompactionCompletion(__bgRuntime, req),
               runtime: __bgRuntime,
             }).then((r) => {
-              if (r?.ok) console.log(`🗜️ background context compaction: folded ${r.coveredMessages} rows via ${r.source}`);
+              if (r?.ok) generateLog.info('context.background_compaction_completed', {
+                historyMessageCount: r.coveredMessages,
+              });
             }).catch(() => {});
           });
         }
@@ -8094,7 +8226,23 @@ router.post(
           finalContent = fullResponseContent || finalContent;
         }
         generationUsage = buildGenerationUsage(finalContent);
-        await saveChatAndTrackUsage(null, null, prompt, finalContent, tokens, actualModel, processedFiles, [], regenerate);
+        await saveChatAndTrackUsage(
+          null,
+          null,
+          prompt,
+          finalContent,
+          tokens,
+          actualModel,
+          processedFiles,
+          [],
+          regenerate,
+          null,
+          null,
+          null,
+          null,
+          0,
+          { observabilityLog: generateLog },
+        );
       }
 
       // ── PR-2: misunderstanding signals (fire-and-forget) ──────────
@@ -8183,11 +8331,11 @@ router.post(
               durationSeconds: (Date.now() - __generateStartedAt) / 1000,
             });
           } catch (metricsErr) {
-            console.warn('[ai/generate] metrics record failed:', metricsErr && metricsErr.message);
+            generateLog.warnError('metrics.stream_record_failed', metricsErr);
           }
         }
       } catch (usageErr) {
-        console.warn('[ai/generate] usage trailer write failed:', usageErr && usageErr.message);
+        generateLog.warnError('usage.trailer_write_failed', usageErr);
       }
 
       // ── Send [DONE] AFTER persistence ──────────────────────────
@@ -8202,7 +8350,9 @@ router.post(
       }
 
     } catch (error) {
-      console.error('AI generation error:', error);
+      generateLog.error('request.failed', error, {
+        durationMs: Date.now() - __generateStartedAt,
+      });
 
       const sanitizedError = sanitizeErrorForUser(error);
       streamFailureMessage = sanitizedError;
@@ -8468,7 +8618,7 @@ router.post(
             }
           }
         } catch (filtErr) {
-          try { console.warn('[ai/generate] filter post-hook failed:', filtErr && filtErr.message); } catch (_) {}
+          generateLog.warnError('filters.post_hook_failed', filtErr);
         }
 
       if (req._publicWebReadonlyTurn && !req._publicWebReadonlyTurn.settled) {
@@ -8504,7 +8654,7 @@ router.post(
         && streamControllers.get(__streamControllerKey) === controller
       ) {
         streamControllers.delete(__streamControllerKey);
-        console.log(`Stream unregistered for ID: ${streamId}`);
+        generateLog.info('stream.unregistered', { hasStream: Boolean(streamId) });
       }
 
       // ─── Mark resume session terminal ─────────────────────────────
