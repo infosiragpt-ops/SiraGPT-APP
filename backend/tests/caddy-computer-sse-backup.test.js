@@ -11,7 +11,12 @@ describe('Caddy computer viewer + live SSE backup', () => {
   test('does not gzip/zstd text/event-stream and keeps generate flush', () => {
     assert.match(caddy, /NOT the live iliagpt-gateway Caddyfile/);
     assert.match(caddy, /\/home\/user\/deployments\/iliagpt\/Caddyfile/);
-    assert.match(caddy, /not header Content-Type text\/event-stream\*/);
+    assert.match(
+      caddy,
+      /@compressible not path \/api\/ai\/generate\* \/api\/ai\/stream\* \/api\/\*\/pending-stream\*/,
+    );
+    assert.match(caddy, /encode @compressible zstd gzip/);
+    assert.doesNotMatch(caddy, /not header Content-Type text\/event-stream\*/);
     assert.match(caddy, /handle \/api\/ai\/generate\*/);
     assert.match(caddy, /flush_interval -1/);
     assert.match(caddy, /X-Accel-Buffering no/);
