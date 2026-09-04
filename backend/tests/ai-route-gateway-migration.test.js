@@ -48,8 +48,8 @@ test('ai.js exports the request-aware helper and uses the gateway client', () =>
   );
   assert.match(
     src,
-    /\[ai\/generate\] via=gateway/,
-    'rollout observability log must be present',
+    /generateLog\.info\('routing\.gateway_selected',\s*\{\s*success:\s*true\s*\}\)/,
+    'structured rollout observability event must be present',
   );
 
   // BUG REGRESSION GUARD: the post-actualProvider re-resolution MUST go
