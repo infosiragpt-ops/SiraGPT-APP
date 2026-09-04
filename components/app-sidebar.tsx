@@ -1346,12 +1346,12 @@ export function AppSidebar() {
           </div>
           <div className="flex shrink-0 items-center gap-1">
             <NotificationCenter />
-            <SidebarChromeTooltip label="Nuevo chat ⌘N">
+            <SidebarChromeTooltip label="Nuevo agente ⌘N">
               <button
                 type="button"
                 onPointerDown={markNewChatIntent}
                 onClick={handleNewChat}
-                aria-label="Nuevo chat ⌘N"
+                aria-label="Nuevo agente ⌘N"
                 className="flex h-7 w-8 shrink-0 items-center justify-center rounded-lg bg-zinc-950 text-white shadow-sm transition-colors hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
               >
                 <MessageSquarePlus className="h-4 w-4" strokeWidth={1.9} />
