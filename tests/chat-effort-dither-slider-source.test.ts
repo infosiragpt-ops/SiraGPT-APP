@@ -40,11 +40,15 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
   })
 
   it("styles a fully rounded grey→violet rail with a white capsule thumb", () => {
+    const section = ruleBody(".effort-section")
+    assert.match(section, /--effort-violet: hsl\(26\d /, "the dissolve resolves to violet")
+    assert.match(section, /--effort-rail: hsl\(220 10% 92%\)/, "the rail starts grey")
+
     const track = ruleBody(".effort-track")
     assert.match(track, /border-radius: 999px;/)
-    assert.match(track, /--effort-violet: hsl\(26\d /, "the dissolve resolves to violet")
-    assert.match(track, /--effort-rail: hsl\(220 10% 92%\)/, "the rail starts grey")
-    assert.match(track, /--effort-x: calc\(/, "thumb centre is a single shared expression")
+    assert.match(track, /cursor: grab;/)
+    assert.match(track, /--effort-index: 0;/)
+    assert.match(track, /--effort-x: calc\(/, "x must be declared on the track: var(--effort-index) substitutes at declaration scope, so section-level x froze the thumb at stop 0")
 
     const fill = ruleBody(".effort-track-fill")
     assert.match(fill, /clip-path: inset\(0 calc\(100% - var\(--effort-x\)\) 0 0\);/, "reveal is a clip, so the dissolve stays anchored to the full rail")
@@ -53,11 +57,11 @@ describe("effort slider — dithered pixel-dissolve contract", () => {
     const thumb = ruleBody(".effort-thumb")
     assert.match(thumb, /border-radius: 999px;/, "capsule")
     assert.match(thumb, /background: #ffffff;/, "white")
-    assert.match(thumb, /border: 1px solid hsl\(220 12% 82% \/ 0\.9\);/, "very subtle hairline border")
+    assert.match(thumb, /border: 1px solid hsl\(220 12% 52%\);/, "3:1 border against the white fill and the grey rail (WCAG 1.4.11)")
     assert.match(thumb, /box-shadow:\s*0 1px 2px hsl\(220 25% 10% \/ 0\.14\),\s*0 3px 8px -2px hsl\(220 25% 10% \/ 0\.2\);/, "soft shadow")
     assert.match(thumb, /left: var\(--effort-x\);/)
 
-    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-track {", ".dark .effort-thumb {"]) {
+    for (const cls of [".effort-dither {", ".effort-dither-base {", ".effort-dither-px {", ".dark .effort-section {", ".dark .effort-thumb {"]) {
       assert.ok(globals.includes(cls), `${cls} must exist`)
     }
     assert.match(globals, /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.effort-track-fill,\s*\.effort-thumb,\s*\.effort-dither-twinkle,\s*\.effort-sheen,/, "reduced motion freezes fill + thumb + pixels + sheen")
