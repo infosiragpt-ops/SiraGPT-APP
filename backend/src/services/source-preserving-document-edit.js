@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
 const { parsePresentationTitleEdit, isScopedSlideMutation } = require('./document-editing/presentation-title-intent');
-const { verifySlideTitleEdit } = require('./document-editing/edit-output-proof');
+const { verifySlideTitleEdit, assertBoundedOfficePackage } = require('./document-editing/edit-output-proof');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
@@ -8034,6 +8034,11 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      try { assertBoundedOfficePackage(input); }
+      catch {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'No pude abrir esta presentación dentro de los límites seguros. Comprueba el archivo o adjunta una versión más pequeña; no modifiqué el original.' });
+      }
       // Surgical fast paths — resolved BEFORE the text/append planner: slide
       // title edits ("en la diapositiva 3 cambia el título…") and image
       // recolor/replace inside slides. The old planner could only replace

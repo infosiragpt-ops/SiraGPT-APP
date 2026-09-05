@@ -54,7 +54,16 @@ async function listConversationArtifacts(prisma, { userId, chatId, take = 8 } = 
 
 async function getLatestConversationArtifact(prisma, { userId, chatId, instruction = '' } = {}) {
   const rows = await listConversationArtifacts(prisma, { userId, chatId, take: 20 });
-  const text = String(instruction).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  // Quoted replacement/title values are CONTENT, not source selectors:
+  // "Excel avanzado" must not redirect a PPTX edit to an older workbook.
+  const referenceText = require('../document-editing/presentation-title-intent').documentReferenceText(instruction);
+  const named = rows.filter((row) => {
+    if (!row.filename) return false;
+    const filename = String(row.filename).split(/[\\/]/).pop().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?<![\\p{L}\\p{N}_.-])${filename}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu').test(referenceText);
+  });
+  if (named.length === 1) return named[0];
+  const text = referenceText.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const format = /\b(?:pptx?|powerpoint|presentacion|diapositiva\w*|lamina\w*|landin\w*|slide\w*)\b/.test(text) ? 'pptx'
     : /\b(?:docx|word)\b/.test(text) ? 'docx' : /\b(?:xlsx|excel|celda\w*|hoja\w*)\b/.test(text) ? 'xlsx'
       : /\bpdf\b/.test(text) ? 'pdf' : null;

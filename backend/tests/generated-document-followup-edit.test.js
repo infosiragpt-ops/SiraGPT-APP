@@ -33,6 +33,21 @@ function changedParts(a, b) {
   assert.deepEqual(Object.keys(before.files).sort(), Object.keys(after.files).sort());
   return Object.keys(before.files).filter((name) => !before.files[name].dir && !before.file(name).asNodeBuffer().equals(after.file(name).asNodeBuffer()));
 }
+function impossibleDeclaredSlideSize(buffer) {
+  const poisoned = Buffer.from(buffer);
+  const signature = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+  let offset = poisoned.indexOf(signature);
+  while (offset >= 0) {
+    const nameLength = poisoned.readUInt16LE(offset + 28);
+    const name = poisoned.subarray(offset + 46, offset + 46 + nameLength).toString('utf8');
+    if (name === 'ppt/slides/slide1.xml') {
+      poisoned.writeUInt32LE(0x7fffffff, offset + 24);
+      return poisoned;
+    }
+    offset = poisoned.indexOf(signature, offset + 4);
+  }
+  throw new Error('Fixture slide1 central entry missing');
+}
 test('exact user follow-up edits the existing 11-slide ZIP without any model or sandbox regeneration', async () => {
   const original = await deck(); const copy = Buffer.from(original);
   const result = await runAgentRunner({ files: [{ name: 'historia_dinosaurios.pptx', buffer: original, isPriorArtifact: true }], instruction: PROMPT,
@@ -44,6 +59,31 @@ test('exact user follow-up edits the existing 11-slide ZIP without any model or 
   assert.equal(adapter.listPptxSlides(result.outputs[0].buffer).length, 11);
   assert.deepEqual(changedParts(original, result.outputs[0].buffer), ['ppt/slides/slide1.xml']);
   assert.match(result.finalText, /Cambié/); assert.doesNotMatch(result.finalText, /Generé/);
+});
+test('an already-cancelled surgical edit emits exactly one cancellation and no deliverable', async () => {
+  const controller = new AbortController(); controller.abort();
+  const original = await deck(); const events = []; let modelCalls = 0;
+  await assert.rejects(runAgentRunner({ files: [{ name: 'historia.pptx', buffer: original }], instruction: PROMPT,
+    signal: controller.signal, onEvent: (event) => events.push(event),
+    client: { chat: { completions: { create() { modelCalls++; throw new Error('Unexpected provider call'); } } } } }),
+    (error) => error?.name === 'AbortError');
+  assert.equal(events.filter((event) => event.type === 'cancelled').length, 1);
+  assert.equal(events.some((event) => event.type === 'file_artifact' || event.type === 'sandbox_ready'), false);
+  assert.equal(modelCalls, 0);
+});
+test('surgical follow-up rejects an Office expansion bomb before parsing slides or calling a model', async () => {
+  const original = impossibleDeclaredSlideSize(await deck()); const originalCopy = Buffer.from(original); let modelCalls = 0;
+  const result = await runAgentRunner({ files: [{ name: 'historia.pptx', buffer: original }], instruction: PROMPT,
+    client: { chat: { completions: { create() { modelCalls++; throw new Error('Unexpected provider call'); } } } } });
+  assert.equal(result.stoppedReason, 'edit_not_applied'); assert.deepEqual(result.outputs, []);
+  assert.match(result.finalText, /límites seguros/); assert.equal(modelCalls, 0); assert.deepEqual(original, originalCopy);
+});
+test('output collection rejects an Office expansion bomb with a safe failed validation', async () => {
+  const buffer = impossibleDeclaredSlideSize(await deck()); const events = [];
+  const outputs = await collectValidOutputs({ collectOutputs: async () => [{ name: 'resultado.pptx', buffer }] }, (event) => events.push(event));
+  assert.equal(outputs[0].valid, false); assert.equal(outputs[0].validation.passed, false);
+  assert.ok(['office_package_limit_exceeded', 'office_package_invalid'].includes(outputs[0].validation.reason));
+  assert.equal(events.some((event) => event.type === 'output_invalid'), true);
 });
 test('ordinal, misspelling and explicit title parsing remain grounded in the existing title', () => {
   for (const unit of ['primera lámina', 'primera Landin', 'primera diapositiva', 'slide 1', 'portada']) assert.equal(slideNumberFromRequest(unit), 1);
@@ -118,6 +158,55 @@ test('latest requested-format artifact wins over newer preview and reattached or
   assert.equal((await getLatestConversationArtifact(prisma, { userId: 'u', chatId: 'c', instruction: PROMPT })).id, 'last-edit');
   const result = await resolveTurnFiles({ prisma, userId: 'u', chatId: 'c', instruction: PROMPT, attachedFiles: [{ name: 'original.pptx', buffer: original }], objectStorage: { readFile: async (p) => { assert.equal(p, '/edited'); return latest; } } });
   assert.equal(result.files[0].artifactId, 'last-edit'); assert.equal(result.files[0].isPriorArtifact, true);
+});
+test('quoted new titles do not select another source format and exact filenames outrank content keywords', async () => {
+  const rows = [{ id: 'latest-presentation', filename: 'presentacion_editada.pptx' }, { id: 'older-spreadsheet', filename: 'presupuesto.xlsx' }];
+  const prisma = { generatedArtifact: { findMany: async () => rows } };
+  const scope = { userId: 'u', chatId: 'c' };
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'Cambia el título de la portada a "Excel avanzado"' })).id, 'latest-presentation');
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'Cambia el título de la portada a "Word y PDF"' })).id, 'latest-presentation');
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'Cambia el título de la portada a Excel avanzado' })).id, 'latest-presentation');
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'En presupuesto.xlsx cambia el título a "PowerPoint avanzado"' })).id, 'older-spreadsheet');
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'En presentacion_editada.pptx cambia el título a Excel avanzado' })).id, 'latest-presentation');
+  assert.equal((await getLatestConversationArtifact(prisma, { ...scope, instruction: 'En "presupuesto.xlsx" cambia el título a Nuevo título' })).id, 'older-spreadsheet');
+});
+test('an explicitly named PPTX wins over the latest artifact and leaves the other original intact', async () => {
+  const a = await deck(); const b = adapter.setSlideTitle({ buffer: a, slideNumber: 1, title: 'Documento B' }).buffer;
+  const originalA = Buffer.from(a); const originalB = Buffer.from(b);
+  const result = await runAgentRunner({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }],
+    instruction: 'En B.pptx cambia el título de la primera diapositiva a "Nuevo título".' });
+  assert.equal(result.outputs.length, 1); assert.equal(result.outputs[0].name, 'B_editado.pptx');
+  assert.equal(adapter.listPptxSlides(result.outputs[0].buffer)[0].title, 'Nuevo título');
+  assert.deepEqual(changedParts(b, result.outputs[0].buffer), ['ppt/slides/slide1.xml']);
+  assert.deepEqual(a, originalA); assert.deepEqual(b, originalB);
+  const titleNamedLikeFile = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }],
+    instruction: 'Cambia el título de la primera diapositiva a "B.pptx".' });
+  assert.equal(titleNamedLikeFile.outputs[0].name, 'A_editado.pptx', 'a new title is not a filename reference');
+  assert.equal(adapter.listPptxSlides(titleNamedLikeFile.outputs[0].buffer)[0].title, 'B.pptx');
+  const quotedSource = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }],
+    instruction: 'En "B.pptx" cambia el título de la primera diapositiva a Nuevo título.' });
+  assert.equal(quotedSource.outputs[0].name, 'B_editado.pptx');
+  assert.equal(adapter.listPptxSlides(quotedSource.outputs[0].buffer)[0].title, 'Nuevo título');
+  const trailingSource = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }],
+    instruction: 'Cambia el título de la primera diapositiva a "Nuevo" en B.pptx.' });
+  assert.equal(trailingSource.outputs[0].name, 'B_editado.pptx');
+  assert.equal(adapter.listPptxSlides(trailingSource.outputs[0].buffer)[0].title, 'Nuevo');
+  const unquotedTitle = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }, { name: 'C.pptx', buffer: a }],
+    instruction: 'En B.pptx cambia el título de la primera diapositiva a C.pptx' });
+  assert.equal(unquotedTitle.outputs[0].name, 'B_editado.pptx');
+  assert.equal(adapter.listPptxSlides(unquotedTitle.outputs[0].buffer)[0].title, 'C.pptx');
+});
+test('multiple or unavailable explicitly named presentations never edit only the latest one', async () => {
+  const a = await deck(); const b = adapter.setSlideTitle({ buffer: a, slideNumber: 1, title: 'Documento B' }).buffer;
+  for (const target of ['ambos PPTX', 'A.pptx y B.pptx', 'C.pptx']) {
+    const result = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }, { name: 'B.pptx', buffer: b }],
+      instruction: `En ${target} cambia el título de la primera diapositiva a "Nuevo título".` });
+    assert.ok(result, 'ambiguous target must be an explicit clarification');
+    assert.equal(result.stoppedReason, 'edit_not_applied'); assert.deepEqual(result.outputs, []);
+    assert.doesNotMatch(result.finalText, /Listo/);
+  }
+  const incomplete = trySurgicalPresentationFollowup({ files: [{ name: 'A.pptx', buffer: a, isPriorArtifact: true }], instruction: 'En ambos PPTX cambia el título de la primera diapositiva a "Nuevo título".' });
+  assert.equal(incomplete.stoppedReason, 'edit_not_applied'); assert.deepEqual(incomplete.outputs, []);
 });
 test('multiple DOCX/PPTX edits map each output to its named original and ambiguous names fail closed', async () => {
   for (const format of ['docx', 'pptx']) {

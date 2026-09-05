@@ -35,7 +35,7 @@ const {
 const MAX_OUTPUT_RETRIES = 3;
 const { trySurgicalPresentationFollowup } = require('./surgical-followup');
 const { isScopedSlideMutation, parsePresentationTitleEdit } = require('../document-editing/presentation-title-intent');
-const { verifyContentChanged, verifySlideTitleEdit } = require('../document-editing/edit-output-proof');
+const { verifyContentChanged, verifySlideTitleEdit, assertBoundedOfficePackage } = require('../document-editing/edit-output-proof');
 
 /* ── F8 — memoria híbrida + skills + cliente MCP (hooks) ────────────────────
  * Los módulos viven en ./memory, ./skills y ./mcp; este helper solo ORQUESTA:
@@ -223,8 +223,16 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
       out.valid = false;
       onEvent({ type: 'output_invalid', name: out.name, reason: 'empty_file' });
     } else if (['docx', 'xlsx', 'pptx'].includes(ext)) {
-      out.valid = isValidOoxml(out.buffer);
-      if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: 'ooxml_structure' });
+      try {
+        assertBoundedOfficePackage(out.buffer);
+        out.valid = isValidOoxml(out.buffer);
+        if (!out.valid) onEvent({ type: 'output_invalid', name: out.name, reason: 'ooxml_structure' });
+      } catch (error) {
+        out.valid = false;
+        const reason = error?.code === 'OFFICE_PACKAGE_LIMIT_EXCEEDED' ? 'office_package_limit_exceeded' : 'office_package_invalid';
+        out.validation = { ok: false, passed: false, reason, engine: 'office_package_preflight' };
+        onEvent({ type: 'output_invalid', name: out.name, reason });
+      }
     } else {
       out.valid = true;
     }
@@ -236,12 +244,17 @@ async function collectValidOutputs(sandbox, onEvent = () => {}, editContext = {}
     if (out.valid && sources.length && editContext.isEdit) {
       let proof = source ? verifyContentChanged(source.buffer, out.buffer, ext) : { passed: false, reason: 'source_ambiguous' };
       if (proof.passed && ext === 'pptx') {
-        const adapter = require('../document-editing/pptx-adapter');
-        const before = adapter.listPptxSlides(source.buffer);
-        const edit = parsePresentationTitleEdit(editContext.instruction, { slides: before });
-        if (edit?.slideNumber) proof = verifySlideTitleEdit(source.buffer, out.buffer, edit);
-        else if (isScopedSlideMutation(editContext.instruction) && before.length !== adapter.listPptxSlides(out.buffer).length)
-          proof = { passed: false, reason: 'unrequested_slide_count_change' };
+        try {
+          assertBoundedOfficePackage(source.buffer);
+          const adapter = require('../document-editing/pptx-adapter');
+          const before = adapter.listPptxSlides(source.buffer);
+          const edit = parsePresentationTitleEdit(editContext.instruction, { slides: before });
+          if (edit?.slideNumber) proof = verifySlideTitleEdit(source.buffer, out.buffer, edit);
+          else if (isScopedSlideMutation(editContext.instruction) && before.length !== adapter.listPptxSlides(out.buffer).length)
+            proof = { passed: false, reason: 'unrequested_slide_count_change' };
+        } catch {
+          proof = { passed: false, reason: 'office_source_invalid' };
+        }
       }
       out.valid = proof.passed;
       out.validation = { ...proof, ok: proof.passed, engine: 'agent_runner_edit_delta' };
@@ -286,10 +299,6 @@ async function runAgentRunner({
 } = {}) {
   const task = String(instruction || '').trim();
   if (!task) throw new Error('runAgentRunner: instruction is required');
-  throwIfAborted(signal);
-  const surgical = CREATE_DOC_RE.test(task) ? null : trySurgicalPresentationFollowup({ instruction: task, files });
-  if (surgical) return surgical;
-  const editContext = { files, instruction: task, isEdit: require('../source-preserving-document-edit').isSourcePreservingEditRequest(task, files) };
   let llm = client || null;
   const resolvedModel = model || defaultModel();
 
@@ -312,6 +321,14 @@ async function runAgentRunner({
   let f7 = null; // F7 (multimodal) extras — cleaned up in finally
   try {
     throwIfAborted(abortScope.signal);
+    const surgical = CREATE_DOC_RE.test(task) ? null : trySurgicalPresentationFollowup({ instruction: task, files });
+    if (surgical) return surgical;
+    // This is an output-integrity gate, not the document-routing classifier:
+    // same-format artifacts returned from an existing-file turn must contain
+    // a real change unless the user explicitly asked to generate a new file.
+    // Keep the generic document pipeline out of AgentRunner's dependency path.
+    const editContext = { files, instruction: task,
+      isEdit: files.some((file) => Buffer.isBuffer(file?.buffer)) && !CREATE_DOC_RE.test(task) };
     sandbox = await createSandbox({
       driver,
       signal: abortScope.signal,

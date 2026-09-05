@@ -23,6 +23,9 @@ This change is separate from the pending document-sandbox phase 1 work.
   the exact requested title and byte-identical untouched OOXML parts.
 - Follow-ups recover the latest compatible artifact, enforcing user/chat identity
   when recovering local storage metadata.
+- The document browser spec is included in the mandatory `E2E · critical UI gate`,
+  not just the informational smoke job. A successful informational job alone is
+  not evidence that all of its tests passed.
 
 ## Reproduce local checks
 
@@ -36,11 +39,13 @@ node --test tests/document-preview-source.test.ts tests/document-preview-regress
 
 task_artifacts_dir=$(mktemp -d)
 NODE_ENV=test AGENT_ARTIFACT_DIR="$task_artifacts_dir" node --test \
+  backend/tests/agent-runner-scenario-bank.test.js \
   backend/tests/generated-document-followup-edit.test.js \
   backend/tests/agent-runner.test.js \
   backend/tests/source-preserving-document-edit.test.js \
   backend/tests/doc-followup-recovery.test.js \
-  backend/tests/pptx-surgical-edit.test.js
+  backend/tests/pptx-surgical-edit.test.js \
+  backend/tests/document-edit-output-proof-security.test.js
 
 npx playwright test e2e/document-artifact-consistency.spec.ts --project=chromium
 npm run ui-lock:verify
@@ -52,8 +57,21 @@ starting a second server. The E2E fixture refuses non-loopback hosts.
 
 ## Evidence and limits
 
-- Frontend component/library suite: 734 passing tests. Preview source regressions:
-  10 passing tests. Backend focused/regression suite: 177 passing tests, none skipped.
+- Compiled frontend Node suite: 12,321 passing tests, 532 suites, no skips.
+  Frontend component/library suite: 734 passing tests. Preview source regressions:
+  10 passing tests. Backend release/regression/security suite: 243 passing tests
+  in one Node 24 run, none skipped and no forced process exit.
+- The expanded mandatory browser gate (chat, upload smoke and document cards)
+  passes 7/7 locally on Node 24.19.0 and Chromium, with zero retries. The two
+  document tests use the explicit mocks described below; the other smoke tests
+  do not replace an authenticated backend upload acceptance test.
+- Local optimized Next.js production build and bundle-size budget pass, with
+  the existing noVNC top-level-await warning. Post-build TypeScript also passes:
+  four pre-existing `Promise | object` route-prop annotations in three redirect
+  pages were narrowed to the Next.js Promise contract. Their transpiled
+  JavaScript remains byte-identical; redirects and the visible UI are unchanged.
+  The local frontend build reused dependencies without regenerating the shared
+  Prisma client; CI still performs the isolated install/generation/build gates.
 - Chromium E2E: 2 passing tests (desktop 1440×1000 and mobile 390×844), with
   16 cards, 12 viewer flows and 8 byte-identical downloads in the companion
   visual check. Advancing, zooming and returning to page 1 preserves both the
@@ -76,3 +94,40 @@ starting a second server. The E2E fixture refuses non-loopback hosts.
 - No secrets, database migrations, Docker changes, DNS changes, model calls or
   production restarts are part of this patch. Before publishing, validate the
   real account/chat flow and document conversion in the deployment environment.
+
+## Pre-deployment review — 2026-09-05
+
+The first PR CI run caught an outdated source-test assertion after shared card
+styles were extracted, plus AgentRunner dependency/cancellation regressions.
+The source test now checks both the helper import/use and the original style
+contract. AgentRunner keeps the document classifier out of its dependency graph
+and runs the surgical path within the existing cancellation/cleanup lifecycle;
+a pre-cancelled PPTX regression checks exactly one cancellation and no output.
+Selection regressions also cover an explicitly named PPTX taking precedence over
+the previous artifact, quoted filenames versus replacement titles, and plural or
+missing targets failing closed instead of silently editing another document.
+Office validation now bounds archive metadata before allocating the ZIP entry
+list, and uses bounded decompression with CRC/exact-length checks before reading
+OOXML parts. Thirteen small adversarial fixtures cover dishonest sizes, entry
+counts and invalid packages. The synchronous path accepts ZIP32 STORE/DEFLATE,
+at most 5,000 entries, 50 MiB per part and 200 MiB total; unsupported or oversized
+packages fail closed. It is not an unlimited document-processing promise.
+
+Production was not changed during this review. Public readiness returned HTTP
+200 and the live commit was `b30b48bc9b7c2510e86ff85c293852967ba31dc9`.
+The configured Lenovo SSH key was rejected (`Permission denied (publickey)`).
+The active GitHub deploy workflow still uses the legacy `/opt/siragpt` path and
+hard-reset operations; its earlier failed run could not preserve rollback images.
+Do not merge expecting that workflow to publish to the Lenovo. Restore the
+approved Lenovo access, review its actual `publish.sh` and backup/rollback path,
+then verify the published commit and authenticated document flow after release.
+
+A fresh read-only `npm audit --omit=dev --audit-level=high` additionally reports
+three high-severity affected packages in the root and twelve in the backend
+(zero critical in both). No package/lockfile changed in this PR, so these are
+baseline dependency findings, not newly introduced dependencies. Examples include
+Next/sharp in the root and document/browser tooling in the backend. Some suggested
+remediations require major versions or are unavailable; do not run a forced
+automatic dependency rewrite as part of this document UI patch. Resolve and
+validate these release-security findings before publication; a green critical-only
+CI audit is not a clean high-severity audit.

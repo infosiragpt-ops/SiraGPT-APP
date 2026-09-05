@@ -9,6 +9,23 @@ const ORDINALS = Object.freeze({ primer: 1, primera: 1, primero: 1, first: 1,
 const UNIT = '(?:diapositivas?|laminas?|landin\\w*|slides?)';
 const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 const EDIT = /\b(?:cambi\w*|actualiz\w*|reempla[zc]\w*|edita\w*|escrib\w*|modific\w*|pon(?:er|ga|le)?|agreg\w*|anad\w*|inclu\w*|set|change\w*|rename\w*)\b/;
+function unquoteDocumentReferences(value) {
+  // A quoted filename after a source cue is not the requested title value.
+  return String(value || '').replace(/\b(en|archivo|presentaci[oó]n|documento)\s+["“']([^"”']+\.(?:pptx|docx|xlsx|pdf))["”']/gi, '$1 $2');
+}
+function documentReferenceText(value) {
+  const raw = unquoteDocumentReferences(value);
+  const assignment = /\b(?:t[ií]tulo|title)\b[^,;.]*?(?:\b(?:a|por|to)\b|:)\s+/i.exec(raw);
+  let references = raw;
+  if (assignment) {
+    const valueStart = assignment.index + assignment[0].length;
+    const tail = raw.slice(valueStart);
+    const quotedValue = /^["“'][^"”']*["”']/.exec(tail);
+    // A source may follow the replacement: title a "Nuevo" en B.pptx.
+    references = raw.slice(0, valueStart) + (quotedValue ? tail.slice(quotedValue[0].length) : '');
+  }
+  return references.replace(/["“'][^"”']*["”']/g, ' ');
+}
 function slideNumberFromRequest(value) {
   const text = normalize(value);
   const numeric = new RegExp(`\\b${UNIT}\\s*(?:n(?:ro|umero)?\\.?\\s*|#\\s*)?(\\d{1,3})\\b`).exec(text);
@@ -40,7 +57,7 @@ function originalSpan(raw, needle) {
   return { start: offsets[match.index], end: (offsets[match.index + match[0].length] ?? raw.length) };
 }
 function parsePresentationTitleEdit(requestText = '', { slides = [] } = {}) {
-  const raw = String(requestText || ''); const normalized = normalize(raw);
+  const raw = unquoteDocumentReferences(requestText); const normalized = normalize(raw);
   if (!normalized || !EDIT.test(normalized)) return null;
   if (/\b(?:y|and)\s+(?:cambi\w*|agreg\w*|anad\w*|quit\w*|elimin\w*|reemplaz\w*|pon\w*|colore\w*)\b/.test(normalized)) return null;
   const slideNumber = slideNumberFromRequest(raw);
@@ -72,4 +89,4 @@ function parsePresentationTitleEdit(requestText = '', { slides = [] } = {}) {
   if (title.length > 160) return null;
   return { kind: 'set_slide_title', slideNumber, title };
 }
-module.exports = { slideNumberFromRequest, isScopedSlideMutation, parsePresentationTitleEdit };
+module.exports = { slideNumberFromRequest, isScopedSlideMutation, parsePresentationTitleEdit, documentReferenceText };
