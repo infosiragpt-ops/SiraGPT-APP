@@ -390,14 +390,13 @@ jobs:
   # ───────────────────────────────────────────────────────────────────
   # SECURITY — npm audit + SBOM (hard gate for critical vulnerabilities)
   # ───────────────────────────────────────────────────────────────────
-  # Blocks newly introduced critical production vulnerabilities and emits
-  # CycloneDX SBOM artifacts from the lockfiles for enterprise review.
-  # High/moderate advisories remain documented debt because several fixes
-  # require framework/runtime migrations that must be handled separately.
+  # Blocks high/critical production vulnerabilities. The one locally patched
+  # dependency must pass byte-for-byte installed-tree attestation; its upstream
+  # advisory remains visible in the audit report and SBOM.
   security-audit:
     name: Security · npm audit + SBOM
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -407,12 +406,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Frontend · npm audit (critical only)
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Frontend · npm audit (high and critical)
+        run: npm audit --omit=dev --audit-level=high
 
-      - name: Backend · npm audit (critical only)
-        working-directory: backend
-        run: npm audit --omit=dev --audit-level=critical
+      - name: Backend · install isolated tree for security attestation
+        run: |
+          npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
+          node backend/scripts/image-size-security-patch.cjs
+      - name: Backend · audit high/critical with verified patch provenance
+        run: node scripts/audit-backend-production.cjs
 
       - name: Generate CycloneDX SBOMs
         run: npm run sbom:generate
@@ -651,7 +653,7 @@ jobs:
   dependency-audit:
     name: Dependency audit · npm audit production
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -670,7 +672,9 @@ jobs:
 
       - name: Audit backend dependencies
         run: |
-          npm --prefix backend audit --omit=dev --audit-level=critical
+          npm ci --prefix backend --omit=dev --ignore-scripts --no-audit --no-fund
+          node backend/scripts/image-size-security-patch.cjs
+          node scripts/audit-backend-production.cjs
 
   drizzle-migrations-dry-run:
     name: Drizzle migrations · dry run

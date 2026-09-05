@@ -320,8 +320,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   /* Admin/user model toggles: keep a compact iOS switch, not a 44px circle.
      Syncfusion button CSS + iOS min tap-targets otherwise blow [role=switch]
      into a huge radio-looking disc. */
-  button[role="switch"]:not(.composer-fast-row),
-  [role="switch"]:not(.composer-fast-row),
+  button[role="switch"],
+  [role="switch"],
   .admin-model-switch {
     width: 36px !important;
     height: 20px !important;
@@ -338,8 +338,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     appearance: none !important;
     transform: none !important;
   }
-  button[role="switch"]:not(.composer-fast-row) > span,
-  [role="switch"]:not(.composer-fast-row) > span,
+  button[role="switch"] > span,
+  [role="switch"] > span,
   .admin-model-switch > span {
     width: 16px !important;
     height: 16px !important;
@@ -1340,122 +1340,97 @@ details[open] > summary .think-chevron,
    whole rail and revealed up to the thumb with clip-path, so a higher effort
    uncovers more violet. White capsule thumb, hairline border, soft shadow. */
 .effort-section {
-  padding: 1.25rem 1.25rem 1.1rem;
+  padding: 0.8rem 1.1rem 0.55rem;
   border: 0;
   background: transparent;
+  /* Single source of slider geometry: the track, thumb, fill, ticks and
+     bubble all resolve these by inheritance, so every stop lands on the
+     same x in every element. */
+  --effort-steps: 3;
+  --effort-rail-h: 1.5rem;
+  --effort-thumb-w: 1.25rem;
+  --effort-thumb-h: 1.3rem;
+  --effort-pad: 0.3rem;
+  --effort-rail: hsl(220 10% 92%);
+  --effort-fill-base: hsl(220 8% 83%);
+  --effort-violet: hsl(266 84% 60%);
+  --effort-accent: hsl(266 84% 60%);
 }
 
 .effort-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
-
-.effort-header-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 2.25rem;
-  height: 2.25rem;
-  border-radius: 0.75rem;
-  background: hsl(266 60% 55% / 0.08);
-  color: hsl(266 55% 50%);
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
 }
 
 .effort-title {
-  margin: 0;
   color: hsl(var(--foreground) / 0.9);
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   letter-spacing: -0.005em;
-  line-height: 1.35;
+  line-height: 1.1;
 }
 
-.effort-subtitle {
-  margin: 0.25rem 0 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.75rem;
-  line-height: 1.4;
-}
-
-.effort-selection {
-  margin-bottom: 0.75rem;
-  padding: 0.875rem;
-  border: 1px solid hsl(266 35% 55% / 0.12);
-  border-radius: 0.875rem;
-  background: hsl(266 60% 55% / 0.045);
-}
-
-.effort-selection-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.effort-selection-heading strong {
+/* Text readout of the active level (Low … Extra high): the value never
+   relies on color or density alone (WCAG 1.4.1). */
+.effort-level {
+  color: hsl(var(--foreground) / 0.78);
   font-size: 0.75rem;
   font-weight: 600;
-  line-height: 1.5;
-}
-
-.effort-level-badge {
-  flex-shrink: 0;
-  border-radius: 0.375rem;
-  padding: 0.2rem 0.45rem;
-  background: hsl(266 60% 55% / 0.09);
-  color: hsl(266 55% 44%);
-  font-size: 0.625rem;
-  font-weight: 650;
-  line-height: 1.4;
-}
-
-.effort-selection p {
-  min-height: 2.8em;
-  margin: 0.5rem 0 0;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.75rem;
-  line-height: 1.4;
+  letter-spacing: -0.005em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .effort-track {
   position: relative;
   display: block;
-  height: 2.75rem;
+  height: 2.25rem;
   margin: 0;
   padding: 0;
   border-radius: 999px;
   outline: none;
-  cursor: pointer;
+  cursor: grab;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   overflow: hidden;
   --effort-index: 0;
-  --effort-steps: 3;
-  --effort-rail-h: 1.5rem;
-  --effort-thumb-w: 0.875rem;
-  --effort-thumb-h: 1.2rem;
-  --effort-pad: 0.3rem;
-  /* Centre of the active stop. Percentages resolve against the element that
-     consumes the variable — rail, fill and thumb all share the track width. */
+  /* Declared HERE on purpose: var(--effort-index) inside this expression
+     resolves against the declaring element, and the [data-effort] overrides
+     below also land on the track. Defining it on the section froze the thumb
+     at stop 0 (custom properties substitute at declaration scope). */
   --effort-x: calc(
     var(--effort-pad) + var(--effort-thumb-w) / 2 +
     var(--effort-index) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
   );
-  --effort-rail: hsl(220 10% 92%);
-  --effort-fill-base: hsl(220 8% 83%);
-  --effort-violet: hsl(266 84% 60%);
 }
 .effort-track[data-effort="0"] { --effort-index: 0; }
 .effort-track[data-effort="1"] { --effort-index: 1; }
 .effort-track[data-effort="2"] { --effort-index: 2; }
 .effort-track[data-effort="3"] { --effort-index: 3; }
+.effort-track[data-dragging="true"] {
+  cursor: grabbing;
+}
+.effort-track[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.effort-track[data-disabled="true"] .effort-dither-twinkle,
+.effort-track[data-disabled="true"] .effort-sheen {
+  animation: none;
+}
 
-.effort-track:focus-visible {
-  outline: 2px solid hsl(var(--foreground) / 0.28);
+/* Specificity (0,3,0) beats the global [tabindex]:focus-visible rule (0,2,0),
+   whose dark --ring would otherwise win by source order. */
+.effort-section .effort-track:focus-visible {
+  outline: 2px solid var(--effort-accent);
   outline-offset: 2px;
 }
+/* Thumb focus ring lives after the hover rule (same specificity wins). */
 
 .effort-track-line {
   position: absolute;
@@ -1569,7 +1544,6 @@ details[open] > summary .think-chevron,
   appearance: none;
   cursor: pointer;
   color: inherit;
-  pointer-events: none;
 }
 .effort-stop[data-stop="1"] { --i: 1; }
 .effort-stop[data-stop="2"] { --i: 2; }
@@ -1604,7 +1578,10 @@ details[open] > summary .think-chevron,
   height: var(--effort-thumb-h);
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  border: 1px solid hsl(220 12% 82% / 0.9);
+  /* 3:1 against the white fill inside AND the grey rail outside (WCAG 1.4.11),
+     so the thumb stays perceivable at every stop — including Bajo, where it
+     sits on light grey. */
+  border: 1px solid hsl(220 12% 52%);
   background: #ffffff;
   box-shadow:
     0 1px 2px hsl(220 25% 10% / 0.14),
@@ -1612,63 +1589,109 @@ details[open] > summary .think-chevron,
   pointer-events: none;
   transition:
     left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms ease;
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
-.effort-track:hover .effort-thumb,
-.effort-track:focus-visible .effort-thumb {
+.effort-track[data-dragging="true"] .effort-thumb {
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow:
+    0 2px 4px hsl(220 25% 10% / 0.2),
+    0 6px 14px -4px hsl(220 25% 10% / 0.3);
+}
+.effort-track:hover .effort-thumb {
   box-shadow:
     0 1px 2px hsl(220 25% 10% / 0.18),
     0 4px 10px -2px hsl(220 25% 10% / 0.26);
 }
-
-.effort-levels {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
+.effort-section .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(0 0% 100%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(220 25% 10% / 0.2);
 }
 
-.effort-level-button {
-  min-width: 0;
-  min-height: 2.25rem;
-  padding: 0.4rem 0.2rem;
-  border: 1px solid transparent;
-  border-radius: 0.5rem;
-  background: transparent;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.75rem;
-  font-weight: 500;
-  line-height: 1.2;
-  transition: color 160ms ease, background-color 160ms ease;
+/* Discrete step marks under the rail: four fixed stops, snapped on
+   release — a second non-color cue next to the header readout. */
+.effort-ticks {
+  position: relative;
+  height: 0.375rem;
+  margin-top: 0.3rem;
+}
+.effort-ticks > span {
+  --i: 0;
+  position: absolute;
+  top: 0;
+  left: calc(
+    var(--effort-pad) + var(--effort-thumb-w) / 2 +
+    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
+  );
+  width: 2px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: hsl(220 8% 68%);
+}
+.effort-ticks > span[data-stop="1"] { --i: 1; }
+.effort-ticks > span[data-stop="2"] { --i: 2; }
+.effort-ticks > span[data-stop="3"] { --i: 3; }
+.dark .effort-ticks > span {
+  background: hsl(0 0% 100% / 0.4);
 }
 
-.effort-level-button:hover {
-  background: hsl(266 60% 55% / 0.055);
-  color: hsl(var(--foreground));
-}
-
-.effort-level-button[aria-pressed="true"] {
-  border-color: hsl(266 60% 55% / 0.15);
-  background: hsl(266 60% 55% / 0.08);
-  color: hsl(266 55% 44%);
+/* Value bubble that follows the thumb while dragging. Clamped so it never
+   leaves the popover at the end stops. */
+.effort-bubble {
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: clamp(2.75rem, var(--effort-x), calc(100% - 2.75rem));
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.6rem;
+  background: hsl(40 3% 11%);
+  color: hsl(0 0% 100%);
+  font-size: 0.7rem;
   font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow:
+    0 2px 6px hsl(220 25% 10% / 0.25),
+    0 8px 20px -8px hsl(220 25% 10% / 0.35);
 }
-
-.effort-level-button:focus-visible,
-.composer-fast-row:focus-visible,
-.composer-effort-chip:focus-visible {
-  outline: 2px solid hsl(266 60% 60%);
-  outline-offset: 2px;
+.effort-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: hsl(40 3% 11%);
+}
+.dark .effort-bubble {
+  background: hsl(0 0% 96%);
+  color: hsl(220 12% 10%);
+  box-shadow:
+    0 2px 6px hsl(0 0% 0% / 0.5),
+    0 8px 20px -8px hsl(0 0% 0% / 0.6);
+}
+.dark .effort-bubble::after {
+  border-top-color: hsl(0 0% 96%);
 }
 
 .effort-ends {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  margin-top: 0.65rem;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.6875rem;
-  font-weight: 400;
+  margin-top: 0.15rem;
+  /* 5.4:1 on the light popover (WCAG 1.4.3) with margin over the 4.5 floor. */
+  color: hsl(220 9% 42%);
+  font-size: 0.625rem;
+  font-weight: 600;
   line-height: 1.2;
+}
+.dark .effort-ends {
+  color: hsl(var(--muted-foreground));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1676,8 +1699,7 @@ details[open] > summary .think-chevron,
   .effort-thumb,
   .effort-dither-twinkle,
   .effort-sheen,
-  .effort-level-button,
-  .composer-fast-switch::before,
+  .effort-bubble,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;
@@ -1686,24 +1708,16 @@ details[open] > summary .think-chevron,
 
 .dark .effort-section {
   background: transparent;
-}
-.dark .effort-header-icon,
-.dark .effort-level-badge,
-.dark .effort-level-button[aria-pressed="true"] {
-  color: hsl(266 85% 82%);
-  background: hsl(266 85% 75% / 0.12);
-}
-.dark .effort-selection,
-.dark .effort-level-button[aria-pressed="true"] {
-  border-color: hsl(266 85% 75% / 0.16);
-}
-.dark .effort-selection {
-  background: hsl(266 85% 75% / 0.06);
-}
-.dark .effort-track {
   --effort-rail: hsl(0 0% 100% / 0.1);
   --effort-fill-base: hsl(220 8% 30%);
   --effort-violet: hsl(268 90% 70%);
+  --effort-accent: hsl(268 90% 72%);
+}
+.dark .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(220 12% 10%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(0 0% 0% / 0.6);
 }
 .dark .effort-stop::after {
   background: hsl(0 0% 100% / 0.35);
@@ -1712,7 +1726,7 @@ details[open] > summary .think-chevron,
   background: hsl(0 0% 100% / 0.6);
 }
 .dark .effort-thumb {
-  border-color: hsl(0 0% 100% / 0.22);
+  border-color: hsl(0 0% 100% / 0.35);
   background: hsl(0 0% 96%);
   box-shadow:
     0 1px 2px hsl(0 0% 0% / 0.5),
@@ -6303,8 +6317,9 @@ footer {
 }
 
 /* Only the icon actions (dictation, send, stop) reserve the 44px target.
-   The compact controls (context meter, effort, permissions) keep their own
-   dimensions so the toolbar fits comfortably in narrow panes. */
+   The compact chips (context meter, effort, permissions) keep their own
+   pill geometry — a blanket 44px width used to crush the effort label to
+   a bare lightning glyph. */
 .composer-input-row .composer-toolbar-actions > button.composer-dictation-button,
 .composer-input-row .composer-toolbar-actions > button.composer-send-button,
 .composer-input-row .composer-toolbar-actions > button.composer-stop-button {
@@ -6406,6 +6421,9 @@ footer {
   white-space: nowrap;
   transition: background-color 160ms ease-out, color 160ms ease-out;
 }
+.composer-effort-chip > .truncate {
+  min-width: 0;
+}
 .composer-permission-chip {
   width: 2rem;
   max-width: 2rem;
@@ -6434,10 +6452,15 @@ footer {
 .composer-permission-chip.is-full {
   color: #dc2626;
 }
-.composer-effort-lightning {
-  display: block;
-  font-size: 18px;
-  line-height: 1;
+.composer-effort-chip.is-high {
+  color: hsl(220 8% 46%);
+}
+.composer-effort-chip.is-high svg {
+  color: #e89a96;
+}
+.composer-effort-caret {
+  font-size: 9px;
+  opacity: 0.55;
 }
 .composer-context-trigger {
   order: 10;
@@ -6460,13 +6483,6 @@ footer {
 }
 .composer-effort-chip {
   order: 30;
-  width: 2rem;
-  min-width: 2rem;
-  max-width: 2rem;
-  padding: 0;
-  justify-content: center;
-  flex-shrink: 0;
-  gap: 0;
 }
 .composer-dictation-button {
   order: 40;
@@ -6510,54 +6526,21 @@ footer {
 .composer-fast-row {
   display: flex;
   align-items: center;
-  gap: 0.65rem;
-  width: 100%;
+  gap: 0.75rem;
   margin: 0;
-  padding: 1rem 1.25rem;
-  border: 0;
+  padding: 0.65rem 1rem 0.75rem;
   border-top: 1px solid hsl(220 12% 90%);
-  background: hsl(220 12% 50% / 0.025);
-  text-align: left;
-  color: inherit;
-  cursor: pointer;
 }
-.composer-fast-row:hover {
-  background: hsl(266 60% 55% / 0.055);
-}
-.composer-fast-row:focus-visible {
-  outline-offset: -4px;
-}
-.composer-fast-icon-wrap {
-  display: grid;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  flex-shrink: 0;
-  border: 1px solid hsl(var(--border));
-  border-radius: 0.625rem;
-}
-.composer-fast-title {
-  display: block;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.composer-fast-description {
-  display: block;
-  margin-top: 0.25rem;
-  color: hsl(var(--muted-foreground));
-  font-size: 0.6875rem;
-  line-height: 1.45;
+.composer-effort-menu[data-effort="2"] .composer-fast-row,
+.composer-effort-menu[data-effort="3"] .composer-fast-row {
+  border-top-color: hsl(278 28% 82%);
 }
 .composer-fast-icon {
-  color: hsl(var(--muted-foreground));
-}
-.composer-fast-row[aria-checked="true"] .composer-fast-icon {
-  color: hsl(266 55% 55%);
+  color: #d83a30;
 }
 .composer-fast-switch {
-  width: 2.25rem;
-  height: 1.375rem;
+  width: 2.1rem;
+  height: 1.2rem;
   border-radius: 999px;
   border: 0;
   background: hsl(220 10% 82%);
@@ -6569,20 +6552,20 @@ footer {
 .composer-fast-switch::before {
   content: "";
   position: absolute;
-  top: 0.1875rem;
-  left: 0.1875rem;
-  width: 1rem;
-  height: 1rem;
+  top: 0.12rem;
+  left: 0.12rem;
+  width: 0.96rem;
+  height: 0.96rem;
   border-radius: 999px;
   background: white;
-  box-shadow: 0 1px 3px hsl(220 25% 10% / 0.2);
   transition: transform 140ms ease;
 }
 .composer-fast-switch.is-on {
-  background: hsl(266 65% 57%);
+  background: #e99a91;
 }
 .composer-fast-switch.is-on::before {
-  transform: translateX(0.875rem);
+  transform: translateX(0.9rem);
+  background: #302b29;
 }
 
 .composer-effort-menu,
@@ -6593,17 +6576,6 @@ footer {
   background: hsl(40 25% 99% / 0.99);
   color: hsl(35 7% 20%);
   box-shadow: 0 8px 28px hsl(30 8% 10% / 0.12), 0 1px 3px hsl(30 8% 10% / 0.06);
-}
-
-.composer-effort-menu {
-  max-height: var(--radix-popover-content-available-height, calc(100dvh - 1.25rem));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  border-color: hsl(220 14% 88%);
-  border-radius: 18px;
-  background: hsl(var(--popover));
-  color: hsl(var(--popover-foreground));
-  box-shadow: 0 16px 48px -12px hsl(220 25% 15% / 0.18), 0 2px 8px hsl(220 25% 15% / 0.04);
 }
 
 .composer-context-menu section {
@@ -7077,7 +7049,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   }
   /* Phone footer budget (360–430 px): + · shield | ring · model · ⚡ · mic · send
      must fit on ONE row inside the surface. Icon controls keep ≥ 40 px touch
-     targets, the effort chip shows its lightning glyph, the model
+     targets, the effort chip collapses to its lightning glyph, the model
      trigger drops its chevron and its label is the only element that
      truncates. Verified at 360 / 390 / 430 px — nothing clips anymore. */
   .composer-leading-controls {
@@ -7129,6 +7101,14 @@ button.anti-bribery-context-chip:not(:disabled):active {
     padding: 0;
     justify-content: center;
     gap: 0;
+  }
+  .composer-effort-chip > .truncate,
+  .composer-effort-chip .composer-effort-caret {
+    display: none;
+  }
+  .composer-effort-chip svg {
+    width: 1rem;
+    height: 1rem;
   }
   /* Width budget for the model pill lives in the (max-width: 767px) block
      above (`.composer-model-inline`). Here: same 40 px height as the other
@@ -7212,6 +7192,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   background-color: hsl(0 0% 100% / 0.08);
 }
 .dark .composer-input-row .composer-model-inline .chat-model-trigger,
+.dark .composer-effort-chip.is-high,
 .dark .composer-dictation-button:not([aria-pressed="true"]) {
   color: hsl(216 14% 72%) !important;
 }
@@ -7230,15 +7211,8 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-permission-chip.is-full {
   color: #f87171;
 }
-.dark .composer-effort-chip {
-  color: hsl(216 14% 78%);
-}
-.dark .composer-effort-chip:hover,
-.dark .composer-effort-chip[data-state="open"] {
-  background: hsl(0 0% 100% / 0.07);
-}
-.dark .composer-fast-row[aria-checked="true"] .composer-fast-icon {
-  color: hsl(266 85% 80%);
+.dark .composer-effort-chip.is-high svg {
+  color: #fca5a5;
 }
 
 /* ────────────────────────────────────────────────────────────

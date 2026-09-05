@@ -1,17 +1,17 @@
 "use client"
 
 import * as React from "react"
-import { SlidersHorizontal, Zap } from "lucide-react"
+import { Zap } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { EffortDitherTrack } from "@/components/chat/effort-dither-track"
 import { readComposerFastMode, writeComposerFastMode } from "@/lib/chat/composer-session"
 import { cn } from "@/lib/utils"
 
 export const EFFORT_LEVELS = [
-  { value: "Bajo", label: "Bajo", summary: "Ágil y directo", description: "Para preguntas sencillas y tareas del día a día." },
-  { value: "Medio", label: "Medio", summary: "Un buen equilibrio", description: "Equilibra rapidez y análisis para el trabajo cotidiano." },
-  { value: "Extra", label: "Alto", summary: "Análisis en profundidad", description: "Dedica más razonamiento a problemas de varios pasos." },
-  { value: "Max", label: "Máximo", summary: "Para los retos más complejos", description: "Prioriza un análisis más exhaustivo; puede tardar más." },
+  { value: "Bajo", label: "Low" },
+  { value: "Medio", label: "Medium" },
+  { value: "Extra", label: "High" },
+  { value: "Max", label: "Extra high" },
 ] as const
 
 /**
@@ -26,19 +26,27 @@ export const EFFORT_LEVELS = [
  *     the active stop; the remaining stops show as faint tick dots;
  *   • a light band travels the revealed region in a constant loop
  *     (`.effort-sheen`) so the bar feels alive while open.
- * The track itself is the pointer target, so taps and drags anywhere on the
- * rail snap to the nearest stop.
+ * Discrete control with four fixed stops: taps and drags snap to the nearest
+ * stop, tick marks under the rail show the steps, the header names the active
+ * level in text (never color alone), and a bubble follows the thumb while
+ * dragging. The title + value label the slider via `aria-labelledby`, so a
+ * screen reader announces e.g. "Esfuerzo Extra high", never a bare number.
+ * The track itself is the pointer target.
  */
-export function EffortSection({ selectedEffort, setSelectedEffort }: {
+export function EffortSection({ selectedEffort, setSelectedEffort, disabled = false }: {
   selectedEffort: string
   setSelectedEffort: (effort: string) => void
+  disabled?: boolean
 }) {
   const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((level) => level.value === selectedEffort))
   const active = EFFORT_LEVELS[activeIndex]
+  const titleId = React.useId()
+  const valueId = React.useId()
   const trackRef = React.useRef<HTMLDivElement | null>(null)
   const draggingRef = React.useRef(false)
-  const descriptionId = React.useId()
+  const [dragging, setDragging] = React.useState(false)
   const moveTo = (index: number) => {
+    if (disabled) return
     const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
     if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
   }
@@ -50,40 +58,37 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
     const fraction = (clientX - rect.left) / rect.width
     return Math.round(Math.min(1, Math.max(0, fraction)) * (EFFORT_LEVELS.length - 1))
   }
+  const endDrag = () => {
+    draggingRef.current = false
+    setDragging(false)
+  }
   return (
     <div className="effort-section" onClick={(event) => event.stopPropagation()}>
       <div className="effort-header">
-        <span className="effort-header-icon" aria-hidden><SlidersHorizontal size={17} /></span>
-        <div>
-          <h3 className="effort-title">Esfuerzo de razonamiento</h3>
-          <p className="effort-subtitle">Ajusta cuánto analiza Sira tu consulta.</p>
-        </div>
-      </div>
-      <div className="effort-selection" aria-live="polite" aria-atomic="true">
-        <div className="effort-selection-heading">
-          <strong>{active.summary}</strong>
-          <span className="effort-level-badge">{active.label}</span>
-        </div>
-        <p id={descriptionId}>{active.description}</p>
+        <span className="effort-title" id={titleId}>Esfuerzo</span>
+        <span className="effort-level" id={valueId}>{active.label}</span>
       </div>
       <div
         ref={trackRef}
         className="effort-track"
         data-effort={String(activeIndex)}
+        data-dragging={dragging ? "true" : undefined}
+        data-disabled={disabled ? "true" : undefined}
         data-testid="composer-effort-track"
         role="slider"
-        tabIndex={0}
-        aria-label="Nivel de esfuerzo de razonamiento"
+        tabIndex={disabled ? -1 : 0}
+        aria-labelledby={`${titleId} ${valueId}`}
         aria-valuemin={0}
         aria-valuemax={EFFORT_LEVELS.length - 1}
         aria-valuenow={activeIndex}
         aria-valuetext={active.label}
-        aria-describedby={descriptionId}
+        aria-orientation="horizontal"
+        aria-disabled={disabled || undefined}
         onPointerDown={(event) => {
+          if (disabled) return
           if (event.button !== 0 && event.pointerType === "mouse") return
-          event.preventDefault()
-          event.currentTarget.focus({ preventScroll: true })
           draggingRef.current = true
+          setDragging(true)
           try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* older browsers */ }
           moveTo(indexFromPointer(event.clientX))
         }}
@@ -92,14 +97,15 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
           moveTo(indexFromPointer(event.clientX))
         }}
         onPointerUp={(event) => {
-          draggingRef.current = false
+          endDrag()
           try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* noop */ }
         }}
-        onPointerCancel={() => { draggingRef.current = false }}
-        onLostPointerCapture={() => { draggingRef.current = false }}
+        onPointerCancel={endDrag}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight" || event.key === "ArrowUp") { event.preventDefault(); moveTo(activeIndex + 1) }
           else if (event.key === "ArrowLeft" || event.key === "ArrowDown") { event.preventDefault(); moveTo(activeIndex - 1) }
+          else if (event.key === "PageUp") { event.preventDefault(); moveTo(activeIndex + 2) }
+          else if (event.key === "PageDown") { event.preventDefault(); moveTo(activeIndex - 2) }
           else if (event.key === "Home") { event.preventDefault(); moveTo(0) }
           else if (event.key === "End") { event.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
         }}
@@ -111,35 +117,36 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
           </span>
         </div>
         {EFFORT_LEVELS.map((level, index) => (
-          <span
+          <button
             key={level.value}
+            type="button"
+            tabIndex={-1}
             aria-hidden
+            title={level.label}
             data-stop={String(index)}
             className={cn(
               "effort-stop",
               index <= activeIndex && "effort-stop-reached",
               index === activeIndex && "effort-stop-active",
             )}
+            onClick={() => moveTo(index)}
           />
         ))}
         <span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden />
+        {dragging && !disabled ? (
+          <span className="effort-bubble" data-testid="composer-effort-bubble" aria-hidden>
+            {active.label}
+          </span>
+        ) : null}
       </div>
-      <div className="effort-levels" role="group" aria-label="Elegir nivel de esfuerzo">
+      <div className="effort-ticks" aria-hidden>
         {EFFORT_LEVELS.map((level, index) => (
-          <button
-            key={level.value}
-            type="button"
-            className="effort-level-button"
-            aria-pressed={index === activeIndex}
-            onClick={() => moveTo(index)}
-          >
-            {level.label}
-          </button>
+          <span key={level.value} data-stop={String(index)} />
         ))}
       </div>
       <div className="effort-ends" aria-hidden>
         <span>Más rápido</span>
-        <span>Más profundo</span>
+        <span>Más inteligente</span>
       </div>
     </div>
   )
@@ -154,9 +161,6 @@ export function ComposerEffortMenu({
 }) {
   const [open, setOpen] = React.useState(false)
   const [fast, setFast] = React.useState(false)
-  const menuTitleId = React.useId()
-  const fastLabelId = React.useId()
-  const fastDescriptionId = React.useId()
   const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((level) => level.value === selectedEffort))
   const active = EFFORT_LEVELS[activeIndex]
 
@@ -170,12 +174,13 @@ export function ComposerEffortMenu({
         <button
           type="button"
           data-testid="composer-effort-chip"
-          data-fast={fast}
           aria-label={`Esfuerzo: ${active.label}`}
-          title={`Esfuerzo ${active.label}${fast ? " · Modo rápido activado" : ""}`}
-          className="composer-effort-chip"
+          title={`${active.label}${fast ? " · Modo rápido" : ""}`}
+          className={cn("composer-effort-chip", (active.value === "Extra" || active.value === "Max") && "is-high")}
         >
-          <span aria-hidden className="composer-effort-lightning">⚡</span>
+          <Zap className="h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
+          <span className="truncate">{active.label}</span>
+          <span aria-hidden className="composer-effort-caret">⌃</span>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -185,41 +190,33 @@ export function ComposerEffortMenu({
         collisionPadding={10}
         data-testid="composer-effort-menu"
         data-effort={String(activeIndex)}
-        aria-labelledby={menuTitleId}
-        className="composer-effort-menu w-[min(calc(100vw-1.25rem),22rem)] p-0"
+        className="composer-effort-menu w-[min(calc(100vw-1.25rem),20.75rem)] p-0"
       >
-        <span id={menuTitleId} className="sr-only">Configurar esfuerzo de razonamiento</span>
         <EffortSection selectedEffort={selectedEffort} setSelectedEffort={setSelectedEffort} />
-        <button
-          type="button"
-          role="switch"
-          aria-labelledby={fastLabelId}
-          aria-describedby={fastDescriptionId}
-          aria-checked={fast}
-          data-testid="composer-fast-mode"
-          className="composer-fast-row"
-          onClick={() => {
-            const next = !fast
-            setFast(next)
-            writeComposerFastMode(next)
-          }}
-        >
-          <span className="composer-fast-icon-wrap" aria-hidden>
-            <Zap className="composer-fast-icon" size={17} strokeWidth={1.8} />
-          </span>
+        <div className="composer-fast-row">
           <span className="min-w-0 flex-1">
-            <span id={fastLabelId} className="composer-fast-title">
+            <span className="flex items-center gap-1.5 text-[13px] font-medium text-foreground">
+              <Zap className="composer-fast-icon h-4 w-4" fill="currentColor" strokeWidth={1.8} />
               Modo rápido
             </span>
-            <span id={fastDescriptionId} className="composer-fast-description">
+            <span className="mt-0.5 block text-[12px] text-muted-foreground">
               Respuestas más rápidas, mayor uso de los límites.
             </span>
           </span>
-          <span
-            aria-hidden
+          <button
+            type="button"
+            role="switch"
+            aria-label="Modo rápido"
+            aria-checked={fast}
+            data-testid="composer-fast-mode"
             className={cn("composer-fast-switch", fast && "is-on")}
+            onClick={() => {
+              const next = !fast
+              setFast(next)
+              writeComposerFastMode(next)
+            }}
           />
-        </button>
+        </div>
       </PopoverContent>
     </Popover>
   )

@@ -113,7 +113,11 @@ async function installFixture(context: BrowserContext, baseURL: string, fixtures
   await context.route("**/*", async route => {
     const url = new URL(route.request().url())
     if (!["http:", "https:"].includes(url.protocol)) return route.continue()
-    if (!loopback(url.hostname)) {
+    // A locally served production build contains the real public API origin.
+    // Intercept those requests below with fixture bytes; NEVER continue them
+    // to the network. The page itself must still be loopback (checked above).
+    const bakedProductionApi = url.origin === "https://siragpt.com" && url.pathname.startsWith("/api/")
+    if (!loopback(url.hostname) && !bakedProductionApi) {
       // Keep QA offline; fallback font is intentional and not typography proof.
       if (url.hostname === "fonts.googleapis.com") return route.fulfill({ status: 200, contentType: "text/css", body: "/* Offline QA uses fallback font. */" })
       externalRequests.push(`${url.origin}${url.pathname}`)

@@ -1,6 +1,6 @@
 # Document cards, preview controls and source-preserving edits
 
-Base: `09fa991cf78a3f425499caefde3d2e68ae58b3b0` (`production-main`).
+Base refreshed: `ff61eeb9d980775cb75900d5350278c58e098243` (`production-main`).
 Branch: `fix/document-artifacts-editing-polish`.
 This change is separate from the pending document-sandbox phase 1 work.
 
@@ -35,7 +35,8 @@ isolated checkout; no additional package or external model is needed.
 ```sh
 NODE_OPTIONS=--no-experimental-webstorage npx vitest run
 npm run type-check
-node --test tests/document-preview-source.test.ts tests/document-preview-regression.test.ts tests/document-page-preview-source.test.ts
+node node_modules/typescript/bin/tsc -p tests/tsconfig.json
+node --require ./tests/register-ts-paths.cjs --test .test-dist/tests/document-preview-source.test.js .test-dist/tests/document-preview-regression.test.js .test-dist/tests/document-page-preview-source.test.js
 
 task_artifacts_dir=$(mktemp -d)
 NODE_ENV=test AGENT_ARTIFACT_DIR="$task_artifacts_dir" node --test \
@@ -95,7 +96,7 @@ starting a second server. The E2E fixture refuses non-loopback hosts.
   production restarts are part of this patch. Before publishing, validate the
   real account/chat flow and document conversion in the deployment environment.
 
-## Pre-deployment review — 2026-09-05
+## Initial pre-deployment review — 2026-09-05 (superseded below)
 
 The first PR CI run caught an outdated source-test assertion after shared card
 styles were extracted, plus AgentRunner dependency/cancellation regressions.
@@ -131,3 +132,50 @@ remediations require major versions or are unavailable; do not run a forced
 automatic dependency rewrite as part of this document UI patch. Resolve and
 validate these release-security findings before publication; a green critical-only
 CI audit is not a clean high-severity audit.
+
+## Reviewed release preparation — 2026-09-05
+
+- Mac-to-Lenovo SSH now authenticates as `deploy`. The current production-main
+  effort-control changes from PR #564 were integrated without replacing their UI.
+- Dependencies were installed in this worktree, not through the previous shared
+  node_modules symlinks. Next 15.5.25 and Sharp 0.35.4 remove the root high findings.
+  Root production audit has zero high/critical findings; the old Sharp exception
+  has been removed. Four moderate advisories remain in the raw root report.
+- Backend Puppeteer 25.10.0 is lazy-loaded as ESM in the two existing callers;
+  Prisma remains 6.19.3. Scoped transitive updates remove remediable high findings.
+  Real browser launch, screenshot, PDF creation and Office parsing passed.
+- `image-size@1.2.1` has no published fix for the two remaining high advisories.
+  A reproducible, hash-checked source patch fixes non-advancing ICNS/BMFF loops.
+  Malformed-file watchdog tests reproduce the old issue and verify termination
+  after patching; valid raster/ICNS/HEIF/JXL dimensions remain unchanged.
+  Every installed copy is verified after installation and inside the runtime
+  Docker image. npm still reports two high affected packages through the
+  PptxGenJS dependency chain, four moderate and one low. The backend gate retains
+  that full report and only accepts the two exact advisories when every installed
+  copy matches the fixed hashes. New findings or failed evidence block release.
+- The optimized Next build, post-build TypeScript, bundle budgets and UI lock
+  pass. The pre-existing noVNC top-level-await build warning remains.
+- Final local verification: 12,383 compiled Node tests (533 suites), 734
+  component/library tests, 325 backend regressions, 14 malformed/valid image
+  security tests and one real-browser integration check all pass. The 15-test
+  Chromium gate passes against the optimized build with zero retries, including
+  original/edited Office/PDF downloads, actual PDF pixels, page/zoom controls
+  and the preserved effort/permissions composer. An initial run exposed fixture
+  assumptions: English browser locale and a blocked build-time public API URL.
+  The fixtures now select Spanish where required and intercept the baked API
+  origin without network access; no assertions were removed or UI changed.
+- The reviewed publisher has 27 passing simulated tests for backups, bad or
+  concurrent state, candidate attestation and recovery. These simulations are
+  not a claim that a live rollback/restore drill occurred.
+- The legacy automatic VPS deployment workflow was disabled before merging.
+  Its replacement only verifies an already-published Lenovo SHA and readiness;
+  it cannot deploy, access SSH secrets or run database migrations.
+- The reviewed publisher backs up configuration/database, preserves prior image
+  IDs, checks concurrent changes, verifies the candidate patch, activates only
+  app services, and restores the previous release if readiness fails. PostgreSQL
+  and Redis are neither republished nor restarted. See the Lenovo release runbook.
+
+These preparation results do not assert that the new release is already public.
+Actual merge SHA, publication and final HTTP/document acceptance are recorded
+after deployment. The source-preserving editing scope and mocked-browser limits
+above still apply; this is not the separate sandbox phase 1 rollout.
