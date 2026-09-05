@@ -14,6 +14,17 @@ const PptxGenJS = require('pptxgenjs');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
 const officeParser = require('officeparser');
 
+test('document writers declare their YAML runtime dependency instead of borrowing a parent or transitive install', async () => {
+  const manifest = require('../package.json');
+  assert.equal(manifest.dependencies['js-yaml'], '4.3.1');
+  const backendDirectory = path.resolve(__dirname, '..');
+  assert.ok(require.resolve('js-yaml').startsWith(path.join(backendDirectory, 'node_modules') + path.sep));
+  const yaml = require('js-yaml');
+  const { generateYaml } = require('../src/services/sira/generators/text-writers');
+  const data = { title: 'Documento original', year: 2026, items: ['uno', 'dos'] };
+  assert.deepEqual(yaml.load(generateYaml({ data }).buffer.toString('utf8')), data);
+});
+
 test('Puppeteer ESM supports the browser methods used by the CommonJS backend', async () => {
   const puppeteer = (await import('puppeteer')).default;
   assert.equal(typeof puppeteer.launch, 'function');

@@ -37,11 +37,20 @@ write_release_keys() {
 }
 healthy() {
   local service id
-  for service in runner backend frontend; do
+  if [[ $# == 0 ]]; then set -- runner backend frontend; fi
+  for service in "$@"; do
     id=$("${COMPOSE[@]}" ps -q "$service") || return 1
     [[ -n $id && $id != *$'\n'* ]] || return 1
     [[ $(docker inspect --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$id") == 'running healthy' ]] || return 1
   done
+}
+wait_services() {
+  local attempt
+  for ((attempt=0; attempt<24; attempt++)); do
+    if healthy "$@"; then return 0; fi
+    sleep 5
+  done
+  return 1
 }
 http_release() {
   local backend
@@ -69,8 +78,9 @@ finish() {
     if [[ $ACTIVATED == 1 ]]; then
       # Shell exports override .env in Compose, so remove ONLY our two exports.
       unset GIT_COMMIT SIRAGPT_VERSION
-      "${COMPOSE[@]}" -f "$BACKUP/rollback.yaml" up -d --no-deps --no-build --pull never runner backend frontend || rollback_ok=0
-      wait_release "$PREVIOUS" || rollback_ok=0
+      if "${COMPOSE[@]}" -f "$BACKUP/rollback.yaml" up -d --no-deps --no-build --pull never runner frontend && wait_services runner frontend; then
+        "${COMPOSE[@]}" -f "$BACKUP/rollback.yaml" up -d --no-deps --no-build --pull never backend && wait_release "$PREVIOUS" || rollback_ok=0
+      else rollback_ok=0; fi
       if [[ $rollback_ok == 1 ]]; then printf '[publish] Failed; previous release restored and verified.\n' >&3;
       else printf '[publish] CRITICAL: rollback verification failed; manual recovery required.\n' >&3; status=2; fi
     elif [[ $rollback_ok != 1 ]]; then printf '[publish] CRITICAL: release metadata restoration failed.\n' >&3; status=2;
@@ -139,7 +149,9 @@ cmp -s "$BACKUP/release.keys" "$BACKUP/preactivation.keys" || die 'Release metad
 ENV_CHANGED=1
 write_release_keys "$BACKUP/target.keys"
 ACTIVATED=1
-"${COMPOSE[@]}" up -d --no-deps --no-build --pull never runner backend frontend
+"${COMPOSE[@]}" up -d --no-deps --no-build --pull never runner frontend
+wait_services runner frontend || die 'Runner or frontend did not become healthy; backend activation withheld.'
+"${COMPOSE[@]}" up -d --no-deps --no-build --pull never backend
 wait_release "$TARGET" || die 'Target health or public release verification failed.'
 [[ ! -L $DEPLOY/releases.log && ( ! -e $DEPLOY/releases.log || -f $DEPLOY/releases.log ) ]] || die 'Release journal path is unsafe.'
 printf '%s target=%s previous=%s version=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$TARGET" "$PREVIOUS" "$SIRAGPT_VERSION" >> "$DEPLOY/releases.log"

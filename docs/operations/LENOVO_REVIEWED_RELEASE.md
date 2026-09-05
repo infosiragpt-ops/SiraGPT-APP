@@ -65,6 +65,12 @@ checks from an authenticated model request. A green build or merge is not a
 publication. The manual GitHub workflow **Verify Lenovo production release**
 provides an additional read-only SHA/readiness check after publication.
 
+The retired VPS workflow's Prometheus traffic-error canary is not configured in
+the current Lenovo Compose stack. The new publisher verifies container health,
+public provenance and database/Redis/migration readiness; it does not claim a
+traffic-SLO observation window. The reusable canary implementation and its unit
+tests remain available for a separately configured metrics integration.
+
 Do not enable that workflow while GitHub still holds the legacy auto-deployer.
 First verify its merged contents contain only the read-only workflow, then enable
 and dispatch it with the exact published SHA. It has no production credentials.

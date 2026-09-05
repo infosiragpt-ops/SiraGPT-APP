@@ -155,7 +155,7 @@ CI audit is not a clean high-severity audit.
   copy matches the fixed hashes. New findings or failed evidence block release.
 - The optimized Next build, post-build TypeScript, bundle budgets and UI lock
   pass. The pre-existing noVNC top-level-await build warning remains.
-- Final local verification: 12,383 compiled Node tests (533 suites), 734
+- Final local verification: 12,388 compiled Node tests (533 suites), 734
   component/library tests, 325 backend regressions, 14 malformed/valid image
   security tests and one real-browser integration check all pass. The 15-test
   Chromium gate passes against the optimized build with zero retries, including
@@ -164,7 +164,7 @@ CI audit is not a clean high-severity audit.
   assumptions: English browser locale and a blocked build-time public API URL.
   The fixtures now select Spanish where required and intercept the baked API
   origin without network access; no assertions were removed or UI changed.
-- The reviewed publisher has 27 passing simulated tests for backups, bad or
+- The reviewed publisher has 32 passing simulated tests for backups, bad or
   concurrent state, candidate attestation and recovery. These simulations are
   not a claim that a live rollback/restore drill occurred.
 - The legacy automatic VPS deployment workflow was disabled before merging.
@@ -178,4 +178,17 @@ CI audit is not a clean high-severity audit.
 These preparation results do not assert that the new release is already public.
 Actual merge SHA, publication and final HTTP/document acceptance are recorded
 after deployment. The source-preserving editing scope and mocked-browser limits
-above still apply; this is not the separate sandbox phase 1 rollout.
+  above still apply; this is not the separate sandbox phase 1 rollout.
+
+The first expanded release CI run also caught a stale generated license
+inventory and backend source-contract tests still pointing at the retired VPS
+workflow. Those contracts now protect the actual read-only verification and
+Lenovo publisher, including runner/frontend health before replacing the backend
+and the same ordering during recovery. Reusable canary/migration implementations
+were not removed or their tests quarantined. Lenovo does not currently run the
+retired VPS Prometheus or /code canary: readiness alone is not claimed as either.
+CI additionally exposed a real missing direct `js-yaml` dependency, previously
+hidden by Puppeteer's incidental hoisting. `js-yaml@4.3.1` is now declared and
+verified with a clean backend-only install, without rewriting the serializers.
+The regenerated license inventory has 1,521 entries and passes the existing
+permissive-license gate; no new license exception was added.
