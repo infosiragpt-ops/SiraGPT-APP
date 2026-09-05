@@ -1,5 +1,37 @@
 # Preparación de producción de la PR #561
 
+## Estado vigente de la reanudación de acceso
+
+El candidato de código `1108af81da95bb5e46c85f59336c558b1a9675ac` incorpora
+por merge la versión productiva `886ec72f`, incluidos ambos cambios del selector
+de esfuerzo. La comparación contra esa versión confirma iguales el CSS, el
+componente del selector y sus pruebas revisadas. El checkout de despliegue no
+se modificó. Las observaciones posteriores de este informe conservan el
+histórico de las verificaciones anteriores.
+
+Tras combinar los cambios pasaron de nuevo 12.375/12.375 pruebas generales,
+TypeScript, lint y UI-lock. Chromium pasó 2/2 casos de cancelación: 24.7 s para
+chat nuevo y 39.9 s para chat vacío; 1.1 minutos de ejecución total. Se revisaron
+las capturas con el selector de rayo publicado, el borrador y su archivo
+conservados. Motor deshabilitado, cero llamadas pagadas; esto no sustituye la
+aceptación documental con proveedor. Evidencia:
+`/tmp/doc-sandbox-resume-561.6LiiQJIE` y `/tmp/doc-sandbox-browser-561-e/browser`.
+Las aplicaciones y relays se retiraron; los cuatro servicios sintéticos
+quedaron detenidos y los puertos 15161/15162 libres, conservando sus datos.
+
+La integración GitHub sigue en `push:false`. Se preparó una clave SSH de
+despliegue exclusiva en el host, sin modificar la configuración SSH global ni
+incluir la clave privada en Git. La clave pública está pendiente de añadirse
+como deploy key con escritura al repositorio. La comprobación SSH con la
+identidad dedicada y la huella oficial verificada devuelve todavía
+`Permission denied (publickey)`.
+
+`sudo -n` sigue requiriendo contraseña. Se intentó el preflight mediante el
+diálogo administrativo del sistema, pero no se completó la autenticación; se
+canceló únicamente esa solicitud pendiente. No se aplicó gVisor ni se publicó
+#561. El comando de preflight de este informe contiene la ruta correcta:
+`/tmp/siragpt-gvisor-20260817.0.QH6smq1z/gvisor.tar.bz2`.
+
 ## Solicitud y alcance
 
 El 2026-09-05 Luis solicitó continuar la PR #561 y dejarla en producción en
