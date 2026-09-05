@@ -118,7 +118,9 @@ grep -E '^(GIT_COMMIT|SIRAGPT_VERSION)=' "$DEPLOY/.env" > "$BACKUP/release.keys"
 awk -F= '$1=="GIT_COMMIT"{g++} $1=="SIRAGPT_VERSION"{v++} END{exit !(g==1 && v==1)}' "$BACKUP/release.keys" || die 'Both unique existing release metadata keys are required.'
 "${COMPOSE[@]}" exec -T db sh -c 'exec pg_dump -Fc -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | gzip -c > "$BACKUP/database.dump.gz"
 gzip -t "$BACKUP/database.dump.gz"
-gzip -dc "$BACKUP/database.dump.gz" | "${COMPOSE[@]}" exec -T db pg_restore --list > "$BACKUP/database-contents.txt"
+# pg_restore --list can exit after the TOC, before gzip finishes a large archive.
+# Drain the same exec stdin without masking restore, drain or producer failures.
+gzip -dc "$BACKUP/database.dump.gz" | "${COMPOSE[@]}" exec -T db sh -c 'status=0; pg_restore --list || status=$?; cat >/dev/null || exit 1; exit "$status"' > "$BACKUP/database-contents.txt"
 printf 'services:\n' > "$BACKUP/rollback.yaml"
 for service in runner backend frontend; do
   id=$("${COMPOSE[@]}" ps -q "$service")
