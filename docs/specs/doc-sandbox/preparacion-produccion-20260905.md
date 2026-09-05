@@ -1,6 +1,78 @@
 # Preparación de producción de la PR #561
 
+## Estado comprobado tras recuperación de OpenClaw
+
+Actualización 2026-09-05, posterior a los apartados históricos siguientes.
+La autorización de Luis para publicar sigue vigente. **No se ha publicado F1,
+ejecutado migración productiva ni reiniciado Docker.**
+
+- Recuperada la candidata `b51cc6e6`, integrada con #563/#564 mediante
+  `5b5354d974de59a51766f48f274863798d726190` y corregidas dos regresiones de CI
+  en `1c7496d20a5ca8257ee4cb7c81c622a6b05a2907`. Ambos commits están en la rama
+  remota y en el worktree aislado Lenovo; el checkout productivo no se cambió.
+- Escritura GitHub y SSH ya funcionan. Se autorizó la clave pública dedicada
+  exclusivamente para este repositorio y se verificó autenticación. El acceso
+  SSH entra al contenedor de despliegue, **no a una sesión administrativa del
+  host**; esta distinción mantiene pendiente el preflight de gVisor.
+- Regresión general local sobre `5b5354d9`: 12.442 pruebas, cero fallos/skips;
+  TypeScript, lint, UI-lock y licencias pasan. Integración documental Linux real
+  HTTP/PostgreSQL/Redis/S3 aislados: **64/64**, cero fallos/skips. Corpus/oracle:
+  16; comprobación de herramientas: 2; validador Python independiente: 42.
+- CI de `5b5354d9` encontró dos fallos genuinos. El fondo de una diapositiva
+  estaba oculto por un rectángulo opaco; ahora solo se recolorea la primera
+  forma inequívoca de fondo a tamaño completo. El fixture de borrado de usuario
+  omitía la nueva desactivación previa: ahora cubre respuestas 200/202 con
+  revocación y auditoría. No se debilitaron las aserciones ni el runtime admin.
+- Sobre `1c7496d2`, **30/30** regresiones Linux con render real, cero skips, en
+  `regressions-ci-1c7496d20.CDcFDB`; prueba PNG roja antes del arreglo en
+  `png-before-5b5354d97.dFikAK`. Una primera invocación dejó sockets Redis de
+  test abiertos y fue detenida; la ejecución válida usa `--test-force-exit`,
+  igual que el runner CI del repositorio. Los contenedores de test se retiraron.
+- Evidencia Linux bajo
+  `/home/user/deployments/doc-sandbox-phase1-tests/entrega-561-20260905/`:
+  `linux-direct-5b5354d97.LHKkjJ`, `integration-5b5354d97.ADnaNo` y los dos
+  directorios de regresión anteriores. Son pruebas sin llamadas al proveedor;
+  **no acreditan aceptación Anthropic ni gVisor efectivo**.
+- La medición exclusiva de unitarias, sin integración/Python, pasa **155/155**
+  tras cuatro casos nuevos del contrato de publicación. Cobertura TS completa:
+  **2123/3454 líneas (61,46 %)**, funciones 58,53 %, ramas 86,60 %. No satisface
+  el umbral del 80 %. Se usó `NODE_V8_COVERAGE` + API oficial `c8.Report` debido
+  a incompatibilidad del CLI con Node 26, conservando `--all` y remapeo fuente.
+  Evidencia local: `/tmp/doc561-unit-coverage-after-7pi5thbw/`.
+- La API existente de Anthropic respondió a consultas de metadatos, sin
+  generaciones ni gasto. Versiones exactas observadas: docx `20260831`, xlsx
+  `20260829`, pptx `20260828`, pdf `20260709`. No se configuró `latest`.
+  El catálogo activo consultado solo tiene `claude-fable-5-1` de Anthropic;
+  todavía no permite configurar dos niveles distintos de forma coherente.
+- Siguen ausentes R2 y la configuración F1 en el backend vivo. `runsc` no
+  figura entre las claves reales de Docker Runtimes. No se trasladaron secretos
+  desde el chat ni se intentó eludir autenticación mediante Docker.
+
+CI de las correcciones: [run 33999203724](https://github.com/infosiragpt-ops/SiraGPT-APP/actions/runs/33999203724).
+Después de cualquier commit posterior, verificar la ejecución de su SHA exacto.
+El job visual informativo de este run no encontró tests y devuelve success por
+su wrapper: **no equivale a una comparación pixel-perfect**. El gate E2E crítico
+es independiente.
+
+La revisión de release detectó que `deploy/iliagpt/publish-reviewed.sh` de #563
+rechaza schema/migrations **antes del backup**. No se quitó esa guarda ni se
+usó el publisher legacy. Sigue pendiente una vía revisada F1 con manifiesto de
+migración exacto, ensayo de restauración, migración estricta, backend listo
+antes del frontend y rollback que conserve reconciliación de jobs. Apagar
+`DOC_SANDBOX_ENGINE` no es una pausa de admisión compatible con dicho rollback.
+El SQL conserva el hash histórico probado que figura más abajo.
+
+Además del acceso administrativo/R2, permanecen abiertos aceptación real con
+presupuesto Anthropic acreditado, concurrencia, muestras, E2E completo,
+cobertura y release con migración. No confundir CI verde con cierre de F1.
+La última versión pública observada continúa en #564 (`ff61eeb9`), saludable;
+verificar de nuevo antes de cualquier acción productiva.
+
 ## Estado vigente de la reanudación de acceso
+
+**Antecedentes conservados:** este apartado describe el checkpoint anterior;
+las afirmaciones de GitHub/SSH bloqueados quedan sustituidas por el estado
+comprobado de recuperación de arriba.
 
 El candidato de código `161284ab` incorpora por merge la versión productiva
 `ff61eeb9d980775cb75900d5350278c58e098243` (#564), partiendo del checkpoint
