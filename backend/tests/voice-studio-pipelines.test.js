@@ -70,12 +70,19 @@ test('translateSegments uses VoiceStudio NLLB by default, never touching an LLM,
     const payload = JSON.parse(init.body);
     assert.equal(payload.provider, 'nllb');
     assert.equal(payload.target_lang, 'es');
-    return new Response(JSON.stringify([{ id: 'a', text: 'Hola' }]), { status: 200, headers: { 'content-type': 'application/json' } });
+    // Real VoiceStudio 0.5.1 response shape (verified in prod 2026-09-05).
+    return new Response(JSON.stringify({ translated: [{ id: 'a', text: 'Hola' }], target_lang: 'es', source_lang: 'en', quality_used: 'fast' }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const out = await translate.translateSegments(segments, { targetLanguage: 'Spanish', env: {}, clientFactory: () => { llmCalls += 1; return null; } }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl });
   assert.equal(out.engine, 'nllb');
   assert.equal(out.segments[0].text, 'Hola');
   assert.equal(llmCalls, 0, 'the paid LLM ladder must not be consulted by default');
+  // An empty/unknown body must surface as a failure, never as a silent "untranslated" dub.
+  const emptyFetch = async () => new Response(JSON.stringify({ target_lang: 'es' }), { status: 200, headers: { 'content-type': 'application/json' } });
+  await assert.rejects(
+    () => translate.translateSegments(segments, { targetLanguage: 'Spanish', env: {}, clientFactory: () => null }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl: emptyFetch }),
+    (err) => err.code === 'TRANSLATE_FAILED' && /no devolvió líneas/.test(err.message),
+  );
   const same = await translate.translateSegments(segments, { targetLanguage: 'en', sourceLanguage: 'English', env: {}, clientFactory: () => null });
   assert.equal(same.engine, 'same-language');
 });

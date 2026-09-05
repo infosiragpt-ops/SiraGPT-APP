@@ -135,7 +135,15 @@ async function translateWithLlm(segments, { targetLanguage, sourceLanguage = nul
 
 async function translateWithVoiceStudio(segments, { targetLanguage, sourceLanguage = null, signal } = {}, options = {}) {
   const body = await voiceStudio.dubTranslate({ segments, targetLang: targetLanguage, sourceLang: sourceLanguage, provider: 'nllb', signal }, options);
-  const rows = Array.isArray(body) ? body : Array.isArray(body?.segments) ? body.segments : Array.isArray(body?.results) ? body.results : [];
+  // VoiceStudio answers `{ translated: [{ id, text }], target_lang, … }`
+  // (older builds returned a bare array); accept every shape seen so far.
+  const rows = Array.isArray(body) ? body
+    : Array.isArray(body?.translated) ? body.translated
+      : Array.isArray(body?.segments) ? body.segments
+        : Array.isArray(body?.results) ? body.results : [];
+  if (!rows.length) {
+    throw Object.assign(new Error('El traductor local no devolvió líneas'), { code: 'TRANSLATE_EMPTY' });
+  }
   const byId = new Map(rows.map((r) => [String(r.id), r]));
   return segments.map((s) => {
     const row = byId.get(String(s.id));
