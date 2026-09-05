@@ -2,22 +2,42 @@
 
 ## Estado vigente de la reanudación de acceso
 
-El candidato de código `1108af81da95bb5e46c85f59336c558b1a9675ac` incorpora
-por merge la versión productiva `886ec72f`, incluidos ambos cambios del selector
-de esfuerzo. La comparación contra esa versión confirma iguales el CSS, el
-componente del selector y sus pruebas revisadas. El checkout de despliegue no
-se modificó. Las observaciones posteriores de este informe conservan el
-histórico de las verificaciones anteriores.
+El candidato de código `161284ab` incorpora por merge la versión productiva
+`ff61eeb9d980775cb75900d5350278c58e098243` (#564), partiendo del checkpoint
+`85866985e516e8cbc5fdba5d64da8e23f874222d`. Se resolvieron siete archivos;
+los seis archivos de código y tests incorporados coinciden exactamente con
+#564. UI-lock conserva 800 entradas y actualiza solo los hashes de CSS y del
+selector de esfuerzo. La auditoría independiente confirmó 4.892 archivos
+protegidos idénticos al checkpoint anterior, incluidos backend, lib, validación
+documental, documentación F1 y chat. El checkout productivo no se modificó.
 
-Tras combinar los cambios pasaron de nuevo 12.375/12.375 pruebas generales,
-TypeScript, lint y UI-lock. Chromium pasó 2/2 casos de cancelación: 24.7 s para
-chat nuevo y 39.9 s para chat vacío; 1.1 minutos de ejecución total. Se revisaron
-las capturas con el selector de rayo publicado, el borrador y su archivo
-conservados. Motor deshabilitado, cero llamadas pagadas; esto no sustituye la
-aceptación documental con proveedor. Evidencia:
-`/tmp/doc-sandbox-resume-561.6LiiQJIE` y `/tmp/doc-sandbox-browser-561-e/browser`.
-Las aplicaciones y relays se retiraron; los cuatro servicios sintéticos
-quedaron detenidos y los puertos 15161/15162 libres, conservando sus datos.
+Pasaron compilación de tests, TypeScript frontend, lint con advertencias,
+UI-lock y los tres archivos de tests específicos del selector. Logs:
+`/tmp/doc-sandbox-ff61-checks-{tests-compile,frontend-typecheck,lint,ui-lock,targeted-tests}.log`.
+Las 12.375 pruebas generales y la integración de backend del informe son
+evidencia anterior; no se repitieron al conservarse ese código.
+
+Chromium pasó los dos casos reales de cancelación en 44.3 s: 17.3 s en chat
+nuevo y 26.0 s en chat vacío. Login y subida reales, petición de capacidades
+real, motor deshabilitado, cero llamadas pagadas. Las cuatro capturas revisadas
+confirman Detener y la restauración del borrador con su original; no aparece
+POST tardío de admisión. Esto no sustituye la aceptación con proveedor.
+Evidencia: `/tmp/doc-sandbox-ff61-browser.log` y
+`/tmp/doc-sandbox-browser-561-f/browser`.
+
+La comprobación auxiliar de interfaz con API simulada pasó 7/8 inicialmente.
+El caso restante esperaba «Escribe un mensaje…» con un navegador configurado
+en inglés, que mostró correctamente «Type a message…». Ese mismo caso pasó
+con locale `es-PE` en 22.3 s (23.3 s total), conservando sus aserciones y el
+código publicado. Un intento intermedio no llegó a cargar la página porque
+el runner anterior ya había retirado los servicios; la comprobación válida
+arrancó su propio entorno aislado. Evidencia:
+`/tmp/doc-sandbox-ff61-browser-es.log` y `/tmp/doc-sandbox-browser-561-g`.
+Esta suite auxiliar no acredita edición documental real.
+
+Ambos runners retiraron sus aplicaciones y relays. La comprobación final
+confirma puertos 15161/15162 libres y los cuatro servicios sintéticos detenidos,
+conservando sus datos. Ningún servicio productivo se modificó.
 
 La integración GitHub sigue en `push:false`. Se preparó una clave SSH de
 despliegue exclusiva en el host, sin modificar la configuración SSH global ni
@@ -45,7 +65,9 @@ Se conservaron los cambios previos de continuidad. Al comenzar, el checkout de
 despliegue `/home/user/SiraGPT-APP` tenía cambios ajenos de interfaz que no se
 incorporaron. Otra tarea los confirmó y publicó durante esta revisión; véase
 la comprobación de producción al final.
-Base remota comprobada: `09fa991cf78a3f425499caefde3d2e68ae58b3b0`.
+Base común de la integración: `09fa991cf78a3f425499caefde3d2e68ae58b3b0`.
+Referencia productiva comprobada en esta reanudación:
+`ff61eeb9d980775cb75900d5350278c58e098243` (#564).
 
 ## Correcciones verificadas
 
@@ -67,9 +89,11 @@ Base remota comprobada: `09fa991cf78a3f425499caefde3d2e68ae58b3b0`.
   `daemon.json`; tolera la ausencia de `Config.User` solo en la imagen de smoke,
   manteniendo el UID obligatorio del validador.
 
-## Evidencia nueva y límites
+## Evidencia histórica anterior a la integración de #564
 
-Las siguientes suites tienen alcances distintos; no se suman como E2E.
+Las siguientes suites se ejecutaron en revisiones anteriores y tienen alcances
+distintos; no se suman como E2E. Los checks repetidos sobre la integración de
+#564 se enumeran en el estado vigente al principio de este informe.
 
 | Verificación | Resultado |
 | --- | --- |
@@ -101,18 +125,19 @@ restricción de publicación. Evidencia privada:
 SHA-256 del SQL F1 probado:
 `a699ad981695f8dd4d48b327ba6fe77c4cc0b7e0f2b0c3183fbf33c0b369ba21`.
 
-Una comparación AST nueva contra `09fa991c` confirma idénticos los 1011 nodos
+Una comparación AST de aquella revisión contra `09fa991c` confirma idénticos los 1011 nodos
 JSX, 785 atributos `className` y 8 `style` del chat. SHA-256 del inventario JSX:
 `066996ac3726dd929b3934e1deeb52627affb1be7edd51b76fea1b5876fb1421`.
 Esto acredita conservación de markup, no equivalencia de comportamiento ni
 una prueba de navegador. Las condiciones de disponibilidad de Detener cambiaron
 intencionalmente para corregir la cancelación.
 
-Tras revisar el diff funcional y esa comparación nueva, se actualizaron
+En aquella revisión, tras comprobar el diff funcional y la comparación AST, se actualizaron
 únicamente las cinco entradas esperadas del UI-lock (chat, clasificador y tres
 módulos documentales). `ui-lock:verify` pasa; no se cambió CSS ni se aceptaron
 archivos de otros worktrees. Es verificación de integridad del código revisado,
-no sustituto del E2E ni permiso para omitirlo.
+no sustituto del E2E ni permiso para omitirlo. La integración posterior de #564
+sí incorpora el CSS ya publicado de esa versión, conservando sus bytes.
 
 El navegador se ejecutó sobre el candidato basado en `09fa991c`, con los
 ajustes finales del spec, en aplicaciones aisladas y sin salida de red. Ambos
@@ -132,9 +157,10 @@ Las capturas confirman Detener durante admisión y el borrador con adjunto al
 cancelar. Se observa un toast genérico «No se pudo iniciar la edición
 verificada» también al cancelar: detalle de experiencia pendiente, sin pérdida
 del original. Estos dos casos no prueban la edición con Anthropic ni la
-descarga validada, y no cubren la actualización concurrente `28058d75`.
+descarga validada. Estas ejecuciones históricas no acreditan por sí solas la
+combinación actual con `ff61`.
 
-El runner retiró las aplicaciones y relays de prueba y dejó libres los puertos
+En aquella ejecución el runner retiró las aplicaciones y relays de prueba y dejó libres los puertos
 15161/15162. Tras liberar la tarea de navegador, también se detuvo el PostgreSQL
 histórico sintético, comprobando scope, imagen fijada y red interna sin puertos
 publicados. Se conservaron la base y el volumen; los cuatro servicios de prueba
@@ -171,7 +197,8 @@ el host reinicia. Ver [plan administrativo](../../../infra/doc-validation/instal
 ## Controles todavía abiertos
 
 - Escritura en GitHub: el `push` HTTPS falla porque no hay credenciales, el
-  agente SSH no tiene identidades y la integración GitHub informa `push:false`
+  intento con la identidad SSH dedicada devuelve `Permission denied (publickey)`
+  y la integración GitHub informa `push:false`
   para este repositorio; `create_blob` devuelve `403 Resource not accessible by
   integration`. Ninguna de estas operaciones actualizó la rama remota ni lanzó
   CI para las correcciones nuevas.
@@ -198,14 +225,12 @@ Este informe acredita preparación y correcciones, no cierre de F1 ni despliegue
 
 ## Checkpoint local y publicación pendiente
 
-Las correcciones y evidencia quedaron en el commit local final
-`66f37cf72853b8ece1feb596e41a70cb9d005cb5`. Se incorporó `production-main`
-(`09fa991cf78a3f425499caefde3d2e68ae58b3b0`) sin conflictos mediante el merge
-local `6ac1a4bd3337ad76cd51bed90962beddbad4588b`; la verificación final de
-navegador quedó en `66f37cf`. Después pasaron UI-lock y
-la regresión específica de voz aportada por esa base. Estos commits no están
-publicados: el último HEAD remoto verificado de la PR sigue siendo
-`f085ebac9cbbb24e4164e852cc83a8fdc07f4d89`.
+El código integrado está en el merge local `161284ab`, sobre `85866985`, con
+#564 preservada. Los commits `66f37cf`, `1108af81` y `85866985` conservan los
+checkpoints anteriores. La consulta remota de esta reanudación confirma
+`production-main` en `ff61eeb9` y la rama de #561 todavía en
+`f085ebac9cbbb24e4164e852cc83a8fdc07f4d89`. Las correcciones locales no están
+publicadas.
 
 No se ejecutaron `publish.sh`, merge a `production-main`, migraciones productivas
 ni cambios del runtime Docker. Se necesita acceso de escritura al repositorio
@@ -213,6 +238,15 @@ ni cambios del runtime Docker. Se necesita acceso de escritura al repositorio
 Una vez resueltos también runtime, R2 y validación real, la publicación canónica
 debe preservar los cambios ajenos del checkout principal mediante un checkout
 limpio y mantener el backup/canary previsto por el procedimiento existente.
+
+La comprobación fresca del 2026-09-05 a las 22:37:45 UTC devuelve
+`ff61eeb9d980775cb75900d5350278c58e098243`, versión
+`0.4.4-production-main.ff61eeb9.20260905T220338Z`. Readiness y todas sus
+dependencias reportan `healthy`. El checkout `/home/user/SiraGPT-APP` está
+limpio en ese mismo HEAD. Este despliegue no contiene #561. Evidencia:
+`/tmp/doc-sandbox-ff61-production-observation.json`.
+
+### Observaciones históricas de producción
 
 Comprobación de producción del 2026-09-05 a las 20:57 UTC: `/api/version`
 devuelve `28058d750ee63aa4daa5aec5f5dfec71dff98f45`, versión
@@ -227,8 +261,9 @@ afectadas para conservar la interfaz actualmente publicada.
 Una comprobación posterior a las 21:11:56 UTC observó otra publicación de esa
 tarea: `886ec72fbf629cd7511ffcdf8b50a5c3f43c0965`, versión
 `0.4.4-production-main.886ec72f.20260905T210539Z`, con readiness `healthy`.
-Refina el mismo selector de esfuerzo y tampoco contiene #561. Esta es la
-última versión observada; también debe conservarse al preparar el release F1.
+Refina el mismo selector de esfuerzo y tampoco contiene #561. Esta observación
+es histórica: la versión vigente comprobada en la nueva reanudación es
+`ff61eeb9d980775cb75900d5350278c58e098243` (#564).
 
 Se conserva además una copia privada de la evidencia seleccionada fuera de
 `/tmp`, en `/home/user/deployments/doc-sandbox-phase1-tests/entrega-561-20260905`.
