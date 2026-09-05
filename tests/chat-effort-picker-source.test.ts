@@ -78,20 +78,18 @@ describe("composer effort picker source contract", () => {
     assert.doesNotMatch(effortMenu, /composer-context-trigger|composer-effort-ring/)
   })
 
-  it("uses the exact four labels and copy from the approved effort reference", () => {
+  it("uses Spanish labels for the four supported effort levels", () => {
     const labels = [...effortMenu.matchAll(/value: "([^"]+)", label: "([^"]+)"/g)]
       .map((match) => [match[1], match[2]])
     assert.deepEqual(labels, [
-      ["Bajo", "Low"],
-      ["Medio", "Medium"],
-      ["Extra", "High"],
-      ["Max", "Extra high"],
+      ["Bajo", "Bajo"],
+      ["Medio", "Medio"],
+      ["Extra", "Alto"],
+      ["Max", "Máximo"],
     ])
-    for (const copy of ["Esfuerzo", "Más rápido", "Más inteligente", "Modo rápido", "Respuestas más rápidas, mayor uso de los límites."]) {
+    for (const copy of ["Esfuerzo de razonamiento", "Más rápido", "Más profundo", "Modo rápido", "Respuestas más rápidas, mayor uso de los límites."]) {
       assert.ok(effortMenu.includes(copy), `missing approved effort copy: ${copy}`)
     }
-    assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
-    assert.doesNotMatch(effortMenu, /effort-value/, "the selected value stays in the toolbar chip, not the popover header")
   })
 
   it("supports real dragging, not just stop clicks", () => {

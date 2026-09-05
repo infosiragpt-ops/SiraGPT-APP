@@ -73,7 +73,9 @@ async function fulfillJson(route: Route, payload: unknown, status = 200) {
 async function mockChatApi(page: Page, state: { hasConversation: boolean }) {
   await page.addInitScript(() => {
     localStorage.setItem("auth-token", "composer-size-token")
-    localStorage.setItem("sira:composer:effort", "Max")
+    if (!localStorage.getItem("sira:composer:effort")) {
+      localStorage.setItem("sira:composer:effort", "Max")
+    }
     localStorage.setItem("sira.composer.access", "full")
     localStorage.removeItem("currentChatId")
   })
@@ -242,7 +244,7 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.permissionAria).toBe("Permisos: Acceso completo")
   expect(approved.permissionTitle).toBe("Acceso completo")
   expect(approved.permissionLevel).toBe("full")
-  expect(approved.effortLabel).toBe("Extra high")
+  expect(approved.effortLabel).toBe("Esfuerzo Máximo")
   expect(approved.hasInlineAgentToggle).toBe(false)
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
 
@@ -386,9 +388,9 @@ test("context and effort open as separate professional popovers with real data",
   await expect(contextMenu).toBeHidden()
   const effortMenu = page.getByTestId("composer-effort-menu")
   await expect(effortMenu).toBeVisible()
-  await expect(effortMenu.getByText("Esfuerzo", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByRole("heading", { name: "Esfuerzo de razonamiento" })).toBeVisible()
   await expect(effortMenu.getByText("Más rápido", { exact: true })).toBeVisible()
-  await expect(effortMenu.getByText("Más inteligente", { exact: true })).toBeVisible()
+  await expect(effortMenu.getByText("Más profundo", { exact: true })).toBeVisible()
   await expect(effortMenu.getByText("Modo rápido", { exact: true })).toBeVisible()
   await expect(effortMenu.getByText("Respuestas más rápidas, mayor uso de los límites.", { exact: true })).toBeVisible()
 
@@ -396,21 +398,40 @@ test("context and effort open as separate professional popovers with real data",
     const rect = element.getBoundingClientRect()
     return { width: rect.width, height: rect.height, radius: getComputedStyle(element).borderRadius }
   })
-  expect(effortGeometry.width).toBeGreaterThanOrEqual(312)
-  expect(effortGeometry.width).toBeLessThanOrEqual(334)
-  expect(effortGeometry.height).toBeGreaterThanOrEqual(145)
-  expect(effortGeometry.height).toBeLessThanOrEqual(194)
-  expect(effortGeometry.radius).toBe("16px")
+  expect(effortGeometry.width).toBeGreaterThanOrEqual(332)
+  expect(effortGeometry.width).toBeLessThanOrEqual(354)
+  expect(effortGeometry.height).toBeGreaterThanOrEqual(360)
+  expect(effortGeometry.height).toBeLessThanOrEqual(424)
+  expect(effortGeometry.radius).toBe("18px")
 
   const slider = effortMenu.getByRole("slider", { name: "Nivel de esfuerzo de razonamiento" })
-  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Máximo")
   await slider.focus()
   await page.keyboard.press("Home")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Low")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Bajo")
   await page.keyboard.press("End")
-  await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
-  await expect(effortTrigger).toContainText("Extra high")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Máximo")
+  await expect(effortTrigger).toContainText("Máximo")
   await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe("Max")
+
+  for (const [label, value] of [["Bajo", "Bajo"], ["Medio", "Medio"], ["Alto", "Extra"], ["Máximo", "Max"]]) {
+    const level = effortMenu.getByRole("button", { name: label, exact: true })
+    await level.click()
+    await expect(level).toHaveAttribute("aria-pressed", "true")
+    await expect(slider).toHaveAttribute("aria-valuetext", label)
+    await expect(effortTrigger).toContainText(label)
+    await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe(value)
+  }
+
+  const track = await slider.boundingBox()
+  expect(track).not.toBeNull()
+  await page.mouse.move(track!.x + track!.width - 8, track!.y + track!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(track!.x + 8, track!.y + track!.height / 2, { steps: 12 })
+  await page.mouse.up()
+  await expect(slider).toHaveAttribute("aria-valuetext", "Bajo")
+  await slider.press("ArrowRight")
+  await expect(slider).toHaveAttribute("aria-valuetext", "Medio")
 
   const fastMode = effortMenu.getByRole("switch", { name: "Modo rápido" })
   await expect(fastMode).toHaveAttribute("aria-checked", "false")
@@ -424,6 +445,7 @@ test("context and effort open as separate professional popovers with real data",
 
   await page.reload({ waitUntil: "domcontentloaded" })
   await page.getByTestId("composer-effort-chip").click()
+  await expect(page.getByRole("slider")).toHaveAttribute("aria-valuetext", "Medio")
   await expect(page.getByRole("switch", { name: "Modo rápido" })).toHaveAttribute("aria-checked", "true")
 })
 
