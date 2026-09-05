@@ -107,40 +107,33 @@ test('backend Docker build context excludes local secrets and dependencies', () 
   assert.match(dockerignore, /^deployments-backup\.json$/m);
 });
 
-test('production deploy accepts only a green production-main commit', () => {
+test('production verification accepts only a green production-main commit and publisher requires its exact checkout', () => {
   const workflow = read('.github/workflows/deploy.yml');
-  const sshScript = workflow.match(/          script: \|\n([\s\S]*?)\n      - name: Surface deploy result/);
-
-  assert.ok(sshScript, 'expected to extract the VPS deployment script');
+  const publisher = read('deploy/iliagpt/publish-reviewed.sh');
   assert.match(workflow, /actions:\s+read/);
-  assert.match(workflow, /workflow_run:\s*\n\s+workflows:\s+\['CI'\]\s*\n\s+types:\s+\[completed\]\s*\n\s+branches:\s+\[production-main\]/);
-  assert.match(workflow, /github\.event\.workflow_run\.conclusion == 'success'/);
-  assert.match(workflow, /github\.event\.workflow_run\.event == 'push'/);
-  assert.match(workflow, /github\.event\.workflow_run\.head_branch == 'production-main'/);
-  assert.match(workflow, /WORKFLOW_RUN_SHA:\s+\$\{\{ github\.event\.workflow_run\.head_sha \|\| '' \}\}/);
-  assert.match(workflow, /git merge-base --is-ancestor "\$\{TARGET_SHA\}" origin\/production-main/);
-  assert.match(workflow, /gh run list --workflow CI --branch production-main --commit "\$\{TARGET_SHA\}"/);
-  assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
-  assert.doesNotMatch(workflow, /envs:[^\n]*(?:GITHUB_TOKEN|GH_TOKEN|DEPLOY_GH_TOKEN)/);
-  assert.match(workflow, /git fetch --no-tags "\$\{DEPLOY_BUNDLE\}" HEAD/);
-  assert.doesNotMatch(sshScript[1], /\$\{\{\s*inputs\.target_sha/);
+  assert.match(workflow, /TARGET_SHA:\s+\$\{\{ inputs\.target_sha \}\}/);
+  assert.match(workflow, /\[\[ "\$TARGET_SHA" =~ \^\[0-9a-f\]\{40\}\$ \]\]/);
+  assert.match(workflow, /git merge-base --is-ancestor "\$TARGET_SHA" origin\/production-main/);
+  assert.match(workflow, /gh run list --workflow CI --branch production-main --commit "\$TARGET_SHA"/);
+  assert.match(workflow, /select\(\.event == "push" and \.conclusion == "success"\)/);
+  assert.match(workflow, /\[\[ "\$runs" -gt 0 \]\] \|\| .*exit 1/);
+  assert.match(workflow, /node scripts\/verify-lenovo-release\.cjs "\$TARGET_SHA"/);
+  assert.match(publisher, /\[\[ \$head == "\$TARGET" && -z \$changes \]\]/);
+  assert.match(publisher, /git merge-base --is-ancestor "\$TARGET" refs\/remotes\/origin\/production-main/);
+  assert.match(publisher, /git merge-base --is-ancestor "\$PREVIOUS" "\$TARGET"/);
 });
 
-test('production deploy supports explicit releases and CI-gated production auto-deploys', () => {
+test('production verification is explicit and read-only, never an automatic remote deployment', () => {
   const workflow = read('.github/workflows/deploy.yml');
-  const triggerBlock = workflow.match(/^on:\n([\s\S]*?)\n# Production deploys/m);
+  const triggerBlock = workflow.match(/^on:\n([\s\S]*?)\npermissions:/m);
 
   assert.ok(triggerBlock, 'expected to extract workflow trigger block');
   assert.match(triggerBlock[1], /workflow_dispatch:/);
-  assert.match(triggerBlock[1], /workflow_run:\s*\n\s+workflows:\s+\['CI'\]\s*\n\s+types:\s+\[completed\]\s*\n\s+branches:\s+\[production-main\]/);
-  assert.match(triggerBlock[1], /push:\s*\n\s+tags:\s*\n\s+- 'deploy-production-\*'/);
-  assert.doesNotMatch(triggerBlock[1], /push:\s*\n\s+branches:/);
-  assert.match(workflow, /FALLBACK_SHA:\s+\$\{\{ github\.sha \}\}/);
-  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
-  assert.match(workflow, /github\.event_name == 'workflow_run'/);
-  assert.match(workflow, /github\.event\.created == true/);
-  assert.match(workflow, /github\.event\.deleted == false/);
-  assert.match(workflow, /github\.event\.forced == false/);
+  assert.match(triggerBlock[1], /target_sha:[\s\S]*required: true/);
+  assert.doesNotMatch(triggerBlock[1], /workflow_run:|\bpush:|\bpull_request:/);
+  assert.match(workflow, /contents:\s+read/);
+  assert.doesNotMatch(workflow, /contents:\s+write|\$\{\{\s*secrets\.|appleboy\/|\bssh\b|\bscp\b|docker compose|git reset --hard/);
+  assert.match(workflow, /cancel-in-progress: false/);
 });
 
 test('main auto-promotion is fast-forward only and CI gated', () => {
@@ -163,68 +156,55 @@ test('main auto-promotion is fast-forward only and CI gated', () => {
   assert.doesNotMatch(workflow, /git merge --no-ff/);
 });
 
-test('U0 migration baseline is explicit per release tag and never global', () => {
+test('reviewed Lenovo publication refuses schema changes and cannot trigger migration baselining', () => {
   const workflow = read('.github/workflows/deploy.yml');
-
-  assert.match(workflow, /startsWith\(github\.ref_name, 'deploy-production-baseline-'\)/);
-  assert.match(workflow, /ALLOW_MIGRATION_BASELINE:\s+\$\{\{/);
-  assert.match(workflow, /envs: TARGET_SHA,ALLOW_MIGRATION_BASELINE,DEPLOY_TRANSFER_DIR/);
-  assert.doesNotMatch(workflow, /envs:[^\n]*(?:GITHUB_TOKEN|GH_TOKEN|DEPLOY_GH_TOKEN)/);
-  assert.match(workflow, /baseline-migration-history\.js/);
-  assert.match(workflow, /MIGRATION_BASELINE_CONFIRM=I_REVIEWED_PRODUCTION_SCHEMA/);
-  assert.match(workflow, /MIGRATION_BASELINE_SYNC_SCHEMA=1/);
-  assert.match(workflow, /\[\[ "\$\{ALLOW_MIGRATION_BASELINE\}" =~ \^\(0\|1\)\$ \]\]/);
-  assert.doesNotMatch(workflow, /ALLOW_EQUIVALENT_UNBASELINED/);
-  assert.doesNotMatch(workflow, /MIGRATION_ALLOW_EQUIVALENT_UNBASELINED/);
-  assert.doesNotMatch(workflow, /deploy-production-equivalent-/);
+  const publisher = read('deploy/iliagpt/publish-reviewed.sh');
+  assert.match(publisher, /schema_changes=\$\(git diff --name-only "\$PREVIOUS" "\$TARGET"/);
+  for (const scope of ['**/migrations/**', '**/schema.prisma', '**/schema.sql', '**/drizzle/**']) assert.ok(publisher.includes(scope));
+  assert.match(publisher, /\[\[ -z \$schema_changes \]\] \|\| die 'Schema or migration changes require a separate reviewed release\.'/);
+  for (const source of [workflow, publisher]) assert.doesNotMatch(source, /ALLOW_EQUIVALENT_UNBASELINED|MIGRATION_ALLOW_EQUIVALENT_UNBASELINED|baseline-migration-history\.js|deploy-production-baseline-|prisma\s+(?:db push|migrate)/);
 });
 
 test('production deploy proves the exact commit and restores rollback provenance', () => {
-  const workflow = read('.github/workflows/deploy.yml');
-  const rollback = workflow.match(/            rollback\(\) \{([\s\S]*?)\n            \}/);
-
+  const publisher = read('deploy/iliagpt/publish-reviewed.sh');
+  const rollback = publisher.match(/finish\(\) \{([\s\S]*?)\n\}/);
   assert.ok(rollback, 'expected to extract rollback function');
-  assert.match(workflow, /export GIT_COMMIT SIRAGPT_VERSION/);
-  assert.match(workflow, /set_release_metadata "\$\{TARGET_SHA\}"/);
-  assert.match(workflow, /set_release_metadata "\$\{PREV_SHA\}"/);
-  assert.match(workflow, /verify_checkout "\$\{TARGET_SHA\}"/);
-  assert.match(workflow, /verify_checkout "\$\{PREV_SHA\}"/);
-  assert.match(workflow, /wait_version "\$\{TARGET_SHA\}" "\$\{SIRAGPT_VERSION\}"/);
-  assert.match(workflow, /wait_version "\$\{PREV_SHA\}" "\$\{PREV_APP_VERSION\}"/);
-  assert.match(workflow, /verify_backend_image_metadata siragpt-backend:latest/);
-  assert.match(workflow, /Backend image metadata mismatch:/);
-  assert.match(workflow, /\$\{COMPOSE\} up -d --no-deps --force-recreate backend frontend/);
-  assert.match(workflow, /wait_frontend/);
-  assert.match(workflow, /preserve_rollback_images/);
-  assert.match(rollback[1], /restore_rollback_images/);
-  assert.doesNotMatch(rollback[1], /\$\{COMPOSE\} build/);
-  assert.match(workflow, /TARGET_SHA="\$\{TARGET_SHA,,\}"/);
-  assert.match(workflow, /resolve_previous_release/);
-  assert.match(workflow, /docker inspect --format '\{\{\.Image\}\}'/);
-  assert.match(workflow, /cleanup_old_rollback_images/);
-  assert.doesNotMatch(workflow, /PREV_SHA="\$\(git rev-parse HEAD/);
+  assert.match(publisher, /export GIT_COMMIT="\$TARGET" SIRAGPT_VERSION=/);
+  assert.match(publisher, /for service in runner backend frontend; do/);
+  assert.match(publisher, /docker inspect --format '\{\{\.Image\}\}'/);
+  assert.match(publisher, /docker image tag "\$image" "\$tag"/);
+  assert.match(publisher, /\[\[ \$image =~ \^sha256:\[0-9a-f\]\{64\}\$ \]\]/);
+  assert.match(publisher, /wait_release "\$TARGET" \|\| die/);
+  assert.match(publisher, /JSON\.parse\(s\)\.commit!==process\.argv\[1\]/);
+  assert.match(rollback[1], /write_release_keys "\$BACKUP\/release\.keys"/);
+  assert.match(rollback[1], /unset GIT_COMMIT SIRAGPT_VERSION/);
+  assert.match(rollback[1], /-f "\$BACKUP\/rollback\.yaml" up -d --no-deps --no-build --pull never runner frontend && wait_services runner frontend; then/);
+  assert.match(rollback[1], /-f "\$BACKUP\/rollback\.yaml" up -d --no-deps --no-build --pull never backend && wait_release "\$PREVIOUS"/);
+  assert.match(rollback[1], /wait_release "\$PREVIOUS"/);
+  assert.doesNotMatch(rollback[1], /\sbuild\s|git reset --hard/);
+  assert.doesNotMatch(publisher, /(?:PREVIOUS|PREV_SHA)="?\$\(git rev-parse HEAD/);
 });
 
-test('production deploy emits redacted backend diagnostics before rollback', () => {
-  const workflow = read('.github/workflows/deploy.yml');
+test('reviewed publication retains private diagnostics without replaying secret-bearing command output', () => {
+  const publisher = read('deploy/iliagpt/publish-reviewed.sh');
   const redactor = read('backend/scripts/redact-log-stream.js');
-
-  assert.match(workflow, /READY_WAIT_SECONDS="\$\{READY_WAIT_SECONDS:-180\}"/);
-  assert.match(workflow, /dump_backend_diagnostics/);
-  assert.match(workflow, /redact-log-stream\.js/);
-  assert.match(workflow, /Health check failed:[\s\S]*dump_backend_diagnostics/);
+  assert.match(publisher, /umask 077/);
+  assert.match(publisher, /LOG="\$BACKUP\/publish\.log"/);
+  assert.match(publisher, /chmod 600 "\$LOG"/);
+  assert.match(publisher, /exec >> "\$LOG" 2>&1/);
+  assert.doesNotMatch(publisher, /(?:cat|tail|tee)\s+"\$LOG"/);
+  assert.match(publisher, /attempt<24/);
+  assert.match(publisher, /--connect-timeout 5 --max-time 15/);
+  assert.match(publisher, /trap finish EXIT/);
   assert.match(redactor, /redactString/);
   assert.doesNotMatch(redactor, /console\.log\(line\)/);
 });
 
-test('official production deploy paths use the bounded migration-only wrapper', () => {
+test('Lenovo release runs no migrations while the separate legacy migration path stays bounded', () => {
   const workflow = read('.github/workflows/deploy.yml');
+  const publisher = read('deploy/iliagpt/publish-reviewed.sh');
   const deployScript = read('scripts/deploy-production.sh');
-
-  assert.match(
-    workflow,
-    /backend node scripts\/start-with-migrations\.js --migrate-only/,
-  );
+  assert.doesNotMatch(workflow + publisher, /start-with-migrations\.js|baseline-migration-history\.js|\bnpx\s+prisma\b/);
   assert.match(
     deployScript,
     /node scripts\/start-with-migrations\.js --migrate-only/,
@@ -233,7 +213,7 @@ test('official production deploy paths use the bounded migration-only wrapper', 
   assert.match(deployScript, /export GIT_COMMIT/);
   assert.doesNotMatch(workflow, /\bnpx\s+prisma\b/);
   assert.doesNotMatch(deployScript, /\bnpx\s+prisma\b/);
-  assert.match(workflow, /Database migration failed; aborting deploy/);
+  assert.match(publisher, /Schema or migration changes require a separate reviewed release/);
 });
 
 test('backend vercel-build uses the bounded migration-only lifecycle', () => {

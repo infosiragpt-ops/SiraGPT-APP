@@ -25,7 +25,7 @@ function flattenSearch(searchParams: Search | undefined): URLSearchParams {
 export default async function ChatRedirectPage({
   searchParams,
 }: {
-  searchParams?: Promise<Search> | Search
+  searchParams?: Promise<Search>
 }) {
   const sp = flattenSearch(await Promise.resolve(searchParams || {}))
   redirect(chatSearchToAgentsHome(sp))
