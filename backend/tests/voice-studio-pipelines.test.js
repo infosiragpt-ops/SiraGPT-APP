@@ -54,16 +54,17 @@ test('translate.parseLines accepts JSON object, fenced JSON and numbered fallbac
   assert.equal(translate.parseLines('{"lines":[{"n":9,"text":"x"}]}', 2).size, 0);
 });
 
-test('translateSegments uses the LLM ladder first and keeps original text for lines the model dropped', async () => {
-  const segments = [{ id: 'a', text: 'Hello' }, { id: 'b', text: 'World' }, { id: 'c', text: '' }];
-  const fakeClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: '{"lines":[{"n":1,"text":"Hola"}]}' } }] }) } } };
-  const out = await translate.translateSegments(segments, { targetLanguage: 'Spanish', sourceLanguage: 'en', clientFactory: () => fakeClient });
-  assert.equal(out.engine, 'sira-llm');
-  assert.deepEqual(out.segments, [{ id: 'a', text: 'Hola' }, { id: 'b', text: 'World' }, { id: 'c', text: '' }]);
+test('translation defaults to the local NLLB engine only (zero cost) and the provider list is env-configurable', () => {
+  assert.deepEqual(translate.DEFAULT_PROVIDERS, ['nllb']);
+  assert.deepEqual(translate.translateProviders({ env: {} }), ['nllb']);
+  assert.deepEqual(translate.translateProviders({ env: { VOICESTUDIO_TRANSLATE_PROVIDERS: 'nllb,llm' } }), ['nllb', 'llm']);
+  assert.deepEqual(translate.translateProviders({ env: { VOICESTUDIO_TRANSLATE_PROVIDERS: 'llm, NLLB, bogus' } }), ['llm', 'nllb']);
+  assert.deepEqual(translate.translateProviders({ env: { VOICESTUDIO_TRANSLATE_PROVIDERS: 'bogus' } }), ['nllb']);
 });
 
-test('translateSegments falls back to VoiceStudio NLLB when no LLM is configured and short-circuits same language', async () => {
+test('translateSegments uses VoiceStudio NLLB by default, never touching an LLM, and short-circuits same language', async () => {
   const segments = [{ id: 'a', text: 'Hello' }];
+  let llmCalls = 0;
   const fetchImpl = async (url, init) => {
     assert.match(url, /\/dub\/translate$/);
     const payload = JSON.parse(init.body);
@@ -71,11 +72,26 @@ test('translateSegments falls back to VoiceStudio NLLB when no LLM is configured
     assert.equal(payload.target_lang, 'es');
     return new Response(JSON.stringify([{ id: 'a', text: 'Hola' }]), { status: 200, headers: { 'content-type': 'application/json' } });
   };
-  const out = await translate.translateSegments(segments, { targetLanguage: 'Spanish', clientFactory: () => null }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl });
+  const out = await translate.translateSegments(segments, { targetLanguage: 'Spanish', env: {}, clientFactory: () => { llmCalls += 1; return null; } }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl });
   assert.equal(out.engine, 'nllb');
   assert.equal(out.segments[0].text, 'Hola');
-  const same = await translate.translateSegments(segments, { targetLanguage: 'en', sourceLanguage: 'English', clientFactory: () => null });
+  assert.equal(llmCalls, 0, 'the paid LLM ladder must not be consulted by default');
+  const same = await translate.translateSegments(segments, { targetLanguage: 'en', sourceLanguage: 'English', env: {}, clientFactory: () => null });
   assert.equal(same.engine, 'same-language');
+});
+
+test('translateSegments can opt into the LLM ladder as a fallback and keeps original text for lines the model dropped', async () => {
+  const segments = [{ id: 'a', text: 'Hello' }, { id: 'b', text: 'World' }, { id: 'c', text: '' }];
+  const fakeClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: '{"lines":[{"n":1,"text":"Hola"}]}' } }] }) } } };
+  const failingFetch = async () => new Response(JSON.stringify({ detail: 'nllb down' }), { status: 503, headers: { 'content-type': 'application/json' } });
+  const out = await translate.translateSegments(segments, { targetLanguage: 'Spanish', sourceLanguage: 'en', env: { VOICESTUDIO_TRANSLATE_PROVIDERS: 'nllb,llm' }, clientFactory: () => fakeClient }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl: failingFetch });
+  assert.equal(out.engine, 'sira-llm');
+  assert.match(out.warning, /nllb/);
+  assert.deepEqual(out.segments, [{ id: 'a', text: 'Hola' }, { id: 'b', text: 'World' }, { id: 'c', text: '' }]);
+  await assert.rejects(
+    () => translate.translateSegments(segments, { targetLanguage: 'Spanish', env: {}, clientFactory: () => fakeClient }, { env: { VOICESTUDIO_URL: 'http://vs.test' }, fetchImpl: failingFetch }),
+    (err) => err.code === 'TRANSLATE_FAILED' && /nllb down/.test(err.message),
+  );
 });
 
 test('chat persistence builders produce renderable artifacts and video snapshots', () => {

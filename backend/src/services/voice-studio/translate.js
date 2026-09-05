@@ -3,11 +3,12 @@
 /**
  * Segment translation for dubbing.
  *
- * Primary path: SiraGPT's own LLM ladder (DeepSeek native → Meta → Gemini →
- * xAI → …, see doc-agent/llm-runtime.js) so the dub keeps the tone the rest of
- * the product uses and no provider key ever leaves this backend.
- * Fallback: VoiceStudio's offline NLLB translator (`/dub/translate`,
- * provider "nllb") which needs no key at all.
+ * Default (zero cost, zero external API): VoiceStudio's offline NLLB-200
+ * translator (`/dub/translate`, provider "nllb") — runs on the same host as
+ * the voices. Optional: SiraGPT's LLM ladder (DeepSeek native → Meta → …,
+ * see doc-agent/llm-runtime.js) when an operator lists `llm` in
+ * VOICESTUDIO_TRANSLATE_PROVIDERS (e.g. "nllb,llm" = LLM only as fallback,
+ * "llm,nllb" = LLM first). Sira Voz ships with "nllb".
  *
  * Contract: returns an array aligned with `segments` — same length, same
  * order — where every item is { id, text }. A segment the translator could
@@ -17,6 +18,16 @@
 const voiceStudio = require('../ai/voicestudio-client');
 
 const DEFAULT_BATCH = 40;
+const DEFAULT_PROVIDERS = ['nllb'];
+
+function translateProviders(opts = {}) {
+  const raw = opts.providers || (opts.env || process.env).VOICESTUDIO_TRANSLATE_PROVIDERS;
+  const list = Array.isArray(raw)
+    ? raw
+    : (typeof raw === 'string' && raw.trim() ? raw.split(',') : DEFAULT_PROVIDERS);
+  const cleaned = list.map((v) => String(v || '').trim().toLowerCase()).filter((v) => v === 'nllb' || v === 'llm');
+  return cleaned.length ? Array.from(new Set(cleaned)) : DEFAULT_PROVIDERS;
+}
 
 function languageLabel(value) {
   const name = voiceStudio.languageName(value);
@@ -134,8 +145,10 @@ async function translateWithVoiceStudio(segments, { targetLanguage, sourceLangua
 }
 
 /**
- * Translate with the LLM ladder, then NLLB; the caller receives which engine
- * produced the lines so the chat summary can say so.
+ * Translate with the configured providers in order (default: local NLLB only);
+ * the caller receives which engine produced the lines so the chat summary can
+ * say so. A provider that throws hands over to the next one; when every
+ * provider failed the error names them all.
  */
 async function translateSegments(segments, opts = {}, options = {}) {
   const list = Array.isArray(segments) ? segments : [];
@@ -145,26 +158,28 @@ async function translateSegments(segments, opts = {}, options = {}) {
   if (source && target && source === target) {
     return { segments: list.map((s) => ({ id: s.id, text: String(s.text || '') })), engine: 'same-language' };
   }
-  let llmError = null;
-  try {
-    const translated = await translateWithLlm(list, opts);
-    return { segments: translated, engine: 'sira-llm' };
-  } catch (err) {
-    if (err?.name === 'AbortError' || opts.signal?.aborted) throw err;
-    llmError = err;
+  const failures = [];
+  for (const provider of translateProviders(opts)) {
+    try {
+      if (provider === 'llm') {
+        const translated = await translateWithLlm(list, opts);
+        return { segments: translated, engine: 'sira-llm', warning: failures.length ? failures.join('; ').slice(0, 200) : null };
+      }
+      const translated = await translateWithVoiceStudio(list, opts, options);
+      return { segments: translated, engine: 'nllb', warning: failures.length ? failures.join('; ').slice(0, 200) : null };
+    } catch (err) {
+      if (err?.name === 'AbortError' || opts.signal?.aborted) throw err;
+      failures.push(`${provider}: ${String(err?.message || err).slice(0, 160)}`);
+    }
   }
-  try {
-    const translated = await translateWithVoiceStudio(list, opts, options);
-    return { segments: translated, engine: 'nllb', warning: llmError ? String(llmError.message || llmError).slice(0, 200) : null };
-  } catch (err) {
-    if (err?.name === 'AbortError') throw err;
-    const wrapped = new Error(`No se pudo traducir el guion (${String(llmError?.message || llmError || '')}; ${String(err?.message || err)})`.slice(0, 400));
-    wrapped.code = 'TRANSLATE_FAILED';
-    throw wrapped;
-  }
+  const wrapped = new Error(`No se pudo traducir el guion (${failures.join('; ')})`.slice(0, 400));
+  wrapped.code = 'TRANSLATE_FAILED';
+  throw wrapped;
 }
 
 module.exports = {
+  DEFAULT_PROVIDERS,
+  translateProviders,
   buildPrompt,
   parseLines,
   translateWithLlm,
