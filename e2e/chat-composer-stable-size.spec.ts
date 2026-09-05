@@ -244,7 +244,7 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.permissionAria).toBe("Permisos: Acceso completo")
   expect(approved.permissionTitle).toBe("Acceso completo")
   expect(approved.permissionLevel).toBe("full")
-  expect(approved.effortLabel).toBe("Esfuerzo Máximo")
+  expect(approved.effortLabel).toBe("⚡")
   expect(approved.hasInlineAgentToggle).toBe(false)
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
 
@@ -411,7 +411,7 @@ test("context and effort open as separate professional popovers with real data",
   await expect(slider).toHaveAttribute("aria-valuetext", "Bajo")
   await page.keyboard.press("End")
   await expect(slider).toHaveAttribute("aria-valuetext", "Máximo")
-  await expect(effortTrigger).toContainText("Máximo")
+  await expect(effortTrigger).toHaveAttribute("aria-label", "Esfuerzo: Máximo")
   await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe("Max")
 
   for (const [label, value] of [["Bajo", "Bajo"], ["Medio", "Medio"], ["Alto", "Extra"], ["Máximo", "Max"]]) {
@@ -419,7 +419,7 @@ test("context and effort open as separate professional popovers with real data",
     await level.click()
     await expect(level).toHaveAttribute("aria-pressed", "true")
     await expect(slider).toHaveAttribute("aria-valuetext", label)
-    await expect(effortTrigger).toContainText(label)
+    await expect(effortTrigger).toHaveAttribute("aria-label", `Esfuerzo: ${label}`)
     await expect.poll(() => page.evaluate(() => localStorage.getItem("sira:composer:effort"))).toBe(value)
   }
 

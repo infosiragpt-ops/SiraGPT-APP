@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { ChevronUp, SlidersHorizontal, Zap } from "lucide-react"
+import { SlidersHorizontal, Zap } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { EffortDitherTrack } from "@/components/chat/effort-dither-track"
 import { readComposerFastMode, writeComposerFastMode } from "@/lib/chat/composer-session"
@@ -173,11 +173,9 @@ export function ComposerEffortMenu({
           data-fast={fast}
           aria-label={`Esfuerzo: ${active.label}`}
           title={`Esfuerzo ${active.label}${fast ? " · Modo rápido activado" : ""}`}
-          className={cn("composer-effort-chip", (active.value === "Extra" || active.value === "Max") && "is-high")}
+          className="composer-effort-chip"
         >
-          <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" strokeWidth={1.8} aria-hidden />
-          <span className="truncate">Esfuerzo <strong>{active.label}</strong></span>
-          <ChevronUp aria-hidden className="composer-effort-caret" size={12} />
+          <span aria-hidden className="composer-effort-lightning">⚡</span>
         </button>
       </PopoverTrigger>
       <PopoverContent

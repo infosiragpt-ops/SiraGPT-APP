@@ -1678,7 +1678,6 @@ details[open] > summary .think-chevron,
   .effort-sheen,
   .effort-level-button,
   .composer-fast-switch::before,
-  .composer-effort-caret,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;
@@ -6304,9 +6303,8 @@ footer {
 }
 
 /* Only the icon actions (dictation, send, stop) reserve the 44px target.
-   The compact chips (context meter, effort, permissions) keep their own
-   pill geometry — a blanket 44px width used to crush the effort label to
-   a bare lightning glyph. */
+   The compact controls (context meter, effort, permissions) keep their own
+   dimensions so the toolbar fits comfortably in narrow panes. */
 .composer-input-row .composer-toolbar-actions > button.composer-dictation-button,
 .composer-input-row .composer-toolbar-actions > button.composer-send-button,
 .composer-input-row .composer-toolbar-actions > button.composer-stop-button {
@@ -6408,9 +6406,6 @@ footer {
   white-space: nowrap;
   transition: background-color 160ms ease-out, color 160ms ease-out;
 }
-.composer-effort-chip > .truncate {
-  min-width: 0;
-}
 .composer-permission-chip {
   width: 2rem;
   max-width: 2rem;
@@ -6439,28 +6434,10 @@ footer {
 .composer-permission-chip.is-full {
   color: #dc2626;
 }
-.composer-effort-chip.is-high {
-  color: hsl(220 8% 46%);
-}
-.composer-effort-chip.is-high > svg:first-child {
-  color: hsl(266 55% 55%);
-}
-.composer-effort-chip > .truncate {
-  display: inline-flex;
-  gap: 0.35rem;
-}
-.composer-effort-chip strong {
-  color: hsl(var(--foreground) / 0.85);
-  font-size: 12px;
-  font-weight: 600;
-}
-.composer-effort-caret {
-  flex-shrink: 0;
-  opacity: 0.55;
-  transition: transform 160ms ease;
-}
-.composer-effort-chip[data-state="open"] .composer-effort-caret {
-  transform: rotate(180deg);
+.composer-effort-lightning {
+  display: block;
+  font-size: 18px;
+  line-height: 1;
 }
 .composer-context-trigger {
   order: 10;
@@ -6483,6 +6460,13 @@ footer {
 }
 .composer-effort-chip {
   order: 30;
+  width: 2rem;
+  min-width: 2rem;
+  max-width: 2rem;
+  padding: 0;
+  justify-content: center;
+  flex-shrink: 0;
+  gap: 0;
 }
 .composer-dictation-button {
   order: 40;
@@ -6568,8 +6552,7 @@ footer {
 .composer-fast-icon {
   color: hsl(var(--muted-foreground));
 }
-.composer-fast-row[aria-checked="true"] .composer-fast-icon,
-.composer-effort-chip[data-fast="true"] > svg:first-child {
+.composer-fast-row[aria-checked="true"] .composer-fast-icon {
   color: hsl(266 55% 55%);
 }
 .composer-fast-switch {
@@ -7094,7 +7077,7 @@ button.anti-bribery-context-chip:not(:disabled):active {
   }
   /* Phone footer budget (360–430 px): + · shield | ring · model · ⚡ · mic · send
      must fit on ONE row inside the surface. Icon controls keep ≥ 40 px touch
-     targets, the effort chip collapses to its lightning glyph, the model
+     targets, the effort chip shows its lightning glyph, the model
      trigger drops its chevron and its label is the only element that
      truncates. Verified at 360 / 390 / 430 px — nothing clips anymore. */
   .composer-leading-controls {
@@ -7146,14 +7129,6 @@ button.anti-bribery-context-chip:not(:disabled):active {
     padding: 0;
     justify-content: center;
     gap: 0;
-  }
-  .composer-effort-chip > .truncate,
-  .composer-effort-chip .composer-effort-caret {
-    display: none;
-  }
-  .composer-effort-chip svg {
-    width: 1rem;
-    height: 1rem;
   }
   /* Width budget for the model pill lives in the (max-width: 767px) block
      above (`.composer-model-inline`). Here: same 40 px height as the other
@@ -7237,7 +7212,6 @@ button.anti-bribery-context-chip:not(:disabled):active {
   background-color: hsl(0 0% 100% / 0.08);
 }
 .dark .composer-input-row .composer-model-inline .chat-model-trigger,
-.dark .composer-effort-chip.is-high,
 .dark .composer-dictation-button:not([aria-pressed="true"]) {
   color: hsl(216 14% 72%) !important;
 }
@@ -7263,8 +7237,6 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-effort-chip[data-state="open"] {
   background: hsl(0 0% 100% / 0.07);
 }
-.dark .composer-effort-chip.is-high > svg:first-child,
-.dark .composer-effort-chip[data-fast="true"] > svg:first-child,
 .dark .composer-fast-row[aria-checked="true"] .composer-fast-icon {
   color: hsl(266 85% 80%);
 }

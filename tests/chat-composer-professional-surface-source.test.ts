@@ -379,9 +379,9 @@ describe("professional chat composer surface source contract", () => {
       "only the compact context meter should be visible, not a second outer ring",
     )
     assert.match(
-      globals,
-      /\.composer-effort-chip\.is-high > svg:first-child\s*\{\s*color: hsl\(266 55% 55%\);/,
-      "the effort icon should match the slider's violet accent",
+      effortMenu,
+      /<span aria-hidden className="composer-effort-lightning">⚡<\/span>/,
+      "the effort trigger should show only the requested lightning emoji",
     )
     assert.match(
       globals,
