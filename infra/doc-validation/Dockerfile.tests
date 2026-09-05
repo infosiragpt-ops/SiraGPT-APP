@@ -1,0 +1,27 @@
+# Reviewed synthetic-fixture runner only, NOT the production validator.
+# Inputs must be immutable images already verified by the operator.
+ARG NODE_IMAGE
+ARG NODE_RUNTIME_IMAGE
+ARG VALIDATOR_IMAGE
+FROM ${NODE_IMAGE} AS node_dependencies
+FROM ${NODE_RUNTIME_IMAGE} AS node_runtime
+FROM ${VALIDATOR_IMAGE}
+USER 0:0
+# Application dependencies may come from Alpine/musl. The executable must come
+# from the reviewed Debian/glibc Node image compatible with the Ubuntu validator.
+COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
+RUN /usr/local/bin/node --version
+COPY --chown=1000:1000 --from=node_dependencies /app/node_modules /work/backend/node_modules
+COPY infra/doc-validation/requirements-test.txt /opt/validator/requirements-test.txt
+RUN /opt/validator-venv/bin/pip install --no-cache-dir -r /opt/validator/requirements-test.txt
+COPY --chown=1000:1000 backend/package.json /work/backend/package.json
+COPY --chown=1000:1000 backend/dist/doc-sandbox /work/backend/dist/doc-sandbox
+COPY --chown=1000:1000 backend/src/modules/doc-sandbox/validation/validator.py /work/backend/src/modules/doc-sandbox/validation/validator.py
+COPY --chown=1000:1000 backend/tests/doc-sandbox-validation.test.py backend/tests/doc-sandbox-readiness.test.py backend/tests/doc-sandbox-conservative-result.test.cjs backend/tests/doc-sandbox-complex.fixture.test.cjs /work/backend/tests/
+COPY --chown=1000:1000 backend/tests/doc-sandbox-real.cjs backend/tests/doc-sandbox-real.fixtures.cjs backend/tests/doc-sandbox-complex.oracle.test.cjs /work/backend/tests/
+COPY --chown=1000:1000 backend/tests/fixtures /work/backend/tests/fixtures
+ENV PATH="/opt/validator-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" HOME=/tmp
+USER 1000:1000
+WORKDIR /work
+ENTRYPOINT ["/usr/bin/timeout", "--signal=KILL", "600s"]
+CMD ["node", "--test", "backend/tests/doc-sandbox-conservative-result.test.cjs", "backend/tests/doc-sandbox-complex.fixture.test.cjs", "backend/tests/doc-sandbox-complex.oracle.test.cjs"]

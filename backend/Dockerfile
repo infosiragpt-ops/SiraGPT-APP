@@ -14,7 +14,7 @@ RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 # Install Node deps
 COPY package.json package-lock.json ./
 RUN for attempt in 1 2 3; do \
-      npm ci --omit=dev --prefer-offline --no-audit --no-fund && break; \
+      npm ci --prefer-offline --no-audit --no-fund && break; \
       status=$?; \
       if [ "$attempt" = "3" ]; then exit "$status"; fi; \
       sleep $((attempt * 10)); \
@@ -26,7 +26,7 @@ WORKDIR /app
 
 RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
 
-# Copy prod node_modules from deps stage (avoids re-download)
+# Build with pinned TypeScript, then remove development dependencies.
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
 
@@ -34,7 +34,7 @@ COPY --from=deps /app/package.json ./package.json
 COPY . .
 
 # Generate Prisma client (needed at runtime for queries)
-RUN npx prisma generate
+RUN npx prisma generate && npm run build:doc-sandbox && npm prune --omit=dev --ignore-scripts
 
 # ─── Stage 3: Production runner ─────────────────────────────
 FROM node:22-alpine AS runner
@@ -105,6 +105,7 @@ COPY --from=build --chown=appuser:appgroup /app/node_modules ./node_modules
 COPY --from=build --chown=appuser:appgroup /app/package.json ./package.json
 COPY --from=build --chown=appuser:appgroup /app/index.js ./index.js
 COPY --from=build --chown=appuser:appgroup /app/src ./src
+COPY --from=build --chown=appuser:appgroup /app/dist ./dist
 COPY --from=build --chown=appuser:appgroup /app/prisma ./prisma
 COPY --from=build --chown=appuser:appgroup /app/scripts ./scripts
 COPY --from=build --chown=appuser:appgroup /app/docs ./docs

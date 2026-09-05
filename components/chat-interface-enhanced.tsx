@@ -250,6 +250,9 @@ import {
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
+import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
+import { routeDocumentSandboxTurn } from "@/lib/document-sandbox-routing"
+import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
 import { agentsHomeHref, conversationIdFromLocation } from "@/lib/agents-home-path"
@@ -546,6 +549,7 @@ const findRecoverableAgentTaskMessage = (messages: any[] = [], taskId?: string |
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
     if (String(message?.role || "").toUpperCase() !== "ASSISTANT") continue
+    if (parseDocumentJobPointer(message.metadata)) continue // this durable job has its own authenticated recovery contract
     const state = parseAgentTaskMessageState(message?.content)
     if (!state || state.done) continue
     totalCandidates += 1
@@ -5938,6 +5942,11 @@ function ChatInterfaceContent() {
     }
   }, [syncActiveLocalJobs]);
 
+  const { start: startDocumentSandbox, stop: stopDocumentSandbox } = useDocumentSandboxChat({
+    currentChat, userId: user?.id || null, selectedModel, setCurrentChat, selectChat,
+    markBusy: markLocalJobBusy, markIdle: markLocalJobIdle, notify: (message) => toast.error(message),
+  });
+
   // ─── Durable agent-task recovery ───────────────────────────────────
   // Agent/document tasks execute on the backend and can outlive this page.
   // Reconnect the visible message bubble after reload or chat navigation by
@@ -6470,6 +6479,8 @@ function ChatInterfaceContent() {
 
   const stopActiveGeneration = React.useCallback(() => {
     const targetChatId = currentChatId;
+    // Stop is an acknowledged server cancellation, not just an aborted SSE reader.
+    if (stopDocumentSandbox(targetChatId)) return;
     const scopedController = targetChatId ? localJobControllersRef.current.get(targetChatId) : null;
     const ownsSendingState = !targetChatId || sendingChatId === targetChatId;
 
@@ -6585,7 +6596,7 @@ function ChatInterfaceContent() {
       setIsSending(false);
       setSendingChatId(null);
     }
-  }, [activeStreamingChatIds, currentChatId, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
+  }, [activeStreamingChatIds, currentChatId, stopDocumentSandbox, markImageGenerationStopped, markLocalJobIdle, sendingChatId, setChatType, stopStreaming]);
 
   // Add reasoning steps to chat messages as they come in
   React.useEffect(() => {
@@ -10584,6 +10595,40 @@ REWRITTEN TEXT:`;
       || isVoiceGenerationActive
       || isMusicGenerationActive
       || isVideoGenerationActive;
+    const documentSandboxRoute = routeDocumentSandboxTurn(msg, filesToSend);
+    if (!hasDedicatedConnector && !hasMediaGenerator && documentSandboxRoute) {
+      const documentPreflight = new AbortController();
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        // The old classifier is broader than an editing authorization (it
+        // even matches discussion). Clarify instead of invoking its editor.
+        if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal)) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        // Preserve the user's draft when preflight rejects a model, permission or input.
+        if ((currentChatIdRef.current || '__new__') === sendLatchKey) {
+          setInput(msg);
+          uploadedFilesRef.current = filesToSend;
+          setUploadedFiles(filesToSend);
+          // Transfer a rejected queued turn back to the visible draft. Leaving
+          // it in the automatic drain would retry an unsupported edit forever.
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
     const shouldUseWorkModeAgent = isWorkModeActive
       && !hasDedicatedConnector
       && !hasMediaGenerator
@@ -10593,9 +10638,8 @@ REWRITTEN TEXT:`;
       customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
-    // Document-EDIT turns (attachment + "borra/elimina/agrega/edita…") must
-    // enter the durable agent-task path. That backend path owns the current
-    // source-preserving Office/PDF editor, artifact persistence and validation.
+    // Explicit edits and ambiguous legacy edit classifications returned above;
+    // remaining document questions retain their existing retrieval path.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent
@@ -11962,6 +12006,9 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (queueDrainClaims.has(item.id)) return false;
       if (activeStreamingChatIds.includes(item.chatId)) return false;
       if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
+      // Original-file editing needs the canonical admission path. Keep these
+      // queued turns until their chat is opened; never bypass it via addMessage.
+      if (routeDocumentSandboxTurn(item.msg, item.files || [])) return false;
       return true;
     });
     if (bgIndex < 0) return;
