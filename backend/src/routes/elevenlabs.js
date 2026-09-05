@@ -17,6 +17,13 @@ const {
   generateOfficeSoundscape,
   officeSoundDefinition,
 } = require('../services/ai/elevenlabs-office-soundscape');
+const localWhisper = require('../services/local-whisper-engine');
+const voiceStudio = require('../services/ai/voicestudio-client');
+const {
+  DEFAULT_PAID_PLANS,
+  normalizePlan,
+  subscriptionAllowsPaidAccess,
+} = require('../middleware/require-paid-plan');
 
 const router = express.Router();
 const prisma = require('../config/database');
@@ -36,6 +43,7 @@ function audioContentType(filename) {
     case '.wav':
       return 'audio/wav';
     case '.m4a':
+    case '.m4b':
     case '.mp4':
       return 'audio/mp4';
     case '.webm':
@@ -258,11 +266,67 @@ router.post('/text-to-speech', [
   }
 });
 
-// Speech-to-Text (using ElevenLabs)
-router.post('/speech-to-text', authenticateToken, requirePaidPlan({ feature: 'voice_transcription' }), upload.single('audio'), async (req, res) => {
+// Dictation is free for every plan: paid accounts keep ElevenLabs Scribe,
+// everyone else (and any deployment without an ElevenLabs key) transcribes
+// locally — whisper.cpp bundled in the backend image first (fast), then
+// Sira Voz / VoiceStudio (WhisperX) when configured. Nothing leaves the host.
+function userHasPaidVoicePlan(user) {
+  if (!user) return false;
+  if (user.isSuperAdmin) return true;
+  return DEFAULT_PAID_PLANS.includes(normalizePlan(user.plan)) && subscriptionAllowsPaidAccess(user);
+}
+
+function markVoiceTranscriptionTier(req, _res, next) {
+  req.freeVoiceTranscription = !userHasPaidVoicePlan(req.user);
+  next();
+}
+
+async function freeSpeechToText(req, res) {
+  const filePath = req.file.path;
+  const language = typeof req.body?.language === 'string' && req.body.language.trim()
+    ? req.body.language.trim().slice(0, 2).toLowerCase()
+    : (process.env.WHISPER_LANGUAGE || 'es');
+  const attempts = [];
   try {
-    if (!ELEVENLABS_API_KEY) {
-      return res.status(400).json({ error: 'ElevenLabs API key not configured' });
+    try {
+      const local = await localWhisper.transcribeLocal(filePath, { language });
+      const text = String(local?.text || local?.transcript || '').trim();
+      if (text) {
+        return res.json({ success: true, text, provider: 'local-whisper', model: local?.model || 'whisper-base', free: true });
+      }
+      attempts.push('local-whisper:no_speech');
+    } catch (err) {
+      attempts.push(`local-whisper:${err?.code || 'error'}`);
+    }
+    if (voiceStudio.isConfigured()) {
+      try {
+        const vs = await voiceStudio.transcribe({ filePath, filename: req.file.originalname || 'dictation.webm', mime: req.file.mimetype, language });
+        if (vs.text) {
+          return res.json({ success: true, text: vs.text, provider: 'sira-voz', model: 'voicestudio-whisperx', free: true });
+        }
+        attempts.push('voicestudio:no_speech');
+      } catch (err) {
+        attempts.push(`voicestudio:${err?.code || 'error'}`);
+      }
+    }
+    if (attempts.every((a) => a.endsWith(':no_speech'))) {
+      return res.json({ success: true, text: '', provider: 'local', free: true, note: 'No se detectó voz en la grabación.' });
+    }
+    console.warn('[elevenlabs/speech-to-text] free transcription unavailable:', attempts.join(', '));
+    return res.status(503).json({ error: 'La transcripción no está disponible en este momento. Intenta de nuevo en unos segundos.', code: 'transcription_unavailable' });
+  } finally {
+    await fs.promises.unlink(filePath).catch(() => {});
+  }
+}
+
+// Speech-to-Text (ElevenLabs Scribe for paid plans; local engines for everyone else)
+router.post('/speech-to-text', authenticateToken, markVoiceTranscriptionTier, upload.single('audio'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Audio file is required' });
+    }
+    if (!ELEVENLABS_API_KEY || req.freeVoiceTranscription) {
+      return freeSpeechToText(req, res);
     }
 
     if (!req.file) {
@@ -416,7 +480,7 @@ router.post('/speech-to-text', authenticateToken, requirePaidPlan({ feature: 'vo
 router.get('/audio/:filename', (req, res) => {
   try {
     const resolved = resolveConfinedFile(audioDir, req.params.filename, {
-      allowedExtensions: ['.mp3', '.mpeg', '.wav', '.m4a', '.mp4', '.webm', '.ogg'],
+      allowedExtensions: ['.mp3', '.mpeg', '.wav', '.m4a', '.m4b', '.mp4', '.webm', '.ogg'],
     });
     if (!resolved) {
       return res.status(400).json({ error: 'Invalid audio filename' });

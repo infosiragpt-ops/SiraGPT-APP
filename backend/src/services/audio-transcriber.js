@@ -24,6 +24,7 @@ const path = require('path');
 const { redactString } = require('../utils/secret-redactor');
 const os = require('os');
 const localWhisper = require('./local-whisper-engine');
+const voiceStudioClient = (options = {}) => options.voiceStudio || require('./ai/voicestudio-client');
 
 const DEFAULT_AUDIO_MAX_FILE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_OPENAI_MODEL = 'whisper-1';
@@ -432,6 +433,32 @@ async function transcribe(filePath, mimeType, originalName, options = {}) {
         logSafe(`${provider.name} transcription rejected the key (${safe}); trying the next provider`);
       } else {
         logSafe(`${provider.name} transcription failed (${safe}); trying the next provider`);
+      }
+    }
+  }
+
+  // Opt-in: Sira Voz / VoiceStudio (WhisperX large-v3, on this host). List
+  // 'voicestudio' in TRANSCRIBE_PROVIDERS to use it before the bundled
+  // whisper.cpp base model — better accuracy, slower on CPU, still free.
+  if (providerOrder(options).includes('voicestudio')) {
+    const vsClient = voiceStudioClient(options);
+    if (vsClient.isConfigured(options)) {
+      try {
+        const vs = await vsClient.transcribe({ filePath, filename: fileName, mime: normalizedMime, language, prompt, signal: options.signal }, options);
+        const text = String(vs?.text || '').trim();
+        if (text.length >= 3) {
+          return formatSuccess({
+            text,
+            method: 'local-whisper',
+            model: 'voicestudio-whisperx',
+            language: vs.language || language || null,
+            segments: vs.segments,
+          });
+        }
+        logSafe('VoiceStudio transcription returned no speech; trying the next provider');
+      } catch (err) {
+        if (isAbortError(err, options.signal)) throw err;
+        logSafe(`VoiceStudio transcription failed (${sanitizeProviderError(err)}); trying the next provider`);
       }
     }
   }

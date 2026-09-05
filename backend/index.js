@@ -434,6 +434,7 @@ const {
 const thesisRoutes = require('./src/routes/thesis');
 const thesisEngineRoutes = require('./src/routes/thesis-engine');
 const voiceGrokRoutes = require('./src/routes/voice-grok');
+const voiceStudioRoutes = require('./src/routes/voice-studio');
 const researchRoutes = require('./src/routes/research');
 const scientificSearchRoutes = require('./src/routes/scientific-search');
 const answerRoutes = require('./src/routes/answer');
@@ -1275,6 +1276,8 @@ app.use('/api/desktop', desktopRoutes.router);
 app.use('/api/thesis', thesisRoutes);
 app.use('/api/thesis', thesisEngineRoutes);
 app.use('/api/voice/grok', voiceGrokRoutes);
+// Sira Voz — VoiceStudio (open source, local): cloning, dubbing, transcription, audiobooks. Free tier.
+app.use('/api/voice-studio', voiceStudioRoutes);
 app.use('/api/research', researchRoutes);
 app.use('/api/scientific-search', scientificSearchRoutes);
 app.use('/api/answer', answerRoutes);
