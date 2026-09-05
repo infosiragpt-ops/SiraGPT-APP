@@ -24,7 +24,7 @@ browser ──/api/voice-studio/*──▶ iliagpt-backend ──http://siragpt-
 - **Jobs**: `backend/src/services/voice-studio/jobs.js` (in-process queue,
   `voice_studio_jobs` table, per-user limit 1 active, global concurrency
   `VOICESTUDIO_JOB_CONCURRENCY` = 1) + `pipelines.js` (dub / audiobook /
-  transcription) + `translate.js` (DeepSeek ladder → NLLB fallback) +
+  transcription) + `translate.js` (local NLLB by default; `VOICESTUDIO_TRANSLATE_PROVIDERS=nllb,llm` opts into the LLM ladder as fallback) +
   `chat-persistence.js` (results become chat messages).
 - **Voices**: `voice_profiles` maps each VoiceStudio profile to its SiraGPT
   owner; users only ever see their own voices.
@@ -48,6 +48,7 @@ browser ──/api/voice-studio/*──▶ iliagpt-backend ──http://siragpt-
 | `VOICESTUDIO_API_KEY` | same value as the container's `OMNIVOICE_API_KEY` |
 | `VOICESTUDIO_TTS_MODEL` | `tts-1` (active engine) or an engine id |
 | `VOICESTUDIO_TTS_CHUNK_CHARS` | chunk size for long narrations (default 3000) |
+| `VOICESTUDIO_TRANSLATE_PROVIDERS` | dub translation order; default `nllb` (offline, zero cost). `nllb,llm` adds the LLM ladder as fallback |
 | `VOICESTUDIO_JOB_CONCURRENCY` | parallel studio jobs (default 1) |
 | `VOICESTUDIO_MAX_ACTIVE_JOBS_PER_USER` | default 1 |
 | `VOICESTUDIO_MAX_VOICES_PER_USER` | default 20 |
@@ -60,6 +61,7 @@ browser ──/api/voice-studio/*──▶ iliagpt-backend ──http://siragpt-
 4. Wait for `/health` → `{"status":"ok","device":"cpu"}` (first boot ≈ 1–3 min).
 5. Pre-download the models from inside the network (admin key):
    `POST /models/install {"repo_id":"k2-fsa/OmniVoice"}` and `{"repo_id":"Systran/faster-whisper-large-v3"}`; follow `GET /setup/download-stream`.
+   Warm the offline translator once (downloads `facebook/nllb-200-distilled-600M`): `POST /dub/translate {"segments":[{"id":"a","text":"hola"}],"target_lang":"en","provider":"nllb"}`.
 6. Recreate the backend so it reads the new env: `docker compose up -d --no-deps --force-recreate backend`.
 7. Verify: `GET /api/voice-studio/status` (auth) → `configured:true, ok:true`.
 

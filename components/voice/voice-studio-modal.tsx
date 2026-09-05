@@ -114,7 +114,8 @@ const LANGUAGE_LABELS: Record<string, string> = {
   Auto: "Automático",
 }
 
-const DUB_TARGET_LANGUAGES = ["Spanish", "English", "Portuguese", "French", "German", "Italian", "Chinese", "Japanese", "Korean", "Arabic", "Russian", "Dutch", "Polish", "Turkish", "Hindi", "Quechua"] as const
+// Languages the local (zero-cost) NLLB translator inside VoiceStudio handles.
+const DUB_TARGET_LANGUAGES = ["Spanish", "English", "Portuguese", "French", "German", "Italian", "Chinese", "Japanese", "Korean", "Arabic", "Russian", "Dutch", "Polish", "Turkish", "Hindi", "Indonesian", "Vietnamese", "Thai", "Swedish", "Ukrainian"] as const
 
 const MAX_RECORD_SECONDS = 20
 const MB = 1024 * 1024
