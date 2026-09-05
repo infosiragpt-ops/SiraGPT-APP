@@ -320,8 +320,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
   /* Admin/user model toggles: keep a compact iOS switch, not a 44px circle.
      Syncfusion button CSS + iOS min tap-targets otherwise blow [role=switch]
      into a huge radio-looking disc. */
-  button[role="switch"],
-  [role="switch"],
+  button[role="switch"]:not(.composer-fast-row),
+  [role="switch"]:not(.composer-fast-row),
   .admin-model-switch {
     width: 36px !important;
     height: 20px !important;
@@ -338,8 +338,8 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
     appearance: none !important;
     transform: none !important;
   }
-  button[role="switch"] > span,
-  [role="switch"] > span,
+  button[role="switch"]:not(.composer-fast-row) > span,
+  [role="switch"]:not(.composer-fast-row) > span,
   .admin-model-switch > span {
     width: 16px !important;
     height: 16px !important;
@@ -1340,7 +1340,7 @@ details[open] > summary .think-chevron,
    whole rail and revealed up to the thumb with clip-path, so a higher effort
    uncovers more violet. White capsule thumb, hairline border, soft shadow. */
 .effort-section {
-  padding: 1rem 1.1rem 0.65rem;
+  padding: 1.25rem 1.25rem 1.1rem;
   border: 0;
   background: transparent;
 }
@@ -1348,23 +1348,80 @@ details[open] > summary .think-chevron,
 .effort-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.65rem;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.effort-header-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.75rem;
+  background: hsl(266 60% 55% / 0.08);
+  color: hsl(266 55% 50%);
 }
 
 .effort-title {
+  margin: 0;
   color: hsl(var(--foreground) / 0.9);
-  font-size: 0.75rem;
+  font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: -0.005em;
-  line-height: 1.1;
+  line-height: 1.35;
+}
+
+.effort-subtitle {
+  margin: 0.25rem 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.effort-selection {
+  margin-bottom: 0.75rem;
+  padding: 0.875rem;
+  border: 1px solid hsl(266 35% 55% / 0.12);
+  border-radius: 0.875rem;
+  background: hsl(266 60% 55% / 0.045);
+}
+
+.effort-selection-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.effort-selection-heading strong {
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.effort-level-badge {
+  flex-shrink: 0;
+  border-radius: 0.375rem;
+  padding: 0.2rem 0.45rem;
+  background: hsl(266 60% 55% / 0.09);
+  color: hsl(266 55% 44%);
+  font-size: 0.625rem;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.effort-selection p {
+  min-height: 2.8em;
+  margin: 0.5rem 0 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.4;
 }
 
 .effort-track {
   position: relative;
   display: block;
-  height: 2.25rem;
+  height: 2.75rem;
   margin: 0;
   padding: 0;
   border-radius: 999px;
@@ -1512,6 +1569,7 @@ details[open] > summary .think-chevron,
   appearance: none;
   cursor: pointer;
   color: inherit;
+  pointer-events: none;
 }
 .effort-stop[data-stop="1"] { --i: 1; }
 .effort-stop[data-stop="2"] { --i: 2; }
@@ -1563,14 +1621,53 @@ details[open] > summary .think-chevron,
     0 4px 10px -2px hsl(220 25% 10% / 0.26);
 }
 
+.effort-levels {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.effort-level-button {
+  min-width: 0;
+  min-height: 2.25rem;
+  padding: 0.4rem 0.2rem;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1.2;
+  transition: color 160ms ease, background-color 160ms ease;
+}
+
+.effort-level-button:hover {
+  background: hsl(266 60% 55% / 0.055);
+  color: hsl(var(--foreground));
+}
+
+.effort-level-button[aria-pressed="true"] {
+  border-color: hsl(266 60% 55% / 0.15);
+  background: hsl(266 60% 55% / 0.08);
+  color: hsl(266 55% 44%);
+  font-weight: 600;
+}
+
+.effort-level-button:focus-visible,
+.composer-fast-row:focus-visible,
+.composer-effort-chip:focus-visible {
+  outline: 2px solid hsl(266 60% 60%);
+  outline-offset: 2px;
+}
+
 .effort-ends {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  margin-top: 0.1rem;
+  margin-top: 0.65rem;
   color: hsl(var(--muted-foreground));
-  font-size: 0.625rem;
-  font-weight: 600;
+  font-size: 0.6875rem;
+  font-weight: 400;
   line-height: 1.2;
 }
 
@@ -1579,6 +1676,9 @@ details[open] > summary .think-chevron,
   .effort-thumb,
   .effort-dither-twinkle,
   .effort-sheen,
+  .effort-level-button,
+  .composer-fast-switch::before,
+  .composer-effort-caret,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;
@@ -1587,6 +1687,19 @@ details[open] > summary .think-chevron,
 
 .dark .effort-section {
   background: transparent;
+}
+.dark .effort-header-icon,
+.dark .effort-level-badge,
+.dark .effort-level-button[aria-pressed="true"] {
+  color: hsl(266 85% 82%);
+  background: hsl(266 85% 75% / 0.12);
+}
+.dark .effort-selection,
+.dark .effort-level-button[aria-pressed="true"] {
+  border-color: hsl(266 85% 75% / 0.16);
+}
+.dark .effort-selection {
+  background: hsl(266 85% 75% / 0.06);
 }
 .dark .effort-track {
   --effort-rail: hsl(0 0% 100% / 0.1);
@@ -6329,12 +6442,25 @@ footer {
 .composer-effort-chip.is-high {
   color: hsl(220 8% 46%);
 }
-.composer-effort-chip.is-high svg {
-  color: #e89a96;
+.composer-effort-chip.is-high > svg:first-child {
+  color: hsl(266 55% 55%);
+}
+.composer-effort-chip > .truncate {
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.composer-effort-chip strong {
+  color: hsl(var(--foreground) / 0.85);
+  font-size: 12px;
+  font-weight: 600;
 }
 .composer-effort-caret {
-  font-size: 9px;
+  flex-shrink: 0;
   opacity: 0.55;
+  transition: transform 160ms ease;
+}
+.composer-effort-chip[data-state="open"] .composer-effort-caret {
+  transform: rotate(180deg);
 }
 .composer-context-trigger {
   order: 10;
@@ -6400,21 +6526,55 @@ footer {
 .composer-fast-row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.65rem;
+  width: 100%;
   margin: 0;
-  padding: 0.8rem 1rem 0.9rem;
+  padding: 1rem 1.25rem;
+  border: 0;
   border-top: 1px solid hsl(220 12% 90%);
+  background: hsl(220 12% 50% / 0.025);
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
 }
-.composer-effort-menu[data-effort="2"] .composer-fast-row,
-.composer-effort-menu[data-effort="3"] .composer-fast-row {
-  border-top-color: hsl(278 28% 82%);
+.composer-fast-row:hover {
+  background: hsl(266 60% 55% / 0.055);
+}
+.composer-fast-row:focus-visible {
+  outline-offset: -4px;
+}
+.composer-fast-icon-wrap {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.625rem;
+}
+.composer-fast-title {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.composer-fast-description {
+  display: block;
+  margin-top: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  line-height: 1.45;
 }
 .composer-fast-icon {
-  color: #d83a30;
+  color: hsl(var(--muted-foreground));
+}
+.composer-fast-row[aria-checked="true"] .composer-fast-icon,
+.composer-effort-chip[data-fast="true"] > svg:first-child {
+  color: hsl(266 55% 55%);
 }
 .composer-fast-switch {
-  width: 2.1rem;
-  height: 1.2rem;
+  width: 2.25rem;
+  height: 1.375rem;
   border-radius: 999px;
   border: 0;
   background: hsl(220 10% 82%);
@@ -6426,20 +6586,20 @@ footer {
 .composer-fast-switch::before {
   content: "";
   position: absolute;
-  top: 0.12rem;
-  left: 0.12rem;
-  width: 0.96rem;
-  height: 0.96rem;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: 1rem;
+  height: 1rem;
   border-radius: 999px;
   background: white;
+  box-shadow: 0 1px 3px hsl(220 25% 10% / 0.2);
   transition: transform 140ms ease;
 }
 .composer-fast-switch.is-on {
-  background: #e99a91;
+  background: hsl(266 65% 57%);
 }
 .composer-fast-switch.is-on::before {
-  transform: translateX(0.9rem);
-  background: #302b29;
+  transform: translateX(0.875rem);
 }
 
 .composer-effort-menu,
@@ -6450,6 +6610,17 @@ footer {
   background: hsl(40 25% 99% / 0.99);
   color: hsl(35 7% 20%);
   box-shadow: 0 8px 28px hsl(30 8% 10% / 0.12), 0 1px 3px hsl(30 8% 10% / 0.06);
+}
+
+.composer-effort-menu {
+  max-height: var(--radix-popover-content-available-height, calc(100dvh - 1.25rem));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-color: hsl(220 14% 88%);
+  border-radius: 18px;
+  background: hsl(var(--popover));
+  color: hsl(var(--popover-foreground));
+  box-shadow: 0 16px 48px -12px hsl(220 25% 15% / 0.18), 0 2px 8px hsl(220 25% 15% / 0.04);
 }
 
 .composer-context-menu section {
@@ -7085,8 +7256,17 @@ button.anti-bribery-context-chip:not(:disabled):active {
 .dark .composer-permission-chip.is-full {
   color: #f87171;
 }
-.dark .composer-effort-chip.is-high svg {
-  color: #fca5a5;
+.dark .composer-effort-chip {
+  color: hsl(216 14% 78%);
+}
+.dark .composer-effort-chip:hover,
+.dark .composer-effort-chip[data-state="open"] {
+  background: hsl(0 0% 100% / 0.07);
+}
+.dark .composer-effort-chip.is-high > svg:first-child,
+.dark .composer-effort-chip[data-fast="true"] > svg:first-child,
+.dark .composer-fast-row[aria-checked="true"] .composer-fast-icon {
+  color: hsl(266 85% 80%);
 }
 
 /* ────────────────────────────────────────────────────────────
