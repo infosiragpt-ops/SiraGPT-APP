@@ -138,10 +138,11 @@ el host reinicia. Ver [plan administrativo](../../../infra/doc-validation/instal
 
 ## Controles todavía abiertos
 
-- Escritura en GitHub: la terminal no tiene credenciales HTTPS y el agente SSH
-  no tiene identidades. `create_blob` mediante la integración GitHub devuelve
-  `403 Resource not accessible by integration`. Ninguna de estas operaciones
-  actualizó la rama remota ni lanzó CI para las correcciones nuevas.
+- Escritura en GitHub: el `push` HTTPS falla porque no hay credenciales, el
+  agente SSH no tiene identidades y la integración GitHub informa `push:false`
+  para este repositorio; `create_blob` devuelve `403 Resource not accessible by
+  integration`. Ninguna de estas operaciones actualizó la rama remota ni lanzó
+  CI para las correcciones nuevas.
 - gVisor efectivo y preflight documental aislado con Writer/Calc/Impress/PDF.
 - Almacenamiento privado productivo: una comprobación de presencia, sin imprimir
   valores ni secretos, confirmó `ANTHROPIC_API_KEY` presente y
@@ -165,10 +166,11 @@ Este informe acredita preparación y correcciones, no cierre de F1 ni despliegue
 
 ## Checkpoint local y publicación pendiente
 
-Las correcciones y evidencia quedaron en el commit local
-`8b4f62c0c9d73e4d7f89eda4e66728b96bd8babe`. Se incorporó `production-main`
+Las correcciones y evidencia quedaron en el commit local final
+`66f37cf72853b8ece1feb596e41a70cb9d005cb5`. Se incorporó `production-main`
 (`09fa991cf78a3f425499caefde3d2e68ae58b3b0`) sin conflictos mediante el merge
-local `6ac1a4bd3337ad76cd51bed90962beddbad4588b`. Después pasaron UI-lock y
+local `6ac1a4bd3337ad76cd51bed90962beddbad4588b`; la verificación final de
+navegador quedó en `66f37cf`. Después pasaron UI-lock y
 la regresión específica de voz aportada por esa base. Estos commits no están
 publicados: el último HEAD remoto verificado de la PR sigue siendo
 `f085ebac9cbbb24e4164e852cc83a8fdc07f4d89`.
