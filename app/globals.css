@@ -1340,9 +1340,21 @@ details[open] > summary .think-chevron,
    whole rail and revealed up to the thumb with clip-path, so a higher effort
    uncovers more violet. White capsule thumb, hairline border, soft shadow. */
 .effort-section {
-  padding: 1rem 1.1rem 0.65rem;
+  padding: 0.8rem 1.1rem 0.55rem;
   border: 0;
   background: transparent;
+  /* Single source of slider geometry: the track, thumb, fill, ticks and
+     bubble all resolve these by inheritance, so every stop lands on the
+     same x in every element. */
+  --effort-steps: 3;
+  --effort-rail-h: 1.5rem;
+  --effort-thumb-w: 1.25rem;
+  --effort-thumb-h: 1.3rem;
+  --effort-pad: 0.3rem;
+  --effort-rail: hsl(220 10% 92%);
+  --effort-fill-base: hsl(220 8% 83%);
+  --effort-violet: hsl(266 84% 60%);
+  --effort-accent: hsl(266 84% 60%);
 }
 
 .effort-header {
@@ -1350,7 +1362,7 @@ details[open] > summary .think-chevron,
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.5rem;
 }
 
 .effort-title {
@@ -1361,6 +1373,18 @@ details[open] > summary .think-chevron,
   line-height: 1.1;
 }
 
+/* Text readout of the active level (Low … Extra high): the value never
+   relies on color or density alone (WCAG 1.4.1). */
+.effort-level {
+  color: hsl(var(--foreground) / 0.78);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 .effort-track {
   position: relative;
   display: block;
@@ -1369,36 +1393,44 @@ details[open] > summary .think-chevron,
   padding: 0;
   border-radius: 999px;
   outline: none;
-  cursor: pointer;
+  cursor: grab;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   overflow: hidden;
   --effort-index: 0;
-  --effort-steps: 3;
-  --effort-rail-h: 1.5rem;
-  --effort-thumb-w: 0.875rem;
-  --effort-thumb-h: 1.2rem;
-  --effort-pad: 0.3rem;
-  /* Centre of the active stop. Percentages resolve against the element that
-     consumes the variable — rail, fill and thumb all share the track width. */
+  /* Declared HERE on purpose: var(--effort-index) inside this expression
+     resolves against the declaring element, and the [data-effort] overrides
+     below also land on the track. Defining it on the section froze the thumb
+     at stop 0 (custom properties substitute at declaration scope). */
   --effort-x: calc(
     var(--effort-pad) + var(--effort-thumb-w) / 2 +
     var(--effort-index) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
   );
-  --effort-rail: hsl(220 10% 92%);
-  --effort-fill-base: hsl(220 8% 83%);
-  --effort-violet: hsl(266 84% 60%);
 }
 .effort-track[data-effort="0"] { --effort-index: 0; }
 .effort-track[data-effort="1"] { --effort-index: 1; }
 .effort-track[data-effort="2"] { --effort-index: 2; }
 .effort-track[data-effort="3"] { --effort-index: 3; }
+.effort-track[data-dragging="true"] {
+  cursor: grabbing;
+}
+.effort-track[data-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.effort-track[data-disabled="true"] .effort-dither-twinkle,
+.effort-track[data-disabled="true"] .effort-sheen {
+  animation: none;
+}
 
-.effort-track:focus-visible {
-  outline: 2px solid hsl(var(--foreground) / 0.28);
+/* Specificity (0,3,0) beats the global [tabindex]:focus-visible rule (0,2,0),
+   whose dark --ring would otherwise win by source order. */
+.effort-section .effort-track:focus-visible {
+  outline: 2px solid var(--effort-accent);
   outline-offset: 2px;
 }
+/* Thumb focus ring lives after the hover rule (same specificity wins). */
 
 .effort-track-line {
   position: absolute;
@@ -1546,7 +1578,10 @@ details[open] > summary .think-chevron,
   height: var(--effort-thumb-h);
   transform: translate(-50%, -50%);
   border-radius: 999px;
-  border: 1px solid hsl(220 12% 82% / 0.9);
+  /* 3:1 against the white fill inside AND the grey rail outside (WCAG 1.4.11),
+     so the thumb stays perceivable at every stop — including Bajo, where it
+     sits on light grey. */
+  border: 1px solid hsl(220 12% 52%);
   background: #ffffff;
   box-shadow:
     0 1px 2px hsl(220 25% 10% / 0.14),
@@ -1554,24 +1589,109 @@ details[open] > summary .think-chevron,
   pointer-events: none;
   transition:
     left 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    box-shadow 160ms ease;
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
-.effort-track:hover .effort-thumb,
-.effort-track:focus-visible .effort-thumb {
+.effort-track[data-dragging="true"] .effort-thumb {
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow:
+    0 2px 4px hsl(220 25% 10% / 0.2),
+    0 6px 14px -4px hsl(220 25% 10% / 0.3);
+}
+.effort-track:hover .effort-thumb {
   box-shadow:
     0 1px 2px hsl(220 25% 10% / 0.18),
     0 4px 10px -2px hsl(220 25% 10% / 0.26);
+}
+.effort-section .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(0 0% 100%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(220 25% 10% / 0.2);
+}
+
+/* Discrete step marks under the rail: four fixed stops, snapped on
+   release — a second non-color cue next to the header readout. */
+.effort-ticks {
+  position: relative;
+  height: 0.375rem;
+  margin-top: 0.3rem;
+}
+.effort-ticks > span {
+  --i: 0;
+  position: absolute;
+  top: 0;
+  left: calc(
+    var(--effort-pad) + var(--effort-thumb-w) / 2 +
+    var(--i) * (100% - 2 * var(--effort-pad) - var(--effort-thumb-w)) / var(--effort-steps)
+  );
+  width: 2px;
+  height: 5px;
+  transform: translateX(-50%);
+  border-radius: 1px;
+  background: hsl(220 8% 68%);
+}
+.effort-ticks > span[data-stop="1"] { --i: 1; }
+.effort-ticks > span[data-stop="2"] { --i: 2; }
+.effort-ticks > span[data-stop="3"] { --i: 3; }
+.dark .effort-ticks > span {
+  background: hsl(0 0% 100% / 0.4);
+}
+
+/* Value bubble that follows the thumb while dragging. Clamped so it never
+   leaves the popover at the end stops. */
+.effort-bubble {
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: clamp(2.75rem, var(--effort-x), calc(100% - 2.75rem));
+  z-index: 3;
+  transform: translateX(-50%);
+  padding: 0.3rem 0.6rem;
+  border-radius: 0.6rem;
+  background: hsl(40 3% 11%);
+  color: hsl(0 0% 100%);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow:
+    0 2px 6px hsl(220 25% 10% / 0.25),
+    0 8px 20px -8px hsl(220 25% 10% / 0.35);
+}
+.effort-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: hsl(40 3% 11%);
+}
+.dark .effort-bubble {
+  background: hsl(0 0% 96%);
+  color: hsl(220 12% 10%);
+  box-shadow:
+    0 2px 6px hsl(0 0% 0% / 0.5),
+    0 8px 20px -8px hsl(0 0% 0% / 0.6);
+}
+.dark .effort-bubble::after {
+  border-top-color: hsl(0 0% 96%);
 }
 
 .effort-ends {
   display: flex;
   justify-content: space-between;
   gap: 1rem;
-  margin-top: 0.1rem;
-  color: hsl(var(--muted-foreground));
+  margin-top: 0.15rem;
+  /* 5.4:1 on the light popover (WCAG 1.4.3) with margin over the 4.5 floor. */
+  color: hsl(220 9% 42%);
   font-size: 0.625rem;
   font-weight: 600;
   line-height: 1.2;
+}
+.dark .effort-ends {
+  color: hsl(var(--muted-foreground));
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1579,6 +1699,7 @@ details[open] > summary .think-chevron,
   .effort-thumb,
   .effort-dither-twinkle,
   .effort-sheen,
+  .effort-bubble,
   .effort-stop::after {
     animation: none !important;
     transition: none !important;
@@ -1587,11 +1708,16 @@ details[open] > summary .think-chevron,
 
 .dark .effort-section {
   background: transparent;
-}
-.dark .effort-track {
   --effort-rail: hsl(0 0% 100% / 0.1);
   --effort-fill-base: hsl(220 8% 30%);
   --effort-violet: hsl(268 90% 70%);
+  --effort-accent: hsl(268 90% 72%);
+}
+.dark .effort-track:focus-visible .effort-thumb {
+  box-shadow:
+    0 0 0 2px hsl(220 12% 10%),
+    0 0 0 4px var(--effort-accent),
+    0 3px 8px -2px hsl(0 0% 0% / 0.6);
 }
 .dark .effort-stop::after {
   background: hsl(0 0% 100% / 0.35);
@@ -1600,7 +1726,7 @@ details[open] > summary .think-chevron,
   background: hsl(0 0% 100% / 0.6);
 }
 .dark .effort-thumb {
-  border-color: hsl(0 0% 100% / 0.22);
+  border-color: hsl(0 0% 100% / 0.35);
   background: hsl(0 0% 96%);
   box-shadow:
     0 1px 2px hsl(0 0% 0% / 0.5),
@@ -6402,7 +6528,7 @@ footer {
   align-items: center;
   gap: 0.75rem;
   margin: 0;
-  padding: 0.8rem 1rem 0.9rem;
+  padding: 0.65rem 1rem 0.75rem;
   border-top: 1px solid hsl(220 12% 90%);
 }
 .composer-effort-menu[data-effort="2"] .composer-fast-row,

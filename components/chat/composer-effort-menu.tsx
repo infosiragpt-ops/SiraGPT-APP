@@ -26,18 +26,27 @@ export const EFFORT_LEVELS = [
  *     the active stop; the remaining stops show as faint tick dots;
  *   • a light band travels the revealed region in a constant loop
  *     (`.effort-sheen`) so the bar feels alive while open.
- * The track itself is the pointer target, so taps and drags anywhere on the
- * rail snap to the nearest stop.
+ * Discrete control with four fixed stops: taps and drags snap to the nearest
+ * stop, tick marks under the rail show the steps, the header names the active
+ * level in text (never color alone), and a bubble follows the thumb while
+ * dragging. The title + value label the slider via `aria-labelledby`, so a
+ * screen reader announces e.g. "Esfuerzo Extra high", never a bare number.
+ * The track itself is the pointer target.
  */
-export function EffortSection({ selectedEffort, setSelectedEffort }: {
+export function EffortSection({ selectedEffort, setSelectedEffort, disabled = false }: {
   selectedEffort: string
   setSelectedEffort: (effort: string) => void
+  disabled?: boolean
 }) {
   const activeIndex = Math.max(0, EFFORT_LEVELS.findIndex((level) => level.value === selectedEffort))
   const active = EFFORT_LEVELS[activeIndex]
+  const titleId = React.useId()
+  const valueId = React.useId()
   const trackRef = React.useRef<HTMLDivElement | null>(null)
   const draggingRef = React.useRef(false)
+  const [dragging, setDragging] = React.useState(false)
   const moveTo = (index: number) => {
+    if (disabled) return
     const clamped = Math.min(EFFORT_LEVELS.length - 1, Math.max(0, index))
     if (clamped !== activeIndex) setSelectedEffort(EFFORT_LEVELS[clamped].value)
   }
@@ -49,26 +58,37 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
     const fraction = (clientX - rect.left) / rect.width
     return Math.round(Math.min(1, Math.max(0, fraction)) * (EFFORT_LEVELS.length - 1))
   }
+  const endDrag = () => {
+    draggingRef.current = false
+    setDragging(false)
+  }
   return (
     <div className="effort-section" onClick={(event) => event.stopPropagation()}>
       <div className="effort-header">
-        <span className="effort-title">Esfuerzo</span>
+        <span className="effort-title" id={titleId}>Esfuerzo</span>
+        <span className="effort-level" id={valueId}>{active.label}</span>
       </div>
       <div
         ref={trackRef}
         className="effort-track"
         data-effort={String(activeIndex)}
+        data-dragging={dragging ? "true" : undefined}
+        data-disabled={disabled ? "true" : undefined}
         data-testid="composer-effort-track"
         role="slider"
-        tabIndex={0}
-        aria-label="Nivel de esfuerzo de razonamiento"
+        tabIndex={disabled ? -1 : 0}
+        aria-labelledby={`${titleId} ${valueId}`}
         aria-valuemin={0}
         aria-valuemax={EFFORT_LEVELS.length - 1}
         aria-valuenow={activeIndex}
         aria-valuetext={active.label}
+        aria-orientation="horizontal"
+        aria-disabled={disabled || undefined}
         onPointerDown={(event) => {
+          if (disabled) return
           if (event.button !== 0 && event.pointerType === "mouse") return
           draggingRef.current = true
+          setDragging(true)
           try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* older browsers */ }
           moveTo(indexFromPointer(event.clientX))
         }}
@@ -77,13 +97,15 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
           moveTo(indexFromPointer(event.clientX))
         }}
         onPointerUp={(event) => {
-          draggingRef.current = false
+          endDrag()
           try { event.currentTarget.releasePointerCapture(event.pointerId) } catch { /* noop */ }
         }}
-        onPointerCancel={() => { draggingRef.current = false }}
+        onPointerCancel={endDrag}
         onKeyDown={(event) => {
           if (event.key === "ArrowRight" || event.key === "ArrowUp") { event.preventDefault(); moveTo(activeIndex + 1) }
           else if (event.key === "ArrowLeft" || event.key === "ArrowDown") { event.preventDefault(); moveTo(activeIndex - 1) }
+          else if (event.key === "PageUp") { event.preventDefault(); moveTo(activeIndex + 2) }
+          else if (event.key === "PageDown") { event.preventDefault(); moveTo(activeIndex - 2) }
           else if (event.key === "Home") { event.preventDefault(); moveTo(0) }
           else if (event.key === "End") { event.preventDefault(); moveTo(EFFORT_LEVELS.length - 1) }
         }}
@@ -111,6 +133,16 @@ export function EffortSection({ selectedEffort, setSelectedEffort }: {
           />
         ))}
         <span className="effort-thumb" data-testid="composer-effort-thumb" aria-hidden />
+        {dragging && !disabled ? (
+          <span className="effort-bubble" data-testid="composer-effort-bubble" aria-hidden>
+            {active.label}
+          </span>
+        ) : null}
+      </div>
+      <div className="effort-ticks" aria-hidden>
+        {EFFORT_LEVELS.map((level, index) => (
+          <span key={level.value} data-stop={String(index)} />
+        ))}
       </div>
       <div className="effort-ends" aria-hidden>
         <span>Más rápido</span>
