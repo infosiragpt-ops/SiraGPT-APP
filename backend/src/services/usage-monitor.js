@@ -180,6 +180,7 @@ class UsageMonitorService {
         where: { id: userId },
         data: {
           apiUsage: 0,
+          docQuotaEpoch: { increment: 1 },
           monthlyCallLimit: 0
         }
       });

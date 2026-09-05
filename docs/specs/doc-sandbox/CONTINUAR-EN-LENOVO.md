@@ -1,5 +1,11 @@
 # Continuar F1 en Lenovo — entrega GitHub, sin despliegue
 
+**Actualización:** Luis solicitó después continuar #561 y publicarla. Consultar
+[preparación de producción del 2026-09-05](preparacion-produccion-20260905.md)
+para las correcciones, nuevas pruebas y bloqueos administrativos/configuración
+comprobados en Lenovo. La solicitud de publicación está vigente; las notas
+siguientes conservan el estado histórico de la entrega inicial.
+
 Estado al 2026-09-05: el usuario continuará desde el servidor y solicitó guardar
 los cambios en GitHub. Se prepara la rama `feat/doc-sandbox-fase-1` como entrega
 de revisión, con PR en borrador hacia `production-main`. **No se ejecutó

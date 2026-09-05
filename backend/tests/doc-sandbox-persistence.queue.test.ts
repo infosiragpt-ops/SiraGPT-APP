@@ -32,13 +32,13 @@ const owner = 'doc-queue-fixture-owner';
 const hash = 'a'.repeat(64);
 async function create(ready = true) {
   const prefix = randomUUID();
-  return repository.createJob({ userId: owner, idempotencyKey: prefix, payloadHash: hash, instructionsKey: `private-queue-fixture/${prefix}/instructions`, inputs: [{ kind: 'input', storageKey: `private-queue-fixture/${prefix}/input`, filename: 'fixture.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 50, sha256: hash }], modelTier: 'mechanical', promptVersion: 'test-v1', expiresAt: new Date(Date.now() + 3600_000), ready });
+  return repository.createJob({ userId: owner, idempotencyKey: prefix, payloadHash: hash, instructionsKey: `private-queue-fixture/${prefix}/instructions`, inputs: [{ kind: 'input', storageKey: `private-queue-fixture/${prefix}/input`, filename: 'fixture.docx', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', size: 50, sha256: hash }], modelTier: 'mechanical', requestedModel: 'fixture-mechanical', maxTokens: 1000, promptVersion: 'test-v1', expiresAt: new Date(Date.now() + 3600_000), ready });
 }
 before(async () => {
   assert.match(schema, /^doc_queue_test_[a-f0-9]{32}$/);
   await admin.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`);
   initialized = true;
-  await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY)`);
+  await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY,"deletedAt" TIMESTAMPTZ,plan TEXT NOT NULL DEFAULT 'PRO',"isSuperAdmin" BOOLEAN NOT NULL DEFAULT false,"apiUsage" BIGINT NOT NULL DEFAULT 0,"monthlyLimit" BIGINT NOT NULL DEFAULT 10000000)`);
   const migration = readFileSync(resolve(__dirname, '../prisma/migrations/20260905000000_doc_sandbox_core/migration.sql'), 'utf8');
   for (const statement of migration.replace(/^--.*$/gm, '').split(';').map(s => s.trim()).filter(Boolean)) await db.$executeRawUnsafe(statement);
   await db.$executeRaw(Prisma.sql`INSERT INTO users(id) VALUES(${owner})`);

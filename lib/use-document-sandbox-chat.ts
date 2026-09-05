@@ -98,7 +98,8 @@ export function useDocumentSandboxChat(options: Options) {
     finally { run.observing = false }
   }, [cancelRun, settle, showError])
 
-  const start = useCallback(async (prompt: string, attachments: readonly unknown[], idempotencyKey: string, signal?: AbortSignal): Promise<boolean> => {
+  const start = useCallback(async (prompt: string, attachments: readonly unknown[], idempotencyKey: string, signal?: AbortSignal,
+    onChatReady?: (chatId: string) => void): Promise<boolean> => {
     const context = latest.current
     const startEpoch = epoch.current
     const startKey = `${startEpoch}:${context.userId}:${context.currentChat?.id || "new"}`
@@ -120,6 +121,9 @@ export function useDocumentSandboxChat(options: Options) {
       chat = response.chat as Chat
       if (!chat?.id) throw new DocumentSandboxClientError("E_CONNECTION")
       guard()
+      // A new conversation replaces the temporary composer identity. Notify
+      // the caller before navigation so Stop and draft recovery keep owning it.
+      onChatReady?.(chat.id)
       await context.selectChat(chat.id)
     }
     guard()
@@ -189,7 +193,8 @@ export function useDocumentSandboxChat(options: Options) {
     // response arrives. Its foreground admission already owns recovery.
     if (starting.current.has(`${epoch.current}:${userId}:${chat.id}`)) return
     const pending = [...chat.messages].reverse().find((message) =>
-      (navigated || !hydrated.current.has(message.id)) && parseDocumentJobPointer(message.metadata))
+      (!hydrated.current.has(message.id) || (navigated && hydrated.current.get(message.id) !== message.content)) &&
+      parseDocumentJobPointer(message.metadata))
     if (!pending) {
       // A background chat refresh can return the original pointer bubble.
       // Reproject the last verified/local error view without another request.

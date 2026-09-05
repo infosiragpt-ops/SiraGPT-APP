@@ -10598,6 +10598,7 @@ REWRITTEN TEXT:`;
     const documentSandboxRoute = routeDocumentSandboxTurn(msg, filesToSend);
     if (!hasDedicatedConnector && !hasMediaGenerator && documentSandboxRoute) {
       const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
       intentAbortControllerRef.current = documentPreflight;
       sendInFlightChatsRef.current.add(sendLatchKey);
       setSendingChatId(currentChat?.id || null);
@@ -10606,11 +10607,14 @@ REWRITTEN TEXT:`;
         // The old classifier is broader than an editing authorization (it
         // even matches discussion). Clarify instead of invoking its editor.
         if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
-        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal)) markQueuedSendSucceeded();
+        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
       } catch (error) {
         toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
         // Preserve the user's draft when preflight rejects a model, permission or input.
-        if ((currentChatIdRef.current || '__new__') === sendLatchKey) {
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
           setInput(msg);
           uploadedFilesRef.current = filesToSend;
           setUploadedFiles(filesToSend);
@@ -12191,6 +12195,10 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isSendingForCurrentChat = Boolean(
     isSending && sendingChatId && currentChatId && sendingChatId === currentChatId
   );
+  const isNewChatAdmissionPending = Boolean(
+    !currentChatId && isSending && sendingChatId === null
+    && sendInFlightChatsRef.current.has('__new__') && intentAbortControllerRef.current
+  );
   // Media flags (image/voice/video/PPT/music) are GLOBAL booleans, but the
   // Stop button must only take over the composer in the chat that OWNS the
   // job (media handlers call markLocalJobBusy(chatId)). Otherwise, while chat
@@ -12199,12 +12207,13 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
   const isCurrentChatMediaBusy =
     isCurrentChatLocalJobBusy &&
     (isGeneratingImage || isGeneratingVoice || isGeneratingVideo || isGeneratingPPT || isGeneratingMusic);
-  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT;
+  const isIdlePlaceholderComposer = isInitial && !isCurrentChatStreaming && !isCurrentChatLocalJobBusy && !isGeneratingVideo && !isGeneratingImage && !isGeneratingVoice && !isGeneratingMusic && !isGeneratingPPT && !isSendingForCurrentChat && !isNewChatAdmissionPending;
   const isStopButtonVisible = !isIdlePlaceholderComposer && (
     isCurrentChatLoading ||
     isCurrentChatStreaming ||
     (pendingStop && isCurrentChatStreaming) ||
     isSendingForCurrentChat ||
+    isNewChatAdmissionPending ||
     isCurrentChatLocalJobBusy ||
     isCurrentChatMediaBusy
   );

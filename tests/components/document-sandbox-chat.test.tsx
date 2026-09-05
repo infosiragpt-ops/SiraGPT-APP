@@ -27,13 +27,13 @@ function deferred<T>() {
   let resolve!: (value: T) => void
   return { promise: new Promise<T>((res) => { resolve = res }), resolve: (value: T) => resolve(value) }
 }
-function harness(initial = chat()) {
+function harness(initial: Chat | null = chat()) {
   const markBusy = vi.fn(); const markIdle = vi.fn(); const notify = vi.fn()
   const rendered = renderHook(() => {
     const [currentChat, setCurrentChat] = useState<Chat | null>(initial)
     const [userId, setUserId] = useState<string | null>("user-1")
     const flow = useDocumentSandboxChat({ currentChat, setCurrentChat, userId, selectedModel: "chosen",
-      markBusy, markIdle, notify, selectChat: async () => {} })
+      markBusy, markIdle, notify, selectChat: async (id) => { setCurrentChat(chat(id)) } })
     return { ...flow, currentChat, setCurrentChat, setUserId }
   })
   return { ...rendered, markBusy, markIdle, notify }
@@ -132,6 +132,42 @@ describe("document sandbox canonical chat wiring (transport unit tests, not vali
     expect(view.result.current.currentChat!.messages[1].content).not.toContain("informe.docx")
     expect(transport.recover).not.toHaveBeenCalled()
     expect(transport.observe).not.toHaveBeenCalled()
+  })
+  it("a new chat transfers draft and Stop ownership before a rejected document admission", async () => {
+    api.createChat.mockResolvedValue({ chat: chat("created-chat") })
+    transport.submit.mockRejectedValue(new DocumentSandboxClientError("E_MODEL", 400, true))
+    const onChatReady = vi.fn()
+    const view = harness(null)
+    await act(async () => {
+      await expect(view.result.current.start("edita el título", [], "new-rejected", undefined, onChatReady))
+        .rejects.toMatchObject({ code: "E_MODEL", admissionRejected: true })
+    })
+    expect(onChatReady).toHaveBeenCalledExactlyOnceWith("created-chat")
+    expect(onChatReady.mock.invocationCallOrder[0]).toBeLessThan(api.addMessage.mock.invocationCallOrder[0])
+    expect(view.result.current.currentChat?.id).toBe("created-chat")
+    expect(view.result.current.currentChat?.messages[1].content).toContain("El modelo seleccionado")
+    expect(view.result.current.stop("created-chat")).toBe(false)
+    expect(transport.recover).not.toHaveBeenCalled()
+  })
+  it("Stop owned by a newly created chat prevents admission while its messages are persisted", async () => {
+    api.createChat.mockResolvedValue({ chat: chat("created-stop") })
+    const assistant = deferred<unknown>()
+    api.addMessage.mockImplementation(async (chatId: string, value: { role: string; content: string }) => value.role === "ASSISTANT"
+      ? assistant.promise : { message: { id: "user-message", chatId, ...value } })
+    const abort = new AbortController()
+    const onChatReady = vi.fn()
+    const view = harness(null)
+    let run!: Promise<boolean>
+    act(() => { run = view.result.current.start("edita el título", [], "new-stop", abort.signal, onChatReady) })
+    await waitFor(() => expect(api.addMessage).toHaveBeenCalledTimes(2))
+    expect(onChatReady).toHaveBeenCalledExactlyOnceWith("created-stop")
+    expect(view.result.current.currentChat?.id).toBe("created-stop")
+    await act(async () => {
+      abort.abort(new DOMException("Stopped", "AbortError"))
+      assistant.resolve({ message: { id: "assistant-message" } })
+      await expect(run).rejects.toMatchObject({ name: "AbortError" })
+    })
+    expect(transport.submit).not.toHaveBeenCalled()
   })
   it("auth failure suspends exactly once; self renders and stale refreshes never trigger a recovery loop", async () => {
     const initial = chat("chat-1", [{ id: "persisted-assistant", chatId: "chat-1", role: "ASSISTANT", timestamp: "2026-09-04T00:00:00Z",

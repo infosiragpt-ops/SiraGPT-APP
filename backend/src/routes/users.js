@@ -675,11 +675,14 @@ router.get('/usage', authenticateToken, async (req, res) => {
 router.delete('/account', authenticateToken, async (req, res) => {
   try {
     // Delete user and all related data (cascading deletes handled by Prisma)
-    await hardDeleteUser({
+    const deletion = await hardDeleteUser({
       userId: req.user.id,
       actorId: req.user.id,
     });
-
+    if (deletion.deletionPending) return res.status(202).json({
+      code: 'DOC_CLEANUP_PENDING', deletionPending: true,
+      message: 'La cuenta está desactivada; la eliminación de sus documentos está pendiente.',
+    });
     res.json({ message: 'Account deleted successfully' });
   } catch (error) {
     console.error('Delete account error:', error);

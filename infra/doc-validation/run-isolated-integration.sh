@@ -9,6 +9,17 @@ esac
 test "$(realpath "$source_dir")" = "$source_dir"
 test -f "$source_dir/package.json"
 test -f "$source_dir/backend/package.json"
+test -f "$source_dir/backend/node_modules/tsx/dist/loader.mjs"
+coverage_args=()
+if (($# > 1)); then
+  coverage_dir=$2
+  case "$coverage_dir" in /tmp/doc-sandbox-coverage-[a-zA-Z0-9-]*) ;; *) echo 'Refusing unscoped coverage directory' >&2; exit 1 ;; esac
+  test "$(realpath "$coverage_dir")" = "$coverage_dir"
+  test -d "$coverage_dir/v8"
+  test "$(stat -c %a "$coverage_dir")" = 700
+  test "$(stat -c %u "$coverage_dir")" = "$(id -u)"
+  coverage_args=(--mount "type=bind,src=$coverage_dir,dst=$coverage_dir" -e "NODE_V8_COVERAGE=$coverage_dir/v8")
+fi
 targets=(doc-sandbox-test-postgres doc-sandbox-test-redis doc-sandbox-test-minio)
 for target in "${targets[@]}"; do
   test "$(docker inspect "$target" --format '{{index .Config.Labels "siragpt.scope"}}')" = doc-sandbox-phase1-test
@@ -29,13 +40,13 @@ done
 docker run --rm --name doc-sandbox-test-runner --label siragpt.scope=doc-sandbox-phase1-test \
   --network doc-sandbox-phase1-test --user 1000:1000 --cpus 1 --memory 1g --pids-limit 256 --read-only \
   --cap-drop ALL --security-opt no-new-privileges --tmpfs /tmp:rw,noexec,nosuid,size=128m \
-  --mount "type=bind,src=$source_dir,dst=/app/doc-sandbox-tests,readonly" \
-  --workdir /app/doc-sandbox-tests --entrypoint node \
+  --mount "type=bind,src=$source_dir,dst=$source_dir,readonly" \
+  --workdir "$source_dir" --entrypoint node "${coverage_args[@]}" \
   -e DOC_SANDBOX_TEST_DATABASE_URL=postgresql://doc_fixture:fixture-only-isolated@doc-sandbox-test-postgres:5432/doc_sandbox_fixture \
   -e DOC_SANDBOX_TEST_REDIS_URL=redis://doc-sandbox-test-redis:6379/0 \
   -e DOC_SANDBOX_TEST_S3_ENDPOINT=http://doc-sandbox-test-minio:9000 \
   -e DOC_SANDBOX_TEST_S3_ACCESS_KEY_ID=docfixture -e DOC_SANDBOX_TEST_S3_SECRET_ACCESS_KEY=fixture-only-isolated-s3 \
-  sha256:0efa5d4f999ae8493821248e37cd7745cc439a292fb4c13385905ae5e5d3f5da \
-  --import /app/node_modules/tsx/dist/loader.mjs --test --test-concurrency=1 \
+  sha256:40f438311ab39713e617fc96b6dcbf5bdc62bf5141ddca954f739386da64176e \
+  --import "$source_dir/backend/node_modules/tsx/dist/loader.mjs" --test --test-concurrency=1 \
   backend/tests/doc-sandbox-api.integration.test.ts backend/tests/doc-sandbox-storage.integration.test.ts \
   backend/tests/doc-sandbox-persistence.integration.test.ts backend/tests/doc-sandbox-persistence.queue.test.ts

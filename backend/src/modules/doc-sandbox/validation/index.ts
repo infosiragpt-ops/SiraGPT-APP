@@ -1,10 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { lstat, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { editPlanSchema, type EditPlan, type InputFile, type Artifact, type ValidationReport } from '../types/contracts';
+import { DocumentValidationError } from './errors';
+import { assertInvocationLaunchable, cleanupInvocation, createInvocation, newValidatorInvocationId,
+  reconcileValidatorOrphans, validatorScope, validatorTimeout, type ValidatorInvocation, type ValidatorReconciliation } from './lifecycle';
+export { DocumentValidationError } from './errors';
 
 const hash = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 const unitSchema = z.object({ part: z.string(), locator: z.string(), text: z.string(), kind: z.string() });
@@ -45,10 +49,6 @@ export interface ValidatorOptions {
   /** Private directory mounted at the IDENTICAL absolute path in worker and Docker host. */
   stagingRoot?: string;
 }
-export class DocumentValidationError extends Error {
-  constructor(public readonly code: string, message: string) { super(message); this.name = 'DocumentValidationError'; }
-}
-
 export function validatorContainerArguments(name: string, inputDirectory: string, artifactDirectory: string, options: ValidatorOptions): string[] {
   if (!/^(?:sha256:[a-f0-9]{64}|[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:[a-f0-9]{64})$/.test(options.image)) {
     throw new DocumentValidationError('VALIDATOR_IMAGE_UNPINNED', 'La imagen del validador requiere un digest inmutable.');
@@ -62,6 +62,8 @@ export function validatorContainerArguments(name: string, inputDirectory: string
   }
   return ['run', '--name', name, '--pull', 'never', '--runtime', runtime,
     '--label', 'siragpt.role=doc-validation',
+    '--label', `siragpt.validation.scope=${validatorScope(path.dirname(path.dirname(inputDirectory)))}`,
+    '--label', `siragpt.validation.invocation=${name.replace(/^siragpt-doc-validator-/, '')}`,
     '--network', 'none', '--read-only', '--user', '65532:65532', '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges', '--memory', '2g', '--cpus', '2', '--pids-limit', '256',
     '--ulimit', 'nofile=256:256', '--ulimit', 'fsize=262144:262144',
@@ -73,7 +75,10 @@ export function validatorContainerArguments(name: string, inputDirectory: string
 }
 
 export async function createValidatorStagingDirectory(root?: string): Promise<string> {
-  if (root === undefined) return mkdtemp(path.join(tmpdir(), 'siragpt-validator-'));
+  if (root === undefined) {
+    const directory = path.join(await realpath(tmpdir()), `siragpt-validator-${newValidatorInvocationId()}`);
+    await mkdir(directory, { mode: 0o700 }); return directory;
+  }
   if (!path.isAbsolute(root) || root === path.parse(root).root || /[\x00-\x1f\x7f,]/.test(root) || path.normalize(root) !== root) {
     throw new DocumentValidationError('VALIDATOR_STAGING_INVALID', 'El staging debe ser una ruta absoluta privada y compartida con el host.');
   }
@@ -85,27 +90,19 @@ export async function createValidatorStagingDirectory(root?: string): Promise<st
       (process.getuid && stat.uid !== process.getuid()) || canonicalRoot !== root) {
     throw new DocumentValidationError('VALIDATOR_STAGING_UNSAFE', 'El staging debe pertenecer al worker, sin enlaces ni acceso de otros usuarios.');
   }
-  return mkdtemp(path.join(root, 'siragpt-validator-'));
+  const directory = path.join(root, `siragpt-validator-${newValidatorInvocationId()}`);
+  await mkdir(directory, { mode: 0o700 }); return directory;
 }
 
-async function stopContainer(binary: string, name: string): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(binary, ['rm', '-f', name], { stdio: 'ignore', env: { PATH: process.env.PATH } });
-    const failure = (): void => reject(new DocumentValidationError('VALIDATOR_CLEANUP_FAILED',
-      `No se pudo confirmar la limpieza del validador ${name}; requiere reconciliación.`));
-    const timeout = setTimeout(() => { child.kill('SIGKILL'); failure(); }, 10_000);
-    child.once('error', () => { clearTimeout(timeout); failure(); });
-    child.once('exit', (code) => { clearTimeout(timeout); if (code === 0) resolve(); else failure(); });
-  });
-}
-
-async function runContainer(args: string[], input: unknown, options: ValidatorOptions, signal?: AbortSignal): Promise<unknown> {
+async function runContainer(args: string[], input: unknown, options: ValidatorOptions, invocation: ValidatorInvocation, signal?: AbortSignal): Promise<unknown> {
   const binary = options.dockerBinary ?? 'docker';
-  const name = args[args.indexOf('--name') + 1]!;
-  if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
-  const timeoutMs = Math.min(Math.max(options.timeoutMs ?? 300_000, 1000), 600_000);
+  let launchSettled = true;
   try {
+    if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
+    await assertInvocationLaunchable(invocation);
+    const timeoutMs = Math.max(1, Math.min(validatorTimeout(options), invocation.deadlineAt - Date.now()));
     return await new Promise<unknown>((resolve, reject) => {
+      launchSettled = false;
       const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'], env: { PATH: process.env.PATH } });
       const chunks: Buffer[] = [];
       let size = 0;
@@ -132,6 +129,7 @@ async function runContainer(args: string[], input: unknown, options: ValidatorOp
         signal?.removeEventListener('abort', abort);
         if (finished) return;
         finished = true;
+        launchSettled = true;
         if (code !== 0) { reject(new DocumentValidationError('VALIDATOR_RUNTIME_FAILED', 'El contenedor validador no terminó correctamente.')); return; }
         try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown); }
         catch { reject(new DocumentValidationError('VALIDATOR_INVALID_RESPONSE', 'El validador devolvió una respuesta inválida.')); }
@@ -140,9 +138,11 @@ async function runContainer(args: string[], input: unknown, options: ValidatorOp
       child.stdin.end(JSON.stringify(input));
     });
   } finally {
-    // A killed docker client does not stop its container. Remove it explicitly,
-    // including on cancel, malformed output and normal completion.
-    await stopContainer(binary, name);
+    // A killed client can leave creation uncertain. Quarantine the bind source,
+    // verify the exact container identity, and retain evidence until quiescence.
+    if (!await cleanupInvocation(invocation, options, launchSettled)) {
+      throw new DocumentValidationError('VALIDATOR_CLEANUP_PENDING', 'La limpieza del validador sigue pendiente de confirmación.');
+    }
   }
 }
 
@@ -185,10 +185,16 @@ export function freezePlan(inputs: InputFile[], inventories: DocumentInventory[]
 export class IndependentDocumentValidator {
   constructor(private readonly options: ValidatorOptions) {}
 
+  async reconcileOrphans(): Promise<ValidatorReconciliation> {
+    return reconcileValidatorOrphans(this.options);
+  }
+
   /** Executes the real image, runsc, shared input mount and Office/PDF tools.
    * Never reaches the editor, model provider or customer documents.
    */
   async preflight(signal?: AbortSignal): Promise<void> {
+    const cleanup = await this.reconcileOrphans();
+    if (cleanup.pending) throw new DocumentValidationError('VALIDATOR_CLEANUP_PENDING', 'Hay validaciones anteriores cuya limpieza no se pudo confirmar.');
     const data = Buffer.from(`SiraGPT startup probe ${randomUUID()}\n`, 'utf8');
     const input: InputFile = { id: 'startup', name: 'readiness.txt', format: 'txt',
       mime: 'text/plain', data, sha256: hash(data) };
@@ -205,7 +211,9 @@ export class IndependentDocumentValidator {
     const staging = await createValidatorStagingDirectory(this.options.stagingRoot);
     const inputDirectory = path.join(staging, 'inputs');
     const artifactDirectory = path.join(staging, 'artifacts');
+    let launched = false;
     try {
+      const invocation = await createInvocation(staging, this.options);
       await mkdir(inputDirectory, { mode: 0o755 });
       const files = [];
       for (const [index, input] of inputs.entries()) {
@@ -220,9 +228,10 @@ export class IndependentDocumentValidator {
         if (output.length > 50 * 1024 * 1024) throw new DocumentValidationError('OUTPUT_SIZE_LIMIT', 'La salida excede el límite.');
         await writeFile(path.join(inputDirectory, 'output'), output, { mode: 0o444, flag: 'wx' });
       }
-      const name = `siragpt-doc-validator-${randomUUID()}`;
+      const name = invocation.name;
       const args = validatorContainerArguments(name, inputDirectory, artifactDirectory, this.options);
-      const raw = await runContainer(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, signal);
+      launched = true;
+      const raw = await runContainer(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, invocation, signal);
       const response = responseSchema.parse(raw);
       if (!response.ok) throw new DocumentValidationError(response.error.code, response.error.message);
       const artifacts: Artifact[] = [];
@@ -248,7 +257,9 @@ export class IndependentDocumentValidator {
       }
       return { response, artifacts };
     } finally {
-      await rm(staging, { recursive: true, force: true });
+      // Once Docker may have seen the invocation, only its identity-aware
+      // cleanup/reconciler may purge it. Keep bytes if cleanup was not proved.
+      if (!launched) await rm(staging, { recursive: true, force: true });
     }
   }
 

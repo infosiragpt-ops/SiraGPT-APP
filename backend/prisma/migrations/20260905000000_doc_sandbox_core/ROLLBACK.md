@@ -1,6 +1,6 @@
 # Reversión segura de doc-sandbox F1
 
-Esta migración es aditiva. Revertir la aplicación conserva las tres tablas y los originales privados; no ejecutar un `DROP` productivo. Detener admisión, cancelar/drenar jobs y completar la limpieza remota antes de retirar el worker. El tombstone conserva la revocación de descargas mientras se purgan objetos/proveedor.
+Esta migración es aditiva. Revertir la aplicación conserva las tres tablas, `users.docQuotaEpoch` y los originales privados; no ejecutar un `DROP` productivo. Detener admisión, cancelar/drenar jobs y completar la limpieza remota y las reservas de cuota antes de retirar el worker. El tombstone conserva la revocación de descargas mientras se purgan objetos/proveedor. No retirar el reconciliador si quedan reservas inciertas ni reembolsarlas manualmente: una versión anterior no mantiene el epoch de cuota en sus resets.
 
 Solo en base **efímera de test**, sin datos que conservar, se puede probar la reversión dentro de una transacción:
 
@@ -14,6 +14,7 @@ END $$;
 DROP TABLE doc_job_artifacts;
 DROP TABLE doc_job_events;
 DROP TABLE doc_jobs;
+ALTER TABLE users DROP COLUMN "docQuotaEpoch";
 COMMIT;
 ```
 

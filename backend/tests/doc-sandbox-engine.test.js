@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const PizZip = require('pizzip');
-const { AnthropicSandboxEngine } = require('../dist/doc-sandbox/engine/anthropic-engine');
+const { AnthropicSandboxEngine, providerContainerRetentionDeadline } = require('../dist/doc-sandbox/engine/anthropic-engine');
 const { AnthropicDocumentProviderClient } = require('../dist/doc-sandbox/engine/provider-client');
 const { EDITOR_PROMPT_VERSION, loadEditorPrompt } = require('../dist/doc-sandbox/agent/prompt');
 const { hostedSkillsForFormats } = require('../dist/doc-sandbox/agent/skills');
@@ -32,7 +32,7 @@ function planFor(file, edits = []) {
 }
 function request(stage = 'plan', approvedPlan, overrides = {}) {
   return { stage, instructions: 'No cambies nada; solo confirma que puedes leer el documento', mode: 'preserve', formats: ['txt'], skills: [],
-    modelTier: 'mechanical', budget: { maxTurns: 8, maxTokens: 100_000, timeoutMs: 60_000, maxCostUsd: 5 }, approvedPlan, ...overrides };
+    modelTier: 'mechanical', requestedModel: 'test-selected-model', budget: { maxTurns: 8, maxTokens: 100_000, timeoutMs: 60_000, maxCostUsd: 5 }, approvedPlan, ...overrides };
 }
 function hooks(overrides = {}) {
   const events = [];
@@ -199,6 +199,14 @@ for (const name of ['../doc.txt', 'a/b.txt', 'a\\b.txt', 'a\u0000.txt', '..', 'C
   test(`reject unsafe export filename ${JSON.stringify(name)}`, () => assert.equal(isSafeFilename(name), false));
 }
 test('unicode original filenames are retained', () => assert.equal(isSafeFilename('Tesis año 2026.docx'), true));
+test('queued model selection cannot be replaced by a new model in the same configured tier', async () => {
+  const { engine, session, sdk, events } = await fixture();
+  await assert.rejects(engine.run(session, request('plan', undefined, { requestedModel: 'previous-selected-model' }), () => {}),
+    isCode('E_NOT_READY'));
+  assert.equal(sdk.messages.length, 0, 'model mismatch must reject before a provider request');
+  assert.equal(events.some(([name]) => name === 'reserve'), false, 'model mismatch must not reserve a paid turn');
+  await engine.destroy(session);
+});
 test('bounded JSON refuses malformed encoding and huge artifacts', () => {
   assert.throws(() => parseJsonArtifact(Buffer.from([0xff])));
   assert.throws(() => parseJsonArtifact(Buffer.from('x')));
@@ -267,11 +275,23 @@ test('pause_turn replays unchanged assistant content in the same container and c
     response.container.expires_at = '2026-10-05T00:00:00Z';
     return response;
   };
+  const observedBefore = Date.now();
   const result = await engine.run(session, request(), () => {});
   assert.equal(result.usage.inputTokens, 200);
-  assert.deepEqual(events.filter(([name]) => name === 'containerCreated').map(([, , ref]) => ref.expiresAt),
-    ['2026-10-04T00:00:00Z', '2026-10-05T00:00:00Z']);
+  const retention = events.filter(([name]) => name === 'containerCreated').map(([, , ref]) => Date.parse(ref.expiresAt));
+  assert.equal(retention.length, 2);
+  assert.ok(retention.every(value => value >= observedBefore + 30 * 24 * 60 * 60 * 1000));
+  assert.ok(retention[1] >= retention[0]);
+  assert.ok(retention[1] >= Date.parse('2026-10-05T00:00:00Z'));
   await engine.destroy(session);
+});
+
+test('checkpoint expiry never certifies provider data deletion before its 30-day retention window', () => {
+  const observed = Date.parse('2026-09-05T16:00:00Z');
+  for (const reported of ['2026-09-05T16:05:00Z', '2026-08-01T00:00:00Z', undefined, null, 'invalid']) {
+    assert.equal(providerContainerRetentionDeadline(reported, observed), '2026-10-05T16:00:00.000Z');
+  }
+  assert.equal(providerContainerRetentionDeadline('2026-11-01T00:00:00Z', observed), '2026-11-01T00:00:00.000Z');
 });
 
 test('an unexpected replacement container is durably tracked before rejection', async () => {

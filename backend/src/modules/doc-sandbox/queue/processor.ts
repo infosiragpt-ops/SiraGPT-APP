@@ -122,7 +122,7 @@ export class DocumentSandboxProcessor {
       const pending = job.costReservations.filter((reservation) => reservation.actualUsd === null)
         .reduce((sum, reservation) => sum + Number(reservation.reservedUsd), 0);
       const remainingUsd = Number(job.maxCostUsd) - Number(job.costUsd) - pending;
-      const remainingTokens = this.config.maxTokens - totalTokens(baseUsage);
+      const remainingTokens = Math.min(this.config.maxTokens, job.tokenBudget) - totalTokens(baseUsage);
       const previousTurns = typeof job.usage.turns === 'number' && Number.isSafeInteger(job.usage.turns) && job.usage.turns >= 0 ? job.usage.turns : 0;
       const remainingTurns = this.config.maxTurns - previousTurns;
       if (remainingUsd <= 0 || remainingTokens <= 0 || remainingTurns <= 0 || baseUsage.costUsd === null) throw new DocSandboxError('E_QUOTA', 429);
@@ -140,7 +140,7 @@ export class DocumentSandboxProcessor {
       const previousReport = job.validationReportKey ? await storage.get(scope, job.validationReportKey, undefined, controller.signal) : undefined;
       const inventory = { inputs: inventories, previousValidationReport: previousReport ? JSON.parse(previousReport.toString('utf8')) as unknown : null };
       const shared: Omit<RunRequest, 'stage'> = { instructions, mode: 'preserve', formats, skills, modelTier: job.modelTier,
-        budget, inventory, signal: controller.signal };
+        requestedModel: job.requestedModel, budget, inventory, signal: controller.signal };
       const planning = await engine.run(session, { ...shared, stage: 'plan' }, (event) => this.recordEvent(lease, event));
       if (planning.status !== 'planned') throw new DocSandboxError('E_VALIDATION', 422);
       const plan = freezePlan(originalInputs, inventories, planning.editPlan);
@@ -274,7 +274,7 @@ export class DocumentSandboxProcessor {
         await repository.recordUsage(lease, { ...usageJson(emptyUsage()), ...state.usage, turns, costExact: false }, state.costUsd);
       },
       settle: async (_session, settlement) => {
-        if (!settlement.uncertain && settlement.usage.costUsd !== null) await repository.settleCost(lease, settlement.requestId, money(settlement.usage.costUsd));
+        if (!settlement.uncertain && settlement.usage.costUsd !== null) await repository.settleCost(lease, settlement.requestId, money(settlement.usage.costUsd), totalTokens(settlement.usage));
       },
       usageChanged: async (_session, usage) => {
         const state = await repository.getInternal(lease.jobId);

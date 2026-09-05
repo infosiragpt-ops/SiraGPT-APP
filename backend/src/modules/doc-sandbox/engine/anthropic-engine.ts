@@ -37,6 +37,18 @@ const JSON_MIME = 'application/json';
 const MAX_EXPORT_FILES = 40;
 
 /**
+ * The response expires_at is a rolling checkpoint timestamp, not proof of data
+ * deletion. The documented container retention is up to 30 days. Start that
+ * conservative window when we observe each response; preserve any longer value.
+ * https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#container-reuse
+ */
+export function providerContainerRetentionDeadline(rollingExpiry: string | null | undefined, observedAt = Date.now()): string {
+  const minimum = observedAt + 30 * 24 * 60 * 60 * 1000;
+  const reported = rollingExpiry ? Date.parse(rollingExpiry) : NaN;
+  return new Date(Number.isFinite(reported) ? Math.max(minimum, reported) : minimum).toISOString();
+}
+
+/**
  * Interchangeable remote editor, not a validator. No method publishes artifacts.
  * Caller must freeze/validate plans independently and run all four validation
  * levels before making the returned bytes downloadable.
@@ -185,7 +197,7 @@ export class AnthropicSandboxEngine implements SandboxEngine {
           // Every response may extend the container's retention window. Even an
           // unexpected replacement ID must be tracked before rejecting it.
           try { await this.persistence.containerCreated(handle, {
-            id: response.container.id, expiresAt: response.container.expires_at ?? null, stage,
+            id: response.container.id, expiresAt: providerContainerRetentionDeadline(response.container.expires_at), stage,
           }); } catch (error: unknown) { persistenceFailure = error; }
           containerId = response.container.id;
         }
@@ -297,6 +309,11 @@ export class AnthropicSandboxEngine implements SandboxEngine {
     if (JSON.stringify([...new Set(request.formats)].sort()) !== JSON.stringify(expectedFormats)) throw new DocSandboxError('E_PARAMS');
     if (session.budget && JSON.stringify(session.budget) !== JSON.stringify(budget)) throw new DocSandboxError('E_PARAMS');
     if (session.modelTier && session.modelTier !== request.modelTier) throw new DocSandboxError('E_PARAMS');
+    // A queued job retains its selected model across configuration changes.
+    // A replacement in the same tier is not permission to call that model.
+    if (!request.requestedModel || this.config.models[request.modelTier]?.id !== request.requestedModel) {
+      throw new DocSandboxError('E_NOT_READY', 503);
+    }
     session.budget = { ...budget };
     session.modelTier = request.modelTier;
     session.deadline = Math.min(session.deadline, session.createdAt + budget.timeoutMs);

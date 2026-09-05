@@ -64,7 +64,8 @@ export async function createDocumentIntegrationFixture() {
   }
   try {
     await admin.$executeRawUnsafe(`CREATE SCHEMA "${schema}"`); schemaCreated = true;
-    await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY)`);
+    await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY,"deletedAt" TIMESTAMPTZ,plan TEXT NOT NULL DEFAULT 'PRO',"isSuperAdmin" BOOLEAN NOT NULL DEFAULT false,"apiUsage" BIGINT NOT NULL DEFAULT 0,"monthlyLimit" BIGINT NOT NULL DEFAULT 10000000)`);
+    await db.$executeRaw(Prisma.sql`CREATE TABLE api_usage(id TEXT PRIMARY KEY,"userId" TEXT REFERENCES users(id) ON DELETE CASCADE,model TEXT,tokens BIGINT,cost DOUBLE PRECISION,timestamp TIMESTAMPTZ)`);
     // Minimal real catalog projection queried by the production document policy.
     // No provider credentials or engine are involved in admission tests.
     await createDocumentModelCatalogFixture(db);

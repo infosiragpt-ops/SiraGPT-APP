@@ -141,7 +141,8 @@ async function initializeLedger(lock, authorizationUsd, marginUsd) {
     // Dedicated test namespace only. Full application migrations have their own gate.
     await lock.query('BEGIN');
     try {
-      await lock.query('CREATE TABLE users(id TEXT PRIMARY KEY)');
+      await lock.query(`CREATE TABLE users(id TEXT PRIMARY KEY,"deletedAt" TIMESTAMPTZ,plan TEXT NOT NULL DEFAULT 'PRO',"isSuperAdmin" BOOLEAN NOT NULL DEFAULT false,"apiUsage" BIGINT NOT NULL DEFAULT 0,"monthlyLimit" BIGINT NOT NULL DEFAULT 10000000)`);
+      await lock.query('CREATE TABLE api_usage(id TEXT PRIMARY KEY,"userId" TEXT REFERENCES users(id) ON DELETE CASCADE,model TEXT,tokens BIGINT,cost DOUBLE PRECISION,timestamp TIMESTAMPTZ)');
       const sql = await fs.readFile(path.join(__dirname, '../prisma/migrations/20260905000000_doc_sandbox_core/migration.sql'), 'utf8');
       await lock.query(sql);
       await lock.query(`CREATE TABLE doc_real_authorization(id TEXT PRIMARY KEY, authorized_usd NUMERIC(18,8) NOT NULL,
@@ -286,6 +287,7 @@ async function main() {
         const prepared = inputs.map((input) => ({ input, object: storage.prepare(scope, input.data) }));
         const instructions = Buffer.from(smoke.instructions, 'utf8'); const instructionObject = storage.prepare(scope, instructions);
         const accepted = await repository.createJob({ id: jobId, userId: OWNER, idempotencyKey: `${opt.campaign}:${smoke.id}`,
+          requestedModel: config.engine.models.mechanical.id, maxTokens: config.maxTokens,
           payloadHash,
           instructionsKey: instructionObject.key, inputs: prepared.map(({ input, object }) => ({ id: input.id, kind: 'input',
             storageKey: object.key, filename: input.name, mime: input.mime, size: object.size, sha256: object.sha256 })),

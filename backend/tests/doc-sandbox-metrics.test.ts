@@ -12,6 +12,7 @@ function values(name: string): number[] { return [...registry.registry.get(name)
 function snapshot(overrides: Partial<StoredDocumentJob> = {}): StoredDocumentJob {
   return { id: 'synthetic-job', userId: 'synthetic-user', status: 'queued', admissionReady: true,
     mode: 'preserve', engine: 'anthropic', modelTier: 'mechanical', instructionsKey: 'not-exported',
+    requestedModel: 'fixture-mechanical', tokenBudget: 1000,
     inputKeys: [], outputKeys: [], editPlanKey: null, editPlanHash: null, validationReportKey: null,
     errorCode: null, usage: {}, costUsd: '0', maxCostUsd: '1', costReservations: [],
     purgedKeys: [], storageKeys: [], attempts: 0, fence: 0, leaseToken: null, leaseExpiresAt: null,

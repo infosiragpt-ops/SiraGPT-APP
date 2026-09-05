@@ -21,6 +21,7 @@ model User {
   isAdmin          Boolean @default(false)
   isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
   apiUsage         BigInt  @default(0)
+  docQuotaEpoch    BigInt  @default(0)
   gemaTokenUsage   BigInt  @default(0)
   gemaTokenLimit   BigInt  @default(0)
   monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
@@ -1356,6 +1357,13 @@ model DocSandboxJob {
   mode                String    @default("preserve")
   engine              String    @default("anthropic")
   modelTier           String    @map("model_tier")
+  requestedModel      String    @map("requested_model")
+  tokenBudget         Int       @map("token_budget")
+  quotaReservedTokens BigInt    @default(0) @map("quota_reserved_tokens")
+  quotaEpoch          BigInt    @default(0) @map("quota_epoch")
+  quotaSettledTokens  BigInt?   @map("quota_settled_tokens")
+  quotaSettledAt      DateTime? @map("quota_settled_at") @db.Timestamptz(3)
+  accountPurgeRequested Boolean @default(false) @map("account_purge_requested")
   instructionsKey     String    @map("instructions_key")
   inputKeys           String[]  @map("input_keys")
   outputKeys          String[]  @default([]) @map("output_keys")

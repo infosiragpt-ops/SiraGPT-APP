@@ -12,7 +12,7 @@ const hash = "a".repeat(64)
 const pointer = { version: 1 as const, idempotencyKey: "doc-test-admission" }
 const file = () => new File([new Uint8Array([80, 75, 3, 4, 1])], "Modelo Informe.docx", { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" })
 const source = () => ({ id: "uploaded-1", name: "Modelo Informe.docx", file: file() })
-const snapshot = (status = "queued", extra = {}) => ({ id: "job-1", status, eventSeq: 1, admissionReady: true,
+const snapshot = (status = "queued", extra = {}) => ({ id: "job-1", status, eventSeq: 1, admissionReady: true, ...(status === "done" ? { outcome: "edited" } : {}),
   artifacts: [], errorCode: null, ...extra })
 const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } })
 const capabilities = { enabled: true, ready: true, supported: true, modelTier: "mechanical", modes: ["preserve"],
@@ -35,10 +35,12 @@ test("edits without a document or image-only attachments stay outside this adapt
   assert.equal(isExplicitDocumentEdit("edita la imagen", [{ name: "imagen.png" }]), false)
 })
 test("routing refuses ambiguous legacy edits instead of falling back, while plain questions retain retrieval", () => {
-  for (const prompt of ["¿Puedes editar este Word?", "describe cómo reemplazar un título", "no edites nada de mi documento", "dime si se puede editar", "resume este documento"]) {
+  for (const prompt of ["¿Puedes editar este Word?", "resume este documento", "describe el documento y cambia el título"]) {
     assert.equal(routeDocumentSandboxTurn(prompt, [source()]), "clarify", prompt)
   }
-  for (const prompt of ["hola", "explica el cambio del documento", "cuál es el título", "analiza el informe"]) {
+  for (const prompt of ["hola", "explica el cambio del documento", "cuál es el título", "analiza el informe",
+    "describe cómo reemplazar un título", "no edites nada de mi documento", "dime si se puede editar",
+    "resume este documento sin modificar el original"]) {
     assert.equal(routeDocumentSandboxTurn(prompt, [source()]), null, prompt)
   }
   assert.equal(routeDocumentSandboxTurn("cambia el título del documento", []), null)
@@ -61,6 +63,14 @@ test("done without an independent report fails closed", () => {
   const state = documentJobState(parseDocumentSnapshot(snapshot("done", { artifacts: [artifacts[0]] })))
   assert.equal(state.artifacts.length, 0)
   assert.match(state.error || "", /validar/)
+})
+test("incomplete or contradictory completion cannot claim a validated edit", () => {
+  for (const extra of [{ outcome: undefined }, { outcome: "unknown" }, { admissionReady: false }, { admissionReady: undefined }, { errorCode: "E_VALIDATION" }]) {
+    const state = documentJobState(parseDocumentSnapshot(snapshot("done", { artifacts, ...extra })))
+    assert.equal(state.artifacts.length, 0)
+    assert.match(state.error || "", /validar/)
+    assert.doesNotMatch(state.finalText || "", /pasó la validación independiente/)
+  }
 })
 test("validated delivery preserves filename and uses a stable owner-mediated route, not a persisted ticket", () => {
   const state = documentJobState(parseDocumentSnapshot(snapshot("done", { artifacts, outcome: "edited" })))

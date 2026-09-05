@@ -1,4 +1,5 @@
 -- Additive only. Postgres is the authority; BullMQ contains IDs, never documents.
+ALTER TABLE "users" ADD COLUMN "docQuotaEpoch" BIGINT NOT NULL DEFAULT 0;
 CREATE TABLE "doc_jobs" (
   "id" TEXT PRIMARY KEY,
   "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE,
@@ -7,6 +8,13 @@ CREATE TABLE "doc_jobs" (
   "mode" TEXT NOT NULL DEFAULT 'preserve',
   "engine" TEXT NOT NULL DEFAULT 'anthropic',
   "model_tier" TEXT NOT NULL,
+  "requested_model" TEXT NOT NULL,
+  "token_budget" INTEGER NOT NULL CHECK (token_budget BETWEEN 1 AND 500000),
+  "quota_reserved_tokens" BIGINT NOT NULL DEFAULT 0 CHECK (quota_reserved_tokens >= 0),
+  "quota_epoch" BIGINT NOT NULL DEFAULT 0,
+  "quota_settled_tokens" BIGINT CHECK (quota_settled_tokens >= 0),
+  "quota_settled_at" TIMESTAMPTZ(3),
+  "account_purge_requested" BOOLEAN NOT NULL DEFAULT false,
   "instructions_key" TEXT NOT NULL,
   "input_keys" TEXT[] NOT NULL,
   "output_keys" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],

@@ -10,6 +10,7 @@ import { createDocumentModelPolicy } from '../src/modules/doc-sandbox/model-poli
 import type { AnthropicEngineConfig } from '../src/modules/doc-sandbox/engine/types';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 import { createDocumentModelCatalogFixture } from './doc-sandbox-model-catalog-fixture';
+const { prepareDocumentAccountDeletion } = require('../src/services/doc-sandbox-account-lifecycle');
 
 // Required integration suite: absence of an isolated real Postgres is a failure, never a green skip.
 const rawUrl = process.env.DOC_SANDBOX_TEST_DATABASE_URL;
@@ -32,11 +33,11 @@ const errorCode = (code: string) => (error: unknown): boolean => error instanceo
 function artifact(kind: ArtifactKind, prefix: string = randomUUID(), name = 'tesis.docx'): ArtifactInput {
   return { kind, storageKey: `private-fixture/${prefix}/${kind}`, filename: name, mime: kind === 'input' || kind === 'output' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/json', size: 500, sha256: hash };
 }
-async function create(options: { userId?: string; idempotencyKey?: string; maxCostUsd?: string; filename?: string; mime?: string; ready?: boolean } = {}) {
+async function create(options: { userId?: string; idempotencyKey?: string; maxCostUsd?: string; maxTokens?: number; filename?: string; mime?: string; ready?: boolean } = {}) {
   const input = artifact('input');
   if (options.filename) input.filename = options.filename;
   if (options.mime) input.mime = options.mime;
-  return repo.createJob({ userId: options.userId ?? owner, idempotencyKey: options.idempotencyKey ?? randomUUID(), payloadHash: hash, instructionsKey: `private-fixture/${randomUUID()}/instructions`, inputs: [input], modelTier: 'mechanical', promptVersion: 'editor-test-v1', expiresAt: new Date(Date.now() + 86400_000), maxCostUsd: options.maxCostUsd ?? '5', ready: options.ready ?? true });
+  return repo.createJob({ userId: options.userId ?? owner, idempotencyKey: options.idempotencyKey ?? randomUUID(), payloadHash: hash, instructionsKey: `private-fixture/${randomUUID()}/instructions`, inputs: [input], modelTier: 'mechanical', requestedModel: 'fixture-mechanical', maxTokens: options.maxTokens ?? 1000, promptVersion: 'editor-test-v1', expiresAt: new Date(Date.now() + 86400_000), maxCostUsd: options.maxCostUsd ?? '5', ready: options.ready ?? true });
 }
 async function advanceToValidation(id: string): Promise<AttemptLease> {
   const lease = await repo.claimAttempt(id, 60_000);
@@ -59,7 +60,8 @@ before(async () => {
   await admin.$executeRawUnsafe(`CREATE SCHEMA "${schemaName}"`);
   initialized = true;
   // Minimal real owner relation for a focused migration test; full application migration is a separate gate.
-  await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY)`);
+  await db.$executeRaw(Prisma.sql`CREATE TABLE users(id TEXT PRIMARY KEY,"deletedAt" TIMESTAMPTZ,plan TEXT NOT NULL DEFAULT 'PRO',"isSuperAdmin" BOOLEAN NOT NULL DEFAULT false,"apiUsage" BIGINT NOT NULL DEFAULT 0,"monthlyLimit" BIGINT NOT NULL DEFAULT 10000000)`);
+  await db.$executeRaw(Prisma.sql`CREATE TABLE api_usage(id TEXT PRIMARY KEY,"userId" TEXT REFERENCES users(id) ON DELETE CASCADE,model TEXT,tokens BIGINT,cost DOUBLE PRECISION,timestamp TIMESTAMPTZ)`);
   await createDocumentModelCatalogFixture(db);
   for (const statement of readFileSync(migrationPath, 'utf8').replace(/^--.*$/gm, '').split(';').map(s => s.trim()).filter(Boolean)) await db.$executeRawUnsafe(statement);
   await db.$executeRaw(Prisma.sql`INSERT INTO users(id) VALUES(${owner}),(${other})`);
@@ -69,6 +71,154 @@ after(async () => {
   // Destruction is restricted to the validated, newly-created test schema.
   if (initialized) await admin.$executeRawUnsafe(`DROP SCHEMA "${schemaName}" CASCADE`);
   await admin.$disconnect();
+});
+
+test('account deletion revokes admitted work in the same transaction and rejects late admission/publication', async () => {
+  const userId = `delete-${randomUUID()}`;
+  await db.$executeRaw(Prisma.sql`INSERT INTO users(id) VALUES(${userId})`);
+  const { job } = await create({ userId });
+  const lease = await advanceToValidation(job.id);
+  const gate = await stage(lease);
+  const revoke = () => db.$transaction(async tx => {
+    await tx.$executeRaw(Prisma.sql`UPDATE users SET "deletedAt"=clock_timestamp() WHERE id=${userId}`);
+    return prepareDocumentAccountDeletion(tx, userId, { purge: true });
+  });
+  assert.equal((await revoke()).pending, true);
+  const deleted = await repo.getInternal(job.id);
+  await assert.rejects(repo.getOwned(job.id, userId), errorCode('DOC_DELETED'));
+  await assert.rejects(repo.publishValidated(lease, gate), errorCode('DOC_STALE_LEASE'));
+  await assert.rejects(create({ userId }), errorCode('DOC_DELETED'));
+  assert.equal(await repo.claimAttempt(job.id, 60_000), null);
+  assert.equal((await repo.artifactsInternal(job.id)).every(a => !a.published), true);
+  assert.equal((await revoke()).revoked, 0);
+  const repeated = await repo.getInternal(job.id);
+  assert.equal(repeated.eventSeq, deleted.eventSeq);
+  assert.deepEqual(repeated.cleanupNotBefore, deleted.cleanupNotBefore);
+  assert.equal((await repo.pendingOutbox(500, 'cleanup')).filter(e => e.jobId === job.id).length, 1);
+});
+
+test('account hard purge waits for real artifact/key evidence and retains unknown remote obligations', async () => {
+  const userId = `purge-${randomUUID()}`;
+  await db.$executeRaw(Prisma.sql`INSERT INTO users(id) VALUES(${userId})`);
+  const { job } = await create({ userId });
+  const lease = await repo.claimAttempt(job.id, 60_000); assert.ok(lease);
+  await repo.recordContainer(lease, { id: 'retained-fixture', expiresAt: null, stage: 'plan' });
+  const purge = () => db.$transaction(async tx => {
+    await tx.$executeRaw(Prisma.sql`UPDATE users SET "deletedAt"=COALESCE("deletedAt",clock_timestamp()) WHERE id=${userId}`);
+    return prepareDocumentAccountDeletion(tx, userId, { purge: true });
+  });
+  assert.equal((await purge()).pending, true);
+  await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()-interval '1 second' WHERE id=${job.id}`);
+  assert.equal((await purge()).pending, true, 'elapsed time does not prove object deletion');
+  for (const a of await repo.artifactsInternal(job.id)) await repo.markArtifactPurged(job.id, a.id);
+  await repo.markStorageKeysPurged(job.id, (await repo.getInternal(job.id)).storageKeys);
+  assert.equal(await repo.finishCleanup(job.id), false, 'unknown remote lifetime remains pending');
+  assert.equal((await purge()).pending, true);
+  // Simulate verified expiry metadata in the fixture, never an API promise that
+  // deleting a Files ID proves the remote execution container was destroyed.
+  await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET provider_containers='[]'::jsonb,cleanup_not_before=clock_timestamp()-interval '1 second' WHERE id=${job.id}`);
+  assert.equal(await repo.finishCleanup(job.id), true);
+  await repo.reconcileAccountQuota(500);
+  assert.deepEqual(await purge(), { pending: false, revoked: 0, purged: 1 });
+  await db.$executeRaw(Prisma.sql`DELETE FROM users WHERE id=${userId}`);
+  await assert.rejects(repo.getInternal(job.id), errorCode('DOC_NOT_FOUND'));
+});
+
+test('concurrent account revocation and ten admissions leave no active owned document jobs', async () => {
+  const userId = `race-delete-${randomUUID()}`;
+  await db.$executeRaw(Prisma.sql`INSERT INTO users(id) VALUES(${userId})`);
+  const admissions = Array.from({ length: 10 }, () => create({ userId }));
+  const deletion = db.$transaction(async tx => {
+    await tx.$executeRaw(Prisma.sql`UPDATE users SET "deletedAt"=clock_timestamp() WHERE id=${userId}`);
+    await prepareDocumentAccountDeletion(tx, userId);
+  });
+  for (const result of await Promise.allSettled(admissions)) {
+    if (result.status === 'rejected') assert.ok(errorCode('DOC_DELETED')(result.reason));
+  }
+  await deletion;
+  const active = await db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`SELECT count(*) AS count FROM doc_jobs WHERE user_id=${userId} AND deleted_at IS NULL`);
+  assert.equal(active[0]!.count, 0n);
+});
+
+async function quotaAccount(limit = 2500): Promise<string> {
+  const id = `quota-${randomUUID()}`;
+  await db.$executeRaw(Prisma.sql`INSERT INTO users(id,"monthlyLimit") VALUES(${id},${BigInt(limit)})`);
+  return id;
+}
+async function quotaUsed(userId: string): Promise<bigint> {
+  return (await db.$queryRaw<Array<{ apiUsage: bigint }>>(Prisma.sql`SELECT "apiUsage" FROM users WHERE id=${userId}`))[0]!.apiUsage;
+}
+test('ten concurrent real admissions reserve only available paid tokens; duplicate delivery never reserves again', async () => {
+  const userId = await quotaAccount(2500);
+  const results = await Promise.allSettled(Array.from({ length: 10 }, () => create({ userId, maxTokens: 1000 })));
+  const accepted = results.flatMap(r => r.status === 'fulfilled' ? [r.value.job] : []);
+  assert.equal(accepted.length, 2);
+  for (const result of results) if (result.status === 'rejected') assert.ok(errorCode('DOC_BUDGET_EXCEEDED')(result.reason));
+  assert.equal(await quotaUsed(userId), 2000n);
+  for (const job of accepted) await repo.cancelOwned(job.id, userId);
+  await new DocSandboxRepository(db).reconcileAccountQuota(500);
+  assert.equal(await quotaUsed(userId), 0n, 'no provider reservations means no consumed tokens');
+  const key = randomUUID();
+  const first = await create({ userId, maxTokens: 2500, idempotencyKey: key });
+  const second = await create({ userId, maxTokens: 2500, idempotencyKey: key });
+  assert.equal(second.created, false); assert.equal(second.job.id, first.job.id);
+  assert.equal(await quotaUsed(userId), 2500n);
+});
+
+test('known late usage after cancellation settles once in tokens and ApiUsage under concurrent reconciliation', async () => {
+  const userId = await quotaAccount();
+  const { job } = await create({ userId });
+  const lease = await repo.claimAttempt(job.id, 60_000); assert.ok(lease);
+  await repo.reserveCost(lease, 'quota-known-call', '1');
+  await repo.cancelOwned(job.id, userId);
+  await repo.reconcileAccountQuota(500);
+  assert.equal(await quotaUsed(userId), 1000n, 'an in-flight call retains its full reservation');
+  await repo.settleCost(lease, 'quota-known-call', '0.25', 123);
+  await Promise.all([repo.reconcileAccountQuota(500), new DocSandboxRepository(db).reconcileAccountQuota(500)]);
+  assert.equal(await quotaUsed(userId), 123n);
+  const usage = await db.$queryRaw<Array<{ tokens: bigint; cost: number }>>(Prisma.sql`SELECT tokens,cost FROM api_usage WHERE "userId"=${userId}`);
+  assert.deepEqual(usage, [{ tokens: 123n, cost: 0.25 }]);
+  await repo.reconcileAccountQuota(500);
+  assert.equal(await quotaUsed(userId), 123n);
+});
+
+test('billing reset epoch prevents an old cancellation from refunding new-period reservations', async () => {
+  const userId = await quotaAccount();
+  const { job: old } = await create({ userId });
+  const lease = await repo.claimAttempt(old.id, 60_000); assert.ok(lease);
+  await repo.reserveCost(lease, 'previous-period-call', '1');
+  await repo.cancelOwned(old.id, userId);
+  await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"=0,"docQuotaEpoch"="docQuotaEpoch"+1 WHERE id=${userId}`);
+  const current = await create({ userId, maxTokens: 500 });
+  await repo.settleCost(lease, 'previous-period-call', '0.25', 123);
+  await repo.reconcileAccountQuota(500);
+  assert.equal(await quotaUsed(userId), 500n);
+  await repo.cancelOwned(current.job.id, userId);
+  await repo.reconcileAccountQuota(500);
+  assert.equal(await quotaUsed(userId), 0n);
+});
+
+test('unknown tokens retain reservation even with known money; a reset blocks another paid request from that job', async () => {
+  const userId = await quotaAccount();
+  const { job } = await create({ userId });
+  const lease = await repo.claimAttempt(job.id, 60_000); assert.ok(lease);
+  await repo.reserveCost(lease, 'unknown-token-call', '1');
+  await repo.settleCost(lease, 'unknown-token-call', '0.25');
+  await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"=0,"docQuotaEpoch"="docQuotaEpoch"+1 WHERE id=${userId}`);
+  await assert.rejects(repo.reserveCost(lease, 'after-reset-call', '1'), errorCode('DOC_BUDGET_EXCEEDED'));
+  await repo.cancelOwned(job.id, userId);
+  await repo.reconcileAccountQuota(500);
+  const rows = await db.$queryRaw<Array<{ quota_settled_at: Date | null }>>(Prisma.sql`SELECT quota_settled_at FROM doc_jobs WHERE id=${job.id}`);
+  assert.equal(rows[0]!.quota_settled_at, null);
+});
+
+test('document quota does not enable FREE accounts; existing superadmin exemption remains explicit', async () => {
+  const userId = await quotaAccount(1);
+  await db.$executeRaw(Prisma.sql`UPDATE users SET plan='FREE' WHERE id=${userId}`);
+  await assert.rejects(create({ userId }), errorCode('DOC_BUDGET_EXCEEDED'));
+  await db.$executeRaw(Prisma.sql`UPDATE users SET "isSuperAdmin"=true WHERE id=${userId}`);
+  await create({ userId });
+  assert.equal(await quotaUsed(userId), 0n);
 });
 
 const catalogModels = { mechanical: { id: 'fixture-mechanical' }, academic: { id: 'fixture-academic' } } as AnthropicEngineConfig['models'];
@@ -131,7 +281,7 @@ test('admission is atomic and idempotent under ten concurrent real DB requests',
   assert.ok(pending.some(e => e.jobId === id));
   await repo.acknowledgeOutbox(events[0]!.id);
   assert.ok(!(await repo.pendingOutbox()).some(e => e.id === events[0]!.id));
-  await assert.rejects(repo.createJob({ userId: owner, idempotencyKey: key, payloadHash: changedHash, instructionsKey: 'different-encrypted-object', inputs: [artifact('input')], modelTier: 'mechanical', promptVersion: 'v1', expiresAt: new Date(Date.now() + 100000) }), errorCode('DOC_CONFLICT'));
+  await assert.rejects(repo.createJob({ userId: owner, idempotencyKey: key, payloadHash: changedHash, instructionsKey: 'different-encrypted-object', inputs: [artifact('input')], modelTier: 'mechanical', requestedModel: 'fixture-mechanical', maxTokens: 1000, promptVersion: 'v1', expiresAt: new Date(Date.now() + 100000) }), errorCode('DOC_CONFLICT'));
 });
 
 test('crashed unready admission is tombstoned after grace and late upload acknowledgement cannot resurrect it', async () => {
@@ -155,7 +305,10 @@ test('crashed unready admission is tombstoned after grace and late upload acknow
 });
 
 test('real foreign key rejects nonexistent owner', async () => {
-  await assert.rejects(create({ userId: 'missing-owner' }));
+  await assert.rejects(create({ userId: 'missing-owner' }), errorCode('DOC_FORBIDDEN'));
+  await assert.rejects(db.$executeRaw(Prisma.sql`INSERT INTO doc_jobs(id,user_id,model_tier,requested_model,token_budget,instructions_key,input_keys,idempotency_key,payload_hash,prompt_version,expires_at)
+    VALUES(${randomUUID()},'missing-owner','mechanical','fixture-mechanical',1000,'fixture-instructions',ARRAY['fixture-input'],${randomUUID()},${hash},'fixture',clock_timestamp()+interval '1 day')`),
+  (error: unknown) => typeof error === 'object' && error !== null && 'meta' in error && (error.meta as { code?: string })?.code === '23503');
 });
 
 test('unready admission reserves all original keys without enqueue or claiming until upload acknowledgement', async () => {
@@ -214,6 +367,7 @@ test('DB preservation gate requires every original metadata hash and publishes d
   const inputs = [artifact('input', randomUUID(), 'first.pdf'), artifact('input', randomUUID(), 'second.pdf')]
     .map((entry, index) => ({ ...entry, mime: 'application/pdf', sha256: index ? changedHash : hash }));
   const { job } = await repo.createJob({ userId: owner, idempotencyKey: randomUUID(), payloadHash: hash,
+    requestedModel: 'fixture-mechanical', maxTokens: 1000,
     instructionsKey: `private-fixture/${randomUUID()}/instructions`, inputs, modelTier: 'mechanical',
     promptVersion: 'editor-test-v1', expiresAt: new Date(Date.now() + 86400_000), maxCostUsd: '5', ready: true });
   const originals = await repo.artifactsInternal(job.id);

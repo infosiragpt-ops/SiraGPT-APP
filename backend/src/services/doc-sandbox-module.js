@@ -18,9 +18,13 @@ function createDocumentSandboxModule({ prisma, authenticate, logger }) {
   }
   const { createDocumentModule } = require('../../dist/doc-sandbox/index.js');
   const { createRedisConnection, getBullMQRuntimeOptions } = require('./agents/agent-task-queue');
-  const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
+  const { createDocumentAdmissionPolicy } = require('./doc-sandbox-admission-policy');
   const modelRouter = require('./ai-product-os/model-router');
-  const instance = createDocumentModule({ prisma, authenticate, admissionPolicy: enforcePlanQuota({ surface: 'doc-sandbox' }),
+  const { reconcileDeletedDocumentAccounts } = require('./doc-sandbox-account-lifecycle');
+  const { hardDeleteUser } = require('./rbac-assignment-sync');
+  const { DEFAULT_GRACE_DAYS } = require('../jobs/hard-delete-deleted-users');
+  const instance = createDocumentModule({ prisma, authenticate, admissionPolicy: createDocumentAdmissionPolicy(prisma),
+    reconcileDeletedAccounts: () => reconcileDeletedDocumentAccounts(prisma, hardDeleteUser, DEFAULT_GRACE_DAYS),
     createRedisConnection, runtimeOptions: getBullMQRuntimeOptions(), metrics: require('../utils/metrics'),
     isModelPlanEligible: (name, plan) => {
       const entry = modelRouter.getModel(name);

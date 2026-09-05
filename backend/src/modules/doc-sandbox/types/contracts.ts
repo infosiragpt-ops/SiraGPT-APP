@@ -99,7 +99,7 @@ export interface Usage {
 export interface JobForEngine { id: string; userId: string; attempt: number; promptVersion: string }
 export interface RunRequest {
   stage: 'plan' | 'edit'; instructions: string; mode: 'preserve'; formats: DocumentFormat[];
-  skills: string[]; modelTier: 'mechanical' | 'academic';
+  skills: string[]; modelTier: 'mechanical' | 'academic'; requestedModel: string;
   budget: { maxTurns: number; maxTokens: number; timeoutMs: number; maxCostUsd: number };
   approvedPlan?: EditPlan; inventory?: unknown; signal?: AbortSignal;
 }

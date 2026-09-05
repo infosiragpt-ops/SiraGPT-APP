@@ -181,6 +181,7 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
       const objects = inputs.map((input) => storage.prepare(scope, input.data));
       const payloadHash = sha256(JSON.stringify({ ...params, inputs: inputs.map(({ name, format, sha256: hash }) => ({ name, format, sha256: hash })) }));
       const { job, created } = await repository.createJob({ id: jobId, userId, idempotencyKey, payloadHash,
+        requestedModel, maxTokens: config.maxTokens,
         instructionsKey: instructions.key, modelTier: params.modelTier, ready: false,
         promptVersion: EDITOR_PROMPT_VERSION, maxCostUsd: config.maxCostUsd.toFixed(8),
         expiresAt: new Date(Date.now() + config.retentionDays * 86_400_000),
@@ -292,8 +293,8 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
     let safe = publicError(error);
     if (error instanceof z.ZodError || error instanceof multer.MulterError) safe = publicError(new DocSandboxError('E_PARAMS', 400));
     if (error instanceof DocumentRepositoryError) {
-      const status = error.code === 'DOC_FORBIDDEN' ? 403 : ['DOC_NOT_FOUND', 'DOC_DELETED', 'DOC_EXPIRED'].includes(error.code) ? 404 : 409;
-      safe = publicError(new DocSandboxError(status === 403 ? 'E_FORBIDDEN' : status === 404 ? 'E_NOT_FOUND' : 'E_CONFLICT', status));
+      const status = error.code === 'DOC_BUDGET_EXCEEDED' ? 429 : error.code === 'DOC_FORBIDDEN' ? 403 : ['DOC_NOT_FOUND', 'DOC_DELETED', 'DOC_EXPIRED'].includes(error.code) ? 404 : 409;
+      safe = publicError(new DocSandboxError(status === 429 ? 'E_QUOTA' : status === 403 ? 'E_FORBIDDEN' : status === 404 ? 'E_NOT_FOUND' : 'E_CONFLICT', status));
     }
     deps.notice(safe.code);
     if (res.destroyed) return;

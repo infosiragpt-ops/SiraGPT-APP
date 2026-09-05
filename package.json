@@ -20,6 +20,7 @@
     "test:unit": "NODE_ENV=test vitest run",
     "test:unit:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:docs": "playwright test --config=playwright.docs.config.ts",
     "test:e2e:install": "playwright install chromium",
     "test:all": "npm test && vitest run",
     "eval:mythos": "node scripts/run-mythos-preview-evals.js",

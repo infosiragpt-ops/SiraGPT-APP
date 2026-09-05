@@ -112,7 +112,7 @@ export function parseDocumentSnapshot(value: unknown): DocumentJobSnapshot {
     }
     return item as unknown as DocumentArtifact
   })
-  return { id: data.id, status: data.status as Status, eventSeq: data.eventSeq, admissionReady: data.admissionReady !== false,
+  return { id: data.id, status: data.status as Status, eventSeq: data.eventSeq, admissionReady: data.admissionReady === true,
     errorCode: typeof data.errorCode === "string" ? data.errorCode : null, artifacts,
     ...(data.costUsd === null ? { costUsd: null, costStatus: "pending" as const }
       : typeof data.costUsd === "string" && /^\d+(?:\.\d{1,12})?$/.test(data.costUsd) && ["exact", "estimated"].includes(String(data.costStatus))
@@ -127,7 +127,8 @@ export function documentJobState(snapshot?: DocumentJobSnapshot, message?: strin
     editing: "Editando el original", validating: "Validando el resultado", done: "Validación terminada", failed: "Edición no completada", cancelled: "Edición cancelada" }
   const outputs = snapshot?.artifacts.filter((item) => item.kind === "output") || []
   const hasReport = snapshot?.artifacts.some((item) => item.kind === "validation_report") === true
-  const accepted = status === "done" && outputs.length > 0 && hasReport
+  const accepted = status === "done" && outputs.length > 0 && hasReport && snapshot?.admissionReady === true &&
+    snapshot.errorCode === null && ["edited", "unchanged", "not_possible"].includes(snapshot.outcome || "")
   const error = status === "failed" ? documentSandboxErrorMessage(snapshot?.errorCode || "E_VALIDATION")
     : status === "cancelled" ? documentSandboxErrorMessage("E_CANCELLED")
       : status === "done" && !accepted ? documentSandboxErrorMessage("E_VALIDATION") : undefined

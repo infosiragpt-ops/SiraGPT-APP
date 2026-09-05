@@ -9,12 +9,13 @@ export type JsonObject = { [key: string]: JsonValue };
 export interface AttemptLease { jobId: string; token: string; fence: number; attempt: number; }
 export interface ProviderFile { fileId: string; attempt: number; deleted: boolean; failures: number; }
 export interface ProviderContainer { id: string; attempt: number; expiresAt: string | null; stage: 'plan' | 'edit'; }
-export interface CostReservation { requestId: string; attempt: number; reservedUsd: string; actualUsd: string | null; }
+export interface CostReservation { requestId: string; attempt: number; reservedUsd: string; actualUsd: string | null; actualTokens?: number | null; }
 interface HistoricalLease { attempt: number; tokenHash: string; }
 export interface ArtifactInput { id?: string; kind: ArtifactKind; storageKey: string; filename: string; mime: string; size: number; sha256: string; }
 export interface StoredArtifact extends ArtifactInput { id: string; jobId: string; attempt: number; published: boolean; purgedAt: Date | null; }
 export interface StoredDocumentJob {
   id: string; userId: string; status: DocumentStatus; admissionReady: boolean; mode: string; engine: string; modelTier: 'mechanical' | 'academic';
+  requestedModel: string; tokenBudget: number;
   instructionsKey: string; inputKeys: string[]; outputKeys: string[]; editPlanKey: string | null; editPlanHash: string | null;
   validationReportKey: string | null; errorCode: string | null; usage: JsonObject; costUsd: string; maxCostUsd: string; costReservations: CostReservation[]; purgedKeys: string[]; storageKeys: string[];
   outcome: DocumentOutcome | null;
@@ -25,6 +26,7 @@ export interface StoredDocumentJob {
 export interface CreateDocumentJob {
   id?: string; userId: string; idempotencyKey: string; payloadHash: string; instructionsKey: string;
   inputs: ArtifactInput[]; modelTier: 'mechanical' | 'academic'; promptVersion: string; expiresAt: Date; parentJobId?: string; maxCostUsd?: string; ready?: boolean;
+  requestedModel: string; maxTokens: number;
 }
 export interface DurableDocumentEvent {
   id: string; jobId: string; seq: number; type: string; payload: JsonObject; createdAt: Date;
@@ -44,6 +46,7 @@ type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
 type Client = Pick<PrismaClient, '$transaction' | '$queryRaw' | '$executeRaw'>;
 interface DbJob {
   id: string; user_id: string; status: DocumentStatus; admission_ready: boolean; mode: string; engine: string; model_tier: 'mechanical' | 'academic';
+  requested_model: string; token_budget: number; quota_reserved_tokens: bigint; quota_epoch: bigint; quota_settled_tokens: bigint | null; quota_settled_at: Date | null;
   instructions_key: string; input_keys: string[]; output_keys: string[]; edit_plan_key: string | null; edit_plan_hash: string | null;
   validation_report_key: string | null; error_code: string | null; usage: JsonObject; cost_usd: Prisma.Decimal; max_cost_usd: Prisma.Decimal; cost_reservations: CostReservation[]; purged_keys: string[]; storage_keys: string[];
   outcome: DocumentOutcome | null;
@@ -67,6 +70,7 @@ const hashToken = (token: string): string => createHash('sha256').update(token).
 const json = (value: unknown): string => JSON.stringify(value);
 const toJob = (r: DbJob): StoredDocumentJob => ({
   id: r.id, userId: r.user_id, status: r.status, admissionReady: r.admission_ready, mode: r.mode, engine: r.engine, modelTier: r.model_tier,
+  requestedModel: r.requested_model, tokenBudget: r.token_budget,
   instructionsKey: r.instructions_key, inputKeys: r.input_keys, outputKeys: r.output_keys, editPlanKey: r.edit_plan_key,
   editPlanHash: r.edit_plan_hash, validationReportKey: r.validation_report_key, errorCode: r.error_code, outcome: r.outcome,
   usage: r.usage, costUsd: String(r.cost_usd), maxCostUsd: String(r.max_cost_usd), costReservations: r.cost_reservations, purgedKeys: r.purged_keys, storageKeys: r.storage_keys, attempts: r.attempts, fence: r.fence, leaseToken: r.lease_token,
@@ -120,10 +124,16 @@ export class DocSandboxRepository {
     await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET storage_keys=array_append(storage_keys,${a.storageKey}) WHERE id=${jobId} AND NOT (${a.storageKey}=ANY(storage_keys))`);
   }
   async createJob(input: CreateDocumentJob): Promise<{ job: StoredDocumentJob; created: boolean }> {
+    if (!Number.isSafeInteger(input.maxTokens) || input.maxTokens < 1 || input.maxTokens > 500_000 || !input.requestedModel || input.requestedModel.length > 200) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     if (!input.userId || !input.idempotencyKey || input.idempotencyKey.length > 200 || !HASH.test(input.payloadHash) || !input.instructionsKey || input.inputs.length < 1 || input.inputs.length > 10 || !Number.isFinite(input.expiresAt.getTime()) || input.expiresAt <= new Date()) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     input.inputs.forEach(a => { validateArtifact(a); if (a.kind !== 'input') throw new DocumentRepositoryError('DOC_INVALID_INPUT'); });
     validateMoney(input.maxCostUsd ?? '0');
     return this.client.$transaction(async db => {
+      // Account lifecycle updates hold this same row lock before revoking jobs.
+      // A request authenticated just before deletion cannot admit new work later.
+      const owners = await db.$queryRaw<Array<{ id: string; deletedAt: Date | null; plan: string; isSuperAdmin: boolean; apiUsage: bigint; monthlyLimit: bigint; docQuotaEpoch: bigint }>>(Prisma.sql`SELECT id,"deletedAt",plan,"isSuperAdmin","apiUsage","monthlyLimit","docQuotaEpoch" FROM users WHERE id=${input.userId} FOR UPDATE`);
+      if (!owners[0]) throw new DocumentRepositoryError('DOC_FORBIDDEN');
+      if (owners[0].deletedAt) throw new DocumentRepositoryError('DOC_DELETED');
       // Serializes identical admission keys without racing unique violations.
       await db.$queryRaw(Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${json([input.userId, input.idempotencyKey])},0))`);
       const previous = await db.$queryRaw<DbJob[]>(Prisma.sql`SELECT * FROM doc_jobs WHERE user_id=${input.userId} AND idempotency_key=${input.idempotencyKey} FOR UPDATE`);
@@ -132,9 +142,14 @@ export class DocSandboxRepository {
         if (previous[0].deleted_at) throw new DocumentRepositoryError('DOC_DELETED');
         return { job: toJob(previous[0]), created: false };
       }
+      const account = owners[0];
+      if (!account.isSuperAdmin && !['PRO','PRO_MAX','ENTERPRISE'].includes(account.plan)) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
+      const reserved = account.isSuperAdmin ? 0n : BigInt(input.maxTokens);
+      if (account.monthlyLimit > 0n && !account.isSuperAdmin && account.apiUsage + reserved > account.monthlyLimit) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
+      if (reserved) await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"="apiUsage"+${reserved} WHERE id=${input.userId}`);
       if (input.parentJobId) { const parent = await this.locked(db, input.parentJobId); assertOwned(parent, input.userId); if (parent.deleted_at) throw new DocumentRepositoryError('DOC_DELETED'); }
       const id = input.id ?? randomUUID();
-      await db.$executeRaw(Prisma.sql`INSERT INTO doc_jobs(id,user_id,model_tier,instructions_key,input_keys,parent_job_id,idempotency_key,payload_hash,prompt_version,expires_at,max_cost_usd,admission_ready) VALUES(${id},${input.userId},${input.modelTier},${input.instructionsKey},ARRAY[${Prisma.join(input.inputs.map(a => a.storageKey))}]::text[],${input.parentJobId ?? null},${input.idempotencyKey},${input.payloadHash},${input.promptVersion},${input.expiresAt},${input.maxCostUsd ?? '0'}::numeric,${input.ready === true})`);
+      await db.$executeRaw(Prisma.sql`INSERT INTO doc_jobs(id,user_id,model_tier,requested_model,token_budget,quota_reserved_tokens,quota_epoch,instructions_key,input_keys,parent_job_id,idempotency_key,payload_hash,prompt_version,expires_at,max_cost_usd,admission_ready) VALUES(${id},${input.userId},${input.modelTier},${input.requestedModel},${input.maxTokens},${reserved},${account.docQuotaEpoch},${input.instructionsKey},ARRAY[${Prisma.join(input.inputs.map(a => a.storageKey))}]::text[],${input.parentJobId ?? null},${input.idempotencyKey},${input.payloadHash},${input.promptVersion},${input.expiresAt},${input.maxCostUsd ?? '0'}::numeric,${input.ready === true})`);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET storage_keys=ARRAY[${input.instructionsKey}]::text[] WHERE id=${id}`);
       for (const a of input.inputs) await this.insertArtifact(db, id, 0, a, false);
       await this.event(db, id, 'status_changed', { status: 'queued', attempt: 0, admissionReady: input.ready === true }, input.ready === true ? 'enqueue' : null);
@@ -289,26 +304,32 @@ export class DocSandboxRepository {
     validateMoney(reservedUsd);
     if (!/^[A-Za-z0-9_-]{1,150}$/.test(requestId)) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     return this.client.$transaction(async db => {
+      const owner = await db.$queryRaw<Array<{ user_id: string }>>(Prisma.sql`SELECT user_id FROM doc_jobs WHERE id=${lease.jobId}`);
+      if (!owner[0]) throw new DocumentRepositoryError('DOC_NOT_FOUND');
+      const account = await db.$queryRaw<Array<{ deletedAt: Date | null; docQuotaEpoch: bigint }>>(Prisma.sql`SELECT "deletedAt","docQuotaEpoch" FROM users WHERE id=${owner[0].user_id} FOR UPDATE`);
       const row = await this.assertLease(db, lease);
+      if (!account[0] || account[0].deletedAt || account[0].docQuotaEpoch !== row.quota_epoch) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
       if (row.cost_reservations.some(r => r.requestId === requestId)) return false;
       if (row.cost_reservations.length >= 600) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
       const outstanding = row.cost_reservations.filter(r => r.actualUsd === null).reduce((sum, r) => sum.plus(r.reservedUsd), new Prisma.Decimal(0));
       if (outstanding.plus(row.cost_usd).plus(reservedUsd).greaterThan(row.max_cost_usd)) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
-      const reservations = [...row.cost_reservations, { requestId, attempt: lease.attempt, reservedUsd, actualUsd: null }];
+      const reservations = [...row.cost_reservations, { requestId, attempt: lease.attempt, reservedUsd, actualUsd: null, actualTokens: null }];
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cost_reservations=${json(reservations)}::jsonb WHERE id=${lease.jobId}`);
       return true;
     });
   }
   /** May record a late bill after cancellation, but cannot change lifecycle or publish files. */
-  async settleCost(lease: AttemptLease, requestId: string, actualUsd: string): Promise<void> {
+  async settleCost(lease: AttemptLease, requestId: string, actualUsd: string, actualTokens?: number): Promise<void> {
     validateMoney(actualUsd);
+    if (actualTokens !== undefined && (!Number.isSafeInteger(actualTokens) || actualTokens < 0)) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     await this.client.$transaction(async db => {
       const row = await this.locked(db, lease.jobId);
       if (!row.attempt_leases.some(p => p.attempt === lease.attempt && p.tokenHash === hashToken(lease.token))) throw new DocumentRepositoryError('DOC_STALE_LEASE');
       const entry = row.cost_reservations.find(r => r.requestId === requestId && r.attempt === lease.attempt);
       if (!entry) throw new DocumentRepositoryError('DOC_NOT_FOUND');
-      if (entry.actualUsd !== null) { if (entry.actualUsd !== actualUsd) throw new DocumentRepositoryError('DOC_CONFLICT'); return; }
+      if (entry.actualUsd !== null) { if (entry.actualUsd !== actualUsd || (entry.actualTokens ?? null) !== (actualTokens ?? null)) throw new DocumentRepositoryError('DOC_CONFLICT'); return; }
       entry.actualUsd = actualUsd;
+      entry.actualTokens = actualTokens ?? null;
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cost_reservations=${json(row.cost_reservations)}::jsonb,cost_usd=cost_usd+${actualUsd}::numeric WHERE id=${lease.jobId}`);
     });
   }
@@ -485,5 +506,34 @@ export class DocSandboxRepository {
     const rows = await this.client.$queryRaw<Array<{ id: string; user_id: string }>>(Prisma.sql`SELECT id,user_id FROM doc_jobs WHERE deleted_at IS NULL AND expires_at<=clock_timestamp() ORDER BY expires_at LIMIT ${Math.max(1, Math.min(500, limit))}`);
     for (const row of rows) await this.deleteOwned(row.id, row.user_id);
     return rows.length;
+  }
+  /** Reconciles terminal reservations after restart too. Lock order is always
+   * user then job, shared with admission/account deletion. Unknown usage retains
+   * its reservation; a reset epoch prevents refunding a newer billing period. */
+  async reconcileAccountQuota(limit = 100): Promise<number> {
+    const rows = await this.client.$queryRaw<Array<{ id: string; user_id: string }>>(Prisma.sql`SELECT id,user_id FROM doc_jobs WHERE status IN ('done','failed','cancelled') AND quota_settled_at IS NULL AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(cost_reservations) r WHERE r->>'actualUsd' IS NULL OR r->>'actualTokens' IS NULL) ORDER BY finished_at LIMIT ${Math.max(1, Math.min(500, limit))}`);
+    let settled = 0;
+    for (const candidate of rows) {
+      const finished = await this.client.$transaction(async db => {
+        const accounts = await db.$queryRaw<Array<{ docQuotaEpoch: bigint; apiUsage: bigint }>>(Prisma.sql`SELECT "docQuotaEpoch","apiUsage" FROM users WHERE id=${candidate.user_id} FOR UPDATE`);
+        const row = await this.locked(db, candidate.id);
+        if (row.quota_settled_at || !TERMINAL.includes(row.status)) return false;
+        if (row.cost_reservations.some(r => r.actualUsd === null || !Number.isSafeInteger(r.actualTokens) || (r.actualTokens ?? -1) < 0)) return false;
+        const actual = row.cost_reservations.reduce((sum, r) => sum + BigInt(r.actualTokens!), 0n);
+        if (!accounts[0]) throw new DocumentRepositoryError('DOC_FORBIDDEN');
+        if (accounts[0].docQuotaEpoch === row.quota_epoch && row.quota_reserved_tokens > 0n) {
+          if (accounts[0].apiUsage < row.quota_reserved_tokens) throw new DocumentRepositoryError('DOC_CONFLICT');
+          await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"="apiUsage"-${row.quota_reserved_tokens}+${actual} WHERE id=${candidate.user_id}`);
+        }
+        // No fictitious cost conversion: this usage row uses the authoritative
+        // decimal provider ledger and actual token counts. No-call failures have
+        // no ApiUsage row, so they cannot consume a daily successful-call quota.
+        if (row.cost_reservations.length) await db.$executeRaw(Prisma.sql`INSERT INTO api_usage(id,"userId",model,tokens,cost,timestamp) VALUES(${`doc-quota-${row.id}`},${row.user_id},${row.requested_model},${actual},${row.cost_usd},${row.created_at})`);
+        await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET quota_settled_tokens=${actual},quota_settled_at=clock_timestamp() WHERE id=${row.id}`);
+        return true;
+      });
+      if (finished) settled++;
+    }
+    return settled;
   }
 }

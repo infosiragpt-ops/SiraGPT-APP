@@ -3,12 +3,73 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { createServer, request as httpRequest, type IncomingMessage } from 'node:http';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { Prisma } from '@prisma/client';
+import { reconcileDocumentCleanup } from '../src/modules/doc-sandbox/queue/cleanup';
+import { AnthropicDocumentProviderClient } from '../src/modules/doc-sandbox/engine/provider-client';
 import { createPrivateDocumentS3Client, PrivateDocumentStorage } from '../src/modules/doc-sandbox/storage/private-storage';
 import { createDocumentIntegrationFixture, type DocumentIntegrationFixture } from './doc-sandbox-integration-fixture';
 
 let fixture: DocumentIntegrationFixture;
 before(async () => { fixture = await createDocumentIntegrationFixture(); });
 after(async () => { if (fixture) await fixture.close(); });
+
+test('real cleanup preserves grace and failed deletions, then purges scoped orphan bytes before acknowledging completion', async t => {
+  const id = randomUUID();
+  const scope = { userId: fixture.owner, jobId: id };
+  const inputBytes = Buffer.from('Original retained until confirmed cleanup.');
+  const instructionsBytes = Buffer.from('No provider call was admitted.');
+  const input = fixture.storage.prepare(scope, inputBytes);
+  const instructions = fixture.storage.prepare(scope, instructionsBytes);
+  await fixture.repository.createJob({ id, userId: fixture.owner, idempotencyKey: randomUUID(),
+    payloadHash: input.sha256, instructionsKey: instructions.key, requestedModel: 'fixture-mechanical',
+    modelTier: 'mechanical', maxTokens: 1000, maxCostUsd: '0', promptVersion: 'fixture-cleanup',
+    expiresAt: new Date(Date.now() + 86_400_000), ready: false,
+    inputs: [{ kind: 'input', storageKey: input.key, filename: 'original.txt', mime: 'text/plain',
+      size: inputBytes.length, sha256: input.sha256 }] });
+  await fixture.storage.putPrepared(scope, input, inputBytes);
+  await fixture.storage.putPrepared(scope, instructions, instructionsBytes);
+  // A crash after PUT and before recording its key leaves only LIST as evidence.
+  const orphanBytes = Buffer.from('Unregistered synthetic private artifact');
+  const orphan = fixture.storage.prepare(scope, orphanBytes);
+  await fixture.storage.putPrepared(scope, orphan, orphanBytes);
+  const otherScope = { userId: fixture.other, jobId: randomUUID() };
+  const untouchedBytes = Buffer.from('Another owner must remain untouched.');
+  const untouched = fixture.storage.prepare(otherScope, untouchedBytes);
+  await fixture.storage.putPrepared(otherScope, untouched, untouchedBytes);
+  await fixture.repository.deleteOwned(id, fixture.owner);
+  const provider = new AnthropicDocumentProviderClient('fixture-unused-no-provider');
+  const notices: string[] = [];
+  await reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+    new AbortController().signal, code => notices.push(code));
+  assert.deepEqual(await fixture.storage.get(scope, input.key, input.sha256), inputBytes,
+    'late-writer grace must preserve original bytes');
+  assert.equal((await fixture.repository.getInternal(id)).cleanupPending, true);
+  // Advance only this synthetic job's durable deadline, never clocks or services.
+  await fixture.db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()-interval '1 second' WHERE id=${id}`);
+  const cancelled = new AbortController(); cancelled.abort();
+  await assert.rejects(reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+    cancelled.signal, code => notices.push(code)));
+  assert.deepEqual(await fixture.storage.get(scope, input.key, input.sha256), inputBytes);
+  const denied = await faultProxy(request => request.method === 'DELETE' ? 403 : 'pass');
+  t.after(() => denied.close());
+  await reconcileDocumentCleanup(fixture.repository, denied.storage, provider,
+    new AbortController().signal, code => notices.push(code));
+  assert.ok(notices.includes('DOC_CLEANUP_PENDING'));
+  assert.equal((await fixture.repository.getInternal(id)).cleanupPending, true);
+  assert.ok((await fixture.repository.pendingOutbox(100, 'cleanup')).some(event => event.jobId === id),
+    'storage failure cannot acknowledge deletion');
+  assert.deepEqual(await fixture.storage.get(scope, orphan.key, orphan.sha256), orphanBytes);
+  // A fresh pass with working S3 must also discover and delete the unregistered key.
+  await reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+    new AbortController().signal, code => notices.push(code));
+  assert.deepEqual(await fixture.storage.list(scope), []);
+  assert.equal((await fixture.repository.getInternal(id)).cleanupPending, false);
+  assert.ok((await fixture.repository.artifactsInternal(id)).every(artifact => artifact.purgedAt));
+  assert.equal((await fixture.repository.pendingOutbox(100, 'cleanup')).some(event => event.jobId === id), false);
+  assert.deepEqual(await fixture.storage.get(otherScope, untouched.key, untouched.sha256), untouchedBytes);
+  // There was no provider upload/call, and no remote deletion was substituted.
+  assert.deepEqual((await fixture.repository.getInternal(id)).providerFiles, []);
+});
 
 /** A real HTTP fault proxy in front of the actual isolated S3 service, not a storage mock. */
 async function faultProxy(fault: (request: IncomingMessage, attempt: number) => 'pass' | 'partial' | 403 | 412 | 503) {
