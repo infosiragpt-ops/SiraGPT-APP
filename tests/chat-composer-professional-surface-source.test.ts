@@ -255,13 +255,13 @@ describe("professional chat composer surface source contract", () => {
     }
     assert.match(
       effortMenu,
-      /value: "Max", label: "Extra high"/,
-      "the far-right Max compute value should expose the reference's Extra high label",
+      /value: "Max", label: "Máximo"/,
+      "the far-right Max compute value should expose its Spanish label",
     )
     assert.equal(
       (effortMenu.match(/<PopoverTrigger asChild>/g) || []).length,
       1,
-      "effort owns only its lightning-chip trigger",
+      "effort owns only its toolbar trigger",
     )
     assert.equal(
       (contextMenu.match(/<PopoverTrigger asChild>/g) || []).length,
@@ -379,9 +379,9 @@ describe("professional chat composer surface source contract", () => {
       "only the compact context meter should be visible, not a second outer ring",
     )
     assert.match(
-      globals,
-      /\.composer-effort-chip\.is-high svg\s*\{\s*color: #e89a96;/,
-      "the high-effort lightning should use the reference's restrained warm accent",
+      effortMenu,
+      /<span aria-hidden className="composer-effort-lightning">⚡<\/span>/,
+      "the effort trigger should show only the requested lightning emoji",
     )
     assert.match(
       globals,
