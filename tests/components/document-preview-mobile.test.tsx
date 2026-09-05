@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { DocumentPreview } from "@/components/document-preview"
@@ -44,6 +44,13 @@ describe("DocumentPreview mobile overlay", () => {
     expect(region).toHaveAttribute("role", "region")
     expect(region).not.toHaveAttribute("aria-modal")
     expect(document.body.style.overflow).toBe("")
+    const toolbar = await screen.findByTestId("document-preview-toolbar")
+    expect(screen.getByTestId("document-preview-header")).toContainElement(toolbar)
+    expect(within(toolbar).getByRole("button", { name: "Página anterior" })).toBeDisabled()
+    expect(within(toolbar).getByRole("button", { name: "Página siguiente" })).toBeDisabled()
+    expect(screen.getAllByRole("button", { name: "Página anterior" })).toHaveLength(1)
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Acercar documento" }))
+    expect(within(toolbar).getByRole("combobox", { name: "Nivel de zoom" })).toHaveValue("1.1")
   })
 
   it("portals a full-screen dialog on compact screens and locks scroll", async () => {
@@ -61,6 +68,9 @@ describe("DocumentPreview mobile overlay", () => {
     expect(screen.getByRole("button", { name: "Cerrar previsualización" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "Más opciones del documento" })).toBeTruthy()
     expect(document.body.style.overflow).toBe("hidden")
+    const toolbar = await screen.findByTestId("document-preview-toolbar")
+    expect(screen.getByTestId("document-preview-header")).toContainElement(toolbar)
+    expect(within(toolbar).getByRole("button", { name: "Página siguiente" })).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: "Escape" })
     expect(onClose).toHaveBeenCalledOnce()

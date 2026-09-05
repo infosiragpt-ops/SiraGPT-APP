@@ -6,6 +6,8 @@ const { createHash } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
+const { parsePresentationTitleEdit, isScopedSlideMutation } = require('./document-editing/presentation-title-intent');
+const { verifySlideTitleEdit, assertBoundedOfficePackage } = require('./document-editing/edit-output-proof');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
 const { renderPreview } = require('./doc-preview');
@@ -122,6 +124,7 @@ function isSourcePreservingEditRequest(prompt, files = []) {
   // Live bug: "realiza una ppt profesional en 30 ppts de la tesis.pdf + imágenes"
   // must create a NEW .pptx from sources — never "preserve PDF + anexos".
   if (wantsNewPresentationDeliverable(prompt)) return false;
+  if (isScopedSlideMutation(prompt)) return true;
   try {
     const { isTemplateTransformRequest } = require('./doc-engine/flags');
     if (isTemplateTransformRequest(prompt, files)) return true;
@@ -4824,6 +4827,9 @@ function assessSourcePreservation(beforeBuffer, afterBuffer, format, operations 
     return { passed: false, reason: 'missing_source_or_output_buffer' };
   }
 
+  if (format === 'pptx' && operations.length === 1 && operations[0]?.kind === 'set_slide_title') {
+    return { ...verifySlideTitleEdit(beforeBuffer, afterBuffer, operations[0]), strictTitleOnly: true };
+  }
   if (!['docx', 'xlsx', 'pptx'].includes(format)) {
     const signaturePreserved = format === 'pdf'
       ? beforeBuffer.slice(0, 5).toString('latin1') === '%PDF-' && afterBuffer.slice(0, 5).toString('latin1') === '%PDF-'
@@ -7003,37 +7009,8 @@ async function runXlsxSurgicalEditFlow({ input, sheetEdit, sourceFile }) {
 // do whole-deck text replacement or append a slide, so title edits degraded
 // to appendix slides.
 const SLIDE_NOUN_RE = /\b(?:diapositiva|l[aá]mina|slide)\s*(?:n(?:ro|umero)?\.?\s*|#\s*)?(\d{1,3})\b/;
-const SLIDE_TITLE_NOUN_RE = /\b(t[ií]tulo|title)\b/;
-const SLIDE_TITLE_VERB_RE = /\b(cambi\w*|pon(?:er|ga|le)?|actualiza\w*|reemplaz\w*|reempla[zc]\w*|edita\w*|escrib\w*|modific\w*|set|change\w*|rename\w*)\b/;
-
-function parsePresentationEditRequest(requestText = '') {
-  const text = normalizeText(requestText);
-  if (!text) return null;
-  // A quoted replace-pair («reemplaza "X" por "Y"») is replace_text territory
-  // — legacy planner owns it. And the noun "título" must appear OUTSIDE the
-  // quoted spans: in that legacy shape the word often lives INSIDE the needle
-  // ("Título viejo") and used to hijack the request into a title edit.
-  const quotedPairs = (requestText.match(/["“'][^"”']{1,160}["”']/g) || []).length;
-  if (quotedPairs >= 2) return null;
-  const textOutsideQuotes = normalizeText(requestText.replace(/["“'][^"”']{1,160}["”']/g, ' '));
-  if (!SLIDE_TITLE_NOUN_RE.test(textOutsideQuotes) || !SLIDE_TITLE_VERB_RE.test(textOutsideQuotes)) return null;
-  const slideMatch = SLIDE_NOUN_RE.exec(text);
-  const slideNumber = slideMatch ? Number(slideMatch[1]) : null;
-  // Capture the new title from the ORIGINAL text (casing/accents preserved):
-  // quoted value wins; otherwise everything after "título … a|por|:" up to a
-  // clause boundary ("y conserva el diseño" must not leak into the title).
-  let title = null;
-  const quoted = /["“']([^"”']{2,120})["”']/.exec(requestText);
-  if (quoted) {
-    title = quoted[1].trim();
-  } else {
-    const tail = /\bt[ií]tulo\b[^,;.]*?\b(?:a|por|:)\s+(.+?)(?:\s+y\s+|\s+and\s+|[,;]|\.\s|\.$|$)/i.exec(requestText);
-    if (tail) title = tail[1].trim();
-  }
-  if (!title || title.length < 2) return null;
-  // "a azul" etc. is an image-edit phrase, not a title — let the image parser own it.
-  if (/^(?:color\s+)?(?:azul|rojo|verde|negro|gris|amarillo|naranja|morado|violeta|blanco|blue|red|green|black|gray|grey|yellow|orange|purple|white)$/i.test(title)) return null;
-  return { kind: 'set_slide_title', slideNumber, title };
+function parsePresentationEditRequest(requestText = '', context = {}) {
+  return parsePresentationTitleEdit(requestText, context);
 }
 
 const DECK_COLOR_HEX = Object.freeze({
@@ -8057,11 +8034,16 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      try { assertBoundedOfficePackage(input); }
+      catch {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'No pude abrir esta presentación dentro de los límites seguros. Comprueba el archivo o adjunta una versión más pequeña; no modifiqué el original.' });
+      }
       // Surgical fast paths — resolved BEFORE the text/append planner: slide
       // title edits ("en la diapositiva 3 cambia el título…") and image
       // recolor/replace inside slides. The old planner could only replace
       // text deck-wide or append slides, so these degraded to appendices.
-      const slideEdit = parsePresentationEditRequest(requestText);
+      const slideEdit = parsePresentationEditRequest(requestText, { slides: pptxAdapterModule()?.listPptxSlides(input) || [] });
       const pptxImageEdit = slideEdit ? null : parseImageEditRequest(requestText);
       const deckStyle = (!slideEdit && !pptxImageEdit) ? parseDeckStyleRequest(requestText) : null;
       const addSlidesIntent = (!slideEdit && !pptxImageEdit)
@@ -8104,6 +8086,10 @@ async function generateSourcePreservingDocumentEdit({
         sourceText: livePptxText,
         originalName: sourceFile.originalName || sourceFile.filename,
       });
+      if (isScopedSlideMutation(requestText) && operations.some((operation) => /^append|^add_slide/.test(operation.kind))) {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'Identifiqué una edición dentro de una diapositiva, pero no el cambio exacto. Indica el texto actual y el texto nuevo; no añadí diapositivas ni regeneré el archivo.' });
+      }
       if (operations.every((op) => op.kind === 'append_generic')) {
         const smart = await planOfficeOperationsSmart({ requestText, format, input, signal });
         if (smart) operations = smart;

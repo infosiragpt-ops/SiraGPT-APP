@@ -3,8 +3,9 @@
 import React from "react"
 import { createPortal } from "react-dom"
 import dynamic from "next/dynamic"
-import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, FileText, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
+import { X, AlertCircle, ChevronLeft, ChevronRight, Download, ExternalLink, Minus, Plus, MoreHorizontal, Maximize2, Minimize2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -409,6 +410,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
   const isOverlay = useDocumentPreviewOverlay()
   const overlayRef = React.useRef<HTMLDivElement | null>(null)
   const [isFullscreen, setIsFullscreen] = React.useState(false)
+  const [toolbarContainer, setToolbarContainer] = React.useState<HTMLDivElement | null>(null)
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const docxRootRef = React.useRef<HTMLDivElement | null>(null)
   const docxStyleRef = React.useRef<HTMLDivElement | null>(null)
@@ -464,15 +466,15 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     return inferFilename(downloadUrl, format)
   }, [downloadUrl, format, url])
   const formatLabel = (FORMAT_EXTENSION[format] || "documento").toUpperCase()
-  const canUsePreviewControls = ["pdf", "svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
+  const canUsePreviewControls = ["svg", "docxNative", "html", "iframeHtml"].includes(state.kind)
   const pdfPreviewAttachment = React.useMemo<AttachmentLike | null>(() => (
     state.kind === "pdfBlob"
       ? {
           name: filename,
           url: state.url,
         }
-      : null
-  ), [filename, state])
+      : state.kind === "pdf" ? { name: filename, url: previewUrl } : null
+  ), [filename, previewUrl, state])
   const previewZoomStyle = React.useMemo(
     () => ({ zoom }) as React.CSSProperties & { zoom: number },
     [zoom],
@@ -573,12 +575,10 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
         credentials: "include",
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       })
-      toast.success("Descarga iniciada")
     } catch (error) {
       console.error("[DocumentPreview] download failed:", error)
       try {
         downloadHref(downloadUrl, filename)
-        toast.success("Descarga iniciada")
       } catch {
         toast.error("No se pudo descargar el documento")
       }
@@ -618,15 +618,6 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     document.addEventListener("fullscreenchange", onFullscreenChange)
     return () => document.removeEventListener("fullscreenchange", onFullscreenChange)
   }, [])
-
-  // Valor del <select> de zoom: preset exacto o el más cercano al zoom actual.
-  const zoomPresetValue = React.useMemo(() => {
-    let best: number = ZOOM_PRESETS[0]
-    for (const preset of ZOOM_PRESETS) {
-      if (Math.abs(preset - zoom) < Math.abs(best - zoom)) best = preset
-    }
-    return String(best)
-  }, [zoom])
 
   React.useEffect(() => {
     if (!isOverlay || typeof document === "undefined") return
@@ -921,261 +912,15 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
     }
   }, [filename, format, previewUrl, downloadUrl, explicitPdfUrl, previewGate.ready, previewGate.label])
 
-  const header = isOverlay ? (
-    <div
-      className="sticky top-0 z-30 flex min-h-12 w-full items-center gap-1 border-b border-black/5 bg-background/92 px-1 pt-[env(safe-area-inset-top)] backdrop-blur-xl dark:border-white/10"
-    >
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={onClose}
-        className="h-11 w-11 shrink-0 rounded-full text-foreground"
-        title="Cerrar"
-        aria-label="Cerrar previsualización"
-      >
-        <X className="h-5 w-5" />
-      </Button>
-      <div className="min-w-0 flex-1 px-1 text-center">
-        <h2 className="truncate text-[15px] font-semibold leading-5 text-foreground" title={filename}>
-          {filename}
-        </h2>
-      </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-11 w-11 shrink-0 rounded-full text-foreground"
-            title="Más opciones"
-            aria-label="Más opciones del documento"
-          >
-            <MoreHorizontal className="h-5 w-5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
-          <DropdownMenuItem onSelect={download} disabled={isDownloading}>
-            <Download className="mr-2 h-4 w-4" />
-            {isDownloading ? "Descargando…" : "Descargar"}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={openInNewTab}>
-            <ExternalLink className="mr-2 h-4 w-4" />
-            Abrir en una pestaña
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  ) : (
-    <div className={cn("sticky top-0 z-30 flex min-h-16 w-full min-w-0 items-center gap-2 px-4", previewHeaderClass)}>
-        <div className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-white/60 bg-white/70 text-zinc-700 shadow-[inset_0_1px_0_rgba(255,255,255,0.8),0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-xl dark:border-white/10 dark:bg-white/10 dark:text-zinc-200">
-            <FileText className="h-5 w-5" />
-          </div>
-          <div className="min-w-0">
-            <span className="block min-w-0 max-w-full truncate text-sm font-semibold text-zinc-950 dark:text-zinc-50" title={filename}>
-              {filename}
-            </span>
-            <span className="mt-0.5 block text-xs font-medium text-zinc-500 dark:text-zinc-400">{formatLabel}</span>
-          </div>
-        </div>
-        {/* Paginador centrado: ‹ anterior · actual/total · siguiente ›.
-            Minimalista sobre fondo blanco; la flecha izquierda se deshabilita
-            en la primera página y la derecha en la última. */}
-        {canUsePreviewControls && (
-          <nav
-            aria-label="Navegación de páginas"
-            className="flex shrink-0 items-center gap-3 rounded-full border border-zinc-200 bg-white px-2 py-1 shadow-sm dark:border-white/10 dark:bg-zinc-950"
-          >
-            <button
-              type="button"
-              data-testid="ppt-nav-prev"
-              onClick={() => goToPreviewPage(activePage - 1)}
-              disabled={activePage <= 1}
-              title="Anterior"
-              aria-label="Diapositiva anterior"
-              className="grid h-8 w-8 place-items-center rounded-full text-zinc-600 transition hover:bg-zinc-100 disabled:pointer-events-none disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-white/10"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span data-testid="ppt-page-counter" aria-live="polite" className="min-w-[3.5rem] text-center text-sm font-semibold tabular-nums text-zinc-950 dark:text-zinc-50">
-              {activePage}/{pageCount}
-            </span>
-            <button
-              type="button"
-              data-testid="ppt-nav-next"
-              onClick={() => goToPreviewPage(activePage + 1)}
-              disabled={activePage >= pageCount}
-              title="Siguiente"
-              aria-label="Diapositiva siguiente"
-              className="grid h-8 w-8 place-items-center rounded-full text-zinc-600 transition hover:bg-zinc-100 disabled:pointer-events-none disabled:opacity-30 dark:text-zinc-300 dark:hover:bg-white/10"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </nav>
-        )}
-        <div className="flex flex-1 shrink-0 items-center justify-end gap-1">
-          {canUsePreviewControls && (
-            <select
-              data-testid="ppt-zoom-select"
-              aria-label="Nivel de zoom"
-              title="Nivel de zoom"
-              value={zoomPresetValue}
-              onChange={(e) => setBoundedZoom(Number(e.target.value))}
-              className={cn(previewMetricClass, "h-9 cursor-pointer appearance-none pr-2")}
-            >
-              {ZOOM_PRESETS.map((preset) => (
-                <option key={preset} value={String(preset)}>
-                  {Math.round(preset * 100)}%
-                </option>
-              ))}
-            </select>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={download}
-            disabled={isDownloading}
-            data-testid="ppt-btn-download"
-            className={cn("shrink-0", previewIconButtonClass)}
-            title={isDownloading ? "Descargando" : "Descargar"}
-            aria-label={isDownloading ? "Descargando" : "Descargar"}
-          >
-            {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleFullscreen}
-            data-testid="ppt-btn-fullscreen"
-            className={cn("shrink-0", previewIconButtonClass)}
-            title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"}
-            aria-label={isFullscreen ? "Salir de pantalla completa" : "Ver en pantalla completa"}
-          >
-            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            data-testid="ppt-btn-close"
-            className={cn("shrink-0", previewIconButtonClass)}
-            title="Cerrar"
-            aria-label="Cerrar previsualización"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
-      </div>
-  )
-
-  const body = (
-    <>
-      <div
-        ref={scrollRef}
-        className={cn(
-          "scroll-contain min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]",
-          state.kind === "pdfBlob" ? "overflow-hidden" : "overflow-auto",
-        )}
-      >
-        {state.kind === "loading" && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground" role="status" aria-live="polite">
-            <div className="mx-auto w-full max-w-[28rem] space-y-3 rounded-sm bg-card/80 p-10 shadow-md ring-1 ring-border/30">
-              <div className="h-5 w-1/2 animate-pulse rounded bg-muted" />
-              <div className="h-3 w-full animate-pulse rounded bg-muted" />
-              <div className="h-3 w-[92%] animate-pulse rounded bg-muted" />
-              <div className="h-3 w-[88%] animate-pulse rounded bg-muted" />
-              <div className="h-3 w-2/5 animate-pulse rounded bg-muted" />
-            </div>
-            <div className="flex items-center gap-2">
-              <ThinkingIndicator size="sm" />
-              <span>{state.message || PREVIEW_LOADING_LABEL}</span>
-              {!previewGate.ready && previewGate.progress > 0 && (
-                <span className="tabular-nums">{Math.round(previewGate.progress)}%</span>
-              )}
-            </div>
-          </div>
-        )}
-
-        {state.kind === "pdfBlob" && pdfPreviewAttachment && (
-          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900">
-            <PdfRenderer a={pdfPreviewAttachment} />
-          </div>
-        )}
-
-        {state.kind === "pdf" && (
-          <iframe
-            src={previewUrl}
-            className="h-full w-full bg-white dark:bg-zinc-900"
-            style={previewZoomStyle}
-            title={`Vista previa ${filename}`}
-          />
-        )}
-
-        {state.kind === "svg" && (
-          <div className="flex min-h-full items-center justify-center p-6 pb-28" style={previewZoomStyle}>
-            {/* eslint-disable-next-line @next/next/no-img-element -- SVG preview from blob URL (user-generated artifact); next/image cannot fetch blob: URIs */}
-            <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white dark:bg-zinc-800 shadow-sm" />
-          </div>
-        )}
-
-        {state.kind === "iframeHtml" && (
-          <iframe
-            srcDoc={state.html}
-            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
-            style={previewZoomStyle}
-            title={`Vista previa ${filename}`}
-            sandbox=""
-          />
-        )}
-
-        {state.kind === "docxNative" && (
-          <div
-            className="relative min-h-full bg-[#262626] px-[clamp(1.5rem,8vw,6rem)] py-8 pb-28"
-            style={previewZoomStyle}
-          >
-            <div ref={docxStyleRef} className="contents" aria-hidden="true" />
-            <div ref={docxRootRef} className="sira-document-preview-docx min-h-[42rem]" />
-            {!docxNativeReady && (
-              <div className="absolute inset-0 flex items-center justify-center bg-[#262626]/80 text-sm text-white/75 backdrop-blur-sm">
-                <div className="flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 shadow-sm">
-                  <ThinkingIndicator size="sm" />
-                  Renderizando documento…
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {state.kind === "html" && (
-          <div className="px-4 pb-28 pt-6 md:px-6 md:pt-8" style={previewZoomStyle}>
-            <div dangerouslySetInnerHTML={{ __html: state.html }} />
-          </div>
-        )}
-
-        {(state.kind === "unsupported" || state.kind === "error") && (
-          <div className="flex h-full items-center justify-center p-6">
-            <div className="max-w-md rounded-lg border border-border bg-background p-6 text-center shadow-sm">
-              <AlertCircle className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
-              <p className="mb-1 font-medium">
-                {state.kind === "error" ? "No se pudo previsualizar" : "Vista previa no disponible"}
-              </p>
-              <p className="mb-4 text-sm text-muted-foreground">{state.message}</p>
-              <Button size="sm" onClick={download}>
-                <Download className="mr-1.5 h-4 w-4" />
-                Descargar archivo
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {canUsePreviewControls && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-4">
-          <div className={cn("pointer-events-auto flex max-w-full items-center gap-1", previewControlShellClass)}>
+  const previewControls = canUsePreviewControls ? (
+        <nav aria-label="Navegación y zoom del documento" className="flex max-w-full justify-center">
+          <div className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", previewControlShellClass)}>
             <Button
               type="button"
               variant="ghost"
               size="icon"
               className={cn("h-8 w-8", previewIconButtonClass)}
+              data-testid="ppt-nav-prev"
               onClick={() => goToPreviewPage(activePage - 1)}
               disabled={activePage <= 1}
               title="Página anterior"
@@ -1183,7 +928,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
-            <span className={previewMetricClass} aria-live="polite">
+            <span data-testid="ppt-page-counter" className={previewMetricClass} aria-live="polite">
               {activePage} / {pageCount}
             </span>
             <Button
@@ -1191,6 +936,7 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
               variant="ghost"
               size="icon"
               className={cn("h-8 w-8", previewIconButtonClass)}
+              data-testid="ppt-nav-next"
               onClick={() => goToPreviewPage(activePage + 1)}
               disabled={activePage >= pageCount}
               title="Página siguiente"
@@ -1213,15 +959,21 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
             >
               <Minus className="h-4 w-4" />
             </Button>
-            <button
-              type="button"
-              className={cn(previewMetricClass, "min-w-[4.1rem]")}
-              onClick={() => setBoundedZoom(1)}
-              title="Restablecer zoom"
-              aria-label="Restablecer zoom"
+            <select
+              data-testid="ppt-zoom-select"
+              aria-label="Nivel de zoom"
+              title="Nivel de zoom"
+              value={String(zoom)}
+              onChange={(e) => setBoundedZoom(Number(e.target.value))}
+              className={cn(previewMetricClass, "h-9 cursor-pointer appearance-none px-2")}
             >
-              {Math.round(zoom * 100)}%
-            </button>
+              {!ZOOM_PRESETS.some(preset => preset === zoom) && (
+                <option value={String(zoom)}>{Math.round(zoom * 100)}%</option>
+              )}
+              {ZOOM_PRESETS.map((preset) => (
+                <option key={preset} value={String(preset)}>{Math.round(preset * 100)}%</option>
+              ))}
+            </select>
             <Button
               type="button"
               variant="ghost"
@@ -1235,8 +987,155 @@ export function DocumentPreview({ url, onClose }: DocumentPreviewProps) {
               <Plus className="h-4 w-4" />
             </Button>
           </div>
+        </nav>
+  ) : null
+
+  const header = (
+    <div data-testid="document-preview-header" className={cn("sticky top-0 z-30 w-full shrink-0", previewHeaderClass)}>
+      <div className={cn("flex min-h-16 min-w-0 items-center gap-2 px-3", isOverlay && "min-h-12 px-1 pt-[env(safe-area-inset-top)]")}>
+        {isOverlay && (
+          <Button variant="ghost" size="icon" onClick={onClose} className="h-11 w-11 shrink-0 rounded-full" title="Cerrar" aria-label="Cerrar previsualización">
+            <X className="h-5 w-5" />
+          </Button>
+        )}
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+          {!isOverlay && <DocumentArtifactIcon format={format} />}
+          <div className={cn("min-w-0 flex-1", isOverlay && "text-center")}>
+            <h2 className="truncate text-sm font-semibold text-foreground" title={filename}>{filename}</h2>
+            {!isOverlay && <span className="mt-0.5 block text-xs text-muted-foreground">{formatLabel}</span>}
+          </div>
         </div>
-      )}
+        {isOverlay ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 rounded-full" title="Más opciones" aria-label="Más opciones del documento">
+                <MoreHorizontal className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              <DropdownMenuItem onSelect={download} disabled={isDownloading}>
+                <Download className="mr-2 h-4 w-4" />{isDownloading ? "Descargando…" : "Descargar"}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={openInNewTab}>
+                <ExternalLink className="mr-2 h-4 w-4" />Abrir en una pestaña
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <div className="flex shrink-0 items-center gap-1">
+            <Button variant="ghost" size="icon" onClick={download} disabled={isDownloading} data-testid="ppt-btn-download" className={previewIconButtonClass} title={isDownloading ? "Descargando" : "Descargar"} aria-label={isDownloading ? "Descargando" : "Descargar"}>
+              {isDownloading ? <ThinkingIndicator size="sm" /> : <Download className="h-4 w-4" />}
+            </Button>
+            <Button variant="ghost" size="icon" onClick={toggleFullscreen} data-testid="ppt-btn-fullscreen" className={previewIconButtonClass} title={isFullscreen ? "Salir de pantalla completa" : "Pantalla completa"} aria-label={isFullscreen ? "Salir de pantalla completa" : "Ver en pantalla completa"}>
+              {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+            <Button variant="ghost" size="icon" onClick={onClose} data-testid="ppt-btn-close" className={previewIconButtonClass} title="Cerrar" aria-label="Cerrar previsualización">
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+      </div>
+      {/* The real PDF renderer portals its controls here, preserving its own
+          page/zoom state. Native previews use this same header on mobile too. */}
+      <div ref={setToolbarContainer} data-testid="document-preview-toolbar" className="flex min-w-0 justify-center px-2 pb-2 empty:hidden">
+        {previewControls}
+      </div>
+    </div>
+  )
+
+  const body = (
+    <>
+      <div
+        ref={scrollRef}
+        className={cn(
+          "scroll-contain min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(250,250,250,0.9),rgba(244,246,248,0.78))] dark:bg-[linear-gradient(180deg,rgba(24,24,27,0.95),rgba(9,9,11,0.96))]",
+          pdfPreviewAttachment ? "overflow-hidden" : "overflow-auto",
+        )}
+      >
+        {state.kind === "loading" && (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-muted-foreground" role="status" aria-live="polite">
+            <div className="mx-auto w-full max-w-[28rem] space-y-3 rounded-sm bg-card/80 p-10 shadow-md ring-1 ring-border/30">
+              <div className="h-5 w-1/2 animate-pulse rounded bg-muted" />
+              <div className="h-3 w-full animate-pulse rounded bg-muted" />
+              <div className="h-3 w-[92%] animate-pulse rounded bg-muted" />
+              <div className="h-3 w-[88%] animate-pulse rounded bg-muted" />
+              <div className="h-3 w-2/5 animate-pulse rounded bg-muted" />
+            </div>
+            <div className="flex items-center gap-2">
+              <ThinkingIndicator size="sm" />
+              <span>{state.message || PREVIEW_LOADING_LABEL}</span>
+              {!previewGate.ready && previewGate.progress > 0 && (
+                <span className="tabular-nums">{Math.round(previewGate.progress)}%</span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {pdfPreviewAttachment && (
+          <div className="h-full min-h-0 w-full bg-white dark:bg-zinc-900">
+            <PdfRenderer a={pdfPreviewAttachment} toolbarContainer={toolbarContainer} />
+          </div>
+        )}
+
+        {state.kind === "svg" && (
+          <div className="flex min-h-full items-center justify-center p-6" style={previewZoomStyle}>
+            {/* eslint-disable-next-line @next/next/no-img-element -- SVG preview from blob URL (user-generated artifact); next/image cannot fetch blob: URIs */}
+            <img src={previewUrl} alt={filename} className="max-h-full max-w-full rounded-xl bg-white dark:bg-zinc-800 shadow-sm" />
+          </div>
+        )}
+
+        {state.kind === "iframeHtml" && (
+          <iframe
+            srcDoc={state.html}
+            className="h-full w-full border-0 bg-white dark:bg-zinc-900"
+            style={previewZoomStyle}
+            title={`Vista previa ${filename}`}
+            sandbox=""
+          />
+        )}
+
+        {state.kind === "docxNative" && (
+          <div
+            className="relative min-h-full bg-[#262626] px-[clamp(1.5rem,8vw,6rem)] py-8"
+            style={previewZoomStyle}
+          >
+            <div ref={docxStyleRef} className="contents" aria-hidden="true" />
+            <div ref={docxRootRef} className="sira-document-preview-docx min-h-[42rem]" />
+            {!docxNativeReady && (
+              <div className="absolute inset-0 flex items-center justify-center bg-[#262626]/80 text-sm text-white/75 backdrop-blur-sm">
+                <div className="flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-2 shadow-sm">
+                  <ThinkingIndicator size="sm" />
+                  Renderizando documento…
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {state.kind === "html" && (
+          <div className="px-4 pb-6 pt-6 md:px-6 md:pt-8" style={previewZoomStyle}>
+            <div dangerouslySetInnerHTML={{ __html: state.html }} />
+          </div>
+        )}
+
+        {(state.kind === "unsupported" || state.kind === "error") && (
+          <div className="flex h-full items-center justify-center p-6">
+            <div className="max-w-md rounded-lg border border-border bg-background p-6 text-center shadow-sm">
+              <AlertCircle className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+              <p className="mb-1 font-medium">
+                {state.kind === "error" ? "No se pudo previsualizar" : "Vista previa no disponible"}
+              </p>
+              <p className="mb-4 text-sm text-muted-foreground">{state.message}</p>
+              <Button size="sm" onClick={download}>
+                <Download className="mr-1.5 h-4 w-4" />
+                Descargar archivo
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+
+
 
     </>
   )

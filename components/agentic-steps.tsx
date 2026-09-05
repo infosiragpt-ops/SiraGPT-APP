@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Image from "next/image"
 import {
   Activity,
   AlertTriangle,
@@ -13,7 +12,6 @@ import {
   Globe,
   History,
   Eye,
-  FileCheck2,
   Pause,
   Play,
   RefreshCcw,
@@ -50,6 +48,7 @@ import {
 } from "@/lib/run-trace"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-dialog"
+import { DOCUMENT_ACTION_CLASS, DOCUMENT_ACTION_ICON_CLASS, DOCUMENT_CARD_CLASS, DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
 import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
@@ -351,11 +350,12 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
       type="button"
       onClick={download}
       disabled={downloading}
-      className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted disabled:opacity-60 sm:h-14 sm:w-14"
+      className={DOCUMENT_ACTION_CLASS}
       title={`Descargar ${displayName}`}
       aria-label={`Descargar documento: ${displayName}`}
+      aria-busy={downloading}
     >
-      {downloading ? <ThinkingIndicator size="lg" /> : <Download className="h-7 w-7 stroke-[2.25] sm:h-9 sm:w-9" />}
+      {downloading ? <ThinkingIndicator size="sm" className="h-[18px] w-[18px]" /> : <Download className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />}
     </button>
   )
 }
@@ -771,23 +771,6 @@ function ArtifactDeliveryList({
   )
 }
 
-function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
-  const format = artifactFormat(artifact)
-  if (format === "docx" || format === "doc") {
-    return <Image src="/icons/Word.png" alt="Word" width={64} height={64} className="object-contain" />
-  }
-  if (format === "xlsx" || format === "xls" || format === "csv") {
-    return <Image src="/icons/Excel.png" alt="Excel" width={64} height={64} className="object-contain" />
-  }
-  if (format === "pptx" || format === "ppt") {
-    return <Image src="/icons/Bigger P powerpoint.png" alt="PowerPoint" width={64} height={64} className="object-contain" />
-  }
-  if (format === "pdf") {
-    return <Image src="/icons/pdf.png" alt="PDF" width={64} height={64} className="object-contain" />
-  }
-  return <FileCheck2 className="h-14 w-14 text-slate-700" />
-}
-
 function ArtifactCard({
   artifact,
   onDocumentPreview,
@@ -823,7 +806,7 @@ function ArtifactCard({
   return (
     <>
     <div
-      className="my-2 w-full max-w-xl cursor-pointer overflow-hidden rounded-2xl border border-border/70 bg-background p-3 shadow-sm transition-colors hover:bg-muted/30 active:bg-muted/45 sm:p-4"
+      className={cn(DOCUMENT_CARD_CLASS, "my-2 cursor-pointer p-3 transition-colors hover:bg-muted/30 active:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
       data-testid="agent-artifact-card"
       data-artifact-id={artifact.id}
       data-preview-openable="true"
@@ -838,15 +821,14 @@ function ArtifactCard({
         }
       }}
     >
-      <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-5">
+      <div className="flex min-w-0 items-center gap-3">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-muted/30 sm:h-20 sm:w-20">
-            <ArtifactFormatIcon artifact={artifact} />
-          </div>
+          <DocumentArtifactIcon format={format} />
           <div className="min-w-0 flex-1">
             <div
               className="truncate text-sm font-semibold text-foreground"
               data-testid="agent-artifact-filename"
+              title={displayName}
             >
               {displayName}
             </div>
@@ -863,28 +845,29 @@ function ArtifactCard({
           </div>
         </div>
         <div
-          className="flex w-full shrink-0 items-center justify-end gap-2 border-t border-border/50 pt-2 sm:ml-auto sm:w-auto sm:gap-4 sm:border-0 sm:pt-0"
+          className="flex shrink-0 items-center gap-1"
           onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
         >
           {artifact.sourceFileId && (
             <button
               type="button"
               onClick={() => setHistoryOpen(true)}
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted sm:h-14 sm:w-14"
+              className={DOCUMENT_ACTION_CLASS}
               title={`Historial de versiones de ${displayName}`}
               aria-label={`Historial de versiones: ${displayName}`}
             >
-              <History className="h-6 w-6 stroke-[2] sm:h-7 sm:w-7" />
+              <History className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />
             </button>
           )}
           <button
             type="button"
             onClick={preview}
-            className="inline-flex h-11 w-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted sm:h-14 sm:w-14"
+            className={DOCUMENT_ACTION_CLASS}
             title={`Ver ${displayName}`}
             aria-label={`Ver documento: ${displayName}`}
           >
-            <Eye className="h-7 w-7 stroke-[2.25] sm:h-9 sm:w-9" />
+            <Eye className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />
           </button>
           <DownloadButton artifact={artifact} href={href} />
         </div>

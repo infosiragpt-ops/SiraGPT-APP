@@ -239,7 +239,7 @@
     "mermaid": "^11.14.0",
     "multer": "^2.2.0",
     "negotiator": "^1.0.0",
-    "next": "15.5.21",
+    "next": "15.5.25",
     "next-auth": "^4.24.15",
     "next-intl": "^4.9.1",
     "next-themes": "latest",
@@ -269,7 +269,7 @@
     "remark-directive": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "sharp": "^0.34.3",
+    "sharp": "0.35.4",
     "shiki": "^1.29.2",
     "sonner": "latest",
     "stripe": "^18.3.0",
@@ -323,6 +323,12 @@
     "license-checker-rseidelsohn": "^4.4.2"
   },
   "overrides": {
+    "next": {
+      "sharp": "$sharp"
+    },
+    "@huggingface/transformers": {
+      "sharp": "$sharp"
+    },
     "pdfjs-dist": "4.8.69",
     "uuid": "^11.1.1",
     "qs": "^6.15.2",

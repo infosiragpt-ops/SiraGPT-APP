@@ -1,6 +1,8 @@
 import { expect, test, type Page, type Route } from "@playwright/test"
 
 test.describe.configure({ timeout: 240_000 })
+// This contract checks Spanish UI copy; match the browser's negotiated locale.
+test.use({ locale: "es-PE" })
 
 const user = {
   id: "composer-size-user",
