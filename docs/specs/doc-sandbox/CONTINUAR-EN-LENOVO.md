@@ -1,4 +1,4 @@
-# Continuar F1 en Lenovo — cambios preparados, no publicados
+# Continuar F1 en Lenovo — entrega GitHub, sin despliegue
 
 Estado al 2026-09-05: el usuario continuará desde el servidor y solicitó guardar
 los cambios en GitHub. Se prepara la rama `feat/doc-sandbox-fase-1` como entrega
@@ -15,7 +15,10 @@ repositorio completo ni una versión lista para desplegar.** No contiene `.git`,
 `node_modules`, `.env`, credenciales, documentos de usuarios ni imágenes Docker.
 `.env.example` solo documenta configuración.
 
-- Base requerida: `0f24e4d004f156eae838e21592539cca91f53cd3`.
+- Base original de F1 y del paquete anterior: `0f24e4d004f156eae838e21592539cca91f53cd3`.
+- Base actual de la rama de entrega: `b30b48bc9b7c2510e86ff85c293852967ba31dc9`.
+  El 2026-09-05 se actualizó mediante rebase limpio, conservando VoiceStudio
+  (#560). La rama remota, no el paquete anterior, es la referencia de continuidad.
 - Rama de entrega: `feat/doc-sandbox-fase-1`. Verificar el commit remoto y la PR
   en borrador antes de continuar; no confundir la subida de código con un deploy.
 - Repo: `infosiragpt-ops/SiraGPT-APP`; destino de PR: `production-main`.
@@ -42,6 +45,10 @@ hacer checkout de esta rama sobre el directorio productivo, no mergear a
 La imagen frontend actual debe conservarse mientras la nueva capacidad siga
 sin habilitarse. Los archivos del paquete son una instantánea anterior; la rama
 verificada en GitHub es la referencia para la continuación posterior.
+
+No reutilizar la comparación AST previa como prueba de la combinación actual
+con VoiceStudio. Las pruebas locales repetidas tras el rebase se registran en
+la PR; no sustituyen el E2E autenticado ni los controles de producción pendientes.
 
 ## Riesgo concreto de publicar todo desactivado
 

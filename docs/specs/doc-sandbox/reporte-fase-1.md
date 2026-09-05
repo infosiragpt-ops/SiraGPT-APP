@@ -1,7 +1,9 @@
 # Fase 1 — informe parcial de verificación, no cierre
 
-Fecha: 2026-09-04. Rama `feat/doc-sandbox-fase-1`, base
-`0f24e4d004f156eae838e21592539cca91f53cd3`. **No publicado. F1 no aprobada para cierre.**
+Fecha: 2026-09-05. Rama `feat/doc-sandbox-fase-1`, base original
+`0f24e4d004f156eae838e21592539cca91f53cd3`; entrega para GitHub actualizada sobre
+`b30b48bc9b7c2510e86ff85c293852967ba31dc9` mediante rebase limpio, conservando
+VoiceStudio (#560). **No desplegado. F1 no aprobada para cierre.**
 Este documento registra evidencia parcial y gates pendientes; no sustituye su ejecución.
 
 ## 1. Qué se implementó
@@ -39,7 +41,12 @@ visuales preexistentes se conserva intacto.
 
 ## 2. Cómo se probó
 
-Última comprobación de esta revisión (2026-09-05 UTC):
+La entrega para GitHub incorpora la nueva base de VoiceStudio sin conflictos
+textuales. Sus comprobaciones locales posteriores al rebase se registran en la
+PR. Los resultados Linux y la comparación AST siguientes son evidencia previa:
+no acreditan de nuevo la combinación ni sustituyen E2E autenticado.
+
+Comprobaciones previas de esta revisión (2026-09-05 UTC):
 
 | Suite | Resultado observado | Alcance |
 |---|---|---|
