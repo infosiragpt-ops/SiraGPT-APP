@@ -5,7 +5,7 @@ import { createRequire } from "node:module"
 import path from "node:path"
 import { promisify } from "node:util"
 import { Document, Packer, Paragraph } from "docx"
-import { expect, test, type Page } from "@playwright/test"
+import { expect, test, type Page, type Request } from "@playwright/test"
 
 // Browser plugin not available: use the repository's Playwright runner.
 // Real login, upload, API, DB, storage and validator. Only the Stop tests delay
@@ -74,7 +74,7 @@ async function emptyChat(page: Page, model: string) {
   expect(typeof chat?.id).toBe("string")
   await page.evaluate(id => localStorage.setItem("currentChatId", id), chat.id)
   await page.reload()
-  await expect(page.getByTestId("chat-composer-surface")).toBeVisible()
+  await expect(page.getByTestId("chat-composer-surface")).toBeVisible({ timeout: 60_000 })
   return chat.id as string
 }
 async function attach(page: Page) {
@@ -84,8 +84,10 @@ async function attach(page: Page) {
   ] }] }))
   const uploaded = page.waitForResponse(response => /\/api\/files\/upload$/.test(new URL(response.url()).pathname)
     && response.request().method() === "POST")
-  await page.locator('input[type="file"]').first().setInputFiles({ name: FILE_NAME, mimeType: MIME, buffer: bytes })
+  await page.getByRole("button", { name: "Adjuntar archivos y herramientas", exact: true }).click()
+  await page.locator('input[type="file"][data-accepts-any-format="true"]').setInputFiles({ name: FILE_NAME, mimeType: MIME, buffer: bytes })
   expect((await uploaded).ok(), "Original upload must reach the real file API").toBe(true)
+  await page.keyboard.press("Escape")
   await page.getByTestId("chat-composer-surface").locator("textarea").fill(PROMPT)
   await expect(page.getByRole("button", { name: "Enviar (⏎)", exact: true })).toBeEnabled({ timeout: 60_000 })
   return bytes
@@ -146,6 +148,7 @@ for (const initial of ["new", "empty"] as const) {
   test(`Stop during ${initial} chat admission retains the original and creates no job @no-provider-call`, async ({ page }) => {
     const model = await login(page)
     if (initial === "empty") await emptyChat(page, model)
+    await expect(page.getByRole("button", { name: "Detener generación", exact: true })).toHaveCount(0)
     const errors: string[] = []
     page.on("pageerror", error => errors.push(error.name))
     await attach(page)
@@ -157,10 +160,23 @@ for (const initial of ["new", "empty"] as const) {
     const delayed = new Promise<void>(resolve => { release = resolve })
     let requested!: () => void
     const reachedPreflight = new Promise<void>(resolve => { requested = resolve })
+    let resumed!: () => void
+    const routeResumed = new Promise<void>(resolve => { resumed = resolve })
+    const preflightCompleted = new Promise<void>(resolve => {
+      const completed = (request: Request) => {
+        if (!/\/api\/docs\/jobs\/capabilities\?/.test(request.url())) return
+        page.off("requestfinished", completed)
+        page.off("requestfailed", completed)
+        resolve()
+      }
+      page.on("requestfinished", completed)
+      page.on("requestfailed", completed)
+    })
     await page.route(/\/api\/docs\/jobs\/capabilities\?/, async route => {
       requested()
       await delayed
       await route.continue().catch(() => {}) // Stop may have already aborted this real request.
+      resumed()
     })
     try {
       await page.getByRole("button", { name: "Enviar (⏎)", exact: true }).click()
@@ -170,7 +186,13 @@ for (const initial of ["new", "empty"] as const) {
       await page.screenshot({ path: test.info().outputPath(`stop-${initial}.png`) })
       await stop.click()
       await expect(page.getByTestId("chat-composer-surface").locator("textarea")).toHaveValue(PROMPT)
+      release()
+      await Promise.all([preflightCompleted, routeResumed])
+      await expect(page.getByTestId("chat-composer-surface").locator("textarea")).toHaveValue(PROMPT)
+      await expect(page.getByRole("list", { name: "Archivos adjuntos", exact: true })
+        .getByRole("listitem", { name: `${FILE_NAME}, adjunto 1 de 1`, exact: true })).toBeVisible()
       await expect(stop).toHaveCount(0)
+      await page.screenshot({ path: test.info().outputPath(`restored-${initial}.png`) })
       expect(admissions).toHaveLength(0)
       expect(errors).toEqual([])
     } finally { release() }

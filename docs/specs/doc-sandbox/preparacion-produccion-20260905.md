@@ -9,8 +9,10 @@ un borrador. Se continúa F1, sin iniciar F2 ni cambiar DNS.
 
 El trabajo se realiza en el worktree existente
 `/home/user/deployments/doc-sandbox-phase1-tests/candidate-git-561`.
-Se conservaron los cambios previos de continuidad. El checkout de despliegue
-`/home/user/SiraGPT-APP` tiene cambios ajenos de interfaz que no se incorporan.
+Se conservaron los cambios previos de continuidad. Al comenzar, el checkout de
+despliegue `/home/user/SiraGPT-APP` tenía cambios ajenos de interfaz que no se
+incorporaron. Otra tarea los confirmó y publicó durante esta revisión; véase
+la comprobación de producción al final.
 Base remota comprobada: `09fa991cf78a3f425499caefde3d2e68ae58b3b0`.
 
 ## Correcciones verificadas
@@ -40,16 +42,23 @@ Las siguientes suites tienen alcances distintos; no se suman como E2E.
 | Verificación | Resultado |
 | --- | --- |
 | Integración HTTP/PostgreSQL/Redis/S3 aislados | 63/63, cero fallos/skips, 18.688 s |
+| Storage real, suite ampliada de limpieza | 10/10; fallo real de DELETE mantiene purga pendiente y recuperación respeta al otro propietario |
 | Motor SDK con proveedor controlado | 52/52; incluye rechazo del cambio de modelo antes de gasto |
 | Ciclo de vida del validador | 9/9 |
 | Pagos HTTP, regresión de planes/cancelación | 9/9 |
 | Cliente documental | 51/51 |
 | Intención documental | 53/53, más 1 follow-up |
 | Hook del chat montado | 14/14 |
+| Navegador Chromium con login y subida reales, motor deshabilitado | 2/2, 43.2 s; Detener en chat nuevo y vacío conserva borrador/original y no envía POST de admisión |
 | Regresión general del repositorio | 12.375/12.375, 532 suites, cero fallos/skips |
 | Guardas de instalación y recuperación | 53/53; no equivalen a instalar gVisor |
 | Typecheck backend/frontend y licencias | Exit 0 |
 | Migración histórica real | 132 migraciones base → F1 (133) → deploy idempotente y status exit 0 |
+
+La cobertura combinada de suites existentes mide 78.77 % de líneas TypeScript
+y 93.61 % de líneas ejecutables Python. El agregado descriptivo es 81.52 %,
+pero incluye integración y no mide ramas Python: no acredita el requisito
+unitario de §10.2. Ver [revisión backend](revision-backend-20260905.md).
 
 La migración se ejecutó con Prisma contra PostgreSQL 16.14/pgvector 0.8.6 en
 una base sintética nueva, sin datos productivos, `db push` ni `migrate resolve`.
@@ -72,6 +81,32 @@ Tras revisar el diff funcional y esa comparación nueva, se actualizaron
 módulos documentales). `ui-lock:verify` pasa; no se cambió CSS ni se aceptaron
 archivos de otros worktrees. Es verificación de integridad del código revisado,
 no sustituto del E2E ni permiso para omitirlo.
+
+El navegador se ejecutó sobre el candidato basado en `09fa991c`, con los
+ajustes finales del spec, en aplicaciones aisladas y sin salida de red. Ambos
+casos esperan la finalización de la petición real de capacidades después de
+Detener y vuelven a verificar que no aparece una admisión tardía. No se
+sustituyeron respuestas de API y no hubo errores de JavaScript de página.
+Evidencia: `/tmp/doc-sandbox-browser-561-d-run.log` y capturas `stop-*` /
+`restored-*` bajo `/tmp/doc-sandbox-browser-561-d/browser`.
+
+La DB del navegador es una copia sintética derivada, alineada como en CI con
+`db push`; se repusieron únicamente las tablas históricas de créditos y su enum
+que quedan fuera del datamodel Prisma. La DB original de la prueba histórica
+no cambió. Esta preparación no acredita resolver esa deriva de esquema en
+producción. Ver [reproducción del navegador](../../../infra/doc-validation/browser-testing.md).
+
+Las capturas confirman Detener durante admisión y el borrador con adjunto al
+cancelar. Se observa un toast genérico «No se pudo iniciar la edición
+verificada» también al cancelar: detalle de experiencia pendiente, sin pérdida
+del original. Estos dos casos no prueban la edición con Anthropic ni la
+descarga validada, y no cubren la actualización concurrente `28058d75`.
+
+El runner retiró las aplicaciones y relays de prueba y dejó libres los puertos
+15161/15162. Tras liberar la tarea de navegador, también se detuvo el PostgreSQL
+histórico sintético, comprobando scope, imagen fijada y red interna sin puertos
+publicados. Se conservaron la base y el volumen; los cuatro servicios de prueba
+quedaron detenidos.
 
 ## Bloqueo administrativo de gVisor
 
@@ -103,6 +138,10 @@ el host reinicia. Ver [plan administrativo](../../../infra/doc-validation/instal
 
 ## Controles todavía abiertos
 
+- Escritura en GitHub: la terminal no tiene credenciales HTTPS y el agente SSH
+  no tiene identidades. `create_blob` mediante la integración GitHub devuelve
+  `403 Resource not accessible by integration`. Ninguna de estas operaciones
+  actualizó la rama remota ni lanzó CI para las correcciones nuevas.
 - gVisor efectivo y preflight documental aislado con Writer/Calc/Impress/PDF.
 - Almacenamiento privado productivo: una comprobación de presencia, sin imprimir
   valores ni secretos, confirmó `ANTHROPIC_API_KEY` presente y
@@ -123,3 +162,42 @@ el host reinicia. Ver [plan administrativo](../../../infra/doc-validation/instal
   apagada: intercepta edición explícita y devolvería `E_NOT_READY`.
 
 Este informe acredita preparación y correcciones, no cierre de F1 ni despliegue.
+
+## Checkpoint local y publicación pendiente
+
+Las correcciones y evidencia quedaron en el commit local
+`8b4f62c0c9d73e4d7f89eda4e66728b96bd8babe`. Se incorporó `production-main`
+(`09fa991cf78a3f425499caefde3d2e68ae58b3b0`) sin conflictos mediante el merge
+local `6ac1a4bd3337ad76cd51bed90962beddbad4588b`. Después pasaron UI-lock y
+la regresión específica de voz aportada por esa base. Estos commits no están
+publicados: el último HEAD remoto verificado de la PR sigue siendo
+`f085ebac9cbbb24e4164e852cc83a8fdc07f4d89`.
+
+No se ejecutaron `publish.sh`, merge a `production-main`, migraciones productivas
+ni cambios del runtime Docker. Se necesita acceso de escritura al repositorio
+`infosiragpt-ops/SiraGPT-APP` para subir la rama y obtener CI del candidato final.
+Una vez resueltos también runtime, R2 y validación real, la publicación canónica
+debe preservar los cambios ajenos del checkout principal mediante un checkout
+limpio y mantener el backup/canary previsto por el procedimiento existente.
+
+Comprobación de producción del 2026-09-05 a las 20:57 UTC: `/api/version`
+devuelve `28058d750ee63aa4daa5aec5f5dfec71dff98f45`, versión
+`0.4.4-production-main.28058d75.20260905T204619Z`; `/api/health/ready` devuelve
+`healthy`, incluidas base de datos, migraciones y Redis. Ese despliegue fue
+realizado por otra tarea y **no contiene #561**. El checkout principal está
+limpio en `codex/effort-polish-production`, mientras `origin/production-main`
+después de un fetch sigue en `09fa991c`. Antes de publicar F1 hay que reconciliar
+esa actualización del selector de esfuerzo y repetir las comprobaciones
+afectadas para conservar la interfaz actualmente publicada.
+
+Una comprobación posterior a las 21:11:56 UTC observó otra publicación de esa
+tarea: `886ec72fbf629cd7511ffcdf8b50a5c3f43c0965`, versión
+`0.4.4-production-main.886ec72f.20260905T210539Z`, con readiness `healthy`.
+Refina el mismo selector de esfuerzo y tampoco contiene #561. Esta es la
+última versión observada; también debe conservarse al preparar el release F1.
+
+Se conserva además una copia privada de la evidencia seleccionada fuera de
+`/tmp`, en `/home/user/deployments/doc-sandbox-phase1-tests/entrega-561-20260905`.
+`evidence-manifest.json` identifica el origen, tamaño y SHA-256 de cada archivo.
+Incluye pruebas generales, integración, limpieza, cobertura, migración, revisión
+AST y preflight administrativo rechazado. No es una autorización de despliegue.

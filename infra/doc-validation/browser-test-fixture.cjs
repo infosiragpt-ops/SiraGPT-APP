@@ -80,6 +80,8 @@ async function seed() {
     const migrations = await db.$queryRawUnsafe('SELECT migration_name FROM _prisma_migrations WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL');
     assert.ok(migrations.some(row => row.migration_name === '20260905000000_doc_sandbox_core'), 'Apply the full historical migrations including F1 before seeding');
     assert.ok(migrations.length > 10, 'A doc-only fixture schema cannot substitute for application migrations');
+    const [rawTables] = await db.$queryRawUnsafe("SELECT to_regclass('credits') IS NOT NULL AND to_regclass('credit_transactions') IS NOT NULL AS ready");
+    assert.equal(rawTables.ready, true, 'Preserve the historical credit tables outside the Prisma datamodel when aligning the browser fixture');
     const existing = await db.user.findUnique({ where: { email: EMAIL }, select: { id: true } });
     assert.ok(!existing || existing.id === OWNER, 'Refusing to overwrite another test account');
     const password = await bcrypt.hash(process.env.DOC_SANDBOX_E2E_PASSWORD, 10);
