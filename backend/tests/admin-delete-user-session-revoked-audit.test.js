@@ -91,43 +91,63 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
       restoreFns.push(() => { model.deleteMany = originalDeleteMany; });
     }
 
+    // User-model fixtures for both the out-of-transaction reads and the
+    // hard-delete transaction below. The exported prisma client is the
+    // instrumented `$extends` client (backend/src/db/pool-instrumentation.js);
+    // on it, write-op overrides (update/delete) assigned onto `prisma.user`
+    // do NOT reliably shadow the real delegate once connected, so a bare
+    // `$transaction((fn) => fn(prisma))` lets `tx.user.update` fall through to
+    // the CI database and fail with P2025. The `$transaction` mock therefore
+    // hands the callback an explicit `tx` whose `user` is this plain fixture.
+    const userFixture = {
+      async findUnique({ where } = {}) {
+        return where.id === VICTIM_ID
+          ? victim
+          : { id: where.id, isSuperAdmin: false, deletedAt: null };
+      },
+      async update({ where, data }) {
+        assert.equal(where.id, VICTIM_ID);
+        assert.ok(data.deletedAt instanceof Date);
+        victim = { ...victim, ...data };
+        return victim;
+      },
+      async delete({ where } = {}) {
+        assert.equal(where.id, VICTIM_ID);
+        assert.ok(victim.deletedAt instanceof Date, 'deactivate before hard deletion');
+        assert.equal(sessions.length, 0, 'revoke sessions before hard deletion');
+        deletedUserIds.push(where.id);
+        const deleted = victim;
+        victim = null;
+        return deleted;
+      },
+    };
+
     const origUserDelete = prisma.user.delete;
-    prisma.user.delete = async ({ where } = {}) => {
-      assert.equal(where.id, VICTIM_ID);
-      assert.ok(victim.deletedAt instanceof Date, 'deactivate before hard deletion');
-      assert.equal(sessions.length, 0, 'revoke sessions before hard deletion');
-      deletedUserIds.push(where.id);
-      const deleted = victim;
-      victim = null;
-      return deleted;
-    };
-    restoreFns.push(() => { prisma.user.delete = origUserDelete; });
-
     const origUserFindUnique = prisma.user.findUnique;
-    prisma.user.findUnique = async ({ where } = {}) => where.id === VICTIM_ID ? victim : ({
-      id: where.id,
-      isSuperAdmin: false,
-      deletedAt: null,
-    });
-    restoreFns.push(() => { prisma.user.findUnique = origUserFindUnique; });
-
-    // Hard deletion now deactivates the user before preparing document cleanup.
-    // Keep this write in the fixture, not the real Prisma client/CI database.
     const origUserUpdate = prisma.user.update;
-    prisma.user.update = async ({ where, data }) => {
-      assert.equal(where.id, VICTIM_ID);
-      assert.ok(data.deletedAt instanceof Date);
-      victim = { ...victim, ...data };
-      return victim;
-    };
-    restoreFns.push(() => { prisma.user.update = origUserUpdate; });
+    prisma.user.delete = userFixture.delete;
+    prisma.user.findUnique = userFixture.findUnique;
+    prisma.user.update = userFixture.update;
+    restoreFns.push(() => {
+      prisma.user.delete = origUserDelete;
+      prisma.user.findUnique = origUserFindUnique;
+      prisma.user.update = origUserUpdate;
+    });
 
     const origUserRoleDeleteMany = prisma.userRole.deleteMany;
     prisma.userRole.deleteMany = async () => ({ count: 0 });
     restoreFns.push(() => { prisma.userRole.deleteMany = origUserRoleDeleteMany; });
 
     const origTransaction = prisma.$transaction;
-    prisma.$transaction = async (fn) => fn(prisma);
+    // Give the transaction a client whose `user` delegate is the plain fixture
+    // (guaranteeing update/delete never reach the real DB); every other model
+    // and raw helper forwards to the mocked singleton exactly as before.
+    prisma.$transaction = async (fn) => fn(new Proxy(prisma, {
+      get(target, prop) {
+        if (prop === 'user') return userFixture;
+        return Reflect.get(target, prop, target);
+      },
+    }));
     restoreFns.push(() => { prisma.$transaction = origTransaction; });
 
     const origQueryRawUnsafe = prisma.$queryRawUnsafe;

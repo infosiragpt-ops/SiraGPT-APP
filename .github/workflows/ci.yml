@@ -274,7 +274,13 @@ jobs:
       - name: Install DOCX test dependency
         run: python -m pip install --disable-pip-version-check --no-cache-dir 'python-docx>=1.1.0'
 
+      # Shard 1 is the only shard that runs the document-sandbox validation /
+      # documents / readiness suites (see the `matrix.shard == 1` steps below).
+      # Installing LibreOffice/Poppler on every shard would activate unrelated
+      # soffice-gated tests (e.g. agent-runner render checks) on shards that do
+      # not need these tools, so scope the install to shard 1.
       - name: Install real document validators (no skipped validation tests)
+        if: matrix.shard == 1
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libreoffice-writer libreoffice-calc libreoffice-impress poppler-utils qpdf fonts-liberation fonts-crosextra-carlito fonts-crosextra-caladea fonts-dejavu redis-server
