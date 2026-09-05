@@ -326,9 +326,8 @@ test('E2E PNG brightness is high after painting white (when soffice exists)', as
   assert.ok(preview.length >= 1);
   const blob = preview.map((e) => String(e.preview || '')).join('\n');
   const brightness = blob.match(/"mean_brightness"\s*:\s*([0-9.]+)/);
-  if (brightness) {
-    assert.ok(Number(brightness[1]) > 180, `white slide should be bright, got ${brightness[1]}`);
-  }
+  assert.ok(brightness, 'installed renderer must produce a measured PNG, not an unverified preview');
+  assert.ok(Number(brightness[1]) > 180, `white slide should be bright, got ${brightness[1]}`);
 });
 
 void TOOL_DEFINITIONS;

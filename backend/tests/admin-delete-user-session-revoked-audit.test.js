@@ -9,7 +9,8 @@
  *   - actorId = victim user id (not the admin)
  *   - metadata.adminId = admin user id
  *   - metadata.scope = 'appshots:capture' only on Appshots-scoped tokens
- *   - 200 response is still returned
+ *   - 200 response is returned after deletion; 202 keeps the deactivated user
+ *     while document cleanup is pending, with the same revocation audit
  */
 
 'use strict';
@@ -47,6 +48,10 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
   const VICTIM_ID = 'victim-user-26';
   let auditWrites = [];
   let sessions = [];
+  let victim;
+  let deletedUserIds;
+  let documentJobs;
+  let documentStatements;
 
   beforeEach(() => {
     auth = installAuthSessionMock({
@@ -57,6 +62,10 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
     });
     restoreFns.push(() => auth.restore());
 
+    victim = { id: VICTIM_ID, isSuperAdmin: false, deletedAt: null };
+    deletedUserIds = [];
+    documentJobs = [];
+    documentStatements = [];
     sessions = [
       { id: 'sess-aps-1', userId: VICTIM_ID, token: makeAppshotsToken(VICTIM_ID) },
       { id: 'sess-aps-2', userId: VICTIM_ID, token: makeAppshotsToken(VICTIM_ID) },
@@ -72,21 +81,46 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
       const model = prisma[modelName];
       if (!model) continue;
       const originalDeleteMany = model.deleteMany;
-      model.deleteMany = async () => ({ count: 0 });
+      model.deleteMany = async ({ where }) => {
+        assert.equal(where.userId, VICTIM_ID);
+        if (modelName !== 'session') return { count: 0 };
+        const before = sessions.length;
+        sessions = sessions.filter((session) => session.userId !== where.userId);
+        return { count: before - sessions.length };
+      };
       restoreFns.push(() => { model.deleteMany = originalDeleteMany; });
     }
 
     const origUserDelete = prisma.user.delete;
-    prisma.user.delete = async ({ where } = {}) => ({ id: where.id });
+    prisma.user.delete = async ({ where } = {}) => {
+      assert.equal(where.id, VICTIM_ID);
+      assert.ok(victim.deletedAt instanceof Date, 'deactivate before hard deletion');
+      assert.equal(sessions.length, 0, 'revoke sessions before hard deletion');
+      deletedUserIds.push(where.id);
+      const deleted = victim;
+      victim = null;
+      return deleted;
+    };
     restoreFns.push(() => { prisma.user.delete = origUserDelete; });
 
     const origUserFindUnique = prisma.user.findUnique;
-    prisma.user.findUnique = async ({ where } = {}) => ({
+    prisma.user.findUnique = async ({ where } = {}) => where.id === VICTIM_ID ? victim : ({
       id: where.id,
       isSuperAdmin: false,
       deletedAt: null,
     });
     restoreFns.push(() => { prisma.user.findUnique = origUserFindUnique; });
+
+    // Hard deletion now deactivates the user before preparing document cleanup.
+    // Keep this write in the fixture, not the real Prisma client/CI database.
+    const origUserUpdate = prisma.user.update;
+    prisma.user.update = async ({ where, data }) => {
+      assert.equal(where.id, VICTIM_ID);
+      assert.ok(data.deletedAt instanceof Date);
+      victim = { ...victim, ...data };
+      return victim;
+    };
+    restoreFns.push(() => { prisma.user.update = origUserUpdate; });
 
     const origUserRoleDeleteMany = prisma.userRole.deleteMany;
     prisma.userRole.deleteMany = async () => ({ count: 0 });
@@ -97,11 +131,23 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
     restoreFns.push(() => { prisma.$transaction = origTransaction; });
 
     const origQueryRawUnsafe = prisma.$queryRawUnsafe;
-    prisma.$queryRawUnsafe = async () => [{ version: '1' }];
+    prisma.$queryRawUnsafe = async (sql, ...params) => {
+      if (sql.includes("to_regclass('doc_jobs')")) return [{ relation: 'doc_jobs' }];
+      if (sql.includes('FROM doc_jobs')) {
+        assert.equal(params[0], VICTIM_ID);
+        if (sql.startsWith('SELECT * FROM doc_jobs')) return documentJobs;
+        if (sql.startsWith('SELECT count(*)::int AS count')) return [{ count: documentJobs.length }];
+        assert.fail('Unexpected document lifecycle query');
+      }
+      return [{ version: '1' }];
+    };
     restoreFns.push(() => { prisma.$queryRawUnsafe = origQueryRawUnsafe; });
 
     const origExecuteRawUnsafe = prisma.$executeRawUnsafe;
-    prisma.$executeRawUnsafe = async () => 1;
+    prisma.$executeRawUnsafe = async (sql) => {
+      if (/doc_jobs|doc_job_artifacts|doc_job_events/.test(sql)) documentStatements.push(sql);
+      return 1;
+    };
     restoreFns.push(() => { prisma.$executeRawUnsafe = origExecuteRawUnsafe; });
 
     const origSettingsFindUnique = prisma.systemSettings.findUnique;
@@ -146,6 +192,9 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
 
     assert.equal(res.status, 200);
     assert.equal(res.body.message, 'User deleted successfully');
+    assert.deepEqual(deletedUserIds, [VICTIM_ID]);
+    assert.equal(victim, null);
+    assert.equal(sessions.length, 0);
 
     // Audit writes are fire-and-forget — give the microtask queue a tick.
     await new Promise((r) => setImmediate(r));
@@ -165,6 +214,36 @@ describe('DELETE /admin/users/:id emits session_admin_revoked audit rows', () =>
     assert.equal(appshotsRows.length, 2, 'two Appshots-scoped tokens tagged');
     const plainRows = revoked.filter((r) => !('scope' in r.metadata));
     assert.equal(plainRows.length, 1, 'plain token left untagged');
+    assert.deepEqual(revoked.map((row) => row.resourceId).sort(), ['sess-aps-1', 'sess-aps-2', 'sess-plain']);
+  });
+
+  it('retains the deactivated user and audits every revoked session while document cleanup is pending', async () => {
+    documentJobs = [{ id: 'doc-job-26', deleted_at: null }];
+    const res = await request(app)
+      .delete(`/admin/users/${VICTIM_ID}`)
+      .set('Authorization', auth.authHeader)
+      .send();
+
+    assert.equal(res.status, 202);
+    assert.equal(res.body.code, 'DOC_CLEANUP_PENDING');
+    assert.equal(res.body.deletionPending, true);
+    assert.ok(victim.deletedAt instanceof Date);
+    assert.deepEqual(deletedUserIds, [], 'do not cascade-delete pending private documents');
+    assert.equal(sessions.length, 0, 'pending cleanup must not leave active sessions');
+    assert.ok(documentStatements.some((sql) => sql.includes('account_purge_requested=true')));
+    assert.ok(documentStatements.some((sql) => sql.includes('UPDATE doc_job_artifacts SET published=false')));
+    assert.equal(documentStatements.some((sql) => sql.startsWith('DELETE FROM doc_jobs')), false);
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const revoked = auditWrites.filter((row) => row.action === 'session_admin_revoked');
+    assert.deepEqual(revoked.map((row) => row.resourceId).sort(), ['sess-aps-1', 'sess-aps-2', 'sess-plain']);
+    for (const row of revoked) {
+      assert.equal(row.actorId, VICTIM_ID);
+      assert.equal(row.resourceType, 'session');
+      assert.equal(row.metadata.adminId, 'admin-user-26');
+      if (row.resourceId.startsWith('sess-aps-')) assert.equal(row.metadata.scope, 'appshots:capture');
+      else assert.equal(Object.hasOwn(row.metadata, 'scope'), false);
+    }
   });
 
   it('refuses to delete the admin themselves and emits no audit rows', async () => {
