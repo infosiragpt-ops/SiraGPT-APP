@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Tar volumes on VPS and upload to S3
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
