@@ -192,6 +192,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: conservar el error original, rescatar sólo entradas admitidas por el mismo extractor estricto y ejecutar las notificaciones existentes de registro/consumo antes de rechazar. Nunca continuar `pause_turn`, descargar ni publicar por esta recuperación.
 - Consecuencias: tres integraciones reales, dos contratos del adapter y guard CI; pre-fix 50/52 y post-fix 52/52. Callbacks observados no se describen como persistencia durable. Sin cambios de SQL/validador/UI, sin mezclar integraciones en cobertura, sin publicación ni cierre F1. Ver [provider-reference-release-20260906.md](provider-reference-release-20260906.md).
 
+## D29. Identidades remotas independientes por original
+
+- Contexto: una respuesta de upload con ID reutilizado podía aceptar dos originales de igual tamaño pero diferente contenido como el mismo objeto remoto. La regresión reproduce un proveedor defectuoso, no una incidencia observada en Anthropic.
+- Decisión: exigir un ID no utilizado por otro input aceptado de la sesión, después de registrar cleanup y respetar cancelación. Rechazar con `E_PROVIDER` antes de aceptar el segundo input o solicitar edición; destruir mediante el flujo existente, sin borrar anticipadamente el recurso del primer input. El [contrato oficial de subida](https://platform.claude.com/docs/en/api/files/upload) describe la identidad única del objeto.
+- Consecuencias: nombres coincidentes siguen admitidos con aliases e IDs independientes. Dos casos unitarios y una regresión PostgreSQL, pre-fix 1/2 y 52/53 frente a post-fix 2/2 y 53/53. Sin cambios de SQL, UI, SDK o autoridad del motor; no acredita almacenamiento de bytes ni edición real. Evidencia y límites en [upload-identity-release-20260906.md](upload-identity-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

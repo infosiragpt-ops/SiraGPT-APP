@@ -598,6 +598,59 @@ test('forged session handles, input hashes and duplicate inputs are refused', as
   await engine.destroy(session);
 });
 
+test('provider upload identities cannot collapse two distinct originals into one remote file', async () => {
+  const { engine, session, sdk, events } = await fixture({ skipUpload: true });
+  const files = [input('Informe.txt', 'Year 2026\n', 'input-a'), input('Informe.txt', 'Year 2027\n', 'input-b')];
+  assert.equal(files[0].data.length, files[1].data.length);
+  assert.notEqual(files[0].sha256, files[1].sha256);
+  let uploaded;
+  sdk.upload = async (bytes, name, mime, options) => {
+    if (!uploaded) uploaded = await ProviderMock.prototype.upload.call(sdk, bytes, name, mime, options);
+    else sdk.uploads.push({ bytes: Buffer.from(bytes), name, mime, options });
+    return { ...uploaded, filename: name, size_bytes: bytes.length };
+  };
+  try {
+    await assert.rejects(engine.uploadInputs(session, files), isCode('E_PROVIDER'));
+    assert.deepEqual(sdk.uploads.map(entry => entry.name), ['input-0.txt', 'input-1.txt']);
+    assert.deepEqual(sdk.uploads.map(entry => sha256(entry.bytes)), files.map(file => file.sha256));
+    assert.equal(sdk.messages.length, 0);
+    assert.equal(sdk.metadataCalls.length, 0);
+    assert.equal(sdk.downloads.length, 0);
+    assert.equal(events.filter(([name]) => name === 'reserve').length, 0);
+    const known = events.filter(([name, , ref]) => name === 'fileChanged' && ref.state === 'known');
+    assert.deepEqual(known.map(([, , ref]) => [ref.id, ref.kind]), [[uploaded.id, 'input']]);
+  } finally {
+    await engine.destroy(session);
+  }
+  assert.deepEqual(sdk.deletions.map(entry => entry.id), [uploaded.id]);
+  assert.equal(sdk.files.size, 0);
+  await engine.destroy(session);
+  assert.equal(sdk.deletions.length, 1);
+});
+
+test('provider upload identities keep same-named originals separate using independent aliases', async () => {
+  const { engine, session, sdk, events } = await fixture({ skipUpload: true });
+  const files = [input('Informe.txt', 'Year 2026\n', 'input-a'), input('Informe.txt', 'Year 2027\n', 'input-b')];
+  try {
+    await engine.uploadInputs(session, files);
+    const known = events.filter(([name, , ref]) => name === 'fileChanged' && ref.state === 'known');
+    assert.equal(known.length, 2);
+    assert.equal(new Set(known.map(([, , ref]) => ref.id)).size, 2);
+    assert.deepEqual(sdk.uploads.map(entry => entry.name), ['input-0.txt', 'input-1.txt']);
+    const result = await engine.run(session, request(), () => {});
+    assert.equal(result.status, 'planned');
+    assert.deepEqual(result.editPlan.inputHashes, Object.fromEntries(files.map(file => [file.id, file.sha256])));
+    const content = sdk.messages[0].params.messages[0].content;
+    assert.equal(new Set(content.filter(block => block.type === 'container_upload').map(block => block.file_id)).size, 2);
+    const payload = JSON.parse(content.find(block => block.type === 'text').text);
+    assert.deepEqual(payload.inputs.map(file => [file.originalName, file.captureAlias]),
+      [['Informe.txt', 'input-0.txt'], ['Informe.txt', 'input-1.txt']]);
+  } finally {
+    await engine.destroy(session);
+  }
+  assert.equal(sdk.files.size, 0);
+});
+
 test('mode, skills, model tier and budget changes cannot silently alter an existing job', async () => {
   const { engine, session } = await fixture();
   const result = await engine.run(session, request(), () => {});

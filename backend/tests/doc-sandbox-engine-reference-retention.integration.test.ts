@@ -178,3 +178,75 @@ for (const family of ['bash_code_execution', 'code_execution'] as const) {
     await verifyRejectedResponse(family, true);
   });
 }
+
+test('real ledger retains one cleanup obligation when distinct uploads reuse a provider file ID', async () => {
+  const inputs: InputFile[] = ['Synthetic 2026\n', 'Synthetic 2027\n'].map((text, index) => {
+    const data = Buffer.from(text);
+    return { id: randomUUID(), name: `Original-${index + 1}.txt`, format: 'txt', mime: 'text/plain', data, sha256: sha256(data) };
+  });
+  assert.equal(inputs[0]!.data.length, inputs[1]!.data.length);
+  assert.notEqual(inputs[0]!.sha256, inputs[1]!.sha256);
+  const { job } = await repository.createJob({ userId: owner, idempotencyKey: randomUUID(),
+    payloadHash: sha256(Buffer.concat(inputs.map(input => input.data))),
+    instructionsKey: `private-fixture/${randomUUID()}/instructions`,
+    inputs: inputs.map(input => ({ id: input.id, kind: 'input', filename: input.name,
+      storageKey: `private-fixture/${randomUUID()}/input`, mime: input.mime, size: input.data.length, sha256: input.sha256 })),
+    modelTier: 'mechanical', requestedModel: model.id, maxTokens: 1000, maxCostUsd: '5',
+    promptVersion: EDITOR_PROMPT_VERSION, expiresAt: new Date(Date.now() + 86400_000), ready: true });
+  const lease = await repository.claimAttempt(job.id, 60_000); assert.ok(lease);
+  await repository.transition(lease, 'planning');
+  // These are real database metadata records, not a claim of stored/validated document bytes.
+  const originals = await repository.artifactsInternal(job.id);
+  assert.equal(originals.length, 2);
+  assert.deepEqual(originals.map(record => record.sha256).sort(), inputs.map(input => input.sha256).sort());
+  assert.ok(originals.every(record => record.kind === 'input' && !record.published && record.purgedAt === null));
+  const uploadId = `file_reused_${randomUUID().replaceAll('-', '')}`;
+  const uploads: Array<{ filename: string; sha256: string }> = [];
+  const deletions: string[] = [];
+  let messageCalls = 0;
+  let metadataCalls = 0;
+  let downloadCalls = 0;
+  const provider: DocumentProviderClient = {
+    upload: async (bytes, filename) => {
+      uploads.push({ filename, sha256: sha256(bytes) });
+      return { id: uploadId, filename, size_bytes: bytes.length, mime_type: 'text/plain', downloadable: false };
+    },
+    message: async () => { messageCalls += 1; throw new Error('Unexpected SDK model request'); },
+    metadata: async () => { metadataCalls += 1; throw new Error('Unexpected SDK metadata request'); },
+    download: async () => { downloadCalls += 1; throw new Error('Unexpected SDK download request'); },
+    delete: async id => { deletions.push(id); },
+  };
+  const engine = new AnthropicSandboxEngine(provider, config, realLedger(lease));
+  const session = await engine.createSession({ id: job.id, userId: owner, attempt: lease.attempt, promptVersion: EDITOR_PROMPT_VERSION });
+  const beforeUpload = await repository.getInternal(job.id);
+  try {
+    await assert.rejects(engine.uploadInputs(session, inputs), isProviderFailure);
+    assert.deepEqual(uploads, inputs.map((input, index) => ({ filename: `input-${index}.txt`, sha256: input.sha256 })));
+    assert.equal(messageCalls, 0);
+    assert.equal(metadataCalls, 0);
+    assert.equal(downloadCalls, 0);
+    assert.deepEqual(deletions, [], 'The shared remote ID remains known until cleanup');
+    await assert.rejects(engine.downloadOutputs(session), error => error instanceof DocSandboxError && error.code === 'E_CONFLICT');
+    const recorded = await repository.getInternal(job.id);
+    assert.deepEqual(recorded.providerFiles, [{ fileId: uploadId, attempt: lease.attempt, deleted: false, failures: 0 }]);
+    assert.deepEqual(recorded.providerContainers, []);
+    assert.deepEqual(recorded.costReservations, []);
+    assert.equal(recorded.costUsd, beforeUpload.costUsd);
+    assert.deepEqual(recorded.usage, beforeUpload.usage);
+    assert.equal(recorded.status, 'planning');
+    assert.equal(recorded.fence, lease.fence);
+    assert.equal(recorded.leaseToken, lease.token);
+    assert.deepEqual(recorded.leaseExpiresAt, beforeUpload.leaseExpiresAt);
+    assert.deepEqual(recorded.outputKeys, []);
+    assert.equal(recorded.cleanupPending, true);
+    assert.deepEqual(await repository.artifactsInternal(job.id), originals);
+    assert.deepEqual(await repository.artifactsOwned(job.id, owner), []);
+    assert.equal(recorded.eventSeq, beforeUpload.eventSeq, 'Upload rejection must not publish or advance the job');
+  } finally {
+    await engine.destroy(session);
+    assert.deepEqual(deletions, [uploadId], 'Only the single known provider identity may be deleted');
+    const cleaned = await repository.getInternal(job.id);
+    assert.deepEqual(cleaned.providerFiles, [{ fileId: uploadId, attempt: lease.attempt, deleted: true, failures: 0 }]);
+    assert.deepEqual(await repository.artifactsInternal(job.id), originals);
+  }
+});

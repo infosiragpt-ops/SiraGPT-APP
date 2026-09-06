@@ -110,7 +110,11 @@ export class AnthropicSandboxEngine implements SandboxEngine {
         const uploaded = await this.call(session, signal, (options) => this.client.upload(file.data, alias, file.mime, options));
         await this.trackFile(session, uploaded.id, 'input');
         if (session.controller.signal.aborted) throw new DocSandboxError('E_CANCELLED', 409);
-        if (uploaded.size_bytes !== file.data.length) throw new DocSandboxError('E_PROVIDER', 502);
+        // Distinct inputs need distinct remote identities for their capture aliases.
+        // Track first so rejecting a reused ID preserves its cleanup obligation.
+        if (uploaded.size_bytes !== file.data.length || session.inputs.some((input) => input.providerId === uploaded.id)) {
+          throw new DocSandboxError('E_PROVIDER', 502);
+        }
         session.inputs.push({ id: file.id, name: file.name, format: file.format, mime: file.mime, sha256: file.sha256, providerId: uploaded.id });
       }
     } catch (error: unknown) {

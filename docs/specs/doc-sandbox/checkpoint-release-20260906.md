@@ -5,7 +5,19 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** producción avanzó a `845e0c481…` (#570), no a
+**Actualización más reciente:** el motor rechaza un ID remoto reutilizado por
+dos originales distintos, sin perder la obligación de limpieza ni confundir
+nombres coincidentes con identidades. Regresiones pre-fix **1/2** unitarias y
+**52/53** PG/Redis; post-fix **2/2** y **53/53**, con servicios detenidos.
+Suite estricta **345/345**, cobertura **72,76 % (2597/3569)** aún inferior al
+80 %, generales **12467/12467**, tipos/lint/UI-lock aprobados y revisión
+independiente favorable. Sin gasto nuevo ni escritura en producción.
+Versión pública y checkout limpio: `845e0c481…` (#570), readiness saludable a
+**2026-09-06T22:02:05.495Z**. No se reconsultaron runsc/R2/configuración en este
+lote. No hay despliegue de #561 ni cierre de F1. Ver
+[upload-identity-release-20260906.md](upload-identity-release-20260906.md).
+
+**Registro anterior (`35c6c7b41…`):** producción avanzó a `845e0c481…` (#570), no a
 #561. Se integró esa base sin conflictos, preservando fuentes y scripts.
 La rama combinada pasa **173/173** nativas, **343/343** unitarias,
 **12467/12467** generales y **52/52** integraciones PG/Redis locales con cierre
