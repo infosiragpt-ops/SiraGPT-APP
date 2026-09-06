@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
+import { gzipSync } from "node:zlib"
 import test from "node:test"
 
 const target = "a".repeat(40)
@@ -18,6 +19,12 @@ const state=(service='backend')=>fs.existsSync(stateFile)?JSON.parse(fs.readFile
 const fail=()=>{process.stderr.write('fixture-private-value\n');process.exit(1)};
 fs.appendFileSync(path.join(root,'commands.jsonl'),JSON.stringify({command,args:a})+'\n');
 if(command==='sleep')process.exit(0);
+if(command==='pg_dump'){if(c.dumpFail)fail();console.log('PGDMP fixture');process.exit(0);}
+if(command==='pg_restore'){
+ const header=Buffer.alloc(5);const n=fs.readSync(0,header,0,header.length,null);
+ if(c.invalidDump||n!==5||header.toString()!=='PGDMP')fail();
+ console.log('verified fixture archive');process.exit(0);
+}
 if(command==='git'){
  if(a[0]==='status'){if(c.gitStatusError)fail();if(c.dirty)console.log(' M fixture.txt');}
  else if(a[0]==='rev-parse')console.log(c.wrongHead?'c'.repeat(40):c.target);
@@ -82,9 +89,11 @@ if(command==='docker'){
    if(!rollback&&(c.upFail||(c.backendUpFail&&services.includes('backend'))))fail();process.exit(0);
   }
   if(a.includes('exec')&&a.includes('db')){
-   if(a.includes('pg_restore')){if(c.invalidDump||!fs.readFileSync(0,'utf8').startsWith('PGDMP'))fail();console.log('verified fixture archive');}
-   else {if(c.dumpFail)fail();console.log('PGDMP fixture');}
-   process.exit(0);
+   const n=a.indexOf('sh');if(n<0||a[n+1]!=='-c')fail();
+   // Preserve the actual pipe fd: pg_restore reads only a header, then the
+   // publisher's same-shell cat must consume the unread remainder.
+   const r=cp.spawnSync('sh',a.slice(n+1),{stdio:['inherit','pipe','pipe'],encoding:'utf8'});
+   process.stdout.write(r.stdout||'');process.stderr.write(r.stderr||'');process.exit(r.status??1);
   }
  }
 }
@@ -109,7 +118,7 @@ function runCase(options: Record<string, unknown> = {}, args = [target, previous
     .replace("LOCK=/tmp/siragpt-publish.lock", `LOCK='${lock}'`)
   const script = path.join(dir, "publish.sh")
   fs.writeFileSync(script, source, { mode: 0o700 })
-  for (const command of ["git", "docker", "curl", "sleep"]) {
+  for (const command of ["git", "docker", "curl", "sleep", "pg_dump", "pg_restore"]) {
     fs.writeFileSync(path.join(dir, "bin", command), `#!${process.execPath}\n${commandFixture}`, { mode: 0o700 })
   }
   const result = spawnSync("bash", [script, ...args], {
@@ -188,7 +197,7 @@ test("reviewed publisher captures private backups and updates only the three app
       assert.equal(fs.statSync(path.join(backup, name)).mode & 0o777, 0o600, name)
     }
     assert.equal(spawnSync("gzip", ["-t", path.join(backup, "database.dump.gz")]).status, 0)
-    assert.ok(c.commands.some(x => x.args.includes("pg_restore") && x.args.includes("--list")))
+    assert.ok(c.commands.some(x => x.command === "pg_restore" && x.args.includes("--list")))
     const updates = c.commands.filter(x => x.command === "docker" && x.args.includes("up"))
     assert.equal(updates.length, 2)
     assert.deepEqual(updates[0].args.slice(-2), ["runner", "frontend"])
@@ -275,3 +284,62 @@ for (const service of ["runner", "frontend"]) {
     } finally { c.cleanup() }
   })
 }
+
+// These probes use real gzip, POSIX pipes, sh and cat, but a deliberately
+// short-reading pg_restore stand-in. They certify stream/error handling,
+// not PostgreSQL archive semantics or a real database backup/restore.
+function runArchivePipe(options: { oldConsumer?: boolean; restoreExit?: number; drainFail?: boolean; corruptGzip?: boolean } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "siragpt-archive-pipe-"))
+  try {
+    const payload = Buffer.alloc(8 * 1024 * 1024, 65)
+    payload.write("PGDMP")
+    const archive = gzipSync(payload)
+    if (options.corruptGzip) archive[archive.length - 8] ^= 0xff // corrupt CRC, keep the DEFLATE stream readable
+    const dump = path.join(dir, "archive.dump.gz")
+    fs.writeFileSync(dump, archive)
+    fs.writeFileSync(path.join(dir, "pg_restore"), '#!/bin/sh\nhead -c 5 >/dev/null || exit 8\nprintf "fixture archive TOC\\n"\nexit "${RESTORE_EXIT:-0}"\n', { mode: 0o700 })
+    if (options.drainFail) fs.writeFileSync(path.join(dir, "cat"), "#!/bin/sh\nexit 9\n", { mode: 0o700 })
+    const validationLine = original.split("\n").find(line => line.startsWith('gzip -dc "$BACKUP/database.dump.gz"'))
+    assert.ok(validationLine, "publisher must decompress the validated archive")
+    const command = /exec -T db sh -c '([^']+)'/.exec(validationLine)?.[1]
+    assert.ok(command, "archive validation and drain must share one database exec shell")
+    return spawnSync("bash", ["-o", "pipefail", "-c", 'gzip -dc "$1" | sh -c "$2"', "archive-probe", dump,
+      options.oldConsumer ? "pg_restore --list" : command], {
+      env: { PATH: `${dir}:${process.env.PATH}`, RESTORE_EXIT: String(options.restoreExit ?? 0) },
+      encoding: "utf8", timeout: 10_000,
+    })
+  } finally { fs.rmSync(dir, { recursive: true, force: true }) }
+}
+
+test("large archive pipe reproduces the old SIGPIPE 141 when pg_restore exits after its TOC", () => {
+  const result = runArchivePipe({ oldConsumer: true })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 141, result.stderr)
+  assert.equal(result.stdout, "fixture archive TOC\n")
+})
+
+test("large archive pipe drains remaining bytes without adding them to the TOC", () => {
+  const result = runArchivePipe()
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stdout, "fixture archive TOC\n")
+})
+
+test("large archive pipe preserves an invalid pg_restore exit code after draining", () => {
+  const result = runArchivePipe({ restoreExit: 7 })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 7, result.stderr)
+})
+
+test("large archive pipe rejects a failed drain rather than hiding it", () => {
+  const result = runArchivePipe({ drainFail: true })
+  assert.equal(result.error, undefined)
+  assert.equal(result.status, 1, result.stderr)
+})
+
+test("large archive pipe preserves gzip corruption failure under pipefail", () => {
+  const result = runArchivePipe({ corruptGzip: true })
+  assert.equal(result.error, undefined)
+  assert.notEqual(result.status, 0, "a successful consumer must not hide a failed decompressor")
+  assert.match(result.stderr, /gzip/i)
+})

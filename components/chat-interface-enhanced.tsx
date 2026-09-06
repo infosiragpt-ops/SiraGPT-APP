@@ -249,6 +249,7 @@ import {
 } from "@/lib/research-artifacts"
 import ResearchResultsWorkbench from "@/components/research/ResearchResultsWorkbench"
 import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialAgentState, type AgentTaskState } from "@/lib/agent-task-service"
+import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
 import { routeDocumentSandboxTurn } from "@/lib/document-sandbox-routing"
@@ -5987,17 +5988,13 @@ function ChatInterfaceContent() {
       setCurrentChat(prevChat => {
         if (!prevChat || prevChat.id !== chatId) return prevChat;
         const messages = [...(prevChat.messages || [])];
-        let messageIndex = messages.findIndex((message: any) => {
-          const parsedState = parseAgentTaskMessageState(message?.content);
-          return getAgentTaskIdFromMessage(message, parsedState) === taskId;
+        const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
+        const messageIndex = findRecoveredAgentAssistantIndex(messages, {
+          chatId,
+          taskId,
+          bubbleMessageId,
+          legacyMessageId: recoverable?.message.id,
         });
-        if (messageIndex < 0 && bubbleMessageId) {
-          messageIndex = messages.findIndex((message: any) => message?.id === bubbleMessageId);
-        }
-        if (messageIndex < 0) {
-          const recoverable = findRecoverableAgentTaskMessage(messages, taskId);
-          if (recoverable) messageIndex = messages.findIndex((message: any) => message?.id === recoverable.message.id);
-        }
 
         if (messageIndex >= 0) {
           const previous = messages[messageIndex];

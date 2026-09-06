@@ -780,7 +780,7 @@ jobs:
           # PLAYWRIGHT_BASE_URL is set, so the config skips its managed server
           # and runs against this pre-warmed instance.
           STATUS=0
-          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/document-artifact-consistency.spec.ts || STATUS=$?
+          npx playwright test --reporter=list e2e/chat.spec.ts e2e/chat-upload.spec.ts e2e/chat-composer-stable-size.spec.ts e2e/document-artifact-consistency.spec.ts e2e/document-task-error-recovery.spec.ts || STATUS=$?
           kill "$SERVER_PID" 2>/dev/null || true
           exit $STATUS
 

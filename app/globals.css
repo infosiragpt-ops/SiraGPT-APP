@@ -797,8 +797,14 @@ div[style*="position: fixed"][style*="z-index"][style*="opacity"] {
 
 .chat-message-scroll [data-radix-scroll-area-viewport] > div {
   min-height: 100%;
-  display: flex;
+  /* Radix sets display:table inline. The transcript is vertical-only: its
+     wrapper must fit the viewport, not expand to a message's intrinsic width. */
+  display: flex !important;
   flex-direction: column;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0 !important;
 }
 
 .chat-message-scroll-content {
