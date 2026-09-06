@@ -22,6 +22,16 @@ const orchestrator = fs.readFileSync(
 )
 
 describe("composer effort picker source contract", () => {
+  it("shows only the lightning icon while retaining the accessible effort name", () => {
+    const trigger = effortMenu.match(/<PopoverTrigger asChild>([\s\S]*?)<\/PopoverTrigger>/)?.[1]
+    assert.ok(trigger, "the existing effort trigger must remain")
+    assert.match(trigger, /aria-label=\{`Esfuerzo: \$\{active\.label\}`\}/)
+    assert.match(trigger, /title=\{`\$\{active\.label\}/)
+    assert.match(trigger, /<Zap\b[^>]*aria-hidden="true"/)
+    assert.doesNotMatch(trigger, /<span\b|composer-effort-caret/, "no visible label or caret beside the bolt")
+    assert.match(globals, /\.composer-effort-chip \{\s*order: 30;\s*width: 2rem;\s*max-width: 2rem;\s*padding: 0;\s*justify-content: center;\s*gap: 0;/)
+  })
+
   it("offers only levels the backend compute planner accepts", () => {
     const levelsBlock = effortMenu.match(/export const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
     assert.ok(levelsBlock, "EFFORT_LEVELS must exist")

@@ -161,6 +161,8 @@ async function composerMetrics(page: Page) {
       permissionTitle: permission.getAttribute("title") || "",
       permissionLevel: permission.getAttribute("data-level") || "",
       effortLabel: effortChip.textContent?.trim().replace(/[▾⌃]/g, "").trim(),
+      effortAria: effortChip.getAttribute("aria-label"),
+      effortWidth: effortChip.getBoundingClientRect().width,
       hasInlineAgentToggle: Boolean(surface.querySelector(".composer-sira-code-toggle")),
       toolbarOrder: [contextTrigger, modelTrigger, effortChip, dictation, primaryAction]
         .map((element) => element.getBoundingClientRect().left),
@@ -244,7 +246,9 @@ test("desktop composer keeps the approved width across text, attachment, tool, a
   expect(approved.permissionAria).toBe("Permisos: Acceso completo")
   expect(approved.permissionTitle).toBe("Acceso completo")
   expect(approved.permissionLevel).toBe("full")
-  expect(approved.effortLabel).toBe("Extra high")
+  expect(approved.effortLabel).toBe("")
+  expect(approved.effortAria).toBe("Esfuerzo: Extra high")
+  expect(approved.effortWidth).toBe(32)
   expect(approved.hasInlineAgentToggle).toBe(false)
   expect(approved.toolbarOrder).toEqual([...approved.toolbarOrder].sort((a, b) => a - b))
 
@@ -419,7 +423,10 @@ test("context and effort open as separate professional popovers with real data",
   await expect(slider).toHaveAttribute("aria-valuetext", "Low")
   await page.keyboard.press("End")
   await expect(slider).toHaveAttribute("aria-valuetext", "Extra high")
-  await expect(effortTrigger).toContainText("Extra high")
+  await expect(effortTrigger).toHaveText("")
+  await expect(effortTrigger).toHaveAccessibleName("Esfuerzo: Extra high")
+  await expect(effortTrigger.locator(":scope > svg")).toHaveCount(1)
+  await expect(effortTrigger.locator(":scope > span")).toHaveCount(0)
   // Dragging shows a value bubble that follows the thumb.
   const sliderBox = await slider.boundingBox()
   expect(sliderBox, "slider must expose a 24px+ target").not.toBeNull()

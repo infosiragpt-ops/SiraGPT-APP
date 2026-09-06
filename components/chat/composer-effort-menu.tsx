@@ -178,9 +178,7 @@ export function ComposerEffortMenu({
           title={`${active.label}${fast ? " · Modo rápido" : ""}`}
           className={cn("composer-effort-chip", (active.value === "Extra" || active.value === "Max") && "is-high")}
         >
-          <Zap className="h-3.5 w-3.5 shrink-0" strokeWidth={2.2} />
-          <span className="truncate">{active.label}</span>
-          <span aria-hidden className="composer-effort-caret">⌃</span>
+          <Zap className="h-3.5 w-3.5 shrink-0" strokeWidth={2.2} aria-hidden="true" />
         </button>
       </PopoverTrigger>
       <PopoverContent
