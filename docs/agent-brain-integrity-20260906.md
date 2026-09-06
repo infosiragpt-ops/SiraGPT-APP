@@ -80,7 +80,7 @@ framework or a wholesale upstream import:
 | Completion evidence | Strict boolean approval; bounded rejection stops with `verification_failed`, never a rejected draft. No last-step override. Stop overrides a late positive verdict. | Real ReAct: native/prose, throwing and malformed guards, last step, provider failure, Stop, valid repair and valid success. |
 | Answer judge | At most two calls per verifier instance; cached in-flight/verdict by full draft and non-finalize evidence digest. A changed draft/evidence cannot inherit approval. Real timeout race and abort cleanup; invalid/unavailable evidence fails closed. | Judge stub failures, invalid JSON/booleans, evidence beyond excerpt, bounded memory, concurrent budget, ignored SDK abort and late rejection. No paid calls. |
 | Resume | Additive checkpoint v2 records actual tool attempts, weighted failure budget, elapsed runtime, rejection/repoll counters, force-finalize latch and bounded no-op hashes. Validate round pairing and counters; merge usage conservatively with caller context. Rejected prose checkpoints too. | Engine-emitted JSON-roundtrip snapshots; real manifest tool allowance; exhausted/reduced limits perform no new model/tool calls; malformed counters, orphaned calls, input immutability and no-op continuation. |
-| Read ordering | Exact audited builtin names, with explicit local `readOnly:false` veto and `readOnly:true` opt-in. Separate `cacheable:false`. Ignore remote annotations as authority. | Prefix/case spoofing, mutating overrides, local new reads, fresh repeated reads and repeat requested writes. |
+| Read ordering | Exact audited builtin names, with explicit local `readOnly:false` veto and `readOnly:true` opt-in. Separate `cacheable:false`. Ignore remote annotations as authority. Automatic read fallback also respects both tools' local read policy. | Prefix/case spoofing, mutating overrides, local new reads, fresh repeated reads, repeat requested writes and forbidden automatic alternate dispatch. |
 | Progress | Only a repeated explicit top-level `ok:true, changed:false` result with same tool/result fingerprint fails to reset consecutive rejection. First evidence, changed revisions/identities, nested data and generic success remain valid. | Native handler fixtures, argument churn, alternating tools, genuine progress controls and checkpoint restore. |
 | Task outcome | Central reason classifier, honest failed/cancelled terminal snapshots and metadata, recovery cannot override guards/Stop/budgets. Late events do not reopen a finished file snapshot; explicit new-job retry can reset it. Inline progress writes drain before terminal DB metadata. | Real temporary file store, actual worker with synthetic tools/attachments, DB adapter stubs, SSE closure and real inline persistence closures with fake timers/delayed DB. These are not live provider E2E. |
 
@@ -108,8 +108,8 @@ framework or a wholesale upstream import:
 
 ### Continuation validation
 
-Final local runs: `test:agent-brain` **295/295**, `test:openclaw-native`
-**343/343**, zero failures/skips in both. These commands overlap; their totals
+Final local runs: `test:agent-brain` **314/314**, `test:openclaw-native`
+**362/362**, zero failures/skips in both. These commands overlap; their totals
 are not additive unique coverage. They include all continuation regression
 files in brain checks and the existing native CI gate; no exclusions or skips
 were added. Native HTTP disconnect tests bind loopback only; they passed after
@@ -123,8 +123,8 @@ successful text or artifacts after a failed done. Explicit new-job retries keep
 their tested transition. Remote CI is a separate gate from these local results.
 
 Scoped coverage of ReAct, chat wrapper, answer verifier and outcome classifier:
-**88.02% lines/statements, 74.61% branches, 66.46% functions**. ReAct itself is
-94.54% lines; verifier and classifier are 100% lines. This is not repository-wide
+**88.02% lines/statements, 74.95% branches, 66.46% functions**. ReAct itself is
+94.55% lines; verifier and classifier are 100% lines. This is not repository-wide
 coverage; wrapper function coverage (50%) remains below the 70% aspirational
 target, and the larger task route/worker are outside this scoped coverage figure.
 
@@ -135,6 +135,13 @@ fixtures (`attachment_chat_fast_path` versus `attachment_runtime_recovery`, and
 reproduced identically by loading HEAD `07013ee7` status consumers in the same
 isolated test context. They are not marked passing, skipped, or hidden by a
 threshold change. Their fixture/routing correction remains separate work.
+
+The first remote continuation run also found two legacy contract assertions:
+an exhausted checkpoint was expected to restart, and a failed document runner
+was expected to finish `completed`. Both were updated to the intentional safe
+contract and strengthened with zero-effect, zero-fallback and preserved-state
+assertions. Their full 17-case suites are now included in both local/native
+gates. No checks were removed and the healthy resume/success cases remain.
 
 ## OpenClaw attribution and boundary
 

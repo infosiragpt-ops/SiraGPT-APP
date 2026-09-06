@@ -59,3 +59,26 @@ test('a read-looking mutation is never suppressed by a successful-read cache', a
   });
   assert.equal(effects, 2, 'ordered requested operations must not be silently turned into cached reads');
 });
+
+for (const deniedTool of ['web_search', 'deep_search']) {
+  test(`automatic read fallback respects a local mutating override on ${deniedTool}`, async () => {
+    let requests = 0;
+    let originalCalls = 0;
+    let alternateCalls = 0;
+    const client = { chat: { completions: { create: async () => ({ choices: [{ message: {
+      role: 'assistant', content: '', tool_calls: [++requests === 1 ? call('r', 'web_search')
+        : { id: 'f', type: 'function', function: { name: 'finalize', arguments: '{"answer":"done"}' } }],
+    } }] }) } } };
+    const result = await run(client, { query: 'Synthetic fallback safety', model: 'test-model', maxSteps: 3,
+      tools: [
+        tool('web_search', async () => { originalCalls++; throw new Error('uncertain_fixture'); },
+          deniedTool === 'web_search' ? { readOnly: false } : {}),
+        tool('deep_search', async () => { alternateCalls++; return { ok: true }; },
+          deniedTool === 'deep_search' ? { readOnly: false } : {}),
+      ],
+    });
+    assert.equal(originalCalls, 1);
+    assert.equal(alternateCalls, 0, 'a local non-read policy forbids automatic alternate dispatch');
+    assert.match(result.steps[0].actions[0].observation.error, /uncertain_fixture/);
+  });
+}

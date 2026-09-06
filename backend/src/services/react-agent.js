@@ -1655,11 +1655,13 @@ async function run(openai, opts) {
       if (
         dispatch.error
         && toolName !== 'finalize'
+        && isParallelSafeTool(toolName, registry)
         && !TOOL_FALLBACK_DISABLED
         && !/abort/i.test(String(dispatch.error))
       ) {
         const altName = fallbackToolFor(toolName);
-        if (altName && altName !== toolName && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
+        if (altName && altName !== toolName && isParallelSafeTool(altName, registry)
+            && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
           try {
             const altDispatch = await dispatchTool(registry, altName, call.function?.arguments, ctx);
             if (altDispatch && !altDispatch.error && !isReportedToolFailure(altDispatch.result)) {
