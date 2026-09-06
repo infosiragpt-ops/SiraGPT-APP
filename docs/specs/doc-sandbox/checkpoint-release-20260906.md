@@ -5,7 +5,17 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** ante referencias mixtas del proveedor, el motor
+**Actualización más reciente:** producción avanzó a `845e0c481…` (#570), no a
+#561. Se integró esa base sin conflictos, preservando fuentes y scripts.
+La rama combinada pasa **173/173** nativas, **343/343** unitarias,
+**12467/12467** generales y **52/52** integraciones PG/Redis locales con cierre
+de servicios. Cobertura **72,73 % (2593/3565)**: sigue bloqueada por el 80 %.
+Readiness público saludable a **2026-09-06T21:33:48.951Z**; runsc y R2/F1
+siguen ausentes. SSH funciona hacia el contenedor deploy, no el host administrativo.
+Ver [production-base-570-release-20260906.md](production-base-570-release-20260906.md).
+No hay despliegue de #561 ni cierre de F1.
+
+**Registro anterior (`e4d94d8df…`):** ante referencias mixtas del proveedor, el motor
 conserva IDs válidos, contenedor y consumo antes de rechazar la respuesta.
 Regresión PostgreSQL pre-fix **50/52**, post-fix y corroboración **52/52**;
 **343/343** unitarias, cobertura **72,73 % (2593/3565)** y **12467/12467** generales.
