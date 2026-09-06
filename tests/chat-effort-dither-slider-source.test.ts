@@ -132,7 +132,7 @@ describe("composer bar — phone layout contract", () => {
   it("keeps every footer control inside the surface on 360–430 px phones", () => {
     const mobileBlock = globals.slice(globals.indexOf("/* Phone footer budget (360–430 px)"))
     assert.ok(mobileBlock.length > 0, "the phone footer budget block must exist")
-    assert.match(mobileBlock, /\.composer-effort-chip > \.truncate,\s*\.composer-effort-chip \.composer-effort-caret \{\s*display: none;/, "effort collapses to its glyph on phones")
+    assert.match(mobileBlock, /\.composer-effort-chip \{\s*width: 2\.25rem;\s*max-width: 2\.25rem;\s*padding: 0;\s*justify-content: center;\s*gap: 0;/, "the icon-only effort control keeps its phone touch target")
     assert.match(mobileBlock, /\.composer-input-row \.composer-model-inline \.chat-model-trigger > svg:last-child \{\s*display: none;/, "the model chevron is dropped on phones")
     assert.match(
       globals,

@@ -6427,9 +6427,6 @@ footer {
   white-space: nowrap;
   transition: background-color 160ms ease-out, color 160ms ease-out;
 }
-.composer-effort-chip > .truncate {
-  min-width: 0;
-}
 .composer-permission-chip {
   width: 2rem;
   max-width: 2rem;
@@ -6464,10 +6461,6 @@ footer {
 .composer-effort-chip.is-high svg {
   color: #e89a96;
 }
-.composer-effort-caret {
-  font-size: 9px;
-  opacity: 0.55;
-}
 .composer-context-trigger {
   order: 10;
   width: 2rem;
@@ -6489,6 +6482,11 @@ footer {
 }
 .composer-effort-chip {
   order: 30;
+  width: 2rem;
+  max-width: 2rem;
+  padding: 0;
+  justify-content: center;
+  gap: 0;
 }
 .composer-dictation-button {
   order: 40;
@@ -7107,10 +7105,6 @@ button.anti-bribery-context-chip:not(:disabled):active {
     padding: 0;
     justify-content: center;
     gap: 0;
-  }
-  .composer-effort-chip > .truncate,
-  .composer-effort-chip .composer-effort-caret {
-    display: none;
   }
   .composer-effort-chip svg {
     width: 1rem;
