@@ -16,7 +16,10 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   `backend/src/services/react-agent.js` and
   `backend/src/services/agents/tool-call-normalizer.js`
   also draws on OpenClaw's no-progress detection and replay-safe tool pairing
-  architecture. The history packer in
+  architecture. The explicit no-op evidence fingerprint and argument-churn
+  handling are native adaptations of that architecture, not copied result
+  extractors; SiraGPT preserves its own structured output and checkpoint
+  semantics. The history packer in
   `backend/src/services/agentic-chat-stream.js` uses the
   complete-turn retention concept reviewed in the existing inactive OpenClaw
   reference snapshot; its upstream revision was not independently verified.

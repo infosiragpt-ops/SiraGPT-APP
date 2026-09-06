@@ -1,6 +1,7 @@
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
 })();
+const { statusForAgentStopReason } = require('./react-run-outcome');
 
 // Process-level dedup: suppress repeated "orphaned task" warnings for the
 // same taskId — concurrent persistence calls for a single task can produce
@@ -35,7 +36,10 @@ function isTerminalStatus(status) {
 
 function statusFromEvent(event = {}, fallback = 'running') {
   if (event.type === 'done') {
-    return event.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+    if (fallback === 'cancelled') return 'cancelled';
+    const status = statusForAgentStopReason(event.stoppedReason);
+    if (status === 'completed' && ['failed', 'error'].includes(fallback)) return 'failed';
+    return status;
   }
   if (event.type === 'error') {
     return String(fallback || '') === 'cancelled' ? 'cancelled' : 'failed';
@@ -108,18 +112,22 @@ function buildExistingTaskLookup(data = {}) {
 
 async function upsertAgentTask(task = {}) {
   if (!hasModel('agentTask') || !task.taskId || !task.userId) return null;
+  const state = task.state || task.streamState;
+  const status = task.status === 'completed' && state?.done
+    ? statusForAgentStopReason(state.stoppedReason)
+    : task.status || 'queued';
   const data = withTerminalTimestamps({
     id: String(task.taskId),
     userId: String(task.userId),
     chatId: task.chatId || null,
     jobId: task.jobId ? String(task.jobId) : null,
-    status: task.status || 'queued',
+    status,
     goal: String(task.displayGoal || task.goal || '').slice(0, 4000),
     model: task.model || null,
     traceId: task.traceId || null,
     documentPolicy: safeJson(task.documentPolicy || task.streamState?.documentPolicy),
     state: safeJson(task.state || task.streamState),
-    completedAt: task.completedAt ? new Date(task.completedAt) : null,
+    completedAt: status === 'completed' && task.completedAt ? new Date(task.completedAt) : null,
     cancelledAt: task.cancelledAt ? new Date(task.cancelledAt) : null,
     failedAt: task.failedAt ? new Date(task.failedAt) : null,
   }, task);

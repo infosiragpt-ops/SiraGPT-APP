@@ -45,6 +45,7 @@
   const openclawCapabilityKernel = require('./openclaw-capability-kernel');
   const { prepareAgentPluginLifecycle } = require('./agents/agent-plugin-lifecycle');
   const { runToolWithRetry } = require('./agents/tool-call-retry');
+  const { statusForAgentStopReason } = require('./agents/react-run-outcome');
   const { liveSubagentsEnabled } = require('./agents/subagent-guard');
   const { isAgenticActionRequest, isArtifactDeliverableRequest, isDocumentEditRequest } = require('./agents/agentic-trigger');
   const { detectMediaIntent, detectMediaIntents, buildMediaIntentsHint } = require('./agents/media-intent');
@@ -549,7 +550,10 @@ function isHandledAgenticChatResult(result) {
   const answer = typeof result.finalAnswer === 'string' ? result.finalAnswer.trim() : '';
   if (!answer || answer === '(agent returned empty message)') return false;
   if (HANDLED_AGENTIC_STOP_REASONS.has(reason)) return true;
-  return reason.startsWith('finalized_guard_breaker');
+  return reason.startsWith('finalized_guard_breaker')
+    || reason.split(':', 1)[0] === 'verification_failed'
+    || reason === 'invalid_resume_checkpoint'
+    || reason === 'resume_budget_exhausted';
 }
 
 /**
@@ -2095,7 +2099,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       const stoppedReason = String(result?.stoppedReason || 'finalized');
       const status = signal?.aborted || /cancelled_by_user|aborted|cost_budget_exhausted/.test(stoppedReason)
         ? 'cancelled'
-        : (/control_plane_error|run_failed/.test(stoppedReason) ? 'failed' : 'completed');
+        : statusForAgentStopReason(stoppedReason);
       const completedRun = await require('./cowork/control-plane').finishRun(toolContext.prisma, {
         runId: __coworkRun.id,
         userId: toolContext.userId,
@@ -2150,6 +2154,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
       name: tool.name,
       description: tool.description,
       parameters: jsonSchema,
+      ...(retryPolicy.readOnly === true ? { readOnly: true } : {}),
       // Only explicit local policy may authorize retries. Tool metadata,
       // names and returned-vs-thrown errors do not prove idempotency.
       execute: async (args, _ctx) => runToolWithRetry(
@@ -2164,7 +2169,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
   function baseWebTools() {
     // Audited first-party reads only. Browser actions, writes, sub-agent
     // creation and generic app executors remain single-attempt by default.
-    const adaptReadOnlyTool = (tool, schema) => adaptAgentTool(tool, schema, { retrySafe: true });
+    const adaptReadOnlyTool = (tool, schema) => adaptAgentTool(tool, schema, { retrySafe: true, readOnly: true });
     return [
       // react-agent expects {name,description,parameters,execute(args,ctx)};
       // agent-tools entries use {schema,handler}. Adapt them inline.

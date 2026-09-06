@@ -108,7 +108,8 @@ test('reported failures do not reset the consecutive finalization guard', async 
   });
   assert.equal(guards, 3, 'failed tools are not progress between rejected finalizations');
   assert.equal(calls, 2);
-  assert.match(result.stoppedReason, /^finalized_guard_breaker:/);
+  assert.match(result.stoppedReason, /^verification_failed:/);
+  assert.notEqual(result.finalAnswer, 'Propuesta no verificada.');
 });
 
 test('genuine success resets the error budget between independent failure streaks', async () => {

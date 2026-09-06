@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const reactAgent = require('../react-agent');
+const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
 const { buildTaskTools } = require('./task-tools');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
@@ -2242,6 +2243,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     artifactsList = artifacts,
     metadata = {},
   }) => {
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const doneEvent = emit({
       type: 'done',
@@ -2249,8 +2252,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps, artifacts: artifactsList.length },
     });
 
-    const status = 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
@@ -3411,7 +3412,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
-    if (attachmentFinalNeedsRecovery) {
+    if (attachmentFinalNeedsRecovery && canRecoverAgentStopReason(stoppedReason)) {
       // Built only on the recovery path: buildToolObservationFallbackContext is
       // a pure full step×action walk (+ JSON.stringify per observation) that was
       // previously computed on every finalization and discarded on the happy path.
@@ -3438,7 +3439,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       finalMarkdown = finalFallbackMarkdown;
       stoppedReason = recoveredMarkdown
         ? 'attachment_empty_response_recovery'
-        : 'attachment_unreadable_empty_response_recovery';
+        : statusForAgentStopReason(stoppedReason) !== 'completed'
+          ? stoppedReason
+          : 'attachment_unreadable_empty_response_recovery';
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
@@ -3513,13 +3516,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     // F2: the rebuild above re-derives autoGenerate from the goal text — a
     // runner-claimed turn that failed must keep the generic auto-document
     // pipeline banned even after the rebuild.
-    if (agentRunnerFailure && documentPolicy) {
+    if ((agentRunnerFailure || statusForAgentStopReason(stoppedReason) !== 'completed') && documentPolicy) {
       documentPolicy = {
         ...documentPolicy,
         autoGenerate: false,
         thresholds: {
           ...(documentPolicy?.thresholds || {}),
-          agentRunnerFailure: agentRunnerFailure.reason,
+          ...(agentRunnerFailure ? { agentRunnerFailure: agentRunnerFailure.reason } : {}),
         },
       };
     }
@@ -3660,6 +3663,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const completedStepCount = Math.max(result.steps.length, stepIdCounter);
     const doneEvent = emit({
@@ -3668,8 +3673,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps: completedStepCount, artifacts: artifacts.length },
     });
 
-    const status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
