@@ -5,7 +5,22 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** el motor rechaza un ID remoto reutilizado por
+**Actualización más reciente:** producción avanzó a `100d29bc2…` (#571), no a
+#561. Integración sin conflictos; 15 fuentes publicadas intactas, uniones de
+scripts y hashes UI comprobadas. Seis nuevos contratos de cleanup ENOENT real
+y SDK que confunde inputs/outputs, sin cambios de runtime F1. **351/351**
+unitarias, **73,91 % (2638/3569)** aún inferior al 80 %, **12470/12470** generales
+y **173/173** nativas. Revisión independiente sin bloqueantes y seis casos
+corroborados. Tipos/lint/UI-lock aprobados; prueba screenshot-diff F7
+heredada no ejecutada por falta de Docker local, sin omisiones en F1.
+Checkout y API coinciden en `100d29bc2…`, readiness saludable a
+**2026-09-06T22:32:28.393Z**. Sin escritura productiva, gasto nuevo ni cierre F1.
+El CI anterior `b1080dab1` aprobó persistencia 45/45 y recuperación 8/8; falló
+sólo cobertura 72,76 % y agregador. Riesgo estático del primer fotograma del
+visor registrado, no corregido ni comprobado en navegador. Evidencia en
+[production-base-571-release-20260906.md](production-base-571-release-20260906.md).
+
+**Registro anterior (`b1080dab1…`):** el motor rechaza un ID remoto reutilizado por
 dos originales distintos, sin perder la obligación de limpieza ni confundir
 nombres coincidentes con identidades. Regresiones pre-fix **1/2** unitarias y
 **52/53** PG/Redis; post-fix **2/2** y **53/53**, con servicios detenidos.

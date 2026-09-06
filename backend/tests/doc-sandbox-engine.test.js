@@ -570,6 +570,76 @@ test('mixed generated references await valid cleanup and usage callbacks before 
   assert.equal(sdk.deletions.some(({ id }) => id === '../invalid' || id === 'file_not_exported'), false);
 });
 
+for (const family of ['bash_code_execution', 'code_execution']) {
+  test(`an uploaded original cannot become a generated ${family} output or erase valid siblings`, async () => {
+    const { engine, session, sdk, events, file } = await fixture();
+    const originalBytes = Buffer.from(file.data);
+    const uploadId = events.find(([name, , reference]) => name === 'fileChanged' && reference.state === 'known')[2].id;
+    const generated = [sdk.add('first.json', Buffer.from('{}')), sdk.add('second.json', Buffer.from('{}'))];
+    sdk.messageOverride = async () => {
+      const response = sdk.response([], 'container_input_collision', 'pause_turn');
+      response.content = [{ type: `${family}_tool_result`, tool_use_id: 'srvtool_collision', content: {
+        type: `${family}_result`, return_code: 0, stdout: '', stderr: '',
+        content: [generated[0], uploadId, generated[1]].map(file_id => ({ type: `${family}_output`, file_id })),
+      } }];
+      return response;
+    };
+    try {
+      await assert.rejects(engine.run(session, request(), () => {}), isCode('E_PROVIDER'));
+      assert.equal(sdk.messages.length, 1, 'The conflicting input identity must not continue pause_turn');
+      assert.equal(sdk.metadataCalls.length, 0);
+      assert.equal(sdk.downloads.length, 0);
+      assert.deepEqual(sdk.deletions, [], 'Rejection must retain the original until normal cleanup');
+      assert.deepEqual(file.data, originalBytes);
+      assert.deepEqual(sdk.files.get(uploadId).data, originalBytes);
+      const known = events.filter(([name, , reference]) => name === 'fileChanged' && reference.state === 'known');
+      assert.deepEqual(known.map(([, , reference]) => [reference.id, reference.kind]),
+        [[uploadId, 'input'], [generated[0], 'output'], [generated[1], 'output']]);
+      const containers = events.filter(([name]) => name === 'containerCreated');
+      const settlements = events.filter(([name]) => name === 'settle');
+      assert.equal(events.filter(([name]) => name === 'reserve').length, 1);
+      assert.equal(containers.length, 1);
+      assert.equal(containers[0][2].id, 'container_input_collision');
+      assert.equal(settlements.length, 1);
+      assert.equal(settlements[0][2].uncertain, false);
+      assert.equal(settlements[0][2].usage.inputTokens, 100);
+      assert.equal(settlements[0][2].usage.outputTokens, 40);
+      assert.ok(events.indexOf(containers[0]) > events.indexOf(known.at(-1)));
+      assert.ok(events.indexOf(settlements[0]) > events.indexOf(containers[0]));
+      assert.equal(events.at(-1)[0], 'usageChanged', 'The usage callback must finish before protocol rejection');
+      await assert.rejects(engine.downloadOutputs(session), isCode('E_CONFLICT'));
+    } finally { await engine.destroy(session); }
+    assert.deepEqual(sdk.deletions.map(({ id }) => id).sort(), [uploadId, ...generated].sort());
+    assert.equal(sdk.files.size, 0);
+    assert.deepEqual(file.data, originalBytes);
+    await engine.destroy(session);
+    assert.equal(sdk.deletions.length, 3, 'Repeated destruction cannot delete the original twice');
+  });
+}
+
+test('invalid session prompt versions and attempt numbers fail before callbacks or provider requests', async () => {
+  const sdk = new ProviderMock();
+  const { events, persistence } = hooks();
+  const engine = new AnthropicSandboxEngine(sdk, config(), persistence);
+  const valid = { id: 'job-version-guard', userId: 'user-1', attempt: 1, promptVersion: EDITOR_PROMPT_VERSION };
+  for (const invalid of [
+    { ...valid, promptVersion: `${EDITOR_PROMPT_VERSION}-unexpected` },
+    ...[0, 4, 1.5].map(attempt => ({ ...valid, attempt })),
+  ]) await assert.rejects(engine.createSession(invalid), isCode('E_PARAMS'));
+  assert.deepEqual(events, []);
+  assert.equal(sdk.uploads.length, 0);
+  assert.equal(sdk.messages.length, 0);
+  assert.equal(sdk.files.size, 0);
+  // The same configured instance still admits both legal attempt boundaries.
+  for (const attempt of [1, 3]) {
+    const session = await engine.createSession({ ...valid, attempt });
+    try { assert.equal(session.attempt, attempt); }
+    finally { await engine.destroy(session); }
+  }
+  assert.equal(events.filter(([name]) => name === 'sessionCreated').length, 2);
+  assert.deepEqual(sdk.deletions, []);
+});
+
 test('download failure is not silently omitted', async () => {
   const { engine, session, sdk } = await fixture();
   sdk.downloadOverride = async () => new Response('private', { status: 503 });

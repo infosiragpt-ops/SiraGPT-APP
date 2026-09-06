@@ -5,17 +5,20 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
 import {
-  assertInvocationLaunchable, createInvocation, reconcileValidatorOrphans,
+  assertInvocationLaunchable, cleanupInvocation, createInvocation, reconcileValidatorOrphans,
   validateInvocationContainer, validateInvocationManifest, validatePrivateStagingRoot,
   VALIDATOR_ORPHAN_GRACE_MS, type ValidatorInvocation,
 } from '../src/modules/doc-sandbox/validation/lifecycle';
 import { createValidatorStagingDirectory, IndependentDocumentValidator, inspectRecipeArchive } from '../src/modules/doc-sandbox/validation/index';
 import type { EditPlan, InputFile } from '../src/modules/doc-sandbox/types/contracts';
+import { DocumentValidationError } from '../src/modules/doc-sandbox/validation/errors';
 
 /** Strict unit suite: pure snapshot parsing and actual private filesystem I/O.
  * No Docker transport, database, Redis, S3, document validator or provider is
- * replaced. Snapshot contracts do not certify Docker/gVisor isolation. The
- * reconciliation cases stop before container inspection or removal is needed.
+ * replaced. Snapshot contracts do not certify Docker/gVisor isolation.
+ * Cleanup failure cases additionally exercise actual spawn ENOENT against an
+ * absent path inside the private fixture, never a substitute Docker executable.
+ * They retain quarantine, not proof of container inspection or removal.
  */
 const image = `sha256:${'a'.repeat(64)}`;
 const past = Date.now() - VALIDATOR_ORPHAN_GRACE_MS - 700_000;
@@ -267,6 +270,65 @@ test('reconciliation reports a recent real quarantine as pending without consumi
     { examined: 1, purged: 0, pending: 1 });
   assert.deepEqual(await readFile(path.join(directory, 'invocation.json')), bytes);
   assert.equal(await readFile(path.join(directory, 'inputs', 'input-0.txt'), 'utf8'), 'synthetic original');
+});
+
+for (const launchSettled of [true, false]) {
+  test(`cleanup spawn ENOENT preserves the exact private quarantine (launchSettled=${launchSettled})`, async t => {
+    const { root, invocation, manifest } = await fixture(t, now);
+    const manifestBytes = await readFile(manifest);
+    const originalBytes = await readFile(path.join(invocation.directory, 'inputs', 'input-0.txt'));
+    const neighbor = path.join(root, 'unrelated-private-original.txt');
+    await writeFile(neighbor, 'unrelated synthetic original', { mode: 0o600 });
+    const dockerBinary = path.join(root, 'absent-docker-executable');
+    await assert.rejects(lstat(dockerBinary), { code: 'ENOENT' });
+    const quarantine = path.join(root, `.siragpt-validator-quarantine-${invocation.invocationId}`);
+    const rejectsUnavailable = (error: unknown): boolean => {
+      assert.ok(error instanceof DocumentValidationError);
+      assert.equal(error.code, 'VALIDATOR_CLEANUP_UNAVAILABLE');
+      assert.equal(error.message.includes(root), false, 'The private filesystem path must not reach the public error');
+      assert.equal(error.message.includes('ENOENT'), false, 'The raw spawn error must remain private');
+      return true;
+    };
+    await assert.rejects(cleanupInvocation(invocation, { image, dockerBinary }, launchSettled, now), rejectsUnavailable);
+    await assert.rejects(lstat(invocation.directory), { code: 'ENOENT' });
+    assert.equal((await lstat(quarantine)).mode & 0o777, 0o700);
+    assert.equal((await lstat(path.join(quarantine, 'invocation.json'))).mode & 0o777, 0o600);
+    assert.deepEqual(await readFile(path.join(quarantine, 'invocation.json')), manifestBytes);
+    assert.deepEqual(await readFile(path.join(quarantine, 'inputs', 'input-0.txt')), originalBytes);
+
+    // A retry reads the real quarantined manifest and cannot create another
+    // generation, report successful removal or make the invocation launchable.
+    const retained = validateInvocationManifest(JSON.parse(manifestBytes.toString('utf8')), quarantine, root);
+    await assert.rejects(cleanupInvocation(retained, { image, dockerBinary }, launchSettled, now), rejectsUnavailable);
+    await assert.rejects(assertInvocationLaunchable(retained, now), { code: 'VALIDATOR_INVOCATION_EXPIRED' });
+    assert.deepEqual((await readdir(root)).sort(), [path.basename(quarantine), path.basename(neighbor)].sort());
+    assert.deepEqual(await readFile(path.join(quarantine, 'invocation.json')), manifestBytes);
+    assert.deepEqual(await readFile(path.join(quarantine, 'inputs', 'input-0.txt')), originalBytes);
+    assert.equal(await readFile(neighbor, 'utf8'), 'unrelated synthetic original');
+    await assert.rejects(lstat(dockerBinary), { code: 'ENOENT' });
+  });
+}
+
+test('reconciliation spawn ENOENT keeps an expired invocation pending across retries', async t => {
+  const { root, invocation, manifest } = await fixture(t, now);
+  const manifestBytes = await readFile(manifest);
+  const originalBytes = await readFile(path.join(invocation.directory, 'inputs', 'input-0.txt'));
+  const neighbor = path.join(root, 'unrelated-private-original.txt');
+  await writeFile(neighbor, 'untouched neighbor', { mode: 0o600 });
+  const dockerBinary = path.join(root, 'absent-docker-executable');
+  await assert.rejects(lstat(dockerBinary), { code: 'ENOENT' });
+  const quarantine = path.join(root, `.siragpt-validator-quarantine-${invocation.invocationId}`);
+  for (const checkpoint of [invocation.deadlineAt + VALIDATOR_ORPHAN_GRACE_MS,
+    invocation.deadlineAt + VALIDATOR_ORPHAN_GRACE_MS + 1]) {
+    assert.deepEqual(await reconcileValidatorOrphans({ image, stagingRoot: root, dockerBinary }, checkpoint),
+      { examined: 1, purged: 0, pending: 1 });
+    await assert.rejects(lstat(invocation.directory), { code: 'ENOENT' });
+    assert.deepEqual((await readdir(root)).sort(), [path.basename(quarantine), path.basename(neighbor)].sort());
+    assert.equal((await lstat(quarantine)).mode & 0o777, 0o700);
+    assert.deepEqual(await readFile(path.join(quarantine, 'invocation.json')), manifestBytes);
+    assert.deepEqual(await readFile(path.join(quarantine, 'inputs', 'input-0.txt')), originalBytes);
+    assert.equal(await readFile(neighbor, 'utf8'), 'untouched neighbor');
+  }
 });
 
 test('reconciliation preserves invalid manifests and does not follow invocation symlinks', async t => {

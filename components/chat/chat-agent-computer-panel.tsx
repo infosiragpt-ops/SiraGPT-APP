@@ -4,7 +4,7 @@
  * Chat computer panel — compact Grok-Bot-style surface.
  *
  * Default view: a light panel with the live screen as a thumbnail card
- * («Pantalla de Siragpt»), gear + collapse controls on top, and the
+ * («Pantalla de SiraGPT»), gear + collapse controls on top, and the
  * Rutinas block underneath. Clicking the thumbnail or the gear expands
  * to the full OS window (AgentComputerShell) — same session, same
  * isolation per conversation.
@@ -331,7 +331,7 @@ export default function ChatAgentComputerPanel({
           </div>
         </button>
         <p className="mt-2 text-center text-[13px] text-muted-foreground">
-          Pantalla de Siragpt
+          Pantalla de SiraGPT
         </p>
       </div>
 
