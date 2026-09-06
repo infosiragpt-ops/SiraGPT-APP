@@ -1,5 +1,11 @@
 # Preparación de producción de la PR #561
 
+**Checkpoint posterior:** [continuidad 2026-09-06](checkpoint-release-20260906.md).
+Integra la producción `81f3d9a` y registra 217 pruebas del módulo, cobertura
+íntegra 67,08 % (gate 80 % abierto), configuración ausente y acceso SSH limitado
+al contenedor. No constituye despliegue ni cierre F1. Los apartados siguientes
+conservan evidencia histórica de revisiones distintas.
+
 ## Estado comprobado tras recuperación de OpenClaw
 
 Actualización 2026-09-05, posterior a los apartados históricos siguientes.

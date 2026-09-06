@@ -95,6 +95,10 @@ separado: tener flags en código no constituye evidencia de aislamiento.
 
 - `npm --prefix backend run test:doc-sandbox:unit`: contratos, cifrado, tickets,
   configuración y motor; solo el transporte SDK del motor usa mocks.
+- `npm --prefix backend run test:doc-sandbox:coverage`: medición de todas las
+  fuentes TypeScript del módulo, incluidas las no cargadas, con umbral de líneas
+  del 80 %. Falla si no se alcanza. No mezcla integración ni Python para aprobar
+  la cobertura unitaria y no acredita la aceptación del motor real.
 - `npm --prefix backend run test:doc-sandbox:validation`: Python/Office/Poppler reales
   sobre fixtures anónimas. Requiere herramientas en PATH y Python con dependencias
   de `infra/doc-validation/requirements-test.txt`; `DOC_VALIDATION_TEST_PYTHON`
