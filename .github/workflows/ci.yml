@@ -323,6 +323,29 @@ jobs:
           DOC_SANDBOX_TEST_REDIS_URL: redis://127.0.0.1:6379/15
         run: npm run test:doc-sandbox:unit && npm run test:doc-sandbox:auxiliary && npm run test:doc-sandbox:runtime && npm run test:doc-sandbox:persistence && npm run test:doc-sandbox:queue-recovery && npm run test:doc-sandbox:documents && npm run test:doc-sandbox:readiness
 
+      - name: Document sandbox real private storage and cleanup
+        if: matrix.shard == 1
+        timeout-minutes: 10
+        env:
+          NODE_ENV: test
+          DOC_SANDBOX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
+          DOC_SANDBOX_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          DOC_SANDBOX_TEST_S3_ACCESS_KEY_ID: docfixture
+          DOC_SANDBOX_TEST_S3_SECRET_ACCESS_KEY: fixture-only-isolated-s3
+        run: |
+          set -euo pipefail
+          storage_id=$(docker run -d --rm --label siragpt.scope=doc-sandbox-ci-test \
+            --publish 127.0.0.1:19000:9000 \
+            -e MINIO_ROOT_USER=docfixture -e MINIO_ROOT_PASSWORD=fixture-only-isolated-s3 \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data)
+          trap 'docker stop "$storage_id" >/dev/null' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null
+          npm run test:doc-sandbox:http-storage
+
       # CI and production share the same `prisma migrate deploy` path (U0).
       # `db push` alone is intentionally not used — it skips migration history
       # and would hide P3005 / baseline gaps that production must surface.

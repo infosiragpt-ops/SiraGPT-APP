@@ -21,15 +21,53 @@ export async function reconcileDocumentCleanup(repository: DocSandboxRepository,
       }
       if (job.deletedAt && (!job.cleanupNotBefore || job.cleanupNotBefore.getTime() <= Date.now())) {
         const scope = { userId: job.userId, jobId: job.id };
-        // Include every key generation and orphan not yet attached as an artifact.
-        const keys = new Set([...job.storageKeys, ...await storage.list(scope, jobSignal)]);
-        for (const key of keys) {
-          await storage.remove(scope, key, jobSignal);
-          await repository.markStorageKeysPurged(job.id, [key]);
+        const removeKnown = async (keys: ReadonlyArray<string>): Promise<void> => {
+          let confirmed: string[] = [];
+          const flush = async (): Promise<void> => {
+            if (!confirmed.length) return;
+            await repository.markStorageKeysPurged(job.id, confirmed);
+            confirmed = [];
+          };
+          try {
+            for (const key of keys) {
+              jobSignal.throwIfAborted();
+              await storage.remove(scope, key, jobSignal);
+              confirmed.push(key);
+              if (confirmed.length >= 100) await flush();
+            }
+          } finally {
+            // Acknowledging confirmed deletes remains necessary after cancellation.
+            // An uncertain DELETE stays in the pre-existing journal for retry.
+            await flush();
+          }
+        };
+        // Make durable progress even if LIST fails. Do not redo acknowledged
+        // known keys on every time-bounded pass; LIST below still sees late PUTs.
+        const alreadyPurged = new Set(job.purgedKeys);
+        await removeKnown(job.storageKeys.filter(key => !alreadyPurged.has(key)));
+        for await (const keys of storage.iterPages(scope, jobSignal)) {
+          jobSignal.throwIfAborted();
+          if (!keys.length) continue;
+          await repository.reserveCleanupStorageKeys(job.id, [...keys]);
+          jobSignal.throwIfAborted();
+          await removeKnown(keys);
         }
-        for (const artifact of await repository.artifactsInternal(job.id)) await repository.markArtifactPurged(job.id, artifact.id);
+        // A write behind the traversal cursor must prevent a false completion.
+        // No token is retained between reconciliation passes.
+        for await (const keys of storage.iterPages(scope, jobSignal)) {
+          jobSignal.throwIfAborted();
+          if (keys.length) {
+            await repository.reserveCleanupStorageKeys(job.id, [...keys]);
+            throw new Error('DOC_CLEANUP_PENDING');
+          }
+        }
+        for (const artifact of await repository.artifactsInternal(job.id)) {
+          jobSignal.throwIfAborted();
+          if (!artifact.purgedAt) await repository.markArtifactPurged(job.id, artifact.id);
+        }
         // No claim that deleting provider Files terminates the remote container.
       }
+      jobSignal.throwIfAborted();
       await repository.finishCleanup(job.id);
     } catch { notice('DOC_CLEANUP_PENDING'); }
   }

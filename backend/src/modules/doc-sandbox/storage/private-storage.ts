@@ -141,6 +141,38 @@ export class PrivateDocumentStorage {
     const boundedSignal = signal;
     await retryStorageRead(() => this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }), { abortSignal: boundedSignal }), boundedSignal);
   }
+  /** Cleanup consumes validated pages without accumulating the entire prefix.
+   * A retry resumes this LIST only, never replays pages already handed to deletion.
+   * Tokens are opaque and scoped to this bounded traversal, not persisted cursors. */
+  async *iterPages(scope: StorageScope, signal?: AbortSignal): AsyncGenerator<ReadonlyArray<string>, void> {
+    const prefix = this.prefix(scope);
+    const boundedSignal = AbortSignal.any([AbortSignal.timeout(120_000), ...(signal ? [signal] : [])]);
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    for (let page = 0; page < 100; page += 1) {
+      boundedSignal.throwIfAborted();
+      const result = await retryStorageRead(() => this.client.send(new ListObjectsV2Command({
+        Bucket: this.config.bucket, Prefix: prefix, ContinuationToken: cursor, MaxKeys: 1000,
+      }), { abortSignal: boundedSignal }), boundedSignal);
+      boundedSignal.throwIfAborted();
+      if (typeof result.IsTruncated !== 'boolean') throw new DocSandboxError('E_PROVIDER', 502);
+      const keys: string[] = [];
+      for (const object of result.Contents ?? []) {
+        if (!object.Key) throw new DocSandboxError('E_PROVIDER', 502);
+        this.checkScope(scope, object.Key);
+        keys.push(object.Key);
+      }
+      if (keys.length > 1000 || new Set(keys).size !== keys.length) throw new DocSandboxError('E_PROVIDER', 502);
+      const next = result.IsTruncated ? result.NextContinuationToken : undefined;
+      if (result.IsTruncated && (!next || seen.has(next) || page === 99)) throw new DocSandboxError('E_PROVIDER', 502);
+      if (next) seen.add(next);
+      // Validate the WHOLE response before exposing any deletion target.
+      yield keys;
+      boundedSignal.throwIfAborted();
+      if (!result.IsTruncated) return;
+      cursor = next;
+    }
+  }
   /** Reconcile a job prefix too: this covers a crash between object upload and DB registration. */
   async list(scope: StorageScope, signal?: AbortSignal): Promise<string[]> {
     signal = AbortSignal.any([AbortSignal.timeout(120_000), ...(signal ? [signal] : [])]);

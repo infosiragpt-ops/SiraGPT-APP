@@ -468,6 +468,32 @@ export class DocSandboxRepository {
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET purged_keys=ARRAY[${Prisma.join(purged)}]::text[] WHERE id=${jobId}`);
     });
   }
+  /** Journal a cleanup page BEFORE DELETE, including unregistered orphan keys.
+   * Tombstones have no attempt lease. Authority is the locked, grace-expired
+   * deleted job and its exact owner prefix; discovery never revives execution. */
+  async reserveCleanupStorageKeys(jobId: string, keys: string[]): Promise<void> {
+    if (!Array.isArray(keys) || keys.length < 1 || keys.length > 1000
+      || keys.some(key => typeof key !== 'string' || !key) || new Set(keys).size !== keys.length) {
+      throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+    }
+    await this.client.$transaction(async db => {
+      const row = await this.locked(db, jobId);
+      const clocks = await db.$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT clock_timestamp() AS now`);
+      if (!row.deleted_at || (row.cleanup_not_before && row.cleanup_not_before > clocks[0]!.now)) {
+        throw new DocumentRepositoryError('DOC_CLEANUP_PENDING');
+      }
+      const prefix = `doc-sandbox/${row.user_id}/${jobId}/`;
+      if (keys.some(key => !key.startsWith(prefix) || !/^[A-Za-z0-9_-]{1,40}\/[A-Za-z0-9_-]+\.sealed$/.test(key.slice(prefix.length)))) {
+        throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+      }
+      const known = [...new Set([...row.storage_keys, ...keys])];
+      const discovered = new Set(keys);
+      // A reappearing object invalidates its old acknowledgement (late PUT).
+      const purged = row.purged_keys.filter(key => !discovered.has(key));
+      const purgedSql = purged.length ? Prisma.sql`ARRAY[${Prisma.join(purged)}]::text[]` : Prisma.sql`ARRAY[]::text[]`;
+      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET storage_keys=ARRAY[${Prisma.join(known)}]::text[],purged_keys=${purgedSql},cleanup_pending=true WHERE id=${jobId}`);
+    });
+  }
   /** Marks cleanup complete only after all known remote IDs are deleted. Retains tombstones for revocation. */
   async finishCleanup(jobId: string): Promise<boolean> {
     return this.client.$transaction(async db => {

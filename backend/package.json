@@ -23,7 +23,7 @@
     "test:doc-sandbox:persistence": "node --import tsx --test tests/doc-sandbox-persistence.integration.test.ts tests/doc-sandbox-persistence.queue.test.ts tests/doc-sandbox-engine-reference-retention.integration.test.ts",
     "test:doc-sandbox:queue-recovery": "node --import tsx --test tests/doc-sandbox-readiness-queue-recovery.integration.test.ts",
     "test:doc-sandbox:readiness": "npm run build:doc-sandbox && node --test tests/doc-sandbox-readiness.redis.test.cjs",
-    "test:doc-sandbox:http-storage": "node --import tsx --test tests/doc-sandbox-api.integration.test.ts tests/doc-sandbox-storage.integration.test.ts tests/doc-sandbox-storage-probe.integration.test.cjs",
+    "test:doc-sandbox:http-storage": "node --import tsx --test tests/doc-sandbox-api.integration.test.ts tests/doc-sandbox-storage.integration.test.ts tests/doc-sandbox-storage-probe.integration.test.cjs tests/doc-sandbox-cleanup-pagination.integration.test.ts",
     "test:doc-sandbox:real": "node tests/doc-sandbox-real.cjs",
     "test:doc-sandbox": "npm run test:doc-sandbox:unit && npm run test:doc-sandbox:auxiliary && npm run test:doc-sandbox:validation && npm run test:doc-sandbox:persistence && npm run test:doc-sandbox:queue-recovery",
     "test:health": "node --test tests/sira-health-and-metrics.test.js tests/probe-scheduler.test.js tests/health-mount.test.js tests/health-index-lifecycle.test.js tests/health-route-queues.test.js",

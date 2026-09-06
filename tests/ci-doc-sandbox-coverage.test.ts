@@ -86,4 +86,20 @@ describe("document sandbox strict coverage release gate", () => {
     const isolated = readFileSync("infra/doc-validation/run-isolated-integration.sh", "utf8")
     assert.match(isolated, /^\s*backend\/tests\/doc-sandbox-engine-reference-retention\.integration\.test\.ts\s*$/m)
   })
+
+  it("requires real private-storage cleanup regressions without counting them as unit coverage", () => {
+    const command = scripts["test:doc-sandbox:http-storage"]
+    assert.match(command, /tests\/doc-sandbox-cleanup-pagination\.integration\.test\.ts(?:\s|$)/)
+    assert.doesNotMatch(command, /\|\|\s*true|--test-skip-pattern/)
+    assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /cleanup-pagination/)
+    const step = backendStep("Document sandbox real private storage and cleanup")
+    assert.match(step, /^\s*if: matrix\.shard == 1\s*$/m)
+    assert.match(step, /minio\/minio@sha256:[a-f0-9]{64} server \/data/)
+    assert.match(step, /--publish 127\.0\.0\.1:19000:9000/)
+    assert.match(step, /trap 'docker stop "\$storage_id" >\/dev\/null' EXIT/)
+    assert.match(step, /npm run test:doc-sandbox:http-storage/)
+    assert.doesNotMatch(step, /continue-on-error|\|\|\s*true|--privileged|\/var\/run\/docker\.sock/)
+    const isolated = readFileSync("infra/doc-validation/run-isolated-integration.sh", "utf8")
+    assert.match(isolated, /backend\/tests\/doc-sandbox-cleanup-pagination\.integration\.test\.ts/)
+  })
 })

@@ -101,6 +101,22 @@ test('storage constructor rejects invalid limits and absent encryption material'
   assert.throws(() => storage({ key: Buffer.alloc(31) }), code('E_NOT_READY'));
 });
 
+test('cleanup page iteration rejects invalid owner scope before storage IO', async () => {
+  const current = storage();
+  const pages = current.iterPages({ userId: '../other-owner', jobId: 'job-a' });
+  await assert.rejects(pages.next(), (error: unknown) => error instanceof Error && error.name === 'ZodError');
+  assert.deepEqual(await pages.next(), { value: undefined, done: true });
+});
+test('cleanup page iteration observes a pre-existing cancellation before requesting a page', async () => {
+  const current = storage();
+  const controller = new AbortController();
+  const reason = new Error('Synthetic cancellation before storage IO');
+  controller.abort(reason);
+  const pages = current.iterPages(identity, controller.signal);
+  await assert.rejects(pages.next(), (error: unknown) => error === reason);
+  assert.deepEqual(await pages.next(), { value: undefined, done: true });
+});
+
 test('download ticket is bound to authenticated identity, job and artifact', () => {
   const tickets = new DocumentDownloadTickets(key);
   const token = tickets.issue(identity.userId, identity.jobId, identity.artifactId, 600, now);

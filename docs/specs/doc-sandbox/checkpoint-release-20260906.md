@@ -5,7 +5,23 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** producción avanzó a `100d29bc2…` (#571), no a
+**Actualización más reciente:** corregida la limpieza privada que no avanzaba
+al superar 10 000 objetos o fallar LIST. Dos fallos reproducidos antes del
+arreglo; **79/79** integraciones PostgreSQL/MinIO finales pasan, incluidas
+seis nuevas: 10 003 objetos purgados en tres pasadas, ámbito/diario, PUT
+reaparecido, LIST denegado, acuse DELETE perdido y escritura posterior a
+LIST no truncado. Servicios de test detenidos y sin puertos publicados.
+**353/353** unitarias, cobertura **72,96 % (2674/3665)** todavía por debajo
+del 80 %; **12471/12471** generales, tipos/lint/UI-lock aprobados, sin mezclar
+integraciones en cobertura. Revisión independiente sin bloqueantes.
+Checkout limpio y API siguen en `100d29bc2…` (#571), readiness saludable a
+**2026-09-06T23:42:50.825Z**. CI del commit base `e50ea886…` falla sólo en el
+gate de cobertura y agregador; el nuevo lote aún debe ejecutar CI remoto.
+Sin cambios de UI/migración, gasto nuevo ni escritura en producción.
+No se ha desplegado #561 ni cerrado F1. Ver
+[cleanup-pagination-release-20260906.md](cleanup-pagination-release-20260906.md).
+
+**Registro anterior (`e50ea886…`):** producción avanzó a `100d29bc2…` (#571), no a
 #561. Integración sin conflictos; 15 fuentes publicadas intactas, uniones de
 scripts y hashes UI comprobadas. Seis nuevos contratos de cleanup ENOENT real
 y SDK que confunde inputs/outputs, sin cambios de runtime F1. **351/351**
