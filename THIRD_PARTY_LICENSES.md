@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1521**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1522**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -24,7 +24,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 |---|---|---|---|
 | `json-schema` | 0.4.0 | AFL-2.1 OR BSD-3-Clause | [link](https://github.com/kriszyp/json-schema) |
 
-## Apache-2.0 (207)
+## Apache-2.0 (208)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -230,6 +230,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `tesseract.js-core` | 5.1.1, 7.0.0 | Apache-2.0 | [link](https://github.com/naptha/tesseract.js-core) |
 | `ts-interface-checker` | 0.1.13 | Apache-2.0 | [link](https://github.com/gristlabs/ts-interface-checker) |
 | `tunnel-agent` | 0.6.0 | Apache-2.0 | [link](https://github.com/mikeal/tunnel-agent) |
+| `typescript` | 5.9.3 | Apache-2.0 | [link](https://github.com/microsoft/TypeScript) |
 | `validate-npm-package-license` | 3.0.4 | Apache-2.0 | [link](https://github.com/kemitchell/validate-npm-package-license.js) |
 | `wasm-feature-detect` | 1.8.0 | Apache-2.0 | [link](https://github.com/GoogleChromeLabs/wasm-feature-detect) |
 | `web-vitals` | 5.2.0 | Apache-2.0 | [link](https://github.com/GoogleChrome/web-vitals) |

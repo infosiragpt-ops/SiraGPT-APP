@@ -465,6 +465,14 @@ export function shouldEditExistingDocument(
 ): boolean {
   const normalized = normalizePrompt(prompt)
   if (!normalized) return false
+  // Describing an edit or explicitly preserving the original does not grant
+  // editing authority. Keep genuinely mixed read/edit requests conservative.
+  const command = normalized.replace(/^[¿¡]\s*/, '').replace(/^(?:por favor\s*[, :]?\s*)+/, '')
+  const readOnly = /^(?:explica\b|describe\b|dime\s+(?:si|como|que)\b|no\s+(?:edites|reescribas)\b)/.test(command)
+    || (/^(?:resume|analiza|revisa)\b/.test(command)
+      && /\b(?:sin (?:editar|modificar|cambiar)|no (?:edites|modifiques|cambies))\b/.test(command))
+  const asksForMutation = /(?:[,;.]|\by\b|\bluego\b|\bdespues\b)\s*(?:cambia|edita|modifica|corrige|reemplaza|reescribe|elimina|agrega)\b/.test(command)
+  if (readOnly && !asksForMutation) return false
   const hasDocumentContext = hasDocumentAttachmentContext(conversationHistory)
   if (
     hasDocumentContext

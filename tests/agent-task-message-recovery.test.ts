@@ -4,6 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import ts from 'typescript';
 import { findRecoveredAgentAssistantIndex } from '../lib/agent-task-message-recovery';
+import { parseDocumentJobPointer } from '../lib/document-sandbox-client';
 import { mergeMessagesPreservingUserContent, parseAgentTaskContent } from '../lib/message-preservation';
 
 const taskId = 'synthetic-document-task';
@@ -91,10 +92,10 @@ function runComponentRecovery(messages: any[], state: Record<string, unknown>, r
   ).outputText;
   let chat: { id: string; messages: any[] } = { id: chatId, messages };
   new Function('initialAgentState', 'signal', 'chatId', 'bubbleMessageId', 'setCurrentChat',
-    'findRecoveredAgentAssistantIndex', 'taskId', 'incomingState', code)(
+    'findRecoveredAgentAssistantIndex', 'parseDocumentJobPointer', 'taskId', 'incomingState', code)(
     {}, { aborted: false }, chatId, rememberedId,
     (update: (current: typeof chat) => typeof chat) => { chat = update(chat); },
-    findRecoveredAgentAssistantIndex, taskId, state,
+    findRecoveredAgentAssistantIndex, parseDocumentJobPointer, taskId, state,
   );
   return chat.messages;
 }
@@ -125,6 +126,33 @@ test('the real updater creates an assistant if only a user turn exists, even wit
   assert.equal(updated[1].role, 'ASSISTANT');
   assert.notEqual(updated[1].id, originalUser.id);
   assert.equal(parseAgentTaskContent(updated[1].content).done, true);
+});
+
+test('the real updater does not adopt a pending document job with its own recovery pointer', () => {
+  const pointer = { docSandbox: { version: 1, idempotencyKey: 'synthetic-document-admission' } };
+  for (const metadata of [pointer, JSON.stringify(pointer)]) {
+    assert.deepEqual(parseDocumentJobPointer(metadata), pointer.docSandbox);
+    const originalUser = user();
+    const document = {
+      id: 'assistant-document-sandbox-turn', chatId, role: 'ASSISTANT', metadata,
+      // Document jobs use this visual envelope but have no agent-task ID.
+      // Their idempotency pointer belongs to the separate document recovery.
+      content: fence({ done: false, steps: [{ id: 'document-sandbox', status: 'running' }] }),
+    };
+    const before = [originalUser, document];
+    const snapshot = structuredClone(before);
+    const updated = runComponentRecovery(before, { meta: { taskId }, done: true, finalText: 'Tarea del agente terminada.' });
+    assert.deepEqual(before, snapshot, 'recovery must not mutate the existing document job');
+    assert.equal(updated.length, 3);
+    assert.equal(updated[0], originalUser);
+    assert.equal(updated[1], document);
+    assert.deepEqual(parseDocumentJobPointer(updated[1].metadata), pointer.docSandbox);
+    assert.equal(parseAgentTaskContent(updated[1].content).done, false);
+    assert.equal(updated[2].role, 'ASSISTANT');
+    assert.notEqual(updated[2].id, document.id);
+    assert.equal(parseAgentTaskContent(updated[2].content).taskId, taskId);
+    assert.equal(parseAgentTaskContent(updated[2].content).done, true);
+  }
 });
 
 for (const status of ['failed', 'error', 'cancelled', 'canceled']) {

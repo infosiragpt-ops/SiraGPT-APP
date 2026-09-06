@@ -675,6 +675,18 @@ function refreshProcessMetrics() {
   }
 }
 
+// Register document families even with admission disabled: the global exposition
+// and rule inventory remain stable; no document work or timers start here.
+registerCounter('siragpt_doc_attempts_total', { help: 'Observed document attempts', labels: ['status'] });
+registerCounter('siragpt_doc_jobs_total', { help: 'Observed document terminal transitions', labels: ['status'] });
+registerCounter('siragpt_doc_timeouts_total', { help: 'Document job timeouts', labels: [] });
+registerCounter('siragpt_doc_rollbacks_total', { help: 'Document retries from pristine originals', labels: [] });
+registerCounter('siragpt_doc_validation_total', { help: 'Executed independent validation levels', labels: ['level', 'passed'] });
+registerHistogram('siragpt_doc_phase_seconds', { help: 'Document phase duration', labels: ['phase'], buckets: [1, 5, 10, 30, 60, 120, 300, 600] });
+registerHistogram('siragpt_doc_job_seconds', { help: 'Observed document job duration', labels: ['status'], buckets: [5, 15, 30, 60, 120, 300, 600, 1800, 3600] });
+registerHistogram('siragpt_doc_cost_usd', { help: 'Recorded document cost estimates, not authoritative billing', labels: ['status'], buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 100] });
+registerGauge('siragpt_doc_worker_active', { help: 'Active document workers in this process', labels: [] });
+
 module.exports = {
   registerCounter,
   registerGauge,

@@ -315,6 +315,41 @@ function applySolidBackground(slideXml, hex) {
   return slideXml;
 }
 
+// Some generated decks put an opaque rectangle behind every other object
+// instead of using p:bg. Changing p:bg alone is invisible in those decks.
+// Only that unambiguous backing object may be repainted: never a picture,
+// grouped object, text box, translucent overlay or styled content shape.
+function recolorCanvasBackingShape(slideXml, hex, canvas) {
+  if (!canvas || !Number.isFinite(canvas.width) || !Number.isFinite(canvas.height)
+    || canvas.width <= 0 || canvas.height <= 0) return slideXml;
+  const tree = /<p:spTree\b[^>]*>([\s\S]*?)<\/p:spTree>/.exec(slideXml);
+  if (!tree) return slideXml;
+  const firstObject = /<p:(sp|pic|grpSp|graphicFrame|cxnSp)\b/.exec(tree[1]);
+  if (!firstObject || firstObject[1] !== 'sp') return slideXml;
+  const shape = /^<p:sp\b[^>]*>[\s\S]*?<\/p:sp>/.exec(tree[1].slice(firstObject.index))?.[0];
+  if (!shape || /<p:(txBody|style)\b|\bhidden="(?:1|true)"/.test(shape)) return slideXml;
+  const properties = /<p:spPr\b[^>]*>([\s\S]*?)<\/p:spPr>/.exec(shape)?.[1];
+  if (!properties || !/<a:prstGeom\b[^>]*\bprst="rect"/.test(properties)) return slideXml;
+  if (/<a:(effectDag|scene3d|sp3d|extLst)\b|<a:alpha[A-Za-z]*\b/.test(properties)
+    || /<a:effectLst\b[^>]*>\s*\S[\s\S]*?<\/a:effectLst>/.test(properties)) return slideXml;
+  const transform = /<a:xfrm\b([^>]*)>([\s\S]*?)<\/a:xfrm>/.exec(properties);
+  if (!transform || /\b(?:flipH|flipV)="(?:1|true)"/.test(transform[1])) return slideXml;
+  const rotation = /\brot="([^"]+)"/.exec(transform[1]);
+  if (rotation && Number(rotation[1]) !== 0) return slideXml;
+  const offset = /<a:off\b[^>]*>/.exec(transform[2])?.[0] || '';
+  const extent = /<a:ext\b[^>]*>/.exec(transform[2])?.[0] || '';
+  const number = (tag, attribute) => Number(new RegExp(`\\b${attribute}="(-?\\d+)"`).exec(tag)?.[1]);
+  if (number(offset, 'x') !== 0 || number(offset, 'y') !== 0
+    || number(extent, 'cx') !== canvas.width || number(extent, 'cy') !== canvas.height) return slideXml;
+  // a:ln may itself contain solidFill; an outline is not the shape's fill.
+  const fillProperties = properties.split(/<a:(?:ln|effectLst|effectDag|scene3d|sp3d|extLst)\b/)[0];
+  const fill = /<a:solidFill\b[^>]*>[\s\S]*?<\/a:solidFill>/.exec(fillProperties)?.[0];
+  if (!fill) return slideXml;
+  const repainted = shape.replace(properties, properties.replace(fill,
+    `<a:solidFill><a:srgbClr val="${hex}"/></a:solidFill>`));
+  return slideXml.replace(shape, repainted);
+}
+
 function recolorTextRuns(slideXml, textHex) {
   const fill = `<a:solidFill><a:srgbClr val="${String(textHex).replace(/^#/, '').toUpperCase()}"/></a:solidFill>`;
   return String(slideXml).replace(/<a:rPr\b([^>]*)(?:\/>|>([\s\S]*?)<\/a:rPr>)/g, (full, attrs, inner) => {
@@ -352,9 +387,12 @@ function setSlideBackgrounds({ buffer, color, allSlides = true, slideNumber = nu
     throw new Error(`no existe la diapositiva ${slideNumber}`);
   }
   const textHex = contrastText ? contrastTextHex(hex) : null;
+  const size = /<p:sldSz\b[^>]*>/.exec(zip.file('ppt/presentation.xml')?.asText() || '')?.[0] || '';
+  const canvas = { width: Number(/\bcx="(\d+)"/.exec(size)?.[1]), height: Number(/\bcy="(\d+)"/.exec(size)?.[1]) };
   for (const slide of targets) {
     let xml = zip.file(slide.partName)?.asText() || '';
     xml = applySolidBackground(xml, hex);
+    xml = recolorCanvasBackingShape(xml, hex, canvas);
     if (textHex) xml = recolorTextRuns(xml, textHex);
     zip.file(slide.partName, xml);
   }
