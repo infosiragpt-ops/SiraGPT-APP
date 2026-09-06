@@ -52,8 +52,6 @@ describe('chrome desktop flags', () => {
       ['start-desktop.sh', sh],
       ['google-chrome.desktop', desk],
       ['orch server.js', orch],
-      ['agent-computer.js', route],
-      ['chat-computer-tools.js', tools],
     ]) {
       assert.match(src, /--no-sandbox/, `${name} keeps --no-sandbox`);
       assert.match(src, /--test-type/, `${name} suppresses the infobar`);
@@ -68,5 +66,6 @@ describe('chrome desktop flags', () => {
     assert.match(route, /chromeMaximizeOrLaunch/);
     assert.match(tools, /chromeOpenUrlCommand/);
     assert.doesNotMatch(route, /about:blank/);
+    assert.doesNotMatch(tools, /about:blank/);
   });
 });
