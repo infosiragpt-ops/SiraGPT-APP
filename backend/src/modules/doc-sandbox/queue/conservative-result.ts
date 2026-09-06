@@ -42,9 +42,14 @@ export function createConservativeBundle(inputs: InputFile[], frozenPlan: EditPl
   if (!inputs.length || inputs.length > 10 || new Set(inputs.map((input) => input.id)).size !== inputs.length ||
       Object.keys(plan.inputHashes).length !== inputs.length || plan.outputName !== inputs[0]!.name ||
       (stage === 'planning' && !plan.notPossible.length) || (stage === 'editing' && plan.notPossible.length) ||
-      !reasons.length || reasons.length > 100 || reasons.some((reason) => !reason.trim() || reason.length > 2000)) {
+      !reasons.length || reasons.length > 100 || reasons.some((reason) => reason.length > 2000)) {
     throw new DocSandboxError('E_VALIDATION', 422);
   }
+  // The canonical refusal contract requires at least one useful warning, but
+  // permits blank accessory entries. Check raw limits before discarding blanks;
+  // retain useful text exactly and never mutate the provider's warning array.
+  const usefulReasons = reasons.filter((reason) => reason.trim().length > 0);
+  if (!usefulReasons.length) throw new DocSandboxError('E_VALIDATION', 422);
   const originalPlanHash = sha256(Buffer.from(JSON.stringify(plan), 'utf8'));
   const outputs: Artifact[] = inputs.map((input) => {
     if (sha256(input.data) !== input.sha256 || plan.inputHashes[input.id] !== input.sha256) throw new DocSandboxError('E_VALIDATION', 422);
@@ -64,7 +69,7 @@ export function createConservativeBundle(inputs: InputFile[], frozenPlan: EditPl
   const recipe = zip.generate({ type: 'nodebuffer', compression: 'STORE' });
   const result = agentResultSchema.parse({ schemaVersion: 1, outputName: plan.outputName, outcome: 'not_possible',
     editsApplied: [], editsFailed: plan.edits.map((edit) => edit.id), partsModified: [], pagesAffected: [],
-    warnings: reasons, selfCheck: { openedOk: false, textDiffMatchesPlan: false } });
+    warnings: usefulReasons, selfCheck: { openedOk: false, textDiffMatchesPlan: false } });
   return { outputs, validationPlans, originalPlanHash, artifacts: [
     { kind: 'recipe', name: 'recipe.zip', data: recipe, sha256: sha256(recipe), mime: 'application/zip' },
     jsonArtifact('result.json', 'agent_result', result),

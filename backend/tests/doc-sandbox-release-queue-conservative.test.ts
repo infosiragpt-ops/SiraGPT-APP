@@ -7,7 +7,7 @@ import path from 'node:path';
 import PizZip from 'pizzip';
 import { sha256 } from '../src/modules/doc-sandbox/engine/artifacts';
 import { createConservativeBundle, combinePreservationReports } from '../src/modules/doc-sandbox/queue/conservative-result';
-import { classifyAgentResult, editPlanSchema, type EditPlan, type InputFile } from '../src/modules/doc-sandbox/types/contracts';
+import { agentResultSchema, classifyAgentResult, editPlanSchema, type EditPlan, type InputFile } from '../src/modules/doc-sandbox/types/contracts';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 
 // Actual source bytes, PizZip archives, hashes and the fixed trusted Python
@@ -51,6 +51,70 @@ test('conservative bundle copies every input, freezes source identity and never 
     assert.deepEqual(result.pagesAffected, []);
     assert.deepEqual(result.selfCheck, { openedOk: false, textDiffMatchesPlan: false });
   }
+});
+
+test('a canonically valid refusal discards only blank warnings and preserves every original byte', () => {
+  for (const editing of [false, true]) {
+    const frozen = plan(inputs, editing);
+    const warnings = ['', '  Cannot preserve the requested change.  ', '\t\n', 'Originals are retained.', '\u00a0'];
+    const refusal = agentResultSchema.parse({ schemaVersion: 1, outputName: frozen.outputName,
+      outcome: 'not_possible', editsApplied: [], editsFailed: frozen.edits.map(edit => edit.id),
+      partsModified: [], pagesAffected: [], warnings,
+      selfCheck: { openedOk: false, textDiffMatchesPlan: false } });
+    const before = JSON.stringify({ frozen, refusal, inputs });
+    Object.freeze(refusal.warnings);
+    assert.equal(classifyAgentResult(frozen, refusal), 'not_possible');
+    const bundle = createConservativeBundle(inputs, frozen, editing ? 'editing' : 'planning', refusal.warnings);
+    const resultArtifact = bundle.artifacts.find(item => item.kind === 'agent_result')!;
+    const result = agentResultSchema.parse(JSON.parse(resultArtifact.data.toString('utf8')));
+    assert.equal(resultArtifact.sha256, sha256(resultArtifact.data));
+    assert.equal(classifyAgentResult(frozen, result), 'not_possible');
+    assert.deepEqual(result.warnings, ['  Cannot preserve the requested change.  ', 'Originals are retained.']);
+    assert.deepEqual(result.editsApplied, []);
+    assert.deepEqual(result.editsFailed, frozen.edits.map(edit => edit.id));
+    assert.equal(bundle.outputs.length, inputs.length);
+    for (const [index, output] of bundle.outputs.entries()) {
+      assert.notEqual(output.data, inputs[index]!.data);
+      assert.deepEqual(output.data, inputs[index]!.data);
+      assert.equal(output.sha256, inputs[index]!.sha256);
+    }
+    assert.equal(JSON.stringify({ frozen, refusal, inputs }), before);
+  }
+});
+
+test('empty or all-blank refusal reasons remain rejected by both classification and preservation', () => {
+  const frozen = plan(inputs, true);
+  for (const warnings of [[], [''], [' ', '\t\r\n', '\u00a0']]) {
+    const refusal = agentResultSchema.parse({ schemaVersion: 1, outputName: frozen.outputName,
+      outcome: 'not_possible', editsApplied: [], editsFailed: ['edit-one'], partsModified: [], pagesAffected: [],
+      warnings, selfCheck: { openedOk: false, textDiffMatchesPlan: false } });
+    const before = JSON.stringify({ refusal, frozen, inputs });
+    assert.throws(() => classifyAgentResult(frozen, refusal), { message: 'DOC_RESULT_REFUSAL_INVALID' });
+    for (const editing of [false, true]) {
+      assert.throws(() => createConservativeBundle(inputs, plan(inputs, editing),
+        editing ? 'editing' : 'planning', refusal.warnings), rejects);
+    }
+    assert.equal(JSON.stringify({ refusal, frozen, inputs }), before);
+  }
+});
+
+test('blank normalization cannot bypass original warning length and count limits', () => {
+  const frozen = plan(inputs, true);
+  for (const warnings of [
+    ['Valid reason.', ' '.repeat(2001)],
+    ['Valid reason.', 'r'.repeat(2001)],
+    ['Valid reason.', ...Array.from({ length: 100 }, () => '')],
+  ]) {
+    const before = JSON.stringify({ warnings, inputs, frozen });
+    assert.throws(() => createConservativeBundle(inputs, frozen, 'editing', warnings), rejects);
+    assert.equal(JSON.stringify({ warnings, inputs, frozen }), before);
+  }
+  const longestReason = 'r'.repeat(2000);
+  const bundle = createConservativeBundle(inputs, frozen, 'editing',
+    [longestReason, ...Array.from({ length: 99 }, () => '')]);
+  const result = agentResultSchema.parse(JSON.parse(bundle.artifacts.find(item => item.kind === 'agent_result')!.data.toString('utf8')));
+  assert.deepEqual(result.warnings, [longestReason]);
+  assert.equal(classifyAgentResult(frozen, result), 'not_possible');
 });
 
 test('trusted recipe preserves exact UTF-8, CRLF and CSV bytes when executed by real Python', () => {

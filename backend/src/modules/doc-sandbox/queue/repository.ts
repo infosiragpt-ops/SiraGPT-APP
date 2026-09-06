@@ -342,6 +342,8 @@ export class DocSandboxRepository {
       const artifacts = await db.$queryRaw<DbArtifact[]>(Prisma.sql`SELECT * FROM doc_job_artifacts WHERE job_id=${lease.jobId} AND attempt=${lease.attempt} AND purged_at IS NULL FOR UPDATE`);
       const required: ArtifactKind[] = ['output', 'edit_plan', 'recipe', 'agent_result', 'validation_report', 'text_diff'];
       if (required.some(kind => !artifacts.some(a => a.kind === kind)) || !artifacts.some(a => a.kind === 'validation_report' && a.storage_key === gate.validationReportKey)) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
+      const plans = artifacts.filter(a => a.kind === 'edit_plan');
+      if (plans.length !== 1 || plans[0]!.storage_key !== row.edit_plan_key || plans[0]!.sha256 !== row.edit_plan_hash) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
       const outputs = artifacts.filter(a => a.kind === 'output');
       const inputs = await db.$queryRaw<DbArtifact[]>(Prisma.sql`SELECT * FROM doc_job_artifacts WHERE job_id=${lease.jobId} AND kind='input' AND purged_at IS NULL`);
       if (gate.outcome === 'not_possible') {

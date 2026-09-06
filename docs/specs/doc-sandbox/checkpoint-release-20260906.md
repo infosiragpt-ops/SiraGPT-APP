@@ -5,7 +5,16 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** se separaron las políticas puras de leases,
+**Actualización más reciente:** se corrigió la publicación con metadata de plan
+incongruente y la conservación de originales ante advertencias vacías accesorias.
+Ambos fallos se reprodujeron antes del arreglo. **339/339** pruebas estrictas,
+cobertura **72,48 % (2571/3547)** y **49/49** integraciones nuevas PostgreSQL/Redis;
+los servicios de prueba quedaron detenidos. No son jobs documentales completos
+ni un ensayo migratorio PG16. Evidencia y límites en
+[publication-release-20260906.md](publication-release-20260906.md).
+El 80 %, la aceptación de F1 y el despliegue siguen pendientes.
+
+**Registro anterior (`43b4f580…`):** se separaron las políticas puras de leases,
 transiciones y presupuesto de intentos, conservando locks, reloj DB y orden de
 IO. **336/336** pruebas estrictas y cobertura **72,48 % (2566/3540)**; **46/46**
 integraciones nuevas con PostgreSQL/Redis reales de prueba pasan y sus servicios

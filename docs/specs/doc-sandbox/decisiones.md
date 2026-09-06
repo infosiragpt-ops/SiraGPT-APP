@@ -174,6 +174,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: funciones puras sobre proyecciones tipadas del dominio, llamadas desde el mismo punto de las operaciones originales. El repositorio mantiene fila bloqueada, reloj DB, transacciones, fencing y SQL; el procesador mantiene inspección, heartbeat, deadlines, motor y reservas de costo. La aritmética y precedencia de errores se conservan.
 - Consecuencias: 29 pruebas nuevas de políticas, revisión independiente y 46 integraciones reales PostgreSQL/Redis separadas de la cobertura estricta. Un snapshot no acredita propiedad concurrente ni puede sustituir una reserva transaccional. No se debilita el 80 %, no se cambia el tratamiento heredado de metadata inválida ni se declara F1 aprobada. Evidencia y límites en [policy-release-20260906.md](policy-release-20260906.md).
 
+## D26. Identidad congelada al publicar y negativas con advertencias accesorias
+
+- Contexto: el repositorio aceptaba metadata de un plan diferente al congelado; una negativa admitida por schema/clasificador podía fallar al conservar originales por una cadena vacía accesoria.
+- Decisión: exigir exactamente un `edit_plan` del intento vigente cuya clave y hash coincidan con la fila congelada, dentro de la transacción y antes de publicar. En el bundle conservador, validar límites originales antes de filtrar vacíos, mantener motivos útiles exactos y exigir al menos uno.
+- Consecuencias: tres regresiones reales PostgreSQL y tres unitarias estrictas, con fallos pre-fix y aprobación post-fix. Se conservan idempotencia, SQL, reloj, leases y originales; no se confunde metadata de publicación con validación documental independiente. No se cambia el procesador ni se certifica producción. Evidencia y próximo hallazgo en [publication-release-20260906.md](publication-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

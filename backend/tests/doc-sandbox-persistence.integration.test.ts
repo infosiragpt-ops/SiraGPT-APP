@@ -43,7 +43,7 @@ async function advanceToValidation(id: string): Promise<AttemptLease> {
   const lease = await repo.claimAttempt(id, 60_000);
   assert.ok(lease);
   await repo.transition(lease, 'planning');
-  await repo.freezePlan(lease, `private-fixture/${id}/plan`, hash);
+  await repo.freezePlan(lease, `private-fixture/${id}/edit_plan`, hash);
   await repo.transition(lease, 'editing');
   await repo.transition(lease, 'validating');
   return lease;
@@ -53,6 +53,22 @@ async function stage(lease: AttemptLease): Promise<PublicationGate> {
   const files = kinds.map(kind => artifact(kind, lease.jobId));
   await repo.registerArtifacts(lease, files);
   return { planHash: hash, outcome: 'edited', validationReportKey: files.find(f => f.kind === 'validation_report')!.storageKey, levels: [1,2,3,4].map(level => ({ level: level as 1 | 2 | 3 | 4, passed: true, applicable: true })) };
+}
+async function assertFrozenPlanRejection(lease: AttemptLease, gate: PublicationGate): Promise<void> {
+  const before = await repo.getInternal(lease.jobId);
+  const artifactsBefore = await repo.artifactsInternal(lease.jobId);
+  const eventsBefore = await repo.listEventsOwned(lease.jobId, before.userId);
+  assert.equal(before.status, 'validating');
+  assert.equal(before.outcome, null);
+  assert.ok(artifactsBefore.every(item => !item.published));
+  assert.ok(eventsBefore.every(event => event.payload.status !== 'done'));
+  await assert.rejects(repo.publishValidated(lease, gate), errorCode('DOC_VALIDATION_GATE'));
+  // The whole fenced snapshot, artifact visibility and event sequence
+  // must remain unchanged when the transaction rejects the plan metadata.
+  assert.deepEqual(await repo.getInternal(lease.jobId), before);
+  assert.deepEqual(await repo.artifactsInternal(lease.jobId), artifactsBefore);
+  assert.deepEqual(await repo.listEventsOwned(lease.jobId, before.userId), eventsBefore);
+  assert.deepEqual(await repo.artifactsOwned(lease.jobId, before.userId), []);
 }
 before(async () => {
   // Identifier is generated locally and validated, never user input. No public tables are touched.
@@ -435,6 +451,9 @@ test('publication is one atomic terminal event with all required private artifac
   const { job } = await create();
   const lease = await advanceToValidation(job.id);
   const gate = await stage(lease);
+  const frozen = await repo.getInternal(job.id);
+  assert.deepEqual((await repo.artifactsInternal(job.id)).filter(item => item.kind === 'edit_plan')
+    .map(item => ({ key: item.storageKey, hash: item.sha256 })), [{ key: frozen.editPlanKey, hash: frozen.editPlanHash }]);
   assert.equal((await repo.artifactsOwned(job.id, owner)).length, 0);
   await assert.rejects(repo.publishValidated(lease, { ...gate, levels: gate.levels.slice(0, 3) }), errorCode('DOC_VALIDATION_GATE'));
   await assert.rejects(repo.publishValidated(lease, { ...gate, planHash: changedHash }), errorCode('DOC_VALIDATION_GATE'));
@@ -446,6 +465,44 @@ test('publication is one atomic terminal event with all required private artifac
   assert.equal(events.filter(e => e.payload.status === 'done').length, 1);
   assert.deepEqual(events.map(e => e.seq), events.map((_, index) => index + 1));
   assert.deepEqual((await repo.listEventsOwned(job.id, owner, 2)).map(e => e.seq), events.filter(e => e.seq > 2).map(e => e.seq));
+});
+
+// These exercise real PostgreSQL publication metadata, not Office bytes or a
+// simulated validator. The single frozen plan is the worker's one planRecord.
+test('publication rejects a plan under a different storage key even when its hash matches', async () => {
+  const { job } = await create();
+  const lease = await advanceToValidation(job.id);
+  const gate = await stage(lease);
+  await db.$executeRaw(Prisma.sql`UPDATE doc_job_artifacts SET storage_key=${`private-fixture/${job.id}/other-plan`} WHERE job_id=${job.id} AND kind='edit_plan'`);
+  const plans = (await repo.artifactsInternal(job.id)).filter(item => item.kind === 'edit_plan');
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]!.sha256, gate.planHash);
+  assert.notEqual(plans[0]!.storageKey, (await repo.getInternal(job.id)).editPlanKey);
+  await assertFrozenPlanRejection(lease, gate);
+});
+
+test('publication rejects a plan at the frozen storage key when its hash differs', async () => {
+  const { job } = await create();
+  const lease = await advanceToValidation(job.id);
+  const gate = await stage(lease);
+  await db.$executeRaw(Prisma.sql`UPDATE doc_job_artifacts SET sha256=${changedHash} WHERE job_id=${job.id} AND kind='edit_plan'`);
+  const plans = (await repo.artifactsInternal(job.id)).filter(item => item.kind === 'edit_plan');
+  assert.equal(plans.length, 1);
+  assert.equal(plans[0]!.storageKey, (await repo.getInternal(job.id)).editPlanKey);
+  assert.notEqual(plans[0]!.sha256, gate.planHash);
+  await assertFrozenPlanRejection(lease, gate);
+});
+
+test('publication rejects an additional incongruent plan even when the frozen plan is present', async () => {
+  const { job } = await create();
+  const lease = await advanceToValidation(job.id);
+  const gate = await stage(lease);
+  await repo.registerArtifacts(lease, [{ ...artifact('edit_plan', `duplicate-${job.id}`), sha256: changedHash }]);
+  const frozen = await repo.getInternal(job.id);
+  const plans = (await repo.artifactsInternal(job.id)).filter(item => item.kind === 'edit_plan');
+  assert.equal(plans.length, 2);
+  assert.equal(plans.filter(item => item.storageKey === frozen.editPlanKey && item.sha256 === frozen.editPlanHash).length, 1);
+  await assertFrozenPlanRejection(lease, gate);
 });
 
 test('validation cannot be declared non-applicable for Office or any structural/textual check', async () => {
