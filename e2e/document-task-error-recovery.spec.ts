@@ -118,18 +118,33 @@ async function installRecoveryFixture(context: BrowserContext, page: Page, baseU
   return { failTask: () => { failed = true }, eventRequests: () => eventRequests, failedEventRequests: () => failedEventRequests, chatRequests: () => chatRequests, errors, unexpectedExternal, forbiddenWrites }
 }
 
+async function waitForConversationBootstrap(page: Page, chatRequests: () => number, previousChatRequests: number) {
+  // DOMContentLoaded precedes auth, the ssr:false ChatInterface import, and
+  // selecting the persisted chat. Give only that bootstrap a bounded budget;
+  // the task-recovery polls below keep their independent 5-second assertions.
+  await test.step("Bootstrap: load the original conversation and composer", async () => {
+    await Promise.all([
+      expect.poll(chatRequests, { timeout: 30_000 }).toBeGreaterThan(previousChatRequests),
+      expect(page.locator(`article.msg--user[data-message-id="${userMessageId}"]`).getByTestId("user-message")).toHaveText(prompt, { timeout: 30_000 }),
+      expect(page.getByTestId("chat-composer-surface").locator("textarea")).toBeVisible({ timeout: 30_000 }),
+    ])
+  })
+}
+
 for (const [viewportName, viewport] of [["desktop", { width: 1440, height: 1000 }], ["mobile", { width: 390, height: 844 }]] as const) {
   for (const terminal of terminalCases) {
     test(`${viewportName}: ${terminal.name} reload preserves the user prompt and stops the spinner`, async ({ context, page, baseURL }, testInfo) => {
       await page.setViewportSize(viewport)
       const fixture = await installRecoveryFixture(context, page, baseURL!, terminal)
       await page.goto(`/agentes?id=${chatId}`, { waitUntil: "domcontentloaded", timeout: 60_000 })
+      await waitForConversationBootstrap(page, fixture.chatRequests, 0)
       await expect.poll(fixture.eventRequests).toBeGreaterThan(0)
       fixture.failTask()
       for (let reload = 1; reload <= 2; reload++) {
         const previousFailedRequests = fixture.failedEventRequests()
         const previousChatRequests = fixture.chatRequests()
         await page.reload({ waitUntil: "domcontentloaded", timeout: 60_000 })
+        await waitForConversationBootstrap(page, fixture.chatRequests, previousChatRequests)
         await expect.poll(fixture.failedEventRequests).toBeGreaterThan(previousFailedRequests)
         await expect.poll(fixture.chatRequests).toBeGreaterThan(previousChatRequests)
         expect(new URL(page.url()).pathname).toBe("/agentes")

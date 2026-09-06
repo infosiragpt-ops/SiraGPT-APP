@@ -81,6 +81,34 @@ claim the correction is in production or that every document format is editable.
 
 ## Rollout
 
+### Cold CI startup follow-up
+
+PR #567 passed CI on `22a751d5d8c63a00db48f191177e712c164f1439`.
+Its identical merged tree at `98d9317879ec50923bc05b69cbaca38bf10a0eb5`
+failed main run `34001751709`: 18 cases passed, but the first recovery case
+timed out waiting for its initial task event before testing recovery.
+Publication was paused rather than overriding the gate.
+
+The retry trace showed a successful page, authentication and chat-list request,
+followed by the late client-only chat chunk. At the five-second timeout the UI
+still displayed its loading shell; no individual chat, pending-stream or task
+events request had been made. This was not evidence of a completed recovery.
+The two terminal variants have identical running fixtures before that point.
+
+The focused follow-up separates a bounded 30-second bootstrap readiness check
+(chat loaded, original user prompt, mounted composer) from the existing
+five-second event/recovery checks, including after both reloads. It does not
+raise global assertion timeouts, add retries, skip a case, alter fixtures or
+change application code. Repeated development-server runs and exact commit CI
+must pass before publication resumes.
+
+The focused next-dev repetition passed all 20 cases (four cases repeated five
+times, one worker, zero retries) in 2.8 minutes. The cold first case included
+a 25.9-second route compile; the 19 warm cases completed in 6.7–7.6 seconds
+each, including both reloads and all assertions. TypeScript, focused lint and
+UI-lock checks passed. The complete critical suite and exact CI are separate
+release gates, not inferred from this repetition.
+
 Normal protected-branch PR and exact merged-main CI, followed by the already
 reviewed Lenovo publisher. Expected previous live SHA is `2ed317307bff5255b3ad8bcb88ec47fdee063520`.
 No schema/migrations, dependencies, credentials, DNS, database/Redis/gateway or
