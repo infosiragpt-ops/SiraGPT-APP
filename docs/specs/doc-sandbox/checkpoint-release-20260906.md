@@ -5,7 +5,16 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** se corrigió la publicación con metadata de plan
+**Actualización más reciente:** el validador Python real distingue TXT incorrecto
+2028 del solicitado 2027 y conserva su diff en la salida de validación: **2/2**
+casos positivos/negativos, fuera de cobertura unitaria. Se añadieron dos contratos
+del motor y uno de CI: **341/341** estrictas, **72,59 % (2575/3547)**,
+**12466/12466** generales. Runtime intacto. La retención del diff en el catch
+continúa sin corregirse ni probarse con almacenamiento real; ensayo y límites en
+[failure-evidence-release-20260906.md](failure-evidence-release-20260906.md).
+No hay despliegue ni cierre de F1.
+
+**Registro anterior (`c337481f4…`):** se corrigió la publicación con metadata de plan
 incongruente y la conservación de originales ante advertencias vacías accesorias.
 Ambos fallos se reprodujeron antes del arreglo. **339/339** pruebas estrictas,
 cobertura **72,48 % (2571/3547)** y **49/49** integraciones nuevas PostgreSQL/Redis;

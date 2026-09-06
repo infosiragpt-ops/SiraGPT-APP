@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { getEventListeners } = require('node:events');
 const { setImmediate: nextImmediate } = require('node:timers/promises');
+const { APIError } = require('@anthropic-ai/sdk');
 const PizZip = require('pizzip');
 const { AnthropicSandboxEngine, providerContainerRetentionDeadline } = require('../dist/doc-sandbox/engine/anthropic-engine');
 const { AnthropicDocumentProviderClient } = require('../dist/doc-sandbox/engine/provider-client');
@@ -217,6 +218,21 @@ test('bounded JSON refuses malformed encoding and huge artifacts', () => {
 test('file references only come from generated tool blocks, not prose or container uploads', () => {
   assert.deepEqual(extractGeneratedFileIds([{ type: 'text', text: 'file_otherTenant' }, { type: 'container_upload', file_id: 'file_otherTenant' }]), []);
   assert.deepEqual(extractGeneratedFileIds(new ProviderMock().response(['file_a', 'file_a']).content), ['file_a']);
+});
+test('valid tool envelopes reject malformed generated file references rather than accepting a partial list', () => {
+  const malformed = [undefined, null, 123, {}, '', 'file_', 'other_a', 'file-a',
+    '../file_a', 'file_a/child', 'file_a\u0000', 'file_a\n', `file_${'a'.repeat(181)}`];
+  for (const family of ['bash_code_execution', 'code_execution']) {
+    const envelope = (fileIds) => [{ type: `${family}_tool_result`, content: {
+      type: `${family}_result`, content: fileIds.map(file_id => ({ type: `${family}_output`, file_id })),
+    } }];
+    const longestAllowed = `file_${'a'.repeat(180)}`;
+    assert.deepEqual(extractGeneratedFileIds(envelope([longestAllowed])), [longestAllowed]);
+    for (const value of malformed) {
+      assert.throws(() => extractGeneratedFileIds(envelope(['file_valid', value])),
+        { message: 'DOC_ENGINE_INVALID_FILE_REFERENCE' });
+    }
+  }
 });
 test('streaming download enforces actual bytes and header limits', async () => {
   const signal = new AbortController().signal;
@@ -687,6 +703,28 @@ test('real SDK adapter forwards message, metadata, download and idempotent delet
     assert.equal(await (await client.download('file_adapter2', options)).text(), 'document bytes');
     await client.delete('file_adapter2', options);
     assert.deepEqual(calls.map((call) => call.method), ['POST', 'GET', 'GET', 'DELETE']);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('real SDK DELETE propagates non-404 failures and never retries or reports successful deletion', async () => {
+  const originalFetch = global.fetch;
+  try {
+    for (const [status, type] of [[403, 'permission_error'], [429, 'rate_limit_error'], [503, 'api_error']]) {
+      const calls = [];
+      // Only the SDK transport is doubled; Request, Response and SDK error
+      // classification are real. No database, storage or validator is replaced.
+      global.fetch = async (url, options) => {
+        const request = new Request(url, options);
+        calls.push({ method: request.method, path: new URL(request.url).pathname });
+        return new Response(JSON.stringify({ error: { type, message: 'Synthetic cleanup rejection' } }),
+          { status, headers: { 'content-type': 'application/json' } });
+      };
+      const client = new AnthropicDocumentProviderClient('unit-test-placeholder');
+      await assert.rejects(client.delete('file_cleanup_contract', {
+        signal: new AbortController().signal, timeoutMs: 1000,
+      }), error => error instanceof APIError && error.status === status);
+      assert.deepEqual(calls, [{ method: 'DELETE', path: '/v1/files/file_cleanup_contract' }]);
+    }
   } finally { global.fetch = originalFetch; }
 });
 

@@ -180,6 +180,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: exigir exactamente un `edit_plan` del intento vigente cuya clave y hash coincidan con la fila congelada, dentro de la transacción y antes de publicar. En el bundle conservador, validar límites originales antes de filtrar vacíos, mantener motivos útiles exactos y exigir al menos uno.
 - Consecuencias: tres regresiones reales PostgreSQL y tres unitarias estrictas, con fallos pre-fix y aprobación post-fix. Se conservan idempotencia, SQL, reloj, leases y originales; no se confunde metadata de publicación con validación documental independiente. No se cambia el procesador ni se certifica producción. Evidencia y próximo hallazgo en [publication-release-20260906.md](publication-release-20260906.md).
 
+## D27. Oráculo real antes de afirmar retención de evidencia fallida
+
+- Contexto: el núcleo validador produce diff incluso al fallar, pero el catch del procesador descarta sus artefactos. El Mac no tiene el transporte aislado ni MinIO preparados para demostrar todo el recorrido.
+- Decisión: oráculo positivo/negativo con Python real y TXT sintético, obligatorio en la suite documental y fuera de cobertura unitaria. Preparar ensayo separado de retención con PostgreSQL/MinIO reales y eventual extracción privada del tramo del catch con paridad revisada. No modificar aún el runtime ni sustituir validadores por simulacros.
+- Consecuencias: se prueba generación de evidencia, no almacenamiento ni edición completa. Se propone persistencia privada allowlist y `failAttempt` transaccional, sujeto a pre-fix/post-fix real, límites, fencing y revisión de cleanup. Dos contratos del SDK/parser avanzan pruebas locales sin relajar el 80 %. Evidencia y matriz pendientes en [failure-evidence-release-20260906.md](failure-evidence-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

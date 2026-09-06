@@ -64,4 +64,14 @@ describe("document sandbox strict coverage release gate", () => {
     assert.match(step, /^\s*retention-days: 14\s*$/m)
     assert.doesNotMatch(step, /coverage\/tmp|\.env|server\.log/)
   })
+
+  it("runs the real failed-diff oracle as a document check without folding it into unit coverage", () => {
+    const command = scripts["test:doc-sandbox:documents"]
+    assert.match(command, /(?:^|&&\s*)node --import tsx --test tests\/doc-sandbox-failure-evidence-validator\.test\.ts(?:\s*&&|$)/)
+    assert.doesNotMatch(command, /\|\|\s*true|--test-skip-pattern/)
+    assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /failure-evidence-validator/)
+    const step = backendStep("Document sandbox contracts and real database/queue tests")
+    assert.match(step, /npm run test:doc-sandbox:documents/)
+    assert.doesNotMatch(step, /continue-on-error|\|\|\s*true/)
+  })
 })
