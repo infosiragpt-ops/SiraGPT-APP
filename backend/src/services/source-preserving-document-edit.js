@@ -6,7 +6,7 @@ const { createHash } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const PizZip = require('pizzip');
-const { parsePresentationTitleEdit, isScopedSlideMutation } = require('./document-editing/presentation-title-intent');
+const { parsePresentationTitleEdit, isScopedSlideMutation, resolveSlideScope } = require('./document-editing/presentation-title-intent');
 const { verifySlideTitleEdit, assertBoundedOfficePackage } = require('./document-editing/edit-output-proof');
 const ExcelJS = require('exceljs');
 const { PDFDocument, StandardFonts, rgb } = require('pdf-lib');
@@ -7532,8 +7532,15 @@ function planGenericOfficeOperations({ requestText = '', format = '', sourceText
   };
   const rawCellWrite = format === 'xlsx' ? extractXlsxCellWrite(requestText) : null;
   if (rawCellWrite) add({ kind: 'set_cell', ...rawCellWrite });
-  const pptxSlideMatch = format === 'pptx' ? SLIDE_NOUN_RE.exec(normalizeText(requestText)) : null;
-  const pptxSlideNumber = pptxSlideMatch ? Number(pptxSlideMatch[1]) : null;
+  // Keep ordinal locations ("primera diapositiva") scoped to that slide,
+  // but never infer a location from a quoted replacement/title value.
+  const pptxScope = format === 'pptx' ? resolveSlideScope(requestText) : null;
+  if (pptxScope?.ambiguous) {
+    const error = new Error('La instrucción contiene varias diapositivas. Indica una diapositiva y su cambio exacto por turno; no modifiqué el archivo.');
+    error.code = 'PPTX_SLIDE_SCOPE_AMBIGUOUS';
+    throw error;
+  }
+  const pptxSlideNumber = pptxScope?.slideNumber ?? null;
   const quotedPairs = extractAllQuotedReplacementPairs(requestText);
   if (quotedPairs.length) {
     for (const pair of quotedPairs) {
@@ -8034,6 +8041,10 @@ async function generateSourcePreservingDocumentEdit({
       }
     } else if (isPptxFile(sourceFile)) {
       format = 'pptx';
+      if (resolveSlideScope(requestText).ambiguous) {
+        await sourceRead.cleanup().catch(() => {});
+        return buildImageEditClarificationResult({ format, message: 'La instrucción contiene varias diapositivas. Indica una diapositiva y su cambio exacto por turno; no modifiqué el archivo.' });
+      }
       try { assertBoundedOfficePackage(input); }
       catch {
         await sourceRead.cleanup().catch(() => {});
