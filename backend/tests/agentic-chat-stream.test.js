@@ -16,6 +16,94 @@ const { PassThrough } = require('node:stream');
 
 const agenticStream = require('../src/services/agentic-chat-stream');
 
+test('retry policy: adapted writes and unknown tools are never repeated after an uncertain result', async () => {
+  await Promise.all([
+    'session_send', 'session_spawn', 'browser_click', 'browser_type',
+    'github_create_issue', 'linkedin_publish_post', 'x_publish_post', 'unknown_read_tool',
+  ].map(async (name) => {
+    let effects = 0;
+    const uncertain = new Error('socket hang up after accepting the action');
+    const tool = agenticStream._internal.adaptAgentTool({
+      name,
+      description: 'Synthetic tool; no external action.',
+      // Untrusted tool metadata is not a server retry policy.
+      retrySafe: true,
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      handler: async () => { effects += 1; throw uncertain; },
+    }, { type: 'object' });
+    await assert.rejects(tool.execute({}, {}), (err) => err === uncertain);
+    assert.equal(effects, 1, name);
+  }));
+});
+
+test('retry policy: the native read policy retains args, context and retry behavior', async () => {
+  const controller = new AbortController();
+  const args = { query: 'synthetic query' };
+  const ctx = { userId: 'synthetic-user', signal: controller.signal };
+  let attempts = 0;
+  const tool = agenticStream._internal.adaptAgentTool({
+    name: 'synthetic_read',
+    description: 'Synthetic read; no network.',
+    handler: async (seenArgs, seenCtx) => {
+      assert.equal(seenArgs, args);
+      assert.equal(seenCtx, ctx);
+      attempts += 1;
+      if (attempts === 1) throw new Error('socket hang up');
+      return { ok: true };
+    },
+  }, { type: 'object' }, { retrySafe: true });
+  assert.deepEqual(await tool.execute(args, ctx), { ok: true });
+  assert.equal(attempts, 2);
+});
+
+test('retry policy: Stop reaches the live adapter before invoking a handler', async () => {
+  const controller = new AbortController();
+  const reason = Object.assign(new Error('cancelled by user'), { code: 'E_CANCELLED' });
+  controller.abort(reason);
+  let calls = 0;
+  const tool = agenticStream._internal.adaptAgentTool({
+    name: 'synthetic_read',
+    handler: async () => { calls += 1; return 'unexpected'; },
+  }, { type: 'object' }, { retrySafe: true });
+  await assert.rejects(tool.execute({}, { signal: controller.signal }), (err) => err === reason);
+  assert.equal(calls, 0);
+});
+
+test('retry policy: the production base toolset opts in only its audited first-party reads', async (t) => {
+  const nativeTools = require('../src/services/agents/agent-tools');
+  const safeReads = [
+    'web_search', 'read_url', 'web_extract', 'session_search',
+    'session_list', 'session_history', 'github_search', 'scientific_search',
+  ];
+  const singleAttempt = [
+    'browser_navigate', 'browser_click', 'browser_type', 'browser_scroll',
+    'github_create_issue', 'linkedin_publish_post', 'x_publish_post',
+    'github_list_repos', 'linkedin_read_profile', 'x_list_mentions', 'x_search',
+  ];
+  const counts = new Map();
+  for (const name of [...safeReads, ...singleAttempt]) {
+    counts.set(name, 0);
+    t.mock.method(nativeTools[name], 'handler', async () => {
+      const attempt = counts.get(name) + 1;
+      counts.set(name, attempt);
+      if (attempt === 1) throw new Error('socket hang up');
+      return { ok: true };
+    });
+  }
+  const toolset = agenticStream._internal.baseWebTools();
+  await Promise.all([...safeReads, ...singleAttempt].map(async (name) => {
+    const tool = toolset.find((entry) => entry.name === name);
+    assert.ok(tool, `native tool exists: ${name}`);
+    if (safeReads.includes(name)) {
+      assert.deepEqual(await tool.execute({}, {}), { ok: true });
+      assert.equal(counts.get(name), 2, name);
+    } else {
+      await assert.rejects(tool.execute({}, {}), /socket hang up/);
+      assert.equal(counts.get(name), 1, name);
+    }
+  }));
+});
+
 // Minimal Response stand-in: collects everything written so we can
 // inspect the SSE frames after the run completes.
 function makeFakeRes() {

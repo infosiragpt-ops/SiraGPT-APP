@@ -2071,29 +2071,30 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
    * skill manifest) because react-agent's OpenAI tool adapter expects
    * a full schema and the agent-tools entries only carry hint strings.
    */
-  function adaptAgentTool(tool, jsonSchema) {
+  function adaptAgentTool(tool, jsonSchema, retryPolicy = {}) {
     return {
       name: tool.name,
       description: tool.description,
       parameters: jsonSchema,
-      // Bounded, classifier-driven retry so a transient network blip while
-      // calling a tool does not abort an otherwise-correct multi-step run.
-      // Transparent on success; only THROWN transient errors are retried,
-      // deterministic `{error}` responses are passed straight through.
+      // Only explicit local policy may authorize retries. Tool metadata,
+      // names and returned-vs-thrown errors do not prove idempotency.
       execute: async (args, _ctx) => runToolWithRetry(
         (a, c) => tool.handler(a, c),
         args,
         _ctx,
-        { label: tool.name },
+        { label: tool.name, retrySafe: retryPolicy.retrySafe === true },
       ),
     };
   }
 
   function baseWebTools() {
+    // Audited first-party reads only. Browser actions, writes, sub-agent
+    // creation and generic app executors remain single-attempt by default.
+    const adaptReadOnlyTool = (tool, schema) => adaptAgentTool(tool, schema, { retrySafe: true });
     return [
       // react-agent expects {name,description,parameters,execute(args,ctx)};
       // agent-tools entries use {schema,handler}. Adapt them inline.
-      adaptAgentTool(agentTools.web_search, {
+      adaptReadOnlyTool(agentTools.web_search, {
         type: 'object',
         properties: {
           query:      { type: 'string', description: 'Search query, 2-12 keywords.' },
@@ -2104,7 +2105,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         required: ['query'],
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.read_url, {
+      adaptReadOnlyTool(agentTools.read_url, {
         type: 'object',
         properties: {
           url:      { type: 'string', description: 'Absolute http(s) URL to read.' },
@@ -2113,7 +2114,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         required: ['url'],
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.web_extract, {
+      adaptReadOnlyTool(agentTools.web_extract, {
         type: 'object',
         properties: {
           url:      { type: 'string', description: 'Absolute http(s) URL to extract as readable markdown.' },
@@ -2122,7 +2123,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         required: ['url'],
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.session_search, {
+      adaptReadOnlyTool(agentTools.session_search, {
         type: 'object',
         properties: {
           query:           { type: 'string', description: 'Terms to search in the user’s past chat messages.' },
@@ -2133,7 +2134,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         required: ['query'],
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.session_list, {
+      adaptReadOnlyTool(agentTools.session_list, {
         type: 'object',
         properties: {
           limit:           { type: 'integer', minimum: 1, maximum: 50, description: 'How many recent sessions to return, newest first. Default 10.' },
@@ -2141,7 +2142,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         },
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.session_history, {
+      adaptReadOnlyTool(agentTools.session_history, {
         type: 'object',
         properties: {
           sessionId: { type: 'string', description: 'Chat/session id to open (e.g. from session_list or session_search).' },
@@ -2239,7 +2240,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
           execute: async (args) => sunat.execute(args),
         };
       })(),
-      adaptAgentTool(agentTools.github_search, {
+      adaptReadOnlyTool(agentTools.github_search, {
         type: 'object',
         properties: {
           query:    { type: 'string', description: 'Keywords, optionally with GitHub qualifiers.' },
@@ -2253,7 +2254,7 @@ function shouldUseAgenticChat({ prompt, history = [], files = [], customGptCapab
         required: ['query'],
         additionalProperties: false,
       }),
-      adaptAgentTool(agentTools.scientific_search, {
+      adaptReadOnlyTool(agentTools.scientific_search, {
         type: 'object',
         properties: {
           query:     { type: 'string', description: 'Research topic or keywords.' },

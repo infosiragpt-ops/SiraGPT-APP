@@ -8,12 +8,36 @@
  * prompt cap (never unscoped generate).
  */
 
-const inFlight = new Map(); // jobId -> { sessionKey, startedAt, abort }
+const inFlight = new Map(); // [owner, jobId] -> { sessionKey, startedAt, abort }
+const { raceWithSignal } = require('../utils/retry-with-backoff');
+const { redactString } = require('../utils/secret-redactor');
 
 const DEFAULT_CRON_TURN_TIMEOUT_MS = 180_000;
 const MAX_CRON_PROMPT_CHARS = 8000;
 const MAX_CONCURRENT_CRON_TICKS = 8;
 const MAX_CRON_JOB_ID_CHARS = 128;
+const CRON_DEAD_LETTER_TIMEOUT_MS = 1000;
+
+function stableFailureCode(value, fallback = 'cron_dispatch_failed') {
+  return typeof value === 'string'
+    && /^(?:E_[A-Z0-9_]{1,48}|[a-z][a-z0-9_]{1,63})$/.test(value)
+    && redactString(value) === value
+    ? value
+    : fallback;
+}
+
+async function confirmDeadLetter(operation) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('cron_dead_letter_timeout')), CRON_DEAD_LETTER_TIMEOUT_MS);
+  try {
+    // No retry: after a timeout, a sink may still commit. The returned false
+    // means insertion was not confirmed before the deadline, not disproved.
+    const result = await raceWithSignal(Promise.resolve().then(operation), controller.signal);
+    return result !== false && result?.ok !== false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function cronTurnTimeoutMs() {
   const n = Number(process.env.SIRAGPT_CRON_TURN_TIMEOUT_MS);
@@ -47,31 +71,34 @@ function cronJobToAgentArgs(job, now = Date.now()) {
   };
 }
 
-function shouldSkipOverlappingTick(jobId, now = Date.now(), maxMs = 120_000) {
-  const prev = inFlight.get(String(jobId || ''));
+function inflightKey(jobId, userId) {
+  return JSON.stringify([String(userId || '').trim(), String(jobId || '').trim()]);
+}
+
+function shouldSkipOverlappingTick(jobId, now = Date.now(), maxMs = 120_000, userId = null) {
+  const prev = inFlight.get(inflightKey(jobId, userId));
   if (!prev) return false;
   return (now - Number(prev.startedAt || 0)) < maxMs;
 }
 
-function pushCronDeadLetter(gatewayOrRunner, sessionKey, reason, extra) {
+async function pushCronDeadLetter(gatewayOrRunner, sessionKey, reason, extra) {
   try {
     const dlq = gatewayOrRunner && (gatewayOrRunner.pushDeadLetter || gatewayOrRunner.pushSessionDeadLetter);
     if (typeof dlq === 'function') {
-      dlq.call(gatewayOrRunner, {
+      return await confirmDeadLetter(() => dlq.call(gatewayOrRunner, {
         sessionKey: String(sessionKey || ''),
         error: String(reason || 'cron_error'),
         at: Date.now(),
         ...(extra && typeof extra === 'object' ? extra : {}),
-      });
-      return true;
+      }));
     }
     if (gatewayOrRunner && gatewayOrRunner.sessionDlq && typeof gatewayOrRunner.sessionDlq.push === 'function') {
-      gatewayOrRunner.sessionDlq.push({
+      return await confirmDeadLetter(() => gatewayOrRunner.sessionDlq.push({
         sessionKey: String(sessionKey || ''),
         error: String(reason || 'cron_error'),
         at: Date.now(),
-      });
-      return true;
+        ...(extra && typeof extra === 'object' ? extra : {}),
+      }));
     }
   } catch (_) { /* DLQ must never throw out of cron */ }
   return false;
@@ -109,7 +136,7 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
   if (args.message.length > MAX_CRON_PROMPT_CHARS) {
     return { ok: false, error: 'prompt_too_long', code: 'prompt_too_long', sessionKey: args.sessionKey, jobId: id };
   }
-  if (shouldSkipOverlappingTick(id, now)) {
+  if (shouldSkipOverlappingTick(id, now, 120_000, args.userId)) {
     return { ok: false, error: 'overlap_skipped', jobId: id };
   }
   if (inFlight.size >= MAX_CONCURRENT_CRON_TICKS) {
@@ -118,19 +145,31 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
 
   const timeoutMs = cronTurnTimeoutMs();
   const abort = { aborted: false, reason: null };
-  inFlight.set(id, { sessionKey: args.sessionKey, startedAt: now, abort });
+  const key = inflightKey(id, args.userId);
+  const activeTick = { sessionKey: args.sessionKey, startedAt: now, abort };
+  inFlight.set(key, activeTick);
   try {
     if (gatewayOrRunner && typeof gatewayOrRunner.abortSession === 'function' && job && job.abortPrevious) {
-      try { gatewayOrRunner.abortSession(args.sessionKey, 'cron_overlap'); } catch (_) { /* best-effort */ }
+      try { gatewayOrRunner.abortSession(args.sessionKey, 'cron_overlap', args.userId); } catch (_) { /* best-effort */ }
     }
 
     const runPromise = (async () => {
       if (gatewayOrRunner && typeof gatewayOrRunner.startAgent === 'function') {
-        const started = gatewayOrRunner.startAgent(args);
+        const started = await gatewayOrRunner.startAgent(args);
+        if (started?.ok === false) {
+          const err = new Error('cron dispatch rejected');
+          err.code = stableFailureCode(started.code || started.error);
+          throw err;
+        }
         return { ok: true, via: 'gateway.startAgent', ...started, sessionKey: args.sessionKey, jobId: id };
       }
       if (gatewayOrRunner && typeof gatewayOrRunner.run === 'function') {
-        await gatewayOrRunner.run(args);
+        const result = await gatewayOrRunner.run(args);
+        if (result?.ok === false) {
+          const err = new Error('cron runner rejected');
+          err.code = stableFailureCode(result.code || result.error);
+          throw err;
+        }
         return { ok: true, via: 'runner.run', sessionKey: args.sessionKey, jobId: id };
       }
       const err = new Error('no_gateway_or_runner');
@@ -146,7 +185,7 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
         abort.reason = 'cron_timeout';
         try {
           if (gatewayOrRunner && typeof gatewayOrRunner.abortSession === 'function') {
-            gatewayOrRunner.abortSession(args.sessionKey, 'cron_timeout');
+            gatewayOrRunner.abortSession(args.sessionKey, 'cron_timeout', args.userId);
           }
         } catch (_) { /* best-effort */ }
         const err = new Error('cron_timeout');
@@ -160,30 +199,32 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
       const result = await Promise.race([runPromise, timeoutPromise]);
       return result;
     } catch (err) {
-      const code = String(err && (err.code || err.message) || 'cron_error');
-      if (code === 'cron_dispatch_unavailable' && !(job && job._retried)) {
-        return dispatchCronJobAsAgentTurn(gatewayOrRunner, Object.assign({}, job, { _retried: true }), now);
-      }
+      // The dispatcher has already settled. Waiting for evidence must not
+      // let its old deadline abort a later run occupying the same session.
+      if (timer) clearTimeout(timer);
+      timer = null;
+      const code = stableFailureCode(err?.code, 'cron_error');
       const reason = code.includes('timeout') ? 'cron_timeout' : (code || 'cron_error');
-      pushCronDeadLetter(gatewayOrRunner, args.sessionKey, reason, { jobId: id, userId: args.userId });
+      const deadLettered = await pushCronDeadLetter(gatewayOrRunner, args.sessionKey, reason, { jobId: id, userId: args.userId });
       return {
         ok: false,
         error: reason,
         code: reason,
         sessionKey: args.sessionKey,
         jobId: id,
-        deadLettered: true,
+        deadLettered,
       };
     } finally {
       if (timer) clearTimeout(timer);
     }
   } finally {
-    inFlight.delete(id);
+    if (inFlight.get(key) === activeTick) inFlight.delete(key);
   }
 }
 
-function markCronTickFinished(jobId) {
-  inFlight.delete(String(jobId || ''));
+function markCronTickFinished(jobId, userId) {
+  if (!String(userId || '').trim()) return { ok: false, code: 'user_required' };
+  inFlight.delete(inflightKey(jobId, userId));
   return { ok: true, jobId: String(jobId || '') };
 }
 
@@ -198,6 +239,7 @@ module.exports = {
   MAX_CRON_PROMPT_CHARS,
   MAX_CONCURRENT_CRON_TICKS,
   MAX_CRON_JOB_ID_CHARS,
+  CRON_DEAD_LETTER_TIMEOUT_MS,
   DEFAULT_CRON_TURN_TIMEOUT_MS,
   inflightSnapshot,
 };
