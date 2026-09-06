@@ -13,9 +13,11 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   The complete OpenClaw copyright and MIT license text is retained at
   `docs/upstream/OPENCLAW-LICENSE`.
   The native ReAct tool-result integrity and call-identity hardening in
-  `backend/src/services/react-agent.js` and `agents/tool-call-normalizer.js`
+  `backend/src/services/react-agent.js` and
+  `backend/src/services/agents/tool-call-normalizer.js`
   also draws on OpenClaw's no-progress detection and replay-safe tool pairing
-  architecture. The history packer in `agentic-chat-stream.js` uses the
+  architecture. The history packer in
+  `backend/src/services/agentic-chat-stream.js` uses the
   complete-turn retention concept reviewed in the existing inactive OpenClaw
   reference snapshot; its upstream revision was not independently verified.
   This is a SiraGPT-owned implementation, not a vendored gateway
