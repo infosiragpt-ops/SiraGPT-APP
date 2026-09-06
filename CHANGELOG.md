@@ -39,6 +39,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Document recovery browser tests now distinguish bounded client/chat startup
+  from task recovery, preserving the five-second recovery assertions and all
+  desktop/mobile, reload, content and layout checks on cold CI development servers.
+
 - Document edits with a source filename before the instruction now reach the
   source-preserving PPTX title path. Reloading a finished or failed agent task
   preserves the original user message and stops the matching assistant bubble.
