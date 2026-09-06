@@ -77,6 +77,12 @@ Sources inspected at upstream revision
 - [No-progress tool-loop detection](https://github.com/openclaw/openclaw/blob/615e964314e41ab7f255c31999537c6a5c85b3c3/src/agents/tool-loop-detection.ts).
 - [Replay-safe tool identity and pairing](https://github.com/openclaw/openclaw/blob/615e964314e41ab7f255c31999537c6a5c85b3c3/src/agents/tool-call-id.ts).
 
+For complete-turn history retention, the existing inactive local reference
+`src/upstream/openclaw/agents/pi-embedded-runner/history.ts` was also inspected.
+Its original upstream revision was not independently verified; it must not be
+attributed to the pinned revision above. The bounded-character packer is a new
+native implementation and does not import or execute that reference file.
+
 The implementation fixes the observed SiraGPT defects under its own CommonJS
 runtime, checkpoint and dispatcher contracts. It does not copy the full upstream
 tree, activate its gateway, install its personal-device integrations, transfer
