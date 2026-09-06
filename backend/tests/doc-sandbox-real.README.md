@@ -101,6 +101,21 @@ modelos, precios, skills, `DOC_SANDBOX_ENGINE`, `REDIS_URL` ni `R2_ACCOUNT_ID`.*
 No se inventan valores de proveedor para completar el preflight. Inspeccionar
 originales no acredita edición, resultados del modelo ni los goldens de §10.
 
+Antes de admitir gasto, ambos modos verifican también **crear, listar, leer y
+borrar un objeto sintético nuevo** mediante el adaptador real: cifrado GCM,
+bytes recuperados idénticos, metadatos privados y GET anónimo rechazado (401/403).
+La eliminación se comprueba incluso si falla la prueba; un error de limpieza
+bloquea la campaña. `preflight.json.storageProof` conserva el resultado sin
+claves, contenido ni URLs. Esto sustituye el insuficiente `HeadBucket`.
+Antes del PUT se escribe un journal privado (0600) con el único objeto de prueba;
+la confirmación de borrado se guarda por separado. Si el proceso muere, ese
+journal permite borrar exactamente el objeto pendiente sin explorar otros jobs.
+
+Esta prueba solo acredita el endpoint S3 aislado consultado, **no la privacidad
+de R2 en producción**. R2 puede publicar por `r2.dev` o dominios personalizados
+independientes del endpoint S3; ambos deben revisarse al configurar producción.
+Referencia: [R2 public buckets](https://developers.cloudflare.com/r2/buckets/public-buckets/).
+
 ## Ejecución pagada: todavía requiere evidencia del límite duro
 
 `--execute-real` sí exige la configuración real completa aceptada por

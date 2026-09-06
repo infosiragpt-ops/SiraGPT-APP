@@ -5,6 +5,13 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
+**Actualización de esta continuación:** se corrigió la prueba CBC inestable,
+se añadieron pruebas reales de recuperación y almacenamiento privado, y se
+separaron los dobles auxiliares de la medición unitaria. La cobertura estricta
+es **63,08 % (2179/3454)**, no 67,08 %: aquella cifra mezclaba auxiliares con
+catálogo/Docker simulados y no acredita el requisito SDK-only de §10.2.
+Se mantienen todas las pruebas y el umbral del 80 %, sin excluir fuentes.
+
 ## 1. Qué se implementó
 
 - Candidata revisada: `d1bd40fa4907fb649ea149652d14a849f838c748` de #561.
@@ -25,6 +32,23 @@ especificación ni sus requisitos de aceptación.
 
 No se modificó el runtime documental para satisfacer pruebas, ni se activó
 ningún modelo, servicio o variable de producción.
+
+Continuación posterior a `fbfff812c`:
+
+- `backend/tests/encryption.test.js`: corrupt padding CBC determinista; la
+  alteración aleatoria anterior no siempre invalidaba el padding. Se preserva
+  el comportamiento heredado; no se afirma autenticación de ese cifrado CBC.
+- `doc-sandbox-storage-probe.cjs`: antes de gasto, exige CRUD real, GCM,
+  bytes exactos, metadatos privados y rechazo anónimo. Journal 0600 sincronizado
+  antes de PUT y confirmación de limpieza separada; un PUT incierto conserva
+  su referencia y no obtiene certificado de borrado. No acredita R2 productivo.
+- Dos pruebas de integración en MinIO real, incluida una política pública
+  sintética que debe fallar, ejecutadas por el comando HTTP/storage y el runner
+  aislado. La campaña real conserva `runsc` como primera puerta obligatoria.
+- Ocho pruebas Postgres/Redis reales de recuperación, cancelación, entrega
+  perdida, deduplicación y fencing. No invocan motor ni validador.
+- `test:doc-sandbox:auxiliary` conserva los 18 checks con transporte Docker,
+  catálogo y admisión simulados; CI los ejecuta aparte, sin sumarlos a cobertura.
 
 ## 2. Cómo se probó
 
@@ -96,6 +120,35 @@ No hay nuevos jobs Anthropic, informes de cinco jobs reales ni E2E completo
 en esta continuación. Gasto nuevo: **US$0**. No se reinició el ledger ni se
 afirma que el saldo del proveedor esté acreditado.
 
+Resultados de la continuación (no son goldens de edición ni publicación):
+
+```text
+npm --prefix backend run test:doc-sandbox:coverage
+tests 200; pass 200; fail 0; skipped 0
+Lines 63.08% (2179/3454), Functions 66.06%, Branches 85.52%
+exit 1: el gate 80% permanece bloqueado
+npm --prefix backend run test:doc-sandbox:auxiliary
+tests 18; pass 18; fail 0; skipped 0; exit 0
+node --test backend/tests/encryption.test.js
+tests 13; pass 13; fail 0; skipped 0; exit 0
+node --import tsx --test tests/doc-sandbox-readiness-queue-recovery.integration.test.ts
+tests 8; pass 8; fail 0; skipped 0; exit 0
+```
+
+La recuperación usa PostgreSQL 17.10 y Redis 7.2.10 efímeros propios en Mac;
+no certifica compatibilidad de migración PostgreSQL 16 productiva.
+Desde el Mac se ejecutó en Lenovo
+`infra/doc-validation/run-isolated-integration.sh` con la candidata aislada
+`/home/user/deployments/doc-sandbox-phase1-tests/candidate-readiness-20260906-XXMEmbBk`:
+**66/66**, cero omisiones, 20.547 ms en la repetición. Evidencia privada:
+`integration-final.log`. PostgreSQL, Redis y MinIO de pruebas estaban detenidos
+al inicio y quedaron detenidos al terminar; no hubo puertos publicados.
+La imagen Node del runner está fijada en
+`sha256:40f438311ab39713e617fc96b6dcbf5bdc62bf5141ddca954f739386da64176e`.
+
+`npm run type-check`, compilación del módulo y UI-lock pasan; lint sale 0 con
+advertencias heredadas. No hay cambio de superficie visual ni de validadores.
+
 `backend/coverage/doc-sandbox-unit/coverage-summary.json` contiene la medición
 local. No constituye una atestación de producción.
 La evidencia Linux anterior permanece bajo el directorio privado
@@ -124,7 +177,7 @@ Las fases siguientes no se declaran iniciadas ni aprobadas.
 | Producción | SSH y `/api/version` coinciden en `81f3d9a…`; readiness saludable a 2026-09-06 01:29 UTC. No contiene #561. |
 | Acceso host | `siragpt-lenovo` entra a Alpine 3.24.1, UID 1000 deploy. No es una sesión administrativa del host. |
 | Aislamiento | Docker publica únicamente runtimes runc; `runsc` no está registrado. Requiere preflight administrativo real y revisión antes de apply. |
-| Configuración | R2 account/access/secret/bucket y variables DOC_SANDBOX requeridas ausentes tanto del backend vivo como del archivo de despliegue. Solo se consultó presencia, nunca valores. |
+| Configuración | R2 account/access/secret/bucket y variables DOC_SANDBOX requeridas ausentes en la última inspección del backend vivo y del archivo de despliegue. Las nuevas pruebas CRUD son del MinIO aislado, no suplen esa configuración. |
 | Presupuesto | La clave Anthropic existe, pero no acredita hard cap/saldo. Mantener US$5 agregados y evidencia real vigente antes de gasto. |
 | Publicación | `publish-reviewed.sh` rechaza schema/migraciones antes del backup. F1 exige un procedimiento migratorio separado y revisado; no quitar la guarda. |
 
@@ -140,7 +193,8 @@ hash e imágenes fijadas antes de ejecutar el adaptador. No repetir rutas de
 - ❌ Cobertura unitarias ≥80 %.
 - ❌ gVisor efectivo y preflight independiente real en su staging privado.
 - ❌ R2 privado: CRUD, cifrado y rechazo anónimo comprobados. `HeadBucket`
-  del preflight existente no certifica estos tres contratos.
+  ya se sustituyó en el runner por una prueba real de estos contratos en S3
+  aislado. Falta verificar R2 productivo y sus accesos públicos independientes.
 - ❌ Goldens reales, concurrencia, E2E autenticado y muestras anonimizadas.
 - ❌ Backup restaurado en aislamiento y release migratorio/reversión revisados.
 - ❌ Publicación #561 y descarga real posterior desde siragpt.com.

@@ -12,6 +12,17 @@ const path = require('node:path');
 const ts = require('typescript');
 const { makeFixtures, digest } = require('./doc-sandbox-real.fixtures.cjs');
 const { options, loadPreflightConfig, loadRunnerConfig } = require('./doc-sandbox-real.cjs');
+const { isolatedProbeTarget } = require('./doc-sandbox-storage-probe.cjs');
+
+test('storage proof refuses production, credential-bearing URLs and non-test buckets before IO', () => {
+  for (const endpoint of ['https://siragpt.com', 'http://169.254.169.254', 'file:///tmp',
+    'http://user:password@127.0.0.1', 'http://127.0.0.1/path', 'http://127.0.0.1?token=fixture',
+    'http://127.0.0.1#fragment']) assert.throws(() => isolatedProbeTarget(endpoint, 'doc-sandbox-phase1-real'));
+  for (const bucket of ['production', 'doc-sandbox-test-', '../doc-sandbox-phase1-real'])
+    assert.throws(() => isolatedProbeTarget('http://127.0.0.1', bucket));
+  assert.equal(isolatedProbeTarget('http://doc-sandbox-test-minio:9000', 'doc-sandbox-phase1-real').hostname,
+    'doc-sandbox-test-minio');
+});
 
 test('real campaign requires explicit mode, capped total authorization and a private output location', () => {
   for (const args of [[], ['--preflight'], ['--preflight', '--campaign=test', '--authorize-usd=6', '--out=/private/tmp/evidence'],

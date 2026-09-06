@@ -19,6 +19,7 @@ COPY --chown=1000:1000 backend/dist/doc-sandbox /work/backend/dist/doc-sandbox
 COPY --chown=1000:1000 backend/src/modules/doc-sandbox/validation/validator.py /work/backend/src/modules/doc-sandbox/validation/validator.py
 COPY --chown=1000:1000 backend/tests/doc-sandbox-validation.test.py backend/tests/doc-sandbox-readiness.test.py backend/tests/doc-sandbox-conservative-result.test.cjs backend/tests/doc-sandbox-complex.fixture.test.cjs /work/backend/tests/
 COPY --chown=1000:1000 backend/tests/doc-sandbox-real.cjs backend/tests/doc-sandbox-real.fixtures.cjs backend/tests/doc-sandbox-complex.oracle.test.cjs /work/backend/tests/
+COPY --chown=1000:1000 backend/tests/doc-sandbox-storage-probe.cjs /work/backend/tests/
 COPY --chown=1000:1000 backend/tests/fixtures /work/backend/tests/fixtures
 ENV PATH="/opt/validator-venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" HOME=/tmp
 USER 1000:1000

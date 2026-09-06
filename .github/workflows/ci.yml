@@ -317,7 +317,7 @@ jobs:
           NODE_ENV: test
           DOC_SANDBOX_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/openwebui
           DOC_SANDBOX_TEST_REDIS_URL: redis://127.0.0.1:6379/15
-        run: npm run test:doc-sandbox:unit && npm run test:doc-sandbox:runtime && npm run test:doc-sandbox:persistence && npm run test:doc-sandbox:documents && npm run test:doc-sandbox:readiness
+        run: npm run test:doc-sandbox:unit && npm run test:doc-sandbox:auxiliary && npm run test:doc-sandbox:runtime && npm run test:doc-sandbox:persistence && npm run test:doc-sandbox:queue-recovery && npm run test:doc-sandbox:documents && npm run test:doc-sandbox:readiness
 
       # CI and production share the same `prisma migrate deploy` path (U0).
       # `db push` alone is intentionally not used — it skips migration history

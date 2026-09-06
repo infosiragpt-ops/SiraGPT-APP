@@ -18,7 +18,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { Client: PgClient } = require('pg');
 const { PrismaClient, Prisma } = require('@prisma/client');
-const { HeadBucketCommand } = require('@aws-sdk/client-s3');
+const { verifyIsolatedDocumentStorage } = require('./doc-sandbox-storage-probe.cjs');
 const { loadDocumentSandboxConfig } = require('../dist/doc-sandbox/config');
 const { PrivateDocumentStorage, decodeStorageKey, createPrivateDocumentS3Client } = require('../dist/doc-sandbox/storage/private-storage');
 const { IndependentDocumentValidator } = require('../dist/doc-sandbox/validation');
@@ -229,7 +229,8 @@ async function main() {
     await validator.preflight(controller.signal);
     await lock.connect(); connected = true;
     await initializeLedger(lock, opt.authorizationUsd, opt.marginUsd);
-    await s3.send(new HeadBucketCommand({ Bucket: config.bucket }), { abortSignal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+    const storageProof = await verifyIsolatedDocumentStorage({ storage, s3, endpoint: endpoint.toString(),
+      bucket: config.bucket, signal: controller.signal, evidenceDirectory: evidence });
     const initialBalance = await campaignBalance(db);
     assert.equal(initialBalance.unknown, false, 'Unknown prior billing requires reconciliation before another paid request');
     // Exercise every input's real parser/runsc boundary before spending anything.
@@ -239,7 +240,7 @@ async function main() {
     }
     await privateJson(path.join(evidence, 'preflight.json'), { kind: `synthetic-${opt.suite}-infrastructure-preflight`, suite: opt.suite, syntheticOnly: true,
       specificationGoldensSatisfied: false, phase1GatesSatisfied: false,
-      fixtureVersion, validatorImage: config.validatorImage,
+      fixtureVersion, validatorImage: config.validatorImage, storageProof,
       authorizationUsd: opt.authorizationUsd, marginUsd: opt.marginUsd, initialBalance, providerCap,
       cases: fixtures.map((smoke) => ({ id: smoke.id, inputs: smoke.inputs.map(({ name, sha256, format }) => ({ name, sha256, format })) })) });
     if (opt.mode === 'preflight') {

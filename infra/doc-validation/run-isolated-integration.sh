@@ -49,4 +49,5 @@ docker run --rm --name doc-sandbox-test-runner --label siragpt.scope=doc-sandbox
   sha256:40f438311ab39713e617fc96b6dcbf5bdc62bf5141ddca954f739386da64176e \
   --import "$source_dir/backend/node_modules/tsx/dist/loader.mjs" --test --test-concurrency=1 \
   backend/tests/doc-sandbox-api.integration.test.ts backend/tests/doc-sandbox-storage.integration.test.ts \
+  backend/tests/doc-sandbox-storage-probe.integration.test.cjs \
   backend/tests/doc-sandbox-persistence.integration.test.ts backend/tests/doc-sandbox-persistence.queue.test.ts

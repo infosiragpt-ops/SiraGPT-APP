@@ -95,6 +95,10 @@ separado: tener flags en código no constituye evidencia de aislamiento.
 
 - `npm --prefix backend run test:doc-sandbox:unit`: contratos, cifrado, tickets,
   configuración y motor; solo el transporte SDK del motor usa mocks.
+- `npm --prefix backend run test:doc-sandbox:auxiliary`: conserva las regresiones
+  de catálogo/admisión con DB simulada y del transporte Docker de limpieza.
+  Siguen siendo obligatorias en CI, pero no se suman al gate unitario SDK-only
+  de §10.2 ni acreditan gVisor o validación real.
 - `npm --prefix backend run test:doc-sandbox:coverage`: medición de todas las
   fuentes TypeScript del módulo, incluidas las no cargadas, con umbral de líneas
   del 80 %. Falla si no se alcanza. No mezcla integración ni Python para aprobar
@@ -107,6 +111,9 @@ separado: tener flags en código no constituye evidencia de aislamiento.
   efímeros y exclusivamente loopback o hosts exactos de la red aislada de test;
   requiere variables `DOC_SANDBOX_TEST_*`
   indicadas en la suite. Usa esquema aleatorio, nunca tablas productivas.
+- `npm --prefix backend run test:doc-sandbox:queue-recovery`: recuperación de
+  entregas perdidas, duplicados, cancelación concurrente y outbox con Postgres
+  real y Redis propio efímero. Requiere PostgreSQL de pruebas y `redis-server`.
 - `npm --prefix backend run test:doc-sandbox:http-storage`: HTTP autenticado con
   identidades de fixture, Postgres y S3 reales. No acredita OAuth ni E2E del navegador.
 - `npm --prefix backend run test:doc-sandbox:readiness`: proceso Redis propio,
