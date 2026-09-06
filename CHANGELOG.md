@@ -4,6 +4,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Unreleased] — Agent integrity
+
+### Fixed
+
+- The native chat agent preserves historical instructions within a bounded
+  context, treats reported tool failures as failures, keeps parallel tool
+  results paired with unique calls, and re-reads current data after a write.
+  Invalid tool groups stop before execution. Includes 57 new regression/unit
+  cases; no interface, dependency or production configuration changes.
+
 ## [Next production release] — 2026-07-22
 
 ### Added
