@@ -25,6 +25,8 @@ type RfbHandle = {
   viewOnly: boolean
   scaleViewport: boolean
   clipViewport: boolean
+  resizeSession?: boolean
+  showDotCursor?: boolean
   addEventListener: (type: string, cb: (ev: Event) => void) => void
   removeEventListener: (type: string, cb: (ev: Event) => void) => void
   disconnect: () => void
@@ -77,6 +79,7 @@ export function DesktopScreen({
 
     let cancelled = false
     let rfb: RfbHandle | null = null
+    let resizeObserver: ResizeObserver | null = null
     const markFrame = () => {
       if (cancelled) return
       setFirstFrame(true)
@@ -92,8 +95,12 @@ export function DesktopScreen({
         const Ctor = RFB as new (target: HTMLElement, url: string, opts?: Record<string, unknown>) => RfbHandle
         rfb = new Ctor(hostRef.current, viewerUrl, { shared: true })
         rfb.viewOnly = Boolean(viewOnly)
+        // Scale the full 1920x1080 desktop into the host. clipViewport=true
+        // was leaving a black unused half when the overlay aspect ≠ 16:9.
         rfb.scaleViewport = true
-        rfb.clipViewport = true
+        rfb.clipViewport = false
+        rfb.resizeSession = false
+        rfb.showDotCursor = false
         rfb.addEventListener("connect", () => {
           if (!cancelled) setStatus("live")
         })
@@ -101,6 +108,12 @@ export function DesktopScreen({
         rfb.addEventListener("disconnect", () => {
           if (!cancelled) setStatus("error")
         })
+        if (typeof ResizeObserver === "function" && hostRef.current) {
+          resizeObserver = new ResizeObserver(() => {
+            try { window.dispatchEvent(new Event("resize")) } catch { /* ignore */ }
+          })
+          resizeObserver.observe(hostRef.current)
+        }
       } catch {
         if (!cancelled) setStatus("error")
       }
@@ -108,6 +121,7 @@ export function DesktopScreen({
 
     return () => {
       cancelled = true
+      try { resizeObserver?.disconnect() } catch { /* already gone */ }
       try { rfb?.disconnect() } catch { /* already gone */ }
     }
   }, [sessionId, viewerUrl, viewOnly, onFirstFrame])
@@ -132,8 +146,9 @@ export function DesktopScreen({
       ) : null}
       <div
         ref={hostRef}
-        className="absolute inset-0 h-full w-full"
+        className="absolute inset-0 flex h-full w-full items-center justify-center [&_canvas]:max-h-full [&_canvas]:max-w-full"
         data-testid="desktop-screen-canvas-host"
+        data-novnc-chrome="hidden"
         role="img"
         aria-label="Pantalla de SiraGPT"
       />

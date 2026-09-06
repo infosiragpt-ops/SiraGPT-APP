@@ -177,6 +177,16 @@ function embedFrom(session: AgentSession): string {
   return `/sessions/${id}/novnc/vnc.html?autoconnect=1&resize=scale&scale_cursor=true&path=sessions/${id}/novnc/websockify`
 }
 
+function rfbWsFromSession(session: AgentSession): string {
+  const id = String(session.sessionId || "").trim()
+  if (!id) return ""
+  const raw = String(session.novncWsUrl || "").trim()
+  if (raw && !/computer\.(siragpt|chatagic)\.com/i.test(raw) && !/api\.siragpt\.com/i.test(raw)) {
+    return raw
+  }
+  return `/sessions/${id}/novnc/websockify`
+}
+
 async function postMemberDesktop(chatId: string, useQuery: boolean) {
   const qs = chatId && useQuery ? `?conversationId=${encodeURIComponent(chatId)}` : ""
   const res = await authenticatedFetch(`${computerApiBase()}/agent-computer/sessions${qs}`, {
@@ -377,7 +387,8 @@ export function DepartmentComputerPane({
   }, [chatId])
 
   const attachUrl = bound || !chatId ? embedUrl : ""
-  const hasLiveDesktop = Boolean(attachUrl || desktopLease)
+  const orchRfbWs = session && (bound || !chatId) ? rfbWsFromSession(session) : ""
+  const hasLiveDesktop = Boolean(desktopLease || orchRfbWs || attachUrl)
 
   React.useEffect(() => {
     if (!expanded) return
@@ -397,9 +408,9 @@ export function DepartmentComputerPane({
     if (!onStatusChange) return
     if (loading) onStatusChange("starting")
     else if (error && poolWarm <= 0) onStatusChange("error")
-    else if ((session && attachUrl) || desktopLease) onStatusChange("live")
+    else if (desktopLease || orchRfbWs || (session && attachUrl)) onStatusChange("live")
     else onStatusChange("idle")
-  }, [loading, error, session, attachUrl, desktopLease, poolWarm, onStatusChange])
+  }, [loading, error, session, attachUrl, orchRfbWs, desktopLease, poolWarm, onStatusChange])
 
   return (
     <section
@@ -471,9 +482,7 @@ export function DepartmentComputerPane({
               : "absolute inset-0 h-full w-full min-h-0",
           )}
         >
-          {attachUrl ? (
-            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
-          ) : desktopLease ? (
+          {desktopLease ? (
             <DesktopScreen
               key={desktopLease.sessionId}
               sessionId={desktopLease.sessionId}
@@ -483,6 +492,17 @@ export function DepartmentComputerPane({
               className="absolute inset-0 h-full w-full min-h-0"
               onFirstFrame={() => setStatusLine("En vivo")}
             />
+          ) : orchRfbWs && session?.sessionId ? (
+            <DesktopScreen
+              key={session.sessionId}
+              sessionId={session.sessionId}
+              wsUrl={orchRfbWs}
+              viewOnly={false}
+              className="absolute inset-0 h-full w-full min-h-0"
+              onFirstFrame={() => setStatusLine("En vivo")}
+            />
+          ) : attachUrl ? (
+            <ComputerViewer key={chatId || session?.sessionId || "desktop"} url={attachUrl} className="absolute inset-0 h-full w-full min-h-0" />
           ) : (
             <div className="absolute inset-0 flex items-center justify-center px-6 text-center" role="status" aria-live="polite">
               <div className="flex flex-col items-center gap-3">

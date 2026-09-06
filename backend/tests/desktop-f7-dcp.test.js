@@ -440,6 +440,8 @@ describe('F7.2 scope fences', () => {
     assert.match(screen, /viewOnly/);
     assert.match(screen, /framebufferupdate|firstFrame/);
     assert.match(screen, /desktop-rfb-client/);
+    assert.match(screen, /clipViewport = false/);
+    assert.match(screen, /scaleViewport = true/);
     assert.doesNotMatch(screen, /@novnc\/novnc\/lib\/rfb/);
     assert.match(pane, /next\/dynamic/);
     assert.match(pane, /ssr:\s*false/);
