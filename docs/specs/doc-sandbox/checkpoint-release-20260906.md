@@ -8,13 +8,15 @@ especificación ni sus requisitos de aceptación.
 **Actualización de esta continuación:** se corrigió la prueba CBC inestable,
 se añadieron pruebas reales de recuperación y almacenamiento privado, y se
 separaron los dobles auxiliares de la medición unitaria. La cobertura estricta
-es **63,08 % (2179/3454)**, no 67,08 %: aquella cifra mezclaba auxiliares con
+es **65,34 % (2257/3454)**, no 67,08 %: aquella cifra mezclaba auxiliares con
 catálogo/Docker simulados y no acredita el requisito SDK-only de §10.2.
 Se mantienen todas las pruebas y el umbral del 80 %, sin excluir fuentes.
 
 ## 1. Qué se implementó
 
-- Candidata revisada: `d1bd40fa4907fb649ea149652d14a849f838c748` de #561.
+- Candidata del ensayo de migración: `8a95a2fe27d637790443cd30f13c1c7d21f43553`
+  de #561. Las pruebas y este checkpoint posteriores no cambian ese runtime
+  ni sus fuentes Prisma. La revisión inicial partió de `d1bd40fa4907fb649ea149652d14a849f838c748`.
 - Integración `80b0aee84` con la producción
   `81f3d9a63150d241f2b22fa4b34ac98b4558a3e3`: conserva #565, #567 y #568.
   No se retrocede el arreglo de títulos PPTX, recuperación del chat ni layout
@@ -49,6 +51,14 @@ Continuación posterior a `fbfff812c`:
   perdida, deduplicación y fencing. No invocan motor ni validador.
 - `test:doc-sandbox:auxiliary` conserva los 18 checks con transporte Docker,
   catálogo y admisión simulados; CI los ejecuta aparte, sin sumarlos a cobertura.
+  En la revisión final, sus dos contratos puros de identidad se trasladaron
+  sin alterar aserciones a `doc-sandbox-validation-filesystem.test.ts`, junto
+  a 16 nuevos casos con filesystem real. Quedan **16 auxiliares**, todos
+  obligatorios, y **222 unitarias estrictas** tras cuatro contratos de planes
+  adicionales. No se eliminó ninguna prueba ni se añadió un mock de transporte.
+- Ensayo de restauración PostgreSQL 16: el backup se restauró, pero el control
+  previo rechazó su historial antes de ejecutar F1. Resultado y diagnóstico
+  separados en [migration-release-rehearsal.md](migration-release-rehearsal.md).
 
 ## 2. Cómo se probó
 
@@ -71,14 +81,15 @@ node node_modules/typescript/bin/tsc -p tests/tsconfig.json
 exit 0
 NODE_ENV=test node --require ./tests/register-ts-paths.cjs --test '.test-dist/tests/**/*.test.js'
 tests 12462; suites 533; pass 12462; fail 0; skipped 0
-duration_ms 60420.176834; exit 0
+duration_ms 60570.898916; exit 0 (repetición de esta continuación)
 ```
 
 La corrida completa final usa reporter `spec` con destino
-`output/phase1-root-tests.log`. La primera corrida, anterior a corregir el
+`output/phase1-readiness-root-tests.log`. La primera corrida, anterior a corregir el
 harness de recuperación descrito abajo, falló y no se contabiliza como verde.
 
-Pruebas específicas (conteos separados, no sumar como E2E):
+Medición histórica, sustituida por la estricta de §3 (no acredita el gate
+SDK-only). Conteos separados, no sumar como E2E:
 
 ```text
 npm --prefix backend run test:doc-sandbox:coverage
@@ -124,24 +135,29 @@ Resultados de la continuación (no son goldens de edición ni publicación):
 
 ```text
 npm --prefix backend run test:doc-sandbox:coverage
-tests 200; pass 200; fail 0; skipped 0
-Lines 63.08% (2179/3454), Functions 66.06%, Branches 85.52%
+tests 222; pass 222; fail 0; skipped 0
+Lines 65.34% (2257/3454), Functions 69.06%, Branches 87.22%
 exit 1: el gate 80% permanece bloqueado
 npm --prefix backend run test:doc-sandbox:auxiliary
-tests 18; pass 18; fail 0; skipped 0; exit 0
+tests 16; pass 16; fail 0; skipped 0; exit 0
 node --test backend/tests/encryption.test.js
 tests 13; pass 13; fail 0; skipped 0; exit 0
 node --import tsx --test tests/doc-sandbox-readiness-queue-recovery.integration.test.ts
 tests 8; pass 8; fail 0; skipped 0; exit 0
 ```
 
-La recuperación usa PostgreSQL 17.10 y Redis 7.2.10 efímeros propios en Mac;
+La medición estricta intermedia fue 200/200 y 63,08 % (2179/3454). El nuevo
+filesystem real y los contratos de planes añaden 78 líneas cubiertas, sin
+cambiar las 3454 líneas medidas. Evidencia: `output/phase1-strict-coverage-final.log`.
+
+La recuperación de la cola usa PostgreSQL 17.10 y Redis 7.2.10 efímeros propios en Mac;
 no certifica compatibilidad de migración PostgreSQL 16 productiva.
 Desde el Mac se ejecutó en Lenovo
 `infra/doc-validation/run-isolated-integration.sh` con la candidata aislada
 `/home/user/deployments/doc-sandbox-phase1-tests/candidate-readiness-20260906-XXMEmbBk`:
-**66/66**, cero omisiones, 20.547 ms en la repetición. Evidencia privada:
-`integration-final.log`. PostgreSQL, Redis y MinIO de pruebas estaban detenidos
+**66/66**, cero omisiones, 20.910 ms en la repetición final con los bytes
+exactos del helper y su prueba. Evidencia privada:
+`integration-final-exact.log`. PostgreSQL, Redis y MinIO de pruebas estaban detenidos
 al inicio y quedaron detenidos al terminar; no hubo puertos publicados.
 La imagen Node del runner está fijada en
 `sha256:40f438311ab39713e617fc96b6dcbf5bdc62bf5141ddca954f739386da64176e`.
@@ -174,12 +190,13 @@ Las fases siguientes no se declaran iniciadas ni aprobadas.
 
 | Control | Estado fresco y acción necesaria |
 | --- | --- |
-| Producción | SSH y `/api/version` coinciden en `81f3d9a…`; readiness saludable a 2026-09-06 01:29 UTC. No contiene #561. |
+| Producción | SSH y `/api/version` coinciden en `81f3d9a…`; readiness saludable a 2026-09-06 02:10 UTC. No contiene #561. |
 | Acceso host | `siragpt-lenovo` entra a Alpine 3.24.1, UID 1000 deploy. No es una sesión administrativa del host. |
 | Aislamiento | Docker publica únicamente runtimes runc; `runsc` no está registrado. Requiere preflight administrativo real y revisión antes de apply. |
 | Configuración | R2 account/access/secret/bucket y variables DOC_SANDBOX requeridas ausentes en la última inspección del backend vivo y del archivo de despliegue. Las nuevas pruebas CRUD son del MinIO aislado, no suplen esa configuración. |
 | Presupuesto | La clave Anthropic existe, pero no acredita hard cap/saldo. Mantener US$5 agregados y evidencia real vigente antes de gasto. |
 | Publicación | `publish-reviewed.sh` rechaza schema/migraciones antes del backup. F1 exige un procedimiento migratorio separado y revisado; no quitar la guarda. |
+| Ensayo migratorio | Backup restaurado en PostgreSQL 16 aislado; 138 filas de historial frente a 132 predecesoras esperadas. Cinco nombres extra, siete checksums distintos y una fila duplicada ya revertida. No faltan predecesoras. Se detuvo antes de migrar; no borrar ni resolver filas automáticamente. |
 
 El paquete gVisor del runbook histórico no aparece desde el namespace del
 contenedor SSH. Esto **no prueba** su ausencia en el host: verificar allí ruta,
@@ -196,7 +213,10 @@ hash e imágenes fijadas antes de ejecutar el adaptador. No repetir rutas de
   ya se sustituyó en el runner por una prueba real de estos contratos en S3
   aislado. Falta verificar R2 productivo y sus accesos públicos independientes.
 - ❌ Goldens reales, concurrencia, E2E autenticado y muestras anonimizadas.
-- ❌ Backup restaurado en aislamiento y release migratorio/reversión revisados.
+- ✅ Restauración del backup real en PostgreSQL 16 aislado, sin arranque de app.
+- ❌ Atestación del historial existente, ensayo completo upgrade/recovery y
+  release migratorio/reversión revisados. La fila revertida no demuestra por
+  sí sola corrupción ni una migración actualmente pendiente.
 - ❌ Publicación #561 y descarga real posterior desde siragpt.com.
 
 ## 8. Continuación

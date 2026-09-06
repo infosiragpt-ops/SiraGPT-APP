@@ -4,8 +4,8 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { assertInvocationLaunchable, cleanupInvocation, createInvocation, reconcileValidatorOrphans, validateInvocationContainer,
-  validateInvocationManifest, VALIDATOR_ORPHAN_GRACE_MS, type ValidatorInvocation } from '../src/modules/doc-sandbox/validation/lifecycle';
+import { assertInvocationLaunchable, cleanupInvocation, createInvocation, reconcileValidatorOrphans,
+  VALIDATOR_ORPHAN_GRACE_MS, type ValidatorInvocation } from '../src/modules/doc-sandbox/validation/lifecycle';
 
 const image = `sha256:${'a'.repeat(64)}`;
 const past = Date.now() - VALIDATOR_ORPHAN_GRACE_MS - 700_000;
@@ -40,25 +40,8 @@ else process.exit(1);
   return { binary, state };
 }
 
-test('private manifest rejects wrong scope, name, expiry and sibling path', async t => {
-  const { root, invocation } = await fixture(t);
-  const raw = JSON.parse(await readFile(path.join(invocation.directory, 'invocation.json'), 'utf8')) as Record<string, unknown>;
-  assert.equal(validateInvocationManifest(raw, invocation.directory, root).invocationId, invocation.invocationId);
-  for (const changed of [{ scope: 'c'.repeat(64) }, { name: 'iliagpt-backend' }, { deadlineAt: past + 700_000 }, { extra: true }]) {
-    assert.throws(() => validateInvocationManifest({ ...raw, ...changed }, invocation.directory, root));
-  }
-  assert.throws(() => validateInvocationManifest(raw, invocation.directory, path.dirname(root)));
-});
-test('container removal requires exact scope, invocation, image, runtime and readonly mount', async t => {
-  const { invocation } = await fixture(t); const row = container(invocation);
-  assert.equal(validateInvocationContainer(row, invocation), row.id);
-  for (const changed of [{ scope: 'c'.repeat(64) }, { invocation: randomUUID() }, { image: 'mutable:latest' }, { runtime: 'runc' },
-    { name: '/iliagpt-backend' }, { network: 'bridge' }, { readonly: false }, { user: '0:0' },
-    { mounts: [{ ...row.mounts[0], RW: true }] }, { mounts: [{ ...row.mounts[0], Source: '/unrelated' }] },
-    { mounts: [...row.mounts, { Type: 'bind', Source: '/elsewhere', Destination: '/other', RW: false }] }]) {
-    assert.throws(() => validateInvocationContainer({ ...row, ...changed }, invocation));
-  }
-});
+// Pure identity contracts and real filesystem guards live in the strict unit
+// suite doc-sandbox-validation-filesystem.test.ts. CLI transport remains auxiliary.
 test('expired invocation is quarantined before verified full-ID removal and proven absence', async t => {
   const { root, invocation } = await fixture(t); const { binary, state } = await fakeDocker(root, container(invocation));
   const result = await reconcileValidatorOrphans({ image, stagingRoot: root, dockerBinary: binary });

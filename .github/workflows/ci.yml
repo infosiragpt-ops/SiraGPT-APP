@@ -311,6 +311,10 @@ jobs:
       - name: Compile document sandbox (strict TypeScript)
         run: npm run build:doc-sandbox
 
+      - name: Document sandbox migration rehearsal guards (no production connection)
+        if: matrix.shard == 1
+        run: node --test ../tests/phase1-migration-rehearsal.test.cjs
+
       - name: Document sandbox contracts and real database/queue tests
         if: matrix.shard == 1
         env:

@@ -5,7 +5,7 @@ import { chmod, lstat, mkdtemp, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createValidatorStagingDirectory, freezePlan, validatorContainerArguments, type DocumentInventory } from '../src/modules/doc-sandbox/validation/index';
-import { hasCompleteValidation, type DocumentFormat, type EditPlan, type InputFile, type ValidationReport } from '../src/modules/doc-sandbox/types/contracts';
+import { classifyAgentResult, editPlanSchema, hasCompleteValidation, type AgentResult, type DocumentFormat, type EditPlan, type InputFile, type ValidationReport } from '../src/modules/doc-sandbox/types/contracts';
 
 const data = Buffer.from('before');
 const sha256 = createHash('sha256').update(data).digest('hex');
@@ -82,6 +82,44 @@ test('two model edits cannot claim the same original leaf', () => assert.throws(
 test('PDF operations cannot target text data', () => assert.throws(() => freezePlan([input], [inventory], {
   ...plan, edits: [{ id: 'e2', kind: 'pdf_rotate', inputId: 'one', pages: [1], degrees: 90 }],
 })));
+
+// Schema/projection checks only: provider claims never certify document bytes.
+test('a plan rejects duplicate edit IDs even for distinct leaves', () => {
+  const candidate = { ...plan, edits: [...plan.edits, { ...plan.edits[0], locator: 'another-leaf' }] };
+  const result = editPlanSchema.safeParse(candidate);
+  assert.equal(result.success, false);
+  if (!result.success) assert.deepEqual(result.error.issues.map(issue => issue.message), ['Identificadores de edición duplicados']);
+});
+
+test('a plan cannot mix successful edits with an unfulfilled part of the same request', () => {
+  const result = editPlanSchema.safeParse({ ...plan, notPossible: [{ request: 'Other requested edit', reason: 'Cannot preserve original' }] });
+  assert.equal(result.success, false);
+  if (!result.success) assert.deepEqual(result.error.issues.map(issue => issue.message), ['No se permite entregar una petición parcialmente editada']);
+});
+
+test('text and PDF merge edits cannot reference files absent from the approved input map', () => {
+  for (const edit of [
+    { ...plan.edits[0], inputId: 'unknown' },
+    { id: 'merge', kind: 'pdf_merge', inputIds: ['one', 'unknown'] },
+  ]) {
+    const result = editPlanSchema.safeParse({ ...plan, edits: [edit] });
+    assert.equal(result.success, false);
+    if (!result.success) assert.deepEqual(result.error.issues.map(issue => issue.message), ['La edición referencia un archivo desconocido']);
+  }
+  assert.equal(editPlanSchema.safeParse({ ...plan, inputHashes: { one: sha256, two: sha256 },
+    edits: [{ id: 'merge', kind: 'pdf_merge', inputIds: ['one', 'two'] }] }).success, true);
+});
+
+test('a provider claim with another filename or repeated applied IDs is not accepted', () => {
+  const result: AgentResult = { schemaVersion: 1, outputName: plan.outputName, outcome: 'edited', editsApplied: ['e1'],
+    editsFailed: [], partsModified: ['$document'], pagesAffected: [], warnings: [],
+    selfCheck: { openedOk: true, textDiffMatchesPlan: true } };
+  assert.equal(classifyAgentResult(plan, result), 'edited', 'Classifies a claim only, not independent validation');
+  assert.throws(() => classifyAgentResult(plan, { ...result, outputName: 'another.txt' }), /DOC_RESULT_PLAN_MISMATCH/);
+  assert.throws(() => classifyAgentResult(plan, { ...result, editsApplied: ['e1', 'e1'] }), /DOC_RESULT_PLAN_MISMATCH/);
+  assert.deepEqual(result.editsApplied, ['e1']);
+  assert.deepEqual(plan.inputHashes, { one: sha256 });
+});
 
 // Pure acceptance-predicate tests. These records exercise the report contract;
 // they are never substituted for the real validator or used to approve bytes.
