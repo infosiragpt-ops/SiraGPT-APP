@@ -39,6 +39,10 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Document edits with a source filename before the instruction now reach the
+  source-preserving PPTX title path. Reloading a finished or failed agent task
+  preserves the original user message and stops the matching assistant bubble.
+
 - `hola` / saludos ya no entran a Extra/Max, thinking extendido ni al
   bucle de SiraCode (Construir/Planificar), aunque esos toggles estén
   activos. Respuesta directa, `disableAgentic`, sin test-time-compute.
