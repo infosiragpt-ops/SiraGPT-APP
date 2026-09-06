@@ -328,9 +328,35 @@ export function isVideoComposerFile(file: unknown): boolean {
   return VIDEO_EXT_RE.test(attachmentDisplayName(candidate, ""))
 }
 
+/**
+ * True when the picker File (or a composer chip) should get an instant
+ * blob preview + <video>/<audio> player — including WhatsApp/Safari
+ * picks that arrive as application/octet-stream with a .mp4/.m4a name.
+ */
+export function shouldCreateLocalMediaPreview(file: unknown): boolean {
+  if (!file) return false
+  if (typeof File !== "undefined" && file instanceof File) {
+    return isVideoComposerFile({ name: file.name, type: file.type })
+      || isAudioComposerFile({ name: file.name, type: file.type })
+      || String(file.type || "").toLowerCase().startsWith("image/")
+  }
+  return isVideoComposerFile(file) || isAudioComposerFile(file)
+}
+
+function isDurableMediaSrc(value: unknown): boolean {
+  const url = optionalString(value)
+  return Boolean(url && !url.startsWith("blob:"))
+}
+
 export function resolveComposerMediaSrc(file: unknown): string {
   const candidate = asComposerFile(file)
   if (!candidate) return ""
+  const durable = [
+    candidate.url,
+    candidate.path,
+    candidate.imageUrl,
+  ].map(optionalString).find((value): value is string => isDurableMediaSrc(value))
+  if (durable) return durable
   return optionalString(candidate.preview)
     || optionalString(candidate.objectUrl)
     || optionalString(candidate.url)

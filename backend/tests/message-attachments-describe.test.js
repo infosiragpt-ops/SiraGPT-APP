@@ -65,3 +65,59 @@ describe("describeUnextractedAttachment", () => {
     assert.match(describeUnextractedAttachment({ filename: "c" }), /"c"/);
   });
 });
+
+const {
+  hydrateChatMessageAttachments,
+  messageFilesNeedHydration,
+} = require("../src/services/message-attachments");
+
+describe("hydrateChatMessageAttachments for video/audio after transcription", () => {
+  test("id-only stubs need hydration; durable /uploads urls do not", () => {
+    assert.equal(messageFilesNeedHydration(null), true);
+    assert.equal(messageFilesNeedHydration([{ id: "file-1", name: "clase.mp4" }]), true);
+    assert.equal(messageFilesNeedHydration([{
+      id: "file-1",
+      name: "clase.mp4",
+      mimeType: "video/mp4",
+      url: "/uploads/user-1/clase.mp4",
+    }]), false);
+  });
+
+  test("rewrites stub files onto a playable serialize snapshot", async () => {
+    const prisma = {
+      file: {
+        async findMany() {
+          return [{
+            id: "file-1",
+            filename: "clase.mp4",
+            originalName: "clase.mp4",
+            mimeType: "video/mp4",
+            size: 1024,
+            path: "/tmp/clase.mp4",
+            extractedText: "hola",
+            openaiFileId: null,
+          }];
+        },
+      },
+    };
+    const [msg] = await hydrateChatMessageAttachments(prisma, {
+      userId: "user-1",
+      messages: [{ id: "m1", role: "USER", files: [{ id: "file-1" }] }],
+    });
+    assert.equal(msg.files[0].url, "/uploads/user-1/clase.mp4");
+    assert.equal(msg.files[0].mimeType, "video/mp4");
+    assert.equal(msg.files[0].name, "clase.mp4");
+  });
+});
+
+const fs = require("fs");
+const path = require("path");
+
+test("GET chat hydrates incomplete files; transcription always backfills playable media", () => {
+  const chats = fs.readFileSync(path.join(__dirname, "../src/routes/chats.js"), "utf8");
+  const runner = fs.readFileSync(path.join(__dirname, "../src/services/agents/agent-task-runner.js"), "utf8");
+  assert.match(chats, /hydrateChatMessageAttachments\(prisma,/);
+  assert.match(runner, /if \(transcriptionFileIds\.length > 0\) \{/);
+  assert.match(runner, /content: displayGoal,/);
+  assert.doesNotMatch(runner, /if \(\(!Array\.isArray\(files\) \|\| files\.length === 0\) && transcriptionFileIds\.length > 0\)/);
+});

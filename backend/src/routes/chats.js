@@ -8,6 +8,7 @@ const conversationCompactor = require('../services/conversation-compactor');
 const OpenAI = require('openai');
 const { v4: uuidv4 } = require('uuid');
 const { serializeChat, serializeBigIntFields } = require('../utils/bigint-serializer');
+const { hydrateChatMessageAttachments } = require('../services/message-attachments');
 const streamCache = require('../services/stream-cache');
 const taskStore = require('../services/agents/task-store');
 const { buildChatListWhere, parseBoolean, parsePositiveInt } = require('../services/chat-scope');
@@ -730,6 +731,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
 
     // Serialize BigInt fields before sending response
     const serializedChat = serializeChat(chat);
+    if (serializedChat?.messages?.length) {
+      serializedChat.messages = await hydrateChatMessageAttachments(prisma, {
+        userId: req.user.id,
+        messages: serializedChat.messages,
+      });
+    }
     res.json({ chat: serializedChat });
   } catch (error) {
     console.error('Get chat error:', error);

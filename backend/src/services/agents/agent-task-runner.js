@@ -2724,17 +2724,17 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           chatId,
           providedFileIds: files,
         });
-      // The USER bubble was persisted before this fallback ran. When the
-      // send raced the upload/processing, `files` is empty but the turn
-      // still resolved media — write it back so the video/audio stays
-      // visible in the bubble after a refresh instead of vanishing.
-      if ((!Array.isArray(files) || files.length === 0) && transcriptionFileIds.length > 0) {
+      // Persist a playable video/audio snapshot on the USER turn even when
+      // the client already sent file ids (id-only stubs / persist raced
+      // createChat). Skipping this left Luis with a transcript and no player.
+      if (transcriptionFileIds.length > 0) {
         await backfillUserMessageFilesForTranscription(prisma, {
           chatId,
           userId: user.id,
           taskId,
           fileIds: transcriptionFileIds,
           clientMetadata: fileMetadata,
+          content: displayGoal,
         });
       }
       const transcriptionText = await buildTranscriptionTextFromFiles(prisma, {
