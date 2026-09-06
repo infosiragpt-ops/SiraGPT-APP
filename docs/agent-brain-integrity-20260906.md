@@ -1,6 +1,10 @@
 # Agent brain integrity: native integration, 2026-09-06
 
 Base: `production-main` at `845e0c48128634179b60e3dd67622412d2b42a52`.
+Synchronized before PR validation with
+`100d29bc2e76bf2fb6e875514112f5cae1e40025`: preserve its desktop changes and
+new test entry unchanged. The published feature branch incorporates that base
+with a merge commit rather than rewriting shared history with a force push.
 Scope: the existing `agentic-chat-stream` → ReAct → tool dispatcher path.
 No frontend, provider, credential, database schema, deployment configuration or
 dependency changes. This document records a bounded implementation, not full

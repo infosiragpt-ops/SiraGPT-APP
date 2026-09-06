@@ -302,7 +302,8 @@ function createOrchestrator(opts = {}) {
       try {
         const body = await readBody(req);
         const urlToOpen = String(body.url || body.href || '').trim();
-        const cmd = `(google-chrome --no-sandbox --disable-dev-shm-usage --user-data-dir=/workspace/.chrome --no-first-run --disable-gpu --new-window ${JSON.stringify(urlToOpen)} || chromium --no-sandbox --disable-dev-shm-usage --new-window ${JSON.stringify(urlToOpen)} || xdg-open ${JSON.stringify(urlToOpen)}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
+        const chromeFlags = '--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --start-maximized --window-size=1920,1080 --window-position=0,0 --user-data-dir=/workspace/.chrome';
+        const cmd = `(google-chrome ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || chromium ${chromeFlags} --new-window ${JSON.stringify(urlToOpen)} || xdg-open ${JSON.stringify(urlToOpen)}) >/tmp/sira-nav.log 2>&1 & echo Opening`;
         if (driver === 'fake' && !opts.execImpl) {
           return json(res, 200, { ok: true, url: urlToOpen, fake: true });
         }

@@ -82,7 +82,9 @@ hide_xfce_panel
 CHROME_BIN="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
 if [ -n "$CHROME_BIN" ]; then
   # CDP on 9222 without a visible window. Dock / agent actions open Chrome later.
-  run_as_compuser "$CHROME_BIN --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --no-startup-window --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=/workspace/.chrome" &
+  # --no-sandbox stays (Docker). --test-type hides the unsupported-flag infobar
+  # if a window ever appears from this process.
+  run_as_compuser "$CHROME_BIN --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --disable-session-crashed-bubble --hide-crash-restore-bubble --disable-infobars --test-type --no-startup-window --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --user-data-dir=/workspace/.chrome" &
 fi
 
 NOVNC_WEB=""
