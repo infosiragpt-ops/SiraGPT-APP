@@ -16,6 +16,8 @@ const { createConservativeBundle } = require('../dist/doc-sandbox/queue/conserva
 
 // SDK transport mocks only. These tests do not replace or claim execution of the
 // independent document validators; that integration suite runs separately.
+// EnginePersistence hooks below observe the callback contract only, not durable
+// database writes; doc-sandbox-engine-reference-retention.integration.test.ts verifies the real ledger.
 const prices = { version: 'unit-price-v1', inputPerMillionUsd: 3, outputPerMillionUsd: 15,
   cacheReadPerMillionUsd: 0.3, cacheWritePerMillionUsd: 3.75,
   executionPerHourUsd: 0.05, minimumExecutionSeconds: 300 };
@@ -454,7 +456,7 @@ test('checkpoint expiry never certifies provider data deletion before its 30-day
   assert.equal(providerContainerRetentionDeadline('2026-11-01T00:00:00Z', observed), '2026-11-01T00:00:00.000Z');
 });
 
-test('an unexpected replacement container is durably tracked before rejection', async () => {
+test('an unexpected replacement container awaits its retention callback before rejection', async () => {
   const { engine, session, sdk, events } = await fixture();
   let calls = 0;
   sdk.messageOverride = async () => sdk.response([], ++calls === 1 ? 'container-first' : 'container-unexpected', 'pause_turn');
@@ -472,7 +474,7 @@ test('pause_turn cannot loop beyond maxTurns and all known files are cleaned', a
   await engine.destroy(session); assert.equal(sdk.files.size, 0);
 });
 
-test('budget reservation is persisted before provider request; insufficient funds makes no call', async () => {
+test('budget reservation callback is awaited before provider request; insufficient funds makes no call', async () => {
   const { engine, session, sdk } = await fixture({ hooks: { reserve: async () => { throw new Error('private ledger rejected'); } } });
   await assert.rejects(engine.run(session, request(), () => {}));
   assert.equal(sdk.messages.length, 0);
@@ -490,7 +492,7 @@ test('uncertain provider errors retain reservation and redact raw messages', asy
   await engine.destroy(session);
 });
 
-test('usage over budget fails closed but still persists generated file IDs for cleanup', async () => {
+test('usage over budget fails closed but still awaits generated-file cleanup callbacks', async () => {
   const { engine, session, sdk } = await fixture();
   sdk.messageOverride = async (params, options, self) => {
     self.messageOverride = undefined;
@@ -524,6 +526,48 @@ test('provider filename traversal is rejected without writing to disk', async ()
   await assert.rejects(engine.run(session, request(), () => {}), isCode('E_PROVIDER'));
   assert.equal(sdk.downloads.length, 0);
   await engine.destroy(session);
+});
+
+test('mismatched provider metadata cannot redirect a generated-file download or deletion', async () => {
+  const { engine, session, sdk } = await fixture();
+  const foreignId = 'file_not_exported_by_this_session';
+  sdk.metadataOverride = async (id, self) => ({ ...self.files.get(id), id: foreignId });
+  try {
+    await assert.rejects(engine.run(session, request(), () => {}), isCode('E_PROVIDER'));
+    assert.equal(sdk.metadataCalls.length, 1);
+    assert.notEqual(sdk.metadataCalls[0].id, foreignId);
+    assert.equal(sdk.downloads.length, 0);
+    await assert.rejects(engine.downloadOutputs(session), isCode('E_CONFLICT'));
+  } finally { await engine.destroy(session); }
+  assert.equal(sdk.deletions.some(({ id }) => id === foreignId), false);
+  assert.equal(sdk.files.size, 0);
+});
+
+test('mixed generated references await valid cleanup and usage callbacks before rejecting pause_turn', async () => {
+  const { engine, session, sdk, events } = await fixture();
+  const generated = [sdk.add('first.json', Buffer.from('{}')), sdk.add('second.json', Buffer.from('{}'))];
+  sdk.messageOverride = async () => {
+    const response = sdk.response([generated[0], '../invalid', generated[1]], 'container_mixed', 'pause_turn');
+    response.content.unshift({ type: 'text', text: 'file_not_exported' });
+    return response;
+  };
+  try {
+    await assert.rejects(engine.run(session, request(), () => {}), isCode('E_PROVIDER'));
+    assert.equal(sdk.messages.length, 1, 'A protocol error cannot continue the pause_turn loop');
+    assert.equal(sdk.metadataCalls.length, 0);
+    assert.equal(sdk.downloads.length, 0);
+    const known = events.filter(([name, , reference]) => name === 'fileChanged' && reference.state === 'known');
+    assert.deepEqual(known.map(([, , reference]) => reference.id).sort(), [...generated, 'file_test1'].sort());
+    const container = events.findIndex(([name]) => name === 'containerCreated');
+    const settlement = events.findIndex(([name]) => name === 'settle');
+    assert.ok(container > events.indexOf(known.at(-1)));
+    assert.ok(settlement > container);
+    assert.equal(events[settlement][2].uncertain, false);
+    assert.equal(events.at(-1)[0], 'usageChanged');
+    await assert.rejects(engine.downloadOutputs(session), isCode('E_CONFLICT'));
+  } finally { await engine.destroy(session); }
+  assert.equal(sdk.files.size, 0);
+  assert.equal(sdk.deletions.some(({ id }) => id === '../invalid' || id === 'file_not_exported'), false);
 });
 
 test('download failure is not silently omitted', async () => {
@@ -612,7 +656,7 @@ test('hard request timeout is passed to SDK and returns a typed timeout', async 
   await engine.destroy(session);
 });
 
-test('failed cleanup remains recorded and retry deletes all original and generated IDs', async () => {
+test('failed cleanup notifies delete_failed and retry deletes all original and generated IDs', async () => {
   const { engine, session, sdk, events } = await fixture();
   await engine.run(session, request(), () => {});
   sdk.deleteFailure = () => true;
@@ -624,7 +668,7 @@ test('failed cleanup remains recorded and retry deletes all original and generat
   await engine.destroy(session); // idempotent
 });
 
-test('persisting a new file reference fails closed and immediately attempts remote deletion', async () => {
+test('a rejected file-reference callback fails closed and immediately attempts remote deletion', async () => {
   const { engine, session, file, sdk } = await fixture({ skipUpload: true, hooks: { fileChanged: async (session, file) => {
     if (file.state === 'known') throw new Error('private DB error');
   } } });

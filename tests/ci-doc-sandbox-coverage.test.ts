@@ -74,4 +74,16 @@ describe("document sandbox strict coverage release gate", () => {
     assert.match(step, /npm run test:doc-sandbox:documents/)
     assert.doesNotMatch(step, /continue-on-error|\|\|\s*true/)
   })
+
+  it("requires real provider-reference persistence checks in CI and the isolated runner, outside unit coverage", () => {
+    const command = scripts["test:doc-sandbox:persistence"]
+    assert.match(command, /tests\/doc-sandbox-engine-reference-retention\.integration\.test\.ts(?:\s|$)/)
+    assert.doesNotMatch(command, /\|\|\s*true|--test-skip-pattern/)
+    assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /engine-reference-retention/)
+    const step = backendStep("Document sandbox contracts and real database/queue tests")
+    assert.match(step, /npm run test:doc-sandbox:persistence/)
+    assert.doesNotMatch(step, /continue-on-error|\|\|\s*true/)
+    const isolated = readFileSync("infra/doc-validation/run-isolated-integration.sh", "utf8")
+    assert.match(isolated, /^\s*backend\/tests\/doc-sandbox-engine-reference-retention\.integration\.test\.ts\s*$/m)
+  })
 })

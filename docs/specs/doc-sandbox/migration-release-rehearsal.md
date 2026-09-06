@@ -125,6 +125,14 @@ inspección; su retiro posterior requiere identificar exclusivamente ese nonce.
 ensayo no elimina esa guarda; el release migratorio continúa siendo un
 procedimiento separado, revisado, con backend listo antes del nuevo frontend.
 
+Auditoría de fuente del 2026-09-06: `start-with-migrations.js --migrate-only`
+no basta para garantizar que el historial permanezca intacto ante P3009.
+`runMigrations` puede invocar `rollbackSafeFailedMigrations` incluso en modo
+estricto. El procedimiento F1 revisado deberá fijar
+`PRISMA_AUTO_ROLLBACK_SAFE_MIGRATIONS=0` únicamente en ese proceso y abortar
+P3005/P3009; no editar el entorno productivo ni usar `migrate resolve` para
+aprobar el ensayo. Es lectura de código, no una nueva ejecución migratoria.
+
 ## Resultado registrado
 
 Guards locales: **17/17 PASS**, cero skips, contra fuentes confirmadas en Git

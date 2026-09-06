@@ -186,6 +186,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: oráculo positivo/negativo con Python real y TXT sintético, obligatorio en la suite documental y fuera de cobertura unitaria. Preparar ensayo separado de retención con PostgreSQL/MinIO reales y eventual extracción privada del tramo del catch con paridad revisada. No modificar aún el runtime ni sustituir validadores por simulacros.
 - Consecuencias: se prueba generación de evidencia, no almacenamiento ni edición completa. Se propone persistencia privada allowlist y `failAttempt` transaccional, sujeto a pre-fix/post-fix real, límites, fencing y revisión de cleanup. Dos contratos del SDK/parser avanzan pruebas locales sin relajar el 80 %. Evidencia y matriz pendientes en [failure-evidence-release-20260906.md](failure-evidence-release-20260906.md).
 
+## D28. Referencias válidas y consumo sobreviven al rechazo del protocolo
+
+- Contexto: PostgreSQL real confirmó que una referencia malformada impedía registrar las referencias válidas de la misma respuesta, su contenedor y la liquidación de consumo.
+- Decisión: conservar el error original, rescatar sólo entradas admitidas por el mismo extractor estricto y ejecutar las notificaciones existentes de registro/consumo antes de rechazar. Nunca continuar `pause_turn`, descargar ni publicar por esta recuperación.
+- Consecuencias: tres integraciones reales, dos contratos del adapter y guard CI; pre-fix 50/52 y post-fix 52/52. Callbacks observados no se describen como persistencia durable. Sin cambios de SQL/validador/UI, sin mezclar integraciones en cobertura, sin publicación ni cierre F1. Ver [provider-reference-release-20260906.md](provider-reference-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

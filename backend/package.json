@@ -20,7 +20,7 @@
     "test:doc-sandbox:documents": "npm run build:doc-sandbox && node --test tests/doc-sandbox-complex.fixture.test.cjs tests/doc-sandbox-complex.oracle.test.cjs tests/doc-sandbox-conservative-result.test.cjs && node --import tsx --test tests/doc-sandbox-failure-evidence-validator.test.ts && python3 tests/doc-sandbox-readiness.test.py",
     "test:doc-sandbox:validation": "node --test tests/doc-sandbox-validation.test.js",
     "test:doc-sandbox:runtime": "node --test ../infra/doc-validation/install-runtime-config.test.cjs ../infra/doc-validation/install-runtime-apply.test.cjs ../infra/doc-validation/install-runtime-rollback.test.cjs ../infra/doc-validation/install-runtime-host.test.cjs",
-    "test:doc-sandbox:persistence": "node --import tsx --test tests/doc-sandbox-persistence.integration.test.ts tests/doc-sandbox-persistence.queue.test.ts",
+    "test:doc-sandbox:persistence": "node --import tsx --test tests/doc-sandbox-persistence.integration.test.ts tests/doc-sandbox-persistence.queue.test.ts tests/doc-sandbox-engine-reference-retention.integration.test.ts",
     "test:doc-sandbox:queue-recovery": "node --import tsx --test tests/doc-sandbox-readiness-queue-recovery.integration.test.ts",
     "test:doc-sandbox:readiness": "npm run build:doc-sandbox && node --test tests/doc-sandbox-readiness.redis.test.cjs",
     "test:doc-sandbox:http-storage": "node --import tsx --test tests/doc-sandbox-api.integration.test.ts tests/doc-sandbox-storage.integration.test.ts tests/doc-sandbox-storage-probe.integration.test.cjs",

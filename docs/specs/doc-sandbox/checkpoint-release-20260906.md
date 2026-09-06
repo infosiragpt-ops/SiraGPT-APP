@@ -5,7 +5,17 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** el validador Python real distingue TXT incorrecto
+**Actualización más reciente:** ante referencias mixtas del proveedor, el motor
+conserva IDs válidos, contenedor y consumo antes de rechazar la respuesta.
+Regresión PostgreSQL pre-fix **50/52**, post-fix y corroboración **52/52**;
+**343/343** unitarias, cobertura **72,73 % (2593/3565)** y **12467/12467** generales.
+SSH vuelve a funcionar pero sólo entra al contenedor deploy: no hay runsc ni
+configuración R2/F1. Producción sigue saludable en `81f3d9a…`, sin #561.
+La autorización de publicación está vigente; faltan acceso administrativo y
+gates técnicos. Evidencia y límites en
+[provider-reference-release-20260906.md](provider-reference-release-20260906.md).
+
+**Registro anterior (`8be1ba856…`):** el validador Python real distingue TXT incorrecto
 2028 del solicitado 2027 y conserva su diff en la salida de validación: **2/2**
 casos positivos/negativos, fuera de cobertura unitaria. Se añadieron dos contratos
 del motor y uno de CI: **341/341** estrictas, **72,59 % (2575/3547)**,

@@ -7,7 +7,7 @@ import { agentResultSchema, classifyAgentResult, editPlanSchema, identifierSchem
 import type { Artifact, DocumentOutcome, EditPlan, InputFile, JobEvent, JobForEngine, RunRequest, Usage } from '../types/contracts';
 import { DocSandboxError } from '../types/errors';
 import { addUsage, assertPriceTable, calculateUsage, emptyUsage, totalTokens } from './cost';
-import { engineManifestSchema, extractGeneratedFileIds, isSafeFilename, parseJsonArtifact, readBoundedResponse, sha256 } from './artifacts';
+import { engineManifestSchema, extractGeneratedFileIds, isRecord, isSafeFilename, parseJsonArtifact, readBoundedResponse, sha256 } from './artifacts';
 import type { DocumentProviderClient, ProviderCallOptions } from './provider-client';
 import type { AnthropicEngineConfig, EnginePersistence, RunResult, SandboxEngine, SandboxSession } from './types';
 
@@ -184,7 +184,25 @@ export class AnthropicSandboxEngine implements SandboxEngine {
         // References must be persisted even if the response subsequently fails a
         // usage/protocol gate, so cleanup can find all remotely created files.
         let persistenceFailure: unknown;
-        for (const id of extractGeneratedFileIds(response.content)) {
+        let generatedIds: string[];
+        try { generatedIds = extractGeneratedFileIds(response.content); }
+        catch (error: unknown) {
+          // Reject the response, but do not lose valid siblings' cleanup IDs.
+          // Reuse the same strict envelope/ID parser for each entry; prose,
+          // uploads and malformed IDs never become deletion authority.
+          persistenceFailure = error;
+          const validIds = new Set<string>();
+          for (const block of Array.isArray(response.content) ? response.content : []) {
+            if (!isRecord(block) || !isRecord(block.content) || !Array.isArray(block.content.content)) continue;
+            for (const entry of block.content.content) {
+              try {
+                for (const id of extractGeneratedFileIds([{ ...block, content: { ...block.content, content: [entry] } }])) validIds.add(id);
+              } catch { /* The original protocol error is thrown after recording cleanup and usage. */ }
+            }
+          }
+          generatedIds = [...validIds];
+        }
+        for (const id of generatedIds) {
           if (session.inputs.some((input) => input.providerId === id)) {
             persistenceFailure = new DocSandboxError('E_PROVIDER', 502);
             continue;
