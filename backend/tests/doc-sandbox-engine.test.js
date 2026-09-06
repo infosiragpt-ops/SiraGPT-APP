@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { getEventListeners } = require('node:events');
 const PizZip = require('pizzip');
 const { AnthropicSandboxEngine, providerContainerRetentionDeadline } = require('../dist/doc-sandbox/engine/anthropic-engine');
 const { AnthropicDocumentProviderClient } = require('../dist/doc-sandbox/engine/provider-client');
@@ -222,6 +223,61 @@ test('streaming download enforces actual bytes and header limits', async () => {
   await assert.rejects(readBoundedResponse(new Response('abcd'), 3, signal));
   await assert.rejects(readBoundedResponse(new Response('a', { headers: { 'content-length': '100' } }), 3, signal));
   await assert.rejects(readBoundedResponse(new Response('abc', { status: 500 }), 3, signal));
+});
+
+test('pre-cancelled artifact download cancels its actual stream before reading', async () => {
+  const controller = new AbortController();
+  const reason = new Error('synthetic-cancel');
+  controller.abort(reason);
+  let cancellations = 0;
+  const stream = new ReadableStream({ cancel() { cancellations++; } });
+  await assert.rejects(readBoundedResponse(new Response(stream), 16, controller.signal), error => error === reason);
+  assert.equal(cancellations, 1);
+  assert.equal(stream.locked, false);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('cancelling a pending artifact read releases the stream and abort subscription', async () => {
+  const controller = new AbortController();
+  const reason = new Error('synthetic-pending-cancel');
+  let cancellations = 0;
+  const stream = new ReadableStream({ cancel() { cancellations++; } });
+  const reading = readBoundedResponse(new Response(stream), 16, controller.signal);
+  assert.equal(stream.locked, true);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 1);
+  controller.abort(reason);
+  await assert.rejects(reading, error => error === reason);
+  assert.equal(cancellations, 1);
+  assert.equal(stream.locked, false);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('artifact reader rejects malformed length declarations and a bodyless success', async () => {
+  const controller = new AbortController();
+  for (const length of ['-1', '1.5', 'NaN', '1e3', '9007199254740992']) {
+    let cancellations = 0;
+    const stream = new ReadableStream({ cancel() { cancellations++; } });
+    await assert.rejects(readBoundedResponse(new Response(stream, { headers: { 'content-length': length } }), 16, controller.signal),
+      { message: 'DOC_ENGINE_OUTPUT_TOO_LARGE' });
+    assert.equal(cancellations, 1);
+    assert.equal(stream.locked, false);
+  }
+  await assert.rejects(readBoundedResponse(new Response(null, { status: 204 }), 16, controller.signal),
+    { message: 'DOC_ENGINE_DOWNLOAD_FAILED' });
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+});
+
+test('an actual stream error cannot return a truncated document and always releases its lock', async () => {
+  const controller = new AbortController();
+  const failure = new Error('synthetic-stream-error');
+  let transport;
+  const stream = new ReadableStream({ start(value) { transport = value; } });
+  transport.enqueue(new Uint8Array([1, 2, 3]));
+  const reading = readBoundedResponse(new Response(stream), 16, controller.signal);
+  transport.error(failure);
+  await assert.rejects(reading, error => error === failure);
+  assert.equal(stream.locked, false);
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
 });
 
 test('plan and edit export complete original-name no-op; edit never reuses inspection container', async () => {

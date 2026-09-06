@@ -5,10 +5,18 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización de esta continuación:** se corrigió la prueba CBC inestable,
+**Actualización más reciente:** la continuación de pruebas eleva la cobertura
+estricta a **71,68 % (2476/3454)**, con **293/293** casos y cero omisiones.
+Se añadió el control CI obligatorio del 80 %; el umbral todavía falla y la fase
+sigue sin aprobarse ni desplegarse. Evidencia y límites en
+[coverage-release-20260906.md](coverage-release-20260906.md). Esta medición
+sustituye las cifras unitarias anteriores de este checkpoint, no los controles
+pendientes de proveedor, host, almacenamiento o migración.
+
+**Registro anterior (`162ae058…`):** se corrigió la prueba CBC inestable,
 se añadieron pruebas reales de recuperación y almacenamiento privado, y se
 separaron los dobles auxiliares de la medición unitaria. La cobertura estricta
-es **65,34 % (2257/3454)**, no 67,08 %: aquella cifra mezclaba auxiliares con
+era **65,34 % (2257/3454)**, no 67,08 %: aquella cifra mezclaba auxiliares con
 catálogo/Docker simulados y no acredita el requisito SDK-only de §10.2.
 Se mantienen todas las pruebas y el umbral del 80 %, sin excluir fuentes.
 

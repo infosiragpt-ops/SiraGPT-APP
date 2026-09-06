@@ -83,6 +83,41 @@ test('public event guard excludes raw content, unknown fields, unsafe codes and 
   for (const payload of payloads) await assert.rejects(repository.appendEvent(lease, 'warning', payload), invalid);
 });
 
+test('allowed event metadata cannot hide a later private field in the same public event', async () => {
+  for (const phase of ['inspecting', 'planning', 'editing', 'validating', 'cleanup', 'uploading', 'downloading']) {
+    const payload: JsonObject = { code: 'E_VALIDATION', phase, passed: false, level: 1, attempt: 0,
+      progress: 0, durationMs: Number.MAX_SAFE_INTEGER, inputTokens: 0, outputTokens: 1,
+      text: 'synthetic private document text' };
+    const original = structuredClone(payload);
+    await assert.rejects(repository.appendEvent(lease, 'validation_level', payload), invalid);
+    assert.deepEqual(payload, original);
+  }
+  // Rejection of the complete event is the assertion; this does not claim that
+  // permitted metadata alone was committed or delivered by SSE.
+});
+
+test('batch guards inspect later entries before any admission or cleanup-reservation write', async () => {
+  await assert.rejects(repository.createJob({ ...admission(),
+    inputs: [{ ...artifact }, { ...artifact, storageKey: 'private/second', sha256: 'invalid' }] }), invalid);
+  await assert.rejects(repository.registerArtifacts(lease, [{ ...artifact, kind: 'output' }, { ...artifact }]), invalid);
+  await assert.rejects(repository.reserveStorageKeys(lease, ['private/first', '']), invalid);
+  await assert.rejects(repository.recordProviderFiles(lease, ['file_valid', '../another-owner/file']), invalid);
+});
+
+test('low-level artifact insertion rechecks metadata for both output and failure-report writes', async () => {
+  // Exercise the real private guard with a genuine, disconnected Prisma client.
+  // Invalid inputs must fail before INSERT; no fake transaction or artifact is
+  // used to represent a successful publication/validation.
+  for (const kind of ['output', 'validation_report'] as const) {
+    for (const change of [{ sha256: 'invalid' }, { size: -1 }, { filename: '' }, { mime: '' }]) {
+      const candidate = { ...artifact, kind, ...change };
+      const original = structuredClone(candidate);
+      await assert.rejects(repository['insertArtifact'](prisma, lease.jobId, lease.attempt, candidate, true), invalid);
+      assert.deepEqual(candidate, original);
+    }
+  }
+});
+
 test('repository rejects invalid plan, storage reservation and session identities before DB IO', async () => {
   await assert.rejects(repository.freezePlan(lease, '', 'a'.repeat(64)), invalid);
   await assert.rejects(repository.freezePlan(lease, 'private/plan', 'not-a-hash'), invalid);
@@ -124,6 +159,20 @@ test('publication preflight rejects incomplete/duplicate/failed levels without t
     { ...base, levels: [1, 2, 3, 4].map(level => ({ level: level as 1 | 2 | 3 | 4, passed: false, applicable: false, reasonCode: 'UNKNOWN' })) },
   ];
   for (const gate of gates) {
+    await assert.rejects(repository.publishValidated(lease, gate), (error: unknown) =>
+      error instanceof DocumentRepositoryError && error.code === 'DOC_VALIDATION_GATE');
+  }
+});
+
+test('plain-text exceptions cannot excuse structural or content validation, or an applicable failure', async () => {
+  for (const rejectedLevel of [1, 2, 3, 4] as const) {
+    const gate: PublicationGate = { planHash: 'a'.repeat(64), validationReportKey: 'private/report', outcome: 'unchanged',
+      levels: ([1, 2, 3, 4] as const).map(level => ({ level,
+        passed: level !== rejectedLevel,
+        applicable: level === rejectedLevel ? (level === 2 || level === 3) : true,
+        reasonCode: 'PLAIN_TEXT_NOT_PAGINATED' })) };
+    // Levels 1/4 may never be waived. Levels 2/3 here are explicitly applicable
+    // and failed, so adding the exception's name must not make them pass either.
     await assert.rejects(repository.publishValidated(lease, gate), (error: unknown) =>
       error instanceof DocumentRepositoryError && error.code === 'DOC_VALIDATION_GATE');
   }

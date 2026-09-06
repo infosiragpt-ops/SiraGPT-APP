@@ -178,3 +178,92 @@ test('plain formats permit only documented pagination exceptions, never structur
     }
   }
 });
+
+test('plan authority binds the exact filename, complete input hash map and inventory count', () => {
+  for (const [inputs, inventories, candidate] of [
+    [[], [], { ...plan, edits: [] }],
+    [[input], [inventory], { ...plan, outputName: 'another.txt' }],
+    [[input], [inventory], { ...plan, inputHashes: { one: sha256, extra: sha256 } }],
+    [[input], [], plan],
+    [[input], [inventory, inventory], plan],
+  ] as const) {
+    assert.throws(() => freezePlan([...inputs], [...inventories], candidate), { code: 'PLAN_INPUT_MISMATCH' });
+  }
+});
+
+test('inventory identity, filename and format cannot be substituted despite an identical content hash', () => {
+  for (const changed of [{ id: 'another' }, { name: 'another.txt' }, { format: 'pdf' }]) {
+    assert.throws(() => freezePlan([input], [{ ...inventory, ...changed }], plan), { code: 'PLAN_INPUT_MISMATCH' });
+  }
+  assert.throws(() => freezePlan([input], [inventory], { ...plan, inputHashes: { one: '0'.repeat(64) } }),
+    { code: 'PLAN_INPUT_MISMATCH' });
+  assert.deepEqual(input.data, data);
+});
+
+test('frozen plan ownership separates nested maps and edits from subsequent model mutations', () => {
+  const candidate = structuredClone(plan);
+  const result = freezePlan([input], [inventory], candidate);
+  const expected = structuredClone(result);
+  candidate.inputHashes.one = '0'.repeat(64);
+  candidate.outputName = 'substituted.txt';
+  const first = candidate.edits[0]!;
+  if (first.kind !== 'text') assert.fail('fixture requires a text operation');
+  first.after = 'unauthorized extra text';
+  candidate.edits.length = 0;
+  assert.deepEqual(result, expected);
+  assert.notEqual(result.inputHashes, candidate.inputHashes);
+  assert.notEqual(result.edits, candidate.edits);
+});
+
+test('exact leaf identity is scoped by input and part, not only a matching text string', () => {
+  const second = { ...input, id: 'two', name: 'b.txt' };
+  const secondInventory = { ...inventory, id: 'two', name: 'b.txt' };
+  const candidate = { ...plan, inputHashes: { one: sha256, two: sha256 },
+    edits: [...plan.edits, { ...plan.edits[0], id: 'e2', inputId: 'two', after: 'different result' }] };
+  assert.equal(freezePlan([input, second], [inventory, secondInventory], candidate).edits.length, 2);
+  assert.throws(() => freezePlan([input], [inventory], { ...plan,
+    edits: [{ ...plan.edits[0], part: 'another-part' }] }), { code: 'PLAN_LOCATOR' });
+});
+
+test('shared-string edits remain explicitly unsupported even when their claimed leaf matches', () => {
+  // Pure plan policy: these records are not returned by a mocked validator and
+  // do not establish that any document bytes are a valid spreadsheet.
+  const source = { ...input, name: 'a.xlsx', format: 'xlsx' as const };
+  const inspected = { ...inventory, name: source.name, format: source.format,
+    units: [{ part: 'xl/sharedStrings.xml', locator: 'si[1]', text: 'before', kind: 'cell' }] };
+  const candidate = { ...plan, outputName: source.name, edits: [{ id: 'cell-1', kind: 'cell', inputId: 'one',
+    part: 'xl/sharedStrings.xml', locator: 'si[1]', before: 'before', after: 'after' }] };
+  assert.throws(() => freezePlan([source], [inspected], candidate), { code: 'SHARED_STRING_EDIT_UNSUPPORTED' });
+  assert.equal(inspected.units[0]!.text, 'before');
+});
+
+test('PDF merge policy checks every referenced inventory and preserves the explicit source order', () => {
+  // Predicate inputs only; PDF sniffing/openability are tested by the real engine suite.
+  const first = { ...input, name: 'a.pdf', format: 'pdf' as const };
+  const second = { ...input, id: 'two', name: 'b.pdf', format: 'pdf' as const };
+  const inventories = [{ ...inventory, name: first.name, format: 'pdf' },
+    { ...inventory, id: second.id, name: second.name, format: 'pdf' }];
+  const candidate = { ...plan, outputName: first.name, inputHashes: { one: sha256, two: sha256 },
+    edits: [{ id: 'merge', kind: 'pdf_merge', inputIds: ['two', 'one'] }] };
+  const result = freezePlan([first, second], inventories, candidate);
+  assert.deepEqual(result.edits, candidate.edits);
+  const nonPdf = { ...second, format: 'txt' as const };
+  assert.throws(() => freezePlan([first, nonPdf], [inventories[0]!, { ...inventories[1]!, format: 'txt' }], candidate),
+    { code: 'PDF_PLAN' });
+});
+
+test('output names cannot authorize traversal or control characters and valid Unicode names remain intact', () => {
+  for (const outputName of ['../a.txt', 'sub/a.txt', 'sub\\a.txt', '.', '..', ' a.txt', 'a.txt ', 'a\u0000.txt', 'a\n.txt']) {
+    assert.equal(editPlanSchema.safeParse({ ...plan, outputName }).success, false);
+  }
+  const name = 'Tesis revisión — 2026.txt';
+  const result = freezePlan([{ ...input, name }], [{ ...inventory, name }], { ...plan, outputName: name });
+  assert.equal(result.outputName, name);
+});
+
+test('both container path arguments reject control characters and relative paths before launch', () => {
+  for (const invalid of ['relative', '/tmp/a\u0000b', '/tmp/a\rb', '/tmp/a\x7f', '/tmp/a,readonly=false']) {
+    assert.throws(() => validatorContainerArguments('name', invalid, '/tmp/artifacts', { image }), { code: 'VALIDATOR_PATH_INVALID' });
+    assert.throws(() => validatorContainerArguments('name', '/tmp/inputs', invalid, { image }), { code: 'VALIDATOR_PATH_INVALID' });
+  }
+});

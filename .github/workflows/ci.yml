@@ -406,6 +406,24 @@ jobs:
           kill "$SERVER_PID" 2>/dev/null || true
           exit 1
 
+      # Run after the existing suites and boot smoke so a known coverage gap
+      # cannot hide their results. This is the full F1 unit denominator, not
+      # the general backend shard sample or the separately executed auxiliaries.
+      - name: Document sandbox strict unit coverage (80% hard gate)
+        if: matrix.shard == 1
+        env:
+          NODE_ENV: test
+        run: npm run test:doc-sandbox:coverage
+
+      - name: Upload document sandbox strict coverage
+        if: matrix.shard == 1 && always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: doc-sandbox-strict-unit-coverage
+          path: backend/coverage/doc-sandbox-unit/coverage-summary.json
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Upload server log on failure
         if: failure()
         uses: actions/upload-artifact@v6

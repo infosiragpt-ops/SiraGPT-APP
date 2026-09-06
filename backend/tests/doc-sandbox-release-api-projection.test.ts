@@ -119,3 +119,68 @@ test('typed public errors retain actionable codes and HTTP status without nested
     assert.equal(JSON.stringify(safe).includes('synthetic-private'), false);
   }
 });
+
+test('snapshots expose an exact public projection and never return storage, model or lease identifiers', () => {
+  const source = job();
+  source.outputKeys = ['synthetic-private-output'];
+  source.editPlanKey = 'synthetic-private-plan'; source.editPlanHash = 'synthetic-private-hash';
+  source.validationReportKey = 'synthetic-private-report'; source.sessionRef = 'synthetic-private-session';
+  source.leaseToken = 'synthetic-private-lease'; source.requestedModel = 'synthetic-private-model';
+  const before = structuredClone(source);
+  const projected = jobSnapshot(source, false);
+  assert.deepEqual(Object.keys(projected).sort(), ['id', 'status', 'mode', 'modelTier', 'attempts',
+    'admissionReady', 'outcome', 'eventSeq', 'errorCode', 'cleanupPending', 'createdAt', 'startedAt',
+    'finishedAt', 'expiresAt'].sort());
+  assert.equal(JSON.stringify(projected).includes('synthetic-private'), false);
+  assert.deepEqual(source, before, 'public projection must not mutate authoritative state');
+});
+
+test('done outcomes remain distinct and preservation warnings never imply an edited document', () => {
+  const source = job(); source.status = 'done'; source.admissionReady = true;
+  for (const outcome of ['edited', 'unchanged', 'not_possible'] as const) {
+    source.outcome = outcome;
+    const result = jobSnapshot(source, true);
+    assert.equal(result.outcome, outcome); assert.equal(result.status, 'done');
+    assert.equal(result.warningCode, outcome === 'not_possible' ? 'E_NOT_POSSIBLE' : undefined);
+    assert.equal('outputKeys' in result, false); assert.equal('validated' in result, false);
+    assert.equal('validationReportKey' in result, false);
+  }
+});
+
+test('unknown provider settlement keeps cost pending even when token usage claims exact', () => {
+  const source = job(); source.usage = { costUsd: null, costExact: true, inputTokens: 0 };
+  let projected = jobSnapshot(source, true);
+  assert.equal(projected.costUsd, null); assert.equal(projected.costStatus, 'pending');
+  assert.deepEqual(projected.usage, { costExact: true, inputTokens: 0 });
+  source.usage = { costExact: true };
+  source.costReservations = [
+    { requestId: 'settled', attempt: 1, reservedUsd: '0.5', actualUsd: '0.1' },
+    { requestId: 'unknown', attempt: 2, reservedUsd: '0.5', actualUsd: null },
+  ];
+  projected = jobSnapshot(source, true);
+  assert.equal(projected.costUsd, null); assert.equal(projected.costStatus, 'pending');
+  assert.equal('costReservations' in projected, false);
+  const hidden = jobSnapshot(source, false);
+  for (const field of ['costUsd', 'maxCostUsd', 'usage', 'costStatus', 'costReservations']) assert.equal(field in hidden, false);
+});
+
+test('event projection is non-mutating and strips every private payload kind including nested document text', () => {
+  const source: DurableDocumentEvent = { id: 'private-event-id', jobId: 'private-job-id', seq: 0,
+    type: 'warning', createdAt: new Date(0), outbox: null, payload: {
+      code: 'E_NOT_POSSIBLE', phase: 'validating', level: 4, passed: false, applicable: true,
+      instructions: 'private text', result: { document: 'private text' }, recipe: ['private code'],
+      storageKey: 'private-key', filename: 'private-name', providerRef: 'private-ref', userId: 'private-user',
+    } };
+  const before = structuredClone(source);
+  const result = publicEvent(source);
+  assert.deepEqual(result, { seq: 0, type: 'warning', createdAt: new Date(0),
+    payload: { code: 'E_NOT_POSSIBLE', phase: 'validating', level: 4, passed: false, applicable: true } });
+  assert.equal(JSON.stringify(result).includes('private'), false);
+  assert.deepEqual(source, before);
+});
+
+test('filename normalization rejects path and header injection instead of silently making a different filename', () => {
+  for (const name of ['', '.', '..', '../original.docx', 'directory/original.docx', 'directory\\original.docx',
+    'original.docx\r\nX-Injected: true', 'original\0.docx']) assert.throws(() => originalFilename(name));
+  for (const name of ['研究.docx', 'Informe 📄.pdf']) assert.equal(originalFilename(name), name);
+});

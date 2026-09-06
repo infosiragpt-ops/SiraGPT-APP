@@ -1,14 +1,16 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   assertInvocationLaunchable, createInvocation, reconcileValidatorOrphans,
   validateInvocationContainer, validateInvocationManifest, validatePrivateStagingRoot,
   VALIDATOR_ORPHAN_GRACE_MS, type ValidatorInvocation,
 } from '../src/modules/doc-sandbox/validation/lifecycle';
+import { createValidatorStagingDirectory, IndependentDocumentValidator, inspectRecipeArchive } from '../src/modules/doc-sandbox/validation/index';
+import type { EditPlan, InputFile } from '../src/modules/doc-sandbox/types/contracts';
 
 /** Strict unit suite: pure snapshot parsing and actual private filesystem I/O.
  * No Docker transport, database, Redis, S3, document validator or provider is
@@ -241,4 +243,195 @@ test('reconciliation preserves invalid manifests and does not follow invocation 
   assert.equal(await readFile(path.join(invocation.directory, 'inputs', 'input-0.txt'), 'utf8'), 'synthetic original');
   assert.ok((await lstat(alias)).isSymbolicLink());
   assert.equal(await readFile(path.join(outside, 'keep'), 'utf8'), 'untouched');
+});
+
+test('concurrent staging allocation creates ten distinct private directories under the exact root', async t => {
+  const root = await privateRoot(t);
+  const directories = await Promise.all(Array.from({ length: 10 }, () => createValidatorStagingDirectory(root)));
+  assert.equal(new Set(directories).size, 10);
+  for (const directory of directories) {
+    assert.equal(path.dirname(directory), root);
+    assert.match(path.basename(directory), /^siragpt-validator-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(await realpath(directory), directory);
+    assert.equal((await lstat(directory)).mode & 0o777, 0o700);
+    assert.deepEqual(await readdir(directory), []);
+  }
+  assert.deepEqual((await readdir(root)).sort(), directories.map(directory => path.basename(directory)).sort());
+});
+
+test('default staging is canonical and private and its exact directory is removable', async t => {
+  const directory = await createValidatorStagingDirectory();
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+    await assert.rejects(lstat(directory), { code: 'ENOENT' });
+  });
+  assert.equal(path.dirname(directory), await realpath(tmpdir()));
+  assert.equal(await realpath(directory), directory);
+  assert.match(path.basename(directory), /^siragpt-validator-[0-9a-f-]{36}$/);
+  assert.equal((await lstat(directory)).mode & 0o777, 0o700);
+  assert.deepEqual(await readdir(directory), []);
+});
+
+test('staging allocation refuses files and ancestor symlinks without creating a child', async t => {
+  const root = await privateRoot(t);
+  const file = path.join(root, 'file');
+  await writeFile(file, 'unchanged', { mode: 0o600 });
+  await assert.rejects(createValidatorStagingDirectory(file), { code: 'VALIDATOR_STAGING_UNSAFE' });
+  const privateDirectory = path.join(root, 'private');
+  await mkdir(privateDirectory, { mode: 0o700 });
+  const alias = path.join(root, 'alias');
+  await symlink(root, alias);
+  await assert.rejects(createValidatorStagingDirectory(path.join(alias, 'private')), { code: 'VALIDATOR_STAGING_UNSAFE' });
+  assert.deepEqual(await readdir(privateDirectory), []);
+  assert.equal(await readFile(file, 'utf8'), 'unchanged');
+});
+
+test('concurrent invocation creation has exactly one winner and retains that winner manifest', async t => {
+  const root = await privateRoot(t);
+  const directory = await createValidatorStagingDirectory(root);
+  const results = await Promise.allSettled(Array.from({ length: 10 }, (_, index) => createInvocation(directory, { image }, now + index)));
+  const winners = results.filter((result): result is PromiseFulfilledResult<ValidatorInvocation> => result.status === 'fulfilled');
+  assert.equal(winners.length, 1);
+  for (const result of results) {
+    if (result.status === 'rejected') assert.equal((result.reason as NodeJS.ErrnoException).code, 'EEXIST');
+  }
+  const { directory: winnerDirectory, root: winnerRoot, ...manifest } = winners[0]!.value;
+  assert.equal(winnerDirectory, directory);
+  assert.equal(winnerRoot, root);
+  assert.deepEqual(JSON.parse(await readFile(path.join(directory, 'invocation.json'), 'utf8')), manifest);
+  assert.equal((await lstat(path.join(directory, 'invocation.json'))).mode & 0o777, 0o600);
+});
+
+test('durable invocation lifetimes enforce both timeout bounds without altering input options', async t => {
+  const root = await privateRoot(t);
+  for (const [timeoutMs, duration] of [[-1, 1000], [0, 1000], [1000, 1000], [300_000, 300_000], [600_000, 600_000], [600_001, 600_000]]) {
+    const directory = await createValidatorStagingDirectory(root);
+    const options = { image, timeoutMs };
+    const invocation = await createInvocation(directory, options, now);
+    assert.equal(invocation.deadlineAt - invocation.createdAt, duration);
+    assert.equal(options.timeoutMs, timeoutMs);
+    await assertInvocationLaunchable(invocation, invocation.deadlineAt - 1);
+    await assert.rejects(assertInvocationLaunchable(invocation, invocation.deadlineAt), { code: 'VALIDATOR_INVOCATION_EXPIRED' });
+  }
+});
+
+test('manifest byte budget accepts exactly 4096 bytes but refuses a directory in place of the file', async t => {
+  const { invocation, manifest } = await fixture(t, now);
+  const bytes = await readFile(manifest);
+  const padded = Buffer.concat([bytes, Buffer.alloc(4096 - bytes.length, 0x20)]);
+  await writeFile(manifest, padded);
+  await assertInvocationLaunchable(invocation, now);
+  assert.deepEqual(await readFile(manifest), padded);
+  const retained = path.join(invocation.directory, 'retained-manifest');
+  await rename(manifest, retained);
+  await mkdir(manifest, { mode: 0o700 });
+  await assert.rejects(assertInvocationLaunchable(invocation, now), { code: 'VALIDATOR_MANIFEST_INVALID' });
+  assert.deepEqual(await readFile(retained), padded);
+});
+
+function original(id = 'one', data = Buffer.from('synthetic private original')): InputFile {
+  return { id, name: `${id}.txt`, format: 'txt', mime: 'text/plain', data,
+    sha256: createHash('sha256').update(data).digest('hex') };
+}
+
+function noChangePlan(input: InputFile): EditPlan {
+  return { schemaVersion: 1, mode: 'preserve', outputName: input.name,
+    inputHashes: { [input.id]: input.sha256 }, edits: [], notPossible: [] };
+}
+
+// These tests exercise the actual validator's pre-launch guards and filesystem
+// cleanup. They do not return fabricated inventories/reports or run a container.
+test('input count and duplicate IDs fail before any staging directory is created', async t => {
+  const root = await privateRoot(t);
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  const file = original();
+  for (const files of [[], [file, { ...file }], Array.from({ length: 11 }, (_, index) => original(`file-${index}`))]) {
+    await assert.rejects(validator.inspect(files), { code: 'INPUT_LIMIT' });
+    assert.deepEqual(await readdir(root), []);
+  }
+});
+
+test('empty and hash-mismatched originals are rejected and their private staging is removed', async t => {
+  const root = await privateRoot(t);
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  const valid = original();
+  for (const file of [original('empty', Buffer.alloc(0)), { ...valid, sha256: '0'.repeat(64) }]) {
+    const bytes = Buffer.from(file.data);
+    await assert.rejects(validator.inspect([file]), { code: 'INPUT_HASH_OR_SIZE' });
+    assert.deepEqual(await readdir(root), []);
+    assert.deepEqual(file.data, bytes);
+  }
+});
+
+test('an original larger than 50 MiB fails before document processing and leaves no staging', async t => {
+  const root = await privateRoot(t);
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  const file = original('oversized', Buffer.alloc(50 * 1024 * 1024 + 1, 0x61));
+  await assert.rejects(validator.inspect([file]), { code: 'INPUT_HASH_OR_SIZE' });
+  assert.deepEqual(await readdir(root), []);
+  assert.equal(createHash('sha256').update(file.data).digest('hex'), file.sha256);
+});
+
+test('failure after staging an earlier input removes only its invocation and preserves neighboring originals', async t => {
+  const root = await privateRoot(t);
+  const sentinel = path.join(root, 'do-not-delete');
+  await writeFile(sentinel, 'neighbor original', { mode: 0o600 });
+  const first = original('first');
+  const second = { ...original('second'), sha256: '0'.repeat(64) };
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  await assert.rejects(validator.inspect([first, second]), { code: 'INPUT_HASH_OR_SIZE' });
+  assert.deepEqual(await readdir(root), ['do-not-delete']);
+  assert.equal(await readFile(sentinel, 'utf8'), 'neighbor original');
+  for (const file of [first, second]) assert.equal(file.data.toString('utf8'), 'synthetic private original');
+});
+
+test('pre-launch runtime rejection cannot use an original display name as a filesystem path', async t => {
+  const root = await privateRoot(t);
+  const sentinel = path.join(root, 'keep.txt');
+  await writeFile(sentinel, 'outside the invocation', { mode: 0o600 });
+  const validator = new IndependentDocumentValidator({ image, runtime: 'runc', stagingRoot: root });
+  const file = { ...original(), name: '../../keep.txt' };
+  await assert.rejects(validator.inspect([file]), { code: 'VALIDATOR_RUNTIME_UNSAFE' });
+  assert.deepEqual(await readdir(root), ['keep.txt']);
+  assert.equal(await readFile(sentinel, 'utf8'), 'outside the invocation');
+  assert.equal(createHash('sha256').update(file.data).digest('hex'), file.sha256);
+});
+
+test('an oversized output is refused before launch and preserves the original', async t => {
+  const root = await privateRoot(t);
+  const file = original();
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  await assert.rejects(validator.validate([file], Buffer.alloc(50 * 1024 * 1024 + 1), noChangePlan(file)), { code: 'OUTPUT_SIZE_LIMIT' });
+  assert.deepEqual(await readdir(root), []);
+  assert.equal(createHash('sha256').update(file.data).digest('hex'), file.sha256);
+});
+
+test('valid-sized output still requires the safe runtime and is removed after pre-launch rejection', async t => {
+  const root = await privateRoot(t);
+  const file = original();
+  const validator = new IndependentDocumentValidator({ image, runtime: 'runc', stagingRoot: root });
+  const output = Buffer.from(file.data);
+  await assert.rejects(validator.validate([file], output, noChangePlan(file)), { code: 'VALIDATOR_RUNTIME_UNSAFE' });
+  assert.deepEqual(await readdir(root), []);
+  assert.deepEqual(output, file.data);
+});
+
+test('recipe byte limits reject empty and oversized buffers before staging through both public entrypoints', async t => {
+  const root = await privateRoot(t);
+  const options = { image, stagingRoot: root };
+  const validator = new IndependentDocumentValidator(options);
+  await assert.rejects(validator.inspectRecipeArchive(Buffer.alloc(0)), { code: 'RECIPE_SIZE_LIMIT' });
+  await assert.rejects(inspectRecipeArchive(Buffer.alloc(16 * 1024 * 1024 + 1), options), { code: 'RECIPE_SIZE_LIMIT' });
+  assert.deepEqual(await readdir(root), []);
+});
+
+test('preflight refuses unreadable orphan metadata and does not manufacture readiness', async t => {
+  const { root, invocation, manifest } = await fixture(t);
+  await writeFile(manifest, 'invalid json');
+  const validator = new IndependentDocumentValidator({ image, stagingRoot: root });
+  assert.deepEqual(await validator.reconcileOrphans(), { examined: 1, purged: 0, pending: 1 });
+  await assert.rejects(validator.preflight(), { code: 'VALIDATOR_CLEANUP_PENDING' });
+  assert.deepEqual(await readdir(root), [path.basename(invocation.directory)]);
+  assert.equal(await readFile(manifest, 'utf8'), 'invalid json');
+  assert.equal(await readFile(path.join(invocation.directory, 'inputs', 'input-0.txt'), 'utf8'), 'synthetic original');
 });

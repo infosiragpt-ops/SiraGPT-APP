@@ -31,6 +31,8 @@ const processor = new DocumentSandboxProcessor(dependencies, config);
 const lease: AttemptLease = { jobId: 'unit-job', token: 'unit-lease', fence: 1, attempt: 1 };
 const session: SandboxSession = { id: 'unit-session', jobId: lease.jobId, userId: 'unit-owner', attempt: 1 };
 const isCode = (expected: string) => (error: unknown): boolean => error instanceof DocSandboxError && error.code === expected;
+const invalidRepositoryInput = (error: unknown): boolean =>
+  error instanceof DocumentRepositoryError && error.code === 'DOC_INVALID_INPUT';
 
 test('processor construction enforces bounded integer leases and positive finite budgets', () => {
   for (const leaseMs of [0, -1, 2999, 3000.1, 300_001, Infinity, NaN]) {
@@ -112,6 +114,46 @@ test('provider reservation callback rejects non-finite/negative money before led
     await assert.rejects(persistence.reserve(session, { requestId: 'request', usd }), isCode('E_QUOTA'));
     await assert.rejects(persistence.settle(session, { requestId: 'request', usage: { ...emptyUsage(), costUsd: usd }, uncertain: false }), isCode('E_QUOTA'));
   }
+});
+
+test('provider reference callbacks propagate real repository guards without swallowing invalid identities', async () => {
+  const persistence = processor['enginePersistence'](lease, emptyUsage(), 0);
+  for (const id of ['', 's'.repeat(501)]) {
+    await assert.rejects(persistence.sessionCreated({ ...session, id }), invalidRepositoryInput);
+  }
+  for (const id of ['', '../another-owner/file', 'id\n', 'a'.repeat(201)]) {
+    await assert.rejects(persistence.containerCreated(session, { id, stage: 'edit', expiresAt: null }), invalidRepositoryInput);
+    await assert.rejects(persistence.fileChanged(session, { id, kind: 'output', state: 'known' }), invalidRepositoryInput);
+  }
+  await assert.rejects(persistence.containerCreated(session, {
+    id: 'container_valid', stage: 'plan', expiresAt: 'not-a-date',
+  }), invalidRepositoryInput);
+});
+
+test('valid-price provider callbacks still reject invalid request IDs and unsafe token totals before DB IO', async () => {
+  const persistence = processor['enginePersistence'](lease, emptyUsage(), 0);
+  // Finite positive charges exercise the real money conversion; the later
+  // repository guard rejects the request before it can reserve any budget.
+  for (const requestId of ['', '../another-request', 'a'.repeat(151)]) {
+    await assert.rejects(persistence.reserve(session, { requestId, usd: 0.000000001 }), invalidRepositoryInput);
+  }
+  for (const tokenCount of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(persistence.settle(session, { requestId: 'request', uncertain: false,
+      usage: { ...emptyUsage(), costUsd: 0.1, inputTokens: tokenCount } }), invalidRepositoryInput);
+  }
+  await assert.rejects(persistence.settle(session, { requestId: 'request', uncertain: false,
+    usage: { ...emptyUsage(), costUsd: 0.1, inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 } }), invalidRepositoryInput);
+});
+
+test('processor event forwarding cannot inject lifecycle transitions or unsafe numeric metadata', async () => {
+  await assert.rejects(processor['recordEvent'](lease, { type: 'status_changed',
+    payload: { status: 'done', text: 'synthetic provider claim' } }), invalidRepositoryInput);
+  for (const key of ['level', 'durationMs']) {
+    await assert.rejects(processor['recordEvent'](lease, { type: 'validation_level',
+      payload: { [key]: Number.MAX_VALUE } }), invalidRepositoryInput);
+  }
+  // This proves pre-IO rejection only, not correct SSE sanitization/delivery;
+  // that positive path requires the real database-backed event stream.
 });
 
 test('uncertain or unknown-price settlement does not release its durable reservation', async () => {
