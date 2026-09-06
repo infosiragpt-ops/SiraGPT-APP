@@ -31,6 +31,7 @@
  */
 
 const { calculateCost } = require('./observability/llm-cost');
+const { normalizeToolCalls, collectToolCallIds } = require('./agents/tool-call-normalizer');
 // engine-3h59 fingerprint cut lives in agent-runner/loop.js. This chat
 // loop already stops repeats via dupCallCache + EXHAUSTED_REPOLL_LIMIT
 // (identical args) and the 5× unavailable breaker (hard failures).
@@ -139,9 +140,10 @@ function prefetchCallTimeoutMs() {
 const PREFETCH_PENDING = Symbol('prefetch_pending');
 
 /**
- * Concurrently dispatch the read-only/idempotent tool calls of one step,
+ * Concurrently dispatch the leading read-only/idempotent calls of one step,
  * returning a Map<call.id, dispatchResult | {__pending: Promise}>. Mutating
- * calls are skipped here (they run inline, sequentially, in the main loop).
+ * calls form a barrier (they and all following calls run inline). A read
+ * after a write may depend on it; it must not execute before the write.
  * Bounded by TOOL_PARALLEL_MAX; each batch waits at most
  * prefetchCallTimeoutMs() (env SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS, default 8000)
  * for stragglers (partial results, never a stall).
@@ -156,15 +158,17 @@ async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools
   // repeats resolve to the cached result in the main loop once the first is
   // stored (dupCallCache.set at the store site).
   const seenSig = new Set();
-  const safe = toolCalls.filter((c) => {
+  const safe = [];
+  for (const c of toolCalls) {
     const n = c && c.function && c.function.name;
-    if (!isParallelSafeTool(n) || (exhaustedTools && exhaustedTools.has(n)) || c.id == null) return false;
+    if (!isParallelSafeTool(n)) break;
+    if ((exhaustedTools && exhaustedTools.has(n)) || c.id == null) continue;
     const sig = toolCallSignature(n, c.function?.arguments);
-    if (dupCallCache && dupCallCache.has(sig)) return false; // cached from a prior step
-    if (seenSig.has(sig)) return false; // duplicate within this batch — dispatch once
+    if (dupCallCache && dupCallCache.has(sig)) continue; // cached from a prior step
+    if (seenSig.has(sig)) continue; // duplicate within this batch — dispatch once
     seenSig.add(sig);
-    return true;
-  });
+    safe.push(c);
+  }
   if (safe.length < 2) return out; // nothing to gain from parallelism
   for (let i = 0; i < safe.length; i += TOOL_PARALLEL_MAX) {
     const chunk = safe.slice(i, i + TOOL_PARALLEL_MAX);
@@ -429,6 +433,16 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   } catch (e) {
     return { error: `tool_execution_failed: ${e.message}` };
   }
+}
+
+// Tool handlers use both thrown exceptions and structured failure envelopes.
+// Only explicit top-level protocol markers are failures: arbitrary prose,
+// nested records and empty successful output remain data. Do not turn these
+// envelopes into thrown dispatch errors: that would enable fallback/retries
+// after intentional denials or validation failures.
+function isReportedToolFailure(result) {
+  return Boolean(result && typeof result === 'object' && !Array.isArray(result)
+    && (result.error || result.ok === false || result.isError === true));
 }
 
 /**
@@ -760,6 +774,9 @@ function buildDegradedAnswer(stoppedReason) {
   if (reason === 'no_message') {
     return 'El modelo no devolvió una respuesta utilizable. Por favor vuelve a intentarlo o reformula la solicitud.';
   }
+  if (reason === 'invalid_tool_calls') {
+    return 'El modelo devolvió un grupo de instrucciones de herramientas inválido. No ejecuté ese grupo ni puedo dar la tarea por completada. Vuelve a intentarlo para continuar.';
+  }
   // max_steps, empty reason, guard-blocked, anything else.
   return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
 }
@@ -1041,6 +1058,10 @@ async function run(openai, opts) {
       try { console.warn('[react-agent] resume checkpoint rejected (starting fresh):', resumeErr && resumeErr.message); } catch { /* noop */ }
     }
   }
+
+  // Scope identities to this run and seed them only after checkpoint restore.
+  // Keep the set across compaction so new calls cannot alias prior results.
+  const usedToolCallIds = collectToolCallIds(messages);
 
   // Serializable snapshot of the loop state at a step boundary. Observations
   // inside `steps` records are truncated — the guard only needs tool names +
@@ -1330,6 +1351,19 @@ async function run(openai, opts) {
       }
     }
 
+    // Validate the complete control envelope before any handler can execute.
+    // Provider/native duplicate IDs must not overwrite the parallel result Map
+    // or associate one tool's observation with another tool's arguments.
+    try {
+      if (msg.tool_calls != null) {
+        msg.tool_calls = normalizeToolCalls(msg.tool_calls, { usedIds: usedToolCallIds });
+      }
+    } catch {
+      stoppedReason = 'invalid_tool_calls';
+      finalAnswer = buildDegradedAnswer(stoppedReason);
+      break;
+    }
+
     // Persist the thought + any tool_calls so the NEXT turn has full
     // context — this is how the model "sees" its own trace.
     messages.push(msg);
@@ -1509,6 +1543,11 @@ async function run(openai, opts) {
       }
       duplicateRepolls = 0;
 
+      // Even a failed write may have committed before its response was lost.
+      // Invalidate before dispatch, never replay it here, and let subsequent
+      // reads verify the current state instead of returning pre-write data.
+      if (toolName !== 'finalize' && !isParallelSafeTool(toolName)) dupCallCache.clear();
+
       let dispatch = prefetched.has(call.id)
         ? prefetched.get(call.id)
         : await dispatchTool(registry, toolName, call.function?.arguments, ctx);
@@ -1531,7 +1570,7 @@ async function run(openai, opts) {
         if (altName && altName !== toolName && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
           try {
             const altDispatch = await dispatchTool(registry, altName, call.function?.arguments, ctx);
-            if (altDispatch && !altDispatch.error) {
+            if (altDispatch && !altDispatch.error && !isReportedToolFailure(altDispatch.result)) {
               console.log(`[react-agent] tool fallback ${toolName} → ${altName} recovered (step ${step})`);
               const altResult = (altDispatch.result && typeof altDispatch.result === 'object' && !Array.isArray(altDispatch.result))
                 ? { ...altDispatch.result, _recovered_from: toolName, _recovered_via: altName }
@@ -1545,12 +1584,18 @@ async function run(openai, opts) {
       let observation = dispatch.error
         ? { error: dispatch.error }
         : dispatch.result;
+      const toolFailed = Boolean(dispatch.error) || isReportedToolFailure(dispatch.result);
+      if (toolFailed && observation && typeof observation === 'object' && !observation.error) {
+        // Keep code, remediation, MCP content and any partial evidence intact,
+        // while exposing the failure to existing trace/finalization consumers.
+        observation = { ...observation, error: 'tool_reported_failure' };
+      }
 
       // Track consecutive tool errors per tool to prevent infinite loops.
       // Transient blips weigh a fraction so a flaky upstream isn't retired as
       // fast as a deterministically broken tool (see classifyToolError).
-      if (dispatch.error) {
-        const errWeight = classifyToolError(dispatch.error) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
+      if (toolFailed) {
+        const errWeight = classifyToolError(dispatch.error || dispatch.result) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
         const errCount = (toolErrorBudget.get(toolName) || 0) + errWeight;
         toolErrorBudget.set(toolName, errCount);
         if (errCount >= MAX_TOOL_ERRORS && toolName !== 'finalize') {
@@ -1565,7 +1610,7 @@ async function run(openai, opts) {
             error: 'tool_unavailable',
             tool: toolName,
             failures,
-            lastError: dispatch.error,
+            lastError: observation.error,
             message: `The tool "${toolName}" failed ${failures} times in a row and is now unavailable. Stop calling it. Provide the best possible answer to the user directly (use other tools or your own reasoning), then call finalize.`,
           };
         }
@@ -1577,7 +1622,7 @@ async function run(openai, opts) {
         if (toolName !== 'finalize') finalizeRejectionsConsecutive = 0;
       }
 
-      if (toolName === 'finalize' && !dispatch.error && typeof finalizeGuard === 'function') {
+      if (toolName === 'finalize' && !toolFailed && typeof finalizeGuard === 'function') {
         const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
         const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
         let guard;
@@ -1648,7 +1693,7 @@ async function run(openai, opts) {
 
       // Remember successful read-only results so an identical repeat can be
       // served from cache (see the duplicate short-circuit above).
-      if (!dispatch.error && toolName !== 'finalize' && isParallelSafeTool(toolName)
+      if (!toolFailed && toolName !== 'finalize' && isParallelSafeTool(toolName)
           && !(observation && typeof observation === 'object' && observation.error)) {
         if (dupCallCache.size >= DUP_CALL_CACHE_MAX) {
           dupCallCache.delete(dupCallCache.keys().next().value);
@@ -1656,7 +1701,7 @@ async function run(openai, opts) {
         dupCallCache.set(dupSig, { step, content: obsContent });
       }
 
-      if (toolName === 'finalize' && !dispatch.error && !observation.error) {
+      if (toolName === 'finalize' && !toolFailed && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
         // Preserve the breaker's degraded-run signal (set just above when the
         // circuit tripped) instead of clobbering it to a clean 'finalized' —

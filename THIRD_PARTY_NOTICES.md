@@ -12,6 +12,17 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   create-if-missing decisions preserved by design).
   The complete OpenClaw copyright and MIT license text is retained at
   `docs/upstream/OPENCLAW-LICENSE`.
+  The native ReAct tool-result integrity and call-identity hardening in
+  `backend/src/services/react-agent.js` and
+  `backend/src/services/agents/tool-call-normalizer.js`
+  also draws on OpenClaw's no-progress detection and replay-safe tool pairing
+  architecture. The history packer in
+  `backend/src/services/agentic-chat-stream.js` uses the
+  complete-turn retention concept reviewed in the existing inactive OpenClaw
+  reference snapshot; its upstream revision was not independently verified.
+  This is a SiraGPT-owned implementation, not a vendored gateway
+  or provider adapter. Audited references and scope are recorded in
+  `docs/agent-brain-integrity-20260906.md`.
   Further ports are governed by docs/code/openclaw-port-charter.md.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
