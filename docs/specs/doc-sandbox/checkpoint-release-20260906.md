@@ -5,12 +5,24 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** se corrigieron cancelaciones perdidas antes de
+**Actualización más reciente:** se separaron las políticas puras de leases,
+transiciones y presupuesto de intentos, conservando locks, reloj DB y orden de
+IO. **336/336** pruebas estrictas y cobertura **72,48 % (2566/3540)**; **46/46**
+integraciones nuevas con PostgreSQL/Redis reales de prueba pasan y sus servicios
+quedaron detenidos. No son jobs completos ni un ensayo migratorio PG16.
+Evidencia y límites en [policy-release-20260906.md](policy-release-20260906.md).
+El 80 %, la aceptación de F1 y el despliegue siguen pendientes.
+
+**Registro anterior (`46caed9c…`):** se corrigieron cancelaciones perdidas antes de
 validar y descargas cuyo cierre podía quedar pendiente. Hay **307/307** pruebas
 estrictas, cobertura **71,76 % (2486/3464)** y 14 casos nuevos. Runtime cambiado
 sólo en esas guardas; sin despliegue. Evidencia y límites en
 [cancellation-release-20260906.md](cancellation-release-20260906.md).
 El gate del 80 % y la aceptación de F1 siguen pendientes.
+
+Las secciones 1–8 siguientes conservan el registro de la revisión inicial y
+sus continuaciones indicadas; las métricas vigentes están en el informe más
+reciente. No representan una revalidación de producción a la hora de este cambio.
 
 **Registro anterior (`db4bc8eaf…`):** la continuación de pruebas elevó la cobertura
 estricta a **71,68 % (2476/3454)**, con **293/293** casos y cero omisiones.

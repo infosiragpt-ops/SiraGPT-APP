@@ -168,6 +168,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: comprobar la señal tras leer el manifiesto y de nuevo antes de `spawn`; conservar `E_CANCELLED` sin exponer el motivo privado. En descargas, solicitar cancelación observada sin bloquear el rechazo por HTTP/tamaño/abort; conservar `finally` para liberar lock/listener. No ocultar errores de lectura ni devolver bytes parciales.
 - Consecuencias: cancelación solicitada no significa limpieza remota confirmada. Los registros de borrado de Files y la reconciliación Docker existente no se cambian. Las regresiones usan streams y filesystem reales, no un validador simulado; el ensayo integral con runtime real sigue pendiente. Evidencia en [cancellation-release-20260906.md](cancellation-release-20260906.md).
 
+## D25. Políticas puras sin trasladar la autoridad de persistencia
+
+- Contexto: las decisiones de lease/transición y presupuesto estaban mezcladas con IO, dificultando probar sus límites sin simular DB o el procesador completo.
+- Decisión: funciones puras sobre proyecciones tipadas del dominio, llamadas desde el mismo punto de las operaciones originales. El repositorio mantiene fila bloqueada, reloj DB, transacciones, fencing y SQL; el procesador mantiene inspección, heartbeat, deadlines, motor y reservas de costo. La aritmética y precedencia de errores se conservan.
+- Consecuencias: 29 pruebas nuevas de políticas, revisión independiente y 46 integraciones reales PostgreSQL/Redis separadas de la cobertura estricta. Un snapshot no acredita propiedad concurrente ni puede sustituir una reserva transaccional. No se debilita el 80 %, no se cambia el tratamiento heredado de metadata inválida ni se declara F1 aprobada. Evidencia y límites en [policy-release-20260906.md](policy-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

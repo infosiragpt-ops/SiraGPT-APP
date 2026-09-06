@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { z } from 'zod';
 import { addUsage, emptyUsage, totalTokens } from '../engine/cost';
 import { sha256 } from '../engine/artifacts';
 import type { EnginePersistence, SandboxEngine, SandboxSession } from '../engine/types';
@@ -11,6 +10,7 @@ import { DocumentValidationError, freezePlan, type IndependentDocumentValidator 
 import { DocumentRepositoryError, type ArtifactInput, type AttemptLease, type DocSandboxRepository,
   type JsonObject } from './repository';
 import { combinePreservationReports, createConservativeBundle } from './conservative-result';
+import { calculateAttemptBudget } from './attempt-budget';
 
 export interface DocumentProcessorDependencies {
   repository: DocSandboxRepository;
@@ -28,10 +28,6 @@ export interface DocumentProcessorConfig {
   timeoutMs: number;
   leaseMs?: number;
 }
-
-const usageSchema = z.object({ inputTokens: z.number().int().nonnegative(), outputTokens: z.number().int().nonnegative(),
-  cacheReadTokens: z.number().int().nonnegative(), cacheWriteTokens: z.number().int().nonnegative(),
-  costUsd: z.number().finite().nonnegative().nullable(), costExact: z.boolean() });
 
 class OutputValidationFailure extends DocSandboxError {
   constructor(readonly report: ValidationReport) { super('E_VALIDATION', 422); }
@@ -118,14 +114,7 @@ export class DocumentSandboxProcessor {
       const instructions = new TextDecoder('utf-8', { fatal: true }).decode(instructionsBytes);
       const inventories = await validator.inspect(originalInputs, controller.signal);
       await repository.heartbeat(lease, leaseMs);
-      const baseUsage = Object.keys(job.usage).length ? usageSchema.parse(job.usage) : emptyUsage();
-      const pending = job.costReservations.filter((reservation) => reservation.actualUsd === null)
-        .reduce((sum, reservation) => sum + Number(reservation.reservedUsd), 0);
-      const remainingUsd = Number(job.maxCostUsd) - Number(job.costUsd) - pending;
-      const remainingTokens = Math.min(this.config.maxTokens, job.tokenBudget) - totalTokens(baseUsage);
-      const previousTurns = typeof job.usage.turns === 'number' && Number.isSafeInteger(job.usage.turns) && job.usage.turns >= 0 ? job.usage.turns : 0;
-      const remainingTurns = this.config.maxTurns - previousTurns;
-      if (remainingUsd <= 0 || remainingTokens <= 0 || remainingTurns <= 0 || baseUsage.costUsd === null) throw new DocSandboxError('E_QUOTA', 429);
+      const { baseUsage, previousTurns, remainingUsd, remainingTokens, remainingTurns } = calculateAttemptBudget(job, this.config);
       engine = engineFactory(this.enginePersistence(lease, baseUsage, previousTurns));
       const sessionStartedAt = Date.now();
       session = await engine.createSession({ id: job.id, userId: job.userId, attempt: lease.attempt, promptVersion: job.promptVersion });

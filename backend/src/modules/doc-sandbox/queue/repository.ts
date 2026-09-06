@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import type { DocumentOutcome } from '../types/contracts';
+import { canClaimDocumentAttempt, documentFailureStatus, documentTransitionFailure, isDocumentLeaseCurrent } from './lease-policy';
 
 export type DocumentStatus = 'queued' | 'inspecting' | 'planning' | 'awaiting_approval' | 'editing' | 'validating' | 'done' | 'failed' | 'cancelled';
 export type ArtifactKind = 'input' | 'output' | 'edit_plan' | 'recipe' | 'agent_result' | 'validation_report' | 'thumbnail_before' | 'thumbnail_after' | 'text_diff' | 'transcript';
@@ -57,12 +58,7 @@ interface DbJob {
 }
 interface DbArtifact { id: string; job_id: string; attempt: number; kind: ArtifactKind; storage_key: string; filename: string; mime: string; size: bigint; sha256: string; published: boolean; purged_at: Date | null; }
 interface DbEvent { id: string; job_id: string; seq: number; type: string; payload: JsonObject; created_at: Date; outbox: 'enqueue' | 'cleanup' | null; }
-const ACTIVE: DocumentStatus[] = ['inspecting', 'planning', 'editing', 'validating'];
 const TERMINAL: DocumentStatus[] = ['done', 'failed', 'cancelled'];
-const NEXT: Record<DocumentStatus, ReadonlyArray<DocumentStatus>> = {
-  queued: ['inspecting'], inspecting: ['planning'], planning: ['editing', 'validating'], awaiting_approval: [],
-  editing: ['validating'], validating: [], done: [], failed: [], cancelled: [],
-};
 const HASH = /^[a-f0-9]{64}$/;
 const PLAIN_MIME: Readonly<Record<string, string>> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', html: 'text/html' };
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{1,79}$/;
@@ -111,7 +107,9 @@ export class DocSandboxRepository {
   private async assertLease(db: Db, lease: AttemptLease): Promise<DbJob> {
     const row = await this.locked(db, lease.jobId);
     const clocks = await db.$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT clock_timestamp() AS now`);
-    if (row.deleted_at || !ACTIVE.includes(row.status) || row.fence !== lease.fence || row.lease_token !== lease.token || row.attempts !== lease.attempt || !row.lease_expires_at || row.lease_expires_at <= clocks[0]!.now || row.expires_at <= clocks[0]!.now) throw new DocumentRepositoryError('DOC_STALE_LEASE');
+    if (!isDocumentLeaseCurrent({ status: row.status, deletedAt: row.deleted_at, fence: row.fence,
+      leaseToken: row.lease_token, attempts: row.attempts, leaseExpiresAt: row.lease_expires_at,
+      expiresAt: row.expires_at }, lease, clocks[0]!.now)) throw new DocumentRepositoryError('DOC_STALE_LEASE');
     return row;
   }
   private async event(db: Db, jobId: string, type: string, payload: JsonObject, outbox: 'enqueue' | 'cleanup' | null = null): Promise<void> {
@@ -211,7 +209,8 @@ export class DocSandboxRepository {
     return this.client.$transaction(async db => {
       const row = await this.locked(db, id);
       const now = (await db.$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT clock_timestamp() AS now`))[0]!.now;
-      if (!row.admission_ready || row.status !== 'queued' || row.deleted_at || row.expires_at <= now || row.attempts >= 3) return null;
+      if (!canClaimDocumentAttempt({ admissionReady: row.admission_ready, status: row.status,
+        deletedAt: row.deleted_at, expiresAt: row.expires_at, attempts: row.attempts }, now)) return null;
       const lease: AttemptLease = { jobId: id, token: randomUUID(), fence: row.fence + 1, attempt: row.attempts + 1 };
       const history: HistoricalLease[] = [...row.attempt_leases, { attempt: lease.attempt, tokenHash: hashToken(lease.token) }];
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status='inspecting',attempts=${lease.attempt},fence=${lease.fence},lease_token=${lease.token},lease_expires_at=clock_timestamp()+${leaseMs}*interval '1 millisecond',attempt_leases=${json(history)}::jsonb,started_at=COALESCE(started_at,clock_timestamp()),error_code=NULL WHERE id=${id}`);
@@ -230,8 +229,8 @@ export class DocSandboxRepository {
   async transition(lease: AttemptLease, next: DocumentStatus): Promise<void> {
     await this.client.$transaction(async db => {
       const row = await this.assertLease(db, lease);
-      if (!NEXT[row.status].includes(next)) throw new DocumentRepositoryError('DOC_INVALID_TRANSITION');
-      if ((next === 'editing' || next === 'validating') && !row.edit_plan_hash) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
+      const failure = documentTransitionFailure(row.status, next, row.edit_plan_hash);
+      if (failure) throw new DocumentRepositoryError(failure);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status=${next} WHERE id=${lease.jobId}`);
       await this.event(db, lease.jobId, 'status_changed', { status: next, attempt: lease.attempt });
     });
@@ -378,7 +377,7 @@ export class DocSandboxRepository {
     return this.client.$transaction(async db => {
       const row = await this.assertLease(db, lease);
       if (report) await this.insertArtifact(db, lease.jobId, lease.attempt, report, true);
-      const next = retryable && row.attempts < 3 ? 'queued' : 'failed';
+      const next = documentFailureStatus(retryable, row.attempts);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status=${next},error_code=${code},validation_report_key=${report?.storageKey ?? row.validation_report_key},lease_token=NULL,lease_expires_at=NULL,fence=fence+1,edit_plan_key=NULL,edit_plan_hash=NULL,session_ref=NULL,cleanup_pending=true,cleanup_not_before=clock_timestamp()+interval '15 minutes',finished_at=CASE WHEN ${next}='failed' THEN clock_timestamp() ELSE NULL END WHERE id=${lease.jobId}`);
       await this.event(db, lease.jobId, 'status_changed', { status: next, attempt: lease.attempt, code }, next === 'queued' ? 'enqueue' : 'cleanup');
       if (next === 'queued') await this.event(db, lease.jobId, 'cleanup_pending', { attempt: lease.attempt }, 'cleanup');

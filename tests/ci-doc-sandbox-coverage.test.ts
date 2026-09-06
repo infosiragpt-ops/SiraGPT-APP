@@ -49,6 +49,8 @@ describe("document sandbox strict coverage release gate", () => {
     assert.match(command, /--check-coverage --lines 80 npm run test:doc-sandbox:unit$/)
     assert.doesNotMatch(command, /--exclude(?:=|\s)|--per-file|\|\|/)
     assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /auxiliary|\.integration\.|model-policy\.test|validation-lifecycle\.test|persistence\.queue/)
+    assert.match(scripts["test:doc-sandbox:unit"], /tests\/doc-sandbox-lease-policy\.test\.ts(?:\s|$)/)
+    assert.match(scripts["test:doc-sandbox:unit"], /tests\/doc-sandbox-attempt-budget\.test\.ts(?:\s|$)/)
     assert.match(scripts["test:doc-sandbox:auxiliary"], /doc-sandbox-validation-lifecycle\.test\.ts/)
     assert.match(backendStep("Document sandbox contracts and real database/queue tests"), /npm run test:doc-sandbox:auxiliary/)
   })
