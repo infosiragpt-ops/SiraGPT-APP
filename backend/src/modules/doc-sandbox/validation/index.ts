@@ -99,7 +99,10 @@ async function runContainer(args: string[], input: unknown, options: ValidatorOp
   let launchSettled = true;
   try {
     if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
-    await assertInvocationLaunchable(invocation);
+    await assertInvocationLaunchable(invocation, undefined, signal);
+    // Abort events are not replayed for the listener installed below. Recheck
+    // after the filesystem await and its continuation, before starting Docker.
+    if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
     const timeoutMs = Math.max(1, Math.min(validatorTimeout(options), invocation.deadlineAt - Date.now()));
     return await new Promise<unknown>((resolve, reject) => {
       launchSettled = false;

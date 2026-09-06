@@ -161,6 +161,13 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: no admitir antes del preflight runsc real; lease renovable del productor y ambas conexiones del worker; recuperar por clave idempotente del dueño. El cliente mantiene modelo/permisos seleccionados, originales binarios y controles existentes, sin nuevo diseño visual ni fallback silencioso.
 - Consecuencias: `done` ya no equivale necesariamente a edición. `outcome` distingue `edited`, `unchanged`, `not_possible`; este último requiere todos los originales intactos, informes independientes y warning. Una carga no confirmada no se anuncia como cancelación ni se duplica. Sin endpoint seguro para mutar mensajes ASSISTANT, un puntero anterior al POST se reconsulta de forma acotada al navegar/recargar, no en un bucle de render. E2E y aprobación del hash UI siguen pendientes.
 
+## D24. Cancelación antes de lanzar y rechazo de descargas sin espera de limpieza
+
+- Contexto: cancelar durante la lectura asíncrona del manifiesto podía perder el evento antes de instalar su listener. En descargas, esperar la promesa de `cancel()` podía dejar abierta la operación; un rechazo de esa promesa también sustituía el error original.
+- Opciones: mantener la espera del transporte, añadir más timeouts, o separar el resultado local del intento de limpieza y revalidar la señal al cruzar el límite asíncrono.
+- Decisión: comprobar la señal tras leer el manifiesto y de nuevo antes de `spawn`; conservar `E_CANCELLED` sin exponer el motivo privado. En descargas, solicitar cancelación observada sin bloquear el rechazo por HTTP/tamaño/abort; conservar `finally` para liberar lock/listener. No ocultar errores de lectura ni devolver bytes parciales.
+- Consecuencias: cancelación solicitada no significa limpieza remota confirmada. Los registros de borrado de Files y la reconciliación Docker existente no se cambian. Las regresiones usan streams y filesystem reales, no un validador simulado; el ensayo integral con runtime real sigue pendiente. Evidencia en [cancellation-release-20260906.md](cancellation-release-20260906.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

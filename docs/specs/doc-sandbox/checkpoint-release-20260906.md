@@ -5,7 +5,14 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** la continuación de pruebas eleva la cobertura
+**Actualización más reciente:** se corrigieron cancelaciones perdidas antes de
+validar y descargas cuyo cierre podía quedar pendiente. Hay **307/307** pruebas
+estrictas, cobertura **71,76 % (2486/3464)** y 14 casos nuevos. Runtime cambiado
+sólo en esas guardas; sin despliegue. Evidencia y límites en
+[cancellation-release-20260906.md](cancellation-release-20260906.md).
+El gate del 80 % y la aceptación de F1 siguen pendientes.
+
+**Registro anterior (`db4bc8eaf…`):** la continuación de pruebas elevó la cobertura
 estricta a **71,68 % (2476/3454)**, con **293/293** casos y cero omisiones.
 Se añadió el control CI obligatorio del 80 %; el umbral todavía falla y la fase
 sigue sin aprobarse ni desplegarse. Evidencia y límites en

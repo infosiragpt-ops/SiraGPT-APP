@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { getEventListeners } = require('node:events');
+const { setImmediate: nextImmediate } = require('node:timers/promises');
 const PizZip = require('pizzip');
 const { AnthropicSandboxEngine, providerContainerRetentionDeadline } = require('../dist/doc-sandbox/engine/anthropic-engine');
 const { AnthropicDocumentProviderClient } = require('../dist/doc-sandbox/engine/provider-client');
@@ -224,6 +225,93 @@ test('streaming download enforces actual bytes and header limits', async () => {
   await assert.rejects(readBoundedResponse(new Response('a', { headers: { 'content-length': '100' } }), 3, signal));
   await assert.rejects(readBoundedResponse(new Response('abc', { status: 500 }), 3, signal));
 });
+
+for (const status of [403, 500]) {
+  test(`rejected HTTP ${status} artifact cancels its body without consuming it`, async () => {
+    const controller = new AbortController();
+    let pulls = 0;
+    let cancellations = 0;
+    const stream = new ReadableStream({
+      pull() { pulls++; },
+      cancel() { cancellations++; },
+    }, { highWaterMark: 0 });
+    await assert.rejects(readBoundedResponse(new Response(stream, { status }), 16, controller.signal),
+      { message: 'DOC_ENGINE_DOWNLOAD_FAILED' });
+    assert.equal(cancellations, 1);
+    assert.equal(pulls, 0, 'an HTTP error body must not be read as document content');
+    assert.equal(stream.locked, false);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  });
+}
+
+for (const boundary of ['http-error', 'declared-size', 'actual-size', 'pre-cancelled', 'pending-cancel']) {
+  test(`artifact ${boundary} retains its primary error when transport cancellation rejects`, async () => {
+    const controller = new AbortController();
+    const reason = new Error('synthetic-user-cancellation');
+    const transportError = new Error('synthetic-transport-cancellation-failure');
+    let cancellations = 0;
+    const stream = new ReadableStream({
+      start(source) {
+        if (boundary === 'actual-size') source.enqueue(new Uint8Array([1, 2, 3, 4]));
+      },
+      cancel() { cancellations++; return Promise.reject(transportError); },
+    });
+    const response = new Response(stream, {
+      status: boundary === 'http-error' ? 500 : 200,
+      headers: boundary === 'declared-size' ? { 'content-length': '4' } : {},
+    });
+    if (boundary === 'pre-cancelled') controller.abort(reason);
+    const reading = readBoundedResponse(response, 3, controller.signal);
+    if (boundary === 'pending-cancel') controller.abort(reason);
+    if (boundary === 'pre-cancelled' || boundary === 'pending-cancel') {
+      await assert.rejects(reading, error => error === reason);
+    } else {
+      await assert.rejects(reading, { message: boundary === 'http-error'
+        ? 'DOC_ENGINE_DOWNLOAD_FAILED' : 'DOC_ENGINE_OUTPUT_TOO_LARGE' });
+    }
+    assert.equal(cancellations, 1);
+    assert.equal(stream.locked, false);
+    assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+  });
+}
+
+for (const boundary of ['http-error', 'declared-size', 'actual-size', 'pre-cancelled']) {
+  test(`artifact ${boundary} releases local resources without waiting for transport cancellation`, async () => {
+    const controller = new AbortController();
+    const reason = new Error('synthetic-user-cancellation');
+    let completeCancellation;
+    const cancellation = new Promise(resolve => { completeCancellation = resolve; });
+    let cancellations = 0;
+    const stream = new ReadableStream({
+      start(source) {
+        if (boundary === 'actual-size') source.enqueue(new Uint8Array([1, 2, 3, 4]));
+      },
+      cancel() { cancellations++; return cancellation; },
+    });
+    const response = new Response(stream, {
+      status: boundary === 'http-error' ? 500 : 200,
+      headers: boundary === 'declared-size' ? { 'content-length': '4' } : {},
+    });
+    if (boundary === 'pre-cancelled') controller.abort(reason);
+    const observed = readBoundedResponse(response, 3, controller.signal)
+      .then(value => ({ value }), error => ({ error }));
+    try {
+      // A real event-loop boundary, not an arbitrary latency target. The local
+      // rejection must settle while the transport cleanup is still pending.
+      const outcome = await Promise.race([observed, nextImmediate().then(() => null)]);
+      assert.notEqual(outcome, null, 'transport cleanup must not hold the document request open');
+      if (boundary === 'pre-cancelled') assert.equal(outcome.error, reason);
+      else assert.equal(outcome.error?.message, boundary === 'http-error'
+        ? 'DOC_ENGINE_DOWNLOAD_FAILED' : 'DOC_ENGINE_OUTPUT_TOO_LARGE');
+      assert.equal(cancellations, 1);
+      assert.equal(stream.locked, false);
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+    } finally {
+      completeCancellation();
+      await observed;
+    }
+  });
+}
 
 test('pre-cancelled artifact download cancels its actual stream before reading', async () => {
   const controller = new AbortController();

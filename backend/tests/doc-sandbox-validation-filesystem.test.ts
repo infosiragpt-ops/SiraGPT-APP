@@ -131,6 +131,44 @@ test('launch rechecks its durable deadline and immutable handle before admitting
   assert.deepEqual(await readFile(manifest), bytes);
 });
 
+test('cancellation during the real manifest read cannot admit a validator launch', async t => {
+  const { invocation, manifest } = await fixture(t, now);
+  const bytes = await readFile(manifest);
+  const controller = new AbortController();
+  assert.equal(controller.signal.aborted, false);
+  // readInvocation has already started its real asynchronous lstat. No timer,
+  // filesystem replacement or Docker transport is needed to hit this window.
+  const admission = assertInvocationLaunchable(invocation, now, controller.signal);
+  controller.abort(new Error('synthetic cancellation reason must stay private'));
+  await assert.rejects(admission, { name: 'DocumentValidationError', code: 'E_CANCELLED', message: 'Validación cancelada.' });
+  assert.equal(controller.signal.aborted, true);
+  assert.deepEqual(await readFile(manifest), bytes);
+  assert.equal(await readFile(path.join(invocation.directory, 'inputs', 'input-0.txt'), 'utf8'), 'synthetic original');
+});
+
+test('an already cancelled admission returns the stable cancellation code without exposing its reason', async t => {
+  const { invocation, manifest } = await fixture(t, now);
+  const bytes = await readFile(manifest);
+  const signal = AbortSignal.abort(new Error('synthetic private abort reason'));
+  await assert.rejects(assertInvocationLaunchable(invocation, now, signal),
+    { name: 'DocumentValidationError', code: 'E_CANCELLED', message: 'Validación cancelada.' });
+  assert.deepEqual(await readFile(manifest), bytes);
+});
+
+test('a live abort signal preserves manifest identity and expiration errors', async t => {
+  const { invocation, manifest } = await fixture(t, now);
+  const signal = new AbortController().signal;
+  const bytes = await readFile(manifest);
+  await assertInvocationLaunchable(invocation, now, signal);
+  await assert.rejects(assertInvocationLaunchable(invocation, invocation.deadlineAt, signal),
+    { code: 'VALIDATOR_INVOCATION_EXPIRED' });
+  await chmod(manifest, 0o640);
+  await assert.rejects(assertInvocationLaunchable(invocation, now, signal),
+    { code: 'VALIDATOR_MANIFEST_INVALID' });
+  assert.deepEqual(await readFile(manifest), bytes);
+  assert.equal(signal.aborted, false);
+});
+
 test('launch refuses group-readable durable manifests without altering the original', async t => {
   const { invocation, manifest } = await fixture(t, now);
   const bytes = await readFile(manifest);

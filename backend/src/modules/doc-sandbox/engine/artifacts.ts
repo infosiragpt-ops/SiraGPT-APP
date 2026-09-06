@@ -38,14 +38,20 @@ export function parseJsonArtifact(bytes: Uint8Array, maximumBytes = 2 * 1024 * 1
 
 /** Read with a streaming limit; Content-Length alone is not trusted. */
 export async function readBoundedResponse(response: Response, limit: number, signal: AbortSignal): Promise<Uint8Array> {
-  if (!response.ok || !response.body) throw new Error('DOC_ENGINE_DOWNLOAD_FAILED');
+  // Request cancellation of rejected bodies too, without awaiting a transport
+  // cleanup that can hang or reject. The primary failure must still settle;
+  // this is not confirmation of remote file deletion (tracked separately).
+  if (!response.ok || !response.body) {
+    void response.body?.cancel().catch(() => undefined);
+    throw new Error('DOC_ENGINE_DOWNLOAD_FAILED');
+  }
   if (signal.aborted) {
-    await response.body.cancel();
+    void response.body.cancel().catch(() => undefined);
     signal.throwIfAborted();
   }
   const contentLength = response.headers.get('content-length');
   if (contentLength !== null && (!/^\d+$/.test(contentLength) || Number(contentLength) > limit)) {
-    await response.body.cancel();
+    void response.body.cancel().catch(() => undefined);
     throw new Error('DOC_ENGINE_OUTPUT_TOO_LARGE');
   }
   const reader = response.body.getReader();
@@ -61,7 +67,7 @@ export async function readBoundedResponse(response: Response, limit: number, sig
       if (chunk.done) break;
       bytes += chunk.value.byteLength;
       if (bytes > limit) {
-        await reader.cancel();
+        void reader.cancel().catch(() => undefined);
         throw new Error('DOC_ENGINE_OUTPUT_TOO_LARGE');
       }
       chunks.push(chunk.value);
