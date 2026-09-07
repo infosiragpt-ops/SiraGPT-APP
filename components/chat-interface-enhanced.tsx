@@ -252,7 +252,11 @@ import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialA
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
-import { routeDocumentSandboxTurn } from "@/lib/document-sandbox-routing"
+import {
+  admitDocumentSandboxTurn,
+  isDocumentSandboxUnavailableError,
+  routeDocumentSandboxTurn,
+} from "@/lib/document-sandbox-routing"
 import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
@@ -10593,6 +10597,7 @@ REWRITTEN TEXT:`;
       || isMusicGenerationActive
       || isVideoGenerationActive;
     const documentSandboxRoute = routeDocumentSandboxTurn(msg, filesToSend);
+    let useLegacyDocumentEditor = false;
     if (!hasDedicatedConnector && !hasMediaGenerator && documentSandboxRoute) {
       const documentPreflight = new AbortController();
       let documentChatId = currentChat?.id || null;
@@ -10601,23 +10606,42 @@ REWRITTEN TEXT:`;
       setSendingChatId(currentChat?.id || null);
       setIsSending(true);
       try {
+        const documentSandboxAdmission = await admitDocumentSandboxTurn(
+          msg,
+          filesToSend,
+          selectedModel,
+          { signal: documentPreflight.signal },
+        );
         // The old classifier is broader than an editing authorization (it
-        // even matches discussion). Clarify instead of invoking its editor.
-        if (documentSandboxRoute === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
-        if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
+        // even matches discussion). Clarify instead of invoking its editor
+        // only when the verified sandbox is actually ready.
+        if (documentSandboxAdmission === "legacy") {
+          useLegacyDocumentEditor = true;
+        } else if (documentSandboxAdmission === "clarify") {
+          throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        } else if (await startDocumentSandbox(msg, filesToSend, idempotencyKey, documentPreflight.signal, (chatId) => {
           documentChatId = chatId;
           if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
         })) markQueuedSendSucceeded();
       } catch (error) {
-        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
-        // Preserve the user's draft when preflight rejects a model, permission or input.
-        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
-          setInput(msg);
-          uploadedFilesRef.current = filesToSend;
-          setUploadedFiles(filesToSend);
-          // Transfer a rejected queued turn back to the visible draft. Leaving
-          // it in the automatic drain would retry an unsupported edit forever.
-          if (queuedSend) markQueuedSendSucceeded();
+        const stopped = documentPreflight.signal.aborted
+          || (error instanceof DOMException && error.name === "AbortError")
+          || (error instanceof DocumentSandboxClientError && error.code === "E_CANCELLED");
+        if (!stopped && isDocumentSandboxUnavailableError(error)) {
+          // Pre-admission outage only: no durable job exists. Use the
+          // legacy source-preserving editor until F1 is configured.
+          useLegacyDocumentEditor = true;
+        } else {
+          toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+          // Preserve the user's draft when preflight rejects a model, permission or input.
+          if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+            setInput(msg);
+            uploadedFilesRef.current = filesToSend;
+            setUploadedFiles(filesToSend);
+            // Transfer a rejected queued turn back to the visible draft. Leaving
+            // it in the automatic drain would retry an unsupported edit forever.
+            if (queuedSend) markQueuedSendSucceeded();
+          }
         }
       } finally {
         inFlightSendKeysRef.current.delete(sendKey);
@@ -10628,7 +10652,9 @@ REWRITTEN TEXT:`;
           setSendingChatId(null);
         }
       }
-      return; // No silent fallback to the legacy document editor or another provider.
+      if (!useLegacyDocumentEditor) {
+        return; // Verified sandbox, clarify, Stop or blocked error. No fallback after admission.
+      }
     }
     const shouldUseWorkModeAgent = isWorkModeActive
       && !hasDedicatedConnector
@@ -10639,8 +10665,9 @@ REWRITTEN TEXT:`;
       customGptId: currentChat?.customGptId,
       customGpt: currentChat?.customGpt,
     });
-    // Explicit edits and ambiguous legacy edit classifications returned above;
-    // remaining document questions retain their existing retrieval path.
+    // Explicit edits use the verified sandbox when it is ready. If F1 is
+    // disabled or returns E_NOT_READY, they fall through to the legacy editor.
+    // Ambiguous classifications still clarify instead of editing when ready.
     // Pure image-analysis turns are still kept out of the queued path because
     // vision runs through /api/ai/generate.
     const shouldStartAgenticLoopImmediately = shouldUseWorkModeAgent

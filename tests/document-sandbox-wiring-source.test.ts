@@ -5,17 +5,22 @@ import { test } from "node:test"
 
 // Auxiliary source-boundary checks only; not SPEC §10.2 acceptance or UI E2E.
 const source = readFileSync(join(process.cwd(), "components/chat-interface-enhanced.tsx"), "utf8")
-test("canonical document admission intercepts before the legacy task loop and refuses fallback", () => {
+test("canonical document admission intercepts before the legacy task loop and falls back only when the sandbox is unavailable", () => {
   const route = source.indexOf("const documentSandboxRoute = routeDocumentSandboxTurn(msg, filesToSend)")
   const legacy = source.indexOf("const shouldStartAgenticLoopImmediately =", route)
   assert.ok(route > 0 && legacy > route)
   const admission = source.slice(route, legacy)
-  assert.match(admission, /documentSandboxRoute === "clarify".*E_EDIT_AMBIGUOUS/)
+  assert.match(admission, /admitDocumentSandboxTurn/)
+  assert.match(admission, /documentSandboxAdmission === "legacy"/)
+  assert.match(admission, /documentSandboxAdmission === "clarify"/)
+  assert.match(admission, /E_EDIT_AMBIGUOUS/)
+  assert.match(admission, /isDocumentSandboxUnavailableError/)
   assert.match(admission, /await startDocumentSandbox\(msg, filesToSend, idempotencyKey, documentPreflight.signal, \(chatId\) =>/)
   assert.match(admission, /documentChatId = chatId/)
   assert.match(admission, /setSendingChatId\(chatId\)/)
   assert.match(admission, /currentChatIdRef.current \|\| '__new__'\) === \(documentChatId \|\| '__new__'/)
-  assert.match(admission, /return; \/\/ No silent fallback/)
+  assert.match(admission, /if \(!useLegacyDocumentEditor\)/)
+  assert.match(admission, /No fallback after admission/)
   assert.match(admission, /setInput\(msg\)/)
   assert.match(admission, /if \(queuedSend\) markQueuedSendSucceeded\(\)/)
 })
