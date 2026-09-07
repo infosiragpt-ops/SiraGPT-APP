@@ -119,6 +119,11 @@ function saveSkillCurator(userId, state) {
   });
 }
 
+function clearSkillCurator(userId) {
+  const filePath = userPath('skill-curator', userId);
+  try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+}
+
 module.exports = {
   STORE_ROOT,
   loadMemoryEntries,
@@ -131,4 +136,5 @@ module.exports = {
   saveSessions,
   loadSkillCurator,
   saveSkillCurator,
+  clearSkillCurator,
 };

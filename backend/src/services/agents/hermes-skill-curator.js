@@ -340,6 +340,15 @@ function status(userId) {
   };
 }
 
+function clearUser(userId) {
+  const id = normalizeUserId(userId);
+  if (!id) return { cleared: false };
+  liveByUser.delete(id);
+  hydratedUsers.delete(id);
+  try { diskPersistence.clearSkillCurator(id); } catch { /* best-effort */ }
+  return { cleared: true };
+}
+
 function resetForTests() {
   liveByUser.clear();
   hydratedUsers.clear();
@@ -355,5 +364,6 @@ module.exports = {
   run,
   status,
   growthCandidates,
+  clearUser,
   resetForTests,
 };

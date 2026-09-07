@@ -54,10 +54,14 @@ function writeUserSkill(userId, name, description) {
 
 before(() => {
   curator.resetForTests();
+  curator.clearUser(USER_A);
+  curator.clearUser(USER_B);
   process.env.SIRAGPT_AGENT_SKILLS_HOME = skillsHome;
 });
 
 after(() => {
+  curator.clearUser(USER_A);
+  curator.clearUser(USER_B);
   curator.resetForTests();
   try { fs.rmSync(skillsHome, { recursive: true, force: true }); } catch { /* ignore */ }
 });
