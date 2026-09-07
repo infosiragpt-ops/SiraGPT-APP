@@ -33,6 +33,10 @@ const TOOL_ALIASES = Object.freeze({
   ls: 'ls',
   list_dir: 'ls',
   apply_patch: 'apply_patch',
+  webfetch: 'webfetch',
+  web_fetch: 'webfetch',
+  todo: 'todo',
+  todowrite: 'todo',
 });
 
 const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch']);

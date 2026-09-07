@@ -14,6 +14,8 @@ const { authorizeTool } = require('./permissions');
 const { execInWorkspace } = require('./workspace');
 const { applyPatchToWorkspace } = require('./apply-patch');
 const { truncateToolResult } = require('./tool-result');
+const { runWebFetch } = require('./webfetch');
+const { runTodo } = require('./todos');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -154,6 +156,14 @@ async function runApplyPatch(workspace, args) {
   }
 }
 
+async function runWebFetchTool(_workspace, args, ctx = {}) {
+  return runWebFetch(args || {}, { fetch: ctx.fetch, skipDns: ctx.skipDns });
+}
+
+function runTodoTool(_workspace, args, ctx = {}) {
+  return runTodo(ctx.session, args || {});
+}
+
 const EXECUTORS = {
   read: runRead,
   write: runWrite,
@@ -163,6 +173,8 @@ const EXECUTORS = {
   glob: runGlob,
   ls: runLs,
   apply_patch: runApplyPatch,
+  webfetch: runWebFetchTool,
+  todo: runTodoTool,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
@@ -191,7 +203,7 @@ async function executeTool(session, toolName, args = {}, ctx = {}) {
   }
   const exec = EXECUTORS[auth.tool];
   if (!exec) return toolError('unknown_tool', `herramienta desconocida: ${auth.tool}`);
-  const result = await exec(session.workspace, args || {}, ctx);
+  const result = await exec(session.workspace, args || {}, { ...ctx, session });
   return { ...result, permission: auth };
 }
 
@@ -310,6 +322,34 @@ const TOOL_DEFINITIONS = [
           patch: { type: 'string' },
         },
         required: ['patch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'webfetch',
+      description: 'Descarga una URL https pública (markdown/text/html). No escribe archivos.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string' },
+          format: { type: 'string' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'todo',
+      description: 'Crea o actualiza la lista de tareas de la sesión (un in_progress).',
+      parameters: {
+        type: 'object',
+        properties: {
+          todos: { type: 'array' },
+        },
       },
     },
   },
