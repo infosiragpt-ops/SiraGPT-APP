@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { createDocumentSandboxClient, documentJobState, isExplicitDocumentEdit, parseDocumentJobPointer,
-  parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
-import { routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
+import { createDocumentSandboxClient, documentJobState, isExplicitDocumentEdit, looksLikeExplicitDocumentEdit,
+  parseDocumentJobPointer, parseDocumentSnapshot, serializeDocumentJobState, DocumentSandboxClientError } from "../lib/document-sandbox-client"
+import { connectorHtmlAttachment, resolveDocumentSandboxAdmission, routeDocumentSandboxTurn } from "../lib/document-sandbox-routing"
 
 // HTTP protocol fixtures test the client only. These are not editor, independent
 // validation or paid-provider E2E evidence; those gates run in the backend suite.
@@ -45,6 +45,48 @@ test("routing refuses ambiguous legacy edits instead of falling back, while plai
   }
   assert.equal(routeDocumentSandboxTurn("cambia el título del documento", []), null)
   assert.equal(routeDocumentSandboxTurn("cambia el título", [{ name: "imagen.png" }]), null)
+})
+test("explicit Spanish edit with a Word attachment admits even if a connector is also open", () => {
+  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
+    attachments: [source()],
+    connectorOpen: true,
+    wordHtml: "<p>Informe abierto en el conector</p>",
+  })
+  assert.equal(admitted.route, "edit")
+  assert.equal((admitted.attachments[0] as { name: string }).name, "Modelo Informe.docx")
+})
+test("explicit edit with open Word HTML and no attachment uses the connector copy as input", async () => {
+  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
+    attachments: [],
+    connectorOpen: true,
+    wordHtml: "<h1>Informe 2026</h1>",
+  })
+  assert.equal(admitted.route, "edit")
+  const html = connectorHtmlAttachment("<h1>Informe 2026</h1>")
+  assert.ok(html)
+  assert.equal((admitted.attachments[0] as { name: string }).name, "documento.html")
+  assert.equal(await ((admitted.attachments[0] as { file: File }).file.text()), "<h1>Informe 2026</h1>")
+})
+test("explicit edit with Word connector open but empty content asks for the original", () => {
+  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
+    attachments: [],
+    connectorOpen: true,
+    wordHtml: "<p></p>",
+  })
+  assert.equal(admitted.route, "need_original")
+  assert.deepEqual(admitted.attachments, [])
+})
+test("explicit edit against a history document without original bytes asks to reattach", () => {
+  const admitted = resolveDocumentSandboxAdmission("puedes agregar comillas al título", {
+    attachments: [],
+    historyAttachments: [{ id: "uploaded-1", name: "tesis.docx" }],
+  })
+  assert.equal(admitted.route, "need_original")
+})
+test("plain chat without a document is not forced into verified admission", () => {
+  assert.equal(looksLikeExplicitDocumentEdit("puedes agregar comillas al título"), true)
+  assert.equal(resolveDocumentSandboxAdmission("puedes agregar comillas al título", { attachments: [] }).route, null)
+  assert.equal(resolveDocumentSandboxAdmission("hola", { connectorOpen: true, wordHtml: "<h1>Doc</h1>" }).route, null)
 })
 test("durable pointer is narrow and does not reinterpret legacy tasks", () => {
   assert.deepEqual(parseDocumentJobPointer(JSON.stringify({ source: "doc-sandbox", docSandbox: pointer })), pointer)
@@ -134,13 +176,22 @@ test("read/protected permissions block before network or paid admission", async 
   }
 })
 test("incompatible selection and unavailable runtime never create a job or fallback request", async () => {
-  for (const caps of [{ ...capabilities, supported: false }, { ...capabilities, ready: false }]) {
-    const calls: string[] = []
-    const client = createDocumentSandboxClient({ apiBase: base, request: async (url) => { calls.push(String(url)); return response(caps) } })
-    await assert.rejects(client.prepare("edita", [source()], "chosen"), code(caps.ready ? "E_MODEL" : "E_NOT_READY"))
-    assert.equal(calls.length, 1)
-    assert.ok(calls.every((url) => url.includes("/capabilities?model=chosen")))
+  const unavailable = createDocumentSandboxClient({ apiBase: base, request: async () => response({ ...capabilities, ready: false }) })
+  await assert.rejects(unavailable.prepare("edita", [source()], "chosen"), code("E_NOT_READY"))
+})
+test("any picker model admits when the sandbox is ready; identity is forwarded, not refused", async () => {
+  for (const caps of [{ ...capabilities, supported: false, modelTier: null }, { ...capabilities, modelTier: null }]) {
+    const urls: string[] = []
+    const client = createDocumentSandboxClient({ apiBase: base, request: async (url) => { urls.push(String(url)); return response(caps) } })
+    const form = await client.prepare("puedes agregar comillas al título", [source()], "muse-spark-1.3-contributor")
+    assert.equal(form.get("requestedModel"), "muse-spark-1.3-contributor")
+    assert.equal(form.get("modelTier"), "mechanical")
+    assert.ok(urls[0]?.includes("model=muse-spark-1.3-contributor"))
   }
+})
+test("empty model selection still fails closed before admission", async () => {
+  const client = createDocumentSandboxClient({ apiBase: base, request: async () => response(capabilities) })
+  await assert.rejects(client.prepare("edita", [source()], ""), code("E_MODEL"))
 })
 test("restored attachment without original File is rejected; extracted text and arbitrary URLs are never used", async () => {
   const calls: string[] = []

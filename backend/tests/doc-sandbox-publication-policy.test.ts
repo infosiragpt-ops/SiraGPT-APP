@@ -11,11 +11,12 @@ test('configuration requires exact model names and unique tier assignment, not a
   assert.equal(configuredDocumentModelTier({ ...models, academic: models.mechanical }, 'chosen-sonnet'), null);
   assert.equal(configuredDocumentModelTier({ ...models, academic: { ...models.academic, id: 'x'.repeat(200) } }, 'x'.repeat(200)), 'academic');
 });
-test('publication accepts only the exact active Anthropic TEXT row without provider-family inference', () => {
+test('publication accepts any exact active TEXT catalog row, including non-Anthropic picker models', () => {
   assert.equal(isPublishedDocumentModel(published, 'chosen-sonnet'), true);
-  assert.equal(isPublishedDocumentModel({ ...published, provider: ' ANTHROPIC ' }, 'chosen-sonnet'), true);
+  assert.equal(isPublishedDocumentModel({ ...published, provider: 'Meta' }, 'chosen-sonnet'), true);
+  assert.equal(isPublishedDocumentModel({ name: 'muse-spark-1.3-contributor', isActive: true, type: 'TEXT', provider: 'Meta' }, 'muse-spark-1.3-contributor'), true);
   for (const row of [null, { ...published, isActive: false }, { ...published, name: 'different' }, { ...published, type: 'IMAGE' },
-    { ...published, type: 'text' }, { ...published, provider: 'OpenRouter' }, { ...published, provider: 'anthropic-proxy' }, { ...published, provider: '' }]) {
+    { ...published, type: 'text' }]) {
     assert.equal(isPublishedDocumentModel(row, 'chosen-sonnet'), false);
   }
 });
