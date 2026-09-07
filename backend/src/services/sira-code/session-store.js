@@ -10,6 +10,7 @@
 const crypto = require('crypto');
 const { DEFAULT_AGENT_ID, resolveAgentId, getAgent } = require('./agents');
 const { createWorkspace } = require('./workspace');
+const { publicPlan } = require('./plan-handoff');
 
 const sessions = new Map();
 const DEFAULT_TTL_MS = 6 * 60 * 60 * 1000;
@@ -29,6 +30,7 @@ function publicSession(session) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
+    plan: publicPlan(session.plan),
   };
 }
 
@@ -58,6 +60,7 @@ async function createSession({
     abort: null,
     pendingPermissions: new Map(),
     permission: 'default',
+    plan: null,
   };
   sessions.set(id, session);
   return session;

@@ -115,6 +115,25 @@ test('POST /session/:id/agent switches to planificar', async () => {
   assert.equal(res.body.session.agent, 'planificar');
 });
 
+test('POST /session/:id/agent planificar→construir returns the captured plan', async () => {
+  const plan = 'Plan:\n1. Crear app.py\n2. Añadir tests\n3. Verificar pytest';
+  const app = buildApp(async () => ({ text: plan, toolCalls: [] }));
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'planificar' });
+  await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/prompt`)
+    .send({ text: 'arma un plan para la app' });
+  const res = await request(app)
+    .post(`/api/opencode/session/${created.body.session.id}/agent`)
+    .send({ agent: 'construir' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.session.agent, 'construir');
+  assert.equal(res.body.session.plan.status, 'active');
+  assert.ok(res.body.session.plan.stepCount >= 2);
+  assert.match(res.body.session.plan.preview, /Crear app\.py/);
+  assert.ok(!JSON.stringify(res.body).includes('DeepSeek'));
+  assert.ok(!JSON.stringify(res.body).includes('model_id'));
+});
+
 test('POST /session/:id/abort cancels the session', async () => {
   const created = await request(buildApp()).post('/api/opencode/session').send({});
   const res = await request(buildApp()).post(`/api/opencode/session/${created.body.session.id}/abort`).send({});
