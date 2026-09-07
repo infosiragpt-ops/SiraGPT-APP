@@ -109,7 +109,7 @@ const hermesMemoryTool = {
     properties: {
       action: {
         type: 'string',
-        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge'],
+        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge', 'compact', 'retrieve'],
       },
       target: { type: 'string', enum: ['memory', 'user'], description: 'Curated store for add/replace/remove/read.' },
       content: { type: 'string', description: 'New entry text for add/replace.' },
@@ -149,6 +149,12 @@ const hermesMemoryTool = {
         return { ok: true, entry: memoryBridge.promote(userId, args.entryId) };
       case 'nudge':
         return { ok: true, ...memoryBridge.nudgePromotion(userId) };
+      case 'compact':
+        return memoryBridge.compactSession(userId, { force: true });
+      case 'retrieve':
+        return memoryBridge.retrieveRanked(userId, args.query || args.content || '', {
+          limit: args.limit,
+        });
       default:
         return { ok: false, error: 'invalid action' };
     }
