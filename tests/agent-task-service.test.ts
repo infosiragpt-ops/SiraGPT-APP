@@ -1,7 +1,16 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
 
-import { initialAgentState, normalizeAgentTaskErrorMessage, reduceEvent, runStream } from "../lib/agent-task-service"
+import {
+  initialAgentState,
+  isFreshAgentTaskSnapshot,
+  isInFlightAgentTaskStatus,
+  isRecoverableAgentTaskStreamDrop,
+  normalizeAgentTaskErrorMessage,
+  reduceEvent,
+  resolveRecoveredTerminalError,
+  runStream,
+} from "../lib/agent-task-service"
 
 describe("agent-task-service · reducer", () => {
   it("keeps tool events under their matching step", () => {
@@ -94,10 +103,41 @@ function makeSseResponse(events: any[]): Response {
   })
 }
 
-function makeJsonResponse(payload: any): Response {
+function makeJsonResponse(payload: any, status = 200): Response {
   return new Response(JSON.stringify(payload), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json" },
+  })
+}
+
+function makeDroppingSseResponse(events: any[]): Response {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+      }
+      controller.error(new TypeError("Failed to fetch"))
+    },
+  })
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  })
+}
+
+function makeHangingSseResponse(events: any[]): Response {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const event of events) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+      }
+    },
+  })
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
   })
 }
 
@@ -147,6 +187,237 @@ describe("agent-task-service · closed-stream recovery", () => {
       globalThis.fetch = originalFetch
     }
   })
+
+  it("resumes from the durable log when the SSE socket throws mid-run", async () => {
+    const originalFetch = globalThis.fetch
+    const seenUrls: string[] = []
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      seenUrls.push(url)
+      if (url.includes("/agent/task/") && url.includes("/events")) {
+        return makeJsonResponse({
+          ok: true,
+          taskId: "task-drop",
+          status: "completed",
+          lastError: null,
+          updatedAt: new Date().toISOString(),
+          events: [
+            { type: "final_text", markdown: "Informe listo tras la caída del SSE.", seq: 3 },
+            { type: "done", stoppedReason: "completed", stats: { steps: 1, artifacts: 0 }, seq: 4 },
+          ],
+        })
+      }
+      if (url.endsWith("/agent/task")) {
+        return makeDroppingSseResponse([
+          { type: "queue_status", taskId: "task-drop", status: "running", queue: "agent-task", jobId: "job-drop", seq: 1 },
+          { type: "step_start", id: "s1", label: "Redactando", icon: "doc", seq: 2 },
+        ])
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }) as typeof fetch
+
+    try {
+      const state = await runStream({
+        goal: "sigue el informe",
+        chatId: "chat-drop",
+        model: "gpt-4o",
+        closedStreamRecoveryMs: 400,
+      })
+
+      assert.equal(state.done, true)
+      assert.equal(state.error, undefined)
+      assert.match(state.finalText, /Informe listo tras la caída/i)
+      assert.ok(seenUrls.some(url => /\/agent\/task\/task-drop\/events\?after=2/.test(url)))
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("retries a failed events poll and then finishes the recovered job", async () => {
+    const originalFetch = globalThis.fetch
+    let eventPolls = 0
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes("/agent/task/") && url.includes("/events")) {
+        eventPolls += 1
+        if (eventPolls === 1) return makeJsonResponse({ error: "temporary" }, 503)
+        return makeJsonResponse({
+          ok: true,
+          taskId: "task-retry-poll",
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+          events: [
+            { type: "final_text", markdown: "Recuperado al segundo poll.", seq: 3 },
+            { type: "done", stoppedReason: "completed", stats: { steps: 1, artifacts: 0 }, seq: 4 },
+          ],
+        })
+      }
+      if (url.endsWith("/agent/task")) {
+        return makeSseResponse([
+          { type: "queue_status", taskId: "task-retry-poll", status: "running", seq: 1 },
+          { type: "step_start", id: "s1", label: "Trabajando", seq: 2 },
+        ])
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }) as typeof fetch
+
+    try {
+      const state = await runStream({
+        goal: "reintenta el poll",
+        model: "gpt-4o",
+        closedStreamRecoveryMs: 400,
+      })
+      assert.equal(state.done, true)
+      assert.equal(state.error, undefined)
+      assert.match(state.finalText, /Recuperado al segundo poll/)
+      assert.ok(eventPolls >= 2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("keeps polling a live snapshot after the silence window would have expired", async () => {
+    const originalFetch = globalThis.fetch
+    let eventPolls = 0
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes("/agent/task/") && url.includes("/events")) {
+        eventPolls += 1
+        if (eventPolls === 1) {
+          return makeJsonResponse({
+            ok: true,
+            taskId: "task-fresh",
+            status: "running",
+            updatedAt: new Date().toISOString(),
+            events: [],
+          })
+        }
+        return makeJsonResponse({
+          ok: true,
+          taskId: "task-fresh",
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+          events: [
+            { type: "final_text", markdown: "El worker seguía vivo.", seq: 3 },
+            { type: "done", stoppedReason: "completed", stats: { steps: 1, artifacts: 0 }, seq: 4 },
+          ],
+        })
+      }
+      if (url.endsWith("/agent/task")) {
+        return makeSseResponse([
+          { type: "queue_status", taskId: "task-fresh", status: "running", seq: 1 },
+          { type: "step_start", id: "s1", label: "Largo", seq: 2 },
+        ])
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }) as typeof fetch
+
+    try {
+      const state = await runStream({
+        goal: "sigue aunque el SSE se cerró",
+        model: "gpt-4o",
+        closedStreamRecoveryMs: 80,
+        inFlightRecoveryMaxMs: 800,
+      })
+      assert.equal(state.done, true)
+      assert.equal(state.error, undefined)
+      assert.match(state.finalText, /El worker seguía vivo/)
+      assert.ok(eventPolls >= 2)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("surfaces the watchdog worker_stalled terminal instead of stream_closed_without_done", async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes("/agent/task/") && url.includes("/events")) {
+        return makeJsonResponse({
+          ok: true,
+          taskId: "task-stalled",
+          status: "error",
+          lastError: "El worker dejó de responder. La tarea se cerró para que no quede en progreso infinito. Puedes reintentar.",
+          updatedAt: new Date().toISOString(),
+          events: [],
+        })
+      }
+      if (url.endsWith("/agent/task")) {
+        return makeSseResponse([
+          { type: "queue_status", taskId: "task-stalled", status: "running", seq: 1 },
+        ])
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }) as typeof fetch
+
+    try {
+      const state = await runStream({
+        goal: "tarea colgada",
+        model: "gpt-4o",
+        closedStreamRecoveryMs: 200,
+      })
+      assert.equal(state.done, true)
+      assert.match(String(state.error), /worker dejó de responder/i)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("does not resume after an explicit user abort", async () => {
+    const originalFetch = globalThis.fetch
+    const seenUrls: string[] = []
+    const ac = new AbortController()
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      seenUrls.push(url)
+      if (url.endsWith("/agent/task")) {
+        const signal = init?.signal
+        if (signal) {
+          signal.addEventListener("abort", () => ac.abort(), { once: true })
+        }
+        return makeHangingSseResponse([
+          { type: "queue_status", taskId: "task-user-stop", status: "running", seq: 1 },
+        ])
+      }
+      throw new Error(`Unexpected fetch ${url}`)
+    }) as typeof fetch
+
+    try {
+      const run = runStream({
+        goal: "stop now",
+        model: "gpt-4o",
+        signal: ac.signal,
+        closedStreamRecoveryMs: 2_000,
+        idleTimeoutMs: 5_000,
+      })
+      await new Promise(resolve => setTimeout(resolve, 20))
+      ac.abort()
+      const state = await run
+      assert.equal(state.done, true)
+      assert.equal(state.error, "aborted")
+      assert.equal(seenUrls.some(url => url.includes("/events")), false)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+describe("agent-task-service · resume helpers", () => {
+  it("classifies transport drops and idle timeouts as recoverable", () => {
+    assert.equal(isRecoverableAgentTaskStreamDrop(new TypeError("Failed to fetch")), true)
+    assert.equal(isRecoverableAgentTaskStreamDrop(new Error("socket hang up")), true)
+    assert.equal(isRecoverableAgentTaskStreamDrop(new Error("boom"), { timedOut: true }), true)
+    assert.equal(isRecoverableAgentTaskStreamDrop(new Error("invalid token")), false)
+    assert.equal(isInFlightAgentTaskStatus("running"), true)
+    assert.equal(isFreshAgentTaskSnapshot(new Date().toISOString()), true)
+    assert.equal(
+      resolveRecoveredTerminalError({
+        status: "error",
+        lastError: "El worker dejó de responder. La tarea se cerró para que no quede en progreso infinito. Puedes reintentar.",
+      }),
+      "El worker dejó de responder. La tarea se cerró para que no quede en progreso infinito. Puedes reintentar.",
+    )
+  })
 })
 
 describe("agent-task-service · error messages", () => {
@@ -163,6 +434,10 @@ describe("agent-task-service · error messages", () => {
     assert.equal(
       normalizeAgentTaskErrorMessage(new Error("idle_timeout")),
       "El asistente dejó de enviar actualizaciones. Reintenta el pedido.",
+    )
+    assert.equal(
+      normalizeAgentTaskErrorMessage(new Error("worker_stalled")),
+      "El worker dejó de responder. La tarea se cerró para que no quede en progreso infinito. Puedes reintentar.",
     )
   })
 

@@ -93,6 +93,11 @@ const {
   requireRedisUrl,
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const {
+  resolveEventCursor,
+  resolveTaskLastError,
+  buildTaskEventsResumePayload,
+} = require('../services/agents/agent-task-event-resume');
 const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
@@ -736,12 +741,9 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
   if (!task) return res.status(404).json({ error: 'task not found' });
 
   const allEvents = task.events || [];
-  const afterRaw = String(req.query.after || '0');
-  const numericAfter = Number.parseInt(afterRaw, 10);
-  const after = Number.isFinite(numericAfter)
-    ? numericAfter
-    : (allEvents.find((event) => String(event.id) === afterRaw)?.seq || 0);
-  const events = allEvents.filter((event) => (Number(event.seq) || 0) > after);
+  const lastEventId = (req.get && (req.get('Last-Event-ID') || req.get('last-event-id'))) || '';
+  const after = resolveEventCursor(req.query.after, lastEventId, allEvents);
+  const resume = buildTaskEventsResumePayload(task, { after });
   res.json({
     ok: true,
     taskId: task.taskId,
@@ -749,9 +751,12 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     queue: task.queueName || getQueueName(),
     traceId: task.traceId || null,
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
-    events,
+    events: resume.events,
     streamState: task.streamState || null,
     artifacts: task.artifacts || task.streamState?.artifacts || [],
+    lastEventSeq: resume.lastEventSeq,
+    updatedAt: resume.updatedAt,
+    lastError: resume.lastError,
   });
 });
 
@@ -3437,6 +3442,7 @@ router.INTERNAL = {
   TASK_EVENT_LIMIT,
   appendTaskEvent,
   buildAgentSystemPrompt,
+  buildTaskEventsResumePayload,
   createTaskRecord,
   extractProfessionalContract,
   failTaskTerminal,
@@ -3448,6 +3454,8 @@ router.INTERNAL = {
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  resolveEventCursor,
+  resolveTaskLastError,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
   shouldResumeGeneratedArtifactForDocumentFollowup,
