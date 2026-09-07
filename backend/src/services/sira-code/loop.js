@@ -15,6 +15,13 @@ const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
 const { ensureSessionTitle } = require('./session-title');
+const {
+  truncateToolResult,
+  compactTranscript,
+  applyCompactedTranscript,
+  COMPACT_STAGE,
+  COMPACT_LABEL,
+} = require('./tool-result');
 const { shouldStartSiraCodeRun, routeTurn } = require('../trivial-turn');
 const {
   ensureCapturedPlan,
@@ -66,7 +73,7 @@ function buildTranscript(session, agent) {
   for (const message of session.messages) {
     transcript.push({ role: message.role, content: message.content });
   }
-  return transcript;
+  return applyCompactedTranscript(transcript, compactTranscript(transcript));
 }
 
 async function runPrompt(session, text, {
@@ -132,6 +139,13 @@ async function runPrompt(session, text, {
   const toolResults = [];
   let assistantText = '';
   let hitBudget = false;
+  let compactedOnce = false;
+
+  function maybeCompactStage(didCompact) {
+    if (!didCompact || compactedOnce) return;
+    compactedOnce = true;
+    stageEvent(session, COMPACT_STAGE, { label: COMPACT_LABEL });
+  }
 
   try {
     for (let step = 0; step < maxSteps; step += 1) {
@@ -140,6 +154,10 @@ async function runPrompt(session, text, {
         session.status = 'cancelled';
         return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
       }
+
+      const packedBefore = compactTranscript(transcript);
+      applyCompactedTranscript(transcript, packedBefore);
+      maybeCompactStage(packedBefore.compacted);
 
       const turn = await callLlmTurn(complete, {
         messages: transcript,
@@ -208,10 +226,14 @@ async function runPrompt(session, text, {
           ok: result.ok,
           preview: String(result.content || '').slice(0, 240),
         });
+        const packedResult = truncateToolResult(result.content || result.error || '');
         transcript.push({
           role: 'tool',
-          content: result.content || result.error || '',
+          content: packedResult.content,
         });
+        const packedAfter = compactTranscript(transcript);
+        applyCompactedTranscript(transcript, packedAfter);
+        maybeCompactStage(packedResult.truncated || packedAfter.compacted);
         if (result.ok && WRITE_TOOLS.has(auth.tool)) {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }

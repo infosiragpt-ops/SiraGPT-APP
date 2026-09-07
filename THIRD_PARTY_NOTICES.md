@@ -48,10 +48,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   permissioned tools (read / edit / bash / grep), the plan→build
   session reminder (execute the approved plan; do not rewrite it),
   the permission reply (ask → once / always / reject, then execute),
-  and `SessionPrompt.ensureTitle` (title the session from the first
-  real user message, once, without overwriting a custom title). The
-  native title helper is local and deterministic — no title-agent LLM,
-  no Effect runtime, no silent swallow. No OpenCode source, SST
+  `SessionPrompt.ensureTitle` (title the session from the first
+  real user message, once, without overwriting a custom title), and
+  tool-result truncation / transcript prune (`Truncate.output` +
+  `SessionCompaction.prune`: cap by lines and bytes, keep the recent
+  tail, shrink older tool output). The native helpers are local and
+  deterministic — no title-agent LLM, no Effect runtime, no global
+  tool-output directory, no silent swallow. No OpenCode source, SST
   console, Nix, desktop, Electron, or TUI was vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.
   The upstream MIT license text is retained at `vendor/opencode/LICENSE`

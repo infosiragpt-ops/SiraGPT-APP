@@ -13,12 +13,10 @@ const path = require('path');
 const { authorizeTool } = require('./permissions');
 const { execInWorkspace } = require('./workspace');
 const { applyPatchToWorkspace } = require('./apply-patch');
-
-const MAX_RESULT = 30_000;
+const { truncateToolResult } = require('./tool-result');
 
 function cap(text) {
-  const str = String(text == null ? '' : text);
-  return str.length > MAX_RESULT ? `${str.slice(0, MAX_RESULT)}\n…[result truncated]` : str;
+  return truncateToolResult(text).content;
 }
 
 function toolError(code, message) {

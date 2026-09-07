@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode truncates bulky tool results (líneas + bytes) and compacts
+  older tool messages in long turns, with a single Spanish stage
+  `Compactando contexto`. Inspired by OpenCode `Truncate.output` and
+  `SessionCompaction.prune`; independent local rewrite, no LLM spill
+  file and no Effect runtime.
+
 - Hermes fusion: optional-skill previews are sandboxed as data
   (`<<<SKILL_REFERENCE>>>`) and each `runSkill` emits a content-free
   `skill_run` audit line (id / ok / duration / errorCode only — no args,
