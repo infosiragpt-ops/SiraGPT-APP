@@ -27,6 +27,7 @@ const {
   resolveSessionPermission,
   publicResolvePayload,
 } = require('./permission-resume');
+const { buildSessionSummary } = require('./session-summary');
 
 function sidecarRequested(env = process.env) {
   return ['1', 'true', 'on', 'yes'].includes(String(env.SIRAGPT_OPENCODE_SIDECAR || '').trim().toLowerCase());
@@ -53,6 +54,11 @@ async function create(opts = {}) {
 
 function get(id, userId) {
   return publicSession(requireOwnedSession(id, userId));
+}
+
+function summarize(id, userId) {
+  const session = requireOwnedSession(id, userId);
+  return sanitizePublicObject(buildSessionSummary(session));
 }
 
 function emitAgentSwitch(session, nextAgentId) {
@@ -158,6 +164,7 @@ module.exports = {
   health,
   create,
   get,
+  summarize,
   switchAgent,
   emitAgentSwitch,
   prompt,
