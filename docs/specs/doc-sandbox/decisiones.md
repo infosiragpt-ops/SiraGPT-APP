@@ -216,6 +216,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: añadir O_NONBLOCK al open existente, conservando O_NOFOLLOW, comprobaciones del descriptor y finally.close. No usar un timeout que deje una apertura pendiente ni convertir el timeout de la prueba en éxito.
 - Consecuencias: post-fix 44/44 y corroboración Linux 62/62 con los contratos pre-IO adicionales. Sólo lectura del manifiesto, sin cambios de protocolo, aislamiento, UI o esquema. No acredita acceso remoto, proceso documental completo ni cierre F1. La lectura creciente y el reloj previo al await quedan como observaciones separadas. Ver [manifest-fifo-release-20260907.md](manifest-fifo-release-20260907.md).
 
+## D33. Muestrear el reloj de admisión después del límite asíncrono
+
+- Contexto: la pausa real de un proceso tras iniciar lstat cruzó el deadline, pero el valor predeterminado de now ya capturado dejó pasar la admisión. Pre-fix 44/45, con controles positivos/temporales/integridad aprobados.
+- Decisión: usar now opcional y evaluar now ?? Date.now() después de leer y comprobar cancelación. Mantener semántica del reloj explícito, identidad, permisos, cuarentena y cleanup. No sustituir IO/reloj ni permitir timeout como éxito en la prueba.
+- Consecuencias: post-fix 45/45 en Mac y Linux, revisión independiente; no acredita spawn, gVisor, proceso documental completo ni cierre F1. El mínimo de 1 ms del caller y la lectura creciente siguen separados. No rebajar el 80% ni integrar el avance remoto de production-main sin revisar. Ver [admission-clock-release-20260907.md](admission-clock-release-20260907.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.

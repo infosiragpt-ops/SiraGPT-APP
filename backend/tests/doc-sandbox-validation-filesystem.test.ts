@@ -500,6 +500,119 @@ test('bounded invocation probe admits a genuine regular manifest and preserves i
   assert.deepEqual(await readFile(manifest), bytes);
 });
 
+interface PausedAdmissionResult {
+  admission: InvocationProbeResult; explicitNow: InvocationProbeResult;
+  startedAt: number; deadlineAt: number; resumedAt: number; finishedAt: number; manifestHash: string;
+}
+
+/** Stop only this child between the real lstat submission and its JS continuation.
+ * Imports and a positive admission finish before the one-second deadline probe.
+ * No Date/FS replacement, busy loop, Docker command or fabricated validator result. */
+async function probePausedAdmission(directory: string): Promise<PausedAdmissionResult> {
+  const child = spawn(process.execPath, ['--import', require.resolve('tsx'), '-e', `
+    const lifecycle = require(process.argv[1]);
+    const { readFile } = require('node:fs/promises');
+    const { createHash } = require('node:crypto');
+    const { join } = require('node:path');
+    const { directory, image } = JSON.parse(process.argv[2]);
+    const outcome = promise => promise.then(() => ({ phase: 'result', status: 'fulfilled' }),
+      error => ({ phase: 'result', status: 'rejected', name: error.name, code: error.code }));
+    process.once('message', async message => {
+      if (message !== 'run') throw new Error('unexpected pause probe command');
+      try {
+        const invocation = await lifecycle.createInvocation(directory, { image, timeoutMs: 1000 });
+        await lifecycle.assertInvocationLaunchable(invocation); // Genuine positive control.
+        const manifestHash = createHash('sha256').update(await readFile(join(directory, 'invocation.json'))).digest('hex');
+        const startedAt = Date.now();
+        if (startedAt >= invocation.deadlineAt) throw new Error('pause probe entered too late');
+        const admission = outcome(lifecycle.assertInvocationLaunchable(invocation));
+        // Deliberately no await or send callback before SIGSTOP: readInvocation's
+        // pending lstat cannot resume on the JS thread before the real pause.
+        process.send({ phase: 'armed', startedAt, deadlineAt: invocation.deadlineAt });
+        process.kill(process.pid, 'SIGSTOP');
+        const result = await admission;
+        const finishedAt = Date.now();
+        const explicitNow = await outcome(lifecycle.assertInvocationLaunchable(invocation, invocation.createdAt));
+        process.send({ phase: 'done', admission: result, explicitNow, finishedAt, manifestHash });
+      } catch { process.send({ phase: 'setup-failed' }); }
+      finally { process.disconnect(); }
+    });
+    process.send({ phase: 'ready' });
+  `, require.resolve('../src/modules/doc-sandbox/validation/lifecycle'), JSON.stringify({ directory, image })], {
+    env: { PATH: process.env.PATH, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  return new Promise((resolve, reject) => {
+    let ready = false; let armed = false; let startedAt = 0; let deadlineAt = 0; let resumedAt = 0;
+    let result: PausedAdmissionResult | undefined; let failure: Error | undefined; let outputBytes = 0;
+    let pauseTimer: NodeJS.Timeout | undefined;
+    const fail = (code: string): void => { failure ??= new Error(code); child.kill('SIGKILL'); };
+    let watchdog = setTimeout(() => fail('DOC_TEST_PAUSED_ADMISSION_START_TIMEOUT'), 15_000);
+    const output = (data: Buffer): void => { outputBytes += data.length; if (outputBytes > 4096) fail('DOC_TEST_PAUSED_ADMISSION_OUTPUT_LIMIT'); };
+    child.stdout!.on('data', output); child.stderr!.on('data', output);
+    child.on('error', () => fail('DOC_TEST_PAUSED_ADMISSION_PROCESS_FAILED'));
+    const confirmPause = (): void => {
+      if (failure) return;
+      try {
+        const state = execFileSync('ps', ['-o', 'stat=', '-p', String(child.pid)], {
+          encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'], env: { PATH: process.env.PATH },
+        }).trim();
+        if (!/^T/.test(state)) { pauseTimer = setTimeout(confirmPause, 20); return; }
+        pauseTimer = setTimeout(() => {
+          if (failure) return;
+          resumedAt = Date.now();
+          if (resumedAt <= deadlineAt || !child.kill('SIGCONT')) fail('DOC_TEST_PAUSED_ADMISSION_RESUME_FAILED');
+        }, Math.max(1, deadlineAt - Date.now() + 25));
+      } catch { fail('DOC_TEST_PAUSED_ADMISSION_STOP_UNCONFIRMED'); }
+    };
+    child.on('message', (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || !('phase' in raw)) { fail('DOC_TEST_PAUSED_ADMISSION_PROTOCOL'); return; }
+      if (raw.phase === 'ready' && !ready) {
+        ready = true; clearTimeout(watchdog);
+        watchdog = setTimeout(() => fail('DOC_TEST_PAUSED_ADMISSION_STALLED'), 10_000);
+        child.send('run', error => { if (error) fail('DOC_TEST_PAUSED_ADMISSION_SEND_FAILED'); });
+      } else if (raw.phase === 'armed' && ready && !armed && 'startedAt' in raw && 'deadlineAt' in raw &&
+          typeof raw.startedAt === 'number' && typeof raw.deadlineAt === 'number' &&
+          Number.isSafeInteger(raw.startedAt) && Number.isSafeInteger(raw.deadlineAt) &&
+          raw.startedAt < raw.deadlineAt && raw.deadlineAt - raw.startedAt <= 1000) {
+        armed = true; startedAt = raw.startedAt; deadlineAt = raw.deadlineAt; confirmPause();
+      } else if (raw.phase === 'done' && armed && resumedAt > deadlineAt && !result &&
+          'admission' in raw && 'explicitNow' in raw && 'finishedAt' in raw && 'manifestHash' in raw) {
+        result = { ...raw, startedAt, deadlineAt, resumedAt } as unknown as PausedAdmissionResult;
+      } else fail('DOC_TEST_PAUSED_ADMISSION_PROTOCOL');
+    });
+    // SIGKILL also terminates a stopped child. Never resolve/reject or remove
+    // the fixture until close confirms that both the process and IPC are gone.
+    child.once('close', (code, signal) => {
+      clearTimeout(watchdog); if (pauseTimer) clearTimeout(pauseTimer);
+      if (failure) reject(failure);
+      else if (code !== 0 || signal !== null || !result) reject(new Error('DOC_TEST_PAUSED_ADMISSION_INCOMPLETE'));
+      else resolve(result);
+    });
+  });
+}
+
+test('implicit launch clock rejects expiry during a real process pause while explicit now remains authoritative', { timeout: 30_000 }, async t => {
+  const root = await privateRoot(t);
+  const directory = await createValidatorStagingDirectory(root);
+  await mkdir(path.join(directory, 'inputs'), { mode: 0o755 });
+  const originalPath = path.join(directory, 'inputs', 'input-0.txt');
+  await writeFile(originalPath, 'synthetic paused original', { mode: 0o444 });
+  const neighbor = path.join(root, 'neighbor.txt');
+  await writeFile(neighbor, 'untouched neighbor', { mode: 0o600 });
+  const result = await probePausedAdmission(directory);
+  assert.ok(result.startedAt < result.deadlineAt, 'admission must start before expiry');
+  assert.ok(result.resumedAt > result.deadlineAt && result.finishedAt >= result.resumedAt, 'the real pause must cross the durable deadline');
+  assert.deepEqual(result.explicitNow, { phase: 'result', status: 'fulfilled' }, 'an explicitly supplied historical now retains its existing meaning');
+  const manifest = await readFile(path.join(directory, 'invocation.json'));
+  assert.equal(createHash('sha256').update(manifest).digest('hex'), result.manifestHash);
+  assert.equal((await lstat(path.join(directory, 'invocation.json'))).mode & 0o777, 0o600);
+  assert.equal(await readFile(originalPath, 'utf8'), 'synthetic paused original');
+  assert.equal(await readFile(neighbor, 'utf8'), 'untouched neighbor');
+  assert.deepEqual(result.admission, { phase: 'result', status: 'rejected',
+    name: 'DocumentValidationError', code: 'VALIDATOR_INVOCATION_EXPIRED' }, 'elapsed filesystem admission cannot reuse the clock captured before its await');
+});
+
 for (const action of ['launch', 'reconcile', 'cleanup', 'preflight'] as const) {
   test(`real FIFO manifest cannot stall ${action} or consume its private originals`, { timeout: 30_000 }, async t => {
     const { root, invocation, manifest } = await fixture(t, now);

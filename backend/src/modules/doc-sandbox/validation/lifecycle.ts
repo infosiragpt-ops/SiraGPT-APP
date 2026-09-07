@@ -64,11 +64,13 @@ async function readInvocation(directory: string, root: string): Promise<Validato
   } finally { await fd.close(); }
 }
 /** Rechecked immediately before Docker. A quarantined or expired invocation cannot launch. */
-export async function assertInvocationLaunchable(invocation: ValidatorInvocation, now = Date.now(), signal?: AbortSignal): Promise<void> {
+export async function assertInvocationLaunchable(invocation: ValidatorInvocation, now?: number, signal?: AbortSignal): Promise<void> {
   const current = await readInvocation(invocation.directory, invocation.root);
   if (signal?.aborted) throw new DocumentValidationError('E_CANCELLED', 'Validación cancelada.');
+  // Filesystem admission may outlive the deadline; sample the implicit clock
+  // after the read while retaining an explicitly supplied clock.
   if (current.invocationId !== invocation.invocationId || current.image !== invocation.image || current.deadlineAt !== invocation.deadlineAt ||
-      now >= current.deadlineAt || !ACTIVE.test(path.basename(current.directory))) throw failure('VALIDATOR_INVOCATION_EXPIRED');
+      (now ?? Date.now()) >= current.deadlineAt || !ACTIVE.test(path.basename(current.directory))) throw failure('VALIDATOR_INVOCATION_EXPIRED');
 }
 function dockerCommand(binary: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {

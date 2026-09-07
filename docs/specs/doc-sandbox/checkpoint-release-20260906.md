@@ -5,7 +5,22 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente (2026-09-07 UTC):** corregido un bloqueo al abrir
+**Actualización más reciente (2026-09-07 UTC):** reproducido y corregido el
+reloj implícito capturado antes de la lectura asíncrona del manifiesto.
+La admisión vuelve a comprobar el tiempo después de la lectura/cancelación;
+reloj explícito, identidad y cleanup intactos. Proceso real detenido durante
+el deadline: pre-fix 44/45, post-fix Mac y Linux 45/45, cero omisiones.
+Unitarias 378/378, cobertura 72,41% (2751/3799), todavía inferior al 80%;
+generales 12472/12472. Tipos/lint/UI-lock y revisión independiente aprobados.
+Sin cambios de UI/esquema ni servicios de test activos. CI padre `40f86de4`
+falló cobertura/agregador; el arreglo necesita CI propio. Checkout limpio y
+API saludables en `100d29bc2` a 2026-09-07T03:16:22.932Z. `production-main`
+remota avanzó a `546a8156b`, aún no integrada ni acreditada como publicada.
+Gasto nuevo US$0; no hay despliegue ni cierre F1. Alcance: admisión, no Docker
+ni edición auténtica. Evidencia y límites:
+[admission-clock-release-20260907.md](admission-clock-release-20260907.md).
+
+**Registro anterior (`40f86de4…`):** corregido un bloqueo al abrir
 un manifiesto FIFO privado antes de comprobar su tipo. Pre-fix 40/44 (cuatro
 READ_STALLED), post-fix 44/44; únicamente se añade O_NONBLOCK, conservando
 los controles del descriptor. Cuatro contratos adicionales pre-IO de informe
