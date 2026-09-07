@@ -5,7 +5,21 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente (2026-09-07 UTC):** corregida la pérdida de evidencia
+**Actualización más reciente (2026-09-07 UTC):** **10/10** pruebas reales de
+retención pasan, incluidas cancelación/borrado durante PUT aceptado y el
+deadline real de 15 segundos. Compensación y recuperación explícita verificadas
+con PostgreSQL/MinIO; originales/vecino intactos, cero outputs tardíos.
+Sólo pruebas y documentación: runtime intacto. Servicios de test detenidos,
+sin puertos publicados; types/diff-check y revisión independiente aprobados.
+CI base `67ded1f0…` terminó: retención 7/7, storage 34/34 y unitarias 368/368;
+falla el gate de cobertura **72,20%**, aún inferior al 80%, y el agregador.
+La suite ampliada requiere su CI. Producción limpia sigue en `100d29bc2…`
+(#571), saludable a **2026-09-07T00:50:57.458Z**, no en #561. Sin gasto nuevo,
+despliegue ni cierre F1. No se acredita `process()` completo ni recuperación
+por scheduler. Evidencia y límites:
+[failure-io-races-release-20260907.md](failure-io-races-release-20260907.md).
+
+**Registro anterior (`67ded1f0…`):** corregida la pérdida de evidencia
 del catch real. Pre-fix **3/4** con diff ausente después de guardar informe;
 post-fix **7/7** en PostgreSQL/MinIO real, mismas evidencias Python externas
 verificadas por SHA. Retención cifrada/privada y transición atómica, sin outputs.

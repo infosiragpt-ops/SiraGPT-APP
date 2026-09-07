@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { createServer, request as httpRequest, type ClientRequest, type IncomingMessage } from 'node:http';
 import { test } from 'node:test';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
+import { GetObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import { Prisma } from '@prisma/client';
 import { AnthropicSandboxEngine } from '../src/modules/doc-sandbox/engine/anthropic-engine';
 import { AnthropicDocumentProviderClient } from '../src/modules/doc-sandbox/engine/provider-client';
 import { sha256 } from '../src/modules/doc-sandbox/engine/artifacts';
 import { DocumentSandboxProcessor } from '../src/modules/doc-sandbox/queue/processor';
+import { reconcileDocumentCleanup } from '../src/modules/doc-sandbox/queue/cleanup';
 import { DocumentRepositoryError, type ArtifactInput, type AttemptLease } from '../src/modules/doc-sandbox/queue/repository';
+import { createPrivateDocumentS3Client, PrivateDocumentStorage } from '../src/modules/doc-sandbox/storage/private-storage';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 import { hasCompleteValidation, type InputFile, type ValidationReport } from '../src/modules/doc-sandbox/types/contracts';
 import { IndependentDocumentValidator } from '../src/modules/doc-sandbox/validation';
@@ -30,7 +33,7 @@ interface PrivateFailureHandler {
   }): Promise<void>;
 }
 
-async function prepareAttempt(fixture: DocumentIntegrationFixture) {
+async function prepareAttempt(fixture: DocumentIntegrationFixture, handlerStorage: PrivateDocumentStorage = fixture.storage) {
   const id = randomUUID();
   const scope = { userId: fixture.owner, jobId: id };
   const original = evidence.original;
@@ -67,7 +70,7 @@ async function prepareAttempt(fixture: DocumentIntegrationFixture) {
   let engineConstructions = 0;
   const notices: string[] = [];
   const provider = new AnthropicDocumentProviderClient('fixture-unused-no-provider');
-  const processor = new DocumentSandboxProcessor({ repository: fixture.repository, storage: fixture.storage,
+  const processor = new DocumentSandboxProcessor({ repository: fixture.repository, storage: handlerStorage,
     validator: new IndependentDocumentValidator({ image: fixture.config.validatorImage }),
     // This is the genuine factory, not a stubbed engine. The private handler
     // must not call it; the count is observational, with no altered behavior.
@@ -283,5 +286,229 @@ test('real failure evidence transaction rejects expired and fenced-out attempts 
       assert.deepEqual(await fixture.storage.get(prepared.otherScope, prepared.other.key, prepared.other.sha256), prepared.otherBytes);
       assert.equal((await fixture.repository.artifactsInternal(prepared.id)).some(artifact => artifact.kind === 'validation_report' || artifact.kind === 'text_diff'), false);
     } finally { await fixture.close(); }
+  }
+});
+
+/** Fault only delivery of a genuine MinIO PUT response. The SDK, encrypted
+ * storage and repository remain real; original uploads bypass this proxy. */
+async function heldEvidencePutProxy(fixture: DocumentIntegrationFixture, parentSignal: AbortSignal) {
+  const upstream = new URL(fixture.config.r2Endpoint!);
+  assert.equal(upstream.protocol, 'http:');
+  assert.ok(['127.0.0.1', 'localhost', '[::1]', 'doc-sandbox-test-minio'].includes(upstream.hostname));
+  const controller = new AbortController();
+  const signal = AbortSignal.any([parentSignal, controller.signal]);
+  const requests = new Set<ClientRequest>();
+  const responses = new Set<IncomingMessage>();
+  const handlers = new Set<Promise<void>>();
+  let client: S3Client | undefined;
+  let resolveAccepted!: (key: string) => void;
+  const accepted = new Promise<string>(resolve => { resolveAccepted = resolve; });
+  let releaseResponse!: () => void;
+  const released = new Promise<void>(resolve => { releaseResponse = resolve; });
+  let acceptedPuts = 0;
+  let deliveredPuts = 0;
+  let disconnectedPuts = 0;
+  let failures = 0;
+  const methods: string[] = [];
+  const deletedKeys: string[] = [];
+  const server = createServer((req, res) => {
+    if (signal.aborted) { res.destroy(); return; }
+    methods.push(req.method ?? '');
+    if (methods.length > 8 || !['PUT', 'DELETE'].includes(req.method ?? '')) { failures += 1; res.destroy(); return; }
+    const forwarded = httpRequest({ hostname: upstream.hostname, port: upstream.port || '80',
+      path: req.url, method: req.method, headers: req.headers }, response => {
+      responses.add(response);
+      response.once('close', () => responses.delete(response));
+      const handling = (async () => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+        for await (const chunk of response) {
+          signal.throwIfAborted();
+          const bytes = Buffer.from(chunk); size += bytes.length;
+          assert.ok(size <= 64 * 1024, 'only a bounded real S3 acknowledgement is buffered');
+          chunks.push(bytes);
+        }
+        const body = Buffer.concat(chunks);
+        const pathname = decodeURIComponent(new URL(req.url ?? '/', 'http://127.0.0.1').pathname);
+        assert.ok(pathname.startsWith(`/${fixture.bucket}/`));
+        const key = pathname.slice(fixture.bucket.length + 2);
+        if (req.method === 'PUT') {
+          assert.equal(response.statusCode, 200, 'MinIO must really accept the evidence before the injected race');
+          acceptedPuts += 1;
+          assert.equal(acceptedPuts, 1, 'the failing evidence must prevent a later report PUT');
+          resolveAccepted(key);
+          await new Promise<void>(resolve => {
+            const finish = () => { signal.removeEventListener('abort', finish); res.removeListener('close', finish); resolve(); };
+            signal.addEventListener('abort', finish, { once: true });
+            res.once('close', finish);
+            void released.then(finish);
+            if (signal.aborted || res.destroyed) finish();
+          });
+          if (res.destroyed) { disconnectedPuts += 1; return; }
+          signal.throwIfAborted();
+          deliveredPuts += 1;
+        } else {
+          assert.equal(response.statusCode, 204, 'compensation must receive a real MinIO DELETE acknowledgement');
+          deletedKeys.push(key);
+        }
+        res.writeHead(response.statusCode!, response.headers);
+        res.end(body); // Exact successful S3 headers/body, never a fabricated response.
+      })().catch(() => { if (!signal.aborted) failures += 1; response.destroy(); res.destroy(); });
+      handlers.add(handling);
+      void handling.finally(() => handlers.delete(handling));
+    });
+    requests.add(forwarded);
+    forwarded.once('close', () => requests.delete(forwarded));
+    forwarded.on('error', () => res.destroy());
+    req.on('error', () => forwarded.destroy());
+    res.on('close', () => { if (!res.writableFinished) forwarded.destroy(); });
+    req.pipe(forwarded);
+  });
+  function abortTransport() {
+    server.closeAllConnections();
+    for (const request of requests) request.destroy();
+    for (const response of responses) response.destroy();
+  }
+  signal.addEventListener('abort', abortTransport, { once: true });
+  async function close() {
+    controller.abort(); releaseResponse(); client?.destroy();
+    const closing = server.listening ? new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) : Promise.resolve();
+    abortTransport();
+    const results = await Promise.allSettled([closing, ...handlers]);
+    signal.removeEventListener('abort', abortTransport);
+    assert.ok(results.every(result => result.status === 'fulfilled'), 'close all proxy transports before fixture cleanup');
+  }
+  try {
+    signal.throwIfAborted();
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
+    });
+    const address = server.address(); assert.ok(address && typeof address !== 'string');
+    client = createPrivateDocumentS3Client({ endpoint: `http://127.0.0.1:${address.port}`, region: 'us-east-1', forcePathStyle: true,
+      credentials: { accessKeyId: fixture.config.r2AccessKeyId, secretAccessKey: fixture.config.r2SecretAccessKey } });
+    return {
+      storage: new PrivateDocumentStorage(client, { bucket: fixture.bucket, key: fixture.key, keyId: 'test-v1', maxBytes: 1024 * 1024 }),
+      release: releaseResponse,
+      async waitAccepted() {
+        signal.throwIfAborted();
+        let onAbort!: () => void;
+        const aborted = new Promise<never>((_resolve, reject) => { onAbort = () => reject(signal.reason); signal.addEventListener('abort', onAbort, { once: true }); });
+        try { return await Promise.race([accepted, aborted]); }
+        finally { signal.removeEventListener('abort', onAbort); }
+      },
+      observation: () => ({ acceptedPuts, deliveredPuts, disconnectedPuts, failures, methods: [...methods], deletedKeys: [...deletedKeys] }),
+      close,
+    };
+  } catch (error) { await close(); throw error; }
+}
+
+for (const action of ['cancel', 'delete'] as const) {
+  test(`real ${action} during an accepted evidence PUT fences the worker and compensates without persisting a report`, { timeout: 35_000 }, async t => {
+    const fixture = await createDocumentIntegrationFixture();
+    let proxy: Awaited<ReturnType<typeof heldEvidencePutProxy>> | undefined;
+    let handling: Promise<unknown> | undefined;
+    try {
+      proxy = await heldEvidencePutProxy(fixture, AbortSignal.any([t.signal, AbortSignal.timeout(30_000)]));
+      const prepared = await prepareAttempt(fixture, proxy.storage);
+      const before = await failureSnapshot(fixture, prepared);
+      handling = prepared.handler.handleFailure(prepared.lease, new DocSandboxError('E_VALIDATION', 422), prepared.context)
+        .then(() => undefined, (error: unknown) => error);
+      const key = await proxy.waitAccepted();
+      const expected = evidence.negative.report.artifacts![0]!;
+      assert.ok((await fixture.repository.getInternal(prepared.id)).storageKeys.includes(key), 'reservation precedes the actual PUT');
+      assert.deepEqual(await fixture.storage.get(prepared.scope, key, expected.sha256), expected.data, 'the held PUT already exists and decrypts correctly');
+      assert.equal(proxy.observation().deliveredPuts, 0);
+      if (action === 'cancel') await fixture.repository.cancelOwned(prepared.id, fixture.owner);
+      else await fixture.repository.deleteOwned(prepared.id, fixture.owner);
+      const revoked = await failureSnapshot(fixture, prepared);
+      proxy.release();
+      const error = await handling;
+      assert.ok(error instanceof DocumentRepositoryError && error.code === 'DOC_STALE_LEASE');
+      await proxy.close();
+      const observed = proxy.observation();
+      assert.equal(observed.failures, 0); assert.equal(observed.acceptedPuts, 1); assert.equal(observed.deliveredPuts, 1);
+      assert.deepEqual(observed.methods, ['PUT', 'DELETE']); assert.deepEqual(observed.deletedKeys, [key]);
+      const after = await failureSnapshot(fixture, prepared);
+      assert.deepEqual(after.job, revoked.job); assert.deepEqual(after.artifacts, revoked.artifacts); assert.deepEqual(after.events, revoked.events);
+      assert.deepEqual(after.keys, before.keys, 'only the newly accepted evidence was really compensated');
+      assert.deepEqual(after.otherKeys, before.otherKeys);
+      const state = await fixture.repository.getInternal(prepared.id);
+      assert.equal(state.status, 'cancelled'); assert.equal(Boolean(state.deletedAt), action === 'delete');
+      assert.equal(state.validationReportKey, null); assert.deepEqual(state.outputKeys, []);
+      assert.equal(state.cleanupPending, true); assert.ok(state.storageKeys.includes(key));
+      assert.equal(state.purgedKeys.includes(key), false, 'the tombstone grace forbids falsely acknowledging cleanup immediately');
+      assert.ok(prepared.notices.includes('DOC_STORAGE_CLEANUP_PENDING'));
+      assert.equal((await fixture.repository.artifactsInternal(prepared.id)).some(artifact => ['text_diff', 'validation_report', 'output'].includes(artifact.kind)), false);
+      assert.deepEqual(await fixture.storage.get(prepared.scope, prepared.input.key, prepared.input.sha256), evidence.original.data);
+      assert.deepEqual(await fixture.storage.get(prepared.otherScope, prepared.other.key, prepared.other.sha256), prepared.otherBytes);
+      assert.equal(prepared.engineConstructions(), 0);
+    } finally {
+      try {
+        const closed = await Promise.allSettled([proxy?.close(), handling]);
+        assert.ok(closed.every(result => result.status === 'fulfilled'), 'settle the worker and proxy before deleting their fixture');
+      }
+      finally { await fixture.close(); }
+    }
+  });
+}
+
+test('real fifteen-second failure storage deadline leaves an accepted PUT journaled for explicit cleanup, not acknowledged as deleted', { timeout: 45_000 }, async t => {
+  const fixture = await createDocumentIntegrationFixture();
+  let proxy: Awaited<ReturnType<typeof heldEvidencePutProxy>> | undefined;
+  let handling: Promise<unknown> | undefined;
+  try {
+    proxy = await heldEvidencePutProxy(fixture, AbortSignal.any([t.signal, AbortSignal.timeout(40_000)]));
+    const prepared = await prepareAttempt(fixture, proxy.storage);
+    const before = await failureSnapshot(fixture, prepared);
+    const beforeState = await fixture.repository.getInternal(prepared.id);
+    const startedAt = performance.now();
+    handling = prepared.handler.handleFailure(prepared.lease, new DocSandboxError('E_VALIDATION', 422), prepared.context)
+      .then(() => undefined, (error: unknown) => error);
+    const key = await proxy.waitAccepted();
+    const expected = evidence.negative.report.artifacts![0]!;
+    assert.deepEqual(await fixture.storage.get(prepared.scope, key, expected.sha256), expected.data);
+    assert.ok((await fixture.repository.getInternal(prepared.id)).storageKeys.includes(key));
+    // No early release or fake timer: the handler's actual shared 15s signal
+    // must expire while its genuine successful PUT acknowledgement is held.
+    const error = await handling;
+    assert.ok(error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name));
+    const elapsed = performance.now() - startedAt;
+    assert.ok(elapsed >= 14_000 && elapsed < 25_000, 'observe the real 15s deadline with scheduling tolerance, not an early fault or a fresh compensation window');
+    await proxy.close();
+    const observed = proxy.observation();
+    assert.equal(observed.failures, 0); assert.equal(observed.acceptedPuts, 1); assert.equal(observed.deliveredPuts, 0);
+    assert.deepEqual(observed.methods, ['PUT']); assert.deepEqual(observed.deletedKeys, []);
+    const after = await failureSnapshot(fixture, prepared);
+    assert.deepEqual(after.artifacts, before.artifacts); assert.deepEqual(after.events, before.events);
+    const pending = await fixture.repository.getInternal(prepared.id);
+    assert.deepEqual(pending, { ...beforeState, storageKeys: [...beforeState.storageKeys, key] }, 'only the durable reservation may change before recovery');
+    assert.equal(pending.status, 'validating'); assert.equal(pending.fence, prepared.lease.fence);
+    assert.equal(pending.leaseToken, prepared.lease.token); assert.equal(pending.validationReportKey, null);
+    assert.deepEqual(pending.outputKeys, []); assert.ok(pending.storageKeys.includes(key)); assert.equal(pending.purgedKeys.includes(key), false);
+    assert.ok(prepared.notices.includes('DOC_STORAGE_CLEANUP_PENDING'));
+    assert.deepEqual(await fixture.storage.get(prepared.scope, key, expected.sha256), expected.data, 'expired compensation cannot silently delete the accepted bytes');
+    assert.deepEqual(await fixture.storage.get(prepared.scope, prepared.input.key, prepared.input.sha256), evidence.original.data);
+    assert.deepEqual(await fixture.storage.get(prepared.otherScope, prepared.other.key, prepared.other.sha256), prepared.otherBytes);
+    // Explicit recovery of this one synthetic job, not a scheduler assertion.
+    await fixture.repository.deleteOwned(prepared.id, fixture.owner);
+    await fixture.db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()-interval '1 second' WHERE id=${prepared.id}`);
+    const provider = new AnthropicDocumentProviderClient('fixture-unused-no-provider');
+    const cleanupNotices: string[] = [];
+    await reconcileDocumentCleanup(fixture.repository, fixture.storage, provider,
+      AbortSignal.any([t.signal, AbortSignal.timeout(10_000)]), code => cleanupNotices.push(code));
+    assert.deepEqual(cleanupNotices, []);
+    assert.deepEqual(await fixture.storage.list(prepared.scope), []);
+    const cleaned = await fixture.repository.getInternal(prepared.id);
+    assert.equal(cleaned.cleanupPending, false); assert.ok(cleaned.purgedKeys.includes(key));
+    assert.deepEqual(cleaned.providerFiles, []); assert.deepEqual(cleaned.providerContainers, []);
+    assert.deepEqual(await fixture.storage.get(prepared.otherScope, prepared.other.key, prepared.other.sha256), prepared.otherBytes);
+    assert.equal(prepared.engineConstructions(), 0);
+  } finally {
+    try {
+      const closed = await Promise.allSettled([proxy?.close(), handling]);
+      assert.ok(closed.every(result => result.status === 'fulfilled'), 'settle the worker and proxy before deleting their fixture');
+    }
+    finally { await fixture.close(); }
   }
 });
