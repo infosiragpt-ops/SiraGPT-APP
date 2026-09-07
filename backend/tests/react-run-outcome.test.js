@@ -207,7 +207,12 @@ test('route: terminal replay excludes every late success, text, artifact and pro
   t.after(() => res.emit('close'));
   INTERNAL.streamTaskEvents(req, res, task.taskId, task.userId);
   assert.equal(res.writableEnded, true);
-  const frames = chunks.filter((text) => text.startsWith('data: ')).map((text) => JSON.parse(text.slice(6)));
+  // SSE frames may start with `id:` (eventSeq resume cursor) before `data:`.
+  const frames = chunks
+    .flatMap((text) => String(text).split('\n\n'))
+    .map((frame) => frame.split('\n').find((line) => line.startsWith('data: ')))
+    .filter(Boolean)
+    .map((line) => JSON.parse(line.slice(6)));
   assert.equal(frames.length, 1);
   assert.equal(frames[0].type, 'done');
   assert.equal(frames[0].stoppedReason, 'verification_failed');
