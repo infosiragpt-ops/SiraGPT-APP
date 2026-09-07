@@ -4,13 +4,19 @@ import type { DocSandboxRepository, DurableDocumentEvent } from './repository';
 export const DOC_QUEUE_NAME = 'doc-edit';
 export interface DocQueuePayload { jobId: string; }
 export interface DocQueueNotice { code: 'DOC_QUEUE_ERROR'; }
+export type DocQueueFactory = (name: string, options: QueueOptions) => Queue<DocQueuePayload>;
 
 /** Redis is delivery only. DB outbox survives failed enqueue and retains the authoritative job. */
 export class DocSandboxQueue {
   readonly queue: Queue<DocQueuePayload>;
   // The application bridge owns and closes the existing Redis factory's connection.
-  constructor(onError: (notice: DocQueueNotice) => void, connection: ConnectionOptions, runtimeOptions: Pick<QueueOptions, 'skipVersionCheck'> = {}) {
-    this.queue = new Queue<DocQueuePayload>(DOC_QUEUE_NAME, {
+  constructor(
+    onError: (notice: DocQueueNotice) => void,
+    connection: ConnectionOptions,
+    runtimeOptions: Pick<QueueOptions, 'skipVersionCheck'> = {},
+    createQueue: DocQueueFactory = (name, options) => new Queue(name, options),
+  ) {
+    this.queue = createQueue(DOC_QUEUE_NAME, {
       connection, ...runtimeOptions,
       defaultJobOptions: { attempts: 1, removeOnComplete: { age: 86_400, count: 2000 }, removeOnFail: { age: 604_800, count: 2000 } },
     });

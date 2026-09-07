@@ -1,10 +1,10 @@
 import { Router, type RequestHandler } from 'express';
-import { Worker, type ConnectionOptions, type QueueOptions } from 'bullmq';
+import { Worker, type ConnectionOptions, type QueueOptions, type Processor } from 'bullmq';
 import type { PrismaClient } from '@prisma/client';
-import { loadDocumentSandboxConfig } from './config';
+import { loadDocumentSandboxConfig, type DocumentSandboxConfig } from './config';
 import { createDocumentRouter } from './api/router';
 import { DocSandboxRepository } from './queue/repository';
-import { DocSandboxQueue, DOC_QUEUE_NAME, type DocQueuePayload } from './queue/queue';
+import { DocSandboxQueue, DOC_QUEUE_NAME, type DocQueueFactory, type DocQueueNotice, type DocQueuePayload } from './queue/queue';
 import { DocumentSandboxProcessor } from './queue/processor';
 import { reconcileDocumentCleanup } from './queue/cleanup';
 import { AnthropicDocumentProviderClient } from './engine/provider-client';
@@ -17,6 +17,18 @@ import { DocumentReadinessLease, createDocumentWorkerReadinessProbe, DOCUMENT_RE
   waitForDocumentOperation } from './readiness';
 import { DocumentBackgroundLoop, drainDocumentOperations } from './background-lifecycle';
 
+export interface DocumentWorkerLike {
+  on(event: string, listener: (...args: unknown[]) => void): unknown;
+  waitUntilReady(): Promise<unknown>;
+  run(): Promise<unknown>;
+  close(force?: boolean): Promise<unknown>;
+}
+export type DocumentWorkerFactory = (
+  name: string,
+  processor: Processor<DocQueuePayload>,
+  options: { connection: ConnectionOptions; concurrency: number; lockDuration: number; autorun: boolean } & Pick<QueueOptions, 'skipVersionCheck'>,
+) => DocumentWorkerLike;
+
 interface ApplicationDependencies {
   prisma: PrismaClient; authenticate: RequestHandler; admissionPolicy: RequestHandler;
   createRedisConnection(options: { label: string; maxRetriesPerRequest: number | null; enableOfflineQueue: boolean; connectTimeout: number; commandTimeout?: number }): ConnectionOptions;
@@ -25,6 +37,11 @@ interface ApplicationDependencies {
   isModelPlanEligible(modelName: string, userPlan: string): boolean;
   reconcileDeletedAccounts?(): Promise<void>;
   notice(code: string): void;
+  createValidator?(config: DocumentSandboxConfig): IndependentDocumentValidator;
+  createQueue?(onError: (notice: DocQueueNotice) => void, connection: ConnectionOptions, runtimeOptions: Pick<QueueOptions, 'skipVersionCheck'>): DocSandboxQueue;
+  createWorker?: DocumentWorkerFactory;
+  createReadinessProbe?: typeof createDocumentWorkerReadinessProbe;
+  createQueueInstance?: DocQueueFactory;
 }
 export interface DocumentModule { router: Router; start(): Promise<void>; close(): Promise<void> }
 /** Startup failures expose no connector bodies and always unwind partial resources. */
@@ -55,7 +72,8 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
   const storage = new PrivateDocumentStorage(client, { bucket: config.bucket, key: config.storageKey,
     keyId: config.keyId, previousKeys: config.previousKeys, maxBytes: config.engine.maxOutputBytes });
   const provider = new AnthropicDocumentProviderClient(config.apiKey);
-  const validator = new IndependentDocumentValidator({ image: config.validatorImage, runtime: 'runsc', stagingRoot: config.validatorStagingRoot });
+  const validator = deps.createValidator?.(config)
+    ?? new IndependentDocumentValidator({ image: config.validatorImage, runtime: 'runsc', stagingRoot: config.validatorStagingRoot });
   const metrics = new DocumentMetrics(deps.metrics);
   const processor = new DocumentSandboxProcessor({ repository, storage, validator,
     engineFactory: (persistence) => new AnthropicSandboxEngine(provider, config.engine, persistence),
@@ -65,7 +83,7 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
   }, { maxTurns: config.maxTurns, maxTokens: config.maxTokens, timeoutMs: config.timeoutMs });
   const controllers = new Map<string, AbortController>();
   const inflight = new Set<Promise<void>>();
-  let worker: Worker<DocQueuePayload> | undefined; let queue: DocSandboxQueue | undefined;
+  let worker: DocumentWorkerLike | undefined; let queue: DocSandboxQueue | undefined;
   const connections: ConnectionOptions[] = [];
   let stopped = false; let started = false;
   let starting: Promise<void> | undefined;
@@ -118,8 +136,11 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
       connections.push(delivery);
       const execution = deps.createRedisConnection({ label: 'doc-worker', maxRetriesPerRequest: null, enableOfflineQueue: true, connectTimeout: 10_000 });
       connections.push(execution);
-      queue = new DocSandboxQueue(({ code }) => { readiness.invalidate(); deps.notice(code); }, delivery, deps.runtimeOptions);
-      worker = new Worker<DocQueuePayload>(DOC_QUEUE_NAME, async (delivery) => {
+      queue = (deps.createQueue ?? ((onError, connection, runtimeOptions) =>
+        new DocSandboxQueue(onError, connection, runtimeOptions, deps.createQueueInstance)))(
+        ({ code }) => { readiness.invalidate(); deps.notice(code); }, delivery, deps.runtimeOptions);
+      worker = (deps.createWorker ?? ((name, processor, options) =>
+        new Worker<DocQueuePayload>(name, processor, options)))(DOC_QUEUE_NAME, async (delivery) => {
         const jobId = delivery.data.jobId;
         if (!/^[A-Za-z0-9_-]{1,128}$/.test(jobId) || Object.keys(delivery.data).length !== 1) throw new Error('DOC_INVALID_DELIVERY');
         if (controllers.has(jobId)) return; // duplicate delivery must not overwrite the active cancellation handle
@@ -139,7 +160,8 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
       await waitForDocumentStartup(Promise.all([worker.waitUntilReady(), queue.queue.waitUntilReady()]), lifecycle.signal);
       if (stopped) throw new Error('DOC_MODULE_CLOSED');
       started = true;
-      readinessProbe = createDocumentWorkerReadinessProbe(queue.queue, worker, () => readiness.invalidate());
+      readinessProbe = (deps.createReadinessProbe ?? createDocumentWorkerReadinessProbe)(
+        queue.queue as never, worker as never, () => readiness.invalidate());
       void worker.run().then(() => { readiness.invalidate(); }, () => { readiness.invalidate(); deps.notice('DOC_WORKER_STOPPED'); });
       if (!await refreshReadiness()) throw new Error('DOC_WORKER_NOT_READY');
       if (stopped) throw new Error('DOC_MODULE_CLOSED');
