@@ -198,6 +198,7 @@ test('lastEventAt prefers the dedicated pulse over updatedAt and marks in-flight
 });
 
 test('heartbeat pulse writes lastEventAt without growing the event log', () => {
+  process.env.AGENT_TASK_PRISMA_SYNC = '0';
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-last-event-at-'));
   taskStore.writeTaskSnapshot({
     taskId: 'task-pulse',
@@ -208,7 +209,7 @@ test('heartbeat pulse writes lastEventAt without growing the event log', () => {
     lastEventAt: '2026-09-07T15:00:00.000Z',
     events: [{ type: 'queue_status', seq: 1 }],
     lastEventSeq: 1,
-    streamState: INTERNAL.initialAgentState(),
+    streamState: { steps: [], artifacts: [], finalText: '', done: false },
   });
 
   const touched = taskStore.touchTaskHeartbeat('task-pulse', 'user-a');
