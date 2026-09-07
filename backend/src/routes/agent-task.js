@@ -933,6 +933,12 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     };
     streamState = reduceAgentState(streamState, retryEvent);
     const retryWritten = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    // The durable retry is now queued. Retire only the previous terminal
+    // record before awaiting mirrors, so Stop reaches the new queued job even
+    // if a persistence mirror fails. Preserve a worker that already started.
+    if (ACTIVE_AGENT_TASKS.get(snapshot.taskId) === snapshot) {
+      ACTIVE_AGENT_TASKS.delete(snapshot.taskId);
+    }
     await agentTaskPersistence.appendAgentTaskEvent(retryWritten || snapshot, retryWritten?.events?.[retryWritten.events.length - 1] || retryEvent);
     const queueEvent = { type: 'queue_status', taskId: snapshot.taskId, status: 'queued', queue: getQueueName(), jobId: String(job.id), position: null };
     streamState = reduceAgentState(streamState, queueEvent);
@@ -943,7 +949,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       streamState,
     });
     await agentTaskPersistence.upsertAgentTask({
-      ...snapshot,
+      ...queued,
       userId: req.user?.id,
       status: 'queued',
       jobId: String(job.id),
