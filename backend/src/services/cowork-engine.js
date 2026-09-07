@@ -92,6 +92,17 @@ function buildCoworkSystemPrompt(userId, opts = {}) {
       }
       parts.push('');
     }
+
+    try {
+      const curated = require('./agents/hermes-curated-memory');
+      const frozen = curated.getFrozenPromptBlock(userId, { chatId: opts.chatId || null });
+      if (frozen) {
+        parts.push(frozen);
+        parts.push('');
+      }
+    } catch {
+      // Curated snapshot is additive; cowork still works without it.
+    }
   }
 
   const skills = skillsRegistry.listSkills({ limit: 10 });

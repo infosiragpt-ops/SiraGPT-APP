@@ -99,12 +99,18 @@ const hermesSessionSearchTool = {
 
 const hermesMemoryTool = {
   name: 'memory',
-  description: 'Remember or recall persistent user facts using the Hermes memory bridge.',
+  description: 'Curated durable memory (Hermes MEMORY.md + USER.md). Use add/replace/remove on target=memory|user. Mid-session writes persist immediately but the system-prompt snapshot refreshes on the next chat. remember/recall remain available for the broader fact store.',
   parameters: {
     type: 'object',
     required: ['action'],
     properties: {
-      action: { type: 'string', enum: ['remember', 'recall', 'promote', 'nudge'] },
+      action: {
+        type: 'string',
+        enum: ['add', 'replace', 'remove', 'read', 'remember', 'recall', 'promote', 'nudge'],
+      },
+      target: { type: 'string', enum: ['memory', 'user'], description: 'Curated store for add/replace/remove/read.' },
+      content: { type: 'string', description: 'New entry text for add/replace.' },
+      old_text: { type: 'string', description: 'Unique substring identifying the entry to replace or remove.' },
       fact: { type: 'string' },
       query: { type: 'string' },
       entryId: { type: 'string' },
@@ -115,6 +121,18 @@ const hermesMemoryTool = {
     if (!userId) return { ok: false, error: 'userId required' };
 
     switch (args.action) {
+      case 'add':
+        return memoryBridge.curatedAdd(userId, { target: args.target, content: args.content || args.fact });
+      case 'replace':
+        return memoryBridge.curatedReplace(userId, {
+          target: args.target,
+          old_text: args.old_text,
+          content: args.content || args.fact,
+        });
+      case 'remove':
+        return memoryBridge.curatedRemove(userId, { target: args.target, old_text: args.old_text || args.query });
+      case 'read':
+        return memoryBridge.curatedRead(userId, { target: args.target });
       case 'remember':
         return { ok: true, entry: memoryBridge.remember(userId, args.fact) };
       case 'recall':
