@@ -8,6 +8,9 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode `applyUnique` keeps `$&` / `$$` / `` $` `` / `$'` literal and
+  rejects overlapping hunks (`aaa` + `aa`) instead of a partial replace.
+
 - SiraCode permission resume: allowing an `ask` tool (Planificar bash or
   composer Protegido writes) now runs it in the session workspace instead
   of only recording the decision. `always` remembers the grant for the
