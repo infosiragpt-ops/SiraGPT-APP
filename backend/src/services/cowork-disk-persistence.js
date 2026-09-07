@@ -90,6 +90,35 @@ function saveSessions(userId, sessions) {
   });
 }
 
+function emptyCuratorState() {
+  return { lastRunAt: 0, skills: {}, pinned: [] };
+}
+
+function loadSkillCurator(userId) {
+  const row = loadJson(userPath('skill-curator', userId), emptyCuratorState());
+  const skills = row.skills && typeof row.skills === 'object' && !Array.isArray(row.skills)
+    ? row.skills
+    : {};
+  return {
+    lastRunAt: Number(row.lastRunAt) || 0,
+    skills,
+    pinned: Array.isArray(row.pinned) ? row.pinned.map(String) : [],
+    updatedAt: Number(row.updatedAt) || 0,
+  };
+}
+
+function saveSkillCurator(userId, state) {
+  saveJson(userPath('skill-curator', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    lastRunAt: Number(state?.lastRunAt) || 0,
+    skills: state?.skills && typeof state.skills === 'object' && !Array.isArray(state.skills)
+      ? state.skills
+      : {},
+    pinned: Array.isArray(state?.pinned) ? state.pinned.map(String) : [],
+  });
+}
+
 module.exports = {
   STORE_ROOT,
   loadMemoryEntries,
@@ -100,4 +129,6 @@ module.exports = {
   saveCuratedMemory,
   loadSessions,
   saveSessions,
+  loadSkillCurator,
+  saveSkillCurator,
 };

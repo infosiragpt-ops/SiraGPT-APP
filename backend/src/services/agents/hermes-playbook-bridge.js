@@ -26,6 +26,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'website', sira: 'backend/src/routes/hermes.js, .agents/skills/technical-docs', status: 'integrated', strategy: 'integration map + health docs via /api/hermes/*' },
   { hermes: 'docker', sira: 'backend/src/services/agents/hermes-docker-bridge.js', status: 'integrated', strategy: 'Hermes backend profiles mapped to code-sandbox + env-gated remote backends' },
   { hermes: 'tests', sira: 'backend/tests, tests, e2e', status: 'integrated', strategy: 'map Hermes test lanes to Node --test suites' },
+  { hermes: 'curator', sira: 'backend/src/services/agents/hermes-skill-curator.js', status: 'integrated', strategy: 'deterministic skill-library review + Biblioteca deposit; never mutates bundled skills' },
 ]);
 
 const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
@@ -48,6 +49,12 @@ const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
   'macos-computer-use': ['agent-validation'],
   'jupyter-live-kernel': ['agent-validation', 'qa-smoke-testing'],
   'github-pr-workflow': ['pr-production-loop'],
+  'pptx-author': ['technical-docs'],
+  'code-wiki': ['technical-docs'],
+  qmd: ['technical-docs', 'biblioteca-deposit'],
+  siyuan: ['biblioteca-deposit'],
+  'concept-diagrams': ['canvas-design'],
+  'openclaw-migration': ['openclaw-import-audit'],
 });
 
 function parseSkillMarkdown(raw) {

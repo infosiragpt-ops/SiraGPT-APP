@@ -12,6 +12,8 @@ const delegateBridge = require('./hermes-delegate-bridge');
 const toolsetRegistry = require('./toolset-registry');
 const skillsRegistry = require('../skills-registry');
 const { buildHermesIntegrationMap, recommendAdaptedPlaybooks } = require('./hermes-playbook-bridge');
+const skillCurator = require('./hermes-skill-curator');
+const biblioteca = require('./hermes-biblioteca');
 
 function ctxUser(ctx) {
   return ctx?.userId || ctx?.user?.id || null;
@@ -204,6 +206,44 @@ const hermesToolsetTool = {
   },
 };
 
+const hermesSkillCuratorTool = {
+  name: 'skill_curator',
+  description: 'Hermes-style skill-library curator. observe/status/run (dry-run default) / record / pin. Never deletes bundled skills. Reports land in Biblioteca.',
+  parameters: {
+    type: 'object',
+    required: ['action'],
+    properties: {
+      action: { type: 'string', enum: ['observe', 'status', 'run', 'record', 'pin', 'list'] },
+      skillName: { type: 'string' },
+      dryRun: { type: 'boolean' },
+      chatId: { type: 'string' },
+    },
+  },
+  async execute(args, ctx = {}) {
+    const userId = ctxUser(ctx);
+    if (!userId) return { ok: false, error: 'userId required' };
+    switch (args.action) {
+      case 'observe':
+        return skillCurator.observe(userId);
+      case 'status':
+        return { ok: true, ...skillCurator.status(userId) };
+      case 'run':
+        return skillCurator.run(userId, {
+          dryRun: args.dryRun !== false,
+          chatId: args.chatId || ctx.chatId || null,
+        });
+      case 'record':
+        return skillCurator.recordUse(userId, args.skillName);
+      case 'pin':
+        return skillCurator.pin(userId, args.skillName);
+      case 'list':
+        return { ok: true, items: biblioteca.listForUser(userId) };
+      default:
+        return { ok: false, error: 'invalid action' };
+    }
+  },
+};
+
 const hermesPlaybookMapTool = {
   name: 'hermes_playbook_map',
   description: 'Return the Hermes→SiraGPT integration matrix or playbook recommendations.',
@@ -229,6 +269,7 @@ function buildHermesTools() {
     hermesMemoryTool,
     hermesDelegateTool,
     hermesSkillsListTool,
+    hermesSkillCuratorTool,
     hermesToolsetTool,
     hermesPlaybookMapTool,
   ];

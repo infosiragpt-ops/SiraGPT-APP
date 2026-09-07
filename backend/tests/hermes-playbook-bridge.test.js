@@ -38,7 +38,7 @@ test('loadFlatInstructionSkills lists one-level SKILL.md folders', () => {
 
 test('folder capability map covers major Hermes source areas', () => {
   const folders = new Set(FOLDER_CAPABILITY_MAP.map((entry) => entry.hermes));
-  for (const expected of ['agent', 'skills', 'plugins', 'gateway', 'tools', 'web']) {
+  for (const expected of ['agent', 'skills', 'plugins', 'gateway', 'tools', 'web', 'curator']) {
     assert.ok(folders.has(expected), `expected folder map for ${expected}`);
   }
 });
