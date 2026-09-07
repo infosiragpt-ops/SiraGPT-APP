@@ -33,6 +33,10 @@ and improvement cycles follow a sequential number with the date the work landed.
   distinct Spanish labels on the terminal SSE event. Native rewrite of
   OpenClaw's `errorKind` → `stopReason` contract; no vendored runtime.
 
+- Sira Voz `POST /voices/clone` deletes the multer temp sample before
+  flushing 201 so a loaded CI shard cannot observe the file after the
+  response (race between `res.json` and `finally`).
+
 - Backend image rebuilds no longer depend on HuggingFace for
   `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
   seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
