@@ -99,3 +99,10 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   skill-load-into-context plus scan-before-inject (same MEMORY/USER
   pattern already live). Optional SKILL.md bodies stay reference data
   (AGENTS.md §17); they are never treated as system instructions.
+
+  The owner checks in `backend/src/routes/hermes.js`,
+  `backend/src/services/agents/cron/hermes-cron-bridge.js` and
+  `backend/src/services/agents/hermes-tools.js` are SiraGPT-owned security
+  corrections to the existing native bridge, not newly copied Hermes code.
+  They use SiraGPT's canonical authentication and job ownership contracts;
+  no upstream credentials, authentication server or scheduler is activated.

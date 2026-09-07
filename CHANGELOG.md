@@ -54,6 +54,11 @@ and improvement cycles follow a sequential number with the date the work landed.
   flushing 201 so a loaded CI shard cannot observe the file after the
   response (race between `res.json` and `finally`).
 
+- Hermes runtime endpoints require canonical authentication. Scheduled jobs,
+  CLI cron queries and cron tools use only the authenticated owner; absent and
+  foreign jobs are indistinguishable, and missing identity cannot inherit a
+  stored job's privileges. Static capability maps remain public.
+
 - Backend image rebuilds no longer depend on HuggingFace for
   `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
   seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
