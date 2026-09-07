@@ -127,6 +127,12 @@ and improvement cycles follow a sequential number with the date the work landed.
   foreign jobs are indistinguishable, and missing identity cannot inherit a
   stored job's privileges. Static capability maps remain public.
 
+- Scheduled agent jobs no longer report success for incomplete, cancelled or
+  failed runs, including a successful synthesis with failed plan steps. Whole
+  agent turns are invoked once; ambiguous transport errors do not automatically
+  replay external effects. Native OpenClaw-inspired outcome contract; no new
+  provider, gateway, schema or interface changes.
+
 - Backend image rebuilds no longer depend on HuggingFace for
   `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
   seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
