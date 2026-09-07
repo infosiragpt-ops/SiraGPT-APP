@@ -95,7 +95,16 @@ function createMemoryEntry(userId, fact, opts = {}) {
 
   store.set(id, entry);
   schedulePersistUserMemory(userId);
+  maybeMirrorToCurated(entry);
   return entry;
+}
+
+function maybeMirrorToCurated(entry) {
+  try {
+    require('./agents/hermes-curated-memory').learnFromEntry(entry);
+  } catch {
+    // Curated MEMORY/USER mirroring must never break the fact store.
+  }
 }
 
 function findExisting(userId, hash) {
@@ -355,6 +364,14 @@ function forget(userId, query) {
     }
   }
 
+  if (removed) {
+    try {
+      require('./agents/hermes-curated-memory').forgetMatching(userId, query);
+    } catch {
+      // Best-effort: fact-store forget still succeeded.
+    }
+  }
+
   return { removed };
 }
 
@@ -365,6 +382,11 @@ function clearUserMemory(userId) {
       store.delete(id);
       cleared++;
     }
+  }
+  try {
+    require('./agents/hermes-curated-memory').clearUser(userId);
+  } catch {
+    // Best-effort companion clear.
   }
   return { cleared };
 }
