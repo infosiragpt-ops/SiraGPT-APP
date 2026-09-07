@@ -47,6 +47,8 @@ const {
 } = require('../services/codex/session-service');
 const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
+const opencodeHarness = require('../services/codex/opencode-harness');
+const selfHosting = require('../services/codex/self-hosting');
 const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
@@ -472,6 +474,101 @@ router.get('/projects', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: 'codex_list_failed', message: err.message });
   }
 });
+
+// ── Clone público desde la web (contratos OpenCode, §25) ────────────────────
+// POST /api/codex/projects/clone { name, repoUrl, branch? } → 201 { project, sourceControl }.
+// Clona CUALQUIER repo público github.com HTTPS sin credenciales en el
+// workspace CloudAgent (fetch --depth=1). Nunca clona en máquinas de usuario.
+// Difiere de POST /projects con `repository` (self-host con allowlist cerrada).
+function sendGithubFlowError(res, err) {
+  const code = String(err?.code || 'codex_github_failed');
+  const status = /^(invalid_|repository_|pull_request_sensitive_path)/.test(code) ? 400
+    : code === 'pull_request_too_large' || code === 'pull_request_file_too_large' ? 413
+      : code === 'github_auth_required' ? 401
+        : code === 'base_branch_diverged' || code === 'checkpoint_not_current' ? 409
+          : 502;
+  return res.status(status).json({
+    error: code,
+    message: String(err?.message || err || 'GitHub flow failed.').slice(0, 2_000),
+  });
+}
+
+router.post(
+  '/projects/clone',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 }),
+    body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+    body('branch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+    body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    const name = req.body.name.trim();
+    const repoUrl = String(req.body.repoUrl).trim();
+    const branch = req.body.branch ? String(req.body.branch).trim() : 'main';
+    let repository;
+    try {
+      repository = opencodeHarness.parsePublicGithubRepo(repoUrl);
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+    try {
+      const organizationId = req.body.organizationId || null;
+      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'organization_not_found' });
+      }
+      const row = await codexDb.codexProject.create({
+        data: {
+          userId: req.user.id,
+          organizationId,
+          name,
+          brief: {
+            kind: 'repo-public',
+            repository: { url: repository.cloneUrl, webUrl: repository.webUrl },
+            sourceBranch: branch,
+          },
+          status: 'provisioning',
+        },
+      });
+      try {
+        const runner = createSandboxClient();
+        const cloned = await opencodeHarness.clonePublicRepo({
+          runner,
+          projectId: row.id,
+          repoUrl: repository.cloneUrl,
+          branch,
+        });
+        const ready = await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
+        });
+        return res.status(201).json({
+          project: projectService.publicProject(ready),
+          sourceControl: {
+            repository: repository.webUrl,
+            sourceBranch: cloned.sourceBranch,
+            workBranch: cloned.workBranch,
+            commitSha: cloned.commitSha,
+          },
+        });
+      } catch (err) {
+        await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'error', error: String(err?.message || err).slice(0, 2_000) },
+        }).catch(() => null);
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return res.status(500).json({ error: 'codex_clone_failed', message: String(err?.message || err).slice(0, 2_000) });
+    }
+  },
+);
 
 router.get('/projects/:id', authenticateToken, async (req, res) => {
   try {
@@ -1776,6 +1873,112 @@ router.post('/projects/:id/publication/rollback', authenticateToken, requireCode
     return sendPublicationError(res, err);
   }
 });
+
+// ── Publicación GitHub desde la web (contratos OpenCode, §25) ───────────────
+// POST /projects/:id/github/plan { repoUrl, runId, sourceBranch?, title?, body? }
+//   → 200 { plan }. Solo lee el diff (git diff + medición). Sin efectos.
+// POST /projects/:id/github/publish { ...plan, githubToken?, confirm? }
+//   → sin confirm:true → 428 { plan } (E_PLAN_GATE: publicar exige aprobación).
+//   → sin token → 428 { plan } con compareUrl para abrir el PR a mano.
+//   → con token+confirm → 201 { plan, pullRequest }. Merge siempre vía PR
+//     (pull_request_only); el token viaja solo en memoria, nunca se persiste,
+//     loguea ni devuelve.
+const githubPlanValidators = [
+  body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+  body('runId').isString().withMessage('runId must be a string').bail().trim().isLength({ min: 1, max: 96 }),
+  body('sourceBranch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+  body('title').optional().isString().isLength({ max: 120 }),
+  body('body').optional().isString().isLength({ max: 60_000 }),
+];
+
+router.post('/projects/:id/github/plan', authenticateToken, githubPlanValidators, async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const plan = await opencodeHarness.buildPublishPlan({
+      runner: createSandboxClient(),
+      projectId: project.id,
+      repoUrl: String(req.body.repoUrl).trim(),
+      sourceBranch: req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main',
+      runId: String(req.body.runId).trim(),
+      title: req.body.title ?? null,
+      body: req.body.body ?? null,
+      hasGithubToken: false,
+    });
+    return res.json({ plan });
+  } catch (err) {
+    return sendGithubFlowError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/github/publish',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    ...githubPlanValidators,
+    body('githubToken').optional().isString().isLength({ max: 500 }),
+    body('confirm').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const repoUrl = String(req.body.repoUrl).trim();
+      const runId = String(req.body.runId).trim();
+      const sourceBranch = req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main';
+      const token = String(req.body.githubToken || '').trim();
+      const runner = createSandboxClient();
+      const plan = await opencodeHarness.buildPublishPlan({
+        runner,
+        projectId: project.id,
+        repoUrl,
+        sourceBranch,
+        runId,
+        title: req.body.title ?? null,
+        body: req.body.body ?? null,
+        hasGithubToken: token.length > 0,
+      });
+      if (plan.status === 'no_changes') return res.json({ plan, pullRequest: null });
+      if (req.body.confirm !== true) {
+        return res.status(428).json({
+          error: 'confirmation_required',
+          message: 'Publicar en GitHub exige confirmación explícita (confirm:true).',
+          plan,
+        });
+      }
+      if (!token) {
+        return res.status(428).json({
+          error: 'github_auth_required',
+          message: 'Sin token se devuelve el enlace para abrir el PR a mano.',
+          plan,
+        });
+      }
+      try {
+        const published = await selfHosting.publishSelfHostedPullRequest({
+          runner,
+          projectId: project.id,
+          runId,
+          repositoryUrl: repoUrl,
+          sourceBranch,
+          title: plan.title,
+          body: plan.body,
+          env: { ...process.env, CODEX_SELF_HOST_GITHUB_TOKEN: token },
+        });
+        if (published.status === 'no_changes') return res.json({ plan, pullRequest: null });
+        return res.status(201).json({ plan, pullRequest: published.pullRequest || null, branch: published.branch });
+      } catch (err) {
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+  },
+);
 
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
