@@ -16,7 +16,7 @@
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
 const { executeTool } = require('./tools');
-const { authorizeTool, canonicalTool } = require('./permissions');
+const { authorizeTool, canonicalTool, WRITE_TOOLS } = require('./permissions');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
 
 const DECISION_ALIASES = Object.freeze({
@@ -75,7 +75,7 @@ async function executeApproved(session, pending, { signal } = {}) {
     ok: result.ok,
     preview: String(result.content || result.error || '').slice(0, 240),
   });
-  if (result.ok && (pending.tool === 'write' || pending.tool === 'edit')) {
+  if (result.ok && WRITE_TOOLS.has(pending.tool)) {
     stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: pending.tool });
   }
   appendMessage(session, {

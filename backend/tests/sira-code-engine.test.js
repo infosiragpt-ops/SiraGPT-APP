@@ -449,6 +449,40 @@ test('always remembers the grant so the next planificar bash does not ask', asyn
   assert.match(String(bash.content), /second/);
 });
 
+test('allowing a Protegido apply_patch in construir persists the file', async () => {
+  const session = await siraCode.create({ userId: 'u-patch', agent: 'construir' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'aplica el parche', {
+    userId: 'u-patch',
+    permission: 'protected',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          text: '',
+          toolCalls: [{
+            name: 'apply_patch',
+            arguments: {
+              patch: '*** Begin Patch\n*** Add File: nota-patch.txt\n+desde permiso\n*** End Patch',
+            },
+          }],
+        };
+      }
+      return { text: 'Hecho.', toolCalls: [] };
+    },
+  });
+  const root = siraCode.getSession(session.id).workspace.root;
+  assert.equal(fs.existsSync(path.join(root, 'nota-patch.txt')), false);
+  const pid = siraCode.get(session.id, 'u-patch').pendingPermissions[0].permissionId;
+  const resolved = await siraCode.resolvePermission(session.id, pid, 'allow', 'u-patch');
+  assert.equal(resolved.executed, true);
+  assert.equal(resolved.tool, 'apply_patch');
+  const file = await siraCode.readFile(session.id, 'nota-patch.txt', 'u-patch');
+  assert.equal(file.content, 'desde permiso');
+  const stored = siraCode.getSession(session.id);
+  assert.ok(stored.events.some((ev) => ev.label === 'Verificando resultado' && ev.tool === 'apply_patch'));
+});
+
 test('allowing a Protegido write in construir persists the file', async () => {
   const session = await siraCode.create({ userId: 'u-prot', agent: 'construir' });
   let calls = 0;
