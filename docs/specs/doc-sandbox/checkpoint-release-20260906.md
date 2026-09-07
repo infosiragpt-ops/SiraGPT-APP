@@ -5,6 +5,23 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
+**Solicitud de despliegue revisada (2026-09-07 UTC):** Luis solicita publicar
+para probar. CI de `1a893cbbe` quedó completamente aprobado (`34081216086`).
+Se integró #574 (`6a13d8724`) conservando sus cuatro fuentes byte-idénticas y
+los hashes F1; UI-lock 802/802, tipos, lint y 27 focales aprobados. Runtime,
+esquema, suite documental y gate81 intactos. La nueva combinación requiere CI.
+Comprobación real: SSH entra al contenedor `deploy`, no al host; sin nodos
+emparejados, `runsc` ausente y variables R2/F1 ausentes en backend. La conexión
+al Chrome existente no estuvo disponible; se solicitaron acceso administrativo
+y sesión Cloudflare por vías seguras, sin pedir contraseñas en el chat.
+El checkout productivo está en #574, pero `/api/version` backend sigue en
+#572 (`546a8156b`); readiness HTTP200/healthy a 04:06:48.917Z. No se confunde
+ese SHA de backend con la versión del frontend. No se ejecutaron publicador,
+migraciones, registro de runtime ni llamadas pagadas. El historial migratorio
+sigue sin atestación completa y el ensayo no llegó a upgrade/recovered.
+**No desplegado:** la cobertura/CI no sustituyen aislamiento, almacenamiento,
+aceptación ni recuperación. Autorización vigente; accesos pendientes.
+
 **Corroboración más reciente (2026-09-07 UTC):** `3b41fbb3` recibió CI
 aprobado (`34079904503`, 03:46:20Z). Repetición independiente: 483/483
 unitarias y 81,02% (3390/4184), gate 81 intacto; generales 12472/12472,
