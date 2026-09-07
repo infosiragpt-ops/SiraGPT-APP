@@ -23,6 +23,10 @@ const {
 const { runPrompt, shouldStartSiraCodeRun } = require('./loop');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
 const { applyAgentChange, publicPlan } = require('./plan-handoff');
+const {
+  resolveSessionPermission,
+  publicResolvePayload,
+} = require('./permission-resume');
 
 function sidecarRequested(env = process.env) {
   return ['1', 'true', 'on', 'yes'].includes(String(env.SIRAGPT_OPENCODE_SIDECAR || '').trim().toLowerCase());
@@ -123,23 +127,10 @@ async function listFiles(id, userId) {
   return { files };
 }
 
-function resolvePermission(id, permissionId, decision, userId) {
+async function resolvePermission(id, permissionId, decision, userId) {
   const session = requireOwnedSession(id, userId);
-  const pending = session.pendingPermissions.get(permissionId);
-  if (!pending) {
-    const err = new Error('permiso no encontrado');
-    err.code = 'permission_not_found';
-    err.status = 404;
-    throw err;
-  }
-  const allow = decision === 'allow';
-  session.pendingPermissions.delete(permissionId);
-  appendEvent(session, 'permission_resolved', {
-    permissionId,
-    tool: pending.tool,
-    decision: allow ? 'allow' : 'deny',
-  });
-  return { ok: true, allowed: allow, tool: pending.tool };
+  const payload = await resolveSessionPermission(session, permissionId, decision);
+  return publicResolvePayload(payload, session);
 }
 
 function streamEvents(res, { sessionId, userId, lastEventId } = {}) {

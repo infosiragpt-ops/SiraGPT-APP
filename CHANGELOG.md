@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode permission resume: allowing an `ask` tool (Planificar bash or
+  composer Protegido writes) now runs it in the session workspace instead
+  of only recording the decision. `always` remembers the grant for the
+  rest of the session; `deny` stays closed. Reconnect can `GET` the
+  session to see pending cards. Inspired by OpenCode once/always/reject;
+  independent rewrite, no vendor tree.
+
 - SiraCode plan→act handoff: switching Planificar → Construir keeps the
   approved plan on the session, emits the existing `Plan listo` stage, and
   injects it into the next Construir turn so the loop executes instead of

@@ -31,8 +31,9 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**
   inspired by OpenCode's session/prompt loop, build vs plan agents,
-  permissioned tools (read / edit / bash / grep), and the plan→build
-  session reminder (execute the approved plan; do not rewrite it). No
+  permissioned tools (read / edit / bash / grep), the plan→build
+  session reminder (execute the approved plan; do not rewrite it), and
+  the permission reply (ask → once / always / reject, then execute). No
   OpenCode source, SST console, Nix, desktop, Electron, or TUI was
   vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.

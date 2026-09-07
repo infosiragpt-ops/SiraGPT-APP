@@ -143,6 +143,7 @@ async function executeTool(session, toolName, args = {}, ctx = {}) {
   const auth = authorizeTool(session.agentId, toolName, {
     permission: session.permission || ctx.permission,
     approved: ctx.approved === true,
+    grants: session.permissionGrants,
   });
   if (auth.denied) {
     const detail = auth.reason === 'composer_read_only'

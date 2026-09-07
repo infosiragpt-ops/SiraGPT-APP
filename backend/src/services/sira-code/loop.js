@@ -165,6 +165,7 @@ async function runPrompt(session, text, {
         const args = call.arguments || call.args || {};
         const auth = authorizeTool(session.agentId, name, {
           permission: session.permission,
+          grants: session.permissionGrants,
         });
 
         if (auth.needsPermission) {
