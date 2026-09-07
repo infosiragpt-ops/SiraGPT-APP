@@ -31,6 +31,21 @@ test('backend Dockerfile includes Linux Office/PDF/OCR tooling for document edit
   }
 });
 
+test('backend Dockerfile installs bash and probes /bin/bash after USER appuser', () => {
+  const dockerfile = fs.readFileSync(path.join(root, 'backend/Dockerfile'), 'utf8');
+  const runnerStage = dockerfile.split('FROM node:22-alpine AS runner')[1] || '';
+  assert.match(runnerStage, /^\s+bash\s*\\$/m);
+  const userIdx = runnerStage.indexOf('\nUSER appuser');
+  assert.ok(userIdx !== -1, 'runner must switch to USER appuser');
+  const afterUser = runnerStage.slice(userIdx);
+  assert.match(
+    afterUser,
+    /RUN \/bin\/bash -lc 'set -euo pipefail; test -n "\$\{BASH_VERSION\}"/,
+  );
+  assert.doesNotMatch(afterUser, /ln -s[^\n]*\/bin\/sh[^\n]*\/bin\/bash/);
+  assert.doesNotMatch(afterUser, /spawn\(['"]sh['"]/);
+});
+
 test('backend Dockerfile installs whisper.cpp with sh and a hard smoke test', () => {
   const dockerfile = fs.readFileSync(path.join(root, 'backend/Dockerfile'), 'utf8');
   assert.doesNotMatch(dockerfile, /bash \/tmp\/install-local-whisper\.sh/);

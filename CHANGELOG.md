@@ -27,6 +27,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Production Alpine runner installs `bash` and probes `/bin/bash` as
+  `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
+  permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
+  stays POSIX `sh`. No silent `sh` fallback.
+
 - `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies
   while the API process stays up. Live runners pulse a snapshot heartbeat;
   a runtime watchdog (OpenClaw-style no-output stall) marks stale
