@@ -49,13 +49,16 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   session reminder (execute the approved plan; do not rewrite it),
   the permission reply (ask → once / always / reject, then execute),
   `SessionPrompt.ensureTitle` (title the session from the first
-  real user message, once, without overwriting a custom title), and
+  real user message, once, without overwriting a custom title),
   tool-result truncation / transcript prune (`Truncate.output` +
   `SessionCompaction.prune`: cap by lines and bytes, keep the recent
-  tail, shrink older tool output). The native helpers are local and
-  deterministic — no title-agent LLM, no Effect runtime, no global
-  tool-output directory, no silent swallow. No OpenCode source, SST
-  console, Nix, desktop, Electron, or TUI was vendored into this tree.
+  tail, shrink older tool output), and a reconnect summary
+  (`SessionSummary`: compact snapshot so the client hydrates without
+  the full event log). The native helpers are local and
+  deterministic — no title-agent LLM, no Effect runtime, no Snapshot
+  git-diff, no global tool-output directory, no silent swallow. No
+  OpenCode source, SST console, Nix, desktop, Electron, or TUI was
+  vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.
   The upstream MIT license text is retained at `vendor/opencode/LICENSE`
   for the historical sidecar reference only; the native engine does not

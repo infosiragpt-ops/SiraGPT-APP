@@ -9,6 +9,7 @@
  *   GET  /api/opencode/health
  *   POST /api/opencode/session
  *   GET  /api/opencode/session/:id
+ *   GET  /api/opencode/session/:id/summary
  *   POST /api/opencode/session/:id/prompt
  *   POST /api/opencode/session/:id/agent
  *   POST /api/opencode/session/:id/abort
@@ -104,6 +105,14 @@ router.post(
 router.get('/session/:id', authenticateToken, (req, res) => {
   try {
     return res.json({ session: siraCode.get(req.params.id, userIdOf(req)) });
+  } catch (err) {
+    return fail(res, err);
+  }
+});
+
+router.get('/session/:id/summary', authenticateToken, (req, res) => {
+  try {
+    return res.json({ summary: siraCode.summarize(req.params.id, userIdOf(req)) });
   } catch (err) {
     return fail(res, err);
   }

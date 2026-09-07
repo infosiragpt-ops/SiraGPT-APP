@@ -206,6 +206,30 @@ test('GET /events streams SSE and abort emits Cancelado', async () => {
   }
 });
 
+test('GET /session/:id/summary returns a reconnect snapshot after a prompt', async () => {
+  const app = buildApp(async () => ({ text: 'Listo.', toolCalls: [] }));
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'construir' });
+  const id = created.body.session.id;
+  await request(app).post(`/api/opencode/session/${id}/prompt`).send({ text: 'explica el login' });
+  const res = await request(app).get(`/api/opencode/session/${id}/summary`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.summary.session.id, id);
+  assert.equal(res.body.summary.session.title, 'explica el login');
+  assert.equal(res.body.summary.stopReason, 'done');
+  assert.equal(res.body.summary.lastStage.label, 'Listo');
+  assert.ok(res.body.summary.lastEventId);
+  assert.ok(res.body.summary.messages.items.some((row) => row.role === 'user'));
+  assert.ok(!JSON.stringify(res.body).includes('model_id'));
+  assert.ok(!JSON.stringify(res.body).includes('DeepSeek'));
+  assert.ok(!JSON.stringify(res.body).includes('OpenRouter'));
+});
+
+test('GET /session/:id/summary is 404 for an unknown session', async () => {
+  const res = await request(buildApp()).get('/api/opencode/session/sc_missing/summary');
+  assert.equal(res.status, 404);
+  assert.equal(res.body.error, 'session_not_found');
+});
+
 test('GET /session/:id returns pending permission cards after an ask', async () => {
   let calls = 0;
   const app = buildApp(async () => {
