@@ -3,10 +3,12 @@
 const { test, before, after, describe } = require('node:test');
 const assert = require('node:assert/strict');
 
+const fs = require('fs');
+const path = require('path');
+
 const curator = require('../src/services/agents/hermes-skill-curator');
 const hygiene = require('../src/services/agents/hermes-skill-hygiene');
 const biblioteca = require('../src/services/agents/hermes-biblioteca');
-const { buildHermesTools } = require('../src/services/agents/hermes-tools');
 
 const USER_A = 'hygiene-user-a';
 const USER_B = 'hygiene-user-b';
@@ -442,15 +444,18 @@ describe('hermes skill curator — injected FS stubs', { concurrency: 1 }, () =>
     );
   });
 
-  test('skill_curator tool exposes dedupe and promote', async () => {
-    const tool = buildHermesTools().find((item) => item.name === 'skill_curator');
-    assert.ok(tool.parameters.properties.action.enum.includes('dedupe'));
-    assert.ok(tool.parameters.properties.action.enum.includes('promote'));
-    const denied = await tool.execute({ action: 'dedupe' }, {});
-    assert.equal(denied.ok, false);
-    const status = await tool.execute({ action: 'status' }, { userId: USER_A });
+  test('skill_curator tool source exposes dedupe and promote without loading cron', () => {
+    const src = fs.readFileSync(
+      path.join(__dirname, '../src/services/agents/hermes-tools.js'),
+      'utf8',
+    );
+    assert.match(src, /enum: \['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote'\]/);
+    assert.match(src, /case 'dedupe':/);
+    assert.match(src, /case 'promote':/);
+    const status = curator.status(USER_A);
     assert.equal(status.neverDeletes, true);
     assert.deepEqual(status.hygiene.dedupeBy, ['hash', 'name']);
+    assert.equal(curator.dedupe('').ok, false);
   });
 
   test('optional-skills inventory stays reference-only in growth', () => {
