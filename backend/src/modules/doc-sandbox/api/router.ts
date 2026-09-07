@@ -8,7 +8,7 @@ import { DocSandboxRepository, type StoredDocumentJob, type DurableDocumentEvent
 import { PrivateDocumentStorage, DocumentDownloadTickets } from '../storage/private-storage';
 import { documentFormatSchema, identifierSchema } from '../types/contracts';
 import { DocSandboxError } from '../types/errors';
-import type { DocumentModelPolicy } from '../model-policy';
+import { configuredDocumentModelTier, type DocumentModelPolicy } from '../model-policy';
 import { documentRequestOwner as owner, documentRequestPlan as userPlan, parseDocumentAdmission, prepareDocumentInputs,
   documentPayloadHash, parseDocumentIdempotencyKey, documentArtifactForDownload, documentDownloadHeaders,
   parseDocumentEventCursor, documentApiError } from './request-policy';
@@ -75,7 +75,10 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
   router.use((_req, res, next) => { res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' }); next(); });
   router.get('/capabilities', asyncRoute(async (req, res) => {
     const selected = z.string().min(1).max(200).optional().parse(req.query.model);
-    const modelTier = selected ? await deps.resolveModel(selected, userPlan(req)) : null;
+    // Pin miss / missing query is an unsupported probe: no catalog, DB or S3.
+    // Only a configured engine identity may consult publication.
+    const pinned = selected ? configuredDocumentModelTier(config.engine.models, selected) : null;
+    const modelTier = pinned && selected ? await deps.resolveModel(selected, userPlan(req)) : null;
     res.json({ enabled: true, ready: deps.isReady(), supported: modelTier !== null, modelTier,
       modes: ['preserve'], formats: documentFormatSchema.options, limits: { maxFiles: 10, maxFileBytes: config.maxFileBytes } });
   }));
@@ -132,6 +135,8 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
       abort.signal.throwIfAborted();
       const params = parseDocumentAdmission(req.body);
       if (!deps.isReady()) throw new DocSandboxError('E_NOT_READY', 503);
+      // Schema and permission already rejected above. Catalog I/O starts here
+      // so a picker TEXT model that is not in the engine pin can still admit.
       const requestedModel = params.requestedModel ?? config.engine.models[params.modelTier].id;
       if (await deps.resolveModel(requestedModel, userPlan(req)) !== params.modelTier) throw new DocSandboxError('E_PARAMS', 400);
       abort.signal.throwIfAborted();

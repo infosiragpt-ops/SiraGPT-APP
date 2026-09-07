@@ -251,13 +251,13 @@ test('real catalog supports Prisma implicit primary identity and exact selected 
   assert.equal(await policy('anthropic/fixture-mechanical', 'PRO'), null);
 });
 
-test('real catalog deactivation and provider/type changes immediately revoke document admission', async () => {
+test('real catalog deactivation and non-text type revoke admission; provider is not an allowlist', async () => {
   const policy = createDocumentModelPolicy(catalogModels, db, () => true);
   try {
     await db.$executeRaw(Prisma.sql`UPDATE ai_models SET "isActive"=false WHERE name='fixture-mechanical'`);
     assert.equal(await policy('fixture-mechanical', 'PRO'), null);
     await db.$executeRaw(Prisma.sql`UPDATE ai_models SET "isActive"=true,provider='OpenRouter' WHERE name='fixture-mechanical'`);
-    assert.equal(await policy('fixture-mechanical', 'PRO'), null);
+    assert.equal(await policy('fixture-mechanical', 'PRO'), 'mechanical');
     await db.$executeRaw(Prisma.sql`UPDATE ai_models SET provider='anthropic',type='IMAGE' WHERE name='fixture-mechanical'`);
     assert.equal(await policy('fixture-mechanical', 'PRO'), null);
   } finally {

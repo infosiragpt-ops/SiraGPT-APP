@@ -176,10 +176,10 @@ test('disabled module lifecycle performs no I/O construction or reconciliation',
   const previous = process.env.DOC_SANDBOX_ENGINE;
   try {
     delete process.env.DOC_SANDBOX_ENGINE;
-    const module = createDocumentModule(unavailableDependencies());
-    assert.equal(typeof module.router, 'function');
-    await module.start(); await module.start();
-    await module.close(); await module.close();
+    const sandbox = createDocumentModule(unavailableDependencies());
+    assert.equal(typeof sandbox.router, 'function');
+    await sandbox.start(); await sandbox.start();
+    await sandbox.close(); await sandbox.close();
   } finally {
     if (previous === undefined) delete process.env.DOC_SANDBOX_ENGINE;
     else process.env.DOC_SANDBOX_ENGINE = previous;
@@ -333,8 +333,10 @@ test('real HTTP schema and permission rejection releases upload slots without mo
       ['unknown permission', { permission: 'admin' }, 400, 'E_PARAMS'],
       ['unknown model tier', { modelTier: 'maximum' }, 400, 'E_PARAMS'],
       ['unknown field', { execute: 'true' }, 400, 'E_PARAMS'],
-      ['model absent from pinned config', { requestedModel: 'unconfigured' }, 400, 'E_PARAMS'],
     ];
+    // A picker TEXT id that is not in DOC_SANDBOX_MODELS_JSON is not a schema
+    // error. Publication (absent / inactive / IMAGE fail closed; any active
+    // TEXT admits on mechanical) is catalog I/O and lives in model-policy tests.
     for (const [name, fields, status, code] of cases) await t.test(name, async () => {
       await expectError(await api('', { method: 'POST', body: form(fields) }), status, code);
       assert.equal(notices.at(-1), code);
@@ -400,6 +402,8 @@ test('real HTTP rejects malformed owners, identifiers, replay cursors and signed
 
 test('real HTTP capability probing cannot report an unavailable or unconfigured model supported', async () => {
   await withHttpAdmission(async ({ api, lease }) => {
+    // Unconfigured / missing query stay pin-only. Catalog I/O is reserved for
+    // a configured engine identity (see the publication integration test).
     for (const ready of [false, true]) {
       if (ready) lease.confirm(lease.ticket());
       for (const path of ['/capabilities', '/capabilities?model=unconfigured']) {
@@ -422,10 +426,10 @@ test('disabled module exposes only authenticated not-ready HTTP responses across
     delete process.env.DOC_SANDBOX_ENGINE;
     const deps = unavailableDependencies();
     deps.authenticate = fixtureAuthenticate;
-    const module = createDocumentModule(deps);
-    const app = express(); app.use('/api/docs/jobs', module.router);
+    const sandbox = createDocumentModule(deps);
+    const app = express(); app.use('/api/docs/jobs', sandbox.router);
     server = createHttpServer(app); const origin = await listen(server);
-    for (const cycle of [module.start, module.close, module.start, module.close]) {
+    for (const cycle of [sandbox.start, sandbox.close, sandbox.start, sandbox.close]) {
       await cycle();
       const capability = await fetch(`${origin}/api/docs/jobs/capabilities`, {
         headers: { Authorization: 'Bearer local-admission-fixture' }, signal: AbortSignal.timeout(5000),
