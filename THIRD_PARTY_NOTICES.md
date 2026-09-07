@@ -26,6 +26,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   This is a SiraGPT-owned implementation, not a vendored gateway
   or provider adapter. Audited references and scope are recorded in
   `docs/agent-brain-integrity-20260906.md`.
+  The /agentes idempotent cancel in
+  `backend/src/services/agents/agent-task-cancel.js` fuses OpenClaw's
+  already-aborted + idempotent run-handle clear
+  (`infra/abort-signal.js`, `agents/pi-embedded-runner/runs.ts`) as a
+  native CommonJS rewrite: a reconnect mid-run (or a second Stop) returns
+  `already` + `E_CANCELLED` without a second abort or event. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`. No OpenClaw runtime,
+  OpenRouter, or extra env. Not a dump of the upstream runner.
   The /agentes 429 backoff in `backend/src/utils/task-error-classifier.js`
   fuses OpenClaw's Retry-After idea (parse `Retry-After` / `retry-after-ms`
   / HTTP-date and do not retry before the hint) as a native CommonJS
