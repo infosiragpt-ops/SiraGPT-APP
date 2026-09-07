@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode exposes `GET /api/opencode/session/:id/summary` so `/agentes`
+  can reconnect with a bounded transcript snapshot (`lastEventId`,
+  Spanish `lastStage`, redacted message previews, tool count) instead
+  of replaying the full SSE log. Inspired by OpenCode `SessionSummary`;
+  independent local rewrite, no Effect runtime and no git-diff spill.
+
 - SiraCode truncates bulky tool results (líneas + bytes) and compacts
   older tool messages in long turns, with a single Spanish stage
   `Compactando contexto`. Inspired by OpenCode `Truncate.output` and
