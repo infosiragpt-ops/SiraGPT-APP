@@ -17,6 +17,8 @@
  *   4. Max output — 128 KB stdout/stderr cap.
  *   5. No interactive I/O — stdin closed immediately.
  *   6. No PIPE chaining — rejected by allowlist (no `|`, no `;`, no `&&`).
+ *   7. No inline evaluation — `node -e`/`python3 -c` style flags are rejected:
+ *      they run arbitrary code that no path/argument check can inspect.
  *
  * This is NOT a general-purpose shell. It's a curated execution tool
  * so the agent can meaningfully work on cloned projects without being
@@ -72,6 +74,37 @@ const SIMPLE_COMMANDS = new Set([
   'whoami', 'id', 'hostname', 'uptime', 'free', 'lsb_release', 'ps',
   'make', 'cmake',
 ]);
+
+// Inline-evaluation flags run ARBITRARY code (node -e "…", python3 -c "…",
+// npm/npx exec -c …). Path validation deliberately skips `-` tokens, so these
+// flags would bypass every other check in this file. Reject them outright —
+// generated code belongs in project files, not in argv.
+const INLINE_EVAL_FLAGS = new Set([
+  '-e', '--eval', '--eval-file', '-p', '--print', '--input-type',
+  '-c', '--command', '-m', '--module',
+]);
+
+function firstInlineEvalFlag(args) {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = String(args[i] || '');
+    if (arg === '--') break;
+    if (INLINE_EVAL_FLAGS.has(arg) || /^(?:-[a-z]*e|--eval=|--print=)/i.test(arg)) return arg;
+  }
+  return null;
+}
+
+function hasInlineEvalFlag(spec) {
+  if (!spec || !Array.isArray(spec.args)) return false;
+  // node/python3: the flag can appear anywhere before `--`.
+  if (spec.program === 'node' || spec.program === 'python3') {
+    return Boolean(firstInlineEvalFlag(spec.args));
+  }
+  // npm exec -c / npx -c / npm run -c style passthrough.
+  if ((spec.program === 'npm' || spec.program === 'npx') && spec.args[0] !== 'run') {
+    return Boolean(firstInlineEvalFlag(spec.args));
+  }
+  return false;
+}
 
 const GIT_READ_SUBCOMMANDS = new Set(['status', 'log', 'diff', 'show', 'branch', 'tag']);
 const SAFE_GIT_CONFIG_KEYS = new Set(['user.name', 'user.email', 'init.defaultBranch']);
@@ -601,6 +634,13 @@ async function hostBash(args, ctx = {}) {
 
   const commandSpec = buildCommandSpec(command);
 
+  if (hasInlineEvalFlag(commandSpec)) {
+    return {
+      ok: false,
+      error: `Evaluación inline no permitida ("${firstInlineEvalFlag(commandSpec.args)}" ejecuta código arbitrario que este tool no puede auditar). Escribe el código en un archivo del proyecto y ejecútalo con node <archivo> / python3 <archivo>.`,
+    };
+  }
+
   const workingDir = normalizeRoot(args.directory || DEFAULT_WORKING_DIR);
 
   if (args.directory && !isAllowedDirectory(args.directory)) {
@@ -720,6 +760,7 @@ module.exports = {
     isAllowedCommand,
     isAllowedDirectory,
     commandHasUnsafePathReference,
+    hasInlineEvalFlag,
     runHostCommand,
     splitCommandLine,
     buildCommandSpec,
