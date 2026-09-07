@@ -7,6 +7,21 @@ The viewer is served on **https://siragpt.com/sessions/:id/novnc/** (path
 prefix). Do not use `computer.siragpt.com` or `computer.chatagic.com`. No DNS
 change.
 
+## Cloudflare prerequisite (verified 2026-09-07)
+
+The noVNC viewer needs a real WebSocket to
+`/sessions/:id/novnc/websockify`. If the Cloudflare edge does not forward
+`Upgrade: websocket` to origin, the orchestrator receives a plain GET,
+websockify answers its Python 404 page, and every viewer hangs forever on
+"Connecting…" / "Preparando escritorio…" — while the desktop itself, the
+orchestrator, Caddy and the WS proxy are all healthy (each verified
+individually end to end). Symptom fingerprint: `curl` with Upgrade headers
+to the websockify path returns websockify's `Error response / 404 / Nothing
+matches the given URI` page instead of `101 Switching Protocols`.
+Fix: Cloudflare dashboard → the zone → Network → **WebSockets ON** (and no
+WAF/Transform rule stripping `Upgrade` headers). No code change can work
+around a stripped upgrade: RFB needs a real socket.
+
 ## Live Lenovo publish (not this repo's Caddy / compose)
 
 Production does **not** use `deploy/Caddyfile`. The live gateway mounts
@@ -40,6 +55,25 @@ conversation suffix). Reuse; never spawn a new Chrome/VM per catalog click.
 Each desktop container is `sira-ac-user-{slug}` with user `compuser`,
 `DISPLAY=:1`, and memory/CPU caps (`AGENT_COMPUTER_DESKTOP_MEMORY_MB`,
 `AGENT_COMPUTER_DESKTOP_CPUS`).
+
+## Always-on behavior
+
+Desktops are never reaped by the orchestrator: containers run with
+`RestartPolicy: unless-stopped`, and on (re)boot the server reconciles every
+running `sira-ac-user-*` container back into the session store
+(`reconcileContainers`, logged as `computer_orchestrator_reconciled`), so a
+restart, deploy or host reboot never orphans a live computer.
+
+The viewer completes the loop client-side
+(`components/code/department-computer-pane.tsx`,
+`components/desktop/DesktopScreen.tsx`): session acquire retries with
+backoff (transport/5xx only, never isolation/auth), cached sessions are
+revalidated before use, the RFB channel reconnects a bounded number of
+times, and a 60 s heartbeat rebuilds the session after consecutive misses.
+When everything fails the pane shows the real error with a Reintentar
+button instead of spinning "Preparando escritorio…" forever. The agent
+drives the same container through `POST /api/agent-computer/action`
+(conversation-bound identity), so viewer and agent always share one computer.
 
 ## Desktop look (Grok Bot)
 
