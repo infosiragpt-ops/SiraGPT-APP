@@ -49,13 +49,22 @@ describe("normalizePath", () => {
     assert.equal(normalizePath("////page.tsx"), "page.tsx")
   })
 
-  it("trims surrounding whitespace AFTER the leading-slash strip", () => {
-    // Order in the implementation: replace `\\`, strip `^/+`, then trim.
-    // So a leading slash that follows whitespace is preserved — we lock
-    // the existing behaviour here so any reorder shows up explicitly.
-    assert.equal(normalizePath("  /a/b.ts  "), "/a/b.ts")
-    // Pure trailing-whitespace input still trims cleanly.
+  it("trims surrounding whitespace", () => {
+    assert.equal(normalizePath("  a/b.ts  "), "a/b.ts")
     assert.equal(normalizePath("a/b.ts   "), "a/b.ts")
+  })
+
+  it("resolves `.` and `..` segments inside the root (Zip Slip guard)", () => {
+    assert.equal(normalizePath("src/./a.ts"), "src/a.ts")
+    assert.equal(normalizePath("src/../a.ts"), "a.ts")
+    assert.equal(normalizePath("a/b/../../c.ts"), "c.ts")
+  })
+
+  it("drops leftover `..` so no key can escape the workspace root", () => {
+    assert.equal(normalizePath("../../../../.zshrc"), ".zshrc")
+    assert.equal(normalizePath("..\\..\\etc\\passwd"), "etc/passwd")
+    assert.equal(normalizePath(".."), "")
+    assert.equal(normalizePath("a/../../.."), "")
   })
 })
 
@@ -89,6 +98,21 @@ describe("parseCodeBlocks", () => {
     const out = parseCodeBlocks("```tsx app/code/page.tsx\nexport {}\n```")
     assert.equal(out[0].language, "tsx")
     assert.equal(out[0].path, "app/code/page.tsx")
+  })
+
+  it("rejects prose after the language in style 1 (no phantom apply targets)", () => {
+    // Regression: the tail used to be taken as a path verbatim.
+    const out = parseCodeBlocks("```ts aquí va la explicación\nconst x = 1\n```")
+    assert.equal(out.length, 1)
+    assert.equal(out[0].language, "ts")
+    assert.equal(out[0].path, null)
+  })
+
+  it("normalises `..` out of inferred paths", () => {
+    const out = parseCodeBlocks("```\n// path: ../../../secrets.env\nexport {}\n```")
+    // The traversal segments are resolved inside the workspace root;
+    // the file cannot land outside it.
+    assert.equal(out[0].path, "secrets.env")
   })
 
   it("parses fence info style 2: path-only info string", () => {
@@ -279,6 +303,58 @@ describe("computeLineDiff", () => {
     assert.deepEqual(
       onlyRemoves.map((l) => l.kind),
       ["removed", "removed"],
+    )
+  })
+
+  it("matches an edited line in the middle instead of remove-all/add-all", () => {
+    // Regression for the old prefix/suffix-only diff: one changed line
+    // mid-file used to render every middle line as removed + added.
+    const before = ["l1", "l2", "old", "l4", "l5"].join("\n")
+    const after = ["l1", "l2", "new", "l4", "l5"].join("\n")
+    const lines = computeLineDiff(before, after)
+    assert.deepEqual(
+      lines.map((l) => l.kind),
+      ["kept", "kept", "removed", "added", "kept", "kept"],
+    )
+    assert.equal(lines[2].text, "old")
+    assert.equal(lines[2].oldNumber, 3)
+    assert.equal(lines[3].text, "new")
+    assert.equal(lines[3].newNumber, 3)
+  })
+
+  it("keeps unchanged interior lines when the tail changes (LCS pairing)", () => {
+    const before = ["fn a() {}", "fn b() {}", "fn c() {}"].join("\n")
+    const after = ["fn a() {}", "// b removed", "fn c() {}"].join("\n")
+    const lines = computeLineDiff(before, after)
+    assert.equal(lines.filter((l) => l.kind === "kept" && l.text === "fn c() {}").length, 1)
+    assert.equal(lines.filter((l) => l.kind === "removed").length, 1)
+    assert.equal(lines.filter((l) => l.kind === "added").length, 1)
+  })
+
+  it("falls back to coarse remove/add beyond the DP cell budget", () => {
+    // 3000 × 3000 = 9M cells > MAX_DIFF_CELLS: must not hang or OOM,
+    // and must still produce a well-formed diff with correct counts.
+    const n = 3000
+    const before = Array.from({ length: n }, (_, i) => `old ${i}`).join("\n")
+    const after = Array.from({ length: n }, (_, i) => `new ${i}`).join("\n")
+    const lines = computeLineDiff(before, after)
+    assert.equal(lines.length, 2 * n)
+    assert.equal(lines.filter((l) => l.kind === "removed").length, n)
+    assert.equal(lines.filter((l) => l.kind === "added").length, n)
+  })
+
+  it("preserves old/new line numbering through an LCS diff", () => {
+    const lines = computeLineDiff("a\nX\nb\nc", "a\nY\nZ\nb\nc")
+    assert.deepEqual(
+      lines.map((l) => [l.kind, l.oldNumber ?? null, l.newNumber ?? null]),
+      [
+        ["kept", 1, 1],
+        ["removed", 2, null],
+        ["added", null, 2],
+        ["added", null, 3],
+        ["kept", 3, 4],
+        ["kept", 4, 5],
+      ],
     )
   })
 })
