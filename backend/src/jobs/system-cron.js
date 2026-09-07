@@ -78,6 +78,14 @@ const INACTIVE_API_KEY_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_INACTIVE_API_KEY
 // SystemSettings `failed_email_retry:*` rows and re-attempts delivery
 // up to MAX_ATTEMPTS times before dropping.
 const FAILED_EMAIL_RETRY_SCHEDULE = process.env.SYSTEM_CRON_FAILED_EMAIL_RETRY_SCHEDULE || '0 6 * * *';
+// Generated-artifact lifecycle sweep (Plataforma Artefactos Storage):
+// prunes task snapshots past retention, purges DB-orphaned
+// GeneratedArtifact rows, and removes unreferenced artifact binaries —
+// purging their Cloudflare R2 mirrors before dropping the local
+// metadata that points at them. Default 05:20 UTC, in the free slot
+// between webhook-secret-grace (05:15) / cost-archive (05:30) and the
+// failed-email drain (06:00).
+const ARTIFACT_LIFECYCLE_SWEEP_SCHEDULE = process.env.SYSTEM_CRON_ARTIFACT_LIFECYCLE_SWEEP_SCHEDULE || '20 5 * * *';
 // Ratchet 45 — Notification inbox retention sweep. Default 04:45 UTC,
 // piggy-backing on the ApiKey expiry slot (independent tables, cheap
 // deleteMany — they can co-fire). Hard-deletes rows that are
@@ -709,6 +717,46 @@ function start(opts = {}) {
     schedule: FAILED_EMAIL_RETRY_SCHEDULE,
     task: failedEmailRetryTask,
     meta: failedEmailRetryMeta,
+  });
+
+  // Generated-artifact lifecycle sweep (05:20 UTC) — see the schedule
+  // constant comment above for what the pass covers.
+  let artifactLifecycleSweepRunning = false;
+  const artifactLifecycleSweepMeta = {};
+  const artifactLifecycleSweepTask = cron.schedule(
+    ARTIFACT_LIFECYCLE_SWEEP_SCHEDULE,
+    async () => {
+      if (artifactLifecycleSweepRunning) {
+        logger.warn?.('[system-cron] skip sweep-artifact-lifecycle — previous run still active');
+        return;
+      }
+      artifactLifecycleSweepRunning = true;
+      const finish = recordRun(artifactLifecycleSweepMeta, 'sweep-artifact-lifecycle');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./sweep-artifact-lifecycle');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] sweep-artifact-lifecycle retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] sweep-artifact-lifecycle done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] sweep-artifact-lifecycle failed: ${err && err.message}`);
+      } finally {
+        artifactLifecycleSweepRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'sweep-artifact-lifecycle',
+    schedule: ARTIFACT_LIFECYCLE_SWEEP_SCHEDULE,
+    task: artifactLifecycleSweepTask,
+    meta: artifactLifecycleSweepMeta,
   });
 
   // Ratchet 45 — PartialSession expiry sweep (hourly).
