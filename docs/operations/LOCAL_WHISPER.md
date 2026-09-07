@@ -31,7 +31,38 @@ OpenMP + GPU init segfault after `whisper_model_load`.
 
 ## Publish / Lenovo host
 
-Rebuild the backend image so the Dockerfile install runs:
+`install-local-whisper.sh` skips HuggingFace when `ggml-base.bin` is already
+present and non-empty (destination, `/tmp/whisper-seed/`, `/tmp/`, or
+`WHISPER_SEED_FILE`). Live images already ship
+`/usr/local/share/whisper/ggml-base.bin` (~142MB).
+
+**Preferred Lenovo rebuild** — copy the cached bin into the backend build
+context and set `BUNDLE_WHISPER_MODEL=1`. That selects the `whisper-seed-1`
+stage (`COPY ggml-base.bin`) so the install never hits HuggingFace (avoids
+429 during `docker compose build`):
+
+```bash
+# From a running backend container, or any host path that already has the bin:
+docker cp <backend-container>:/usr/local/share/whisper/ggml-base.bin backend/ggml-base.bin
+
+BUNDLE_WHISPER_MODEL=1 docker compose -f docker-compose.prod.yml build backend
+# equivalent:
+# docker compose -f docker-compose.prod.yml build \
+#   --build-arg BUNDLE_WHISPER_MODEL=1 backend
+```
+
+Do not commit `ggml-base.bin`. `backend/.dockerignore` must not exclude it
+(the file is gitignored only).
+
+**Alternate:** pass an internal or `file://` URL instead of HuggingFace:
+
+```bash
+docker compose -f docker-compose.prod.yml build \
+  --build-arg WHISPER_MODEL_URL=file:///tmp/whisper-seed/ggml-base.bin \
+  backend
+```
+
+Default (CI / first install) still downloads from HuggingFace:
 
 ```bash
 docker compose -f docker-compose.prod.yml build backend

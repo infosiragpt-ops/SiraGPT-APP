@@ -27,6 +27,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Backend image rebuilds no longer depend on HuggingFace for
+  `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
+  seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies
+  `file://` / absolute `WHISPER_MODEL_URL` locally. Dockerfile
+  `BUNDLE_WHISPER_MODEL=1` copies a context `ggml-base.bin` (Lenovo cached
+  bin) so 429 during install is skipped.
+
 - Production Alpine runner installs `bash` and probes `/bin/bash` as
   `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
   permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
