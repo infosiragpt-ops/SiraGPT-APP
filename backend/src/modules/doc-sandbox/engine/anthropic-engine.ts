@@ -9,7 +9,7 @@ import { DocSandboxError } from '../types/errors';
 import { addUsage, assertPriceTable, calculateUsage, emptyUsage, totalTokens } from './cost';
 import { engineManifestSchema, extractGeneratedFileIds, isRecord, isSafeFilename, parseJsonArtifact, readBoundedResponse, sha256 } from './artifacts';
 import type { DocumentProviderClient, ProviderCallOptions } from './provider-client';
-import type { AnthropicEngineConfig, EnginePersistence, RunResult, SandboxEngine, SandboxSession } from './types';
+import type { AnthropicEngineConfig, EnginePersistence, RunResult, SandboxEngine, SandboxSession } from './contracts';
 
 interface SessionState {
   handle: SandboxSession;

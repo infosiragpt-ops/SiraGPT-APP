@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import path from 'node:path';
-import type { AnthropicEngineConfig } from './engine/types';
+import type { AnthropicEngineConfig } from './engine/contracts';
 import { decodeStorageKey } from './storage/private-storage';
 import { DocSandboxError } from './types/errors';
 

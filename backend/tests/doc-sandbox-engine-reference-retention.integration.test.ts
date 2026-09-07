@@ -7,7 +7,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import type { BetaMessage } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { AnthropicSandboxEngine } from '../src/modules/doc-sandbox/engine/anthropic-engine';
 import type { DocumentProviderClient } from '../src/modules/doc-sandbox/engine/provider-client';
-import type { AnthropicEngineConfig, EnginePersistence } from '../src/modules/doc-sandbox/engine/types';
+import type { AnthropicEngineConfig, EnginePersistence } from '../src/modules/doc-sandbox/engine/contracts';
 import { sha256 } from '../src/modules/doc-sandbox/engine/artifacts';
 import { totalTokens } from '../src/modules/doc-sandbox/engine/cost';
 import { EDITOR_PROMPT_VERSION } from '../src/modules/doc-sandbox/agent/prompt';

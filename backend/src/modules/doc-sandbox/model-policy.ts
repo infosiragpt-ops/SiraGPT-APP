@@ -1,5 +1,5 @@
 import type { PrismaClient } from '@prisma/client';
-import type { AnthropicEngineConfig } from './engine/types';
+import type { AnthropicEngineConfig } from './engine/contracts';
 import { DocSandboxError } from './types/errors';
 
 export type DocumentModelTier = 'mechanical' | 'academic';

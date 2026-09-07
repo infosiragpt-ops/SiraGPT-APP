@@ -8,7 +8,7 @@ import { IndependentDocumentValidator, DocumentValidationError } from '../src/mo
 import { DocSandboxError, publicError } from '../src/modules/doc-sandbox/types/errors';
 import { emptyUsage } from '../src/modules/doc-sandbox/engine/cost';
 import { sha256 } from '../src/modules/doc-sandbox/engine/artifacts';
-import type { SandboxSession } from '../src/modules/doc-sandbox/engine/types';
+import type { SandboxSession } from '../src/modules/doc-sandbox/engine/contracts';
 
 // This suite exercises constructor/pure mapping/pre-IO guards, not process().
 // Real clients are present (never connected); validation is NOT mocked. Private

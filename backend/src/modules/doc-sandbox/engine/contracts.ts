@@ -2,6 +2,9 @@ import type { Artifact, AgentResult, EditPlan, InputFile, JobEvent, JobForEngine
 import type { HostedSkillId } from '../agent/skills';
 import type { EnginePriceTable } from './cost';
 
+/** Runtime marker so the engine contract module is not a types-only remap. */
+export const SANDBOX_ENGINE_CONTRACT = 'anthropic-messages' as const;
+
 export interface SandboxSession {
   readonly id: string;
   readonly jobId: string;

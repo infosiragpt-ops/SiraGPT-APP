@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { addUsage, emptyUsage, totalTokens } from '../engine/cost';
 import { sha256 } from '../engine/artifacts';
-import type { EnginePersistence, SandboxEngine, SandboxSession } from '../engine/types';
+import type { EnginePersistence, SandboxEngine, SandboxSession } from '../engine/contracts';
 import type { PrivateDocumentStorage, StorageScope } from '../storage/private-storage';
 import { classifyAgentResult, documentFormatSchema, hasCompleteValidation } from '../types/contracts';
 import type { Artifact, DocumentOutcome, EditPlan, InputFile, JobEvent, RunRequest, Usage, ValidationReport } from '../types/contracts';

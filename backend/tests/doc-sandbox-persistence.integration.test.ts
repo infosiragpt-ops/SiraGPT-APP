@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { DocSandboxRepository, type ArtifactInput, type ArtifactKind, type AttemptLease, type PublicationGate } from '../src/modules/doc-sandbox/queue/repository';
 import { createDocumentModelPolicy } from '../src/modules/doc-sandbox/model-policy';
-import type { AnthropicEngineConfig } from '../src/modules/doc-sandbox/engine/types';
+import type { AnthropicEngineConfig } from '../src/modules/doc-sandbox/engine/contracts';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 import { createDocumentModelCatalogFixture } from './doc-sandbox-model-catalog-fixture';
 const { prepareDocumentAccountDeletion } = require('../src/services/doc-sandbox-account-lifecycle');

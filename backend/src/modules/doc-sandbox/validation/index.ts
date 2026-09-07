@@ -48,6 +48,8 @@ export interface ValidatorOptions {
   timeoutMs?: number;
   /** Private directory mounted at the IDENTICAL absolute path in worker and Docker host. */
   stagingRoot?: string;
+  /** Test hook. Production leaves this unset and uses the isolated container runner. */
+  runContainer?(args: string[], input: unknown, options: ValidatorOptions, invocation: ValidatorInvocation, signal?: AbortSignal): Promise<unknown>;
 }
 export function validatorContainerArguments(name: string, inputDirectory: string, artifactDirectory: string, options: ValidatorOptions): string[] {
   if (!/^(?:sha256:[a-f0-9]{64}|[a-zA-Z0-9][a-zA-Z0-9./:_-]*@sha256:[a-f0-9]{64})$/.test(options.image)) {
@@ -234,7 +236,8 @@ export class IndependentDocumentValidator {
       const name = invocation.name;
       const args = validatorContainerArguments(name, inputDirectory, artifactDirectory, this.options);
       launched = true;
-      const raw = await runContainer(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, invocation, signal);
+      const runner = this.options.runContainer ?? runContainer;
+      const raw = await runner(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, invocation, signal);
       const response = responseSchema.parse(raw);
       if (!response.ok) throw new DocumentValidationError(response.error.code, response.error.message);
       const artifacts: Artifact[] = [];
