@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Hermes fusion: optional-skill previews are sandboxed as data
+  (`<<<SKILL_REFERENCE>>>`) and each `runSkill` emits a content-free
+  `skill_run` audit line (id / ok / duration / errorCode only — no args,
+  result, or prompt). Native rewrite of Hermes skill-load +
+  scan-before-inject; no upstream Python.
+
 - SiraCode sessions now take a title from the first real user message
   (`Nueva sesión` until then). Trivial greetings do not lock the label;
   a caller-supplied title is kept. Inspired by OpenCode
