@@ -113,7 +113,7 @@ function saveSessions(userId, sessions) {
 }
 
 function emptyCuratorState() {
-  return { lastRunAt: 0, skills: {}, pinned: [] };
+  return { lastRunAt: 0, skills: {}, pinned: [], promoted: {} };
 }
 
 function loadSkillCurator(userId) {
@@ -121,10 +121,14 @@ function loadSkillCurator(userId) {
   const skills = row.skills && typeof row.skills === 'object' && !Array.isArray(row.skills)
     ? row.skills
     : {};
+  const promoted = row.promoted && typeof row.promoted === 'object' && !Array.isArray(row.promoted)
+    ? row.promoted
+    : {};
   return {
     lastRunAt: Number(row.lastRunAt) || 0,
     skills,
     pinned: Array.isArray(row.pinned) ? row.pinned.map(String) : [],
+    promoted,
     updatedAt: Number(row.updatedAt) || 0,
   };
 }
@@ -138,6 +142,9 @@ function saveSkillCurator(userId, state) {
       ? state.skills
       : {},
     pinned: Array.isArray(state?.pinned) ? state.pinned.map(String) : [],
+    promoted: state?.promoted && typeof state.promoted === 'object' && !Array.isArray(state.promoted)
+      ? state.promoted
+      : {},
   });
 }
 

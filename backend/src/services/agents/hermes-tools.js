@@ -223,12 +223,12 @@ const hermesToolsetTool = {
 
 const hermesSkillCuratorTool = {
   name: 'skill_curator',
-  description: 'Hermes-style skill-library curator. observe/status/run (dry-run default) / record / pin. Never deletes bundled skills. Reports land in Biblioteca.',
+  description: 'Hermes-style skill-library curator. observe/status/run (dry-run default) / record / pin / dedupe / promote. Never deletes bundled skills. High-signal skills land in Biblioteca with provenance.',
   parameters: {
     type: 'object',
     required: ['action'],
     properties: {
-      action: { type: 'string', enum: ['observe', 'status', 'run', 'record', 'pin', 'list'] },
+      action: { type: 'string', enum: ['observe', 'status', 'run', 'record', 'pin', 'list', 'dedupe', 'promote'] },
       skillName: { type: 'string' },
       dryRun: { type: 'boolean' },
       chatId: { type: 'string' },
@@ -253,6 +253,17 @@ const hermesSkillCuratorTool = {
         return skillCurator.pin(userId, args.skillName);
       case 'list':
         return { ok: true, items: biblioteca.listForUser(userId) };
+      case 'dedupe':
+        return skillCurator.dedupe(userId, {
+          dryRun: args.dryRun !== false,
+          chatId: args.chatId || ctx.chatId || null,
+        });
+      case 'promote':
+        return skillCurator.promoteHighSignal(userId, {
+          dryRun: args.dryRun === true,
+          chatId: args.chatId || ctx.chatId || null,
+          skillName: args.skillName,
+        });
       default:
         return { ok: false, error: 'invalid action' };
     }

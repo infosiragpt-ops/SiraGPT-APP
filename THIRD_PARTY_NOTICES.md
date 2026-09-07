@@ -116,10 +116,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   pinned in `.agents/hermes-upstream/SNAPSHOT.json`).
   The skill-library curator and Biblioteca deposit in
   `backend/src/services/agents/hermes-skill-curator.js`,
+  `backend/src/services/agents/hermes-skill-hygiene.js`,
   `backend/src/services/agents/hermes-biblioteca.js` and
   `.agents/skills/biblioteca-deposit/SKILL.md` adapt Hermes curator
-  observation → stale → archive (never delete) and `logs/curator/REPORT.md`
-  landing. No Python curator was copied; every write is keyed by `userId`.
+  observation → stale → archive (never delete), consolidation/rename-map
+  hygiene, and `logs/curator/REPORT.md` landing. Native hash/name dedupe
+  plus high-signal Biblioteca promote with provenance is SiraGPT-owned.
+  No Python curator was copied; every write is keyed by `userId`.
   The skill-prompt sandbox and content-free `skill_run` audit in
   `backend/src/services/agents/skill-prompt-sandbox.js` adapt Hermes
   skill-load-into-context plus scan-before-inject (same MEMORY/USER
