@@ -43,7 +43,7 @@ const hermesCronjobTool = {
       case 'list':
         return { ok: true, jobs: cronBridge.listJobs({ userId }) };
       case 'trigger':
-        return { ok: true, ...(await cronBridge.triggerJob(args.jobId)) };
+        return { ok: true, ...(await cronBridge.triggerJob(args.jobId, { userId })) };
       case 'pause':
         return { ok: true, ...cronBridge.pauseJob(args.jobId, userId) };
       case 'resume':
