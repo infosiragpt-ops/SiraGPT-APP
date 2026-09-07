@@ -37,9 +37,10 @@ present and non-empty (destination, `/tmp/whisper-seed/`, `/tmp/`, or
 `/usr/local/share/whisper/ggml-base.bin` (~142MB).
 
 **Preferred Lenovo rebuild** — copy the cached bin into the backend build
-context and set `BUNDLE_WHISPER_MODEL=1`. That selects the `whisper-seed-1`
-stage (`COPY ggml-base.bin`) so the install never hits HuggingFace (avoids
-429 during `docker compose build`):
+context and set `BUNDLE_WHISPER_MODEL=1`. That ARG is declared before the
+first `FROM` so BuildKit can interpolate `FROM whisper-seed-${BUNDLE_WHISPER_MODEL}`
+and select `whisper-seed-1` (`COPY ggml-base.bin`). The install never hits
+HuggingFace (avoids 429 during `docker compose build`):
 
 ```bash
 # From a running backend container, or any host path that already has the bin:

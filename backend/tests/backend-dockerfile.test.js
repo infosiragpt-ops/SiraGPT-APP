@@ -66,6 +66,31 @@ test('backend Dockerfile installs whisper.cpp with sh and a hard smoke test', ()
   assert.match(dockerfile, /\{\s*apk del[^}]*\|\|\s*true;\s*\}/);
 });
 
+function globalDockerfileArgs(dockerfile) {
+  const firstFrom = dockerfile.search(/^\s*FROM\s+/m);
+  assert.ok(firstFrom !== -1, 'Dockerfile must have a FROM');
+  return dockerfile.slice(0, firstFrom);
+}
+
+function interpolateFromStage(dockerfile, name, buildArgs = {}) {
+  const globalBlock = globalDockerfileArgs(dockerfile);
+  const declared = {};
+  for (const line of globalBlock.split('\n')) {
+    const match = line.match(/^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$/);
+    if (!match) continue;
+    declared[match[1]] = match[2] === undefined ? '' : match[2];
+  }
+  const value = Object.prototype.hasOwnProperty.call(buildArgs, name)
+    ? String(buildArgs[name])
+    : declared[name];
+  assert.ok(value !== undefined && value !== '', `${name} must be a non-empty global ARG (usable in FROM)`);
+  const fromLine = dockerfile.match(
+    new RegExp(`^\\s*FROM\\s+whisper-seed-\\$\\{${name}\\}\\s+AS\\s+whisper-seed\\s*$`, 'm'),
+  );
+  assert.ok(fromLine, `FROM whisper-seed-\${${name}} AS whisper-seed must exist`);
+  return `whisper-seed-${value}`;
+}
+
 test('backend Dockerfile can seed ggml-base.bin without HuggingFace', () => {
   const dockerfile = fs.readFileSync(path.join(root, 'backend/Dockerfile'), 'utf8');
   const compose = fs.readFileSync(path.join(root, 'docker-compose.prod.yml'), 'utf8');
@@ -77,10 +102,19 @@ test('backend Dockerfile can seed ggml-base.bin without HuggingFace', () => {
     /ARG WHISPER_MODEL_URL=https:\/\/huggingface\.co\/ggerganov\/whisper\.cpp\/resolve\/main\/ggml-base\.bin/,
   );
   assert.match(dockerfile, /WHISPER_MODEL_URL=\$\{WHISPER_MODEL_URL\}/);
-  assert.match(dockerfile, /ARG BUNDLE_WHISPER_MODEL=0/);
+  assert.match(globalDockerfileArgs(dockerfile), /^\s*ARG BUNDLE_WHISPER_MODEL=0\s*$/m);
   assert.match(dockerfile, /FROM [^\n]+ AS whisper-seed-0/);
   assert.match(dockerfile, /FROM [^\n]+ AS whisper-seed-1/);
   assert.match(dockerfile, /FROM whisper-seed-\$\{BUNDLE_WHISPER_MODEL\} AS whisper-seed/);
+  assert.equal(
+    interpolateFromStage(dockerfile, 'BUNDLE_WHISPER_MODEL', { BUNDLE_WHISPER_MODEL: '0' }),
+    'whisper-seed-0',
+  );
+  assert.equal(interpolateFromStage(dockerfile, 'BUNDLE_WHISPER_MODEL'), 'whisper-seed-0');
+  assert.equal(
+    interpolateFromStage(dockerfile, 'BUNDLE_WHISPER_MODEL', { BUNDLE_WHISPER_MODEL: '1' }),
+    'whisper-seed-1',
+  );
   assert.match(dockerfile, /COPY ggml-base\.bin \/whisper-seed\/ggml-base\.bin/);
   assert.match(dockerfile, /COPY --from=whisper-seed \/whisper-seed\/ \/tmp\/whisper-seed\//);
 
@@ -97,6 +131,7 @@ test('backend Dockerfile can seed ggml-base.bin without HuggingFace', () => {
   assert.doesNotMatch(dockerignore, /^\*\.bin$/m);
   assert.match(opsDoc, /BUNDLE_WHISPER_MODEL=1/);
   assert.match(opsDoc, /WHISPER_MODEL_URL/);
+  assert.match(opsDoc, /before the\nfirst `FROM`/s);
 });
 
 function readInstallLocalWhisper() {
