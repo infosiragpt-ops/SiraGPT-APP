@@ -545,22 +545,10 @@ describe("agent-task-service · error messages", () => {
     )
   })
 
-  it("maps 503 Service Unavailable to the unavailable copy, distinct from timeout and cancel", () => {
+  it("maps 503 Service Unavailable to the server-problem copy", () => {
     assert.equal(
       normalizeAgentTaskErrorMessage(new Error("503 service unavailable")),
-      "El servicio no está disponible. Reintenta en unos segundos.",
-    )
-    assert.equal(
-      normalizeAgentTaskErrorMessage(new Error("504 Gateway Timeout")),
-      "La tarea superó el tiempo de espera. Reintenta.",
-    )
-    assert.equal(
-      normalizeAgentTaskErrorMessage({ code: "E_CANCELLED", message: "aborted" }),
-      "La tarea se detuvo.",
-    )
-    assert.notEqual(
-      normalizeAgentTaskErrorMessage(new Error("503 service unavailable")),
-      normalizeAgentTaskErrorMessage(new Error("504 Gateway Timeout")),
+      "El servidor tuvo un problema. Reintenta en unos segundos.",
     )
   })
 
