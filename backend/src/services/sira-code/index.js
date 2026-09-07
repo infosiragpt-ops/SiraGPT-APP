@@ -19,6 +19,7 @@ const engine = require('./engine');
 const planHandoff = require('./plan-handoff');
 const permissionResume = require('./permission-resume');
 const sessionTitle = require('./session-title');
+const toolResult = require('./tool-result');
 
 module.exports = {
   ...agents,
@@ -33,4 +34,5 @@ module.exports = {
   ...planHandoff,
   ...permissionResume,
   ...sessionTitle,
+  ...toolResult,
 };
