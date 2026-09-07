@@ -53,6 +53,13 @@ describe("sidebar chat folders", () => {
     assert.deepEqual(next.assignments, { b: "Personal" })
   })
 
+  it("persists a case-only folder rename across its chats", () => {
+    assert.deepEqual(renameChatFolder({ a: "TRABAJO" }, ["TRABAJO"], "TRABAJO", "Trabajo"), {
+      assignments: { a: "Trabajo" },
+      named: ["Trabajo"],
+    })
+  })
+
   it("filters and counts chats that belong to a folder", () => {
     const assignments = { a: "Trabajo", b: "Personal", c: "trabajo" }
     const chats = [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d" }]
