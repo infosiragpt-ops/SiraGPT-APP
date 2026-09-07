@@ -32,6 +32,12 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   rewrite: Spanish user copy, 60s clamp matching the agent-task worker,
   no OpenClaw transport, SDK, env, or vendor names. Not a dump of
   `agents/provider-transport-fetch.ts`.
+  The /agentes still-alive pulse in `backend/src/services/agents/task-store.js`
+  (`touchTaskHeartbeat`) and `agent-task-event-resume.js` fuses OpenClaw's
+  task `lastEventAt` activity stamp (media/subagent records, ACP wait) as a
+  native CommonJS rewrite: ISO string, no event-log growth, `alive` on
+  GET `/api/agent/task/:id/events` after SSE drop. Not a dump of
+  `agents/media-generation-task-status-shared.ts` or the ACP control plane.
   Further ports are governed by docs/code/openclaw-port-charter.md.
   The agent-task error presenter in
   `backend/src/utils/task-error-classifier.js` (`presentTaskError`) is a

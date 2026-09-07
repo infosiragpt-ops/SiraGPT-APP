@@ -757,6 +757,8 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     artifacts: task.artifacts || task.streamState?.artifacts || [],
     lastEventSeq: resume.lastEventSeq,
     updatedAt: resume.updatedAt,
+    lastEventAt: resume.lastEventAt,
+    alive: resume.alive,
     lastError: resume.lastError,
   });
 });
@@ -2973,6 +2975,7 @@ function createTaskRecord({
     fileIds: existingSnapshot?.fileIds || [],
     createdAt: now,
     updatedAt: now,
+    lastEventAt: now,
     streamState: streamState || existingSnapshot?.streamState || initialAgentState(),
     executionProfile,
     intentAlignmentProfile,
@@ -3069,6 +3072,7 @@ function formatTaskPayload(task) {
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    lastEventAt: task.lastEventAt || task.streamState?.lastEventAt || task.updatedAt || null,
     completedAt: task.completedAt || null,
     cancelledAt: task.cancelledAt || null,
     failedAt: task.failedAt || null,

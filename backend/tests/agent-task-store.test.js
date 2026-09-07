@@ -493,6 +493,8 @@ test('agent task store: touchTaskHeartbeat refreshes updatedAt on running tasks 
   const touched = taskStore.touchTaskHeartbeat('t-run', 'u');
   assert.equal(touched.status, 'running');
   assert.ok(Date.now() - Date.parse(touched.updatedAt) < 5_000);
+  assert.ok(Date.now() - Date.parse(touched.lastEventAt) < 5_000);
+  assert.equal(touched.lastEventAt, touched.streamState.lastEventAt);
 });
 
 test('agent task store: compactSnapshotEvents drops verbose tool payloads on completed tasks', () => {
