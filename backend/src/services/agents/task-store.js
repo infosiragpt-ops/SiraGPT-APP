@@ -795,6 +795,25 @@ function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {})
   return stale;
 }
 
+/**
+ * Cheap liveness pulse for an in-flight task. Bumps `updatedAt` so the
+ * runtime watchdog can tell a live worker from a dead one without appending
+ * events (which would grow the replay log). No-ops on missing, foreign, or
+ * already-terminal snapshots. Never throws — a heartbeat must not break the
+ * live run.
+ */
+function touchTaskHeartbeat(taskId, userId) {
+  if (!taskId || !userId) return null;
+  try {
+    const existing = getTaskSnapshotForUser(taskId, userId);
+    if (!existing) return null;
+    if (existing.status !== 'running' && existing.status !== 'queued') return existing;
+    return updateTaskSnapshot(taskId, userId, { updatedAt: nowIso() });
+  } catch {
+    return null;
+  }
+}
+
 function recoverStaleRunningTasks({
   staleAfterMs = DEFAULT_STALE_RUNNING_MS,
   markAs = 'error',
@@ -807,6 +826,7 @@ function recoverStaleRunningTasks({
   // were skipped FOREVER: rescanned and logged on every boot while their
   // chats showed an eternal in-progress state.
   jobBackedStaleAfterMs = 24 * 60 * 60 * 1000,
+  errorMessage = null,
 } = {}) {
   const stale = findStaleRunningTasks({ staleAfterMs });
   const recovered = [];
@@ -828,7 +848,9 @@ function recoverStaleRunningTasks({
     const seq = (Number(snapshot.lastEventSeq) || 0) + 1;
     const recoveryEvent = {
       type: 'error',
-      message: `Task ${reason}; was stuck in ${snapshot.status}`,
+      message: (typeof errorMessage === 'string' && errorMessage.trim())
+        ? errorMessage.trim()
+        : `Task ${reason}; was stuck in ${snapshot.status}`,
       ts: stamp,
       seq,
       id: `${snapshot.taskId}:${seq}`,
@@ -1212,6 +1234,7 @@ module.exports = {
   readTaskSnapshot,
   rebuildIndex,
   recoverStaleRunningTasks,
+  touchTaskHeartbeat,
   removeFromIndex,
   safeTaskId,
   sanitizeTaskRecord,
