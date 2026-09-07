@@ -56,3 +56,15 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   `packages/opencode/src/tool/{read,write,edit,glob,grep,shell,task,todo,webfetch,websearch,skill,plan}.ts`.
   No Effect-TS runtime was copied. Read-only upstream reference vendored at
   `vendor/opencode/` (see `vendor/opencode/LICENSE`).
+
+- **Hermes Agent** (https://github.com/NousResearch/hermes-agent, MIT License,
+  © 2025 Nous Research, commit `8b69ec03af50de892ae0bca1f7e2384a8f6eb5a8`) —
+  the `.agents/skills/pr-production-loop/SKILL.md` playbook (branch → commit →
+  PR → CI → squash-merge → SHA-pinned publish) is a SiraGPT-native rewrite of
+  the PR-lifecycle structure in upstream
+  `skills/github/github-pr-workflow/SKILL.md` (branch/commit/open/CI/merge
+  sections). No Hermes code, credentials, hostnames or agent runtime was
+  copied; all paths, gates (`production-main`, required checks, `publish.sh`
+  TARGET+PREVIOUS SHAs) and policies are SiraGPT-owned. The upstream MIT
+  license text is retained at `.agents/hermes-upstream/LICENSE` (snapshot
+  pinned in `.agents/hermes-upstream/SNAPSHOT.json`).
