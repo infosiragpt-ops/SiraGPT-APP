@@ -82,6 +82,10 @@ function sanitizeTaskRecord(record = {}) {
     // this without appending events (OpenClaw lastEventAt idea, native rewrite).
     lastEventAt: record.lastEventAt || record.updatedAt || now,
     cancelledAt: record.cancelledAt || null,
+    // Latch for idempotent Stop after SSE reconnect (#588). A second
+    // POST /cancel must not append another E_CANCELLED. Native rewrite
+    // of OpenClaw's already-aborted / idempotent run-handle clear.
+    cancelRequestedAt: record.cancelRequestedAt || null,
     completedAt: record.completedAt || null,
     failedAt: record.failedAt || null,
     terminalMetricRecorded: record.terminalMetricRecorded === true,
