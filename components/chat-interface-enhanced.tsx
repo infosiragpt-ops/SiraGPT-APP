@@ -252,7 +252,7 @@ import { agentTaskService, normalizeAgentTaskErrorMessage, reduceEvent, initialA
 import { findRecoveredAgentAssistantIndex } from "@/lib/agent-task-message-recovery"
 import { pickLastArtifactId } from "@/lib/document-chat-request"
 import { parseDocumentJobPointer, DocumentSandboxClientError } from "@/lib/document-sandbox-client"
-import { routeDocumentSandboxTurn } from "@/lib/document-sandbox-routing"
+import { DOCUMENT_SANDBOX_NEED_ORIGINAL, historyDocumentAttachments, resolveDocumentSandboxAdmission } from "@/lib/document-sandbox-routing"
 import { useDocumentSandboxChat } from "@/lib/use-document-sandbox-chat"
 import { devLog } from "@/lib/dev-log"
 import { normalizeChatInput, shouldWarnUser } from "@/lib/chat-input-normalize"
@@ -10166,6 +10166,62 @@ But first, you need to connect your Spotify account securely using the button be
       return;
     }
 
+    const sandboxDecision = resolveDocumentSandboxAdmission(msg, {
+      attachments: composerFiles,
+      historyAttachments: historyDocumentAttachments(currentChat?.messages || []),
+      previewAttachments: [composerPreviewAttachment, sidePreviewAttachment].filter(Boolean),
+      wordHtml: isWordConnectorActive
+        ? (wordConnectorRef.current?.getHTML() || (currentChat as { wordContent?: string } | null)?.wordContent || "")
+        : "",
+      connectorOpen: Boolean(isWordConnectorActive || isExcelConnectorActive),
+    });
+    if (sandboxDecision.route === "need_original") {
+      toast.error(DOCUMENT_SANDBOX_NEED_ORIGINAL);
+      inFlightSendKeysRef.current.delete(sendKey);
+      return;
+    }
+    if (sandboxDecision.route === "edit" || sandboxDecision.route === "clarify") {
+      setInput("");
+      setSelectedMentionIds([]);
+      setMentionMenuOpen(false);
+      setMentionTrigger(null);
+      setMentionSearchQuery("");
+      chatDraft.clear();
+      uploadedFilesRef.current = [];
+      setUploadedFiles([]);
+      attachmentHashesRef.current.clear();
+      const documentPreflight = new AbortController();
+      let documentChatId = currentChat?.id || null;
+      intentAbortControllerRef.current = documentPreflight;
+      sendInFlightChatsRef.current.add(sendLatchKey);
+      setSendingChatId(currentChat?.id || null);
+      setIsSending(true);
+      try {
+        if (sandboxDecision.route === "clarify") throw new DocumentSandboxClientError("E_EDIT_AMBIGUOUS");
+        if (await startDocumentSandbox(msg, sandboxDecision.attachments, idempotencyKey, documentPreflight.signal, (chatId) => {
+          documentChatId = chatId;
+          if (intentAbortControllerRef.current === documentPreflight) setSendingChatId(chatId);
+        })) markQueuedSendSucceeded();
+      } catch (error) {
+        toast.error(error instanceof DocumentSandboxClientError ? error.message : "No se pudo iniciar la edición verificada. El original no se modificó.");
+        if ((currentChatIdRef.current || '__new__') === (documentChatId || '__new__')) {
+          setInput(msg);
+          uploadedFilesRef.current = composerFiles;
+          setUploadedFiles(composerFiles);
+          if (queuedSend) markQueuedSendSucceeded();
+        }
+      } finally {
+        inFlightSendKeysRef.current.delete(sendKey);
+        sendInFlightChatsRef.current.delete(sendLatchKey);
+        if (intentAbortControllerRef.current === documentPreflight) {
+          intentAbortControllerRef.current = null;
+          setIsSending(false);
+          setSendingChatId(null);
+        }
+      }
+      return; // No silent fallback to the legacy document editor or another provider.
+    }
+
     // Handle rewrite request
     if (selectedWordText) {
       setIsRewriting(true);
@@ -10592,8 +10648,10 @@ REWRITTEN TEXT:`;
       || isVoiceGenerationActive
       || isMusicGenerationActive
       || isVideoGenerationActive;
-    const documentSandboxRoute = routeDocumentSandboxTurn(msg, filesToSend);
-    if (!hasDedicatedConnector && !hasMediaGenerator && documentSandboxRoute) {
+    // Word/Excel connector generation already returned above. Explicit edits
+    // were admitted before those returns so they cannot be skipped here.
+    const documentSandboxRoute = resolveDocumentSandboxAdmission(msg, { attachments: filesToSend }).route;
+    if (!hasMediaGenerator && (documentSandboxRoute === "edit" || documentSandboxRoute === "clarify")) {
       const documentPreflight = new AbortController();
       let documentChatId = currentChat?.id || null;
       intentAbortControllerRef.current = documentPreflight;
@@ -12009,7 +12067,7 @@ I can help you with Google Calendar and Drive tasks. But first, you need to conn
       if (activeLocalJobChatIdsRef.current.has(item.chatId)) return false;
       // Original-file editing needs the canonical admission path. Keep these
       // queued turns until their chat is opened; never bypass it via addMessage.
-      if (routeDocumentSandboxTurn(item.msg, item.files || [])) return false;
+      if (resolveDocumentSandboxAdmission(item.msg, { attachments: item.files || [] }).route) return false;
       return true;
     });
     if (bgIndex < 0) return;

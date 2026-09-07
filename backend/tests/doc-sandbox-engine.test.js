@@ -204,13 +204,21 @@ for (const name of ['../doc.txt', 'a/b.txt', 'a\\b.txt', 'a\u0000.txt', '..', 'C
   test(`reject unsafe export filename ${JSON.stringify(name)}`, () => assert.equal(isSafeFilename(name), false));
 }
 test('unicode original filenames are retained', () => assert.equal(isSafeFilename('Tesis año 2026.docx'), true));
-test('queued model selection cannot be replaced by a new model in the same configured tier', async () => {
+test('catalog picker models admit; the engine still calls the configured sandbox model', async () => {
+  const { engine, session, sdk } = await fixture();
+  try {
+    const planning = await engine.run(session, request('plan', undefined, { requestedModel: 'muse-spark-1.3-contributor' }), () => {});
+    assert.equal(planning.status, 'planned');
+    assert.equal(sdk.messages[0].params.model, 'test-selected-model');
+  } finally { await engine.destroy(session); }
+});
+test('an empty picker model cannot start a paid engine turn', async () => {
   const { engine, session, sdk, events } = await fixture();
-  await assert.rejects(engine.run(session, request('plan', undefined, { requestedModel: 'previous-selected-model' }), () => {}),
-    isCode('E_NOT_READY'));
-  assert.equal(sdk.messages.length, 0, 'model mismatch must reject before a provider request');
-  assert.equal(events.some(([name]) => name === 'reserve'), false, 'model mismatch must not reserve a paid turn');
-  await engine.destroy(session);
+  try {
+    await assert.rejects(engine.run(session, request('plan', undefined, { requestedModel: '' }), () => {}), isCode('E_PARAMS'));
+    assert.equal(sdk.messages.length, 0);
+    assert.equal(events.some(([name]) => name === 'reserve'), false);
+  } finally { await engine.destroy(session); }
 });
 test('bounded JSON refuses malformed encoding and huge artifacts', () => {
   assert.throws(() => parseJsonArtifact(Buffer.from([0xff])));

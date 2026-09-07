@@ -176,10 +176,10 @@ test('disabled module lifecycle performs no I/O construction or reconciliation',
   const previous = process.env.DOC_SANDBOX_ENGINE;
   try {
     delete process.env.DOC_SANDBOX_ENGINE;
-    const module = createDocumentModule(unavailableDependencies());
-    assert.equal(typeof module.router, 'function');
-    await module.start(); await module.start();
-    await module.close(); await module.close();
+    const sandbox = createDocumentModule(unavailableDependencies());
+    assert.equal(typeof sandbox.router, 'function');
+    await sandbox.start(); await sandbox.start();
+    await sandbox.close(); await sandbox.close();
   } finally {
     if (previous === undefined) delete process.env.DOC_SANDBOX_ENGINE;
     else process.env.DOC_SANDBOX_ENGINE = previous;
@@ -333,8 +333,10 @@ test('real HTTP schema and permission rejection releases upload slots without mo
       ['unknown permission', { permission: 'admin' }, 400, 'E_PARAMS'],
       ['unknown model tier', { modelTier: 'maximum' }, 400, 'E_PARAMS'],
       ['unknown field', { execute: 'true' }, 400, 'E_PARAMS'],
-      ['model absent from pinned config', { requestedModel: 'unconfigured' }, 400, 'E_PARAMS'],
     ];
+    // A picker TEXT id that is not in DOC_SANDBOX_MODELS_JSON is not a schema
+    // error. Publication (absent / inactive / IMAGE fail closed; any active
+    // TEXT admits on mechanical) is catalog I/O and lives in model-policy tests.
     for (const [name, fields, status, code] of cases) await t.test(name, async () => {
       await expectError(await api('', { method: 'POST', body: form(fields) }), status, code);
       assert.equal(notices.at(-1), code);
@@ -400,6 +402,8 @@ test('real HTTP rejects malformed owners, identifiers, replay cursors and signed
 
 test('real HTTP capability probing cannot report an unavailable or unconfigured model supported', async () => {
   await withHttpAdmission(async ({ api, lease }) => {
+    // Unconfigured / missing query stay pin-only. Catalog I/O is reserved for
+    // a configured engine identity (see the publication integration test).
     for (const ready of [false, true]) {
       if (ready) lease.confirm(lease.ticket());
       for (const path of ['/capabilities', '/capabilities?model=unconfigured']) {
@@ -415,6 +419,103 @@ test('real HTTP capability probing cannot report an unavailable or unconfigured 
   });
 });
 
+async function withIsolatedRouter(
+  resolveModel: ReturnType<typeof createDocumentModelPolicy>,
+  run: (api: (path?: string, init?: RequestInit) => Promise<Response>) => Promise<void>,
+): Promise<void> {
+  const previous = process.env.DOC_SANDBOX_ENGINE;
+  let server: HttpServer | undefined;
+  try {
+    const key = randomBytes(32);
+    const model = { prices: { version: 'local-unused', inputPerMillionUsd: 1, outputPerMillionUsd: 1,
+      cacheReadPerMillionUsd: 1, cacheWritePerMillionUsd: 1, executionPerHourUsd: 0, minimumExecutionSeconds: 0 },
+      maxOutputTokensPerTurn: 256, reservationUsdPerTurn: 1 };
+    const config = loadDocumentSandboxConfig({ DOC_SANDBOX_ENGINE: 'anthropic',
+      DOC_SANDBOX_MODELS_JSON: JSON.stringify({ mechanical: { ...model, id: 'local-mechanical' }, academic: { ...model, id: 'local-academic' } }),
+      DOC_SANDBOX_SKILL_VERSIONS_JSON: JSON.stringify({ docx: 'local-pinned', xlsx: 'local-pinned', pptx: 'local-pinned', pdf: 'local-pinned' }),
+      DOC_SANDBOX_VALIDATOR_IMAGE: `sha256:${'a'.repeat(64)}`, DOC_SANDBOX_VALIDATION_STAGING_ROOT: '/tmp/local-validator-not-started',
+      DOC_SANDBOX_ENCRYPTION_KEY: key.toString('base64'), DOC_SANDBOX_MAX_COST_USD: '1', DOC_SANDBOX_MAX_FILE_BYTES: '32',
+      REDIS_URL: 'redis://127.0.0.1:1', ANTHROPIC_API_KEY: 'local-unused-no-provider', R2_BUCKET: 'local-fixture',
+      R2_ACCOUNT_ID: 'local-fixture', R2_ACCESS_KEY_ID: 'local-fixture', R2_SECRET_ACCESS_KEY: 'local-fixture-only' });
+    assert.ok(config);
+    const app = express();
+    app.use('/api/docs/jobs', createDocumentRouter({
+      authenticate: fixtureAuthenticate,
+      admissionPolicy: (_req, _res, next) => next(),
+      repository: {} as never, storage: {} as never,
+      tickets: new DocumentDownloadTickets(key), config, isReady: () => true,
+      resolveModel, abort: () => assert.fail('isolated router attempted to cancel a worker'), notice: () => {},
+    }));
+    server = createHttpServer(app);
+    const origin = await listen(server);
+    await run((path = '', init = {}) => fetch(`${origin}/api/docs/jobs${path}`, { ...init,
+      headers: { Authorization: 'Bearer local-admission-fixture', ...init.headers }, signal: AbortSignal.timeout(5000) }));
+  } finally {
+    if (server) await close(server);
+    if (previous === undefined) delete process.env.DOC_SANDBOX_ENGINE;
+    else process.env.DOC_SANDBOX_ENGINE = previous;
+  }
+}
+
+test('capability publication is consulted only after a pinned engine identity, without catalog I/O', async () => {
+  let catalogCalls = 0;
+  const rows = new Map<string, { name: string; isActive: boolean; type: string; provider: string } | null>([
+    ['local-mechanical', { name: 'local-mechanical', isActive: true, type: 'TEXT', provider: 'Anthropic' }],
+    ['local-academic', { name: 'local-academic', isActive: false, type: 'TEXT', provider: 'Anthropic' }],
+    ['muse-spark-1.3-contributor', { name: 'muse-spark-1.3-contributor', isActive: true, type: 'TEXT', provider: 'Meta' }],
+  ]);
+  const catalog = {
+    aiModel: { findUnique: async ({ where: { name } }: { where: { name: string } }) => {
+      catalogCalls += 1;
+      return rows.get(name) ?? null;
+    } },
+  };
+  const models = { mechanical: { id: 'local-mechanical' }, academic: { id: 'local-academic' } };
+  const policy = createDocumentModelPolicy(models as never, catalog as never, () => true);
+  // Unlisted picker TEXT still admits on mechanical. Capabilities stay pin-first
+  // and must not perform this catalog read for an unpinned identity.
+  assert.equal(await policy('muse-spark-1.3-contributor', 'PRO'), 'mechanical');
+  assert.equal(await policy('', 'PRO'), null);
+  assert.equal(await policy(' local-mechanical', 'PRO'), null);
+  assert.equal(await policy('x'.repeat(201), 'PRO'), null);
+  assert.equal(await createDocumentModelPolicy(
+    { ...models, academic: models.mechanical } as never,
+    { aiModel: { findUnique: async () => assert.fail('ambiguous pin reached catalog') } } as never,
+    () => true,
+  )('local-mechanical', 'PRO'), null);
+  assert.equal(await createDocumentModelPolicy(models as never, catalog as never, () => false)('local-mechanical', 'FREE'), null);
+  await assert.rejects(
+    createDocumentModelPolicy(models as never, {
+      aiModel: { findUnique: async () => { throw new Error('private database details'); } },
+    } as never, () => true)('local-mechanical', 'PRO'),
+    (error: unknown) => error instanceof DocSandboxError && error.code === 'E_NOT_READY'
+      && !error.message.includes('private database details'));
+  catalogCalls = 0;
+  await withIsolatedRouter(policy, async (api) => {
+    const unconfigured = await (await api('/capabilities?model=muse-spark-1.3-contributor')).json();
+    assert.equal(unconfigured.supported, false);
+    assert.equal(unconfigured.modelTier, null);
+    assert.equal(catalogCalls, 0);
+    const pinned = await (await api('/capabilities?model=local-mechanical')).json();
+    assert.equal(pinned.supported, true);
+    assert.equal(pinned.modelTier, 'mechanical');
+    assert.equal(catalogCalls, 1);
+    const unpublished = await (await api('/capabilities?model=local-academic')).json();
+    assert.equal(unpublished.supported, false);
+    assert.equal(unpublished.modelTier, null);
+    assert.equal(catalogCalls, 2);
+  });
+});
+
+test('job POST consults publication after schema and rejects an unpublished picker identity without storage I/O', async () => {
+  await withIsolatedRouter(async () => null, async (api) => {
+    await expectError(await api('', {
+      method: 'POST',
+      body: form({ requestedModel: 'muse-spark-1.3-contributor', modelTier: 'mechanical' }),
+    }), 400, 'E_PARAMS');
+  });
+});
+
 test('disabled module exposes only authenticated not-ready HTTP responses across start/close', async () => {
   const previous = process.env.DOC_SANDBOX_ENGINE;
   let server: HttpServer | undefined;
@@ -422,10 +523,10 @@ test('disabled module exposes only authenticated not-ready HTTP responses across
     delete process.env.DOC_SANDBOX_ENGINE;
     const deps = unavailableDependencies();
     deps.authenticate = fixtureAuthenticate;
-    const module = createDocumentModule(deps);
-    const app = express(); app.use('/api/docs/jobs', module.router);
+    const sandbox = createDocumentModule(deps);
+    const app = express(); app.use('/api/docs/jobs', sandbox.router);
     server = createHttpServer(app); const origin = await listen(server);
-    for (const cycle of [module.start, module.close, module.start, module.close]) {
+    for (const cycle of [sandbox.start, sandbox.close, sandbox.start, sandbox.close]) {
       await cycle();
       const capability = await fetch(`${origin}/api/docs/jobs/capabilities`, {
         headers: { Authorization: 'Bearer local-admission-fixture' }, signal: AbortSignal.timeout(5000),

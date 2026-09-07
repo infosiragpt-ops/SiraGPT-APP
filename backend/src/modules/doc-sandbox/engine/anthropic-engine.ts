@@ -22,6 +22,7 @@ interface SessionState {
   artifacts: Artifact[];
   budget?: RunRequest['budget'];
   modelTier?: RunRequest['modelTier'];
+  requestedModel?: string;
   usage: Usage;
   turns: number;
   pendingReservationUsd: number;
@@ -331,13 +332,16 @@ export class AnthropicSandboxEngine implements SandboxEngine {
     if (JSON.stringify([...new Set(request.formats)].sort()) !== JSON.stringify(expectedFormats)) throw new DocSandboxError('E_PARAMS');
     if (session.budget && JSON.stringify(session.budget) !== JSON.stringify(budget)) throw new DocSandboxError('E_PARAMS');
     if (session.modelTier && session.modelTier !== request.modelTier) throw new DocSandboxError('E_PARAMS');
-    // A queued job retains its selected model across configuration changes.
-    // A replacement in the same tier is not permission to call that model.
-    if (!request.requestedModel || this.config.models[request.modelTier]?.id !== request.requestedModel) {
-      throw new DocSandboxError('E_NOT_READY', 503);
+    if (!request.requestedModel || request.requestedModel !== request.requestedModel.trim() || request.requestedModel.length > 200) {
+      throw new DocSandboxError('E_PARAMS');
     }
+    // The picker model is recorded on the job. The Anthropic code-execution
+    // container still uses the configured engine model for this tier.
+    if (session.requestedModel && session.requestedModel !== request.requestedModel) throw new DocSandboxError('E_PARAMS');
+    if (!this.config.models[request.modelTier]?.id) throw new DocSandboxError('E_NOT_READY', 503);
     session.budget = { ...budget };
     session.modelTier = request.modelTier;
+    session.requestedModel = request.requestedModel;
     session.deadline = Math.min(session.deadline, session.createdAt + budget.timeoutMs);
   }
 
