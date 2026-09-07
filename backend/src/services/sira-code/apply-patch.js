@@ -96,18 +96,18 @@ function applyUnique(haystack, oldText, newText) {
     err.code = 'hunk_empty';
     throw err;
   }
-  const count = haystack.split(oldText).length - 1;
-  if (count === 0) {
+  const start = haystack.indexOf(oldText);
+  if (start === -1) {
     const err = new Error('el hunk no coincide con el archivo');
     err.code = 'hunk_miss';
     throw err;
   }
-  if (count > 1) {
+  if (haystack.indexOf(oldText, start + 1) !== -1) {
     const err = new Error('el hunk aparece más de una vez');
     err.code = 'hunk_ambiguous';
     throw err;
   }
-  return haystack.replace(oldText, newText);
+  return haystack.slice(0, start) + newText + haystack.slice(start + oldText.length);
 }
 
 async function applyPatchToWorkspace(workspace, input) {

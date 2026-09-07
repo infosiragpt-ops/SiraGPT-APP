@@ -8,6 +8,16 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode `applyUnique` keeps `$&` / `$$` / `` $` `` / `$'` literal and
+  rejects overlapping hunks (`aaa` + `aa`) instead of a partial replace.
+
+- SiraCode permission resume: allowing an `ask` tool (Planificar bash or
+  composer Protegido writes) now runs it in the session workspace instead
+  of only recording the decision. `always` remembers the grant for the
+  rest of the session; `deny` stays closed. Reconnect can `GET` the
+  session to see pending cards. Inspired by OpenCode once/always/reject;
+  independent rewrite, no vendor tree.
+
 - SiraCode plan→act handoff: switching Planificar → Construir keeps the
   approved plan on the session, emits the existing `Plan listo` stage, and
   injects it into the next Construir turn so the loop executes instead of
@@ -16,6 +26,11 @@ and improvement cycles follow a sequential number with the date the work landed.
   OpenCode session reminders; independent rewrite, no vendor tree.
 
 ### Fixed
+
+- Production Alpine runner installs `bash` and probes `/bin/bash` as
+  `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
+  permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
+  stays POSIX `sh`. No silent `sh` fallback.
 
 - `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies
   while the API process stays up. Live runners pulse a snapshot heartbeat;

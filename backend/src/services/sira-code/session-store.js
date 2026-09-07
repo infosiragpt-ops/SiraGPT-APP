@@ -31,6 +31,11 @@ function publicSession(session) {
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
     plan: publicPlan(session.plan),
+    pendingPermissions: [...(session.pendingPermissions || [])].map(([permissionId, pending]) => ({
+      permissionId,
+      tool: pending.tool,
+      label: 'Esperando permiso',
+    })),
   };
 }
 
@@ -59,6 +64,7 @@ async function createSession({
     workspace,
     abort: null,
     pendingPermissions: new Map(),
+    permissionGrants: new Set(),
     permission: 'default',
     plan: null,
   };

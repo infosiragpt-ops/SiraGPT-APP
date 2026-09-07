@@ -338,6 +338,193 @@ test('short planificar replies are not stored as an approved plan', async () => 
   assert.equal(siraCode.getSession(session.id).plan, null);
 });
 
+test('authorizing planificar bash with approved or a session grant allows it', () => {
+  const asked = siraCode.authorizeTool('planificar', 'bash', { permission: 'default' });
+  assert.equal(asked.needsPermission, true);
+  const once = siraCode.authorizeTool('planificar', 'bash', { permission: 'default', approved: true });
+  assert.equal(once.allowed, true);
+  assert.equal(once.needsPermission, false);
+  const granted = siraCode.authorizeTool('planificar', 'bash', {
+    permission: 'default',
+    grants: new Set(['bash']),
+  });
+  assert.equal(granted.allowed, true);
+});
+
+test('approved cannot unlock a denied write in planificar or Solo lectura', () => {
+  const write = siraCode.authorizeTool('planificar', 'write', { permission: 'default', approved: true });
+  assert.equal(write.denied, true);
+  const read = siraCode.authorizeTool('construir', 'bash', { permission: 'read', approved: true });
+  assert.equal(read.denied, true);
+  assert.equal(read.reason, 'composer_read_only');
+});
+
+test('allowing a pending planificar bash actually runs the command', async () => {
+  const session = await siraCode.create({ userId: 'u-perm', agent: 'planificar' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'lista archivos', {
+    userId: 'u-perm',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo permiso-ok' } }] };
+      }
+      return { text: 'Plan listo.', toolCalls: [] };
+    },
+  });
+  const stored = siraCode.getSession(session.id);
+  assert.equal(stored.pendingPermissions.size, 1);
+  const publicRow = siraCode.get(session.id, 'u-perm');
+  assert.equal(publicRow.pendingPermissions.length, 1);
+  assert.equal(publicRow.pendingPermissions[0].tool, 'bash');
+  const pid = publicRow.pendingPermissions[0].permissionId;
+
+  const resolved = await siraCode.resolvePermission(session.id, pid, 'allow', 'u-perm');
+  assert.equal(resolved.ok, true);
+  assert.equal(resolved.allowed, true);
+  assert.equal(resolved.executed, true);
+  assert.equal(resolved.remembered, false);
+  assert.match(String(resolved.result && resolved.result.preview), /permiso-ok/);
+  assert.equal(siraCode.getSession(session.id).pendingPermissions.size, 0);
+  assert.ok(stored.events.some((ev) => ev.type === 'permission_resolved' && ev.decision === 'allow'));
+  assert.ok(stored.events.some((ev) => ev.type === 'tool_result' && ev.ok === true));
+  assert.ok(!JSON.stringify(resolved).includes('DeepSeek'));
+  assert.ok(!JSON.stringify(resolved).includes('model_id'));
+});
+
+test('denying a pending bash does not execute it', async () => {
+  const session = await siraCode.create({ userId: 'u-deny', agent: 'planificar' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'lista archivos', {
+    userId: 'u-deny',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo no-debes' } }] };
+      }
+      return { text: 'Plan.', toolCalls: [] };
+    },
+  });
+  const pid = siraCode.get(session.id, 'u-deny').pendingPermissions[0].permissionId;
+  const resolved = await siraCode.resolvePermission(session.id, pid, 'deny', 'u-deny');
+  assert.equal(resolved.allowed, false);
+  assert.equal(resolved.executed, false);
+  const stored = siraCode.getSession(session.id);
+  assert.equal(stored.events.some((ev) => ev.type === 'tool_result'), false);
+  assert.ok(stored.events.some((ev) => ev.label === 'Permiso denegado'));
+});
+
+test('always remembers the grant so the next planificar bash does not ask', async () => {
+  const session = await siraCode.create({ userId: 'u-always', agent: 'planificar' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'lista archivos', {
+    userId: 'u-always',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo first' } }] };
+      }
+      return { text: 'Plan.', toolCalls: [] };
+    },
+  });
+  const pid = siraCode.get(session.id, 'u-always').pendingPermissions[0].permissionId;
+  const first = await siraCode.resolvePermission(session.id, pid, 'always', 'u-always');
+  assert.equal(first.remembered, true);
+  assert.equal(first.executed, true);
+
+  let secondCalls = 0;
+  const again = await siraCode.prompt(session.id, 'vuelve a listar', {
+    userId: 'u-always',
+    llmTurn: async () => {
+      secondCalls += 1;
+      if (secondCalls === 1) {
+        return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo second' } }] };
+      }
+      return { text: 'Plan otra vez.', toolCalls: [] };
+    },
+  });
+  const bash = again.toolResults.find((t) => t.tool === 'bash');
+  assert.ok(bash && bash.ok, 'remembered grant must run bash without asking');
+  assert.equal(siraCode.getSession(session.id).pendingPermissions.size, 0);
+  assert.match(String(bash.content), /second/);
+});
+
+test('allowing a Protegido apply_patch in construir persists the file', async () => {
+  const session = await siraCode.create({ userId: 'u-patch', agent: 'construir' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'aplica el parche', {
+    userId: 'u-patch',
+    permission: 'protected',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return {
+          text: '',
+          toolCalls: [{
+            name: 'apply_patch',
+            arguments: {
+              patch: '*** Begin Patch\n*** Add File: nota-patch.txt\n+desde permiso\n*** End Patch',
+            },
+          }],
+        };
+      }
+      return { text: 'Hecho.', toolCalls: [] };
+    },
+  });
+  const root = siraCode.getSession(session.id).workspace.root;
+  assert.equal(fs.existsSync(path.join(root, 'nota-patch.txt')), false);
+  const pid = siraCode.get(session.id, 'u-patch').pendingPermissions[0].permissionId;
+  const resolved = await siraCode.resolvePermission(session.id, pid, 'allow', 'u-patch');
+  assert.equal(resolved.executed, true);
+  assert.equal(resolved.tool, 'apply_patch');
+  const file = await siraCode.readFile(session.id, 'nota-patch.txt', 'u-patch');
+  assert.equal(file.content, 'desde permiso');
+  const stored = siraCode.getSession(session.id);
+  assert.ok(stored.events.some((ev) => ev.label === 'Verificando resultado' && ev.tool === 'apply_patch'));
+});
+
+test('allowing a Protegido write in construir persists the file', async () => {
+  const session = await siraCode.create({ userId: 'u-prot', agent: 'construir' });
+  let calls = 0;
+  await siraCode.prompt(session.id, 'escribe nota.txt', {
+    userId: 'u-prot',
+    permission: 'protected',
+    llmTurn: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { text: '', toolCalls: [{ name: 'write', arguments: { path: 'nota.txt', content: 'revisado' } }] };
+      }
+      return { text: 'Hecho.', toolCalls: [] };
+    },
+  });
+  const root = siraCode.getSession(session.id).workspace.root;
+  assert.equal(fs.existsSync(path.join(root, 'nota.txt')), false);
+  const pid = siraCode.get(session.id, 'u-prot').pendingPermissions[0].permissionId;
+  const resolved = await siraCode.resolvePermission(session.id, pid, 'allow', 'u-prot');
+  assert.equal(resolved.executed, true);
+  const file = await siraCode.readFile(session.id, 'nota.txt', 'u-prot');
+  assert.equal(file.content, 'revisado');
+});
+
+test('resolvePermission rejects a missing card and another user', async () => {
+  const session = await siraCode.create({ userId: 'owner' });
+  await assert.rejects(
+    () => siraCode.resolvePermission(session.id, 'perm_missing', 'allow', 'owner'),
+    /permiso no encontrado/,
+  );
+  await assert.rejects(
+    () => siraCode.resolvePermission(session.id, 'perm_missing', 'allow', 'intruder'),
+    /sesión no encontrada/,
+  );
+});
+
+test('permission-resume helpers normalize OpenCode-style replies', () => {
+  assert.equal(siraCode.normalizeDecision('once'), 'allow');
+  assert.equal(siraCode.normalizeDecision('always_allow_in_chat'), 'always');
+  assert.equal(siraCode.normalizeDecision('reject'), 'deny');
+  assert.equal(siraCode.normalizeDecision('nope'), null);
+});
+
 test('plan-handoff helpers count steps and classify transient LLM errors', () => {
   assert.equal(siraCode.extractStepCount(SAMPLE_PLAN), 3);
   assert.equal(siraCode.looksLikePlan('Listo.'), false);

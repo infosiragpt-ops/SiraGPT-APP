@@ -46,7 +46,10 @@ WORKDIR /app
 
 # Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
 # git/openssh-client for APPS/GitHub workspace clone, pull, diff, push.
+# bash: SiraCode workspace exec spawns /bin/bash -lc (Planificar permission
+# resume). Alpine's node image does not ship it; do not fall back to sh.
 RUN apk add --no-cache \
+    bash \
     chromium \
     docker-cli \
     font-liberation \
@@ -81,9 +84,10 @@ RUN addgroup -S appgroup 2>/dev/null || true; \
 # Local Whisper (whisper.cpp + ggml-base). No API key. Used when OpenAI
 # Whisper is unset or returns 401/403. See scripts/install-local-whisper.sh
 # and docs/operations/LOCAL_WHISPER.md.
-# Alpine has no bash — invoke the installer with sh. Do not attach `|| true`
-# to the install itself (that previously turned a missing-bash no-op into
-# a green layer). apk del is grouped so its failure cannot mask the install.
+# The whisper installer is POSIX sh — invoke it with sh even after bash is
+# installed for SiraCode. Do not attach `|| true` to the install itself
+# (that previously turned a missing-binary no-op into a green layer).
+# apk del is grouped so its failure cannot mask the install.
 # Alpine musl: OpenMP + native/GPU backends segfault after whisper_model_load.
 # install-local-whisper.sh builds with -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF
 # -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DBUILD_SHARED_LIBS=OFF.
@@ -124,6 +128,11 @@ RUN mkdir -p /app/uploads /srv/sites /codex-exports && \
 
 # Switch to non-root user
 USER appuser
+
+# Fail the image if /bin/bash is missing or not a real Bash. SiraCode
+# permission-resume spawns this path as appuser; CI on Ubuntu will not
+# catch an Alpine-only ENOENT. Do not substitute sh.
+RUN /bin/bash -lc 'set -euo pipefail; test -n "${BASH_VERSION}"'
 
 # Immutable release provenance is declared after expensive runtime layers so a
 # new commit does not invalidate the document-toolchain installation cache.

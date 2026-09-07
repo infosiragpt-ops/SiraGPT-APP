@@ -10,7 +10,7 @@
 
 const crypto = require('crypto');
 const { getAgent } = require('./agents');
-const { authorizeTool } = require('./permissions');
+const { authorizeTool, WRITE_TOOLS } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
@@ -165,6 +165,7 @@ async function runPrompt(session, text, {
         const args = call.arguments || call.args || {};
         const auth = authorizeTool(session.agentId, name, {
           permission: session.permission,
+          grants: session.permissionGrants,
         });
 
         if (auth.needsPermission) {
@@ -206,7 +207,7 @@ async function runPrompt(session, text, {
           role: 'tool',
           content: result.content || result.error || '',
         });
-        if (result.ok && (auth.tool === 'write' || auth.tool === 'edit')) {
+        if (result.ok && WRITE_TOOLS.has(auth.tool)) {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }
       }

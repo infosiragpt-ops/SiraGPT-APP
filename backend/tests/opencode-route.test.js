@@ -206,6 +206,71 @@ test('GET /events streams SSE and abort emits Cancelado', async () => {
   }
 });
 
+test('GET /session/:id returns pending permission cards after an ask', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo via-http' } }] };
+    }
+    return { text: 'Plan.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'planificar' });
+  const id = created.body.session.id;
+  await request(app).post(`/api/opencode/session/${id}/prompt`).send({ text: 'lista archivos' });
+  const got = await request(app).get(`/api/opencode/session/${id}`);
+  assert.equal(got.status, 200);
+  assert.equal(got.body.session.agent, 'planificar');
+  assert.equal(got.body.session.pendingPermissions.length, 1);
+  assert.equal(got.body.session.pendingPermissions[0].tool, 'bash');
+  assert.ok(!JSON.stringify(got.body).includes('DeepSeek'));
+});
+
+test('POST /session/:id/permission allow executes the pending bash', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo via-http' } }] };
+    }
+    return { text: 'Plan.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'planificar' });
+  const id = created.body.session.id;
+  await request(app).post(`/api/opencode/session/${id}/prompt`).send({ text: 'lista archivos' });
+  const pending = siraCode.get(id, 'u-1').pendingPermissions[0];
+  const res = await request(app)
+    .post(`/api/opencode/session/${id}/permission`)
+    .send({ permissionId: pending.permissionId, decision: 'allow' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ok, true);
+  assert.equal(res.body.allowed, true);
+  assert.equal(res.body.executed, true);
+  assert.match(String(res.body.result && res.body.result.preview), /via-http/);
+  assert.ok(!JSON.stringify(res.body).includes('model_id'));
+});
+
+test('POST /session/:id/permission reject does not execute', async () => {
+  let calls = 0;
+  const app = buildApp(async () => {
+    calls += 1;
+    if (calls === 1) {
+      return { text: '', toolCalls: [{ name: 'bash', arguments: { command: 'echo no' } }] };
+    }
+    return { text: 'Plan.', toolCalls: [] };
+  });
+  const created = await request(app).post('/api/opencode/session').send({ agent: 'planificar' });
+  const id = created.body.session.id;
+  await request(app).post(`/api/opencode/session/${id}/prompt`).send({ text: 'lista archivos' });
+  const pending = siraCode.get(id, 'u-1').pendingPermissions[0];
+  const res = await request(app)
+    .post(`/api/opencode/session/${id}/permission`)
+    .send({ permissionId: pending.permissionId, decision: 'reject' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.allowed, false);
+  assert.equal(res.body.executed, false);
+});
+
 test('upstreamFail returns a generic 502 and never leaks the raw upstream message', () => {
   const realErr = console.error;
   console.error = () => {};

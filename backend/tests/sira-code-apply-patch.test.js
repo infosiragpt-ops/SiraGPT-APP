@@ -42,6 +42,32 @@ test('applyUnique refuses missing and ambiguous hunks', () => {
   assert.throws(() => applyUnique('solo', 'nope', 'x'), /no coincide/);
 });
 
+test('applyUnique keeps replacement dollars literal', () => {
+  assert.equal(applyUnique('price', 'price', '$& sale'), '$& sale');
+  assert.equal(applyUnique('x', 'x', '$$'), '$$');
+  assert.equal(applyUnique('pre mid post', 'mid', "$`ok$'"), "pre $`ok$' post");
+  assert.equal(applyUnique('id', 'id', '$1$2'), '$1$2');
+});
+
+test('applyUnique rejects overlapping matches instead of a partial replace', () => {
+  assert.throws(() => applyUnique('aaa', 'aa', 'X'), /más de una vez/);
+  assert.throws(() => applyUnique('aaaa', 'aa', 'X'), /más de una vez/);
+});
+
+test('apply_patch writes literal $ sequences through a real workspace file', async () => {
+  const workspace = await createWorkspace('sc-dollar');
+  try {
+    await workspace.writeFile('pay.js', 'const n = cost;\n');
+    const result = await executeTool(session('construir', workspace), 'apply_patch', {
+      patch: '*** Begin Patch\n*** Update File: pay.js\n-const n = cost;\n+const n = $& + $$ + $\' ;\n*** End Patch',
+    });
+    assert.equal(result.ok, true, result.error);
+    assert.equal(await workspace.readFile('pay.js'), "const n = $& + $$ + $' ;\n");
+  } finally {
+    await workspace.destroy();
+  }
+});
+
 test('ls lists names and sizes without file bodies', async () => {
   const workspace = await createWorkspace('sc-ls');
   try {
