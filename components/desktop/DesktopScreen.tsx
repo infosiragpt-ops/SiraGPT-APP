@@ -19,7 +19,16 @@ export type DesktopScreenProps = {
   viewOnly?: boolean
   className?: string
   onFirstFrame?: () => void
+  /** Called when the RFB channel dies and local retries are exhausted (or a
+      live channel drops). The owner should rebuild the session (re-POST) or
+      surface an honest error — never leave "Preparando…" spinning. */
+  onConnectionError?: () => void
 }
+
+/** Bounded reconnect budget: a dead channel retries a few times with backoff
+    (transient blips, slow boot), then gives up loudly via onConnectionError. */
+export const DESKTOP_RFB_MAX_RETRIES = 4
+export const DESKTOP_RFB_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000]
 
 type RfbHandle = {
   viewOnly: boolean
@@ -65,14 +74,25 @@ export function DesktopScreen({
   viewOnly = true,
   className,
   onFirstFrame,
+  onConnectionError,
 }: DesktopScreenProps) {
-  const hostRef = React.useRef<HTMLDivElement>(null)
+  const hostRef = React.useRef<HTMLDivElement | null>(null)
   const [firstFrame, setFirstFrame] = React.useState(false)
   const [status, setStatus] = React.useState<"connecting" | "live" | "error">("connecting")
+  const [retryNonce, setRetryNonce] = React.useState(0)
+  const firstFrameRef = React.useRef(false)
+  const attemptsRef = React.useRef(0)
+  const retryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const viewerUrl = sameOriginDesktopWsUrl(wsUrl, viewerToken)
+
+  // A new session (or new URL) gets a fresh retry budget.
+  React.useEffect(() => {
+    attemptsRef.current = 0
+  }, [sessionId, viewerUrl])
 
   React.useEffect(() => {
     setFirstFrame(false)
+    firstFrameRef.current = false
     setStatus("connecting")
     const host = hostRef.current
     if (!host || !viewerUrl || !sessionId) return
@@ -82,9 +102,29 @@ export function DesktopScreen({
     let resizeObserver: ResizeObserver | null = null
     const markFrame = () => {
       if (cancelled) return
+      firstFrameRef.current = true
       setFirstFrame(true)
       setStatus("live")
       onFirstFrame?.()
+    }
+    const failChannel = () => {
+      if (cancelled) return
+      setStatus("error")
+      onConnectionError?.()
+    }
+    const scheduleRetry = () => {
+      if (cancelled) return
+      if (attemptsRef.current >= DESKTOP_RFB_MAX_RETRIES) {
+        failChannel()
+        return
+      }
+      const delay = DESKTOP_RFB_RETRY_DELAYS_MS[
+        Math.min(attemptsRef.current, DESKTOP_RFB_RETRY_DELAYS_MS.length - 1)
+      ]
+      attemptsRef.current += 1
+      retryTimerRef.current = setTimeout(() => {
+        if (!cancelled) setRetryNonce((nonce) => nonce + 1)
+      }, delay)
     }
 
     void (async () => {
@@ -106,7 +146,15 @@ export function DesktopScreen({
         })
         rfb.addEventListener("framebufferupdate", markFrame as (ev: Event) => void)
         rfb.addEventListener("disconnect", () => {
-          if (!cancelled) setStatus("error")
+          if (cancelled) return
+          // A drop after the first frame also rebuilds through the owner:
+          // a frozen canvas with no error is worse than a visible retry.
+          if (firstFrameRef.current) {
+            setStatus("error")
+            onConnectionError?.()
+            return
+          }
+          scheduleRetry()
         })
         if (typeof ResizeObserver === "function" && hostRef.current) {
           resizeObserver = new ResizeObserver(() => {
@@ -115,16 +163,26 @@ export function DesktopScreen({
           resizeObserver.observe(hostRef.current)
         }
       } catch {
-        if (!cancelled) setStatus("error")
+        if (cancelled) return
+        // Import/constructor failure behaves like a dead channel.
+        if (firstFrameRef.current || attemptsRef.current >= DESKTOP_RFB_MAX_RETRIES) {
+          failChannel()
+        } else {
+          scheduleRetry()
+        }
       }
     })()
 
     return () => {
       cancelled = true
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
       try { resizeObserver?.disconnect() } catch { /* already gone */ }
       try { rfb?.disconnect() } catch { /* already gone */ }
     }
-  }, [sessionId, viewerUrl, viewOnly, onFirstFrame])
+  }, [sessionId, viewerUrl, viewOnly, onFirstFrame, onConnectionError, retryNonce])
 
   return (
     <div
