@@ -15,6 +15,12 @@ const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
 const { shouldStartSiraCodeRun, routeTurn } = require('../trivial-turn');
+const {
+  ensureCapturedPlan,
+  buildSwitchReminder,
+  publicPlan,
+  isTransientLlmError,
+} = require('./plan-handoff');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -33,6 +39,33 @@ function defaultLlmTurn() {
 
 function permissionId() {
   return `perm_${crypto.randomBytes(6).toString('hex')}`;
+}
+
+async function callLlmTurn(complete, args, session) {
+  try {
+    return await complete(args);
+  } catch (err) {
+    if (!isTransientLlmError(err)) throw err;
+    if (args.signal && args.signal.aborted) throw err;
+    stageEvent(session, 'retrying', { label: 'Reintentando' });
+    return complete(args);
+  }
+}
+
+function buildTranscript(session, agent) {
+  const transcript = [
+    { role: 'system', content: agent.systemPrompt },
+  ];
+  if (agent.id === 'construir' && session.plan && session.plan.text) {
+    transcript.push({
+      role: 'system',
+      content: buildSwitchReminder(session.plan),
+    });
+  }
+  for (const message of session.messages) {
+    transcript.push({ role: message.role, content: message.content });
+  }
+  return transcript;
 }
 
 async function runPrompt(session, text, {
@@ -88,14 +121,12 @@ async function runPrompt(session, text, {
   session.status = 'running';
   stageEvent(session, 'thinking', { label: 'Pensando' });
 
-  const transcript = [
-    { role: 'system', content: agent.systemPrompt },
-    ...session.messages.map((m) => ({ role: m.role, content: m.content })),
-  ];
+  const transcript = buildTranscript(session, agent);
 
   const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
   const toolResults = [];
   let assistantText = '';
+  let hitBudget = false;
 
   try {
     for (let step = 0; step < maxSteps; step += 1) {
@@ -105,14 +136,14 @@ async function runPrompt(session, text, {
         return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
       }
 
-      const turn = await complete({
+      const turn = await callLlmTurn(complete, {
         messages: transcript,
         tools: TOOL_DEFINITIONS,
         agent: agent.id,
         model: session.model,
         signal: combined,
         step,
-      });
+      }, session);
 
       const calls = Array.isArray(turn && turn.toolCalls) ? turn.toolCalls : [];
       const textPart = turn && typeof turn.text === 'string' ? turn.text : '';
@@ -179,6 +210,7 @@ async function runPrompt(session, text, {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }
       }
+      if (step === maxSteps - 1) hitBudget = true;
     }
   } catch (err) {
     const aborted = combined.aborted
@@ -212,7 +244,13 @@ async function runPrompt(session, text, {
     parts,
   });
   appendEvent(session, 'message', { role: 'assistant', content: assistantText });
-  if (session.status === 'running') {
+  if (agent.id === 'planificar' && assistantText) {
+    ensureCapturedPlan(session, assistantText, { sourceAgent: 'planificar', status: 'ready' });
+  }
+  if (hitBudget && session.status === 'running') {
+    session.status = 'stopped';
+    stageEvent(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
+  } else if (session.status === 'running') {
     session.status = 'idle';
     stageEvent(session, 'done', { label: 'Listo' });
   }
@@ -224,6 +262,8 @@ async function runPrompt(session, text, {
     toolResults,
     parts,
     message: { parts },
+    plan: publicPlan(session.plan),
+    stopReason: hitBudget && session.status === 'stopped' ? 'step_budget' : undefined,
   };
 }
 

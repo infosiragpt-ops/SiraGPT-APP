@@ -6,6 +6,15 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ## [Unreleased] — Agent integrity
 
+### Added
+
+- SiraCode plan→act handoff: switching Planificar → Construir keeps the
+  approved plan on the session, emits the existing `Plan listo` stage, and
+  injects it into the next Construir turn so the loop executes instead of
+  re-planning. Hitting the step budget now stops as `Presupuesto agotado`
+  (not a silent `Listo`). One retry on transient LLM errors. Inspired by
+  OpenCode session reminders; independent rewrite, no vendor tree.
+
 ### Fixed
 
 - `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies

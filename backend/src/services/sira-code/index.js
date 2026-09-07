@@ -16,6 +16,7 @@ const events = require('./events');
 const store = require('./session-store');
 const loop = require('./loop');
 const engine = require('./engine');
+const planHandoff = require('./plan-handoff');
 
 module.exports = {
   ...agents,
@@ -27,4 +28,5 @@ module.exports = {
   ...store,
   ...loop,
   ...engine,
+  ...planHandoff,
 };
