@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const { authenticateToken } = require('../middleware/auth');
 const { optionalAuth } = require('../middleware/optionalAuth');
 const {
   getHermesRuntimeStatus,
@@ -65,10 +66,7 @@ function clearRewind(sessionId) {
 
 const router = express.Router();
 
-router.get('/health', optionalAuth, (_req, res) => {
-  res.json(getHermesRuntimeStatus());
-});
-
+// Public inventory only: these maps and tool definitions contain no user jobs.
 router.get('/map', optionalAuth, (_req, res) => {
   res.json(buildHermesIntegrationMap());
 });
@@ -100,25 +98,32 @@ router.get('/toolsets/:id', optionalAuth, (req, res) => {
   return res.json(toolset);
 });
 
+// All remaining runtime operations require canonical authentication. Protect
+// indirect cron entry points (CLI and agent tools), not only /cron/jobs. Runtime
+// health includes global job/delegate counts and is not a public static map.
+router.use(authenticateToken);
+
+router.get('/health', (_req, res) => {
+  res.json(getHermesRuntimeStatus());
+});
+
 router.get('/cli', optionalAuth, (_req, res) => {
   const { listCommands } = require('../services/agents/hermes-cli-bridge');
   res.json({ commands: listCommands() });
 });
 
-router.get('/cli/:command', optionalAuth, (req, res) => {
-  const userId = req.user?.id || req.query.userId || null;
+router.get('/cli/:command', (req, res) => {
+  const userId = req.user.id;
   res.json(runHermesCommand(req.params.command, { userId, model: req.query.model || null }));
 });
 
-router.get('/cron/jobs', optionalAuth, (req, res) => {
-  const userId = req.user?.id || req.query.userId;
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+router.get('/cron/jobs', (req, res) => {
+  const userId = req.user.id;
   res.json({ jobs: cronBridge.listJobs({ userId }) });
 });
 
-router.post('/cron/jobs', optionalAuth, (req, res) => {
-  const userId = req.user?.id || req.body?.userId;
-  if (!userId) return res.status(400).json({ error: 'userId required' });
+router.post('/cron/jobs', (req, res) => {
+  const userId = req.user.id;
   try {
     const job = cronBridge.createJob({
       userId,
@@ -134,13 +139,18 @@ router.post('/cron/jobs', optionalAuth, (req, res) => {
   }
 });
 
-router.post('/cron/jobs/:id/trigger', optionalAuth, async (req, res) => {
-  res.json(await cronBridge.triggerJob(req.params.id, { payload: req.body?.payload || null }));
+router.post('/cron/jobs/:id/trigger', async (req, res) => {
+  const result = await cronBridge.triggerJob(req.params.id, {
+    userId: req.user.id, payload: req.body?.payload || null,
+  });
+  if (!result.ok && result.reason === 'not found') return res.status(404).json({ error: 'job_not_found' });
+  return res.json(result);
 });
 
-router.delete('/cron/jobs/:id', optionalAuth, (req, res) => {
-  const userId = req.user?.id || req.query.userId || null;
-  res.json(cronBridge.removeJob(req.params.id, userId));
+router.delete('/cron/jobs/:id', (req, res) => {
+  const result = cronBridge.removeJob(req.params.id, req.user.id);
+  if (!result.ok && result.reason === 'not found') return res.status(404).json({ error: 'job_not_found' });
+  return res.json(result);
 });
 
 router.get('/gateway/status', optionalAuth, (_req, res) => {
@@ -220,8 +230,8 @@ router.get('/tui/commands', optionalAuth, (_req, res) => {
   res.json({ commands: listSlashCommands() });
 });
 
-router.post('/tui/slash', optionalAuth, async (req, res) => {
-  const userId = req.user?.id || req.body?.userId || null;
+router.post('/tui/slash', async (req, res) => {
+  const userId = req.user.id;
   res.json(await executeSlashCommand(req.body?.input || req.body?.command || '', {
     userId,
     sessionId: req.body?.sessionId,
