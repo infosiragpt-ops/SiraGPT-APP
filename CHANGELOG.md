@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- `/agentes` task cancel is idempotent after an SSE drop: a reconnect
+  mid-run (or a second Stop) returns `already` + `E_CANCELLED` and does
+  not abort twice or append another cancel event. Completed/error
+  snapshots keep their real status. Native rewrite of OpenClaw
+  already-aborted / idempotent run-handle clear; no vendored runtime.
+
 - SiraCode exposes `GET /api/opencode/session/:id/summary` so `/agentes`
   can reconnect with a bounded transcript snapshot (`lastEventId`,
   Spanish `lastStage`, redacted message previews, tool count) instead
