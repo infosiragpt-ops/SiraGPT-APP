@@ -55,6 +55,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   cancel and timeout. Snapshot SHA
   `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`. No OpenClaw runtime was
   vendored.
+  The per-job overlap lease in
+  `backend/src/services/scheduler/overlap-lease.js` (wired into
+  `scheduler.js` and `cron-as-turn.js`) is a native CommonJS rewrite of
+  OpenClaw's in-process active-job set and "already-running" skip: Redis
+  SET NX + PX with token renew/release, Spanish fail-closed copy when
+  the lease is held, and an honest single-process Map if Redis is down.
+  Not a dump of `cron/active-jobs.ts` or `cron/service/ops.ts`. Snapshot
+  SHA `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**

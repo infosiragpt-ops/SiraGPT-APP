@@ -33,6 +33,17 @@ const crypto = require('crypto');
 const cron = require('node-cron');
 const { withRetry } = require('../../utils/retry-with-backoff');
 const { writeJsonAtomicSync } = require('../../utils/atomic-json-write');
+const {
+  acquireJobOverlap,
+  releaseJobOverlap,
+  startJobOverlapRenew,
+  ensureDefaultRedisClient,
+  OVERLAP_HELD_REASON_ES,
+} = require('./overlap-lease');
+
+function isThenable(value) {
+  return Boolean(value && typeof value.then === 'function');
+}
 
 const DATA_DIR = path.join(__dirname, '..', '..', '..', 'data');
 const JOBS_FILE = path.join(DATA_DIR, 'scheduled-jobs.json');
@@ -163,6 +174,7 @@ function start() {
     console.log('[scheduler] disabled via AGENT_SCHEDULER=off');
     return;
   }
+  ensureDefaultRedisClient();
   const jobs = loadAll();
   for (const job of jobs) activate(job);
   console.log(`[scheduler] started — ${active.size} cron job(s) active, ${jobs.length} total`);
@@ -269,18 +281,40 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
   const job = getJob(jobId);
   if (!job) return { ok: false, reason: 'job not found' };
   if (!job.enabled) return { ok: false, reason: 'disabled' };
-  // Same-process guard shared by cron and webhook entry points. This is
-  // not a distributed lease: multiple workers need a durable claim store.
+  // Process-local fast path, then Redis (or documented local fallback).
   if (running.has(job.id)) {
-    return { ok: false, reason: 'already running', code: 'overlap_skipped' };
+    return {
+      ok: false,
+      reason: OVERLAP_HELD_REASON_ES,
+      code: 'overlap_skipped',
+      distributed: false,
+      fallback: 'local_only',
+    };
   }
   if (!_invoker) {
     console.warn(`[scheduler] no invoker registered — skipping job ${jobId}`);
     return { ok: false, reason: 'no invoker' };
   }
 
+  const claimed = acquireJobOverlap({
+    jobId: job.id,
+    ownerId: job.userId,
+    holderId: `scheduler:${source}`,
+  });
+  const claim = isThenable(claimed) ? await claimed : claimed;
+  if (!claim.ok) {
+    return {
+      ok: false,
+      reason: claim.reason || OVERLAP_HELD_REASON_ES,
+      code: 'overlap_skipped',
+      distributed: Boolean(claim.distributed),
+      fallback: claim.fallback || null,
+    };
+  }
+
   const startedAt = new Date();
   const record = { at: startedAt.toISOString(), source, durationMs: 0, ok: false };
+  const stopRenew = startJobOverlapRenew(claim);
 
   try {
     running.add(job.id);
@@ -318,6 +352,8 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
     record.retries = true;
   } finally {
     running.delete(job.id);
+    stopRenew();
+    await releaseJobOverlap(claim);
   }
   record.durationMs = Date.now() - startedAt.getTime();
 

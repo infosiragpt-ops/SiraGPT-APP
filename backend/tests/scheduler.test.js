@@ -206,7 +206,10 @@ test('fireJob skips an overlapping invocation of the same job in this process', 
     release();
     await Promise.all([first, overlapping]);
   }
-  assert.deepEqual(await overlapping, { ok: false, reason: 'already running', code: 'overlap_skipped' });
+  const skipped = await overlapping;
+  assert.equal(skipped.ok, false);
+  assert.equal(skipped.code, 'overlap_skipped');
+  assert.match(skipped.reason, /solapamiento|ejecutando/);
   assert.equal((await first).ok, true);
   assert.equal(sched.getJob(job.id).lastRuns.length, 1);
 });
