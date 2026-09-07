@@ -59,6 +59,24 @@ function saveMemoryDocument(userId, doc) {
   });
 }
 
+function loadCuratedMemory(userId) {
+  const row = loadJson(userPath('curated-memory', userId), { memory: [], user: [] });
+  return {
+    memory: Array.isArray(row.memory) ? row.memory.map(String) : [],
+    user: Array.isArray(row.user) ? row.user.map(String) : [],
+    updatedAt: Number(row.updatedAt) || 0,
+  };
+}
+
+function saveCuratedMemory(userId, stores) {
+  saveJson(userPath('curated-memory', userId), {
+    userId: String(userId),
+    updatedAt: Date.now(),
+    memory: Array.isArray(stores?.memory) ? stores.memory.map(String) : [],
+    user: Array.isArray(stores?.user) ? stores.user.map(String) : [],
+  });
+}
+
 function loadSessions(userId) {
   const row = loadJson(userPath('sessions', userId), { sessions: [] });
   return Array.isArray(row.sessions) ? row.sessions : [];
@@ -78,6 +96,8 @@ module.exports = {
   saveMemoryEntries,
   loadMemoryDocument,
   saveMemoryDocument,
+  loadCuratedMemory,
+  saveCuratedMemory,
   loadSessions,
   saveSessions,
 };
