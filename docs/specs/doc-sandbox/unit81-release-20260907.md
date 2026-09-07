@@ -8,7 +8,8 @@
 Base de trabajo `40f86de4ea8f793526649076e09d22dec41e2a6f`.
 Se incorporó sin sobrescribir trabajo ajeno la corrección concurrente
 `cd2e6501c3c746c058bd449779ce0f934273f6d2` (revalidar reloj tras leer manifiesto).
-La versión medida incluye esa corrección.
+La versión medida incluye esa corrección. Después se integró sin conflictos
+`546a8156b2ec63c468157a4125aebcb4705f80db` (#572); sin cambios F1 adicionales.
 
 Se separaron responsabilidades ya existentes, manteniendo sus sitios de IO:
 
@@ -67,7 +68,14 @@ Logs y JSON local: `output/phase1-unit81-coverage.log`,
 - La prueba Redis local no arrancó por `DOC_TEST_REDIS_BINARY_UNAVAILABLE`;
   no se cuenta como aprobada. La corroboración de servicios Linux/CI se registra
   separadamente y nunca modifica el numerador unitario.
-- Aún pendiente el CI del nuevo commit y corroboración final de integración.
+- PostgreSQL/Redis/S3 reales en Lenovo: **79/79**, cero fallos/omisiones,
+  150119,997345 ms. Runner aislado Node22, imagen fijada
+  `sha256:40f438311ab39713e617fc96b6dcbf5bdc62bf5141ddca954f739386da64176e`,
+  red interna, read-only, sin socket Docker ni credenciales productivas.
+  Este ensayo usó snapshot anterior a `cd2e6501c`; las políticas/adapter de
+  HTTP, persistencia, processor y cleanup probados son idénticos a la candidata.
+  No ejercita el cambio posterior de reloj del manifiesto.
+- Aún pendiente el CI del nuevo commit y corroboración Linux del validador.
 
 Sin llamadas pagadas, publicación, reinicios de producción ni cambios de DNS.
 El objetivo unitario no acredita gVisor real, R2 productivo, límite efectivo del

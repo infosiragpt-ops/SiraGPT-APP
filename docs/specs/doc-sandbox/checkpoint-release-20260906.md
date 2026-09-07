@@ -5,7 +5,17 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente (2026-09-07 UTC):** reproducido y corregido el
+**Actualización de cobertura (2026-09-07 UTC):** objetivo de Luis **≥81 %
+alcanzado: 81,02 % (3390/4184), 483/483 unitarias**, cero omisiones.
+Gate CI elevado de80 a81, mismas fuentes completas y sin mezclar integraciones.
+Se separaron políticas y ciclos de vida existentes, conservando orden de IO,
+transacciones, aislamiento, validación y límites. Revisión independiente sin
+bloqueantes; 12472 generales y79 integraciones PG/Redis/S3 aprobadas.
+Se preservó `cd2e6501c` y se integró `production-main` #572 (`546a8156b`).
+Falta CI de la candidata y los restantes controles de aceptación/producción.
+No se ha publicado #561. Véase [unit81-release-20260907.md](unit81-release-20260907.md).
+
+**Registro anterior (2026-09-07 UTC):** reproducido y corregido el
 reloj implícito capturado antes de la lectura asíncrona del manifiesto.
 La admisión vuelve a comprobar el tiempo después de la lectura/cancelación;
 reloj explícito, identidad y cleanup intactos. Proceso real detenido durante
