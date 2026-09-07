@@ -132,7 +132,14 @@ describe("composer bar — phone layout contract", () => {
   it("keeps every footer control inside the surface on 360–430 px phones", () => {
     const mobileBlock = globals.slice(globals.indexOf("/* Phone footer budget (360–430 px)"))
     assert.ok(mobileBlock.length > 0, "the phone footer budget block must exist")
-    assert.match(mobileBlock, /\.composer-effort-chip > \.truncate,\s*\.composer-effort-chip \.composer-effort-caret \{\s*display: none;/, "effort collapses to its glyph on phones")
+    assert.doesNotMatch(effortMenu, /<span className="truncate">/, "the bar shows just the bolt — no text label")
+    assert.doesNotMatch(effortMenu, /composer-effort-caret/, "no caret next to the bolt")
+    assert.match(
+      globals,
+      /\.composer-permission-chip,\s*\.composer-effort-chip \{\s*width: 2rem;\s*max-width: 2rem;\s*padding: 0;\s*justify-content: center;\s*gap: 0;/,
+      "effort is icon-only like the permission chip",
+    )
+    assert.match(effortMenu, /aria-label=\{`Esfuerzo: \$\{active\.label\}`\}/, "the bolt still names the level for assistive tech")
     assert.match(mobileBlock, /\.composer-input-row \.composer-model-inline \.chat-model-trigger > svg:last-child \{\s*display: none;/, "the model chevron is dropped on phones")
     assert.match(
       globals,
