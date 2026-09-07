@@ -24,6 +24,10 @@ The per-turn tool-round guard is a native rewrite of the last-step /
 agent.steps idea (count tool calls in one user turn, Spanish stop
 label); it does not copy the MAX_STEPS prompt or disable the tool
 schema.
+Workspace grep/glob are a native rewrite of the OpenCode search
+contract (pattern, path, include, limit, bounded line previews).
+They walk the session jail in CommonJS — no ripgrep binary, no
+Effect LocationSearch, no vendor dump.
 
 SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
