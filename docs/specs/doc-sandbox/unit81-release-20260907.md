@@ -75,7 +75,17 @@ Logs y JSON local: `output/phase1-unit81-coverage.log`,
   Este ensayo usó snapshot anterior a `cd2e6501c`; las políticas/adapter de
   HTTP, persistencia, processor y cleanup probados son idénticos a la candidata.
   No ejercita el cambio posterior de reloj del manifiesto.
-- Aún pendiente el CI del nuevo commit y corroboración Linux del validador.
+- Snapshot posterior a `cd2e6501c` y merge #572, Linux real: **116/116**
+  (56 filesystem/codec/oráculos,16 corpus,2 herramientas y42 validador).
+  Mismo runner fijado, sin red ni socket Docker. Exit0. No acredita gVisor.
+- Postmerge: **362/362** pruebas OpenClaw Native;32/32 archivos ajenos a
+  package.json de #572 byte-idénticos a producción; scripts generales,
+  dependencias y lockfiles preservados. Las483 unitarias repitieron81,02 %.
+- CI remoto de la candidata está en cola (sin resultado aún), no se declara
+  aprobado. El CI exigirá81 % en la misma población de fuentes.
+- Los tres servicios de test quedaron detenidos, sin puertos publicados.
+  El origen sigue en #572 (`546a8156b`), no #561; API responde HTTP200,
+  health reporta `degraded`. No se modificó el origen en esta tarea.
 
 Sin llamadas pagadas, publicación, reinicios de producción ni cambios de DNS.
 El objetivo unitario no acredita gVisor real, R2 productivo, límite efectivo del

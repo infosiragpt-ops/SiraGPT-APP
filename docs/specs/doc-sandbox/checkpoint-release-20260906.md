@@ -7,10 +7,11 @@ especificación ni sus requisitos de aceptación.
 
 **Actualización de cobertura (2026-09-07 UTC):** objetivo de Luis **≥81 %
 alcanzado: 81,02 % (3390/4184), 483/483 unitarias**, cero omisiones.
-Gate CI elevado de80 a81, mismas fuentes completas y sin mezclar integraciones.
+Gate CI elevado de 80 a 81, mismas fuentes completas y sin mezclar integraciones.
 Se separaron políticas y ciclos de vida existentes, conservando orden de IO,
 transacciones, aislamiento, validación y límites. Revisión independiente sin
-bloqueantes; 12472 generales y79 integraciones PG/Redis/S3 aprobadas.
+bloqueantes; 12472 generales,79 integraciones PG/Redis/S3,116 comprobaciones Linux y
+362 pruebas nativas aprobadas; servicios de prueba detenidos.
 Se preservó `cd2e6501c` y se integró `production-main` #572 (`546a8156b`).
 Falta CI de la candidata y los restantes controles de aceptación/producción.
 No se ha publicado #561. Véase [unit81-release-20260907.md](unit81-release-20260907.md).
