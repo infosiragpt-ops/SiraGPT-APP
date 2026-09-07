@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const taskStorePrismaSync = require('./task-store-prisma-sync');
 const agentMetrics = require('./metrics');
+const { statusForAgentStopReason } = require('./react-run-outcome');
 const {
   MAX_SIMULTANEOUS_DOCUMENTS,
 } = require('../../config/document-batch-limits');
@@ -217,13 +218,32 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
     seq,
     ts: event.ts || nowIso(),
   };
+  const explicitRetry = snapshotLike.status === 'queued'
+    && snapshotLike.jobId && String(snapshotLike.jobId) !== String(existing.jobId || '')
+    && ['repair_attempt', 'queue_status'].includes(stamped.type) && stamped.status === 'queued';
+  const alreadyFinished = TERMINAL_STATUSES.has(existing.status) && existing.streamState?.done && !explicitRetry;
+  // The replay log is public execution state too: keeping the failed status
+  // while appending a late successful done/text/artifact would still publish
+  // contradictory results on reconnect. No write, sequence or dual-write for
+  // an already closed attempt. Final metadata is persisted via markTaskStatus.
+  if (alreadyFinished) return existing;
+  const observedStatus = terminalStatusObservedByEvent(stamped, snapshotLike.status);
+  // Done must already be terminal when persisted, before the producer awaits
+  // message persistence. Later progress can carry its stale running snapshot;
+  // only an explicit retry starts a new attempt, never a late step or done.
+  const status = observedStatus || (stamped.type === 'checkpoint' && TERMINAL_STATUSES.has(existing.status)
+    ? existing.status
+    : snapshotLike.status || existing.status);
+  const nextState = explicitRetry
+    ? { ...(streamState || existing.streamState), done: false, error: undefined, stoppedReason: undefined }
+    : streamState || existing.streamState;
   const events = trimEvents([...(existing.events || []), stamped], options.eventLimit || DEFAULT_EVENT_LIMIT);
   const checkpoints = [...(existing.checkpoints || [])];
   if (shouldCheckpoint(stamped)) {
     checkpoints.push({
       ts: stamped.ts,
       type: stamped.type,
-      status: snapshotLike.status || existing.status,
+      status,
       eventCount: events.length,
       stepCount: streamState?.steps?.length || existing.streamState?.steps?.length || 0,
       artifactCount: streamState?.artifacts?.length || existing.streamState?.artifacts?.length || 0,
@@ -231,14 +251,18 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   }
   const next = {
     ...existing,
-    status: snapshotLike.status || existing.status,
+    status,
+    ...(explicitRetry ? { jobId: String(snapshotLike.jobId), queueName: snapshotLike.queueName || existing.queueName } : {}),
     assistantMessageId: snapshotLike.assistantMessageId || existing.assistantMessageId || null,
-    streamState: streamState || existing.streamState,
+    streamState: nextState,
     events,
     lastEventSeq: seq,
     checkpoints: trimEvents(checkpoints, 200),
     updatedAt: nowIso(),
   };
+  if (status === 'failed' || status === 'error') next.failedAt = existing.failedAt || stamped.ts;
+  if (status === 'cancelled') next.cancelledAt = existing.cancelledAt || stamped.ts;
+  if (status === 'completed') next.completedAt = existing.completedAt || stamped.ts;
   if (stamped.type === 'file_artifact' && stamped.artifact) {
     const current = Array.isArray(next.artifacts) ? [...next.artifacts] : [];
     const filename = String(stamped.artifact.filename || '').trim().toLowerCase();
@@ -257,7 +281,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
   }
   const written = persistTerminalMetricObservation({
     current: existing,
-    observedStatus: terminalStatusObservedByEvent(stamped, snapshotLike.status),
+    observedStatus: status,
     persist: (markerPatch) => writeTaskSnapshot({ ...next, ...markerPatch }),
   });
   taskStorePrismaSync.schedulePrismaSync(written, stamped);
@@ -279,10 +303,13 @@ const AUTO_COMPACT_EVENT_THRESHOLD = 400;
 const AUTO_COMPACT_KEEP_RECENT = 150;
 
 function terminalStatusObservedByEvent(event, snapshotStatus) {
-  if (TERMINAL_STATUSES.has(snapshotStatus)) return snapshotStatus;
   if (event?.type === 'done') {
-    return event.stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+    if (snapshotStatus === 'cancelled') return 'cancelled';
+    const status = statusForAgentStopReason(event.stoppedReason);
+    if (status === 'completed' && ['failed', 'error'].includes(snapshotStatus)) return snapshotStatus;
+    return status;
   }
+  if (TERMINAL_STATUSES.has(snapshotStatus)) return snapshotStatus;
   return null;
 }
 
@@ -319,6 +346,20 @@ function persistTerminalMetricObservation({
 
 function markTaskStatus(taskLike, status, patch = {}) {
   if (!taskLike?.taskId || !taskLike?.userId) return null;
+  const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
+  // Defend against legacy producers treating every closed stream as success.
+  // Explicit queued/running transitions remain available for a user retry.
+  if (status === 'completed' && ['failed', 'error', 'cancelled'].includes(existing?.status) && existing.streamState?.done) {
+    status = existing.status;
+    patch = {
+      ...patch,
+      streamState: existing.streamState,
+      completedAt: existing.completedAt || null,
+      stats: { ...(patch.stats || {}), ...(existing.stats || {}), stoppedReason: existing.streamState.stoppedReason },
+    };
+  }
+  const state = patch.streamState || existing?.streamState || taskLike.streamState;
+  if (status === 'completed' && state?.done) status = statusForAgentStopReason(state.stoppedReason);
   const stamp = nowIso();
   const statusPatch = { status, updatedAt: stamp, ...patch };
   // A completed run's loop checkpoint is dead weight (and a spurious-resume
@@ -327,7 +368,6 @@ function markTaskStatus(taskLike, status, patch = {}) {
   if (status === 'completed') statusPatch.completedAt = patch.completedAt || stamp;
   if (status === 'cancelled') statusPatch.cancelledAt = patch.cancelledAt || stamp;
   if (status === 'error' || status === 'failed') statusPatch.failedAt = patch.failedAt || stamp;
-  const existing = getTaskSnapshotForUser(taskLike.taskId, taskLike.userId);
   const current = existing || sanitizeTaskRecord(taskLike);
   const result = persistTerminalMetricObservation({
     current,
