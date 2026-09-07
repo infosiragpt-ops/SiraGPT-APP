@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { PrismaClient } from '@prisma/client';
 import { DocSandboxRepository, DocumentRepositoryError, type ArtifactInput, type AttemptLease,
   type CreateDocumentJob, type JsonObject, type PublicationGate } from '../src/modules/doc-sandbox/queue/repository';
+import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 
 // These are pre-IO unit guards, NOT persistence/transaction integration tests.
 // The genuine Prisma client is never connected. Any unexpected DB operation
@@ -147,6 +148,75 @@ test('failure metadata rejects raw exception messages and non-report artifacts',
     await assert.rejects(repository.failAttempt(lease, code, false), invalid);
   }
   await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, { ...artifact, kind: 'output' }), invalid);
+});
+
+// Metadata-only rejection fixtures. Their declared digests/sizes do not assert
+// document validation, actual bytes, storage ownership or a committed report.
+const failureReport = (): ArtifactInput => ({ ...artifact, id: 'unit-report', kind: 'validation_report',
+  storageKey: 'private/report', filename: 'validation-report-attempt-1.json', mime: 'application/json' });
+const failureDiff = (): ArtifactInput => ({ ...artifact, id: 'unit-diff', kind: 'text_diff',
+  storageKey: 'private/diff', filename: 'text-diff.json', mime: 'application/json' });
+const invalidEvidence = (error: unknown): boolean =>
+  error instanceof DocSandboxError && error.code === 'E_VALIDATION' && error.status === 422;
+
+test('failure evidence requires a nonempty JSON report even when no evidence files completed', async () => {
+  for (const artifacts of [[], [failureDiff()]]) {
+    const evidence = { artifacts, mode: { kind: 'single' as const } };
+    await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, undefined, evidence), invalid);
+    for (const change of [{ mime: 'text/plain' }, { mime: 'application/json; charset=utf-8' }, { size: 0 }, { size: -1 }]) {
+      await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, { ...failureReport(), ...change }, evidence), invalid);
+    }
+  }
+});
+
+test('failure report metadata is checked before starting a transaction with otherwise admissible evidence metadata', async () => {
+  const changes: Partial<ArtifactInput>[] = [
+    { storageKey: '' }, { filename: '' }, { sha256: 'a'.repeat(63) }, { sha256: 'A'.repeat(64) },
+    { size: NaN }, { size: Infinity }, { size: 0.5 }, { size: Number.MAX_SAFE_INTEGER + 1 },
+  ];
+  for (const change of changes) {
+    const report = { ...failureReport(), ...change };
+    const evidence = { artifacts: [failureDiff()], mode: { kind: 'single' as const } };
+    const before = structuredClone({ report, evidence });
+    await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, report, evidence), invalid);
+    assert.deepEqual({ report, evidence }, before);
+  }
+});
+
+test('failure evidence policy rejection retains its exact typed code through the repository entrypoint', async () => {
+  const cases = [
+    { artifacts: [{ ...failureDiff(), kind: 'output' as const }], mode: { kind: 'single' as const } },
+    { artifacts: [{ ...failureDiff(), mime: 'text/plain' }], mode: { kind: 'single' as const } },
+    { artifacts: [{ ...failureDiff(), sha256: 'invalid' }], mode: { kind: 'single' as const } },
+    { artifacts: [{ ...failureDiff(), size: 0 }], mode: { kind: 'single' as const } },
+    { artifacts: [], mode: { kind: 'preservation' as const, groups: 0 } },
+    { artifacts: [failureDiff(), { ...failureDiff(), id: 'second', storageKey: 'private/second',
+      filename: 'before-0.png', kind: 'output' as const, mime: 'image/png' }], mode: { kind: 'single' as const } },
+  ];
+  for (const evidence of cases) {
+    const before = structuredClone(evidence);
+    await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, failureReport(), evidence), invalidEvidence);
+    assert.deepEqual(evidence, before);
+  }
+});
+
+test('failure batch checks later storage metadata and snapshots frozen caller records without assigning their IDs', async () => {
+  // Both metadata groups satisfy the pure name/type policy. Deliberately invalid
+  // storage metadata or the final report must still reject before any DB call.
+  for (const invalidPosition of ['second-evidence', 'last-report'] as const) {
+    const first = Object.freeze({ ...failureDiff(), id: undefined, filename: 'input-0-text-diff.json' });
+    const second = Object.freeze({ ...failureDiff(), id: undefined, filename: 'input-1-text-diff.json',
+      storageKey: invalidPosition === 'second-evidence' ? '' : 'private/second' });
+    const report = Object.freeze({ ...failureReport(), id: undefined,
+      sha256: invalidPosition === 'last-report' ? 'invalid' : artifact.sha256 });
+    const evidence = Object.freeze({ artifacts: Object.freeze([first, second]),
+      mode: Object.freeze({ kind: 'preservation' as const, groups: 2 }) });
+    const before = structuredClone({ report, evidence });
+    await assert.rejects(repository.failAttempt(lease, 'E_VALIDATION', true, report, evidence), invalid);
+    assert.deepEqual({ report, evidence }, before);
+    assert.equal(first.id, undefined); assert.equal(second.id, undefined); assert.equal(report.id, undefined);
+    assert.ok(Object.isFrozen(evidence.artifacts) && Object.isFrozen(evidence.mode));
+  }
 });
 
 test('publication preflight rejects incomplete/duplicate/failed levels without trusting synthetic claims', async () => {

@@ -4,6 +4,7 @@ import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   assertInvocationLaunchable, cleanupInvocation, createInvocation, reconcileValidatorOrphans,
   validateInvocationContainer, validateInvocationManifest, validatePrivateStagingRoot,
@@ -428,6 +429,104 @@ test('manifest byte budget accepts exactly 4096 bytes but refuses a directory in
   await assert.rejects(assertInvocationLaunchable(invocation, now), { code: 'VALIDATOR_MANIFEST_INVALID' });
   assert.deepEqual(await readFile(retained), padded);
 });
+
+type InvocationProbeAction = 'launch' | 'reconcile' | 'cleanup' | 'preflight';
+interface InvocationProbeResult { phase: 'result'; status: 'fulfilled' | 'rejected'; value?: unknown; code?: string; name?: string }
+
+/** A real child process contains a potentially blocking filesystem open.
+ * Its timeout is a failed assertion, never evidence of safe rejection. No
+ * executable stands in for Docker, and the child must close before cleanup. */
+async function probeInvocation(action: InvocationProbeAction, invocation: ValidatorInvocation): Promise<InvocationProbeResult> {
+  const child = spawn(process.execPath, ['--import', require.resolve('tsx'), '-e', `
+    const lifecycle = require(process.argv[1]);
+    const { IndependentDocumentValidator } = require(process.argv[2]);
+    const { action, invocation, now } = JSON.parse(process.argv[3]);
+    const options = { image: invocation.image, stagingRoot: invocation.root,
+      dockerBinary: require('node:path').join(invocation.root, 'absent-docker-executable') };
+    process.once('message', async message => {
+      if (message !== 'run') throw new Error('unexpected probe command');
+      try {
+        let value;
+        if (action === 'launch') value = await lifecycle.assertInvocationLaunchable(invocation, now);
+        else if (action === 'reconcile') value = await lifecycle.reconcileValidatorOrphans(options, now);
+        else if (action === 'cleanup') value = await lifecycle.cleanupInvocation(invocation, options, true, now);
+        else if (action === 'preflight') value = await new IndependentDocumentValidator(options).preflight();
+        else throw new Error('unexpected probe action');
+        process.send({ phase: 'result', status: 'fulfilled', value });
+      } catch (error) {
+        process.send({ phase: 'result', status: 'rejected', name: error.name, code: error.code });
+      } finally { process.disconnect(); }
+    });
+    process.send({ phase: 'ready' });
+  `, require.resolve('../src/modules/doc-sandbox/validation/lifecycle'),
+  require.resolve('../src/modules/doc-sandbox/validation/index'), JSON.stringify({ action, invocation, now })], {
+    env: { PATH: process.env.PATH, NODE_V8_COVERAGE: process.env.NODE_V8_COVERAGE },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+  });
+  return new Promise((resolve, reject) => {
+    let ready = false;
+    let result: InvocationProbeResult | undefined;
+    let failure: Error | undefined;
+    let outputBytes = 0;
+    const fail = (code: string) => { failure ??= new Error(code); child.kill('SIGKILL'); };
+    let deadline = setTimeout(() => fail('DOC_TEST_INVOCATION_PROBE_START_FAILED'), 15_000);
+    const output = (data: Buffer) => { outputBytes += data.length; if (outputBytes > 4096) fail('DOC_TEST_INVOCATION_PROBE_OUTPUT_LIMIT'); };
+    child.stdout!.on('data', output); child.stderr!.on('data', output); // Both are explicitly piped above.
+    child.on('error', () => fail('DOC_TEST_INVOCATION_PROBE_PROCESS_FAILED'));
+    child.on('message', (raw: unknown) => {
+      if (!raw || typeof raw !== 'object' || !('phase' in raw)) { fail('DOC_TEST_INVOCATION_PROBE_PROTOCOL'); return; }
+      if (raw.phase === 'ready' && !ready && !result) {
+        ready = true; clearTimeout(deadline);
+        deadline = setTimeout(() => fail('DOC_TEST_INVOCATION_READ_STALLED'), 5_000);
+        child.send('run', error => { if (error) fail('DOC_TEST_INVOCATION_PROBE_SEND_FAILED'); });
+      } else if (raw.phase === 'result' && ready && !result && 'status' in raw &&
+        (raw.status === 'fulfilled' || raw.status === 'rejected')) {
+        result = raw as InvocationProbeResult;
+      } else fail('DOC_TEST_INVOCATION_PROBE_PROTOCOL');
+    });
+    child.once('close', (code, signal) => {
+      clearTimeout(deadline);
+      if (failure) reject(failure);
+      else if (code !== 0 || signal !== null || !result) reject(new Error('DOC_TEST_INVOCATION_PROBE_INCOMPLETE'));
+      else resolve(result);
+    });
+  });
+}
+
+test('bounded invocation probe admits a genuine regular manifest and preserves its bytes', { timeout: 30_000 }, async t => {
+  const { invocation, manifest } = await fixture(t, now);
+  const bytes = await readFile(manifest);
+  assert.deepEqual(await probeInvocation('launch', invocation), { phase: 'result', status: 'fulfilled' });
+  assert.deepEqual(await readFile(manifest), bytes);
+});
+
+for (const action of ['launch', 'reconcile', 'cleanup', 'preflight'] as const) {
+  test(`real FIFO manifest cannot stall ${action} or consume its private originals`, { timeout: 30_000 }, async t => {
+    const { root, invocation, manifest } = await fixture(t, now);
+    const bytes = await readFile(manifest);
+    const retainedName = 'original-manifest.json';
+    await rename(manifest, path.join(invocation.directory, retainedName));
+    execFileSync('mkfifo', ['-m', '600', manifest], { timeout: 2000, stdio: 'ignore', env: { PATH: process.env.PATH } });
+    assert.ok((await lstat(manifest)).isFIFO());
+    assert.equal((await lstat(manifest)).mode & 0o777, 0o600);
+    const neighbor = path.join(root, 'unrelated-original.txt');
+    await writeFile(neighbor, 'untouched neighbor', { mode: 0o600 });
+    const result = await probeInvocation(action, invocation);
+    if (action === 'reconcile') {
+      assert.deepEqual(result, { phase: 'result', status: 'fulfilled', value: { examined: 1, purged: 0, pending: 1 } });
+    } else {
+      assert.deepEqual(result, { phase: 'result', status: 'rejected', name: 'DocumentValidationError',
+        code: action === 'preflight' ? 'VALIDATOR_CLEANUP_PENDING' : 'VALIDATOR_MANIFEST_INVALID' });
+    }
+    const directory = action === 'cleanup' ? path.join(root, `.siragpt-validator-quarantine-${invocation.invocationId}`) : invocation.directory;
+    assert.ok((await lstat(path.join(directory, 'invocation.json'))).isFIFO());
+    assert.deepEqual(await readFile(path.join(directory, retainedName)), bytes);
+    assert.equal(await readFile(path.join(directory, 'inputs', 'input-0.txt'), 'utf8'), 'synthetic original');
+    assert.equal(await readFile(neighbor, 'utf8'), 'untouched neighbor');
+    assert.deepEqual((await readdir(root)).sort(), [path.basename(directory), path.basename(neighbor)].sort());
+    await assert.rejects(lstat(path.join(root, 'absent-docker-executable')), { code: 'ENOENT' });
+  });
+}
 
 function original(id = 'one', data = Buffer.from('synthetic private original')): InputFile {
   return { id, name: `${id}.txt`, format: 'txt', mime: 'text/plain', data,

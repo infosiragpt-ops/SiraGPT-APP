@@ -5,7 +5,19 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente (2026-09-07 UTC):** **10/10** pruebas reales de
+**Actualización más reciente (2026-09-07 UTC):** corregido un bloqueo al abrir
+un manifiesto FIFO privado antes de comprobar su tipo. Pre-fix 40/44 (cuatro
+READ_STALLED), post-fix 44/44; únicamente se añade O_NONBLOCK, conservando
+los controles del descriptor. Cuatro contratos adicionales pre-IO de informe
+inválido. Linux aislado 62/62; unitarias 377/377, cobertura 72,39% (2749/3797),
+todavía inferior al 80%; generales 12472/12472. Tipos/lint/UI-lock y revisión
+independiente aprobados, sin UI ni esquema. CI base `6fc7b5ddd` aprobó retención
+10/10 y storage 34/34, falló cobertura/agregador; falta CI del nuevo lote.
+Checkout limpio y API siguen en `100d29bc2` (#571), saludables a
+2026-09-07T01:04:59.548Z. No hay despliegue, gasto nuevo ni cierre F1.
+Evidencia y límites: [manifest-fifo-release-20260907.md](manifest-fifo-release-20260907.md).
+
+**Registro anterior (`6fc7b5ddd…`):** **10/10** pruebas reales de
 retención pasan, incluidas cancelación/borrado durante PUT aceptado y el
 deadline real de 15 segundos. Compensación y recuperación explícita verificadas
 con PostgreSQL/MinIO; originales/vecino intactos, cero outputs tardíos.

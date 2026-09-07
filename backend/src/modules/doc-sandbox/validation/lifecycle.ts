@@ -54,7 +54,8 @@ async function readInvocation(directory: string, root: string): Promise<Validato
   const stat = await lstat(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0 ||
     (process.getuid && stat.uid !== process.getuid())) throw failure('VALIDATOR_MANIFEST_INVALID');
-  const fd = await open(path.join(directory, 'invocation.json'), constants.O_RDONLY | constants.O_NOFOLLOW);
+  // Reject special files via fstat without first blocking on a FIFO writer.
+  const fd = await open(path.join(directory, 'invocation.json'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const metadata = await fd.stat();
     if (!metadata.isFile() || metadata.size > 4096 || metadata.nlink !== 1 || (metadata.mode & 0o077) !== 0 ||

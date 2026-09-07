@@ -210,6 +210,12 @@ Estado: **D01–D18 aprobadas para iniciar F1** mediante “procede con la fase 
 - Decisión: preservar únicamente artefactos allowlist del informe independiente, verificar hashes antes de IO y exigir claves propias reservadas/no purgadas/sin alias. Evidencia `published=false`, informe con visibilidad previa, metadatos en lotes SQL de 500 y transición/outbox dentro de una transacción con lease y reloj DB revalidados. Preservación admite hasta diez grupos efectivamente validados, cada uno con 1001 piezas/16 MiB y 10 MiB por pieza; no se usa la cantidad de adjuntos como autorización. Un único plazo de 15 s para storage y compensación, sin prometer un SLA total SQL ni reiniciar plazos por archivo; claves sin confirmación permanecen pendientes de limpieza.
 - Consecuencias: 7/7 casos de retención/fencing/propiedad con Python real transportado por hash y PostgreSQL/MinIO, 79/79 regresiones y 15 contratos puros separados de la cobertura. No es `process()` completo, runsc, tres intentos, carrera durante PUT ni ensayo de 10010 objetos dentro del plazo. Sin esquema/UI/proveedor alterno, sin omisiones del 80% y sin cierre F1. Ver [failure-retention-release-20260907.md](failure-retention-release-20260907.md).
 
+## D32. Rechazar archivos especiales antes de una lectura bloqueante
+
+- Contexto: un FIFO privado sin escritor bloqueó cuatro entradas del lifecycle antes de fstat y del timeout Docker; reproducción real Mac 40/44, control regular aprobado.
+- Decisión: añadir O_NONBLOCK al open existente, conservando O_NOFOLLOW, comprobaciones del descriptor y finally.close. No usar un timeout que deje una apertura pendiente ni convertir el timeout de la prueba en éxito.
+- Consecuencias: post-fix 44/44 y corroboración Linux 62/62 con los contratos pre-IO adicionales. Sólo lectura del manifiesto, sin cambios de protocolo, aislamiento, UI o esquema. No acredita acceso remoto, proceso documental completo ni cierre F1. La lectura creciente y el reloj previo al await quedan como observaciones separadas. Ver [manifest-fifo-release-20260907.md](manifest-fifo-release-20260907.md).
+
 ## Consulta externa y límites de este diagnóstico
 
 Se consultaron las referencias accesibles de §15 y las licencias anteriores. El antiguo sitemap `docs.claude.com/en/docs_site_map.md` no se pudo recuperar; se utilizó el [índice oficial actual](https://platform.claude.com/llms.txt). La consulta documental no prueba permisos de la cuenta, disponibilidad del modelo ni firmas ejecutadas del SDK. Todo ello se verifica nuevamente y mediante tests reales en F1, tras aprobación.
