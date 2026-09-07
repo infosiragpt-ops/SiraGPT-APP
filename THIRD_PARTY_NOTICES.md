@@ -26,6 +26,12 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   This is a SiraGPT-owned implementation, not a vendored gateway
   or provider adapter. Audited references and scope are recorded in
   `docs/agent-brain-integrity-20260906.md`.
+  The /agentes 429 backoff in `backend/src/utils/task-error-classifier.js`
+  fuses OpenClaw's Retry-After idea (parse `Retry-After` / `retry-after-ms`
+  / HTTP-date and do not retry before the hint) as a native CommonJS
+  rewrite: Spanish user copy, 60s clamp matching the agent-task worker,
+  no OpenClaw transport, SDK, env, or vendor names. Not a dump of
+  `agents/provider-transport-fetch.ts`.
   Further ports are governed by docs/code/openclaw-port-charter.md.
   The agent-task error presenter in
   `backend/src/utils/task-error-classifier.js` (`presentTaskError`) is a
