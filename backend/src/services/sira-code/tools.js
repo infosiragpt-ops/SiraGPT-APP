@@ -4,9 +4,9 @@
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
  * Also ls (directory listing) and apply_patch (unique hunks).
  *
- * File tools stay inside the session workspace. bash runs through
- * execInWorkspace (scrubbed env + cwd jail). Never execs on the repo
- * root or the raw host tree.
+ * File tools stay inside the session workspace. bash/shell runs through
+ * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
+ * env + cwd jail). Never execs on the repo root or the raw host tree.
  */
 
 const path = require('path');
@@ -16,6 +16,7 @@ const { applyPatchToWorkspace } = require('./apply-patch');
 const { truncateToolResult } = require('./tool-result');
 const { runWebFetch } = require('./webfetch');
 const { runTodo } = require('./todos');
+const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -85,20 +86,32 @@ async function runEdit(workspace, args) {
 
 async function runBash(workspace, args, ctx = {}) {
   const command = String(args.command || args.cmd || '').trim();
-  if (!command) return toolError('validation', 'command is required');
+  if (!command) return toolError('validation', SHELL_ERRORS.validation);
+  const agentId = (ctx.session && ctx.session.agentId) || ctx.agentId || 'construir';
+  const gate = authorizeShellCommand(command, {
+    workspaceRoot: workspace && workspace.root,
+    agentId,
+    allowNetwork: args.allowNetwork === true || args.network === true,
+    timeoutMs: args.timeoutMs != null ? args.timeoutMs : args.timeout,
+  });
+  if (!gate.ok) return toolError(gate.code || 'command_denied', gate.error);
   const result = await execInWorkspace(workspace.root, command, {
-    timeoutMs: Number(args.timeoutMs) || 30_000,
+    timeoutMs: gate.timeoutMs,
     signal: ctx.signal,
+    allowNetwork: gate.allowNetwork,
   });
   const parts = [];
   if (result.stdout) parts.push(result.stdout);
   if (result.stderr) parts.push(`[stderr] ${result.stderr}`);
-  parts.push(result.timedOut ? `[exit ${result.exitCode} — TIMED OUT]` : `[exit ${result.exitCode}]`);
+  if (result.truncated) parts.push('[salida recortada por límite de tamaño]');
+  parts.push(result.timedOut
+    ? `[exit ${result.exitCode} — ${SHELL_ERRORS.timeout}]`
+    : `[exit ${result.exitCode}]`);
   const content = cap(parts.join('\n'));
   if (result.aborted) return toolError('aborted', `comando cancelado\n${content}`);
-  if (result.timedOut) return toolError('timeout', content);
+  if (result.timedOut) return toolError('timeout', `${SHELL_ERRORS.timeout}\n${content}`);
   if (Number(result.exitCode) !== 0) return { ok: false, code: 'bash_failed', error: content, content: `ERROR: ${content}` };
-  return toolOk(content);
+  return toolOk(content, { className: gate.className, truncated: Boolean(result.truncated) });
 }
 
 async function runGrep(workspace, args) {
@@ -169,6 +182,7 @@ const EXECUTORS = {
   write: runWrite,
   edit: runEdit,
   bash: runBash,
+  shell: runBash,
   grep: runGrep,
   glob: runGlob,
   ls: runLs,
@@ -196,7 +210,7 @@ async function executeTool(session, toolName, args = {}, ctx = {}) {
     return {
       ok: false,
       code: 'permission_required',
-      error: `bash necesita permiso en modo ${session.agentId}`,
+      error: `${auth.tool} necesita permiso en modo ${session.agentId}`,
       content: `ERROR: permiso requerido para ${auth.tool}`,
       permission: auth,
     };
@@ -259,11 +273,13 @@ const TOOL_DEFINITIONS = [
     type: 'function',
     function: {
       name: 'bash',
-      description: 'Ejecuta un comando bash dentro del workspace aislado. Sin red, env limpio.',
+      description: 'Ejecuta un comando allowlisted en el sandbox del workspace (alias: shell). Sin red salvo allowNetwork. Planificar: solo lectura. No lo uses para leer o editar archivos; usa read, write, ls o apply_patch.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' },
+          timeoutMs: { type: 'integer' },
+          allowNetwork: { type: 'boolean' },
         },
         required: ['command'],
       },

@@ -70,10 +70,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   (`SessionSummary`: compact snapshot so the client hydrates without
   the full event log), and a per-turn tool-round guard
   (`agent.steps` / last-step finalize: cap tool executions in one
-  user turn and stop with a Spanish /agentes label). The native
-  helpers are local and deterministic — no title-agent LLM, no
-  Effect runtime, no Snapshot git-diff, no MAX_STEPS prompt dump,
-  no global tool-output directory, no silent swallow. No
+  user turn and stop with a Spanish /agentes label), and a
+  sandboxed `bash`/`shell` contract (allowlisted read-ish
+  commands, timeout + size caps, no network unless `allowNetwork`,
+  Planificar stays read-only even after permission-resume; ~0%
+  copy of `vendor/opencode` `shell.ts` — see AGENTS.md §25). The
+  native helpers are local and deterministic — no title-agent LLM,
+  no Effect runtime, no Snapshot git-diff, no MAX_STEPS prompt
+  dump, no global tool-output directory, no silent swallow. No
   OpenCode source, SST console, Nix, desktop, Electron, or TUI was
   vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.
