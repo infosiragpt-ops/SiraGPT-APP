@@ -221,6 +221,7 @@ test('GET /session/:id returns pending permission cards after an ask', async () 
   const got = await request(app).get(`/api/opencode/session/${id}`);
   assert.equal(got.status, 200);
   assert.equal(got.body.session.agent, 'planificar');
+  assert.equal(got.body.session.title, 'lista archivos');
   assert.equal(got.body.session.pendingPermissions.length, 1);
   assert.equal(got.body.session.pendingPermissions[0].tool, 'bash');
   assert.ok(!JSON.stringify(got.body).includes('DeepSeek'));

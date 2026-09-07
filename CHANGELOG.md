@@ -8,6 +8,11 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode sessions now take a title from the first real user message
+  (`Nueva sesión` until then). Trivial greetings do not lock the label;
+  a caller-supplied title is kept. Inspired by OpenCode
+  `SessionPrompt.ensureTitle`; independent local rewrite, no LLM.
+
 - SiraCode `applyUnique` keeps `$&` / `$$` / `` $` `` / `$'` literal and
   rejects overlapping hunks (`aaa` + `aa`) instead of a partial replace.
 
