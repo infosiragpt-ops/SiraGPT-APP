@@ -5,6 +5,7 @@ const { buildAgentTaskPlan } = require('../agents/agent-task-plan');
 const { buildExecutionProfile } = require('../agents/agentic-execution-profile');
 const { buildUserIntentAlignmentProfile } = require('../agents/user-intent-alignment');
 const codexRunStore = require('./codex-run-store');
+const { notifyRunFinished } = require('./codex-run-notifier');
 const streamCache = require('../stream-cache');
 const { cloneProject } = require('../agents/clone-project-tool');
 
@@ -94,6 +95,20 @@ async function runCodexPipeline(params = {}, deps = {}) {
     if (typeof onEvent === 'function') onEvent(event);
   };
 
+  // The run keeps going in the backend after the user closes the tab, so
+  // its terminal outcome is announced in-app (critical → web-push/SMS on
+  // failure). Best-effort: never flips the run's own outcome.
+  const notifyOutcome = typeof deps.notifyRunFinished === 'function'
+    ? deps.notifyRunFinished
+    : notifyRunFinished;
+  const announceOutcome = async (outcome) => {
+    try {
+      await notifyOutcome({ userId, chatId, runId, outcome, goal });
+    } catch {
+      /* best-effort */
+    }
+  };
+
   const setPhase = async (phase, percent, extra = {}) => {
     codexRunStore.updateRun(runId, { phase, percent, status: 'running', ...extra });
     await touchStreamProgress(userId, chatId, { taskId: taskId || runId, phase, percent });
@@ -126,6 +141,7 @@ async function runCodexPipeline(params = {}, deps = {}) {
         codexRunStore.updateRun(runId, { status: 'completed', phase: 'done', percent: 100 });
         await touchStreamProgress(userId, chatId, { taskId: taskId || runId, phase: 'done', percent: 100 });
         emit({ type: 'done', runId, path: cloneResult.path });
+        await announceOutcome('completed');
         return codexRunStore.readRun(runId);
       }
 
@@ -133,6 +149,7 @@ async function runCodexPipeline(params = {}, deps = {}) {
       emit({ type: 'clone_error', error: cloneResult.error });
       codexRunStore.updateRun(runId, { status: 'failed', error: cloneResult.error, percent: 100 });
       emit({ type: 'error', message: cloneResult.error });
+      await announceOutcome('failed');
       return codexRunStore.readRun(runId);
     }
 
@@ -202,11 +219,13 @@ async function runCodexPipeline(params = {}, deps = {}) {
     codexRunStore.updateRun(runId, { status: 'completed', phase: 'done', percent: 100 });
     await touchStreamProgress(userId, chatId, { taskId: taskId || runId, phase: 'done', percent: 100 });
     emit({ type: 'done', runId });
+    await announceOutcome('completed');
     return codexRunStore.readRun(runId);
   } catch (err) {
     const message = err && err.message ? err.message : String(err);
     codexRunStore.updateRun(runId, { status: 'failed', error: message, percent: 100 });
     emit({ type: 'error', message });
+    await announceOutcome('failed');
     throw err;
   }
 }
