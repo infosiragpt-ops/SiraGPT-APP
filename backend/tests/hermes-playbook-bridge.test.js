@@ -48,6 +48,28 @@ test('upstream Hermes skills map to active SiraGPT playbooks', () => {
   assert.ok(UPSTREAM_TO_SIRAGPT_SKILLS['test-driven-development'].includes('qa-smoke-testing'));
 });
 
+test('github-pr-workflow fuses into the native pr-production-loop skill', () => {
+  assert.ok(
+    UPSTREAM_TO_SIRAGPT_SKILLS['github-pr-workflow'].includes('pr-production-loop'),
+    'Hermes PR lifecycle must resolve to the SiraGPT production loop',
+  );
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const matrix = buildHermesIntegrationMap({ repoRoot });
+  const entry = matrix.skills.find((skill) => skill.upstream === 'github-pr-workflow');
+  assert.ok(entry, 'github-pr-workflow must be indexed from the upstream snapshot');
+  assert.equal(entry.status, 'covered', 'the native skill must exist so the mapping resolves');
+  assert.ok(entry.availableSkills.includes('pr-production-loop'));
+  const skillSource = fs.readFileSync(
+    path.join(repoRoot, '.agents', 'skills', 'pr-production-loop', 'SKILL.md'),
+    'utf8',
+  );
+  for (const marker of ['production-main', 'publish.sh', 'required checks']) {
+    assert.ok(skillSource.includes(marker), `skill must pin SiraGPT gate: ${marker}`);
+  }
+  assert.ok(skillSource.includes('NEVER push to `main`'), 'skill must forbid main pushes');
+  assert.match(skillSource, /skill:validate:agents/, 'skill must name its validation command');
+});
+
 test('buildHermesIntegrationMap reports copied upstream and rewritten SiraGPT skills', () => {
   const repoRoot = path.resolve(__dirname, '..', '..');
   const matrix = buildHermesIntegrationMap({ repoRoot });
