@@ -7,6 +7,7 @@
 
 const activeMemory = require('../active-memory');
 const sessionManager = require('../session-manager');
+const curatedMemory = require('./hermes-curated-memory');
 
 function normalizeText(text) {
   return String(text || '')
@@ -76,7 +77,17 @@ function promote(userId, entryId) {
 }
 
 function buildMemoryPrompt(userId, opts = {}) {
-  return activeMemory.buildMemoryPrompt(userId, opts);
+  const live = activeMemory.buildMemoryPrompt(userId, opts);
+  const frozen = curatedMemory.getFrozenPromptBlock(userId, { chatId: opts.chatId });
+  return [frozen, live].filter(Boolean).join('\n\n');
+}
+
+function beginSession(userId, opts = {}) {
+  return curatedMemory.beginSession(userId, opts);
+}
+
+function getFrozenPromptBlock(userId, opts = {}) {
+  return curatedMemory.getFrozenPromptBlock(userId, opts);
 }
 
 function searchSessions(userId, query, opts = {}) {
@@ -145,8 +156,9 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory'],
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
+    curated: curatedMemory.status(userId),
   };
   if (!userId) return base;
   return {
@@ -161,6 +173,12 @@ module.exports = {
   recall,
   promote,
   buildMemoryPrompt,
+  beginSession,
+  getFrozenPromptBlock,
+  curatedAdd: curatedMemory.add,
+  curatedReplace: curatedMemory.replace,
+  curatedRemove: curatedMemory.remove,
+  curatedRead: curatedMemory.read,
   searchSessions,
   nudgePromotion,
   listEntries,

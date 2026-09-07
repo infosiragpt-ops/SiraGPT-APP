@@ -43,3 +43,15 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
 - **Simple Icons** (https://simpleicons.org/, CC0 1.0) — brand-colored SVGs
   under `public/conexiones-logos/` used as official marks on `/conexiones`
   and `/gpts` app cards.
+
+- **OpenCode** (https://github.com/sst/opencode, MIT License, © SST Inc.) —
+  the tool-catalog mapping, permission-evaluate semantics (last-match-wins,
+  default ask), read limits, public-repo clone and GitHub publish-plan
+  contracts in `backend/src/services/codex/opencode-harness.js` plus the
+  `POST /api/codex/projects/clone` and `/projects/:id/github/*` routes in
+  `backend/src/routes/codex.js` are CommonJS ports of
+  `packages/opencode/src/tool/registry.ts`,
+  `packages/opencode/src/permission/index.ts` and
+  `packages/opencode/src/tool/{read,write,edit,glob,grep,shell,task,todo,webfetch,websearch,skill,plan}.ts`.
+  No Effect-TS runtime was copied. Read-only upstream reference vendored at
+  `vendor/opencode/` (see `vendor/opencode/LICENSE`).
