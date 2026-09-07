@@ -26,8 +26,8 @@ function backendStep(name: string): string {
 }
 
 describe("document sandbox strict coverage release gate", () => {
-  it("runs the 80 percent check as a blocking step in a required job", () => {
-    const step = backendStep("Document sandbox strict unit coverage (80% hard gate)")
+  it("runs the 81 percent check as a blocking step in a required job", () => {
+    const step = backendStep("Document sandbox strict unit coverage (81% hard gate)")
     assert.match(step, /^\s*if: matrix\.shard == 1\s*$/m)
     assert.match(step, /^\s*NODE_ENV: test\s*$/m)
     assert.match(step, /^\s*run: npm run test:doc-sandbox:coverage\s*$/m)
@@ -46,7 +46,7 @@ describe("document sandbox strict coverage release gate", () => {
     const command = scripts["test:doc-sandbox:coverage"]
     assert.match(command, /^c8 --all --src src\/modules\/doc-sandbox /)
     assert.match(command, /--include 'src\/modules\/doc-sandbox\/\*\*\/\*\.ts'/)
-    assert.match(command, /--check-coverage --lines 80 npm run test:doc-sandbox:unit$/)
+    assert.match(command, /--check-coverage --lines 81 npm run test:doc-sandbox:unit$/)
     assert.doesNotMatch(command, /--exclude(?:=|\s)|--per-file|\|\|/)
     assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /auxiliary|\.integration\.|model-policy\.test|validation-lifecycle\.test|persistence\.queue/)
     assert.match(scripts["test:doc-sandbox:unit"], /tests\/doc-sandbox-lease-policy\.test\.ts(?:\s|$)/)

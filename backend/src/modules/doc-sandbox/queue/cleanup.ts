@@ -1,6 +1,7 @@
 import type { DocSandboxRepository } from './repository';
 import type { PrivateDocumentStorage } from '../storage/private-storage';
 import type { DocumentProviderClient } from '../engine/provider-client';
+import { removeAndAcknowledge } from './acknowledged-deletion';
 
 /** No success is recorded until the remote delete succeeds and DB acknowledges it. */
 export async function reconcileDocumentCleanup(repository: DocSandboxRepository, storage: PrivateDocumentStorage,
@@ -21,26 +22,8 @@ export async function reconcileDocumentCleanup(repository: DocSandboxRepository,
       }
       if (job.deletedAt && (!job.cleanupNotBefore || job.cleanupNotBefore.getTime() <= Date.now())) {
         const scope = { userId: job.userId, jobId: job.id };
-        const removeKnown = async (keys: ReadonlyArray<string>): Promise<void> => {
-          let confirmed: string[] = [];
-          const flush = async (): Promise<void> => {
-            if (!confirmed.length) return;
-            await repository.markStorageKeysPurged(job.id, confirmed);
-            confirmed = [];
-          };
-          try {
-            for (const key of keys) {
-              jobSignal.throwIfAborted();
-              await storage.remove(scope, key, jobSignal);
-              confirmed.push(key);
-              if (confirmed.length >= 100) await flush();
-            }
-          } finally {
-            // Acknowledging confirmed deletes remains necessary after cancellation.
-            // An uncertain DELETE stays in the pre-existing journal for retry.
-            await flush();
-          }
-        };
+        const removeKnown = (keys: ReadonlyArray<string>): Promise<void> => removeAndAcknowledge(keys, jobSignal,
+          key => storage.remove(scope, key, jobSignal), confirmed => repository.markStorageKeysPurged(job.id, confirmed));
         // Make durable progress even if LIST fails. Do not redo acknowledged
         // known keys on every time-bounded pass; LIST below still sees late PUTs.
         const alreadyPurged = new Set(job.purgedKeys);

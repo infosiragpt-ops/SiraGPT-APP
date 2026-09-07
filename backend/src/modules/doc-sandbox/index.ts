@@ -15,6 +15,7 @@ import { DocumentMetrics, type MetricsRegistry } from './observability/metrics';
 import { createDocumentModelPolicy } from './model-policy';
 import { DocumentReadinessLease, createDocumentWorkerReadinessProbe, DOCUMENT_READINESS_INTERVAL_MS,
   waitForDocumentOperation } from './readiness';
+import { DocumentBackgroundLoop, drainDocumentOperations } from './background-lifecycle';
 
 interface ApplicationDependencies {
   prisma: PrismaClient; authenticate: RequestHandler; admissionPolicy: RequestHandler;
@@ -65,15 +66,12 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
   const controllers = new Map<string, AbortController>();
   const inflight = new Set<Promise<void>>();
   let worker: Worker<DocQueuePayload> | undefined; let queue: DocSandboxQueue | undefined;
-  const connections: ConnectionOptions[] = []; let timer: NodeJS.Timeout | undefined;
-  let reconciliation: Promise<void> | undefined; let stopped = false; let started = false;
+  const connections: ConnectionOptions[] = [];
+  let stopped = false; let started = false;
   let starting: Promise<void> | undefined;
-  let cleanup: Promise<void> | undefined; let cleanupTimer: NodeJS.Timeout | undefined;
-  let validatorCleanup: Promise<void> | undefined; let validatorCleanupTimer: NodeJS.Timeout | undefined;
   let validatorCleanupHealthy = true;
   const lifecycle = new AbortController();
   const readiness = new DocumentReadinessLease();
-  let readinessTimer: NodeJS.Timeout | undefined;
   let readinessProbe: ReturnType<typeof createDocumentWorkerReadinessProbe> | undefined;
   const router = createDocumentRouter({ authenticate: deps.authenticate, admissionPolicy: deps.admissionPolicy, repository, storage,
     tickets: new DocumentDownloadTickets(config.storageKey), config, notice: deps.notice,
@@ -86,29 +84,17 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
     await repository.expireJobs(); await repository.recoverExpiredLeases(); await repository.recoverUndeliveredJobs();
     await queue?.dispatchOutbox(repository);
   };
-  const cleanupLoop = (): void => {
-    if (stopped) return;
-    cleanup = reconcileDocumentCleanup(repository, storage, provider, lifecycle.signal, deps.notice)
+  const cleanupLoop = new DocumentBackgroundLoop(() =>
+    reconcileDocumentCleanup(repository, storage, provider, lifecycle.signal, deps.notice)
       .then(() => deps.reconcileDeletedAccounts?.())
-      .catch(() => deps.notice('DOC_CLEANUP_PENDING')).finally(() => {
-        if (!stopped) cleanupTimer = setTimeout(cleanupLoop, 30_000);
-      });
-  };
-  const validatorCleanupLoop = (): void => {
-    if (stopped) return;
-    validatorCleanup = validator.reconcileOrphans().then(result => {
+      .catch(() => deps.notice('DOC_CLEANUP_PENDING')), 30_000);
+  const validatorCleanupLoop = new DocumentBackgroundLoop(() =>
+    validator.reconcileOrphans().then(result => {
       validatorCleanupHealthy = result.pending === 0;
       if (result.pending) { readiness.invalidate(); deps.notice('DOC_VALIDATOR_CLEANUP_PENDING'); }
-    }).catch(() => { validatorCleanupHealthy = false; readiness.invalidate(); deps.notice('DOC_VALIDATOR_CLEANUP_PENDING'); }).finally(() => {
-      if (!stopped) validatorCleanupTimer = setTimeout(validatorCleanupLoop, 30_000);
-    });
-  };
-  const loop = (): void => {
-    if (stopped) return;
-    reconciliation = reconcile().catch(() => deps.notice('DOC_RECONCILIATION_FAILED')).finally(() => {
-      if (!stopped) timer = setTimeout(loop, 3000);
-    });
-  };
+    }).catch(() => { validatorCleanupHealthy = false; readiness.invalidate(); deps.notice('DOC_VALIDATOR_CLEANUP_PENDING'); }), 30_000);
+  const loop = new DocumentBackgroundLoop(() =>
+    reconcile().catch(() => deps.notice('DOC_RECONCILIATION_FAILED')), 3000);
   const refreshReadiness = async (): Promise<boolean> => {
     const ticket = readiness.ticket();
     const healthy = await readinessProbe?.check(lifecycle.signal);
@@ -116,12 +102,8 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
     // A close/error during an in-flight PING invalidates its old result.
     return readiness.confirm(ticket);
   };
-  const readinessLoop = (): void => {
-    if (stopped) return;
-    void refreshReadiness().catch(() => { readiness.invalidate(); deps.notice('DOC_READINESS_FAILED'); }).finally(() => {
-      if (!stopped) readinessTimer = setTimeout(readinessLoop, DOCUMENT_READINESS_INTERVAL_MS);
-    });
-  };
+  const readinessLoop = new DocumentBackgroundLoop(() =>
+    refreshReadiness().then(() => undefined).catch(() => { readiness.invalidate(); deps.notice('DOC_READINESS_FAILED'); }), DOCUMENT_READINESS_INTERVAL_MS);
   return { router,
     async start() {
       if (stopped) throw new Error('DOC_MODULE_CLOSED');
@@ -161,11 +143,11 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
       void worker.run().then(() => { readiness.invalidate(); }, () => { readiness.invalidate(); deps.notice('DOC_WORKER_STOPPED'); });
       if (!await refreshReadiness()) throw new Error('DOC_WORKER_NOT_READY');
       if (stopped) throw new Error('DOC_MODULE_CLOSED');
-      readinessTimer = setTimeout(readinessLoop, DOCUMENT_READINESS_INTERVAL_MS);
-      loop(); cleanupLoop(); validatorCleanupLoop();
+      readinessLoop.start(DOCUMENT_READINESS_INTERVAL_MS);
+      loop.start(); cleanupLoop.start(); validatorCleanupLoop.start();
       }, async () => {
         readiness.invalidate(); readinessProbe?.close(); readinessProbe = undefined;
-        if (readinessTimer) clearTimeout(readinessTimer);
+        readinessLoop.pause();
         const notice = (): void => { try { deps.notice('DOC_START_CLEANUP_PENDING'); } catch { /* Cleanup must still attempt every resource. */ } };
         if (worker) { try { await worker.close(true); } catch { notice(); } }
         if (queue) { try { await queue.close(); } catch { notice(); } }
@@ -180,24 +162,20 @@ export function createDocumentModule(deps: ApplicationDependencies): DocumentMod
     },
     async close() {
       stopped = true; readiness.stop(); lifecycle.abort(); readinessProbe?.close();
-      if (timer) clearTimeout(timer); if (cleanupTimer) clearTimeout(cleanupTimer); if (readinessTimer) clearTimeout(readinessTimer);
-      if (validatorCleanupTimer) clearTimeout(validatorCleanupTimer);
+      loop.stop(); cleanupLoop.stop(); readinessLoop.stop(); validatorCleanupLoop.stop();
       // A concurrent preflight/start must finish unwinding before releasing the
       // shared client or allowing a late worker to outlive this module.
       if (starting) { try { await starting; } catch { /* Already sanitized by startup cleanup. */ } }
       for (const controller of controllers.values()) controller.abort();
       await worker?.close(true);
-      const drain = Promise.allSettled([...inflight, ...(reconciliation ? [reconciliation] : []), ...(cleanup ? [cleanup] : []), ...(validatorCleanup ? [validatorCleanup] : [])]);
-      let timeout: NodeJS.Timeout | undefined;
-      const finished = await Promise.race([drain.then(() => true), new Promise<false>((resolve) => { timeout = setTimeout(() => resolve(false), 20_000); })]);
-      if (timeout) clearTimeout(timeout);
+      const background = [loop.pending(), cleanupLoop.pending(), validatorCleanupLoop.pending()]
+        .filter((operation): operation is Promise<void> => operation !== undefined);
       const release = async (): Promise<void> => {
         await queue?.close();
         for (const connection of connections) if ('disconnect' in connection && typeof connection.disconnect === 'function') connection.disconnect();
         client.destroy();
       };
-      if (finished) await release();
-      else { deps.notice('DOC_SHUTDOWN_CLEANUP_PENDING'); void drain.then(release).catch(() => deps.notice('DOC_SHUTDOWN_CLEANUP_PENDING')); }
+      await drainDocumentOperations([...inflight, ...background], release, () => deps.notice('DOC_SHUTDOWN_CLEANUP_PENDING'));
     },
   };
 }

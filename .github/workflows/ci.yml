@@ -443,7 +443,7 @@ jobs:
       # Run after the existing suites and boot smoke so a known coverage gap
       # cannot hide their results. This is the full F1 unit denominator, not
       # the general backend shard sample or the separately executed auxiliaries.
-      - name: Document sandbox strict unit coverage (80% hard gate)
+      - name: Document sandbox strict unit coverage (81% hard gate)
         if: matrix.shard == 1
         env:
           NODE_ENV: test
