@@ -108,7 +108,7 @@ function charLimit(target) {
 
 function charCount(entries) {
   if (!entries.length) return 0;
-  return ENTRY_DELIMITER.join(entries).length;
+  return entries.join(ENTRY_DELIMITER).length;
 }
 
 function looksLikePiiOrSecret(text) {
