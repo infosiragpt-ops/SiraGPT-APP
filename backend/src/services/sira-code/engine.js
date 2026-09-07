@@ -22,6 +22,7 @@ const {
 } = require('./session-store');
 const { runPrompt, shouldStartSiraCodeRun } = require('./loop');
 const { publicModelLabel, sanitizePublicObject } = require('./display');
+const { applyAgentChange, publicPlan } = require('./plan-handoff');
 
 function sidecarRequested(env = process.env) {
   return ['1', 'true', 'on', 'yes'].includes(String(env.SIRAGPT_OPENCODE_SIDECAR || '').trim().toLowerCase());
@@ -50,19 +51,36 @@ function get(id, userId) {
   return publicSession(requireOwnedSession(id, userId));
 }
 
-function switchAgent(id, agentId, userId) {
-  const session = requireOwnedSession(id, userId);
-  switchStoredAgent(session, agentId);
+function emitAgentSwitch(session, nextAgentId) {
+  const change = applyAgentChange(session, nextAgentId, switchStoredAgent);
   appendEvent(session, 'agent', {
     agent: session.agentId,
     label: getAgent(session.agentId).label,
   });
+  if (change.handoff) {
+    stageEvent(session, 'planReady', {
+      label: 'Plan listo',
+      from: change.from,
+      to: change.to,
+    });
+    appendEvent(session, 'handoff', {
+      from: change.from,
+      to: change.to,
+      plan: publicPlan(session.plan),
+    });
+  }
+  return change;
+}
+
+function switchAgent(id, agentId, userId) {
+  const session = requireOwnedSession(id, userId);
+  emitAgentSwitch(session, agentId);
   return publicSession(session);
 }
 
 async function prompt(id, text, opts = {}) {
   const session = requireOwnedSession(id, opts.userId);
-  if (opts.agent) switchStoredAgent(session, opts.agent);
+  if (opts.agent) emitAgentSwitch(session, opts.agent);
   if (opts.permission != null) session.permission = opts.permission;
   const result = await runPrompt(session, text, {
     llmTurn: opts.llmTurn,
@@ -150,6 +168,7 @@ module.exports = {
   create,
   get,
   switchAgent,
+  emitAgentSwitch,
   prompt,
   abort,
   readFile,
