@@ -1707,7 +1707,7 @@ class ApiClient {
 
   async editUserMessage(
     messageId: string,
-    data: { content: string },
+    data: { content: string; files?: unknown[] },
     options: { signal?: AbortSignal } = {},
   ) {
     return this.request(`/chats/messages/${messageId}`, {
