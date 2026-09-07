@@ -1,0 +1,81 @@
+encarta de todo y déjalo en porudc con quiero que puedas copiar codigo de anomalyco/opencode openclaw/openclaw NousResearch/hermes-agent y fusionarlo en nuestro sofware infosiragpt-ops/SiraGPT-APP para que el sofware de infosiragpt-ops/SiraGPT-APP se vuelva muchisimo mejor dejalo en prpduccion y avisame en que % de copia y clonacion yfusion esta en nivel de % de 0 a 100% parsa ver en que % estamos copiar el codigo y fusionarlo con nuestro sofware. PLAYBOOK SiraGPT → producción Lenovo (sin secretos)
+Para otro agente. No asumas un VPS nuevo. No pidas ni imprimas .env.
+
+## Qué es producción
+- Dominio: https://siragpt.com (https://siragpt.com/) (www redirige al apex).
+- Origen: Lenovo oficina (user-06), túnel Cloudflare. NO Hostinger (srv745334 / 62.72.11.231). NO armar otro VPS ni migrar DNS.
+- DNS ya está en Cloudflare (NS connie/jaime), CNAME naranja al túnel. No toques DNS.
+- Repo: infosiragpt-ops/SiraGPT-APP
+- Rama de prod: production-main. Nunca push a main. Todo cambio = PR a production-main, CI verde, squash-merge, luego publish.
+- UI: /agentes es canónico. /chat y /code redirigen. No revivas /code.
+- Modelos: solo DeepSeek V4 Flash/Pro. En UI: alias (Sira Rápido / Sira Pro), nunca el model_id ni “DeepSeek”.
+- Apps: Conectada = token válido + health. NUNCA marcar Conectada por abrir Chrome/catálogo (Indeed, Etsy, tarot…). Eso OOM-eó computadoras.
+- Luis: infosiragpt@gmail.com para OAuth. Solo interviene en login/2FA/Allow/pago.
+
+## SSH (sin pegar la key)
+- Público: ssh.siragpt.com:22, usuario deploy, vía Cloudflare Access TCP.
+- Desde esta computadora Grok Bot (mismo box):
+cloudflared access tcp --hostname ssh.siragpt.com --url 127.0.0.1:2222
+Key: /home/box/.ssh/siragpt_deploy
+Passphrase: /home/box/.ssh/siragpt_deploy.pw (leer en el proceso, NUNCA echo ni chat)
+Conectar: deploy@127.0.0.1:2222 (paramiko o ssh). El landing es un contenedor Alpine con Docker, no el host crudo.
+- Si el otro agente NO está en este box: Luis le da acceso SSH por canal seguro, no por este chat. Rotar si la key se pegó antes.
+
+## Rutas en la Lenovo
+- Código: /home/user/SiraGPT-APP
+- Publish: /home/user/deployments/iliagpt/publish.sh
+- Compose: /home/user/deployments/iliagpt/compose.yaml
+- ENV DE PROD (único): /home/user/deployments/iliagpt/.env
+Keys OAuth ya mezcladas desde Replit. NO crear otro .env. NO dump. NO commitear.
+- Backup .env reciente: .env.bak-* en el mismo dir (tampoco dump).
+- SOCIAL_LINKEDIN_SCOPES ya está en .env = openid profile (no imprimir el archivo).
+- Stack Docker: iliagpt-backend, frontend, runner, gateway (Caddy). iliagpt-origin:80.
+- Túnel público: open-webui-chatagic id 7807846a-039d-407f-8722-9e98d641d2e3 → siragpt.com/www → http://iliagpt-origin:80
+- No toques otros stacks (chatagic, WordPress, Ollama, etc.).
+
+## Dónde viven los secretos (valores NO se copian)
+- Replit (fuente OAuth): https://replit.com/@JorgeCarrera4/SiraGPT-APP → Secrets
+SET: Google, GitHub, LinkedIn, X, Spotify, YouTube. Facebook VACÍO.
+- Prod: /home/user/deployments/iliagpt/.env (mismo set). El backend se recrea para tomar env.
+- Nombres típicos (solo nombres): GOOGLE_CLIENT_ID/SECRET, GITHUB_*, SOCIAL_LINKEDIN_*, SOCIAL_X_*, SOCIAL_FACEBOOK_* (vacío), Spotify, YouTube.
+- Google Drive ya usa el cliente Google + /api/auth/google-services/callback (GOOGLE_REDIRECT_CALENDAR_DRIVE_URI).
+- OneDrive: aún no hay MICROSOFT_*/ONEDRIVE_* en .env; hay que crear Azure app y poner keys EN el .env de la Lenovo y Replit, no en el chat.
+- Cache local de este box (0600, no pegar): /home/box/.ssh/replit-oauth.env y /workspace/conexiones-secrets/vps-oauth-clients.env
+
+## Cómo publicar
+1. PR a production-main. Esperar check "CI · required checks passed". Squash-merge. No --admin si CI está rojo.
+2. SSH como arriba.
+3. En /home/user/SiraGPT-APP: git fetch origin && git checkout -B deploy-from-github origin/production-main
+(así se hizo el último publish). No git reset --hard. No compose down -v.
+4. /home/user/deployments/iliagpt/publish.sh
+Si ya hay un publish.sh de ese SHA, esperar el lock; no lanzar otro.
+5. Verificar: curl -sI https://siragpt.com (https://siragpt.com/) y https://siragpt.com/api/health → 200.
+Health puede decir "degraded" (model_providers/mcp/r2) y críticos (db, redis, migrations) healthy. oauth_providers healthy.
+6. Recreate solo backend si cambiaste .env: docker compose up -d --no-deps --force-recreate backend (desde iliagpt/). Nunca down -v.
+
+## OAuth callbacks (no cambiar)
+- Login Google: https://siragpt.com/api/auth/google/callback
+- Gmail: https://siragpt.com/api/auth/gmail/callback
+- Calendar+Drive: https://siragpt.com/api/auth/google-services/callback
+- GitHub: https://siragpt.com/api/github/callback
+- LinkedIn: https://siragpt.com/api/social-posts/oauth/linkedin/callback
+- X: https://siragpt.com/api/social-posts/oauth/x/callback
+
+## Estado actual (2026-08-27, ~15:00 PET)
+- Live: production-main publicado. Release reciente 0.4.4-production-main.b1578018 (PR 468: picker @ en /agentes).
+- PR 469: logos oficiales en el picker @. CI se rompió por vitest (varios “Conectar”); fix en curso. No mergear rojo. Luego publish.sh.
+- OneDrive + Google Drive: cloud agent bc-2d28d299. Drive OAuth ya existe (google-services); OneDrive es greenfield (falta Azure client en .env).
+- Apps en sesión Sara PRO: X y GitHub Conectadas. LinkedIn bloqueado por Cloudflare bot en ESTA computadora (conectar desde el celular de Luis). Facebook sin keys Meta. Catálogo no se toca.
+- LinkedIn: no pedir r_member_social. Env SOCIAL_LINKEDIN_SCOPES=openid profile.
+- Hostinger abandonado. SSH VPS muerto. No restaurar origen ahí.
+- api.siragpt.com es 404 en Cloudflare (usar siragpt.com/api/...).
+
+## Prohibido
+- Pegar .env, keys, cookies, SSH key o passphrase en el chat.
+- compose down -v, git reset --hard, push a main, clonar el repo en el box o en la Mac “para mirar”.
+- Nuevo VPS / nuevo .env / mover DNS.
+- Click-masivo del catálogo ChatGPT / abrir computadora para “conectar” apps.
+- OpenRouter u otros modelos.
+
+## Si el otro agente necesita un secreto nuevo
+Pedirlo a Luis con secret-request (campo enmascarado), escribirlo solo en Replit Secrets y en /home/user/deployments/iliagpt/.env, recrear backend. Nunca en el transcript.
