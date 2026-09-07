@@ -102,9 +102,9 @@ export type AgentTaskEvent =
   | { type: "done"; stoppedReason: string; stats: { steps: number; artifacts: number }; dbMessageId?: string | null }
   | { type: "run.started"; runId?: string; taskId?: string; assistantMessageId?: string }
   | { type: "run.succeeded"; stoppedReason?: string; stats?: { steps?: number; artifacts?: number } }
-  | { type: "run.failed"; message?: string }
+  | { type: "run.failed"; message?: string; code?: string; reason?: string }
   | { type: "heartbeat"; at?: number; ts?: string }
-  | { type: "error"; message: string }
+  | { type: "error"; message: string; code?: string; reason?: string }
 
 export interface AgentTaskRunArgs {
   goal: string
@@ -186,6 +186,20 @@ export class AgentTaskEmptyStreamError extends Error {
 
 export function normalizeAgentTaskErrorMessage(err: unknown): string {
   const raw = String((err as any)?.message || err || "Agent task failed")
+  const code = String((err as { code?: string } | null)?.code || "").trim()
+  // Structured §16 codes from presentTaskError win over message regex so
+  // 503 / cancel / timeout stay distinct after an SSE reconnect.
+  if (code === "E_CANCELLED") return "La tarea se detuvo."
+  if (code === "E_TIMEOUT") return "La tarea superó el tiempo de espera. Reintenta."
+  if (code === "E_QUOTA") return "Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan."
+  if (code === "E_CONTENT") return "Este pedido no se pudo completar por la política de contenido. Reformúlalo."
+  if (code === "E_PARAMS") return "Faltan datos o el pedido no es válido."
+  if (code === "E_PROVIDER") {
+    if (/\b503\b|service unavailable|no está disponible/i.test(raw)) {
+      return "El servicio no está disponible. Reintenta en unos segundos."
+    }
+    return "El servidor tuvo un problema. Reintenta en unos segundos."
+  }
   if (/failed to fetch|networkerror|load failed|fetch failed/i.test(raw)) {
     return "El backend se reinició o se perdió la conexión durante la tarea. Reintenta."
   }
@@ -211,8 +225,16 @@ export function normalizeAgentTaskErrorMessage(err: unknown): string {
   if (/\b429\b|rate[_ -]?limit|too many requests|quota[_ -]?exceeded/i.test(raw)) {
     return "Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan."
   }
-  // 5xx: tell the user it's our side and they can retry.
-  if (/\b50[0-9]\b|internal server error|bad gateway|service unavailable/i.test(raw)) {
+  // Timeout / 504 before generic 5xx — otherwise "504 Gateway Timeout"
+  // collapses into the same banner as a 503.
+  if (/\b504\b|\b408\b|gateway timeout|\btimeout\b|timed? out|etimedout|deadline exceeded/i.test(raw)) {
+    return "La tarea superó el tiempo de espera. Reintenta."
+  }
+  if (/\b503\b|service unavailable/i.test(raw)) {
+    return "El servicio no está disponible. Reintenta en unos segundos."
+  }
+  // Other 5xx: tell the user it's our side and they can retry.
+  if (/\b50[0-9]\b|internal server error|bad gateway/i.test(raw)) {
     return "El servidor tuvo un problema. Reintenta en unos segundos."
   }
   // Provider-side errors (OpenAI/Anthropic/Gemini) commonly leak
@@ -553,6 +575,8 @@ export interface AgentTaskState {
   done: boolean
   stoppedReason?: string
   error?: string
+  /** AGENTS.md §16 code when the backend presented a structured failure. */
+  errorCode?: string
   /** ISO timestamp of the last SSE event seen (heartbeats included). */
   lastEventAt?: string
   /** ISO timestamp of the last transport heartbeat (`: ping` / type:heartbeat). */
@@ -833,7 +857,13 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
       return { ...state, done: true, stoppedReason: (evt as { stoppedReason?: string }).stoppedReason, currentActivity: null }
     case "error":
     case "run.failed":
-      return { ...state, done: true, error: (evt as { message?: string }).message || "run_failed", currentActivity: null }
+      return {
+        ...state,
+        done: true,
+        error: (evt as { message?: string }).message || "run_failed",
+        errorCode: (evt as { code?: string }).code,
+        currentActivity: null,
+      }
     default:
       return state
   }

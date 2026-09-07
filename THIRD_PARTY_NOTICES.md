@@ -27,6 +27,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   or provider adapter. Audited references and scope are recorded in
   `docs/agent-brain-integrity-20260906.md`.
   Further ports are governed by docs/code/openclaw-port-charter.md.
+  The agent-task error presenter in
+  `backend/src/utils/task-error-classifier.js` (`presentTaskError`) is a
+  native rewrite of OpenClaw's ACP `errorKind` → `stopReason` contract
+  (`aborted` stays cancelled; timeout / refusal / generic error stay
+  distinct) so `/agentes` can show separate Spanish labels for 503,
+  cancel and timeout. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`. No OpenClaw runtime was
+  vendored.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**

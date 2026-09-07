@@ -27,6 +27,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` task failures no longer collapse 503, cancel and timeout
+  into one generic banner. `presentTaskError` maps classified reasons to
+  AGENTS.md §16 codes (`E_PROVIDER` / `E_CANCELLED` / `E_TIMEOUT`) and
+  distinct Spanish labels on the terminal SSE event. Native rewrite of
+  OpenClaw's `errorKind` → `stopReason` contract; no vendored runtime.
+
 - Backend image rebuilds no longer depend on HuggingFace for
   `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
   seeds from `/tmp/whisper-seed`, `/tmp`, or `WHISPER_SEED_FILE` and copies

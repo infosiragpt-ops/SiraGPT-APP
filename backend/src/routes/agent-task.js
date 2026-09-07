@@ -17,7 +17,7 @@
  *     { type: "file_artifact", id, filename, mime, sizeBytes, downloadUrl }
  *     { type: "final_text",   markdown }
  *     { type: "done",         stoppedReason, stats }
- *     { type: "error",        message }
+ *     { type: "error",        message, code?, reason? }
  *
  * GET /api/agent/artifact/:id
  *   Serves a previously-created artifact as an attachment download.
@@ -98,6 +98,7 @@ const {
   resolveTaskLastError,
   buildTaskEventsResumePayload,
 } = require('../services/agents/agent-task-event-resume');
+const { toAgentTaskErrorEvent } = require('../utils/task-error-classifier');
 const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
@@ -821,10 +822,12 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
         ...(snapshot.streamState || initialAgentState()),
         done: true,
         error: 'Tarea cancelada por el usuario.',
+        errorCode: 'E_CANCELLED',
       };
       streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
-      const writtenCancel = taskStore.appendTaskEvent(snapshot, { type: 'error', message: 'Tarea cancelada por el usuario.' }, streamState, { eventLimit: TASK_EVENT_LIMIT });
-      await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || { type: 'error', message: 'Tarea cancelada por el usuario.' });
+      const cancelEvent = { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' };
+      const writtenCancel = taskStore.appendTaskEvent(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+      await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || cancelEvent);
       taskStore.markTaskStatus(snapshot, 'cancelled', {
         streamState,
       });
@@ -840,10 +843,11 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   task.cancelledAt = new Date().toISOString();
   task.updatedAt = task.cancelledAt;
   task.controller.abort();
-  appendTaskEvent(task, { type: 'error', message: 'Tarea detenida por el usuario.' }, {
+  appendTaskEvent(task, { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea detenida por el usuario.' }, {
     ...task.streamState,
     done: true,
     error: 'Tarea detenida por el usuario.',
+    errorCode: 'E_CANCELLED',
   });
   taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
   if (task.durableExecution?.graphId) {
@@ -1993,7 +1997,7 @@ function runAgentJobInProcess(payload, userId) {
         updateProgress: async () => {},
       });
     } catch (err) {
-      failTaskTerminal(payload.taskId, userId, err?.message || 'agent task failed');
+      failTaskTerminal(payload.taskId, userId, err || 'agent task failed');
     }
   });
 }
@@ -2481,12 +2485,12 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
     } catch (err) {
       const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id) || snapshot;
       if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return;
-      const errorEvent = { type: 'error', message: err?.message || 'agent task failed' };
+      const errorEvent = toAgentTaskErrorEvent(err || 'agent task failed');
       const state = reduceAgentState(latest.streamState || streamState, errorEvent);
       appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
       taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'error', {
         streamState: state,
-        stats: { error: errorEvent.message },
+        stats: { error: errorEvent.message, code: errorEvent.code },
       });
     }
   });
@@ -2510,12 +2514,12 @@ function failTaskTerminal(taskId, userId, message) {
       || taskStore.getTaskSnapshotForUser(taskId, undefined);
     if (!latest) return false;
     if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return false;
-    const errorEvent = { type: 'error', message: String(message || 'La tarea agéntica falló.') };
+    const errorEvent = toAgentTaskErrorEvent(message || 'La tarea agéntica falló.');
     const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
     appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
     taskStore.markTaskStatus({ ...latest, userId: latest.userId || userId }, 'error', {
       streamState: state,
-      stats: { error: errorEvent.message },
+      stats: { error: errorEvent.message, code: errorEvent.code },
     });
     return true;
   } catch (_) {
@@ -3363,7 +3367,12 @@ function reduceAgentState(state, evt) {
       return { ...state, done: true, stoppedReason: evt.stoppedReason };
     case 'error':
     case 'run.failed':
-      return { ...state, done: true, error: evt.message };
+      return {
+        ...state,
+        done: true,
+        error: evt.message,
+        ...(evt.code ? { errorCode: evt.code } : {}),
+      };
     case 'heartbeat':
       return { ...state, lastEventAt: evt.ts || new Date().toISOString(), heartbeatAt: evt.ts || new Date().toISOString() };
     default:
@@ -3394,6 +3403,7 @@ function toSerializableAgentState(state = {}) {
     finalText: state.finalText || '',
     done: Boolean(state.done),
     error: state.error || undefined,
+    ...(state.errorCode ? { errorCode: state.errorCode } : {}),
     stoppedReason: state.stoppedReason || undefined,
     checkpoints: (state.checkpoints || []).map((checkpoint) => ({
       id: checkpoint.id,
