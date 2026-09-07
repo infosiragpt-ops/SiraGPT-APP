@@ -4,6 +4,15 @@
 # Also installs pandoc for document-conversion routes.
 # ──────────────────────────────────────────────────────────────
 
+# Global ARG: must be declared BEFORE the first FROM so BuildKit can
+# interpolate FROM whisper-seed-${BUNDLE_WHISPER_MODEL}. An ARG inside a
+# later stage is not visible to FROM and resolves to whisper-seed- (invalid).
+# Default 0 keeps CI on WHISPER_MODEL_URL (HuggingFace). Lenovo: copy the
+# cached bin into the backend/ build context and pass
+# --build-arg BUNDLE_WHISPER_MODEL=1 so seed-1 is used. BuildKit does not
+# execute unused seed-1, so CI does not need the file present.
+ARG BUNDLE_WHISPER_MODEL=0
+
 # ─── Stage 1: Install dependencies ───────────────────────────
 FROM node:22-alpine AS deps
 WORKDIR /app
@@ -40,12 +49,8 @@ COPY . .
 # Generate Prisma client (needed at runtime for queries)
 RUN npx prisma generate && npm run build:doc-sandbox && npm prune --omit=dev --ignore-scripts
 
-# Optional bundled ggml-base.bin. Default 0 keeps CI on WHISPER_MODEL_URL
-# (HuggingFace). Lenovo: copy the cached bin into the backend/ build context
-# and pass --build-arg BUNDLE_WHISPER_MODEL=1 so seed-1 is used. BuildKit
-# does not execute unused seed-1, so CI does not need the file present.
-ARG BUNDLE_WHISPER_MODEL=0
-
+# Optional bundled ggml-base.bin. Stage pick uses the global
+# BUNDLE_WHISPER_MODEL ARG declared before the first FROM.
 FROM node:22-alpine AS whisper-seed-0
 RUN mkdir -p /whisper-seed
 
