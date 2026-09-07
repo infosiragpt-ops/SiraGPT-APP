@@ -207,6 +207,33 @@ function createDockerRuntime(opts = {}) {
     return { info, reused: false, created: true };
   }
 
+  /**
+   * List SiraGPT desktop containers (label siragpt.computer=1) across any
+   * state. Used by boot reconciliation: after an orchestrator restart the
+   * in-memory session store is empty while the desktops (unless-stopped)
+   * are still there — this lets the server re-register them instead of
+   * orphaning live computers. Best-effort: never throws.
+   */
+  async function listComputers() {
+    try {
+      const out = await requestImpl(
+        'GET',
+        `/containers/json?filters=${encodeURIComponent(JSON.stringify({ label: ['siragpt.computer=1'] }))}`,
+      );
+      const list = Array.isArray(out && out.data) ? out.data : [];
+      return list
+        .map((c) => {
+          const names = (c && c.Names) || [];
+          const raw = names.length ? names[0] : (c && (c.Name || c.Id)) || '';
+          const name = String(raw || '').replace(/^\//, '');
+          return { name, running: String((c && c.State) || '').toLowerCase() === 'running' };
+        })
+        .filter((c) => Boolean(c.name));
+    } catch (_) {
+      return [];
+    }
+  }
+
   function containerIp(info) {
     const nets = (info && info.NetworkSettings && info.NetworkSettings.Networks) || {};
     for (const net of Object.values(nets)) {
@@ -256,6 +283,7 @@ function createDockerRuntime(opts = {}) {
     containerIp,
     execIn,
     image,
+    listComputers,
   };
 }
 
