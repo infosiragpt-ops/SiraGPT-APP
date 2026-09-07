@@ -21,6 +21,7 @@ model User {
   isAdmin          Boolean @default(false)
   isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
   apiUsage         BigInt  @default(0)
+  docQuotaEpoch    BigInt  @default(0)
   gemaTokenUsage   BigInt  @default(0)
   gemaTokenLimit   BigInt  @default(0)
   monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
@@ -139,6 +140,7 @@ model User {
   notifications              Notification[]
   subscriptionEvents         SubscriptionEvent[]
   agentTasks                 AgentTask[]
+  docSandboxJobs             DocSandboxJob[]
   goalRuns                   GoalRun[]
   codexProjects              CodexProject[]
   codexRuns                  CodexRun[]
@@ -1344,6 +1346,106 @@ model AgentTaskEvent {
   @@unique([taskId, seq])
   @@index([taskId, createdAt])
   @@map("agent_task_events")
+}
+
+// Documents are encrypted private objects; this row contains references, not instructions.
+model DocSandboxJob {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  status              String    @default("queued")
+  admissionReady      Boolean   @default(false) @map("admission_ready")
+  mode                String    @default("preserve")
+  engine              String    @default("anthropic")
+  modelTier           String    @map("model_tier")
+  requestedModel      String    @map("requested_model")
+  tokenBudget         Int       @map("token_budget")
+  quotaReservedTokens BigInt    @default(0) @map("quota_reserved_tokens")
+  quotaEpoch          BigInt    @default(0) @map("quota_epoch")
+  quotaSettledTokens  BigInt?   @map("quota_settled_tokens")
+  quotaSettledAt      DateTime? @map("quota_settled_at") @db.Timestamptz(3)
+  accountPurgeRequested Boolean @default(false) @map("account_purge_requested")
+  instructionsKey     String    @map("instructions_key")
+  inputKeys           String[]  @map("input_keys")
+  outputKeys          String[]  @default([]) @map("output_keys")
+  editPlanKey         String?   @map("edit_plan_key")
+  editPlanHash        String?   @map("edit_plan_hash")
+  validationReportKey String?   @map("validation_report_key")
+  errorCode           String?   @map("error_code")
+  outcome             String?
+  usage               Json      @default("{}")
+  costUsd             Decimal   @default(0) @map("cost_usd") @db.Decimal(18, 8)
+  maxCostUsd          Decimal   @default(0) @map("max_cost_usd") @db.Decimal(18, 8)
+  costReservations    Json      @default("[]") @map("cost_reservations")
+  purgedKeys          String[]  @default([]) @map("purged_keys")
+  storageKeys         String[]  @default([]) @map("storage_keys")
+  attempts            Int       @default(0)
+  fence               Int       @default(0)
+  leaseToken          String?   @map("lease_token")
+  leaseExpiresAt      DateTime? @map("lease_expires_at") @db.Timestamptz(3)
+  eventSeq            Int       @default(0) @map("event_seq")
+  sessionRef          String?   @map("session_ref")
+  providerFiles       Json      @default("[]") @map("provider_files")
+  providerContainers  Json      @default("[]") @map("provider_containers")
+  attemptLeases       Json      @default("[]") @map("attempt_leases")
+  cleanupPending      Boolean   @default(false) @map("cleanup_pending")
+  cleanupNotBefore    DateTime? @map("cleanup_not_before") @db.Timestamptz(3)
+  parentJobId         String?   @map("parent_job_id")
+  idempotencyKey      String    @map("idempotency_key")
+  payloadHash         String    @map("payload_hash")
+  promptVersion       String    @map("prompt_version")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  startedAt           DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(3)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user                User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  parent              DocSandboxJob? @relation("DocSandboxChildren", fields: [parentJobId], references: [id], onDelete: Restrict)
+  children            DocSandboxJob[] @relation("DocSandboxChildren")
+  events              DocSandboxJobEvent[]
+  artifacts           DocSandboxJobArtifact[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@index([expiresAt])
+  @@index([cleanupPending])
+  @@map("doc_jobs")
+}
+
+model DocSandboxJobEvent {
+  id          String    @id @default(uuid())
+  jobId       String    @map("job_id")
+  seq         Int
+  type        String
+  payload     Json
+  outbox      String?
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  job         DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, seq])
+  @@index([outbox, dispatchedAt, createdAt])
+  @@map("doc_job_events")
+}
+
+model DocSandboxJobArtifact {
+  id           String    @id @default(uuid())
+  jobId        String    @map("job_id")
+  attempt      Int
+  kind         String
+  storageKey   String    @unique @map("storage_key")
+  filename     String
+  mime         String
+  size         BigInt
+  sha256       String
+  published    Boolean   @default(false)
+  purgedAt     DateTime?  @map("purged_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  job          DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, kind])
+  @@map("doc_job_artifacts")
 }
 
 // Persistent /goal background runs. Mirrors the AgentTask + AgentTaskEvent

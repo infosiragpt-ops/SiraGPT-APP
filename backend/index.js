@@ -693,6 +693,7 @@ const apiLimiterSpecificPrefixes = [
     '/api/rag',
     '/api/document-ai',
     '/api/doc/',
+    '/api/docs/jobs',
     '/api/doc-agent',
 ];
 const apiLimiter = rateLimit({
@@ -745,6 +746,7 @@ app.use('/api/agent', expensiveLimiter);
 app.use('/api/rag', expensiveLimiter);
 app.use('/api/document-ai', expensiveLimiter);
 app.use('/api/doc', expensiveLimiter);
+app.use('/api/docs/jobs', expensiveLimiter);
 app.use('/api/doc-agent', expensiveLimiter);
 app.use('/api/ai/generate', expensiveLimiter);
 // Autonomous research loop (planner→search→browser→vision LLM) and the
@@ -1193,6 +1195,9 @@ app.get('/internal/metrics', metricsHandler);
 // See backend/src/routes/api-docs.js for the env-gate semantics
 // and docs/api-docs.md for the operator runbook.
 const { buildApiDocsRouter } = require('./src/routes/api-docs');
+const { createDocumentSandboxModule } = require('./src/services/doc-sandbox-module');
+const documentSandboxModule = createDocumentSandboxModule({ prisma, authenticate: authenticateToken, logger });
+app.use('/api/docs/jobs', documentSandboxModule.router);
 app.use('/api-docs', buildApiDocsRouter());
 // Alias under /api/docs — same env-gate, same Swagger UI. Kept as a
 // separate router instance so the two surfaces are independently
@@ -1579,6 +1584,7 @@ async function startServer() {
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
+    documentSandboxModule.start().catch(() => logger.error({ code: 'DOC_WORKER_START_FAILED' }, 'doc_sandbox'));
     try {
       const { startAgentRunnerWorker } = require('./src/services/agent-runner/queue');
       const { createRedisConnection } = require('./src/services/agents/agent-task-queue');
@@ -1821,6 +1827,7 @@ async function startServer() {
         5000,
     );
 
+    shutdownRegistry.register('doc_sandbox_close', () => documentSandboxModule.close(), 25000);
     // Close BullMQ workers + queue.
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch { }

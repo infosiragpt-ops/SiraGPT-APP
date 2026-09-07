@@ -99,6 +99,11 @@ describe("ai-service · deterministic intent routing", () => {
     assert.equal(shouldEditExistingDocument("reescribe esta frase", history), false)
     assert.equal(shouldEditExistingDocument("reescribe este documento en un tono formal", history), true)
     assert.equal(shouldEditExistingDocument("explica la reescritura del documento", history), false)
+    for (const prompt of ["describe cómo reemplazar un título", "dime si se puede editar", "no edites nada de mi documento",
+      "resume este documento sin modificar el original"]) {
+      assert.equal(shouldEditExistingDocument(prompt, history), false, prompt)
+    }
+    assert.equal(shouldEditExistingDocument("describe el documento y cambia el título", history), true)
   })
 
   it("routes document follow-up questions like title lookup through the agent runtime", async () => {
