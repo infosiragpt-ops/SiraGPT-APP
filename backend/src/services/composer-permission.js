@@ -60,6 +60,10 @@ const TOOL_ALIASES = Object.freeze({
   ls: 'ls',
   list_dir: 'ls',
   apply_patch: 'apply_patch',
+  webfetch: 'webfetch',
+  web_fetch: 'webfetch',
+  todo: 'todo',
+  todowrite: 'todo',
 });
 
 function canonicalTool(name) {
