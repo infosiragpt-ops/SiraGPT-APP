@@ -99,6 +99,22 @@ function app(overrides: Record<string, unknown> = {}) {
   return instance;
 }
 
+test('GET by id and idempotency key return the owner snapshot with published artifacts', async () => {
+  const server = await listen(app());
+  try {
+    const byId = await fetch(`${server.origin}/api/docs/jobs/${jobId}`);
+    assert.equal(byId.status, 200);
+    const snapshot = await byId.json() as { id: string; artifacts: Array<{ id: string }> };
+    assert.equal(snapshot.id, jobId);
+    assert.equal(snapshot.artifacts[0]?.id, artifactId);
+    const byKey = await fetch(`${server.origin}/api/docs/jobs/by-key/idem-key-1`);
+    assert.equal(byKey.status, 200);
+    assert.equal((await byKey.json() as { id: string }).id, jobId);
+  } finally {
+    await server.close();
+  }
+});
+
 test('download streams bounded chunks and SSE replays then finishes a terminal job', async () => {
   const server = await listen(app());
   try {
@@ -281,6 +297,33 @@ test('POST upload returns the previous job when admission is a duplicate key', a
     });
     assert.equal(response.status, 202);
     assert.equal((await response.json() as { jobId: string }).jobId, jobId);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST upload over the per-file limit removes already stored buffers', async () => {
+  const server = await listen(app({
+    repository: {
+      createJob: async () => assert.fail('multer must reject before admission'),
+    },
+    storage: {
+      prepare() { throw new Error('must not persist'); },
+    },
+  }));
+  try {
+    const form = new FormData();
+    form.set('instructions', 'Conserva el informe.');
+    form.set('modelTier', 'mechanical');
+    form.set('permission', 'default');
+    form.set('files[]', new Blob(['a'.repeat(200)], { type: 'text/plain' }), 'ok.txt');
+    form.set('files[]', new Blob(['b'.repeat(2_000)], { type: 'text/plain' }), 'too-big.txt');
+    const response = await fetch(`${server.origin}/api/docs/jobs`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'limit-key' },
+      body: form,
+    });
+    assert.ok(response.status >= 400);
   } finally {
     await server.close();
   }

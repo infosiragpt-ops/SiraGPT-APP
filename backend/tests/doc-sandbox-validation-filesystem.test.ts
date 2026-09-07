@@ -1,5 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { watch, readFileSync, writeFileSync } from 'node:fs';
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -735,6 +736,68 @@ test('recipe byte limits reject empty and oversized buffers before staging throu
   await assert.rejects(validator.inspectRecipeArchive(Buffer.alloc(0)), { code: 'RECIPE_SIZE_LIMIT' });
   await assert.rejects(inspectRecipeArchive(Buffer.alloc(16 * 1024 * 1024 + 1), options), { code: 'RECIPE_SIZE_LIMIT' });
   assert.deepEqual(await readdir(root), []);
+});
+
+async function emptyPsDocker(root: string, mutate?: string): Promise<string> {
+  const binary = path.join(root, 'empty-ps-docker.cjs');
+  await writeFile(binary, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const root = ${JSON.stringify(root)};
+if (process.argv[2] === 'ps') {
+  for (const name of fs.readdirSync(root)) {
+    if (!name.includes('siragpt-validator-quarantine-')) continue;
+    const manifest = path.join(root, name, 'invocation.json');
+    if (!fs.existsSync(manifest)) continue;
+    const data = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    ${mutate ?? ''}
+    fs.writeFileSync(manifest, JSON.stringify(data), { mode: 0o600 });
+  }
+}
+process.exit(0);
+`, { mode: 0o700 });
+  return binary;
+}
+
+test('cleanup refuses a quarantined manifest that changed identity after removal', async t => {
+  const { root, invocation } = await fixture(t, now);
+  const dockerBinary = await emptyPsDocker(root, `data.image = 'sha256:' + 'b'.repeat(64);`);
+  await assert.rejects(cleanupInvocation(invocation, { image, dockerBinary }, true, now), {
+    code: 'VALIDATOR_MANIFEST_CHANGED',
+  });
+});
+
+test('uncertain cleanup within grace returns pending instead of a certified purge', async t => {
+  const { root, invocation } = await fixture(t, now);
+  const dockerBinary = await emptyPsDocker(root);
+  assert.equal(await cleanupInvocation(invocation, { image, dockerBinary }, false, now), false);
+  assert.equal((await lstat(path.join(root, `.siragpt-validator-quarantine-${invocation.invocationId}`))).isDirectory(), true);
+});
+
+test('reconciliation keeps an expired invocation pending when the manifest extends after first read', async t => {
+  const { root, invocation, manifest } = await fixture(t);
+  const dockerBinary = await emptyPsDocker(root);
+  const quarantine = path.join(root, `.siragpt-validator-quarantine-${invocation.invocationId}`);
+  const extend = (): void => {
+    for (const file of [manifest, path.join(quarantine, 'invocation.json')]) {
+      try {
+        const data = JSON.parse(readFileSync(file, 'utf8')) as { createdAt: number; deadlineAt: number };
+        data.createdAt = Date.now();
+        data.deadlineAt = Date.now() + 120_000;
+        writeFileSync(file, JSON.stringify(data), { mode: 0o600 });
+      } catch { /* the active or quarantine path may not exist in this tick */ }
+    }
+  };
+  const watcher = watch(root, { persistent: true }, () => extend());
+  t.after(() => watcher.close());
+  const result = await new Promise<Awaited<ReturnType<typeof reconcileValidatorOrphans>>>((resolve, reject) => {
+    setImmediate(() => {
+      void reconcileValidatorOrphans({ image, stagingRoot: root, dockerBinary }).then(resolve, reject);
+    });
+  });
+  assert.equal(result.examined, 1);
+  assert.equal(result.purged, 0);
+  assert.equal(result.pending, 1);
 });
 
 test('preflight refuses unreadable orphan metadata and does not manufacture readiness', async t => {

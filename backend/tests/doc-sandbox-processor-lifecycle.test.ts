@@ -402,16 +402,18 @@ test('heartbeat renew aborts when the lease is lost mid-inspect', async () => {
     'doc-sandbox/owner-1/job-1/v1/in.sealed': Buffer.from(bytes),
     'doc-sandbox/owner-1/job-1/v1/ins.sealed': instructions,
   });
-  const instance = processor({
-    repository, storage: stored,
+  const instance = new DocumentSandboxProcessor({
+    repository: repository as never,
+    storage: stored as never,
     validator: {
       inspect: async () => {
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        await new Promise(resolve => setTimeout(resolve, 1_200));
         return [inventory()];
       },
     } as never,
     engineFactory: () => { throw new Error('engine'); },
-  }, notices);
+    onNotice: ({ code }) => notices.push(code),
+  }, { maxTurns: 8, maxTokens: 20_000, timeoutMs: 30_000, leaseMs: 3_000 });
   await instance.process('job-1');
   assert.ok(beats >= 1);
 });
@@ -664,6 +666,31 @@ test('handleFailure maps repository, validator and unknown failures to stable pu
   assert.ok(notices.includes('E_CANCELLED'));
   assert.ok(notices.includes('E_NOT_READY'));
   assert.ok(notices.includes('E_TIMEOUT'));
+});
+
+test('a successful heartbeat reschedules the next renewal while inspect is still running', async () => {
+  const stored = fakeStorage({
+    'doc-sandbox/owner-1/job-1/v1/in.sealed': Buffer.from(bytes),
+    'doc-sandbox/owner-1/job-1/v1/ins.sealed': instructions,
+  });
+  const repository = fakeRepository({ job: job(), artifacts: [artifactMeta()] });
+  const started = Date.now();
+  const heartbeats: number[] = [];
+  repository.heartbeat = async () => { heartbeats.push(Date.now() - started); };
+  const instance = new DocumentSandboxProcessor({
+    repository: repository as never,
+    storage: stored as never,
+    validator: {
+      inspect: async () => {
+        await new Promise(resolve => setTimeout(resolve, 2_200));
+        return [inventory()];
+      },
+    } as never,
+    engineFactory: () => { throw new Error('engine'); },
+  }, { maxTurns: 8, maxTokens: 20_000, timeoutMs: 30_000, leaseMs: 3_000 });
+  await instance.process('job-1');
+  const duringInspect = heartbeats.filter(elapsed => elapsed < 2_100);
+  assert.ok(duringInspect.length >= 2, `renewals during inspect=${duringInspect.join(',')} all=${heartbeats.join(',')}`);
 });
 
 test('repository conflict during inspect is classified without leaking private text', async () => {

@@ -6,8 +6,10 @@ Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
 **Cobertura unitaria estricta (2026-09-07 UTC, post-#574):** el comando
-`npm --prefix backend run test:doc-sandbox:coverage` midió **99,52 %**
-(4199/4219) con 582/582 unitarias en este árbol, gate `--lines 81` intacto.
+`npm --prefix backend run test:doc-sandbox:coverage` midió **100 %**
+de statements/lines (4219/4219) con 590/590 unitarias en este árbol.
+Gate `--lines 81` intacto. No se excluyó ninguna fuente. No sustituye
+gVisor, R2, flujo auténtico, migración ni admin.
 Se añadieron ganchos opcionales (cola/worker/validador/readiness) con el
 mismo comportamiento de producción por defecto, y pruebas unitarias con
 mocks. No se excluyó ninguna fuente. No sustituye gVisor, R2, flujo

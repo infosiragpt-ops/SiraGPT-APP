@@ -154,6 +154,65 @@ test('container argument helper and default staging directory stay pinned and pr
   assert.ok(path.isAbsolute(staging));
 });
 
+async function writeLocalDocker(root: string, name: string, body: string): Promise<string> {
+  const binary = path.join(root, name);
+  await writeFile(binary, `#!/usr/bin/env node\n${body}`, { mode: 0o700 });
+  return binary;
+}
+
+test('default isolated runner covers spawn failure, timeout cleanup, invalid JSON and abort', async t => {
+  const root = await privateRoot(t);
+  const input = txt();
+  const missing = new IndependentDocumentValidator({
+    image, runtime: 'runsc', stagingRoot: root, timeoutMs: 1_000,
+    dockerBinary: path.join(root, 'absent-docker'),
+  });
+  await assert.rejects(missing.inspect([input]), (error: unknown) => {
+    assert.ok(error instanceof DocumentValidationError);
+    assert.ok(['VALIDATOR_UNAVAILABLE', 'VALIDATOR_CLEANUP_UNAVAILABLE'].includes(error.code));
+    return true;
+  });
+
+  const hang = await writeLocalDocker(root, 'hang-docker.cjs', `
+if (process.argv[2] === 'run') { setInterval(() => undefined, 60_000); return; }
+process.exit(0);
+`);
+  const timed = new IndependentDocumentValidator({
+    image, runtime: 'runsc', stagingRoot: root, timeoutMs: 1_000, dockerBinary: hang,
+  });
+  await assert.rejects(timed.inspect([input]), { code: 'VALIDATOR_CLEANUP_PENDING' });
+
+  const invalid = await writeLocalDocker(root, 'invalid-docker.cjs', `
+if (process.argv[2] === 'run') { process.stdout.write('not-json'); process.exit(0); }
+process.exit(0);
+`);
+  const decoded = new IndependentDocumentValidator({
+    image, runtime: 'runsc', stagingRoot: root, timeoutMs: 1_000, dockerBinary: invalid,
+  });
+  await assert.rejects(decoded.inspect([input]), { code: 'VALIDATOR_INVALID_RESPONSE' });
+
+  const failed = await writeLocalDocker(root, 'fail-docker.cjs', `
+if (process.argv[2] === 'run') process.exit(1);
+process.exit(0);
+`);
+  const runtime = new IndependentDocumentValidator({
+    image, runtime: 'runsc', stagingRoot: root, timeoutMs: 1_000, dockerBinary: failed,
+  });
+  await assert.rejects(runtime.inspect([input]), { code: 'VALIDATOR_RUNTIME_FAILED' });
+
+  const aborted = new IndependentDocumentValidator({
+    image, runtime: 'runsc', stagingRoot: root, timeoutMs: 1_000, dockerBinary: hang,
+  });
+  await assert.rejects(aborted.inspect([input], AbortSignal.abort()), { code: 'E_CANCELLED' });
+  const midAbort = new AbortController();
+  setTimeout(() => midAbort.abort(), 20);
+  await assert.rejects(aborted.inspect([input], midAbort.signal), (error: unknown) => {
+    assert.ok(error instanceof DocumentValidationError);
+    assert.ok(['E_CANCELLED', 'VALIDATOR_CLEANUP_PENDING'].includes(error.code));
+    return true;
+  });
+});
+
 test('inspect and validate reject a runner reply that omits the expected payload', async t => {
   const root = await privateRoot(t);
   const input = txt();

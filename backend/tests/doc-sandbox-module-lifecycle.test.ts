@@ -2,11 +2,30 @@ import { EventEmitter } from 'node:events';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Router, type RequestHandler } from 'express';
+import { Prisma } from '@prisma/client';
 import { createDocumentModule, waitForDocumentStartup, withDocumentStartupCleanup } from '../src/modules/doc-sandbox';
 import { DocSandboxError } from '../src/modules/doc-sandbox/types/errors';
 import { DocSandboxQueue, type DocQueuePayload } from '../src/modules/doc-sandbox/queue/queue';
 import type { Queue } from 'bullmq';
 import type { Processor } from 'bullmq';
+
+function dbJob() {
+  const now = new Date();
+  return {
+    id: 'job-1', user_id: 'owner-1', status: 'done', admission_ready: true, mode: 'preserve', engine: 'anthropic',
+    model_tier: 'mechanical', requested_model: 'synthetic', token_budget: 1000,
+    quota_reserved_tokens: 1000n, quota_epoch: 1n, quota_settled_tokens: null, quota_settled_at: null,
+    instructions_key: 'doc-sandbox/owner-1/job-1/v1/ins.sealed', input_keys: [], output_keys: [],
+    edit_plan_key: null, edit_plan_hash: null, validation_report_key: null, error_code: null,
+    usage: {}, cost_usd: new Prisma.Decimal('0'), max_cost_usd: new Prisma.Decimal('1'),
+    cost_reservations: [], purged_keys: [], storage_keys: [], outcome: 'edited', attempts: 1, fence: 1,
+    lease_token: null, lease_expires_at: null, event_seq: 1, session_ref: null, provider_files: [],
+    provider_containers: [], attempt_leases: [], cleanup_pending: false, cleanup_not_before: null,
+    parent_job_id: null, payload_hash: 'a'.repeat(64), prompt_version: 'v1', created_at: now,
+    started_at: now, finished_at: now, expires_at: new Date(now.getTime() + 3_600_000), deleted_at: null,
+    idempotency_key: 'request-one',
+  };
+}
 
 function env(): NodeJS.ProcessEnv {
   const key = Buffer.alloc(32, 11).toString('base64');
@@ -160,6 +179,44 @@ test('enabled module starts and closes with injected queue, worker and readiness
     await module.close();
     assert.ok(notices.includes('DOC_WORKER_ERROR'));
     assert.ok(notices.includes('DOC_WORKER_DELIVERY_FAILED'));
+  });
+});
+
+test('worker delivery records completion metrics after a no-op claim', async () => {
+  await withEnabledEnv(async () => {
+    let handler: Processor<DocQueuePayload> | undefined;
+    const worker = new FakeWorker();
+    const delivery = new FakeDeliveryQueue();
+    const completed: string[] = [];
+    const module = createDocumentModule({
+      ...deps(),
+      prisma: {
+        $transaction: async () => undefined,
+        $queryRaw: async () => [dbJob()],
+        $executeRaw: async () => 0,
+      } as never,
+      metrics: {
+        registerCounter() {}, registerGauge() {}, registerHistogram() {},
+        counter(name: string) { completed.push(name); },
+        gauge() {}, observe() {},
+      },
+      createValidator: () => ({
+        preflight: async () => undefined,
+        reconcileOrphans: async () => ({ examined: 0, purged: 0, pending: 0 }),
+      } as never),
+      createQueue: () => new DocSandboxQueue(() => undefined, { host: '127.0.0.1', port: 1 }, { skipVersionCheck: true },
+        () => delivery as unknown as Queue<DocQueuePayload>),
+      createWorker: (_name: string, processor: Processor<DocQueuePayload>) => {
+        handler = processor;
+        return worker;
+      },
+      createReadinessProbe: () => ({ check: async () => true, close() {} }),
+    });
+    await module.start();
+    await assert.doesNotReject(() =>
+      (handler as Processor<DocQueuePayload>)({ data: { jobId: 'job-1' } } as never, {} as never));
+    await module.close();
+    assert.ok(Array.isArray(completed));
   });
 });
 
