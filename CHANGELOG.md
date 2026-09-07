@@ -8,6 +8,12 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- `/agentes` agent tasks no longer stay in "Pensando…" after a worker dies
+  while the API process stays up. Live runners pulse a snapshot heartbeat;
+  a runtime watchdog (OpenClaw-style no-output stall) marks stale
+  `running`/`queued` snapshots `error` with `worker_stalled` so SSE/poll
+  close instead of hanging. Boot recovery is unchanged. Disable with
+  `AGENT_TASK_RUNTIME_WATCHDOG_DISABLED=1`.
 - Rejected final answers now stop as unverified rather than becoming successful
   after repeated rejection or on the last step. Judge timeouts, invalid verdicts
   and cancellation fail closed; bounded reviews are tied to draft and evidence.

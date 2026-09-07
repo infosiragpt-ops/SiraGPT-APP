@@ -2193,7 +2193,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   }, maxRuntimeMs + 5000);
   runtimeTimer.unref?.();
 
-  // ── BullMQ lock heartbeat ──────────────────────────────────────────
+  // ── Liveness + BullMQ lock heartbeat ───────────────────────────────
   // Agent tasks routinely run 10–20 min (max_steps=80 reached at ~19min
   // in prod logs). BullMQ's automatic lock renewal fires every
   // lockDuration/2 and any single failed renew (Upstash failover, quota
@@ -2206,18 +2206,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // single tick fails we retry on the next tick instead of giving up,
   // and we throttle warns so a Redis outage logs once per minute, not
   // once per heartbeat. Cleared in the outer `finally` below.
+  //
+  // The same tick pulses `touchTaskHeartbeat` so the runtime watchdog
+  // can tell a live runner from a dead one (OpenClaw-style no-output
+  // stall). Local in-process runs have no BullMQ lock but still need
+  // the snapshot pulse — otherwise a crashed local runner leaves
+  // /agentes stuck on "Pensando…".
   const lockHeartbeatIntervalMs = Math.max(
     5_000,
     Number.parseInt(process.env.AGENT_WORKER_LOCK_HEARTBEAT_MS || '30000', 10) || 30_000,
   );
   const lockHeartbeatExtendMs = Math.max(
     lockHeartbeatIntervalMs * 4,
-    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60 * 1000,
+    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60_000,
   );
   let lockHeartbeatTimer = null;
   let lockHeartbeatLastWarnAt = 0;
-  if (job && typeof job.extendLock === 'function' && job.token) {
-    const tick = async () => {
+  const tickHeartbeat = async () => {
+    try {
+      taskStore.touchTaskHeartbeat(taskId, user.id);
+    } catch { /* never break the live run */ }
+    if (job && typeof job.extendLock === 'function' && job.token) {
       try {
         await job.extendLock(job.token, lockHeartbeatExtendMs);
       } catch (err) {
@@ -2229,13 +2238,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           );
         }
       }
-    };
-    // Refresh immediately so the first long step doesn't race the
-    // initial 30s renew, then on a steady cadence.
-    tick();
-    lockHeartbeatTimer = setInterval(tick, lockHeartbeatIntervalMs);
-    if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
-  }
+    }
+  };
+  // Refresh immediately so the first long step doesn't race the
+  // initial 30s renew / watchdog stale window, then on a steady cadence.
+  tickHeartbeat();
+  lockHeartbeatTimer = setInterval(() => { tickHeartbeat(); }, lockHeartbeatIntervalMs);
+  if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
   const finishDeterministicTask = async ({
     finalMarkdown,
     stoppedReason,

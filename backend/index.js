@@ -514,6 +514,10 @@ const scheduler = require('./src/services/scheduler/scheduler');
 const coworkScheduler = require('./src/services/cowork/scheduler');
 const { runAgent } = require('./src/services/agents/agent-entry');
 const { recoverAgentTasksAfterBoot } = require('./src/services/agents/agent-task-boot-recovery');
+const {
+  startAgentTaskRuntimeWatchdog,
+  stopAgentTaskRuntimeWatchdog,
+} = require('./src/services/agents/agent-task-runtime-watchdog');
 const { startAgentTaskWorker, closeAgentTaskWorker } = require('./src/services/agents/agent-task-worker');
 const { closeAgentTaskQueue } = require('./src/services/agents/agent-task-queue');
 const { closeChatRunQueue } = require('./src/services/chat-run-queue');
@@ -1581,6 +1585,7 @@ async function startServer() {
     startDatabasePoolAutoscaler();
 
     recoverAgentTasksAfterBoot({ logger });
+    startAgentTaskRuntimeWatchdog({ logger });
     recoverGoalRunsAfterBoot({ logger });
     startGoalCleanup({ logger });
     startAgentTaskWorker();
@@ -1832,6 +1837,7 @@ async function startServer() {
     shutdownRegistry.register('bullmq_workers_close', async () => {
         try { stopGoalRecovery(); } catch { }
         try { stopGoalCleanup(); } catch { }
+        try { stopAgentTaskRuntimeWatchdog(); } catch { }
         await Promise.allSettled([
             closeAgentTaskWorker(),
             closeAgentTaskQueue(),
