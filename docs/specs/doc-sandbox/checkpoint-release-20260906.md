@@ -5,7 +5,24 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente (2026-09-07 UTC):** reproducido y corregido el
+**Comprobación concurrente de `cd2e6501c` + #572 (2026-09-07 UTC):** producción avanzó a
+`546a8156b` (#572), con CI/Docker aprobados y API saludable a
+2026-09-07T03:28:31.120Z; no contiene #561. Se integra esa base sin conflictos
+en la candidata documental: 32 archivos byte-idénticos y unión íntegra de
+los 15 scripts F1 con las pruebas de agentes/nativas. Runtime documental,
+Prisma, dependencias y UI-lock intactos. Pruebas de combinación: agentes
+314/314, nativas 362/362 (se solapan), F1 378/378, generales 12472/12472;
+cero omisiones en esas suites. Cobertura estricta 72,41% (2751/3799), aún
+inferior al 80%, sin añadir los otros tests a esa métrica. Tipos/lint/UI-lock
+y revisión independiente aprobados. SSH sigue sin acceso administrativo del
+host; runsc no registrado y configuración R2/F1 ausente. Sin cambios de
+producción ni gasto nuevo. CI propio, aceptación e infraestructura siguen
+pendientes; no hay cierre F1. La PR avanzó después a `3b41fbb3…`, con un
+refactor y más pruebas; estas cifras no describen ese nuevo HEAD y no
+reemplazan su revisión ni su CI. Evidencia histórica y límites:
+[production-base-572-release-20260907.md](production-base-572-release-20260907.md).
+
+**Registro anterior (`cd2e6501c…`):** reproducido y corregido el
 reloj implícito capturado antes de la lectura asíncrona del manifiesto.
 La admisión vuelve a comprobar el tiempo después de la lectura/cancelación;
 reloj explícito, identidad y cleanup intactos. Proceso real detenido durante
