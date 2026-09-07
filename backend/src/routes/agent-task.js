@@ -39,6 +39,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const { resolveRateLimitConfig, makeJwtAwareKeyGenerator, extractBearerToken } = require('../middleware/rate-limit-policy');
 const reactAgent = require('../services/react-agent');
+const { statusForAgentStopReason, canRecoverAgentStopReason } = require('../services/agents/react-run-outcome');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
 const taskStore = require('../services/agents/task-store');
 const auditLog = require('../services/agents/audit-log');
@@ -860,7 +861,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
   const snapshot = getTaskForUser(req.params.taskId, req.user?.id)
     || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
   if (!snapshot) return res.status(404).json({ error: 'task not found' });
-  if (!['error', 'cancelled'].includes(snapshot.status)) {
+  if (!['error', 'failed', 'cancelled'].includes(snapshot.status)) {
     return res.status(409).json({ error: 'task is not retryable', status: snapshot.status });
   }
 
@@ -1501,7 +1502,10 @@ router.post(
     let assistantMessageId = null;
     let persistTimer = null;
     let lastPersistAt = 0;
+    let terminalStatus = null;
+    const pendingProgressWrites = new Set();
     const persistTaskState = async (status = 'running') => {
+      if (terminalStatus && status === 'running') return;
       if (!assistantMessageId || !prisma) return;
       task.status = status;
       task.updatedAt = new Date().toISOString();
@@ -1541,19 +1545,39 @@ router.post(
       } catch (e) { /* non-fatal */ }
     };
     const schedulePersistTaskState = (status = 'running') => {
+      if (terminalStatus) return;
       if (!assistantMessageId || !prisma) return;
+      const persistProgress = () => {
+        const pending = persistTaskState(status);
+        pendingProgressWrites.add(pending);
+        void pending.then(
+          () => pendingProgressWrites.delete(pending),
+          () => pendingProgressWrites.delete(pending),
+        );
+      };
       const elapsed = Date.now() - lastPersistAt;
       const delay = elapsed >= 1500 ? 0 : 1500 - elapsed;
       if (delay === 0) {
-        void persistTaskState(status);
+        persistProgress();
         return;
       }
       if (!persistTimer) {
         persistTimer = setTimeout(() => {
           persistTimer = null;
-          void persistTaskState(status);
+          persistProgress();
         }, delay);
       }
+    };
+    const finishProgressPersistence = async (status) => {
+      terminalStatus = status;
+      task.status = status;
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+      // Older progress writes must settle before the terminal DB write;
+      // otherwise a slow update can overwrite the final message afterwards.
+      await Promise.allSettled(Array.from(pendingProgressWrites));
     };
 
     const applyEvent = (obj) => {
@@ -1778,7 +1802,7 @@ router.post(
       let finalMarkdown = result.finalAnswer || '';
       let stoppedReason = result.stoppedReason;
       const attachmentFinalNeedsRecovery = fileIds.length > 0 && looksLikeAttachmentRecoveryNeeded(finalMarkdown);
-      if (attachmentFinalNeedsRecovery) {
+      if (attachmentFinalNeedsRecovery && canRecoverAgentStopReason(stoppedReason)) {
         const recoveredMarkdown = resolveAttachmentFallbackMarkdown({
           goal: displayGoal || agentGoal,
           uploadedFileContext,
@@ -1811,6 +1835,7 @@ router.post(
         }
       }
 
+      await finishProgressPersistence(statusForAgentStopReason(stoppedReason));
       if (finalMarkdown) {
         emit({ type: 'final_text', markdown: finalMarkdown });
       }
@@ -1831,7 +1856,7 @@ router.post(
               metadata: {
                 source: 'agent-task',
                 taskId,
-                status: stoppedReason === 'aborted' ? 'cancelled' : 'completed',
+                status: terminalStatus,
                 displayGoal,
                 artifacts,
                 executionProfile,
@@ -1864,9 +1889,9 @@ router.post(
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
       };
-      task.status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+      task.status = terminalStatus;
       task.updatedAt = new Date().toISOString();
-      taskStore.markTaskStatus(task, task.status, {
+      taskStore.markTaskStatus(task, terminalStatus, {
         streamState,
         stats: {
           steps: result.steps.length,
@@ -1911,7 +1936,7 @@ router.post(
     } catch (err) {
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
-      task.status = controller.signal.aborted ? 'cancelled' : 'error';
+      await finishProgressPersistence(controller.signal.aborted ? 'cancelled' : 'error');
       emit({ type: 'error', message });
       taskStore.markTaskStatus(task, task.status, {
         streamState,
@@ -2450,7 +2475,7 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
       });
     } catch (err) {
       const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id) || snapshot;
-      if (['completed', 'cancelled', 'error'].includes(latest.status)) return;
+      if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return;
       const errorEvent = { type: 'error', message: err?.message || 'agent task failed' };
       const state = reduceAgentState(latest.streamState || streamState, errorEvent);
       appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
@@ -2479,7 +2504,7 @@ function failTaskTerminal(taskId, userId, message) {
     const latest = taskStore.getTaskSnapshotForUser(taskId, userId)
       || taskStore.getTaskSnapshotForUser(taskId, undefined);
     if (!latest) return false;
-    if (['completed', 'cancelled', 'error'].includes(latest.status)) return false;
+    if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return false;
     const errorEvent = { type: 'error', message: String(message || 'La tarea agéntica falló.') };
     const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
     appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
@@ -2580,7 +2605,7 @@ function streamTaskEvents(req, res, taskId, userId) {
       lastSeq = seq;
       send(event);
     }
-    if (['completed', 'cancelled', 'error'].includes(snapshot.status)) {
+    if (['completed', 'cancelled', 'error', 'failed'].includes(snapshot.status)) {
       safeCloseQueuedConnection();
     }
   };

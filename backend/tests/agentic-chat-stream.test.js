@@ -333,6 +333,14 @@ test('isHandledAgenticChatResult keeps a successful Office edit off the plain st
   }), true);
 });
 
+test('honest verification and resume failures cannot fall through to a second plain model answer', () => {
+  for (const stoppedReason of ['verification_failed:3/3', 'verification_failed:step_budget',
+    'invalid_resume_checkpoint', 'resume_budget_exhausted']) {
+    assert.equal(agenticStream.isHandledAgenticChatResult({ stoppedReason, finalAnswer: 'No pude verificar la tarea.' }), true);
+    assert.equal(agenticStream.isHandledAgenticChatResult({ stoppedReason, finalAnswer: '' }), false);
+  }
+});
+
 test('shouldUseAgenticChat routes same-deck "agrega N ppts" as an attachment edit', () => {
   const live = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
   assert.equal(agenticStream.shouldUseAgenticChat({

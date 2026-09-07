@@ -4,6 +4,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and improvement cycles follow a sequential number with the date the work landed.
 
+## [Unreleased] — Agent integrity
+
+### Fixed
+
+- Rejected final answers now stop as unverified rather than becoming successful
+  after repeated rejection or on the last step. Judge timeouts, invalid verdicts
+  and cancellation fail closed; bounded reviews are tied to draft and evidence.
+- Versioned ReAct checkpoints preserve consumed attempts, elapsed runtime,
+  failure/rejection counters and no-progress evidence. Invalid or exhausted
+  checkpoints cannot silently restart previous operations.
+- Trusted local read policy overrides exact builtin defaults; a read-looking
+  name or remote hint cannot authorize parallelism or suppress a mutation.
+  Uncacheable reads stay fresh. Repeated explicit no-ops are not new progress.
+- Task stream closure no longer implies success. Verification/budget failures
+  retain failed status through worker, chat, file snapshot and DB adapters;
+  late inline progress writes cannot overwrite terminal metadata. Existing
+  retry and recovery boundaries are tested without changing the interface.
+
+- The native chat agent preserves historical instructions within a bounded
+  context, treats reported tool failures as failures, keeps parallel tool
+  results paired with unique calls, and re-reads current data after a write.
+  Invalid tool groups stop before execution. Includes 57 new regression/unit
+  cases; no interface, dependency or production configuration changes.
+
 ## [Next production release] — 2026-07-22
 
 ### Added
