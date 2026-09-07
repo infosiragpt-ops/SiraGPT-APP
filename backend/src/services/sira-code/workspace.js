@@ -113,6 +113,51 @@ async function createWorkspace(sessionId) {
       await walk(jailPath(root, relDir), 0);
       return files;
     },
+    async listDir(relDir = '.', { maxEntries = 200 } = {}) {
+      const abs = jailPath(root, relDir);
+      const stat = await fs.stat(abs);
+      if (!stat.isDirectory()) {
+        const err = new Error('no es un directorio');
+        err.code = 'not_a_directory';
+        throw err;
+      }
+      const entries = await fs.readdir(abs, { withFileTypes: true });
+      const out = [];
+      for (const entry of entries) {
+        if (out.length >= maxEntries) break;
+        if (!entry.name || entry.name.startsWith('.')) continue;
+        if (entry.isDirectory() && SKIP_DIRS.has(entry.name)) continue;
+        const child = path.join(abs, entry.name);
+        let size = 0;
+        let isDir = entry.isDirectory();
+        try {
+          const st = await fs.stat(child);
+          size = st.isDirectory() ? 0 : st.size;
+          isDir = st.isDirectory();
+        } catch {
+          continue;
+        }
+        out.push({
+          path: path.relative(root, child).replace(/\\/g, '/') || entry.name,
+          name: entry.name,
+          isDir,
+          size,
+        });
+      }
+      out.sort((a, b) => Number(b.isDir) - Number(a.isDir) || a.name.localeCompare(b.name));
+      return out;
+    },
+    async removeFile(relPath) {
+      const abs = jailPath(root, relPath);
+      const stat = await fs.stat(abs);
+      if (!stat.isFile()) {
+        const err = new Error('no es un archivo');
+        err.code = 'not_a_file';
+        throw err;
+      }
+      await fs.unlink(abs);
+      return path.relative(root, abs).replace(/\\/g, '/') || path.basename(abs);
+    },
     async destroy() {
       await fs.rm(root, { recursive: true, force: true }).catch(() => {});
     },

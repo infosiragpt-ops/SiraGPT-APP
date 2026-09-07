@@ -2,6 +2,7 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
+ * Also ls (directory listing) and apply_patch (unique hunks).
  *
  * File tools stay inside the session workspace. bash runs through
  * execInWorkspace (scrubbed env + cwd jail). Never execs on the repo
@@ -11,6 +12,7 @@
 const path = require('path');
 const { authorizeTool } = require('./permissions');
 const { execInWorkspace } = require('./workspace');
+const { applyPatchToWorkspace } = require('./apply-patch');
 
 const MAX_RESULT = 30_000;
 
@@ -130,6 +132,30 @@ async function runGlob(workspace, args) {
   return toolOk(matched.length ? matched.join('\n') : '(no matches)');
 }
 
+async function runLs(workspace, args) {
+  const rel = String(args.path || args.dir || '.').trim() || '.';
+  try {
+    const entries = await workspace.listDir(rel);
+    if (!entries.length) return toolOk('(empty)');
+    const lines = entries.map((entry) => (
+      entry.isDir ? `${entry.path}/` : `${entry.path}\t${entry.size}`
+    ));
+    return toolOk(lines.join('\n'), { entries });
+  } catch (err) {
+    return toolError(err.code || 'ls_failed', err.message || 'ls failed');
+  }
+}
+
+async function runApplyPatch(workspace, args) {
+  const patch = String(args.patch || args.diff || args.input || '').trim();
+  if (!patch) return toolError('validation', 'patch is required');
+  try {
+    return await applyPatchToWorkspace(workspace, patch);
+  } catch (err) {
+    return toolError(err.code || 'patch_failed', err.message || 'apply_patch failed');
+  }
+}
+
 const EXECUTORS = {
   read: runRead,
   write: runWrite,
@@ -137,6 +163,8 @@ const EXECUTORS = {
   bash: runBash,
   grep: runGrep,
   glob: runGlob,
+  ls: runLs,
+  apply_patch: runApplyPatch,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
@@ -257,6 +285,33 @@ const TOOL_DEFINITIONS = [
           pattern: { type: 'string' },
         },
         required: ['pattern'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ls',
+      description: 'Lista el directorio del workspace (nombres y tamaño). No lee el contenido.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description: 'Aplica un parche Begin/End Patch con hunks únicos (Add/Update/Delete File).',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string' },
+        },
+        required: ['patch'],
       },
     },
   },

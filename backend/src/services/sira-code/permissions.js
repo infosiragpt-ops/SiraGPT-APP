@@ -30,9 +30,12 @@ const TOOL_ALIASES = Object.freeze({
   grep: 'grep',
   glob: 'glob',
   list_files: 'glob',
+  ls: 'ls',
+  list_dir: 'ls',
+  apply_patch: 'apply_patch',
 });
 
-const WRITE_TOOLS = new Set(['write', 'edit']);
+const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch']);
 
 function canonicalTool(name) {
   const raw = String(name || '').trim();

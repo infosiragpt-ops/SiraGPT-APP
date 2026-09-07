@@ -27,6 +27,7 @@ const WRITE_TOOLS = new Set([
   'computer_write_file',
   'computer_edit_file',
   'clone_project',
+  'apply_patch',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -56,6 +57,9 @@ const TOOL_ALIASES = Object.freeze({
   computer_write_file: 'computer_write_file',
   computer_edit_file: 'computer_edit_file',
   clone_project: 'clone_project',
+  ls: 'ls',
+  list_dir: 'ls',
+  apply_patch: 'apply_patch',
 });
 
 function canonicalTool(name) {
