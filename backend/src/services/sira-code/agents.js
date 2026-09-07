@@ -27,6 +27,8 @@ const AGENTS = Object.freeze({
       glob: 'allow',
       ls: 'allow',
       apply_patch: 'allow',
+      webfetch: 'allow',
+      todo: 'allow',
     }),
     systemPrompt: [
       'Eres SiraCode en modo Construir.',
@@ -51,6 +53,8 @@ const AGENTS = Object.freeze({
       glob: 'allow',
       ls: 'allow',
       apply_patch: 'deny',
+      webfetch: 'allow',
+      todo: 'allow',
     }),
     systemPrompt: [
       'Eres SiraCode en modo Planificar.',
@@ -75,6 +79,8 @@ const AGENTS = Object.freeze({
       glob: 'allow',
       ls: 'allow',
       apply_patch: 'deny',
+      webfetch: 'allow',
+      todo: 'allow',
     }),
     systemPrompt: [
       'Eres un subagente de búsqueda de SiraCode.',
