@@ -68,3 +68,9 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   TARGET+PREVIOUS SHAs) and policies are SiraGPT-owned. The upstream MIT
   license text is retained at `.agents/hermes-upstream/LICENSE` (snapshot
   pinned in `.agents/hermes-upstream/SNAPSHOT.json`).
+  The skill-library curator and Biblioteca deposit in
+  `backend/src/services/agents/hermes-skill-curator.js`,
+  `backend/src/services/agents/hermes-biblioteca.js` and
+  `.agents/skills/biblioteca-deposit/SKILL.md` adapt Hermes curator
+  observation → stale → archive (never delete) and `logs/curator/REPORT.md`
+  landing. No Python curator was copied; every write is keyed by `userId`.
