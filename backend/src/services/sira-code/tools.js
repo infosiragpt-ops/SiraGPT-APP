@@ -157,7 +157,7 @@ async function runApplyPatch(workspace, args) {
 }
 
 async function runWebFetchTool(_workspace, args, ctx = {}) {
-  return runWebFetch(args || {}, { fetch: ctx.fetch, skipDns: ctx.skipDns });
+  return runWebFetch(args || {}, { fetch: ctx.fetch, signal: ctx.signal });
 }
 
 function runTodoTool(_workspace, args, ctx = {}) {
