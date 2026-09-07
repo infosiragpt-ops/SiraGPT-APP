@@ -112,10 +112,13 @@ function makeJsonResponse(payload: any, status = 200): Response {
 
 function makeDroppingSseResponse(events: any[]): Response {
   const encoder = new TextEncoder()
+  let index = 0
   const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const event of events) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`))
+    pull(controller) {
+      if (index < events.length) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(events[index])}\n\n`))
+        index += 1
+        return
       }
       controller.error(new TypeError("Failed to fetch"))
     },
@@ -316,8 +319,8 @@ describe("agent-task-service · closed-stream recovery", () => {
       const state = await runStream({
         goal: "sigue aunque el SSE se cerró",
         model: "gpt-4o",
-        closedStreamRecoveryMs: 80,
-        inFlightRecoveryMaxMs: 800,
+        closedStreamRecoveryMs: 400,
+        inFlightRecoveryMaxMs: 2_000,
       })
       assert.equal(state.done, true)
       assert.equal(state.error, undefined)

@@ -400,7 +400,10 @@ async function* recoverClosedStreamEvents(
       }
     }
 
-    await waitForRecoveryPoll(Math.min(CLOSED_STREAM_RECOVERY_POLL_MS, Math.max(50, deadline - Date.now())), signal)
+    const remaining = Math.min(deadline, hardDeadline) - Date.now()
+    if (remaining <= 0) break
+    // Leave slack so a fresh/in-flight poll can run again after the wait.
+    await waitForRecoveryPoll(Math.min(CLOSED_STREAM_RECOVERY_POLL_MS, Math.max(20, remaining - 10)), signal)
   }
 }
 
@@ -863,6 +866,13 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
       cbs.onEvent?.(evt)
       state = reduceEvent(state, evt)
       cbs.onStateChange?.(state)
+    }
+    // Stop cancels the SSE reader; that looks like a clean close, not a
+    // throw. Do not resume or report stream_closed_without_done.
+    if (args.signal?.aborted) {
+      state = { ...state, done: true, error: state.error || "aborted" }
+      cbs.onFinal?.(state)
+      return state
     }
     // The SSE socket closed cleanly. Two failure shapes still need
     // to surface to the user instead of leaving the message bubble
