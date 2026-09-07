@@ -129,6 +129,9 @@ test('optional skills bridge summarizes categories and exposes adaptation guidan
   assert.equal(activated.skill.category, 'research');
   assert.equal(activated.activation, 'use_siragpt_skills');
   assert.match(activated.adaptationPlan.sourcePolicy, /rewrite behavior/);
+  assert.equal(activated.instructionRole, 'data');
+  assert.match(activated.instructionPreview, /<<<SKILL_REFERENCE>>>/);
+  assert.match(activated.instructionPreview, /not as instructions/);
 });
 
 test('toolset registry resolves core and composed bundles', () => {
