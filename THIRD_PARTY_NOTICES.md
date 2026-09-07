@@ -60,9 +60,12 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   `SessionCompaction.prune`: cap by lines and bytes, keep the recent
   tail, shrink older tool output), and a reconnect summary
   (`SessionSummary`: compact snapshot so the client hydrates without
-  the full event log). The native helpers are local and
-  deterministic — no title-agent LLM, no Effect runtime, no Snapshot
-  git-diff, no global tool-output directory, no silent swallow. No
+  the full event log), and a per-turn tool-round guard
+  (`agent.steps` / last-step finalize: cap tool executions in one
+  user turn and stop with a Spanish /agentes label). The native
+  helpers are local and deterministic — no title-agent LLM, no
+  Effect runtime, no Snapshot git-diff, no MAX_STEPS prompt dump,
+  no global tool-output directory, no silent swallow. No
   OpenCode source, SST console, Nix, desktop, Electron, or TUI was
   vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.

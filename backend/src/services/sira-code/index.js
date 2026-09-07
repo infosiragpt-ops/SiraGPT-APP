@@ -21,6 +21,7 @@ const permissionResume = require('./permission-resume');
 const sessionTitle = require('./session-title');
 const toolResult = require('./tool-result');
 const sessionSummary = require('./session-summary');
+const toolRounds = require('./tool-rounds');
 
 module.exports = {
   ...agents,
@@ -37,4 +38,5 @@ module.exports = {
   ...sessionTitle,
   ...toolResult,
   ...sessionSummary,
+  ...toolRounds,
 };

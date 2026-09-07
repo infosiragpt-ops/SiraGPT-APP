@@ -44,7 +44,12 @@ function inferStopReason(session) {
   if (status === 'cancelled') return 'cancelled';
   if (status === 'error') return 'error';
   if (status === 'running') return 'running';
-  if (status === 'stopped') return 'step_budget';
+  if (status === 'stopped') {
+    if (session.stopReason === 'tool_rounds') return 'tool_rounds';
+    const stage = lastStage(session);
+    if (stage && stage.step === 'toolRoundsExceeded') return 'tool_rounds';
+    return session.stopReason || 'step_budget';
+  }
   const messages = session && Array.isArray(session.messages) ? session.messages : [];
   if (status === 'idle' && messages.some((row) => row && row.role === 'assistant')) {
     return 'done';
