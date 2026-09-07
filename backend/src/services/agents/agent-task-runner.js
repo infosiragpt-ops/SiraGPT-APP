@@ -3843,9 +3843,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         },
       });
     }
-    const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
+    const errorEvent = controller.signal.aborted
+      ? { type: 'error', message: 'Tarea detenida por el usuario.' }
+      : toAgentTaskErrorEvent(err || 'agent task failed');
+    const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
-    emit({ type: 'error', message });
+    emit(errorEvent);
     taskStore.markTaskStatus(task, task.status, {
       streamState,
       stats: { durationMs: Date.now() - startedAt, error: message },
@@ -3903,7 +3906,7 @@ function withJitter(baseMs) {
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
  * (0 = immediate, >0 = backoff).
  */
-const { classifyTaskError, presentTaskError } = require('../../utils/task-error-classifier');
+const { classifyTaskError, presentTaskError, toAgentTaskErrorEvent } = require('../../utils/task-error-classifier');
 
 module.exports = {
   runAgentTaskJob,
@@ -3911,6 +3914,7 @@ module.exports = {
   buildOpenAICompatibleClient,
   classifyTaskError,
   presentTaskError,
+  toAgentTaskErrorEvent,
   normalizeAgentRuntimeModel,
   resolveAgentRuntimeClient,
   detectAgentRuntimeProvider,

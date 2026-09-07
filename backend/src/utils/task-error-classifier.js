@@ -3,7 +3,17 @@
 /**
  * Unified task error classification for agent workers, graphs, and retries.
  * Single source of truth — agent-task-runner re-exports this module.
+ *
+ * Upstream 429 / Retry-After handling is a SiraGPT-owned rewrite of the
+ * OpenClaw idea (MIT, github.com/openclaw/openclaw — parse Retry-After /
+ * retry-after-ms / HTTP-date and do not retry before the hint). No
+ * OpenClaw transport, SDK, env, or vendor names are imported.
  */
+
+const RATE_LIMIT_USER_MESSAGE =
+  'El proveedor está recibiendo demasiadas solicitudes. Espera unos segundos y reintenta.';
+const MIN_RETRY_AFTER_MS = 1_000;
+const MAX_RETRY_AFTER_MS = 60_000;
 
 function withJitter(baseMs) {
   if (!baseMs || baseMs <= 0) return baseMs;
@@ -155,6 +165,78 @@ function matchesRule(rule, msg, code, errName) {
   return matchesByCode(rule, code) || matchesByMessage(rule, `${errName} ${code} ${msg}`);
 }
 
+function headerValue(headers, name) {
+  if (!headers) return null;
+  if (typeof headers.get === 'function') {
+    return headers.get(name) || headers.get(String(name).toLowerCase()) || null;
+  }
+  const lower = String(name).toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (String(key).toLowerCase() === lower) return value;
+  }
+  return null;
+}
+
+/**
+ * Read a provider cooldown hint. Accepts Headers, a plain object,
+ * `retryAfterMs` / `retryAfter`, `retry-after`, and `retry-after-ms`.
+ * Returns milliseconds or null. Never throws.
+ */
+function pickRetryAfterMs(err) {
+  if (!err || typeof err !== 'object') return null;
+  if (typeof err.retryAfterMs === 'number' && Number.isFinite(err.retryAfterMs) && err.retryAfterMs >= 0) {
+    return err.retryAfterMs;
+  }
+  if (typeof err.retryAfter === 'number' && Number.isFinite(err.retryAfter) && err.retryAfter >= 0) {
+    return err.retryAfter * 1000;
+  }
+
+  const headers = err.headers
+    || (err.response && err.response.headers)
+    || (err.cause && err.cause.headers)
+    || null;
+  const msRaw = headerValue(headers, 'retry-after-ms');
+  if (msRaw != null && msRaw !== '') {
+    const milliseconds = Number.parseFloat(msRaw);
+    if (Number.isFinite(milliseconds) && milliseconds >= 0) return milliseconds;
+  }
+
+  const raw = headerValue(headers, 'retry-after');
+  if (raw == null || raw === '') return null;
+  const trimmed = String(raw).trim();
+  const asNumber = Number(trimmed);
+  if (Number.isFinite(asNumber) && asNumber >= 0) return asNumber * 1000;
+  const retryAt = Date.parse(trimmed);
+  if (Number.isFinite(retryAt)) return Math.max(0, retryAt - Date.now());
+  return null;
+}
+
+function clampRetryAfterMs(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(MAX_RETRY_AFTER_MS, Math.max(MIN_RETRY_AFTER_MS, Math.round(ms)));
+}
+
+function formatRateLimitUserMessage(retryAfterMs) {
+  const clamped = clampRetryAfterMs(retryAfterMs);
+  if (clamped == null) return RATE_LIMIT_USER_MESSAGE;
+  const secs = Math.max(1, Math.round(clamped / 1000));
+  if (secs <= 1) return RATE_LIMIT_USER_MESSAGE;
+  return `El proveedor está recibiendo demasiadas solicitudes. Espera unos ${secs} segundos y reintenta.`;
+}
+
+function classifyRateLimited(err, rateRule) {
+  const hintMs = pickRetryAfterMs(err);
+  const clamped = clampRetryAfterMs(hintMs);
+  const ttlMs = clamped != null ? clamped : withJitter(rateRule.ttlMs);
+  return {
+    retryable: true,
+    reason: rateRule.reason,
+    ttlMs,
+    retryAfterMs: clamped,
+    userMessage: formatRateLimitUserMessage(clamped),
+  };
+}
+
 function classifyTaskError(err) {
   if (!err) return { retryable: false, reason: 'no-error' };
   const msg = String(err.message || err).toLowerCase();
@@ -164,7 +246,7 @@ function classifyTaskError(err) {
   // Rate/concurrency pressure wins over generic quota words like "burst quota".
   const rateRule = RETRYABLE_RULES[0];
   if (matchesRule(rateRule, msg, code, errName)) {
-    return { retryable: true, reason: rateRule.reason, ttlMs: withJitter(rateRule.ttlMs) };
+    return classifyRateLimited(err, rateRule);
   }
 
   // ECONNABORTED is an HTTP client timeout code, not a user cancellation.
@@ -219,6 +301,7 @@ const TASK_ERROR_LABELS = Object.freeze({
   E_PROVIDER_UNAVAILABLE: 'El servicio no está disponible. Reintenta en unos segundos.',
   E_PROVIDER: 'El servidor tuvo un problema. Reintenta en unos segundos.',
   E_QUOTA: 'Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan.',
+  E_RATE_LIMITED: RATE_LIMIT_USER_MESSAGE,
   E_CONTENT: 'Este pedido no se pudo completar por la política de contenido. Reformúlalo.',
   E_PARAMS: 'Faltan datos o el pedido no es válido.',
 });
@@ -243,7 +326,7 @@ const REASON_TO_CODE = Object.freeze({
 });
 
 const PRESERVED_LABEL_RE =
-  /dej[oó] de responder|se detuvo|super[oó] el tiempo|no est[aá] disponible|tuvo un problema|Has alcanzado el l[ií]mite|sesi[oó]n expir[oó]|pol[ií]tica de contenido|Faltan datos|ag[eé]ntica fall[oó]/i;
+  /dej[oó] de responder|se detuvo|super[oó] el tiempo|no est[aá] disponible|tuvo un problema|Has alcanzado el l[ií]mite|sesi[oó]n expir[oó]|pol[ií]tica de contenido|Faltan datos|ag[eé]ntica fall[oó]|demasiadas solicitudes/i;
 
 function httpStatusOf(err) {
   if (!err || typeof err !== 'object') return '';
@@ -266,15 +349,22 @@ function looksLikeUnavailable(err, msg, status) {
 function codeForClassification(classified, err) {
   const msg = String((err && err.message) || err || '').toLowerCase();
   const status = httpStatusOf(err);
+  // Upstream 429 is provider pressure, not a plan-quota refusal. Keep the
+  // listed §16 code `E_QUOTA` so existing clients do not see a new enum,
+  // but never let a "timeout" word inside a 429 body steal the label.
+  if (classified.reason === 'rate-limited' || status === '429') return 'E_QUOTA';
   if (looksLikeTimeout(err, msg, status)) return 'E_TIMEOUT';
   if (classified.reason === 'aborted') return 'E_CANCELLED';
   if (looksLikeUnavailable(err, msg, status)) return 'E_PROVIDER';
   return REASON_TO_CODE[classified.reason] || 'E_PROVIDER';
 }
 
-function labelForCode(code, err) {
+function labelForCode(code, err, classified) {
   const msg = String((err && err.message) || err || '');
   const status = httpStatusOf(err);
+  if (classified && classified.reason === 'rate-limited') {
+    return classified.userMessage || formatRateLimitUserMessage(classified.retryAfterMs);
+  }
   if (code === 'E_PROVIDER' && looksLikeUnavailable(err, msg, status)) {
     return TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE;
   }
@@ -288,32 +378,44 @@ function labelForCode(code, err) {
 function presentTaskError(err) {
   const classified = classifyTaskError(err);
   const raw = String((err && err.message) || (typeof err === 'string' ? err : '') || '').trim();
-  const code = codeForClassification(classified, err && typeof err === 'object' ? err : new Error(raw));
+  const probe = err && typeof err === 'object' ? err : new Error(raw);
+  const code = codeForClassification(classified, probe);
   const label = raw && PRESERVED_LABEL_RE.test(raw)
     ? raw
-    : labelForCode(code, err && typeof err === 'object' ? err : new Error(raw));
+    : labelForCode(code, probe, classified);
   return {
     code,
     reason: classified.reason,
     label,
     retryable: Boolean(classified.retryable),
+    retryAfterMs: classified.retryAfterMs || null,
   };
 }
 
 function toAgentTaskErrorEvent(err) {
   const presented = presentTaskError(err);
-  return {
+  const event = {
     type: 'error',
     code: presented.code,
     message: presented.label,
     reason: presented.reason,
   };
+  if (presented.retryAfterMs) {
+    event.retryAfterMs = presented.retryAfterMs;
+    event.retryAfterSec = Math.max(1, Math.round(presented.retryAfterMs / 1000));
+  }
+  return event;
 }
 
 module.exports = {
   classifyTaskError,
   presentTaskError,
   toAgentTaskErrorEvent,
+  pickRetryAfterMs,
+  formatRateLimitUserMessage,
   TASK_ERROR_LABELS,
+  RATE_LIMIT_USER_MESSAGE,
+  MIN_RETRY_AFTER_MS,
+  MAX_RETRY_AFTER_MS,
   withJitter,
 };
