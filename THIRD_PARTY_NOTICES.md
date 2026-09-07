@@ -40,10 +40,13 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**
   inspired by OpenCode's session/prompt loop, build vs plan agents,
   permissioned tools (read / edit / bash / grep), the plan→build
-  session reminder (execute the approved plan; do not rewrite it), and
-  the permission reply (ask → once / always / reject, then execute). No
-  OpenCode source, SST console, Nix, desktop, Electron, or TUI was
-  vendored into this tree.
+  session reminder (execute the approved plan; do not rewrite it),
+  the permission reply (ask → once / always / reject, then execute),
+  and `SessionPrompt.ensureTitle` (title the session from the first
+  real user message, once, without overwriting a custom title). The
+  native title helper is local and deterministic — no title-agent LLM,
+  no Effect runtime, no silent swallow. No OpenCode source, SST
+  console, Nix, desktop, Electron, or TUI was vendored into this tree.
   SiraGPT / SiraCode is **not affiliated with** OpenCode or Anomaly.
   The upstream MIT license text is retained at `vendor/opencode/LICENSE`
   for the historical sidecar reference only; the native engine does not

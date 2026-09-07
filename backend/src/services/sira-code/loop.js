@@ -14,6 +14,7 @@ const { authorizeTool, WRITE_TOOLS } = require('./permissions');
 const { executeTool, TOOL_DEFINITIONS } = require('./tools');
 const { appendEvent, stageEvent } = require('./events');
 const { appendMessage } = require('./session-store');
+const { ensureSessionTitle } = require('./session-title');
 const { shouldStartSiraCodeRun, routeTurn } = require('../trivial-turn');
 const {
   ensureCapturedPlan,
@@ -98,6 +99,10 @@ async function runPrompt(session, text, {
     attachments,
   };
   const turnDecision = routeTurn({ text, ...routerSignals });
+  const titled = ensureSessionTitle(session, text, { trivial: turnDecision.trivial });
+  if (titled.changed) {
+    appendEvent(session, 'title', { title: titled.title, label: 'Sesión' });
+  }
   try {
     console.log(`[turn-router] plane=${turnDecision.plane} rule_id=${turnDecision.rule_id}`);
   } catch (_err) { /* internal trace only */ }
