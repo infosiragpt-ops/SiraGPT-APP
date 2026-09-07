@@ -11,6 +11,7 @@ import { DocumentRepositoryError, type ArtifactInput, type AttemptLease, type Do
   type JsonObject } from './repository';
 import { combinePreservationReports, createConservativeBundle } from './conservative-result';
 import { calculateAttemptBudget } from './attempt-budget';
+import { validateFailureEvidence, type FailureEvidenceMode } from './failure-evidence';
 
 export interface DocumentProcessorDependencies {
   repository: DocSandboxRepository;
@@ -86,6 +87,7 @@ export class DocumentSandboxProcessor {
     };
     const beginPhase = (next: typeof phase): void => { measurePhase(); phase = next; phaseStartedAt = Date.now(); };
     let latestReport: ValidationReport | undefined;
+    let failureEvidenceMode: FailureEvidenceMode = { kind: 'single' };
     const renew = async (): Promise<void> => {
       try { await repository.heartbeat(lease, leaseMs); }
       catch { controller.abort(); }
@@ -179,6 +181,7 @@ export class DocumentSandboxProcessor {
         const reports: ValidationReport[] = [];
         for (const [index, input] of originalInputs.entries()) {
           reports.push(await validator.validate([input], outputs[index]!.data, preserved.validationPlans[index]!, controller.signal));
+          failureEvidenceMode = { kind: 'preservation', groups: reports.length };
           // Retain real partial evidence if cancellation or a later child fails.
           latestReport = combinePreservationReports(originalInputs, preserved, reports);
           if (!hasCompleteValidation(reports[index]!, input.format)) throw new OutputValidationFailure(latestReport);
@@ -216,22 +219,7 @@ export class DocumentSandboxProcessor {
           ...(!level.applicable ? { reasonCode: 'PLAIN_TEXT_NOT_PAGINATED' } : {}) })),
       });
     } catch (error: unknown) {
-      const normalized = timedOut ? new DocSandboxError('E_TIMEOUT', 408) : this.normalize(error);
-      // A late worker cannot turn cancellation/deletion/stale leases into failure
-      // or enqueue a new attempt. It may only clean its remote files in finally.
-      const state = await repository.getInternal(jobId);
-      if (state.deletedAt || state.status === 'cancelled' || state.fence !== lease.fence || state.leaseToken !== lease.token) return;
-      const report = error instanceof OutputValidationFailure ? error.report : latestReport;
-      const { artifacts: _artifacts, ...reportWithoutBytes } = report ?? { passed: false, levels: [] };
-      const failure = reportArtifact({ schemaVersion: 1, ...reportWithoutBytes, passed: false,
-        phase, attempt: lease.attempt, error: { code: normalized.code },
-        checksNotExecuted: report ? undefined : [1, 2, 3, 4], inputHashes: Object.fromEntries(originalInputs.map((file) => [file.id, file.sha256])) }, lease.attempt);
-      // A validation failure is the only automatic retry here. Provider failures
-      // and uncertain billing are terminal; they are never hidden by fallback.
-      const retryable = normalized.code === 'E_VALIDATION' && phase !== 'inspecting';
-      const record = await this.persist(lease, { userId: state.userId, jobId }, failure, AbortSignal.timeout(15_000));
-      await repository.failAttempt(lease, normalized.code, retryable, record);
-      this.dependencies.onNotice?.({ jobId, attempt: lease.attempt, code: normalized.code });
+      await this.handleFailure(lease, error, { timedOut, phase, latestReport, originalInputs, failureEvidenceMode });
     } finally {
       measurePhase();
       stopped = true;
@@ -243,6 +231,53 @@ export class DocumentSandboxProcessor {
         catch { this.dependencies.onNotice?.({ jobId, attempt: lease.attempt, code: 'DOC_CLEANUP_PENDING' }); }
       }
     }
+  }
+
+  /** The catch delegates to this exact path so failure persistence can be
+   * exercised with real reports/storage without substituting the validator. */
+  private async handleFailure(lease: AttemptLease, error: unknown, context: {
+    timedOut: boolean; phase: 'inspecting' | 'planning' | 'editing' | 'validating';
+    latestReport?: ValidationReport; originalInputs: InputFile[];
+    failureEvidenceMode?: FailureEvidenceMode;
+  }): Promise<void> {
+    const { repository } = this.dependencies;
+    const { jobId } = lease;
+    const { timedOut, phase, latestReport, originalInputs } = context;
+    const normalized = timedOut ? new DocSandboxError('E_TIMEOUT', 408) : this.normalize(error);
+    // A late worker cannot turn cancellation/deletion/stale leases into failure
+    // or enqueue a new attempt. It may only clean its remote files in finally.
+    const state = await repository.getInternal(jobId);
+    if (state.deletedAt || state.status === 'cancelled' || state.fence !== lease.fence || state.leaseToken !== lease.token) return;
+    const report = error instanceof OutputValidationFailure ? error.report : latestReport;
+    const evidence = report?.artifacts ?? [];
+    const mode = context.failureEvidenceMode ?? { kind: 'single' };
+    // Validate the complete batch before reserving or writing any object. The
+    // larger preservation allowance comes only from completed validator runs.
+    for (const artifact of evidence) {
+      if (!artifact || !Buffer.isBuffer(artifact.data) || sha256(artifact.data) !== artifact.sha256) {
+        throw new DocSandboxError('E_VALIDATION', 422);
+      }
+    }
+    validateFailureEvidence(evidence.map(artifact => ({ kind: artifact.kind, filename: artifact.name,
+      mime: artifact.mime, size: artifact.data.length, sha256: artifact.sha256 })), mode);
+    const { artifacts: _artifacts, ...reportWithoutBytes } = report ?? { passed: false, levels: [] };
+    const failure = reportArtifact({ schemaVersion: 1, ...reportWithoutBytes, passed: false,
+      phase, attempt: lease.attempt, error: { code: normalized.code },
+      checksNotExecuted: report ? undefined : [1, 2, 3, 4], inputHashes: Object.fromEntries(originalInputs.map((file) => [file.id, file.sha256])) }, lease.attempt);
+    // A validation failure is the only automatic retry here. Provider failures
+    // and uncertain billing are terminal; they are never hidden by fallback.
+    const retryable = normalized.code === 'E_VALIDATION' && phase !== 'inspecting';
+    // One bounded storage window for the whole failure, including compensation;
+    // never grant a fresh 15 seconds per thumbnail. Unfinished reserved keys
+    // remain in the durable journal for the existing cleanup/recovery worker.
+    const signal = AbortSignal.timeout(15_000);
+    const scope = { userId: state.userId, jobId };
+    const records: ArtifactInput[] = [];
+    for (const artifact of evidence) records.push(await this.persist(lease, scope, artifact, signal, signal));
+    const record = await this.persist(lease, scope, failure, signal, signal);
+    signal.throwIfAborted();
+    await repository.failAttempt(lease, normalized.code, retryable, record, { artifacts: records, mode });
+    this.dependencies.onNotice?.({ jobId, attempt: lease.attempt, code: normalized.code });
   }
 
   private enginePersistence(lease: AttemptLease, base: Usage, previousTurns: number): EnginePersistence {
@@ -274,19 +309,26 @@ export class DocumentSandboxProcessor {
     };
   }
 
-  private async persist(lease: AttemptLease, scope: StorageScope, artifact: Artifact, signal?: AbortSignal): Promise<ArtifactInput> {
+  private async persist(lease: AttemptLease, scope: StorageScope, artifact: Artifact, signal?: AbortSignal, compensationSignal?: AbortSignal): Promise<ArtifactInput> {
     const { repository, storage } = this.dependencies;
+    signal?.throwIfAborted();
     if (sha256(artifact.data) !== artifact.sha256) throw new DocSandboxError('E_VALIDATION', 422);
     const object = storage.prepare(scope, artifact.data);
     await repository.reserveStorageKeys(lease, [object.key]);
     try {
+      signal?.throwIfAborted();
       await storage.putPrepared(scope, object, artifact.data, signal);
+      signal?.throwIfAborted();
       // A DELETE can land after key reservation but before a delayed PUT ends.
       // Recheck the lease and compensate rather than leaving a late object live.
       await repository.heartbeat(lease, this.config.leaseMs ?? 30_000);
+      signal?.throwIfAborted();
     } catch (error: unknown) {
       try {
-        await storage.remove(scope, object.key, AbortSignal.timeout(15_000));
+        const cleanupSignal = compensationSignal ?? AbortSignal.timeout(15_000);
+        cleanupSignal.throwIfAborted();
+        await storage.remove(scope, object.key, cleanupSignal);
+        cleanupSignal.throwIfAborted();
         await repository.markStorageKeysPurged(lease.jobId, [object.key]);
       } catch {
         this.dependencies.onNotice?.({ jobId: lease.jobId, attempt: lease.attempt, code: 'DOC_STORAGE_CLEANUP_PENDING' });

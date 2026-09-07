@@ -25,7 +25,7 @@ export function createTextFailureEvidenceFixture(): TextFailureEvidenceFixture {
         part: '$document', locator: 'text', before: '2026', after: '2027' }], notPossible: [] }) };
 }
 
-const responseSchema = z.object({ ok: z.literal(true), report: z.object({
+export const realTextEvidenceResponseSchema = z.object({ ok: z.literal(true), report: z.object({
   schemaVersion: z.literal(1), passed: z.boolean(), originalSha256: hashSchema, outputSha256: hashSchema,
   levels: z.array(z.object({ level: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
     passed: z.boolean(), applicable: z.boolean(), details: z.record(z.string(), z.unknown()),
@@ -66,7 +66,7 @@ export function runRealTextEvidenceValidation(fixture: TextFailureEvidenceFixtur
     assert.equal(result.error, undefined, 'The real Python validator must start and finish within its bound');
     assert.equal(result.signal, null, 'The real Python validator must not be killed');
     assert.equal(result.status, 0, 'The real Python validator must exit successfully (stderr withheld)');
-    const { report: rawReport } = responseSchema.parse(JSON.parse(result.stdout) as unknown);
+    const { report: rawReport } = realTextEvidenceResponseSchema.parse(JSON.parse(result.stdout) as unknown);
     assert.deepEqual(rawReport.artifactFiles, ['text-diff.json']);
     assert.deepEqual(Object.keys(rawReport.artifactData), ['text-diff.json']);
     const data = readFileSync(path.join(artifactDirectory, 'text-diff.json'));
@@ -77,7 +77,8 @@ export function runRealTextEvidenceValidation(fixture: TextFailureEvidenceFixtur
     const report: ValidationReport = { passed: rawReport.passed, levels: rawReport.levels,
       originalSha256: rawReport.originalSha256, outputSha256: rawReport.outputSha256, changes: rawReport.changes,
       artifacts: [{ name: 'text-diff.json', kind: 'text_diff', data, mime: 'application/json', sha256: sha256(data) }] };
-    return { report, textDiff, directory, originalAfter: readFileSync(originalPath), candidateAfter: readFileSync(candidatePath) };
+    return { report, rawReport, rawResponse: result.stdout, textDiff, directory,
+      originalAfter: readFileSync(originalPath), candidateAfter: readFileSync(candidatePath) };
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

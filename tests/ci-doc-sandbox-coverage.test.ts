@@ -102,4 +102,54 @@ describe("document sandbox strict coverage release gate", () => {
     const isolated = readFileSync("infra/doc-validation/run-isolated-integration.sh", "utf8")
     assert.match(isolated, /backend\/tests\/doc-sandbox-cleanup-pagination\.integration\.test\.ts/)
   })
+
+  it("requires independently pinned Python evidence and a bounded real failure-retention suite outside unit coverage", () => {
+    assert.match(scripts["test:doc-sandbox:unit"], /tests\/doc-sandbox-failure-evidence-policy\.test\.ts(?:\s|$)/)
+    assert.doesNotMatch(scripts["test:doc-sandbox:unit"], /failure-retention\.integration|failure-evidence-bundle/)
+    const command = scripts["test:doc-sandbox:failure-retention"]
+    assert.match(command, /^node --import tsx --test --test-concurrency=1 tests\/doc-sandbox-failure-retention\.integration\.test\.ts$/)
+    assert.doesNotMatch(command, /c8|coverage|\|\||--test-skip-pattern/)
+
+    const step = backendStep("Document sandbox real private storage and cleanup")
+    assert.match(step, /mktemp -d/)
+    assert.match(step, /realpath "\$failure_bundle_dir"/)
+    assert.match(step, /stat -c %a "\$failure_bundle_dir".*= 700/)
+    assert.match(step, /failure_bundle_sha=\$\(DOC_SANDBOX_TEST_PYTHON="\$\(command -v python\)"/)
+    assert.match(step, /node --import tsx tests\/helpers\/doc-sandbox-failure-evidence-bundle\.ts/)
+    assert.match(step, /\[\[ "\$failure_bundle_sha" =~ \^\[a-f0-9\]\{64\}\$ \]\]/)
+    assert.match(step, /DOC_SANDBOX_TEST_FAILURE_BUNDLE_PATH="\$failure_bundle_dir\/failure-evidence\.json"/)
+    assert.match(step, /DOC_SANDBOX_TEST_FAILURE_BUNDLE_SHA256="\$failure_bundle_sha"/)
+    const exportAt = step.indexOf("tests/helpers/doc-sandbox-failure-evidence-bundle.ts")
+    const startAt = step.indexOf("storage_id=$(docker run")
+    const runAt = step.indexOf("npm run test:doc-sandbox:failure-retention")
+    assert.ok(exportAt >= 0 && startAt > exportAt && runAt > startAt,
+      "real Python export must precede service startup and the mandatory retention test")
+    assert.doesNotMatch(step, /continue-on-error|\|\|\s*true|NODE_V8_COVERAGE|--test-skip-pattern/)
+
+    const integration = readFileSync("backend/tests/doc-sandbox-failure-retention.integration.test.ts", "utf8")
+    assert.match(integration, /assert\.ok\(bundlePath && bundleHash,/)
+    const verifyAt = integration.indexOf("readVerifiedFailureEvidenceBundle(bundlePath, bundleHash)")
+    assert.ok(verifyAt >= 0 && verifyAt < integration.indexOf("await createDocumentIntegrationFixture()"),
+      "a missing or unverified bundle must fail before opening the actual services")
+    for (const variable of ["DOC_SANDBOX_TEST_FAILURE_BUNDLE_PATH", "DOC_SANDBOX_TEST_FAILURE_BUNDLE_SHA256"]) {
+      assert.match(integration, new RegExp(`process\\.env\\.${variable};`), "bundle settings cannot silently default")
+    }
+
+    const isolated = readFileSync("infra/doc-validation/run-isolated-failure-retention.sh", "utf8")
+    const deadline = isolated.match(/timeout -s TERM -k (\d+) (\d+) docker run/)
+    assert.ok(deadline, "the Docker client requires an external TERM/kill bound")
+    assert.ok(Number(deadline[1]) > 0 && Number(deadline[1]) <= 15)
+    assert.ok(Number(deadline[2]) > 0 && Number(deadline[2]) <= 180)
+    assert.match(isolated, /--cidfile "\$runner_state\/id"/)
+    assert.match(isolated, /docker inspect "\$target" --format '\{\{\.Id\}\}'/)
+    assert.match(isolated, /service_ids\+=\("\$target_id"\)/)
+    assert.match(isolated, /for target in "\$\{service_ids\[@\]\}"/)
+    assert.match(isolated, /docker stop --time \d+ "\$runner_id"/)
+    assert.match(isolated, /for started_id in "\$\{started\[@\]\}"/)
+    assert.match(isolated, /docker stop --time \d+ "\$started_id"/)
+    assert.match(isolated, /trap cleanup EXIT/)
+    assert.match(isolated, /exit "\$original_status"/)
+    assert.match(isolated, /DOC_SANDBOX_TEST_FAILURE_BUNDLE_SHA256=\$evidence_sha/)
+    assert.doesNotMatch(isolated, /\|\|\s*true|--privileged|\/var\/run\/docker\.sock/)
+  })
 })

@@ -5,7 +5,21 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
-**Actualización más reciente:** corregida la limpieza privada que no avanzaba
+**Actualización más reciente (2026-09-07 UTC):** corregida la pérdida de evidencia
+del catch real. Pre-fix **3/4** con diff ausente después de guardar informe;
+post-fix **7/7** en PostgreSQL/MinIO real, mismas evidencias Python externas
+verificadas por SHA. Retención cifrada/privada y transición atómica, sin outputs.
+Regresión **79/79**, generales **12472/12472**, unitarias **368/368**;
+cobertura **72,20% (2741/3796)** aún inferior al 80%. Tipos/lint/UI-lock y
+revisión independiente aprobados. Sin UI/migraciones ni gasto del proveedor.
+Producción limpia sigue en `100d29bc2…`, saludable a
+**2026-09-07T00:23:40.840Z**, no en #561. CI base `eaef4182…` aprobó storage
+34/34 y falló cobertura/agregador; el nuevo lote requiere CI propio.
+Faltan carreras durante IO, ensayos integrales, infraestructura y aceptación;
+no hay cierre F1 ni despliegue. Evidencia:
+[failure-retention-release-20260907.md](failure-retention-release-20260907.md).
+
+**Registro anterior (`eaef4182…`):** corregida la limpieza privada que no avanzaba
 al superar 10 000 objetos o fallar LIST. Dos fallos reproducidos antes del
 arreglo; **79/79** integraciones PostgreSQL/MinIO finales pasan, incluidas
 seis nuevas: 10 003 objetos purgados en tres pasadas, ámbito/diario, PUT

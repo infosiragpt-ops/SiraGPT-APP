@@ -334,6 +334,14 @@ jobs:
           DOC_SANDBOX_TEST_S3_SECRET_ACCESS_KEY: fixture-only-isolated-s3
         run: |
           set -euo pipefail
+          # Generate both controls with the real installed Python before any
+          # storage service starts. This transport is not part of unit coverage.
+          failure_bundle_dir=$(mktemp -d "${RUNNER_TEMP:?}/doc-failure-evidence.XXXXXXXX")
+          failure_bundle_dir=$(realpath "$failure_bundle_dir")
+          test "$(stat -c %a "$failure_bundle_dir")" = 700
+          failure_bundle_sha=$(DOC_SANDBOX_TEST_PYTHON="$(command -v python)" \
+            node --import tsx tests/helpers/doc-sandbox-failure-evidence-bundle.ts "$failure_bundle_dir/failure-evidence.json")
+          [[ "$failure_bundle_sha" =~ ^[a-f0-9]{64}$ ]]
           storage_id=$(docker run -d --rm --label siragpt.scope=doc-sandbox-ci-test \
             --publish 127.0.0.1:19000:9000 \
             -e MINIO_ROOT_USER=docfixture -e MINIO_ROOT_PASSWORD=fixture-only-isolated-s3 \
@@ -345,6 +353,9 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:19000/minio/health/ready >/dev/null
           npm run test:doc-sandbox:http-storage
+          DOC_SANDBOX_TEST_FAILURE_BUNDLE_PATH="$failure_bundle_dir/failure-evidence.json" \
+            DOC_SANDBOX_TEST_FAILURE_BUNDLE_SHA256="$failure_bundle_sha" \
+            npm run test:doc-sandbox:failure-retention
 
       # CI and production share the same `prisma migrate deploy` path (U0).
       # `db push` alone is intentionally not used — it skips migration history

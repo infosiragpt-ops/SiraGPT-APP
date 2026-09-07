@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import type { DocumentOutcome } from '../types/contracts';
 import { canClaimDocumentAttempt, documentFailureStatus, documentTransitionFailure, isDocumentLeaseCurrent } from './lease-policy';
+import { validateFailureEvidence, type FailureEvidenceMode } from './failure-evidence';
 
 export type DocumentStatus = 'queued' | 'inspecting' | 'planning' | 'awaiting_approval' | 'editing' | 'validating' | 'done' | 'failed' | 'cancelled';
 export type ArtifactKind = 'input' | 'output' | 'edit_plan' | 'recipe' | 'agent_result' | 'validation_report' | 'thumbnail_before' | 'thumbnail_after' | 'text_diff' | 'transcript';
@@ -373,14 +374,52 @@ export class DocSandboxRepository {
       await this.event(db, lease.jobId, 'status_changed', { status: 'done', outcome: gate.outcome, attempt: lease.attempt }, 'cleanup');
     });
   }
-  async failAttempt(lease: AttemptLease, code: string, retryable: boolean, report?: ArtifactInput): Promise<DocumentStatus> {
+  async failAttempt(lease: AttemptLease, code: string, retryable: boolean, report?: ArtifactInput,
+    evidence?: { artifacts: readonly ArtifactInput[]; mode: FailureEvidenceMode }): Promise<DocumentStatus> {
     validateCode(code);
     if (report && report.kind !== 'validation_report') throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+    if (evidence) {
+      validateFailureEvidence(evidence.artifacts, evidence.mode);
+      if (!report || report.mime !== 'application/json' || report.size <= 0) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+    }
+    // Snapshot primitive metadata before the first await, not mutable caller
+    // arrays. Legacy report-only callers retain their established contract.
+    const batch = evidence ? [...evidence.artifacts, report!].map(artifact => ({ ...artifact, id: artifact.id ?? randomUUID() })) : [];
+    const failureReportKey = evidence ? batch[batch.length - 1]!.storageKey : report?.storageKey;
+    const mode = evidence?.mode.kind === 'preservation' ? { ...evidence.mode } : { kind: 'single' as const };
+    for (const artifact of batch) validateArtifact(artifact);
     return this.client.$transaction(async db => {
       const row = await this.assertLease(db, lease);
-      if (report) await this.insertArtifact(db, lease.jobId, lease.attempt, report, true);
+      if (evidence) {
+        if (mode.kind === 'preservation' && mode.groups > row.input_keys.length) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+        const prefix = `doc-sandbox/${row.user_id}/${row.id}/`;
+        const reserved = new Set(row.storage_keys);
+        const protectedKeys = new Set([...row.input_keys, ...row.output_keys, ...row.purged_keys, row.instructions_key, row.edit_plan_key]);
+        const keys = new Set<string>(); const ids = new Set<string>(); const names = new Set<string>();
+        for (const artifact of batch) {
+          if (!artifact.storageKey.startsWith(prefix) || !/^[A-Za-z0-9_-]{1,40}\/[A-Za-z0-9_-]+\.sealed$/.test(artifact.storageKey.slice(prefix.length))
+            || !reserved.has(artifact.storageKey) || protectedKeys.has(artifact.storageKey)
+            || !/^[A-Za-z0-9_-]{1,128}$/.test(artifact.id)
+            || keys.has(artifact.storageKey) || ids.has(artifact.id) || names.has(artifact.filename)) {
+            throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+          }
+          keys.add(artifact.storageKey); ids.add(artifact.id); names.add(artifact.filename);
+        }
+        const existing = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM doc_job_artifacts WHERE id=ANY(${[...ids]}::text[]) OR storage_key=ANY(${[...keys]}::text[]) LIMIT 1`);
+        if (existing.length) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
+        // Bounded batched inserts avoid one transaction round-trip per image.
+        // Every key was reserved before PUT; uniqueness errors roll back the
+        // entire batch, report, status and outbox together. No partial publish.
+        for (let offset = 0; offset < batch.length; offset += 500) {
+          const values = batch.slice(offset, offset + 500).map(artifact => Prisma.sql`(${artifact.id},${lease.jobId},${lease.attempt},${artifact.kind},${artifact.storageKey},${artifact.filename},${artifact.mime},${BigInt(artifact.size)},${artifact.sha256},${artifact.kind === 'validation_report'})`);
+          await db.$executeRaw(Prisma.sql`INSERT INTO doc_job_artifacts(id,job_id,attempt,kind,storage_key,filename,mime,size,sha256,published) VALUES ${Prisma.join(values)}`);
+        }
+        // SQL does not accept AbortSignal: retain the existing transaction
+        // timeout and recheck the lease against the database clock before commit.
+        await this.assertLease(db, lease);
+      } else if (report) await this.insertArtifact(db, lease.jobId, lease.attempt, report, true);
       const next = documentFailureStatus(retryable, row.attempts);
-      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status=${next},error_code=${code},validation_report_key=${report?.storageKey ?? row.validation_report_key},lease_token=NULL,lease_expires_at=NULL,fence=fence+1,edit_plan_key=NULL,edit_plan_hash=NULL,session_ref=NULL,cleanup_pending=true,cleanup_not_before=clock_timestamp()+interval '15 minutes',finished_at=CASE WHEN ${next}='failed' THEN clock_timestamp() ELSE NULL END WHERE id=${lease.jobId}`);
+      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status=${next},error_code=${code},validation_report_key=${failureReportKey ?? row.validation_report_key},lease_token=NULL,lease_expires_at=NULL,fence=fence+1,edit_plan_key=NULL,edit_plan_hash=NULL,session_ref=NULL,cleanup_pending=true,cleanup_not_before=clock_timestamp()+interval '15 minutes',finished_at=CASE WHEN ${next}='failed' THEN clock_timestamp() ELSE NULL END WHERE id=${lease.jobId}`);
       await this.event(db, lease.jobId, 'status_changed', { status: next, attempt: lease.attempt, code }, next === 'queued' ? 'enqueue' : 'cleanup');
       if (next === 'queued') await this.event(db, lease.jobId, 'cleanup_pending', { attempt: lease.attempt }, 'cleanup');
       return next;
