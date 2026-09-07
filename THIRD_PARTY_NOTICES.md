@@ -91,3 +91,8 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   `.agents/skills/biblioteca-deposit/SKILL.md` adapt Hermes curator
   observation → stale → archive (never delete) and `logs/curator/REPORT.md`
   landing. No Python curator was copied; every write is keyed by `userId`.
+  The skill-prompt sandbox and content-free `skill_run` audit in
+  `backend/src/services/agents/skill-prompt-sandbox.js` adapt Hermes
+  skill-load-into-context plus scan-before-inject (same MEMORY/USER
+  pattern already live). Optional SKILL.md bodies stay reference data
+  (AGENTS.md §17); they are never treated as system instructions.
