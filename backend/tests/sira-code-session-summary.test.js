@@ -93,6 +93,11 @@ describe('pure session snapshot', () => {
     assert.equal(inferStopReason({ status: 'error', messages: [] }), 'error');
     assert.equal(inferStopReason({ status: 'running', messages: [] }), 'running');
     assert.equal(inferStopReason({ status: 'stopped', messages: [] }), 'step_budget');
+    assert.equal(inferStopReason({
+      status: 'stopped',
+      stopReason: 'tool_rounds',
+      messages: [],
+    }), 'tool_rounds');
     assert.equal(inferStopReason({ status: 'idle', messages: [] }), 'idle');
     assert.equal(inferStopReason({
       status: 'idle',

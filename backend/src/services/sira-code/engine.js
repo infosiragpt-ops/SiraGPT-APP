@@ -96,6 +96,7 @@ async function prompt(id, text, opts = {}) {
     llmTurn: opts.llmTurn,
     model: opts.model,
     maxSteps: opts.maxSteps,
+    maxToolRounds: opts.maxToolRounds,
     signal: opts.signal,
     chip: opts.chip,
     attachments: opts.attachments,

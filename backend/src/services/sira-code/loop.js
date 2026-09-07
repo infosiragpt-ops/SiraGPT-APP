@@ -29,6 +29,12 @@ const {
   publicPlan,
   isTransientLlmError,
 } = require('./plan-handoff');
+const {
+  resolveMaxToolRounds,
+  isToolRoundsExceeded,
+  buildToolRoundsStop,
+  MAX_TOOL_ROUNDS_DEFAULT,
+} = require('./tool-rounds');
 
 const MAX_STEPS_DEFAULT = 8;
 
@@ -80,6 +86,7 @@ async function runPrompt(session, text, {
   llmTurn,
   model = '',
   maxSteps = MAX_STEPS_DEFAULT,
+  maxToolRounds = MAX_TOOL_ROUNDS_DEFAULT,
   signal,
   chip,
   attachments,
@@ -137,8 +144,11 @@ async function runPrompt(session, text, {
 
   const complete = typeof llmTurn === 'function' ? llmTurn : defaultLlmTurn();
   const toolResults = [];
+  const toolRoundCap = resolveMaxToolRounds(maxToolRounds);
   let assistantText = '';
   let hitBudget = false;
+  let hitToolRounds = false;
+  let toolRounds = 0;
   let compactedOnce = false;
 
   function maybeCompactStage(didCompact) {
@@ -184,6 +194,22 @@ async function runPrompt(session, text, {
           session.status = 'cancelled';
           return { status: 'cancelled', text: assistantText, toolResults, parts: [] };
         }
+        if (isToolRoundsExceeded(toolRounds, toolRoundCap)) {
+          hitToolRounds = true;
+          const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });
+          const skipped = call.name || call.tool || '';
+          toolResults.push({
+            tool: skipped,
+            ok: false,
+            code: stop.stopReason,
+            error: stop.label,
+            content: stop.content,
+            skipped: true,
+          });
+          transcript.push({ role: 'tool', content: stop.content });
+          break;
+        }
+        toolRounds += 1;
         const name = call.name || call.tool || '';
         const args = call.arguments || call.args || {};
         const auth = authorizeTool(session.agentId, name, {
@@ -238,6 +264,10 @@ async function runPrompt(session, text, {
           stageEvent(session, 'verifying', { label: 'Verificando resultado', tool: auth.tool });
         }
       }
+      if (hitToolRounds || isToolRoundsExceeded(toolRounds, toolRoundCap)) {
+        hitToolRounds = true;
+        break;
+      }
       if (step === maxSteps - 1) hitBudget = true;
     }
   } catch (err) {
@@ -275,8 +305,18 @@ async function runPrompt(session, text, {
   if (agent.id === 'planificar' && assistantText) {
     ensureCapturedPlan(session, assistantText, { sourceAgent: 'planificar', status: 'ready' });
   }
-  if (hitBudget && session.status === 'running') {
+  if (hitToolRounds && (session.status === 'running' || session.status === 'idle')) {
     session.status = 'stopped';
+    session.stopReason = 'tool_rounds';
+    const stop = buildToolRoundsStop({ count: toolRounds, max: toolRoundCap });
+    stageEvent(session, stop.step, {
+      label: stop.label,
+      count: stop.count,
+      max: stop.max,
+    });
+  } else if (hitBudget && session.status === 'running') {
+    session.status = 'stopped';
+    session.stopReason = 'step_budget';
     stageEvent(session, 'budgetExceeded', { label: 'Presupuesto agotado' });
   } else if (session.status === 'running') {
     session.status = 'idle';
@@ -291,7 +331,11 @@ async function runPrompt(session, text, {
     parts,
     message: { parts },
     plan: publicPlan(session.plan),
-    stopReason: hitBudget && session.status === 'stopped' ? 'step_budget' : undefined,
+    toolRounds,
+    maxToolRounds: toolRoundCap,
+    stopReason: session.status === 'stopped'
+      ? (session.stopReason || (hitToolRounds ? 'tool_rounds' : 'step_budget'))
+      : undefined,
   };
 }
 
@@ -300,4 +344,5 @@ module.exports = {
   defaultLlmTurn,
   shouldStartSiraCodeRun,
   MAX_STEPS_DEFAULT,
+  MAX_TOOL_ROUNDS_DEFAULT,
 };

@@ -20,6 +20,10 @@ they do not copy the Effect service or write a tool-output directory.
 The reconnect summary is a native rewrite of the SessionSummary idea
 (compact snapshot + lastEventId for SSE resume); it does not copy
 the Effect service, Snapshot git-diff, or an LLM summarizer.
+The per-turn tool-round guard is a native rewrite of the last-step /
+agent.steps idea (count tool calls in one user turn, Spanish stop
+label); it does not copy the MAX_STEPS prompt or disable the tool
+schema.
 
 SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
