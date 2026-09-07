@@ -75,10 +75,9 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
   router.use((_req, res, next) => { res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' }); next(); });
   router.get('/capabilities', asyncRoute(async (req, res) => {
     const selected = z.string().min(1).max(200).optional().parse(req.query.model);
-    // Pin miss / missing query is an unsupported probe: no catalog, DB or S3.
-    // Only a configured engine identity may consult publication.
-    const pinned = selected ? configuredDocumentModelTier(config.engine.models, selected) : null;
-    const modelTier = pinned && selected ? await deps.resolveModel(selected, userPlan(req)) : null;
+    // Pin miss / missing query is unsupported and must not touch the catalog.
+    const modelTier = selected && configuredDocumentModelTier(config.engine.models, selected)
+      ? await deps.resolveModel(selected, userPlan(req)) : null;
     res.json({ enabled: true, ready: deps.isReady(), supported: modelTier !== null, modelTier,
       modes: ['preserve'], formats: documentFormatSchema.options, limits: { maxFiles: 10, maxFileBytes: config.maxFileBytes } });
   }));
