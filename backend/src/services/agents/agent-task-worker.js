@@ -127,10 +127,7 @@ function startAgentTaskWorker() {
         const { INTERNAL } = require('../../routes/agent-task');
         const taskId = job.data && job.data.taskId;
         const userId = job.data && job.data.user && job.data.user.id;
-        const message = (classification && classification.userMessage)
-          || err.message
-          || 'La tarea agéntica falló de forma permanente.';
-        INTERNAL.failTaskTerminal(taskId, userId, message);
+        INTERNAL.failTaskTerminal(taskId, userId, err);
       } catch (terminalErr) {
         console.warn('[agent-task-worker] failed to write terminal error event:', terminalErr?.message || terminalErr);
       }

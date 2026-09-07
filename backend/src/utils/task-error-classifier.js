@@ -204,7 +204,116 @@ function classifyTaskError(err) {
   return { retryable: false, reason: 'unknown', ttlMs: 0 };
 }
 
+/**
+ * Public /agentes error surface (AGENTS.md §16).
+ *
+ * OpenClaw keeps terminal kinds distinct (`aborted` → cancelled,
+ * `errorKind: timeout` ≠ `errorKind: refusal`) so the client does not
+ * collapse every failure into one stop reason. This is a SiraGPT-owned
+ * rewrite of that contract: classify → `{ code, label }` in Spanish.
+ * No OpenClaw runtime or vendor names leak to the user.
+ */
+const TASK_ERROR_LABELS = Object.freeze({
+  E_CANCELLED: 'La tarea se detuvo.',
+  E_TIMEOUT: 'La tarea superó el tiempo de espera. Reintenta.',
+  E_PROVIDER_UNAVAILABLE: 'El servicio no está disponible. Reintenta en unos segundos.',
+  E_PROVIDER: 'El servidor tuvo un problema. Reintenta en unos segundos.',
+  E_QUOTA: 'Has alcanzado el límite del plan. Espera unos minutos o actualiza tu plan.',
+  E_CONTENT: 'Este pedido no se pudo completar por la política de contenido. Reformúlalo.',
+  E_PARAMS: 'Faltan datos o el pedido no es válido.',
+});
+
+const REASON_TO_CODE = Object.freeze({
+  aborted: 'E_CANCELLED',
+  'network-timeout': 'E_TIMEOUT',
+  'server-error': 'E_PROVIDER',
+  'ssl-error': 'E_PROVIDER',
+  'dns-failure': 'E_PROVIDER',
+  'rate-limited': 'E_QUOTA',
+  'quota-exhausted': 'E_QUOTA',
+  'content-policy': 'E_CONTENT',
+  'validation-error': 'E_PARAMS',
+  'auth-failure': 'E_PARAMS',
+  'payload-too-large': 'E_PARAMS',
+  'context-length': 'E_PARAMS',
+  'model-unavailable': 'E_PROVIDER',
+  'not-implemented': 'E_PARAMS',
+  unknown: 'E_PROVIDER',
+  'no-error': 'E_PROVIDER',
+});
+
+const PRESERVED_LABEL_RE =
+  /dej[oó] de responder|se detuvo|super[oó] el tiempo|no est[aá] disponible|tuvo un problema|Has alcanzado el l[ií]mite|sesi[oó]n expir[oó]|pol[ií]tica de contenido|Faltan datos|ag[eé]ntica fall[oó]/i;
+
+function httpStatusOf(err) {
+  if (!err || typeof err !== 'object') return '';
+  const raw = err.statusCode || err.status || err.code || '';
+  const digits = String(raw).match(/(\d{3})/);
+  return digits ? digits[1] : '';
+}
+
+function looksLikeTimeout(err, msg, status) {
+  if (status === '408' || status === '504') return true;
+  return /\b(timeout|timed out|etimedout|gateway timeout|deadline exceeded)\b/i.test(msg)
+    || /\b(timeout|timed out|etimedout|gateway timeout|deadline exceeded)\b/i.test(String(err && err.name || ''));
+}
+
+function looksLikeUnavailable(err, msg, status) {
+  if (status === '503') return true;
+  return /\b503\b|service unavailable|servicio no disponible/i.test(msg);
+}
+
+function codeForClassification(classified, err) {
+  const msg = String((err && err.message) || err || '').toLowerCase();
+  const status = httpStatusOf(err);
+  if (looksLikeTimeout(err, msg, status)) return 'E_TIMEOUT';
+  if (classified.reason === 'aborted') return 'E_CANCELLED';
+  if (looksLikeUnavailable(err, msg, status)) return 'E_PROVIDER';
+  return REASON_TO_CODE[classified.reason] || 'E_PROVIDER';
+}
+
+function labelForCode(code, err) {
+  const msg = String((err && err.message) || err || '');
+  const status = httpStatusOf(err);
+  if (code === 'E_PROVIDER' && looksLikeUnavailable(err, msg, status)) {
+    return TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE;
+  }
+  return TASK_ERROR_LABELS[code] || TASK_ERROR_LABELS.E_PROVIDER;
+}
+
+/**
+ * Map a thrown / persisted agent-task failure to a user-facing payload.
+ * `{ code, label, reason, retryable }` — `label` is Spanish, no vendor.
+ */
+function presentTaskError(err) {
+  const classified = classifyTaskError(err);
+  const raw = String((err && err.message) || (typeof err === 'string' ? err : '') || '').trim();
+  const code = codeForClassification(classified, err && typeof err === 'object' ? err : new Error(raw));
+  const label = raw && PRESERVED_LABEL_RE.test(raw)
+    ? raw
+    : labelForCode(code, err && typeof err === 'object' ? err : new Error(raw));
+  return {
+    code,
+    reason: classified.reason,
+    label,
+    retryable: Boolean(classified.retryable),
+  };
+}
+
+function toAgentTaskErrorEvent(err) {
+  const presented = presentTaskError(err);
+  return {
+    type: 'error',
+    code: presented.code,
+    message: presented.label,
+    reason: presented.reason,
+  };
+}
+
 module.exports = {
   classifyTaskError,
+  presentTaskError,
+  toAgentTaskErrorEvent,
+  TASK_ERROR_LABELS,
   withJitter,
 };

@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { classifyTaskError } = require('../src/utils/task-error-classifier');
+const { classifyTaskError, presentTaskError, TASK_ERROR_LABELS } = require('../src/utils/task-error-classifier');
 
 const CASES = [
   // retryable rate/concurrency pressure
@@ -175,4 +175,41 @@ test('classifyTaskError covers at least 100 production error fingerprints', () =
     assert.equal(result.reason, reason, `${input} reason`);
     if (retryable) assert.ok(result.ttlMs > 0, `${input} should include retry TTL`);
   }
+});
+
+test('presentTaskError: 503, cancel and timeout keep distinct Spanish labels', () => {
+  const unavailable = presentTaskError(Object.assign(new Error('maintenance'), { statusCode: 503 }));
+  assert.equal(unavailable.code, 'E_PROVIDER');
+  assert.equal(unavailable.label, TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE);
+
+  const cancelled = presentTaskError(Object.assign(new Error('cancelled by user'), { name: 'AbortError' }));
+  assert.equal(cancelled.code, 'E_CANCELLED');
+  assert.equal(cancelled.label, TASK_ERROR_LABELS.E_CANCELLED);
+
+  const timedOut = presentTaskError(Object.assign(new Error('upstream timeout'), { statusCode: 504 }));
+  assert.equal(timedOut.code, 'E_TIMEOUT');
+  assert.equal(timedOut.label, TASK_ERROR_LABELS.E_TIMEOUT);
+
+  assert.notEqual(unavailable.label, cancelled.label);
+  assert.notEqual(unavailable.label, timedOut.label);
+  assert.notEqual(cancelled.label, timedOut.label);
+});
+
+test('presentTaskError: deadline exceeded presents as timeout, not cancel', () => {
+  const presented = presentTaskError(new Error('context deadline exceeded'));
+  assert.equal(presented.code, 'E_TIMEOUT');
+  assert.equal(presented.label, TASK_ERROR_LABELS.E_TIMEOUT);
+  assert.equal(presented.reason, 'aborted');
+});
+
+test('presentTaskError: other 5xx stay E_PROVIDER without the 503 copy', () => {
+  const presented = presentTaskError(Object.assign(new Error('provider exploded'), { statusCode: 500 }));
+  assert.equal(presented.code, 'E_PROVIDER');
+  assert.equal(presented.label, TASK_ERROR_LABELS.E_PROVIDER);
+  assert.notEqual(presented.label, TASK_ERROR_LABELS.E_PROVIDER_UNAVAILABLE);
+});
+
+test('presentTaskError: already-Spanish labels are not rewritten', () => {
+  const presented = presentTaskError(new Error('El worker dejó de responder. La tarea se cerró.'));
+  assert.match(presented.label, /dejó de responder/);
 });

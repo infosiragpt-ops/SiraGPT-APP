@@ -3903,13 +3903,14 @@ function withJitter(baseMs) {
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
  * (0 = immediate, >0 = backoff).
  */
-const { classifyTaskError } = require('../../utils/task-error-classifier');
+const { classifyTaskError, presentTaskError } = require('../../utils/task-error-classifier');
 
 module.exports = {
   runAgentTaskJob,
   buildFinalizeProfile,
   buildOpenAICompatibleClient,
   classifyTaskError,
+  presentTaskError,
   normalizeAgentRuntimeModel,
   resolveAgentRuntimeClient,
   detectAgentRuntimeProvider,
