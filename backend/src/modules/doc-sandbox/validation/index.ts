@@ -3,43 +3,15 @@ import { spawn } from 'node:child_process';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { z } from 'zod';
-import { editPlanSchema, type EditPlan, type InputFile, type Artifact, type ValidationReport } from '../types/contracts';
+import { editPlanSchema, type EditPlan, type InputFile, type ValidationReport } from '../types/contracts';
 import { DocumentValidationError } from './errors';
 import { assertInvocationLaunchable, cleanupInvocation, createInvocation, newValidatorInvocationId,
   reconcileValidatorOrphans, validatorScope, validatorTimeout, type ValidatorInvocation, type ValidatorReconciliation } from './lifecycle';
 export { DocumentValidationError } from './errors';
+import { decodeValidatorResponse, type DecodedValidatorResponse, type DocumentInventory, type RecipeInventory } from './response-codec';
+export type { DocumentInventory, RecipeInventory } from './response-codec';
 
 const hash = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
-const unitSchema = z.object({ part: z.string(), locator: z.string(), text: z.string(), kind: z.string() });
-const inventorySchema = z.object({
-  id: z.string(), format: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int(),
-  name: z.string(), mime: z.string(), parts: z.record(z.string(), z.string()), units: z.array(unitSchema),
-  warnings: z.array(z.string()), partOrder: z.array(z.string()).optional(), pages: z.number().int().optional(),
-  encoding: z.string().optional(),
-});
-const reportSchema = z.object({
-  schemaVersion: z.literal(1), passed: z.boolean(), originalSha256: z.string(), outputSha256: z.string(),
-  levels: z.array(z.object({ level: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4)]),
-    passed: z.boolean(), applicable: z.boolean(), details: z.record(z.string(), z.unknown()), durationMs: z.number().nonnegative() })),
-  artifactFiles: z.array(z.string()), artifactData: z.record(z.string(), z.string()), changes: z.array(z.unknown()),
-});
-const recipeSchema = z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/), size: z.number().int().positive(),
-  expandedBytes: z.number().int().nonnegative(), scripts: z.array(z.string()).min(1), parts: z.record(z.string(), z.string()) });
-const responseSchema = z.union([
-  z.object({ ok: z.literal(false), error: z.object({ code: z.string(), message: z.string() }) }),
-  z.object({ ok: z.literal(true), inventories: z.array(inventorySchema) }),
-  z.object({ ok: z.literal(true), report: reportSchema }),
-  z.object({ ok: z.literal(true), recipe: recipeSchema }),
-  z.object({ ok: z.literal(true), preflight: z.object({ schemaVersion: z.literal(1),
-    inputSha256: z.string().regex(/^[a-f0-9]{64}$/), applications: z.object({
-      writer: z.string().regex(/^[a-f0-9]{64}$/), calc: z.string().regex(/^[a-f0-9]{64}$/),
-      impress: z.string().regex(/^[a-f0-9]{64}$/),
-    }).strict() }).strict() }),
-]);
-
-export type DocumentInventory = z.infer<typeof inventorySchema>;
-export type RecipeInventory = z.infer<typeof recipeSchema>;
 export interface ValidatorOptions {
   /** Immutable image reference required; no implicit pull of a mutable latest tag. */
   image: string;
@@ -207,7 +179,7 @@ export class IndependentDocumentValidator {
     }
   }
 
-  private async execute(inputs: InputFile[], operation: Record<string, unknown>, output: Buffer | undefined, signal?: AbortSignal): Promise<{ response: z.infer<typeof responseSchema>; artifacts: Artifact[] }> {
+  private async execute(inputs: InputFile[], operation: Record<string, unknown>, output: Buffer | undefined, signal?: AbortSignal): Promise<DecodedValidatorResponse> {
     if (inputs.length < 1 || inputs.length > 10 || new Set(inputs.map((file) => file.id)).size !== inputs.length) {
       throw new DocumentValidationError('INPUT_LIMIT', 'Se requieren entre uno y diez archivos distintos.');
     }
@@ -235,30 +207,7 @@ export class IndependentDocumentValidator {
       const args = validatorContainerArguments(name, inputDirectory, artifactDirectory, this.options);
       launched = true;
       const raw = await runContainer(args, { ...operation, inputs: files, outputPath: '/inputs/output', artifactDir: '/artifacts', inlineArtifacts: true }, this.options, invocation, signal);
-      const response = responseSchema.parse(raw);
-      if (!response.ok) throw new DocumentValidationError(response.error.code, response.error.message);
-      const artifacts: Artifact[] = [];
-      let totalArtifactBytes = 0;
-      const names = 'report' in response ? response.report.artifactFiles : [];
-      if (names.length > 1001) throw new DocumentValidationError('ARTIFACT_LIMIT', 'Exceso de artefactos de validación.');
-      for (const filename of names) {
-        if (!/^(?:(?:before|after)-(?:notes-)?\d+\.png|text-diff\.json)$/.test(filename)) {
-          throw new DocumentValidationError('ARTIFACT_PATH', 'Artefacto de validación inesperado.');
-        }
-        const encoded = 'report' in response ? response.report.artifactData[filename] : undefined;
-        if (!encoded || encoded.length > 24 * 1024 * 1024 || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
-          throw new DocumentValidationError('ARTIFACT_UNSAFE', 'Artefacto de validación inválido.');
-        }
-        const data = Buffer.from(encoded, 'base64');
-        if (data.toString('base64') !== encoded) throw new DocumentValidationError('ARTIFACT_UNSAFE', 'Codificación de artefacto inválida.');
-        totalArtifactBytes += data.length;
-        if (data.length > 10 * 1024 * 1024 || totalArtifactBytes > 16 * 1024 * 1024) {
-          throw new DocumentValidationError('ARTIFACT_LIMIT', 'Artefactos de validación excedieron su presupuesto total.');
-        }
-        artifacts.push({ name: filename, kind: filename === 'text-diff.json' ? 'text_diff' : filename.startsWith('before') ? 'thumbnail_before' : 'thumbnail_after',
-          mime: filename.endsWith('.png') ? 'image/png' : 'application/json', data, sha256: hash(data) });
-      }
-      return { response, artifacts };
+      return decodeValidatorResponse(raw);
     } finally {
       // Once Docker may have seen the invocation, only its identity-aware
       // cleanup/reconciler may purge it. Keep bytes if cleanup was not proved.

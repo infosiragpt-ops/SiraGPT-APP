@@ -1,43 +1,21 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Router, type Request, type Response, type RequestHandler, type ErrorRequestHandler } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
 import type { DocumentSandboxConfig } from '../config';
 import { EDITOR_PROMPT_VERSION } from '../agent/prompt';
-import { DocSandboxRepository, DocumentRepositoryError, type StoredDocumentJob, type DurableDocumentEvent } from '../queue/repository';
+import { DocSandboxRepository, type StoredDocumentJob, type DurableDocumentEvent } from '../queue/repository';
 import { PrivateDocumentStorage, DocumentDownloadTickets } from '../storage/private-storage';
-import { documentFormatSchema, fileNameSchema, identifierSchema, type DocumentFormat } from '../types/contracts';
-import { DocSandboxError, publicError } from '../types/errors';
+import { documentFormatSchema, identifierSchema } from '../types/contracts';
+import { DocSandboxError } from '../types/errors';
 import type { DocumentModelPolicy } from '../model-policy';
+import { documentRequestOwner as owner, documentRequestPlan as userPlan, parseDocumentAdmission, prepareDocumentInputs,
+  documentPayloadHash, parseDocumentIdempotencyKey, documentArtifactForDownload, documentDownloadHeaders,
+  parseDocumentEventCursor, documentApiError } from './request-policy';
+export { originalFilename, classifyInput } from './request-policy';
 
-const MIME: Readonly<Record<DocumentFormat, string>> = {
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', pdf: 'application/pdf',
-  txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', html: 'text/html',
-};
-const admissionSchema = z.object({ instructions: z.string().trim().min(1).max(50_000),
-  mode: z.literal('preserve').default('preserve'), modelTier: z.enum(['mechanical', 'academic']).default('mechanical'),
-  requestedModel: z.string().trim().min(1).max(200).optional(),
-  permission: z.enum(['default', 'read', 'protected', 'workspace', 'full']).default('default') }).strict();
 const terminal = (job: StoredDocumentJob): boolean => ['done', 'failed', 'cancelled'].includes(job.status);
-const sha256 = (data: Buffer | string): string => createHash('sha256').update(data).digest('hex');
 
-/** UTF-8 multipart filenames are decoded without replacing invalid bytes or losing accents. */
-export function originalFilename(name: string): string {
-  if ([...name].some((char) => char.codePointAt(0)! > 255)) return fileNameSchema.parse(name);
-  const latin = Buffer.from(name, 'latin1');
-  const decoded = latin.toString('utf8');
-  const resolved = !decoded.includes('\uFFFD') && Buffer.from(decoded).equals(latin) ? decoded : name;
-  return fileNameSchema.parse(resolved);
-}
-export function classifyInput(name: string, bytes: Buffer): { format: DocumentFormat; mime: string } {
-  const format = documentFormatSchema.parse(name.split('.').pop()?.toLowerCase());
-  // Cheap admission checks only. Full MIME/ZIP/XML checks run independently before any paid call.
-  if (['docx', 'xlsx', 'pptx'].includes(format) && !bytes.subarray(0, 4).equals(Buffer.from([80, 75, 3, 4]))) throw new DocSandboxError('E_PARAMS', 415);
-  if (format === 'pdf' && bytes.subarray(0, 5).toString('ascii') !== '%PDF-') throw new DocSandboxError('E_PARAMS', 415);
-  return { format, mime: MIME[format] };
-}
 export function jobSnapshot(job: StoredDocumentJob, showCost: boolean): Record<string, unknown> {
   const usage = Object.fromEntries(Object.entries(job.usage).filter(([key, value]) =>
     (['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheWriteTokens'].includes(key) && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) ||
@@ -57,15 +35,6 @@ export function publicEvent(event: DurableDocumentEvent): Record<string, unknown
   const payload = Object.fromEntries(Object.entries(event.payload).filter(([key, value]) => keys.includes(key) &&
     (typeof value === 'boolean' || typeof value === 'number' || (typeof value === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(value)))));
   return { seq: event.seq, type: /^[a-z_]{1,40}$/.test(event.type) ? event.type : 'phase', payload, createdAt: event.createdAt };
-}
-function owner(req: Request): string {
-  const parsed = z.object({ user: z.object({ id: identifierSchema }) }).safeParse(req);
-  if (!parsed.success) throw new DocSandboxError('E_FORBIDDEN', 401);
-  return parsed.data.user.id;
-}
-function userPlan(req: Request): string {
-  const parsed = z.object({ user: z.object({ plan: z.string().optional() }) }).safeParse(req);
-  return parsed.success ? parsed.data.user.plan || 'FREE' : 'FREE';
 }
 function id(req: Request, key: string): string { return identifierSchema.parse(req.params[key]); }
 const asyncRoute = (run: (req: Request, res: Response) => Promise<void>): RequestHandler =>
@@ -116,7 +85,7 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
     return { ...jobSnapshot(job, config.showCost), artifacts };
   };
   router.get('/by-key/:idempotencyKey', asyncRoute(async (req, res) => {
-    const key = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/).parse(req.params.idempotencyKey);
+    const key = parseDocumentIdempotencyKey(req.params.idempotencyKey);
     const userId = owner(req);
     res.json(await readSnapshot(await repository.getByIdempotencyKeyOwned(key, userId), userId));
   }));
@@ -161,25 +130,19 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
     const timeout = setTimeout(() => abort.abort(new DocSandboxError('E_TIMEOUT', 408)), 120_000);
     try {
       abort.signal.throwIfAborted();
-      const params = admissionSchema.parse(req.body);
-      if (params.permission === 'read' || params.permission === 'protected') throw new DocSandboxError('E_PLAN_GATE', 403);
+      const params = parseDocumentAdmission(req.body);
       if (!deps.isReady()) throw new DocSandboxError('E_NOT_READY', 503);
       const requestedModel = params.requestedModel ?? config.engine.models[params.modelTier].id;
       if (await deps.resolveModel(requestedModel, userPlan(req)) !== params.modelTier) throw new DocSandboxError('E_PARAMS', 400);
       abort.signal.throwIfAborted();
       if (!deps.isReady()) throw new DocSandboxError('E_NOT_READY', 503);
-      const idempotencyKey = z.string().min(1).max(200).regex(/^[A-Za-z0-9_.:-]+$/).parse(req.get('Idempotency-Key'));
-      if (!Array.isArray(req.files) || !req.files.length) throw new DocSandboxError('E_PARAMS');
-      const inputs = req.files.map((file) => {
-        const name = originalFilename(file.originalname); const type = classifyInput(name, file.buffer);
-        return { id: randomUUID(), name, ...type, data: file.buffer, sha256: sha256(file.buffer) };
-      });
-      if (inputs.length > 1 && inputs.some((input) => input.format !== 'pdf')) throw new DocSandboxError('E_PARAMS', 400);
+      const idempotencyKey = parseDocumentIdempotencyKey(req.get('Idempotency-Key'));
+      const inputs = prepareDocumentInputs(req.files);
       const jobId = randomUUID(); const scope = { userId, jobId };
       const instructionBytes = Buffer.from(params.instructions);
       const instructions = storage.prepare(scope, instructionBytes);
       const objects = inputs.map((input) => storage.prepare(scope, input.data));
-      const payloadHash = sha256(JSON.stringify({ ...params, inputs: inputs.map(({ name, format, sha256: hash }) => ({ name, format, sha256: hash })) }));
+      const payloadHash = documentPayloadHash(params, inputs);
       const { job, created } = await repository.createJob({ id: jobId, userId, idempotencyKey, payloadHash,
         requestedModel, maxTokens: config.maxTokens,
         instructionsKey: instructions.key, modelTier: params.modelTier, ready: false,
@@ -225,8 +188,7 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
   }));
   router.get('/:id/artifacts/:artifactId', asyncRoute(async (req, res) => {
     const userId = owner(req); const jobId = id(req, 'id'); const artifactId = id(req, 'artifactId');
-    const artifact = (await repository.artifactsOwned(jobId, userId)).find((entry) => entry.id === artifactId);
-    if (!artifact) throw new DocSandboxError('E_NOT_FOUND', 404);
+    documentArtifactForDownload(await repository.artifactsOwned(jobId, userId), artifactId);
     const signature = tickets.issue(userId, jobId, artifactId);
     // "signature" is redacted by the existing URL logger. No externally accessible object URL.
     const url = `/api/docs/jobs/${jobId}/artifacts/${artifactId}/download?signature=${signature}`;
@@ -236,14 +198,11 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
   router.get('/:id/artifacts/:artifactId/download', asyncRoute(async (req, res) => {
     const userId = owner(req); const jobId = id(req, 'id'); const artifactId = id(req, 'artifactId');
     tickets.verify(z.string().parse(req.query.signature), { userId, jobId, artifactId });
-    const artifact = (await repository.artifactsOwned(jobId, userId)).find((entry) => entry.id === artifactId);
-    if (!artifact) throw new DocSandboxError('E_NOT_FOUND', 404);
+    const artifact = documentArtifactForDownload(await repository.artifactsOwned(jobId, userId), artifactId);
     const abort = new AbortController(); const closed = (): void => abort.abort(); res.once('close', closed);
     try {
       const bytes = await storage.get({ userId, jobId }, artifact.storageKey, artifact.sha256, abort.signal);
-      const encodedFilename = encodeURIComponent(fileNameSchema.parse(artifact.filename)).replace(/['()*]/g,
-        (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-      res.set({ 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename="document"; filename*=UTF-8''${encodedFilename}`, 'Content-Length': String(bytes.length), 'Content-Security-Policy': "sandbox; default-src 'none'" });
+      res.set(documentDownloadHeaders(artifact.filename, bytes.length));
       // Recheck the durable tombstone before every bounded chunk. Downloaded bytes cannot be revoked.
       for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
         abort.signal.throwIfAborted(); await repository.getOwned(jobId, userId);
@@ -260,8 +219,7 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
   router.get('/:id/events', asyncRoute(async (req, res) => {
     const userId = owner(req); const jobId = id(req, 'id');
     if ((streams.get(userId) ?? 0) >= 3) throw new DocSandboxError('E_QUOTA', 429);
-    let cursor = Number(req.get('Last-Event-ID') ?? req.query.after ?? '0');
-    if (!Number.isSafeInteger(cursor) || cursor < 0) throw new DocSandboxError('E_PARAMS');
+    let cursor = parseDocumentEventCursor(req.get('Last-Event-ID'), req.query.after);
     const snapshot = await repository.getOwned(jobId, userId);
     if (cursor > snapshot.eventSeq) throw new DocSandboxError('E_CONFLICT', 409);
     streams.set(userId, (streams.get(userId) ?? 0) + 1);
@@ -290,12 +248,7 @@ export function createDocumentRouter(deps: DocumentRouterDependencies): Router {
     void poll();
   }));
   const errors: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
-    let safe = publicError(error);
-    if (error instanceof z.ZodError || error instanceof multer.MulterError) safe = publicError(new DocSandboxError('E_PARAMS', 400));
-    if (error instanceof DocumentRepositoryError) {
-      const status = error.code === 'DOC_BUDGET_EXCEEDED' ? 429 : error.code === 'DOC_FORBIDDEN' ? 403 : ['DOC_NOT_FOUND', 'DOC_DELETED', 'DOC_EXPIRED'].includes(error.code) ? 404 : 409;
-      safe = publicError(new DocSandboxError(status === 429 ? 'E_QUOTA' : status === 403 ? 'E_FORBIDDEN' : status === 404 ? 'E_NOT_FOUND' : 'E_CONFLICT', status));
-    }
+    const safe = documentApiError(error);
     deps.notice(safe.code);
     if (res.destroyed) return;
     if (res.headersSent) { res.destroy(); return; }

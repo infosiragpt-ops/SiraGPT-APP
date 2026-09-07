@@ -1,17 +1,20 @@
 import { randomUUID } from 'node:crypto';
-import { addUsage, emptyUsage, totalTokens } from '../engine/cost';
+import { totalTokens } from '../engine/cost';
 import { sha256 } from '../engine/artifacts';
 import type { EnginePersistence, SandboxEngine, SandboxSession } from '../engine/types';
 import type { PrivateDocumentStorage, StorageScope } from '../storage/private-storage';
-import { classifyAgentResult, documentFormatSchema, hasCompleteValidation } from '../types/contracts';
-import type { Artifact, DocumentOutcome, EditPlan, InputFile, JobEvent, RunRequest, Usage, ValidationReport } from '../types/contracts';
+import { hasCompleteValidation } from '../types/contracts';
+import type { Artifact, DocumentOutcome, InputFile, JobEvent, Usage, ValidationReport } from '../types/contracts';
 import { DocSandboxError, publicError } from '../types/errors';
 import { DocumentValidationError, freezePlan, type IndependentDocumentValidator } from '../validation';
-import { DocumentRepositoryError, type ArtifactInput, type AttemptLease, type DocSandboxRepository,
-  type JsonObject } from './repository';
+import { DocumentRepositoryError, type ArtifactInput, type AttemptLease, type DocSandboxRepository } from './repository';
 import { combinePreservationReports, createConservativeBundle } from './conservative-result';
 import { calculateAttemptBudget } from './attempt-budget';
-import { validateFailureEvidence, type FailureEvidenceMode } from './failure-evidence';
+import { DocumentAttemptLifetime } from './attempt-lifetime';
+import type { FailureEvidenceMode } from './failure-evidence';
+import { accumulatedUsage, canRecordFailure, candidateBundle, classifyEditedResponse, classifyOutputBundle, decodeDocumentInstructions,
+  editPlanArtifact, prepareDocumentRun, prepareFailureRecord, preserveOutputBundle, publicationManifest,
+  publicProcessorEvent, reportArtifact, reservedUsage, sourceMetadata } from './processor-policy';
 
 export interface DocumentProcessorDependencies {
   repository: DocSandboxRepository;
@@ -39,15 +42,6 @@ function money(value: number): string {
   // Round up reservations/costs; never round a positive charge down to zero.
   return (Math.ceil(value * 100_000_000) / 100_000_000).toFixed(8);
 }
-function usageJson(usage: Usage): JsonObject {
-  return { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadTokens,
-    cacheWriteTokens: usage.cacheWriteTokens, costUsd: usage.costUsd, costExact: usage.costExact };
-}
-function reportArtifact(value: unknown, attempt: number): Artifact {
-  const data = Buffer.from(JSON.stringify(value), 'utf8');
-  return { name: `validation-report-attempt-${attempt}.json`, kind: 'validation_report', data,
-    sha256: sha256(data), mime: 'application/json' };
-}
 
 /**
  * One delivery claims one fenced DB attempt. Retrying goes back through the
@@ -68,14 +62,10 @@ export class DocumentSandboxProcessor {
     const leaseMs = this.config.leaseMs ?? 30_000;
     const lease = await repository.claimAttempt(jobId, leaseMs);
     if (!lease) return;
-    const controller = new AbortController();
-    const cancel = (): void => controller.abort();
-    externalSignal?.addEventListener('abort', cancel, { once: true });
-    if (externalSignal?.aborted) cancel();
+    const lifetime = new DocumentAttemptLifetime(externalSignal);
+    const { controller } = lifetime;
     let heartbeat: ReturnType<typeof setTimeout> | undefined;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
-    let timedOut = false;
     let engine: SandboxEngine | undefined;
     let session: SandboxSession | undefined;
     let originalInputs: InputFile[] = [];
@@ -98,22 +88,17 @@ export class DocumentSandboxProcessor {
       const job = await repository.getInternal(jobId);
       const scope = { userId: job.userId, jobId };
       const jobDeadline = (job.startedAt ?? new Date()).getTime() + this.config.timeoutMs;
-      const remainingMs = jobDeadline - Date.now();
-      if (remainingMs <= 0) throw new DocSandboxError('E_TIMEOUT', 408);
-      deadlineTimer = setTimeout(() => { timedOut = true; controller.abort(); }, remainingMs);
+      lifetime.expireAt(jobDeadline);
       const storedInputs = (await repository.artifactsInternal(jobId)).filter((artifact) => artifact.kind === 'input' && artifact.purgedAt === null);
       // Preserve the admission order; it defines the original output filename for merges.
       for (const key of job.inputKeys) {
-        const metadata = storedInputs.find((artifact) => artifact.storageKey === key);
-        if (!metadata) throw new DocSandboxError('E_VALIDATION', 422);
-        const format = documentFormatSchema.parse(metadata.filename.split('.').pop()?.toLowerCase());
+        const { metadata, format } = sourceMetadata(key, storedInputs);
         const data = await storage.get(scope, key, metadata.sha256, controller.signal);
         originalInputs.push({ id: metadata.id, name: metadata.filename, format, mime: metadata.mime, data, sha256: metadata.sha256 });
       }
       if (!originalInputs.length || originalInputs.length !== storedInputs.length) throw new DocSandboxError('E_VALIDATION', 422);
       const instructionsBytes = await storage.get(scope, job.instructionsKey, undefined, controller.signal);
-      if (instructionsBytes.length > 400_000) throw new DocSandboxError('E_PARAMS');
-      const instructions = new TextDecoder('utf-8', { fatal: true }).decode(instructionsBytes);
+      const instructions = decodeDocumentInstructions(instructionsBytes);
       const inventories = await validator.inspect(originalInputs, controller.signal);
       await repository.heartbeat(lease, leaseMs);
       const { baseUsage, previousTurns, remainingUsd, remainingTokens, remainingTurns } = calculateAttemptBudget(job, this.config);
@@ -123,22 +108,18 @@ export class DocumentSandboxProcessor {
       await engine.uploadInputs(session, originalInputs, controller.signal);
       beginPhase('planning');
       await repository.transition(lease, 'planning');
-      const formats = [...new Set(originalInputs.map((input) => input.format))];
-      const skills = formats.filter((format) => ['docx', 'xlsx', 'pptx', 'pdf'].includes(format)).sort();
       const budget = { maxTurns: remainingTurns, maxTokens: remainingTokens,
         timeoutMs: Math.max(1, jobDeadline - sessionStartedAt), maxCostUsd: remainingUsd };
       // Previous independent failure feedback is private data, not extra authority.
       const previousReport = job.validationReportKey ? await storage.get(scope, job.validationReportKey, undefined, controller.signal) : undefined;
-      const inventory = { inputs: inventories, previousValidationReport: previousReport ? JSON.parse(previousReport.toString('utf8')) as unknown : null };
-      const shared: Omit<RunRequest, 'stage'> = { instructions, mode: 'preserve', formats, skills, modelTier: job.modelTier,
-        requestedModel: job.requestedModel, budget, inventory, signal: controller.signal };
+      const shared = prepareDocumentRun({ originals: originalInputs, instructions, job, budget, inventories,
+        previousReport, signal: controller.signal });
       const planning = await engine.run(session, { ...shared, stage: 'plan' }, (event) => this.recordEvent(lease, event));
       if (planning.status !== 'planned') throw new DocSandboxError('E_VALIDATION', 422);
       const plan = freezePlan(originalInputs, inventories, planning.editPlan);
-      const planData = Buffer.from(JSON.stringify(plan), 'utf8');
-      const planHash = sha256(planData);
-      const planRecord = await this.persist(lease, scope, { name: 'edit_plan.json', kind: 'edit_plan', data: planData,
-        sha256: planHash, mime: 'application/json' }, controller.signal);
+      const planArtifact = editPlanArtifact(plan);
+      const planHash = planArtifact.sha256;
+      const planRecord = await this.persist(lease, scope, planArtifact, controller.signal);
       await repository.freezePlan(lease, planRecord.storageKey, planHash);
       let refusalStage: 'planning' | 'editing' = 'planning';
       let refusalReasons = plan.notPossible.map((entry) => entry.reason);
@@ -148,19 +129,16 @@ export class DocumentSandboxProcessor {
         beginPhase('editing');
         await repository.transition(lease, 'editing');
         const edited = await engine.run(session, { ...shared, stage: 'edit', approvedPlan: plan }, (event) => this.recordEvent(lease, event));
-        if (edited.status === 'planned' || JSON.stringify(edited.editPlan) !== JSON.stringify(plan)) throw new DocSandboxError('E_VALIDATION', 422);
-        try { outcome = classifyAgentResult(plan, edited.agentResult); }
-        catch { throw new DocSandboxError('E_VALIDATION', 422); }
-        if ((outcome === 'not_possible') !== (edited.status === 'not_possible')) throw new DocSandboxError('E_VALIDATION', 422);
+        const classified = classifyEditedResponse(plan, edited);
+        outcome = classified.outcome;
         if (outcome === 'not_possible') {
           refusalStage = 'editing';
-          refusalReasons = edited.agentResult.warnings;
+          refusalReasons = classified.warnings;
         } else {
           bundle = await engine.downloadOutputs(session);
           // Provider outcome is a claim; persist the explicit worker-classified
           // result only if the independent validation below succeeds.
-          const result = Buffer.from(JSON.stringify({ ...edited.agentResult, outcome }), 'utf8');
-          bundle = bundle.map((artifact) => artifact.kind === 'agent_result' ? { ...artifact, data: result, sha256: sha256(result) } : artifact);
+          bundle = classifyOutputBundle(bundle, classified.result, outcome);
         }
       }
       const preserved = outcome === 'not_possible' ? createConservativeBundle(originalInputs, plan, refusalStage, refusalReasons) : undefined;
@@ -168,12 +146,9 @@ export class DocumentSandboxProcessor {
         const exports = await engine.downloadOutputs(session);
         // Keep private trace evidence, but discard ALL provider candidates and
         // recipes: a refused indivisible request only delivers pristine inputs.
-        bundle = [...preserved.outputs, ...preserved.artifacts, ...exports.filter((artifact) => artifact.kind === 'transcript')];
+        bundle = preserveOutputBundle(preserved, exports);
       }
-      const outputs = bundle.filter((artifact) => artifact.kind === 'output');
-      const recipes = bundle.filter((artifact) => artifact.kind === 'recipe');
-      if (outputs.length !== (preserved ? originalInputs.length : 1) || recipes.length !== 1 || outputs[0]!.name !== plan.outputName
-        || outputs.some((output) => sha256(output.data) !== output.sha256)) throw new DocSandboxError('E_VALIDATION', 422);
+      const { outputs, recipes } = candidateBundle(bundle, preserved ? originalInputs.length : 1, plan.outputName);
       beginPhase('validating');
       await repository.transition(lease, 'validating');
       await validator.inspectRecipeArchive(recipes[0]!.data, controller.signal);
@@ -211,21 +186,17 @@ export class DocumentSandboxProcessor {
       await repository.registerArtifacts(lease, [planRecord, ...recorded]);
       await repository.heartbeat(lease, leaseMs);
       controller.signal.throwIfAborted();
-      await repository.publishValidated(lease, {
-        planHash, validationReportKey: validationRecord.storageKey, outcome,
-        ...(preserved ? { preservedInputs: originalInputs.map((input, index) => ({ inputId: input.id,
-          outputStorageKey: recorded.filter((artifact) => artifact.kind === 'output')[index]!.storageKey, sha256: input.sha256 })) } : {}),
-        levels: latestReport.levels.map((level) => ({ level: level.level, passed: level.passed, applicable: level.applicable,
-          ...(!level.applicable ? { reasonCode: 'PLAIN_TEXT_NOT_PAGINATED' } : {}) })),
-      });
+      await repository.publishValidated(lease, publicationManifest({
+        planHash, validationReportKey: validationRecord.storageKey, outcome, preserved: !!preserved,
+        originals: originalInputs, recorded, levels: latestReport.levels,
+      }));
     } catch (error: unknown) {
-      await this.handleFailure(lease, error, { timedOut, phase, latestReport, originalInputs, failureEvidenceMode });
+      await this.handleFailure(lease, error, { timedOut: lifetime.timedOut, phase, latestReport, originalInputs, failureEvidenceMode });
     } finally {
       measurePhase();
       stopped = true;
       if (heartbeat) clearTimeout(heartbeat);
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      externalSignal?.removeEventListener('abort', cancel);
+      lifetime.dispose();
       if (engine && session) {
         try { await engine.destroy(session); }
         catch { this.dependencies.onNotice?.({ jobId, attempt: lease.attempt, code: 'DOC_CLEANUP_PENDING' }); }
@@ -247,26 +218,11 @@ export class DocumentSandboxProcessor {
     // A late worker cannot turn cancellation/deletion/stale leases into failure
     // or enqueue a new attempt. It may only clean its remote files in finally.
     const state = await repository.getInternal(jobId);
-    if (state.deletedAt || state.status === 'cancelled' || state.fence !== lease.fence || state.leaseToken !== lease.token) return;
+    if (!canRecordFailure(state, lease)) return;
     const report = error instanceof OutputValidationFailure ? error.report : latestReport;
-    const evidence = report?.artifacts ?? [];
     const mode = context.failureEvidenceMode ?? { kind: 'single' };
-    // Validate the complete batch before reserving or writing any object. The
-    // larger preservation allowance comes only from completed validator runs.
-    for (const artifact of evidence) {
-      if (!artifact || !Buffer.isBuffer(artifact.data) || sha256(artifact.data) !== artifact.sha256) {
-        throw new DocSandboxError('E_VALIDATION', 422);
-      }
-    }
-    validateFailureEvidence(evidence.map(artifact => ({ kind: artifact.kind, filename: artifact.name,
-      mime: artifact.mime, size: artifact.data.length, sha256: artifact.sha256 })), mode);
-    const { artifacts: _artifacts, ...reportWithoutBytes } = report ?? { passed: false, levels: [] };
-    const failure = reportArtifact({ schemaVersion: 1, ...reportWithoutBytes, passed: false,
-      phase, attempt: lease.attempt, error: { code: normalized.code },
-      checksNotExecuted: report ? undefined : [1, 2, 3, 4], inputHashes: Object.fromEntries(originalInputs.map((file) => [file.id, file.sha256])) }, lease.attempt);
-    // A validation failure is the only automatic retry here. Provider failures
-    // and uncertain billing are terminal; they are never hidden by fallback.
-    const retryable = normalized.code === 'E_VALIDATION' && phase !== 'inspecting';
+    const { evidence, failure, retryable } = prepareFailureRecord({ report, mode, normalized, phase,
+      attempt: lease.attempt, originals: originalInputs });
     // One bounded storage window for the whole failure, including compensation;
     // never grant a fresh 15 seconds per thumbnail. Unfinished reserved keys
     // remain in the durable journal for the existing cleanup/recovery worker.
@@ -295,16 +251,15 @@ export class DocumentSandboxProcessor {
         if (!created) throw new DocSandboxError('E_CONFLICT', 409);
         turns += 1;
         const state = await repository.getInternal(lease.jobId);
-        await repository.recordUsage(lease, { ...usageJson(emptyUsage()), ...state.usage, turns, costExact: false }, state.costUsd);
+        await repository.recordUsage(lease, reservedUsage(state.usage, turns), state.costUsd);
       },
       settle: async (_session, settlement) => {
         if (!settlement.uncertain && settlement.usage.costUsd !== null) await repository.settleCost(lease, settlement.requestId, money(settlement.usage.costUsd), totalTokens(settlement.usage));
       },
       usageChanged: async (_session, usage) => {
         const state = await repository.getInternal(lease.jobId);
-        const accumulated = addUsage(base, usage);
         // DB settlement is the authoritative decimal total, including late bills.
-        await repository.recordUsage(lease, { ...usageJson(accumulated), turns }, state.costUsd);
+        await repository.recordUsage(lease, accumulatedUsage(base, usage, turns), state.costUsd);
       },
     };
   }
@@ -341,17 +296,7 @@ export class DocumentSandboxProcessor {
 
   private async recordEvent(lease: AttemptLease, event: JobEvent): Promise<void> {
     // Defense in depth: never let a future engine emit raw text to public SSE.
-    const safe: JsonObject = {};
-    for (const [key, value] of Object.entries(event.payload)) {
-      if (['level', 'durationMs'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0) safe[key] = Math.ceil(value);
-      else if (key === 'passed' && typeof value === 'boolean' && event.payload.applicable !== false) safe[key] = value;
-      else if (key === 'phase' && ['Planificando edición', 'plan'].includes(String(value))) safe[key] = 'planning';
-      else if (key === 'phase' && ['Editando documento', 'edit'].includes(String(value))) safe[key] = 'editing';
-      else if (key === 'code' && typeof value === 'string' && /^[A-Z][A-Z0-9_]{1,79}$/.test(value)) safe[key] = value;
-    }
-    safe.attempt = lease.attempt;
-    if (event.payload.applicable === false) safe.code = 'DOC_VALIDATION_NOT_APPLICABLE';
-    await this.dependencies.repository.appendEvent(lease, event.type, safe);
+    await this.dependencies.repository.appendEvent(lease, event.type, publicProcessorEvent(event, lease.attempt));
   }
 
   private normalize(error: unknown): DocSandboxError {

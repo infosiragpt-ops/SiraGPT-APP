@@ -5,6 +5,30 @@ publicar está vigente, pero faltan condiciones técnicas y acceso administrativ
 Este checkpoint sustituye las observaciones de producción antiguas, no la
 especificación ni sus requisitos de aceptación.
 
+**Corroboración más reciente (2026-09-07 UTC):** `3b41fbb3` recibió CI
+aprobado (`34079904503`, 03:46:20Z). Repetición independiente: 483/483
+unitarias y 81,02% (3390/4184), gate 81 intacto; generales 12472/12472,
+cero omisiones en ambas. Tipos/lint/UI-lock aprobados y dos revisiones de
+seguridad semántica/métrica sin bloqueantes. Se unen normalmente los dos
+historiales de trabajo; el único conflicto documental conserva ambos
+registros, sin modificar el código de `3b41fbb3`. El commit documental
+posterior necesita su propio CI; no se hereda una aprobación anticipada.
+Versión pública #572 `546a8156b` y API saludable a 03:49:48Z, no #561.
+Los controles administrativos, privados, migratorios y de aceptación no
+quedan satisfechos por esa cobertura. Sin publicación ni gasto nuevo.
+Véase la corroboración al final de [unit81-release-20260907.md](unit81-release-20260907.md).
+
+**Registro anterior de cobertura (previo al CI de `3b41`, 2026-09-07 UTC):** objetivo de Luis **≥81 %
+alcanzado: 81,02 % (3390/4184), 483/483 unitarias**, cero omisiones.
+Gate CI elevado de 80 a 81, mismas fuentes completas y sin mezclar integraciones.
+Se separaron políticas y ciclos de vida existentes, conservando orden de IO,
+transacciones, aislamiento, validación y límites. Revisión independiente sin
+bloqueantes; 12472 generales,79 integraciones PG/Redis/S3,116 comprobaciones Linux y
+362 pruebas nativas aprobadas; servicios de prueba detenidos.
+Se preservó `cd2e6501c` y se integró `production-main` #572 (`546a8156b`).
+Falta CI de la candidata y los restantes controles de aceptación/producción.
+No se ha publicado #561. Véase [unit81-release-20260907.md](unit81-release-20260907.md).
+
 **Comprobación concurrente de `cd2e6501c` + #572 (2026-09-07 UTC):** producción avanzó a
 `546a8156b` (#572), con CI/Docker aprobados y API saludable a
 2026-09-07T03:28:31.120Z; no contiene #561. Se integra esa base sin conflictos

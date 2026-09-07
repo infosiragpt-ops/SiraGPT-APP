@@ -1,8 +1,13 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { Prisma, PrismaClient } from '@prisma/client';
 import type { DocumentOutcome } from '../types/contracts';
 import { canClaimDocumentAttempt, documentFailureStatus, documentTransitionFailure, isDocumentLeaseCurrent } from './lease-policy';
 import { validateFailureEvidence, type FailureEvidenceMode } from './failure-evidence';
+
+import { DocumentRepositoryError } from './repository-error';
+import { TERMINAL, HASH, hashToken, toJob, toArtifact, toEvent, validateArtifact, validateCode, validateMoney, validateEvent, assertOwned,
+  validateCreateDocumentJob, admissionReservation, providerFilesUpdate, providerContainersUpdate, costReservationUpdate, costSettlementUpdate, validatePublicationGate, publicationArtifacts, validatePublicationOutputs, failureEvidenceIdentity, cleanupStorageUpdate, accountQuotaSettlement,
+  assertOwnedAvailable, inputsNeedReady, providerFileDeletion, cleanupMayProceed, cleanupCompletion, providerFilesNeedingCleanup } from './persistence-policy';
 
 export type DocumentStatus = 'queued' | 'inspecting' | 'planning' | 'awaiting_approval' | 'editing' | 'validating' | 'done' | 'failed' | 'cancelled';
 export type ArtifactKind = 'input' | 'output' | 'edit_plan' | 'recipe' | 'agent_result' | 'validation_report' | 'thumbnail_before' | 'thumbnail_after' | 'text_diff' | 'transcript';
@@ -39,14 +44,10 @@ export interface PublicationGate {
   preservedInputs?: ReadonlyArray<{ inputId: string; outputStorageKey: string; sha256: string }>;
   levels: ReadonlyArray<{ level: 1 | 2 | 3 | 4; passed: boolean; applicable: boolean; reasonCode?: string }>;
 }
-export class DocumentRepositoryError extends Error {
-  constructor(readonly code: 'DOC_NOT_FOUND' | 'DOC_FORBIDDEN' | 'DOC_DELETED' | 'DOC_EXPIRED' | 'DOC_CONFLICT' | 'DOC_STALE_LEASE' | 'DOC_INVALID_TRANSITION' | 'DOC_VALIDATION_GATE' | 'DOC_INVALID_INPUT' | 'DOC_BUDGET_EXCEEDED' | 'DOC_CLEANUP_PENDING') {
-    super(code); this.name = 'DocumentRepositoryError';
-  }
-}
+export { DocumentRepositoryError } from './repository-error';
 type Db = Pick<Prisma.TransactionClient, '$queryRaw' | '$executeRaw'>;
 type Client = Pick<PrismaClient, '$transaction' | '$queryRaw' | '$executeRaw'>;
-interface DbJob {
+export interface DbJob {
   id: string; user_id: string; status: DocumentStatus; admission_ready: boolean; mode: string; engine: string; model_tier: 'mechanical' | 'academic';
   requested_model: string; token_budget: number; quota_reserved_tokens: bigint; quota_epoch: bigint; quota_settled_tokens: bigint | null; quota_settled_at: Date | null;
   instructions_key: string; input_keys: string[]; output_keys: string[]; edit_plan_key: string | null; edit_plan_hash: string | null;
@@ -57,45 +58,9 @@ interface DbJob {
   parent_job_id: string | null; payload_hash: string; prompt_version: string; created_at: Date; started_at: Date | null;
   finished_at: Date | null; expires_at: Date; deleted_at: Date | null;
 }
-interface DbArtifact { id: string; job_id: string; attempt: number; kind: ArtifactKind; storage_key: string; filename: string; mime: string; size: bigint; sha256: string; published: boolean; purged_at: Date | null; }
-interface DbEvent { id: string; job_id: string; seq: number; type: string; payload: JsonObject; created_at: Date; outbox: 'enqueue' | 'cleanup' | null; }
-const TERMINAL: DocumentStatus[] = ['done', 'failed', 'cancelled'];
-const HASH = /^[a-f0-9]{64}$/;
-const PLAIN_MIME: Readonly<Record<string, string>> = { txt: 'text/plain', md: 'text/markdown', csv: 'text/csv', json: 'application/json', html: 'text/html' };
-const SAFE_CODE = /^[A-Z][A-Z0-9_]{1,79}$/;
-const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
+export interface DbArtifact { id: string; job_id: string; attempt: number; kind: ArtifactKind; storage_key: string; filename: string; mime: string; size: bigint; sha256: string; published: boolean; purged_at: Date | null; }
+export interface DbEvent { id: string; job_id: string; seq: number; type: string; payload: JsonObject; created_at: Date; outbox: 'enqueue' | 'cleanup' | null; }
 const json = (value: unknown): string => JSON.stringify(value);
-const toJob = (r: DbJob): StoredDocumentJob => ({
-  id: r.id, userId: r.user_id, status: r.status, admissionReady: r.admission_ready, mode: r.mode, engine: r.engine, modelTier: r.model_tier,
-  requestedModel: r.requested_model, tokenBudget: r.token_budget,
-  instructionsKey: r.instructions_key, inputKeys: r.input_keys, outputKeys: r.output_keys, editPlanKey: r.edit_plan_key,
-  editPlanHash: r.edit_plan_hash, validationReportKey: r.validation_report_key, errorCode: r.error_code, outcome: r.outcome,
-  usage: r.usage, costUsd: String(r.cost_usd), maxCostUsd: String(r.max_cost_usd), costReservations: r.cost_reservations, purgedKeys: r.purged_keys, storageKeys: r.storage_keys, attempts: r.attempts, fence: r.fence, leaseToken: r.lease_token,
-  leaseExpiresAt: r.lease_expires_at, eventSeq: r.event_seq, sessionRef: r.session_ref, providerFiles: r.provider_files, providerContainers: r.provider_containers,
-  cleanupPending: r.cleanup_pending, cleanupNotBefore: r.cleanup_not_before, parentJobId: r.parent_job_id, promptVersion: r.prompt_version,
-  createdAt: r.created_at, startedAt: r.started_at, finishedAt: r.finished_at, expiresAt: r.expires_at, deletedAt: r.deleted_at,
-});
-const toArtifact = (r: DbArtifact): StoredArtifact => ({ id: r.id, jobId: r.job_id, attempt: r.attempt, kind: r.kind, storageKey: r.storage_key, filename: r.filename, mime: r.mime, size: Number(r.size), sha256: r.sha256, published: r.published, purgedAt: r.purged_at });
-const toEvent = (r: DbEvent): DurableDocumentEvent => ({ id: r.id, jobId: r.job_id, seq: r.seq, type: r.type, payload: r.payload, createdAt: r.created_at, outbox: r.outbox });
-function validateArtifact(a: ArtifactInput): void {
-  if (!a.storageKey || !a.filename || !a.mime || !HASH.test(a.sha256) || !Number.isSafeInteger(a.size) || a.size < 0) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-}
-function validateCode(code: string): void { if (!SAFE_CODE.test(code)) throw new DocumentRepositoryError('DOC_INVALID_INPUT'); }
-function validateMoney(value: string): void { if (!/^\d{1,10}(\.\d{1,8})?$/.test(value)) throw new DocumentRepositoryError('DOC_INVALID_INPUT'); }
-function validateEvent(type: string, payload: JsonObject): void {
-  if (!['phase', 'validation_level', 'warning', 'error', 'agent_message', 'tool_call'].includes(type)) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-  for (const [key, value] of Object.entries(payload)) {
-    if (key === 'code' && typeof value === 'string' && SAFE_CODE.test(value)) continue;
-    if (key === 'phase' && typeof value === 'string' && ['inspecting','planning','editing','validating','cleanup','uploading','downloading'].includes(value)) continue;
-    if (key === 'passed' && typeof value === 'boolean') continue;
-    if (['level','attempt','progress','durationMs','inputTokens','outputTokens'].includes(key) && typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) continue;
-    throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-  }
-}
-function assertOwned(row: DbJob | undefined, userId: string): asserts row is DbJob {
-  if (!row) throw new DocumentRepositoryError('DOC_NOT_FOUND');
-  if (row.user_id !== userId) throw new DocumentRepositoryError('DOC_FORBIDDEN');
-}
 
 /** No in-memory state and no best-effort DB writes. The caller owns the Prisma client. */
 export class DocSandboxRepository {
@@ -123,10 +88,7 @@ export class DocSandboxRepository {
     await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET storage_keys=array_append(storage_keys,${a.storageKey}) WHERE id=${jobId} AND NOT (${a.storageKey}=ANY(storage_keys))`);
   }
   async createJob(input: CreateDocumentJob): Promise<{ job: StoredDocumentJob; created: boolean }> {
-    if (!Number.isSafeInteger(input.maxTokens) || input.maxTokens < 1 || input.maxTokens > 500_000 || !input.requestedModel || input.requestedModel.length > 200) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-    if (!input.userId || !input.idempotencyKey || input.idempotencyKey.length > 200 || !HASH.test(input.payloadHash) || !input.instructionsKey || input.inputs.length < 1 || input.inputs.length > 10 || !Number.isFinite(input.expiresAt.getTime()) || input.expiresAt <= new Date()) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-    input.inputs.forEach(a => { validateArtifact(a); if (a.kind !== 'input') throw new DocumentRepositoryError('DOC_INVALID_INPUT'); });
-    validateMoney(input.maxCostUsd ?? '0');
+    validateCreateDocumentJob(input, new Date());
     return this.client.$transaction(async db => {
       // Account lifecycle updates hold this same row lock before revoking jobs.
       // A request authenticated just before deletion cannot admit new work later.
@@ -142,9 +104,7 @@ export class DocSandboxRepository {
         return { job: toJob(previous[0]), created: false };
       }
       const account = owners[0];
-      if (!account.isSuperAdmin && !['PRO','PRO_MAX','ENTERPRISE'].includes(account.plan)) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
-      const reserved = account.isSuperAdmin ? 0n : BigInt(input.maxTokens);
-      if (account.monthlyLimit > 0n && !account.isSuperAdmin && account.apiUsage + reserved > account.monthlyLimit) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
+      const reserved = admissionReservation(account, input.maxTokens);
       if (reserved) await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"="apiUsage"+${reserved} WHERE id=${input.userId}`);
       if (input.parentJobId) { const parent = await this.locked(db, input.parentJobId); assertOwned(parent, input.userId); if (parent.deleted_at) throw new DocumentRepositoryError('DOC_DELETED'); }
       const id = input.id ?? randomUUID();
@@ -159,28 +119,21 @@ export class DocSandboxRepository {
   async markInputsReadyOwned(id: string, userId: string): Promise<void> {
     await this.client.$transaction(async db => {
       const row = await this.locked(db, id); assertOwned(row, userId);
-      if (row.deleted_at) throw new DocumentRepositoryError('DOC_DELETED');
-      if (row.expires_at <= new Date()) throw new DocumentRepositoryError('DOC_EXPIRED');
-      if (row.status !== 'queued') throw new DocumentRepositoryError('DOC_CONFLICT');
-      if (row.admission_ready) return;
+      if (!inputsNeedReady(row, new Date())) return;
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET admission_ready=true WHERE id=${id}`);
       await this.event(db, id, 'status_changed', { status: 'queued', attempt: 0, admissionReady: true }, 'enqueue');
     });
   }
   async getOwned(id: string, userId: string): Promise<StoredDocumentJob> {
     const rows = await this.client.$queryRaw<DbJob[]>(Prisma.sql`SELECT * FROM doc_jobs WHERE id=${id}`);
-    assertOwned(rows[0], userId);
-    if (rows[0].deleted_at) throw new DocumentRepositoryError('DOC_DELETED');
-    if (rows[0].expires_at <= new Date()) throw new DocumentRepositoryError('DOC_EXPIRED');
+    assertOwnedAvailable(rows[0], userId, new Date());
     return toJob(rows[0]);
   }
   /** Owner-scoped recovery after a lost admission response; no cross-user lookup. */
   async getByIdempotencyKeyOwned(key: string, userId: string): Promise<StoredDocumentJob> {
     if (!key || key.length > 200 || !userId) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     const rows = await this.client.$queryRaw<DbJob[]>(Prisma.sql`SELECT * FROM doc_jobs WHERE user_id=${userId} AND idempotency_key=${key}`);
-    assertOwned(rows[0], userId);
-    if (rows[0].deleted_at) throw new DocumentRepositoryError('DOC_DELETED');
-    if (rows[0].expires_at <= new Date()) throw new DocumentRepositoryError('DOC_EXPIRED');
+    assertOwnedAvailable(rows[0], userId, new Date());
     return toJob(rows[0]);
   }
   /** Internal worker/cleanup snapshot; never expose unfiltered on the public API. */
@@ -267,10 +220,7 @@ export class DocSandboxRepository {
     if (fileIds.some(id => !/^[A-Za-z0-9_-]{1,200}$/.test(id))) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     await this.client.$transaction(async db => {
       const row = await this.locked(db, lease.jobId);
-      if (!row.attempt_leases.some(p => p.attempt === lease.attempt && p.tokenHash === hashToken(lease.token))) throw new DocumentRepositoryError('DOC_STALE_LEASE');
-      const files = [...row.provider_files];
-      for (const fileId of fileIds) if (!files.some(f => f.fileId === fileId)) files.push({ fileId, attempt: lease.attempt, deleted: false, failures: 0 });
-      const cleanupNow = row.deleted_at !== null || TERMINAL.includes(row.status) || row.fence !== lease.fence;
+      const { files, cleanupNow } = providerFilesUpdate(row, lease, fileIds);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET provider_files=${json(files)}::jsonb,cleanup_pending=true WHERE id=${lease.jobId}`);
       if (cleanupNow) await this.event(db, lease.jobId, 'cleanup_pending', { attempt: lease.attempt }, 'cleanup');
     });
@@ -280,13 +230,7 @@ export class DocSandboxRepository {
     if (!/^[A-Za-z0-9_-]{1,200}$/.test(container.id) || !['plan', 'edit'].includes(container.stage) || (container.expiresAt !== null && !Number.isFinite(Date.parse(container.expiresAt)))) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     await this.client.$transaction(async db => {
       const row = await this.locked(db, lease.jobId);
-      if (!row.attempt_leases.some(p => p.attempt === lease.attempt && p.tokenHash === hashToken(lease.token))) throw new DocumentRepositoryError('DOC_STALE_LEASE');
-      const containers = [...row.provider_containers];
-      const previous = containers.find(c => c.id === container.id && c.stage === container.stage && c.attempt === lease.attempt);
-      if (previous) {
-        // Never shorten retention on a later report; unknown remains pending until provider metadata arrives.
-        if (container.expiresAt !== null && (previous.expiresAt === null || Date.parse(container.expiresAt) > Date.parse(previous.expiresAt))) previous.expiresAt = container.expiresAt;
-      } else containers.push({ ...container, attempt: lease.attempt });
+      const containers = providerContainersUpdate(row, lease, container);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET provider_containers=${json(containers)}::jsonb,cleanup_pending=true WHERE id=${lease.jobId}`);
       if (row.deleted_at || TERMINAL.includes(row.status) || row.fence !== lease.fence) await this.event(db, lease.jobId, 'cleanup_pending', { attempt: lease.attempt }, 'cleanup');
     });
@@ -308,12 +252,8 @@ export class DocSandboxRepository {
       if (!owner[0]) throw new DocumentRepositoryError('DOC_NOT_FOUND');
       const account = await db.$queryRaw<Array<{ deletedAt: Date | null; docQuotaEpoch: bigint }>>(Prisma.sql`SELECT "deletedAt","docQuotaEpoch" FROM users WHERE id=${owner[0].user_id} FOR UPDATE`);
       const row = await this.assertLease(db, lease);
-      if (!account[0] || account[0].deletedAt || account[0].docQuotaEpoch !== row.quota_epoch) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
-      if (row.cost_reservations.some(r => r.requestId === requestId)) return false;
-      if (row.cost_reservations.length >= 600) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
-      const outstanding = row.cost_reservations.filter(r => r.actualUsd === null).reduce((sum, r) => sum.plus(r.reservedUsd), new Prisma.Decimal(0));
-      if (outstanding.plus(row.cost_usd).plus(reservedUsd).greaterThan(row.max_cost_usd)) throw new DocumentRepositoryError('DOC_BUDGET_EXCEEDED');
-      const reservations = [...row.cost_reservations, { requestId, attempt: lease.attempt, reservedUsd, actualUsd: null, actualTokens: null }];
+      const reservations = costReservationUpdate(row, account[0], lease, requestId, reservedUsd);
+      if (!reservations) return false;
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cost_reservations=${json(reservations)}::jsonb WHERE id=${lease.jobId}`);
       return true;
     });
@@ -324,50 +264,22 @@ export class DocSandboxRepository {
     if (actualTokens !== undefined && (!Number.isSafeInteger(actualTokens) || actualTokens < 0)) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
     await this.client.$transaction(async db => {
       const row = await this.locked(db, lease.jobId);
-      if (!row.attempt_leases.some(p => p.attempt === lease.attempt && p.tokenHash === hashToken(lease.token))) throw new DocumentRepositoryError('DOC_STALE_LEASE');
-      const entry = row.cost_reservations.find(r => r.requestId === requestId && r.attempt === lease.attempt);
-      if (!entry) throw new DocumentRepositoryError('DOC_NOT_FOUND');
-      if (entry.actualUsd !== null) { if (entry.actualUsd !== actualUsd || (entry.actualTokens ?? null) !== (actualTokens ?? null)) throw new DocumentRepositoryError('DOC_CONFLICT'); return; }
-      entry.actualUsd = actualUsd;
-      entry.actualTokens = actualTokens ?? null;
-      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cost_reservations=${json(row.cost_reservations)}::jsonb,cost_usd=cost_usd+${actualUsd}::numeric WHERE id=${lease.jobId}`);
+      const reservations = costSettlementUpdate(row, lease, requestId, actualUsd, actualTokens);
+      if (!reservations) return;
+      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cost_reservations=${json(reservations)}::jsonb,cost_usd=cost_usd+${actualUsd}::numeric WHERE id=${lease.jobId}`);
     });
   }
   async publishValidated(lease: AttemptLease, gate: PublicationGate): Promise<void> {
-    if (!['edited','unchanged','not_possible'].includes(gate.outcome) || !HASH.test(gate.planHash) || !gate.validationReportKey || gate.levels.length !== 4 || [1,2,3,4].some(n => !gate.levels.some(l => l.level === n)) || gate.levels.some(l => l.applicable ? !l.passed : (!(l.level === 2 || l.level === 3) || l.reasonCode !== 'PLAIN_TEXT_NOT_PAGINATED'))) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
+    validatePublicationGate(gate);
     await this.client.$transaction(async db => {
       const existing = await this.locked(db, lease.jobId);
       if (existing.status === 'done' && !existing.deleted_at && existing.fence === lease.fence && existing.edit_plan_hash === gate.planHash && existing.validation_report_key === gate.validationReportKey && existing.outcome === gate.outcome && existing.attempt_leases.some(h => h.attempt === lease.attempt && h.tokenHash === hashToken(lease.token))) return;
       const row = await this.assertLease(db, lease);
       if (row.status !== 'validating' || row.edit_plan_hash !== gate.planHash) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
       const artifacts = await db.$queryRaw<DbArtifact[]>(Prisma.sql`SELECT * FROM doc_job_artifacts WHERE job_id=${lease.jobId} AND attempt=${lease.attempt} AND purged_at IS NULL FOR UPDATE`);
-      const required: ArtifactKind[] = ['output', 'edit_plan', 'recipe', 'agent_result', 'validation_report', 'text_diff'];
-      if (required.some(kind => !artifacts.some(a => a.kind === kind)) || !artifacts.some(a => a.kind === 'validation_report' && a.storage_key === gate.validationReportKey)) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
-      const plans = artifacts.filter(a => a.kind === 'edit_plan');
-      if (plans.length !== 1 || plans[0]!.storage_key !== row.edit_plan_key || plans[0]!.sha256 !== row.edit_plan_hash) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
-      const outputs = artifacts.filter(a => a.kind === 'output');
+      const outputs = publicationArtifacts(row, artifacts, gate);
       const inputs = await db.$queryRaw<DbArtifact[]>(Prisma.sql`SELECT * FROM doc_job_artifacts WHERE job_id=${lease.jobId} AND kind='input' AND purged_at IS NULL`);
-      if (gate.outcome === 'not_possible') {
-        const preserved = gate.preservedInputs;
-        if (!preserved || preserved.length !== inputs.length || outputs.length !== inputs.length ||
-            new Set(preserved.map(item => item.inputId)).size !== inputs.length ||
-            new Set(preserved.map(item => item.outputStorageKey)).size !== inputs.length ||
-            preserved.some(item => {
-              const original = inputs.find(input => input.id === item.inputId);
-              const output = outputs.find(candidate => candidate.storage_key === item.outputStorageKey);
-              return !original || !output || !HASH.test(item.sha256) || item.sha256 !== original.sha256 ||
-                output.sha256 !== original.sha256 || output.size !== original.size ||
-                output.filename !== original.filename || output.mime !== original.mime;
-            })) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
-      } else if (gate.preservedInputs || outputs.length !== 1 ||
-          (gate.outcome === 'unchanged' && (inputs.length !== 1 || outputs[0]!.sha256 !== inputs[0]!.sha256 ||
-            outputs[0]!.size !== inputs[0]!.size || outputs[0]!.filename !== inputs[0]!.filename || outputs[0]!.mime !== inputs[0]!.mime))) {
-        throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
-      }
-      // A report cannot excuse an opening/visual gate on a paginated format.
-      if (gate.levels.some(l => !l.applicable)) {
-        if ([...inputs, ...outputs].some(a => PLAIN_MIME[a.filename.split('.').pop()?.toLowerCase() ?? ''] !== a.mime)) throw new DocumentRepositoryError('DOC_VALIDATION_GATE');
-      }
+      validatePublicationOutputs(inputs, outputs, gate);
       await db.$executeRaw(Prisma.sql`UPDATE doc_job_artifacts SET published=true WHERE job_id=${lease.jobId} AND attempt=${lease.attempt}`);
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET status='done',outcome=${gate.outcome},error_code=NULL,output_keys=ARRAY[${Prisma.join(outputs.map(a => a.storage_key))}]::text[],validation_report_key=${gate.validationReportKey},finished_at=clock_timestamp(),lease_token=NULL,lease_expires_at=NULL,cleanup_pending=true WHERE id=${lease.jobId}`);
       if (gate.outcome === 'not_possible') await this.event(db, lease.jobId, 'warning', { code: 'E_NOT_POSSIBLE', attempt: lease.attempt });
@@ -391,20 +303,7 @@ export class DocSandboxRepository {
     return this.client.$transaction(async db => {
       const row = await this.assertLease(db, lease);
       if (evidence) {
-        if (mode.kind === 'preservation' && mode.groups > row.input_keys.length) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-        const prefix = `doc-sandbox/${row.user_id}/${row.id}/`;
-        const reserved = new Set(row.storage_keys);
-        const protectedKeys = new Set([...row.input_keys, ...row.output_keys, ...row.purged_keys, row.instructions_key, row.edit_plan_key]);
-        const keys = new Set<string>(); const ids = new Set<string>(); const names = new Set<string>();
-        for (const artifact of batch) {
-          if (!artifact.storageKey.startsWith(prefix) || !/^[A-Za-z0-9_-]{1,40}\/[A-Za-z0-9_-]+\.sealed$/.test(artifact.storageKey.slice(prefix.length))
-            || !reserved.has(artifact.storageKey) || protectedKeys.has(artifact.storageKey)
-            || !/^[A-Za-z0-9_-]{1,128}$/.test(artifact.id)
-            || keys.has(artifact.storageKey) || ids.has(artifact.id) || names.has(artifact.filename)) {
-            throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-          }
-          keys.add(artifact.storageKey); ids.add(artifact.id); names.add(artifact.filename);
-        }
+        const { ids, keys } = failureEvidenceIdentity(row, batch, mode);
         const existing = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`SELECT id FROM doc_job_artifacts WHERE id=ANY(${[...ids]}::text[]) OR storage_key=ANY(${[...keys]}::text[]) LIMIT 1`);
         if (existing.length) throw new DocumentRepositoryError('DOC_INVALID_INPUT');
         // Bounded batched inserts avoid one transaction round-trip per image.
@@ -484,10 +383,8 @@ export class DocSandboxRepository {
   async markProviderFileDeleted(jobId: string, fileId: string, succeeded: boolean): Promise<void> {
     await this.client.$transaction(async db => {
       const row = await this.locked(db, jobId);
-      const entry = row.provider_files.find(f => f.fileId === fileId);
-      if (!entry) throw new DocumentRepositoryError('DOC_NOT_FOUND');
-      if (succeeded) entry.deleted = true; else entry.failures += 1;
-      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET provider_files=${json(row.provider_files)}::jsonb WHERE id=${jobId}`);
+      const updated = providerFileDeletion(row.provider_files, fileId, succeeded);
+      await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET provider_files=${json(updated)}::jsonb WHERE id=${jobId}`);
     });
   }
   async markArtifactPurged(jobId: string, artifactId: string): Promise<void> {
@@ -518,17 +415,7 @@ export class DocSandboxRepository {
     await this.client.$transaction(async db => {
       const row = await this.locked(db, jobId);
       const clocks = await db.$queryRaw<Array<{ now: Date }>>(Prisma.sql`SELECT clock_timestamp() AS now`);
-      if (!row.deleted_at || (row.cleanup_not_before && row.cleanup_not_before > clocks[0]!.now)) {
-        throw new DocumentRepositoryError('DOC_CLEANUP_PENDING');
-      }
-      const prefix = `doc-sandbox/${row.user_id}/${jobId}/`;
-      if (keys.some(key => !key.startsWith(prefix) || !/^[A-Za-z0-9_-]{1,40}\/[A-Za-z0-9_-]+\.sealed$/.test(key.slice(prefix.length)))) {
-        throw new DocumentRepositoryError('DOC_INVALID_INPUT');
-      }
-      const known = [...new Set([...row.storage_keys, ...keys])];
-      const discovered = new Set(keys);
-      // A reappearing object invalidates its old acknowledgement (late PUT).
-      const purged = row.purged_keys.filter(key => !discovered.has(key));
+      const { known, purged } = cleanupStorageUpdate(row, keys, clocks[0]!.now);
       const purgedSql = purged.length ? Prisma.sql`ARRAY[${Prisma.join(purged)}]::text[]` : Prisma.sql`ARRAY[]::text[]`;
       await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET storage_keys=ARRAY[${Prisma.join(known)}]::text[],purged_keys=${purgedSql},cleanup_pending=true WHERE id=${jobId}`);
     });
@@ -537,20 +424,18 @@ export class DocSandboxRepository {
   async finishCleanup(jobId: string): Promise<boolean> {
     return this.client.$transaction(async db => {
       const row = await this.locked(db, jobId);
-      if (row.cleanup_not_before && row.cleanup_not_before > new Date()) return false;
-      if (row.provider_files.some(f => !f.deleted)) return false;
+      if (!cleanupMayProceed(row, new Date())) return false;
       if (row.deleted_at) {
         const remaining = await db.$queryRaw<Array<{ count: bigint }>>(Prisma.sql`SELECT count(*) AS count FROM doc_job_artifacts WHERE job_id=${jobId} AND purged_at IS NULL`);
         if (remaining[0]!.count !== 0n) return false;
-        if (row.storage_keys.some(key => !row.purged_keys.includes(key))) return false;
       }
-      const retained = row.provider_containers.filter(c => c.expiresAt === null || Date.parse(c.expiresAt) > Date.now());
-      if (retained.length) {
-        const nextCheck = new Date(Math.min(Date.now() + 86400_000, ...retained.filter(c => c.expiresAt !== null).map(c => Date.parse(c.expiresAt!))));
-        await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=${nextCheck} WHERE id=${jobId}`);
+      const completion = cleanupCompletion(row, Date.now());
+      if (completion.kind === 'blocked') return false;
+      if (completion.kind === 'retry_at') {
+        await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=${completion.nextCheck} WHERE id=${jobId}`);
         return false;
       }
-      if (row.cost_reservations.some(r => r.actualUsd === null)) {
+      if (completion.kind === 'uncertain') {
         // An uncertain paid request may have created a remote container whose response was lost.
         await db.$executeRaw(Prisma.sql`UPDATE doc_jobs SET cleanup_not_before=clock_timestamp()+interval '1 day' WHERE id=${jobId}`);
         return false;
@@ -565,8 +450,7 @@ export class DocSandboxRepository {
   }
   async providerFilesForCleanup(jobId: string): Promise<ProviderFile[]> {
     const row = await this.getInternal(jobId);
-    if (row.cleanupNotBefore && row.cleanupNotBefore > new Date()) return [];
-    return row.providerFiles.filter(f => !f.deleted && (row.deletedAt !== null || row.status === 'queued' || TERMINAL.includes(row.status) || f.attempt < row.attempts));
+    return providerFilesNeedingCleanup(row, new Date());
   }
   async expireJobs(limit = 100): Promise<number> {
     const rows = await this.client.$queryRaw<Array<{ id: string; user_id: string }>>(Prisma.sql`SELECT id,user_id FROM doc_jobs WHERE deleted_at IS NULL AND expires_at<=clock_timestamp() ORDER BY expires_at LIMIT ${Math.max(1, Math.min(500, limit))}`);
@@ -583,14 +467,10 @@ export class DocSandboxRepository {
       const finished = await this.client.$transaction(async db => {
         const accounts = await db.$queryRaw<Array<{ docQuotaEpoch: bigint; apiUsage: bigint }>>(Prisma.sql`SELECT "docQuotaEpoch","apiUsage" FROM users WHERE id=${candidate.user_id} FOR UPDATE`);
         const row = await this.locked(db, candidate.id);
-        if (row.quota_settled_at || !TERMINAL.includes(row.status)) return false;
-        if (row.cost_reservations.some(r => r.actualUsd === null || !Number.isSafeInteger(r.actualTokens) || (r.actualTokens ?? -1) < 0)) return false;
-        const actual = row.cost_reservations.reduce((sum, r) => sum + BigInt(r.actualTokens!), 0n);
-        if (!accounts[0]) throw new DocumentRepositoryError('DOC_FORBIDDEN');
-        if (accounts[0].docQuotaEpoch === row.quota_epoch && row.quota_reserved_tokens > 0n) {
-          if (accounts[0].apiUsage < row.quota_reserved_tokens) throw new DocumentRepositoryError('DOC_CONFLICT');
-          await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"="apiUsage"-${row.quota_reserved_tokens}+${actual} WHERE id=${candidate.user_id}`);
-        }
+        const settlement = accountQuotaSettlement(row, accounts[0]);
+        if (!settlement) return false;
+        const { actual } = settlement;
+        if (settlement.refundReservation) await db.$executeRaw(Prisma.sql`UPDATE users SET "apiUsage"="apiUsage"-${row.quota_reserved_tokens}+${actual} WHERE id=${candidate.user_id}`);
         // No fictitious cost conversion: this usage row uses the authoritative
         // decimal provider ledger and actual token counts. No-call failures have
         // no ApiUsage row, so they cannot consume a daily successful-call quota.
