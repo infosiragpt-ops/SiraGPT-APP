@@ -78,6 +78,9 @@ function sanitizeTaskRecord(record = {}) {
     status: record.status || 'running',
     createdAt: record.createdAt || now,
     updatedAt: record.updatedAt || now,
+    // Liveness stamp for still-alive UI after SSE drop. Heartbeats pulse
+    // this without appending events (OpenClaw lastEventAt idea, native rewrite).
+    lastEventAt: record.lastEventAt || record.updatedAt || now,
     cancelledAt: record.cancelledAt || null,
     completedAt: record.completedAt || null,
     failedAt: record.failedAt || null,
@@ -257,6 +260,7 @@ function appendTaskEvent(snapshotLike, event, streamState, options = {}) {
     streamState: nextState,
     events,
     lastEventSeq: seq,
+    lastEventAt: stamped.ts || nowIso(),
     checkpoints: trimEvents(checkpoints, 200),
     updatedAt: nowIso(),
   };
@@ -796,11 +800,13 @@ function findStaleRunningTasks({ staleAfterMs = DEFAULT_STALE_RUNNING_MS } = {})
 }
 
 /**
- * Cheap liveness pulse for an in-flight task. Bumps `updatedAt` so the
- * runtime watchdog can tell a live worker from a dead one without appending
- * events (which would grow the replay log). No-ops on missing, foreign, or
- * already-terminal snapshots. Never throws — a heartbeat must not break the
- * live run.
+ * Cheap liveness pulse for an in-flight task. Bumps `updatedAt` +
+ * `lastEventAt` so the runtime watchdog and the still-alive UI can tell a
+ * live worker from a dead one without appending events (which would grow
+ * the replay log). Also refreshes streamState.lastEventAt / heartbeatAt so
+ * GET /events after an SSE drop can keep "Pensando…" from going stale.
+ * No-ops on missing, foreign, or already-terminal snapshots. Never throws
+ * — a heartbeat must not break the live run.
  */
 function touchTaskHeartbeat(taskId, userId) {
   if (!taskId || !userId) return null;
@@ -808,7 +814,19 @@ function touchTaskHeartbeat(taskId, userId) {
     const existing = getTaskSnapshotForUser(taskId, userId);
     if (!existing) return null;
     if (existing.status !== 'running' && existing.status !== 'queued') return existing;
-    return updateTaskSnapshot(taskId, userId, { updatedAt: nowIso() });
+    const stamp = nowIso();
+    const streamState = existing.streamState && typeof existing.streamState === 'object'
+      ? existing.streamState
+      : {};
+    return updateTaskSnapshot(taskId, userId, {
+      updatedAt: stamp,
+      lastEventAt: stamp,
+      streamState: {
+        ...streamState,
+        lastEventAt: stamp,
+        heartbeatAt: stamp,
+      },
+    });
   } catch {
     return null;
   }
