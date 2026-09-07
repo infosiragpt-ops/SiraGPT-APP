@@ -39,6 +39,10 @@ and improvement cycles follow a sequential number with the date the work landed.
   `BUNDLE_WHISPER_MODEL=1` copies a context `ggml-base.bin` (Lenovo cached
   bin) so 429 during install is skipped.
 
+- `BUNDLE_WHISPER_MODEL` is a global Dockerfile ARG (before the first
+  `FROM`) so `FROM whisper-seed-${BUNDLE_WHISPER_MODEL}` parses as
+  `whisper-seed-0` / `whisper-seed-1` instead of the invalid `whisper-seed-`.
+
 - Production Alpine runner installs `bash` and probes `/bin/bash` as
   `appuser` (`BASH_VERSION` + `set -euo pipefail`) so SiraCode Planificar
   permission-resume does not `spawn /bin/bash ENOENT`. Whisper installer
