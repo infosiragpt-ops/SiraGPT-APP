@@ -38,6 +38,12 @@ and improvement cycles follow a sequential number with the date the work landed.
   `running`/`queued` snapshots `error` with `worker_stalled` so SSE/poll
   close instead of hanging. Boot recovery is unchanged. Disable with
   `AGENT_TASK_RUNTIME_WATCHDOG_DISABLED=1`.
+- After an SSE drop on `/agentes`, the live job resumes from the durable
+  event log (`GET /api/agent/task/:id/events?after=` + `Last-Event-ID`)
+  instead of failing the chat. Resume keeps polling while the #579
+  snapshot heartbeat is fresh; a `worker_stalled` reap surfaces a clear
+  terminal error. Transient event-poll 5xx retries. Inspired by OpenClaw
+  `agent.wait` / recoverable transport-close (MIT); SiraGPT-owned rewrite.
 - Rejected final answers now stop as unverified rather than becoming successful
   after repeated rejection or on the last step. Judge timeouts, invalid verdicts
   and cancellation fail closed; bounded reviews are tied to draft and evidence.
