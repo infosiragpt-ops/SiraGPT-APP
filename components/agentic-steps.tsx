@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Image from "next/image"
 import {
   Activity,
   AlertTriangle,
@@ -13,7 +12,6 @@ import {
   Globe,
   History,
   Eye,
-  FileCheck2,
   Pause,
   Play,
   RefreshCcw,
@@ -33,16 +31,28 @@ import { AgentStatusIcon, type AgentStatusIconKind } from "@/components/icons/ag
 import { agentTaskService, type AgentArtifact, type AgentTaskState } from "@/lib/agent-task-service"
 import {
   formatQualityScore,
-  professionalStepLabel,
   sanitizeAgentText,
   summarizeAgentActivity,
   toolToProfessionalLabel,
   type AgentActivityStatus,
 } from "@/lib/agent-task-presentation"
+import {
+  descriptionsDiffer,
+  humanizeToolDetail,
+  isStaleRun,
+  projectStepRow,
+  resolveRunStatus,
+  shouldRenderRunTrace,
+  collapseSuccessLabel,
+  STEP_STATUS_CLASS,
+} from "@/lib/run-trace"
 import type { DocumentPreviewTarget } from "@/components/document-preview"
 import { FileVersionHistoryDialog } from "@/components/doc/file-version-history-dialog"
+import { DOCUMENT_ACTION_CLASS, DOCUMENT_ACTION_ICON_CLASS, DOCUMENT_CARD_CLASS, DocumentArtifactIcon } from "@/components/doc/document-artifact-chrome"
 
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
+import { loaderLabel, mapEventToLoaderState, type LoaderState } from "@/lib/thinking-loaders"
 interface Props {
   state: AgentTaskState
   className?: string
@@ -54,6 +64,9 @@ interface Props {
    * sees two timelines for one turn.
    */
   hideSteps?: boolean
+  /** Host message role — RunTrace only mounts on assistant bubbles. */
+  role?: string
+  messageId?: string
 }
 
 interface ProjectedSearchCall {
@@ -69,6 +82,8 @@ interface TimelineStepProjection {
   status: "running" | "done" | "error"
   phase: AgentStatusIconKind
   count: number
+  tool?: string
+  loaderState: LoaderState
   /** Claude-style web research trace: queries + their result lists. */
   searchCalls: ProjectedSearchCall[]
   /** Domains the agent is fetching ("Obteniendo datos de …"). */
@@ -137,7 +152,6 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
 
   for (const step of source) {
     const tools = Array.from(new Set((step.toolCalls || []).map((call) => toolToProfessionalLabel(call.tool)))).slice(0, 2)
-    const label = professionalStepLabel(step)
     // Prefer the model's own reasoning narration (Claude-style transparency)
     // as the secondary line; fall back to the tool names when absent.
     const reasoning = typeof step.reasoning === "string" ? step.reasoning.trim() : ""
@@ -157,13 +171,32 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
         if (target && !fetchTargets.includes(target)) fetchTargets.push(target)
       }
     }
-    const item: TimelineStepProjection = {
+    const firstTool = (step.toolCalls || [])[0]?.tool
+    const row = projectStepRow({
       id: step.id,
-      label,
-      detail: reasoning || (tools.length ? tools.join(" · ") : undefined),
-      status: step.status === "running" ? "running" : step.status === "error" ? "error" : "done",
-      phase: phaseFromStep(step, label),
+      label: step.label,
+      status: step.status,
+      reasoning,
+      retryCount: (step as { retryCount?: number }).retryCount,
+      toolCalls: step.toolCalls,
+    })
+    const rawDetail = row.description || (tools.length ? tools.filter((tool) => descriptionsDiffer(row.label, tool)).join(" · ") : "")
+    const detailSource = humanizeToolDetail(rawDetail) || ""
+    const item: TimelineStepProjection = {
+      id: row.id,
+      label: row.label,
+      detail: detailSource || undefined,
+      status: row.status === "failed" ? "error" : row.status === "running" ? "running" : "done",
+      phase: phaseFromStep(step, row.label),
       count: 1,
+      tool: firstTool,
+      loaderState: mapEventToLoaderState({
+        tool: firstTool,
+        label: row.label,
+        text: reasoning,
+        status: step.status,
+        step_id: step.id,
+      }),
       searchCalls,
       fetchTargets,
     }
@@ -171,6 +204,8 @@ function projectTimelineSteps(steps: AgentTaskState["steps"]): TimelineStepProje
     if (previous && previous.label === item.label && previous.detail === item.detail && previous.status === item.status) {
       previous.count += 1
       previous.id = item.id
+      previous.tool = item.tool
+      previous.loaderState = item.loaderState
       previous.searchCalls.push(...item.searchCalls)
       previous.fetchTargets.push(...item.fetchTargets.filter((t) => !previous.fetchTargets.includes(t)))
     } else {
@@ -286,6 +321,7 @@ function StepResearchTrace({ searchCalls, fetchTargets }: { searchCalls: Project
 
 function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: string }) {
   const [downloading, setDownloading] = React.useState(false)
+  const displayName = artifactDisplayName(artifact)
 
   const download = React.useCallback(async () => {
     if (downloading) return
@@ -314,16 +350,19 @@ function DownloadButton({ artifact, href }: { artifact: AgentArtifact; href: str
       type="button"
       onClick={download}
       disabled={downloading}
-      className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted disabled:opacity-60"
-      title="Descargar documento"
-      aria-label="Descargar documento"
+      className={DOCUMENT_ACTION_CLASS}
+      title={`Descargar ${displayName}`}
+      aria-label={`Descargar documento: ${displayName}`}
+      aria-busy={downloading}
     >
-      {downloading ? <ThinkingIndicator size="lg" /> : <Download className="h-9 w-9 stroke-[2.25]" />}
+      {downloading ? <ThinkingIndicator size="sm" className="h-[18px] w-[18px]" /> : <Download className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />}
     </button>
   )
 }
 
 function artifactDisplayName(artifact: AgentArtifact): string {
+  const filename = artifact.filename?.trim()
+  if (filename) return filename
   const format = artifactFormat(artifact)
   if (isAudioArtifact(artifact)) return "Audio generado"
   if (format === "docx" || format === "doc") return "Documento Word"
@@ -331,6 +370,12 @@ function artifactDisplayName(artifact: AgentArtifact): string {
   if (format === "pptx" || format === "ppt") return "Presentacion"
   if (format === "pdf") return "Documento PDF"
   return "Archivo generado"
+}
+
+function artifactValidationPassed(artifact: AgentArtifact): boolean {
+  // Only an explicit passed===true is honest. `ok` is a weaker/generic
+  // flag some pipelines set without running quality gates.
+  return artifact.validation?.passed === true
 }
 
 function artifactFormat(artifact: AgentArtifact): string {
@@ -520,8 +565,8 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0
 
   return (
-    <div className="my-2 w-full max-w-[460px]">
-      <div className="relative flex flex-col gap-2 rounded-2xl border border-border/70 bg-background px-4 pb-3 pt-3 shadow-sm">
+    <div className="my-2 w-full max-w-[460px]" data-testid="chat-audio-player" data-variant="generated">
+      <div className="relative flex flex-col gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 pb-3 pt-3 shadow-sm dark:border-white/12 dark:bg-zinc-900">
         {/* Header: label (+ engine) + share / download */}
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-medium leading-5 text-muted-foreground">
@@ -536,7 +581,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             <button
               type="button"
               onClick={share}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
               aria-label={copied ? "Enlace copiado" : `Compartir ${generatedMediaLabel}`}
               title={copied ? "Enlace copiado" : "Compartir"}
             >
@@ -546,7 +591,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
               type="button"
               onClick={download}
               disabled={isDownloading}
-              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60 dark:text-zinc-100 dark:hover:bg-white/10"
               aria-label={`Descargar ${generatedMediaLabel}`}
               title="Descargar"
             >
@@ -580,10 +625,10 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           }}
           className="group relative flex h-4 cursor-pointer touch-none select-none items-center focus-visible:outline-none"
         >
-          <div className="relative h-1.5 w-full rounded-full bg-blue-500/15">
-            <div className="absolute inset-y-0 left-0 rounded-full bg-blue-500" style={{ width: `${progress * 100}%` }} />
+          <div className="relative h-1.5 w-full rounded-full bg-zinc-900/15 dark:bg-white/15">
+            <div className="absolute inset-y-0 left-0 rounded-full bg-zinc-950 dark:bg-white" style={{ width: `${progress * 100}%` }} />
             <div
-              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100"
+              className="absolute top-1/2 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-zinc-950 shadow ring-2 ring-background transition-opacity duration-150 group-hover:opacity-100 group-focus-visible:opacity-100 dark:bg-white"
               style={{ left: `${progress * 100}%`, opacity: isSeeking ? 1 : undefined }}
             />
           </div>
@@ -608,7 +653,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
                 key={`${height}-${index}`}
                 className={cn(
                   "w-[3px] shrink-0 rounded-full transition-colors duration-200",
-                  played ? "bg-blue-500" : "bg-foreground/20 group-hover/wave:bg-foreground/30",
+                  played ? "bg-zinc-950 dark:bg-white" : "bg-foreground/20 group-hover/wave:bg-foreground/30",
                 )}
                 style={{ height }}
               />
@@ -621,7 +666,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={() => skipBy(-10)}
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Retroceder 10 segundos"
             title="Retroceder 10s"
           >
@@ -631,7 +676,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={restart}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Reiniciar"
             title="Reiniciar"
           >
@@ -641,7 +686,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             type="button"
             onClick={togglePlayback}
             disabled={isLoadingAudio}
-            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-blue-500 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75"
+            className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-zinc-900 transition-transform hover:scale-[1.06] active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:scale-100 disabled:opacity-75 dark:text-zinc-100"
             aria-label={isLoadingAudio ? `Cargando ${generatedMediaLabel}` : isPlaying ? `Pausar ${generatedMediaLabel}` : `Reproducir ${generatedMediaLabel}`}
             title={isLoadingAudio ? "Cargando" : isPlaying ? "Pausar" : "Reproducir"}
           >
@@ -656,7 +701,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
           <button
             type="button"
             onClick={() => skipBy(10)}
-            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-blue-500 transition-colors hover:bg-blue-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="relative inline-flex h-9 w-9 items-center justify-center rounded-full text-zinc-900 transition-colors hover:bg-zinc-900/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-zinc-100 dark:hover:bg-white/10"
             aria-label="Adelantar 10 segundos"
             title="Adelantar 10s"
           >
@@ -669,7 +714,7 @@ function AudioArtifactPlayer({ artifact, generationIndex }: { artifact: AgentArt
             aria-pressed={isLooping}
             className={cn(
               "inline-flex h-9 w-9 items-center justify-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isLooping ? "bg-blue-500 text-white" : "text-blue-500 hover:bg-blue-500/10",
+              isLooping ? "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" : "text-zinc-900 hover:bg-zinc-900/10 dark:text-zinc-100 dark:hover:bg-white/10",
             )}
             aria-label={isLooping ? "Desactivar repetición" : "Repetir"}
             title={isLooping ? "Repetición activada" : "Repetir"}
@@ -726,23 +771,6 @@ function ArtifactDeliveryList({
   )
 }
 
-function ArtifactFormatIcon({ artifact }: { artifact: AgentArtifact }) {
-  const format = artifactFormat(artifact)
-  if (format === "docx" || format === "doc") {
-    return <Image src="/icons/Word.png" alt="Word" width={64} height={64} className="object-contain" />
-  }
-  if (format === "xlsx" || format === "xls" || format === "csv") {
-    return <Image src="/icons/Excel.png" alt="Excel" width={64} height={64} className="object-contain" />
-  }
-  if (format === "pptx" || format === "ppt") {
-    return <Image src="/icons/Bigger P powerpoint.png" alt="PowerPoint" width={64} height={64} className="object-contain" />
-  }
-  if (format === "pdf") {
-    return <Image src="/icons/pdf.png" alt="PDF" width={64} height={64} className="object-contain" />
-  }
-  return <FileCheck2 className="h-14 w-14 text-slate-700" />
-}
-
 function ArtifactCard({
   artifact,
   onDocumentPreview,
@@ -755,6 +783,7 @@ function ArtifactCard({
   const displayName = artifactDisplayName(artifact)
   const format = artifactFormat(artifact)
   const formatLabel = format === "bin" ? "archivo" : format.toUpperCase()
+  const validationPassed = artifactValidationPassed(artifact)
   const [historyOpen, setHistoryOpen] = React.useState(false)
 
   const preview = React.useCallback(() => {
@@ -776,44 +805,69 @@ function ArtifactCard({
 
   return (
     <>
-    <div className="my-2 w-full max-w-xl rounded-2xl border border-border/70 bg-background p-4 shadow-sm">
-      <div className="flex min-w-0 items-center justify-between gap-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-xl bg-muted/30">
-            <ArtifactFormatIcon artifact={artifact} />
-          </div>
-          <div className="hidden min-w-0 sm:block">
-            <div className="truncate text-sm font-semibold text-foreground">{displayName}</div>
+    <div
+      className={cn(DOCUMENT_CARD_CLASS, "my-2 cursor-pointer p-3 transition-colors hover:bg-muted/30 active:bg-muted/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring")}
+      data-testid="agent-artifact-card"
+      data-artifact-id={artifact.id}
+      data-preview-openable="true"
+      role="button"
+      tabIndex={0}
+      aria-label={`Archivo: ${displayName}`}
+      onClick={preview}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault()
+          preview()
+        }
+      }}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <DocumentArtifactIcon format={format} />
+          <div className="min-w-0 flex-1">
+            <div
+              className="truncate text-sm font-semibold text-foreground"
+              data-testid="agent-artifact-filename"
+              title={displayName}
+            >
+              {displayName}
+            </div>
             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
               <span>{formatLabel}</span>
               <span>{sizeKb} KB</span>
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
-                <ShieldCheck className="h-3 w-3" />
-                Validado
-              </span>
+              {validationPassed && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200">
+                  <ShieldCheck className="h-3 w-3" />
+                  Validado
+                </span>
+              )}
             </div>
           </div>
         </div>
-        <div className="ml-auto flex shrink-0 items-center gap-4">
+        <div
+          className="flex shrink-0 items-center gap-1"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
           {artifact.sourceFileId && (
             <button
               type="button"
               onClick={() => setHistoryOpen(true)}
-              className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
-              title="Historial de versiones"
-              aria-label="Historial de versiones"
+              className={DOCUMENT_ACTION_CLASS}
+              title={`Historial de versiones de ${displayName}`}
+              aria-label={`Historial de versiones: ${displayName}`}
             >
-              <History className="h-7 w-7 stroke-[2]" />
+              <History className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />
             </button>
           )}
           <button
             type="button"
             onClick={preview}
-            className="inline-flex h-14 w-14 items-center justify-center rounded-full text-foreground transition-colors hover:bg-muted"
-            title="Ver documento"
-            aria-label="Ver documento"
+            className={DOCUMENT_ACTION_CLASS}
+            title={`Ver ${displayName}`}
+            aria-label={`Ver documento: ${displayName}`}
           >
-            <Eye className="h-9 w-9 stroke-[2.25]" />
+            <Eye className={DOCUMENT_ACTION_ICON_CLASS} aria-hidden="true" />
           </button>
           <DownloadButton artifact={artifact} href={href} />
         </div>
@@ -848,9 +902,9 @@ function TimelineRow({
       <div className="flex w-5 shrink-0 justify-center text-muted-foreground">
         <div className={cn(
           "mt-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-background/80 ring-1 ring-border/50",
-          status === "done" && "text-emerald-600",
-          status === "running" && "text-sky-600 shadow-[0_0_0_3px_rgba(14,165,233,0.08)]",
-          status === "error" && "text-red-600",
+          status === "done" && "text-[var(--step-done,#059669)]",
+          status === "running" && "text-[var(--step-running,#38BDF8)] shadow-[0_0_0_3px_rgba(56,189,248,0.12)]",
+          status === "error" && "text-[var(--step-failed,#B45353)]",
           (!status || status === "muted") && "text-muted-foreground",
         )}>
           {icon}
@@ -898,7 +952,7 @@ function ValidationSummary({ state }: { state: AgentTaskState }) {
   )
 }
 
-export function AgenticStepsRenderer({ state, className, onDocumentPreview, hideSteps = false }: Props) {
+export function AgenticStepsRenderer({ state, className, onDocumentPreview, hideSteps = false, role, messageId }: Props) {
   const [retrying, setRetrying] = React.useState(false)
   const [cancelling, setCancelling] = React.useState(false)
   // Claude-style live trace: expanded by default while the agent runs;
@@ -920,11 +974,6 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     }, 1000)
     return () => window.clearInterval(id)
   }, [live])
-  const elapsedLabel = elapsedSec >= 60
-    ? `${Math.floor(elapsedSec / 60)}m ${String(elapsedSec % 60).padStart(2, "0")}s`
-    : elapsedSec >= 3
-      ? `${elapsedSec}s`
-      : ""
   const summary = React.useMemo(() => summarizeAgentActivity(state), [state])
   const timelineSteps = React.useMemo(() => projectTimelineSteps(state.steps), [state.steps])
   const runningTimelineStep = React.useMemo(
@@ -951,19 +1000,33 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
   // to "stale". The persisted JSON is untouched; the next event
   // delta would re-arm the live view.
   const [stale, setStale] = React.useState(false)
+  const [terminalFlash, setTerminalFlash] = React.useState<LoaderState | null>(null)
+  const wasLiveRef = React.useRef(false)
   React.useEffect(() => {
     setStale(false)
     if (state.done || state.error) return
-    // Re-armed by lastEventAt: SSE heartbeats arrive every ~15 s, so a
-    // long quiet model call no longer trips the banner — only a stream
-    // that is truly dead for 90 s does.
-    const id = window.setTimeout(() => setStale(true), 90_000)
+    // Stale only after 3 missed heartbeats (~45 s), never because the
+    // model is quiet between business events. lastEventAt is refreshed
+    // by heartbeat frames as well as step events.
+    const id = window.setTimeout(() => {
+      const stamp = state.lastEventAt || state.heartbeatAt
+      if (!stamp || isStaleRun(stamp)) setStale(true)
+    }, 45_000)
     return () => window.clearTimeout(id)
-  }, [state.done, state.error, state.steps.length, state.lastEventAt])
+  }, [state.done, state.error, state.lastEventAt, state.heartbeatAt])
 
   const isLiveActivity = Boolean(!state.done && !state.error && !stale)
-  const isCompletedActivity = Boolean(state.done && !state.error)
+  const isCompletedActivity = Boolean(state.done && !state.error && !terminalFlash)
   const isStaleActivity = Boolean(stale && !state.done && !state.error)
+
+  React.useEffect(() => {
+    if (wasLiveRef.current && state.done && !state.error) {
+      setTerminalFlash("completado")
+    } else if (wasLiveRef.current && state.error) {
+      setTerminalFlash("error")
+    }
+    wasLiveRef.current = isLiveActivity
+  }, [state.done, state.error, isLiveActivity])
 
   const cancelTask = React.useCallback(async () => {
     if (!taskId || cancelling) return
@@ -991,14 +1054,78 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     }
   }, [retrying, taskId])
 
+  const runStatus = resolveRunStatus({
+    done: state.done,
+    error: state.error,
+    queueStatus: state.queue?.status,
+  })
+  const assistantOk = shouldRenderRunTrace({
+    role,
+    messageId,
+    assistantMessageId: state.meta?.assistantMessageId,
+  })
+  if (role && !assistantOk) return null
+
+  if (terminalFlash === "completado" || terminalFlash === "error") {
+    return (
+      <div className={cn("my-2.5 w-full max-w-2xl", className)}>
+        <ThinkingStatusLoader
+          state={terminalFlash}
+          elapsedSec={elapsedSec}
+          onSettled={() => setTerminalFlash(null)}
+        />
+        {hasDeliverable ? (
+          <div className="mt-2">
+            <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
   if (isCompletedActivity || hideSteps) {
-    // Once the task is finished we want a clean answer surface — no
-    // "Completado · N pasos · M herramientas" header and no "Ver
-    // actividad" disclosure. The agent's deliverables still render
-    // when present so the user can keep the file/preview, but if the
-    // run produced no artifacts we render nothing here and let the
-    // message body speak for itself. `hideSteps` reuses the same
-    // artifacts-only surface while AgentTrace owns the live timeline.
+    // Succeeded runs collapse to one expandable line. Artifacts stay
+    // visible so the user can keep the file/preview. `hideSteps` reuses
+    // the artifacts-only surface while AgentTrace owns the live timeline.
+    if (hideSteps) {
+      if (!hasDeliverable) return null
+      return (
+        <div className={cn("my-2 max-w-2xl space-y-1", className)}>
+          <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} />
+        </div>
+      )
+    }
+    if (runStatus === "succeeded") {
+      const elapsed = liveStartRef.current
+        ? Math.max(1, Math.round((Date.now() - liveStartRef.current) / 1000))
+        : Math.max(1, elapsedSec || 1)
+      return (
+        <div className={cn("my-2 max-w-2xl space-y-1", className)}>
+          <button
+            type="button"
+            onClick={() => setTraceExpanded((v) => !v)}
+            aria-expanded={traceExpanded}
+            className="group flex items-center gap-2 rounded-lg px-1 py-0.5 text-left"
+          >
+            <span className={cn("text-[13px] font-medium", STEP_STATUS_CLASS.done)}>{collapseSuccessLabel(elapsed)}</span>
+            {traceExpanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground/70" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/70" />}
+          </button>
+          {traceExpanded && (
+            <div className="mt-1 border-l border-border/50 pl-3">
+              {timelineSteps.map((step) => (
+                <div key={step.id} className={cn("py-1 text-[12.5px] leading-5", STEP_STATUS_CLASS[step.status === "error" ? "failed" : "done"])}>
+                  {step.label}
+                  {step.detail && descriptionsDiffer(step.label, step.detail) ? (
+                    <div className="mt-0.5 text-[12px] text-muted-foreground/65">{step.detail}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          )}
+          {hasDeliverable ? <ArtifactDeliveryList artifacts={state.artifacts} onDocumentPreview={onDocumentPreview} /> : null}
+        </div>
+      )
+    }
     if (!hasDeliverable) return null
     return (
       <div className={cn("my-2 max-w-2xl space-y-1", className)}>
@@ -1039,6 +1166,10 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
     // headers, no counters — the line IS the status.
     const visibleSteps = timelineSteps.slice(-5)
     const headerLabel = runningTimelineStep?.label || summary.label
+    const headerState =
+      runningTimelineStep?.loaderState ||
+      mapEventToLoaderState({ label: headerLabel, tool: runningTimelineStep?.tool })
+    const headerKitLabel = loaderLabel(headerState)
     return (
       <div
         role="status"
@@ -1054,13 +1185,11 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
             aria-label="Ver actividad del agente"
             className="group flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-0.5 text-left"
           >
-            <ThinkingIndicator size="sm" label="Trabajando" />
-            <span className="thinking-shimmer-text min-w-0 truncate text-[13px] font-medium tracking-tight">
-              {headerLabel}
-            </span>
-            {elapsedLabel && (
-              <span className="shrink-0 text-[11.5px] tabular-nums text-muted-foreground/55">{elapsedLabel}</span>
-            )}
+            <ThinkingStatusLoader
+              state={headerState}
+              elapsedSec={elapsedSec >= 3 ? elapsedSec : null}
+              announce={false}
+            />
             {liveExpanded ? (
               <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
             ) : (
@@ -1088,14 +1217,14 @@ export function AgenticStepsRenderer({ state, className, onDocumentPreview, hide
                 <div
                   className={cn(
                     "text-[12.5px] leading-5",
-                    step.status === "running" ? "font-medium text-foreground/75" : "text-muted-foreground/80",
-                    step.status === "error" && "text-red-600 dark:text-red-400",
+                    STEP_STATUS_CLASS[step.status === "error" ? "failed" : step.status === "running" ? "running" : "done"],
+                    step.status === "running" && "font-medium",
                   )}
                 >
-                  {step.label}
+                  {step.status === "running" && !descriptionsDiffer(headerKitLabel, step.label) ? null : step.label}
                   {step.count > 1 && <span className="ml-1.5 text-[10.5px] text-muted-foreground/60">×{step.count}</span>}
                 </div>
-                {step.detail && (
+                {step.detail && descriptionsDiffer(step.label, step.detail) && (
                   <div className="mt-0.5 max-w-[48rem] text-[12px] leading-5 text-muted-foreground/65">{step.detail}</div>
                 )}
                 <StepResearchTrace searchCalls={step.searchCalls} fetchTargets={step.fetchTargets} />

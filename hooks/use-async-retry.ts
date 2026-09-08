@@ -110,7 +110,7 @@ export function useApiRetry<T, Args extends any[] = any[]>(
         msg.includes("network") ||
         msg.includes("timeout") ||
         msg.includes("econnrefused") ||
-        msg.includes("unexpected token") // JSON parse fail from partial response
+        msg.includes("unexpected token") || /\\b(429|502|503|504)\\b/.test(msg)
       )
     },
     ...options,

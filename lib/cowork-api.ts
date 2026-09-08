@@ -356,3 +356,35 @@ export const coworkApi = {
     return requestJson<CoworkCostSummary>(`/cowork/costs?${params}`)
   },
 }
+
+
+/** OLA200_WAVE_G FE-098 — cowork progress SSE resumes with Last-Event-ID. */
+export function coworkProgressResumeHeaders(lastEventId?: string | null): Record<string, string> {
+  const id = String(lastEventId || "").trim()
+  if (!id) return {}
+  return { "Last-Event-ID": id, "X-Last-Event-Id": id }
+}
+export function coworkProgressResumeUrl(baseUrl: string, lastEventId?: string | null): string {
+  const id = String(lastEventId || "").trim()
+  if (!id) return baseUrl
+  const join = baseUrl.includes("?") ? "&" : "?"
+  return `${baseUrl}${join}lastEventId=${encodeURIComponent(id)}`
+}
+
+
+/** 3H-FE-008 — analyze-stream Last-Event-ID (progress helper already shipped FE-098). */
+export function coworkAnalyzeStreamResumeHeaders(lastEventId?: string | null): Record<string, string> {
+  return coworkProgressResumeHeaders(lastEventId)
+}
+
+
+/** 3H2-FE-005 leftover: analyze-pro/stream Last-Event-ID (progress+analyze already shipped). */
+export function coworkAnalyzeProStreamResumeHeaders(lastEventId?: string | null): Record<string, string> {
+  return coworkProgressResumeHeaders(lastEventId)
+}
+
+
+/** 3H3-FE-006 leftover: control/steer mutations never cached. */
+export function coworkControlHeaders(): Record<string, string> {
+  return { "Cache-Control": "no-store" }
+}

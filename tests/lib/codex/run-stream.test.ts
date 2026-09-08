@@ -130,6 +130,67 @@ describe('openRunStream', () => {
     expect(events).toContain('run_status')
   })
 
+  it('does not advance past an out-of-order seq and recovers the gap by replay', async () => {
+    let calls = 0
+    const urls: string[] = []
+    const events: number[] = []
+    const opens: boolean[] = []
+    const reconnects: number[] = []
+    const fetchImpl = (async (url: string) => {
+      urls.push(url)
+      calls += 1
+      if (calls === 1) {
+        return streamResponse(['data: {"seq":2,"type":"narrative_delta","data":{"text":"two"}}\n\n'])
+      }
+      return streamResponse([
+        'data: {"seq":1,"type":"narrative_delta","data":{"text":"one"}}\n\n',
+        'data: {"seq":2,"type":"narrative_delta","data":{"text":"two"}}\n\n',
+        'data: {"seq":3,"type":"run_status","data":{"status":"done"}}\n\n',
+      ])
+    }) as unknown as typeof fetch
+
+    const handle = openRunStream({
+      runId: 'gap-run',
+      onEvent: (e) => { if (typeof e.seq === 'number') events.push(e.seq) },
+      onOpen: ({ reconnecting }) => opens.push(reconnecting),
+      onReconnect: ({ attempt }) => reconnects.push(attempt),
+      fetchImpl,
+      token: 't',
+      maxBackoffMs: 1,
+    })
+    await handle.done
+
+    expect(events).toEqual([1, 2, 3])
+    expect(opens).toEqual([false, true])
+    expect(reconnects).toEqual([1])
+    expect(new URL(urls[0]).searchParams.get('afterSeq')).toBe('0')
+    expect(new URL(urls[1]).searchParams.get('afterSeq')).toBe('0')
+  })
+
+  it('backs off and fails with an actionable error when a gap never converges', async () => {
+    let calls = 0
+    const fetchImpl = (async () => {
+      calls += 1
+      return streamResponse(['data: {"seq":2,"type":"narrative_delta","data":{"text":"orphan"}}\n\n'])
+    }) as unknown as typeof fetch
+    let error: unknown = null
+    const handle = openRunStream({
+      runId: 'permanent-gap',
+      onEvent: () => {},
+      onError: (value) => { error = value },
+      fetchImpl,
+      token: 't',
+      maxGapRecoveries: 2,
+      gapBackoffMs: 1,
+      maxGapBackoffMs: 2,
+    })
+
+    await expect(handle.done).rejects.toThrow(/seq gap unresolved after 2 recoveries/)
+    expect(calls).toBe(3)
+    expect(error).toBeInstanceOf(Error)
+    expect(String((error as Error).message)).toMatch(/last contiguous seq 0/)
+  })
+
   it('passes afterSeq in the URL and the token only in the Authorization header', async () => {
     let calledUrl = ''
     let calledInit: RequestInit | undefined

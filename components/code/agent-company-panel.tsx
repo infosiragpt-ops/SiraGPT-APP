@@ -36,6 +36,7 @@ import {
   Loader2,
   Megaphone,
   MessageSquareText,
+  Monitor,
   MoreHorizontal,
   Network,
   PackageOpen,
@@ -94,17 +95,28 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { useIsMobile } from "@/hooks/use-mobile"
+import {
+  CODE_NAV_FULLSCREEN_EVENT,
+  subscribeAgentCompanyCenterSlot,
+} from "@/lib/agent-company-center-slot"
 import { subscribeAgentCompanyPreviewSlot } from "@/lib/agent-company-preview-slot"
 import { subscribeAgentCompanySlot } from "@/lib/agent-company-slot"
+import {
+  codexErrorCode,
+  codexIdentityIssue,
+} from "@/lib/codex/codex-api"
 import { buildAgentOfficeModel, type AgentOfficeWorker } from "@/lib/agent-office-model"
 import {
   buildCompanyAgentFileArtifacts,
+  buildCompanyDepartmentFolders,
+  listCompanyExplorerEntries,
   type CompanyAgentFileArtifact,
 } from "@/lib/company-agent-file-reports"
 import {
   associatedCodexProjectIdForCompany,
   shouldAcceptCompanyAssociationResponse,
 } from "@/lib/company-association-scope"
+import { codexProjectIdFromWorkspaceId, desktopRuntimeProjectId } from "@/lib/codex-workspace-identity"
 import {
   companySocialApi,
   type CompanySocialOperations,
@@ -130,6 +142,7 @@ import {
 import {
   buildProactiveKickoffPrompt,
   departmentBootstrapTitle,
+  CODE_FOCUS_CEO_CHAT_EVENT,
   focusCeoChatColumn,
   hydrateProactiveCompany,
   PROACTIVE_CORE_DEPARTMENTS,
@@ -149,11 +162,18 @@ import {
 import { coworkApi, type CoworkConnector } from "@/lib/cowork-api"
 import {
   CODE_ACTIVE_CODEX_PROJECT_EVENT,
+  CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT,
+  CODE_OPEN_DEPARTMENT_COMPUTER_EVENT,
   CODE_NEW_CODE_CHAT_EVENT,
   getActiveCodexProject,
+  notifyCompanyAssociationChanged,
   setActiveCodexProject,
+  setActiveDepartmentComputer,
+  setActiveDepartmentSelection,
   useCodeWorkspace,
 } from "@/lib/code-workspace-context"
+import { pullProjectFiles } from "@/lib/code-agent/codex-file-pull"
 import {
   codexApi,
   type CodexAccess,
@@ -184,7 +204,8 @@ import { cn } from "@/lib/utils"
 
 import { AICodeChatPanel } from "./ai-code-chat-panel"
 import { AgentOfficeOverlay } from "./agent-office/agent-office-overlay"
-import { AgentOfficeScene } from "./agent-office/agent-office-scene"
+import { OfficeLivePreview } from "./agent-office/office-live-preview"
+import { TerminalPanel } from "./terminal-panel"
 import { CompanyResourcesSurface } from "./company-resources-surface"
 import {
   EnterpriseCommandCenter,
@@ -197,8 +218,8 @@ import {
   type EnterpriseSwarmSummary,
 } from "./enterprise-command-center"
 
-type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "files" | "resources" | "task"
-type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "department">
+type CompanyView = "home" | "chat" | "dashboard" | "control" | "department" | "files" | "resources" | "task" | "computer"
+type CompanyPreviewView = Exclude<CompanyView, "home" | "chat" | "department" | "computer">
 
 type CompanyOption = {
   id: string
@@ -217,6 +238,30 @@ const DEPARTMENT_OVERRIDES_KEY = "code-workspace:agent-company-department-overri
 
 /** Logical agent capacity (research shards + writers + QA). Runtime parallelism is separate. */
 const MAX_LOGICAL_AGENTS = 10_000
+
+function spanishComputerError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error || "")
+  const key = raw.toLowerCase()
+  if (!raw.trim()) return "No se pudo preparar la computadora del departamento."
+  if (/department_computer_unavailable|computadora del departamento/.test(key)) {
+    return "No se pudo preparar la computadora del departamento."
+  }
+  if (/project_not_found|company_project_not_found/.test(key)) {
+    return "No encontramos el entorno de esta empresa. Recarga e inténtalo de nuevo."
+  }
+  if (/unauthorized|not authorised|not authorized|401/.test(key)) {
+    return "No tienes permiso para abrir esta computadora."
+  }
+  if (/timeout|timed out|etimedout|abort/.test(key)) {
+    return "La computadora tardó demasiado en responder. Inténtalo de nuevo."
+  }
+  if (/network|fetch|econnrefused|failed to fetch/.test(key)) {
+    return "Sin conexión con el servidor. Revisa la red e inténtalo de nuevo."
+  }
+  if (/[áéíóúñ¿¡]|departamento|computadora|empresa|permiso/.test(key)) return raw
+  return "No se pudo preparar la computadora del departamento."
+}
+
 const MIN_SWARM_LOGICAL_AGENTS = 256
 /** Default research concurrency when activating CEO Office swarm. */
 const DEFAULT_SWARM_MAX_CONCURRENCY = 128
@@ -252,7 +297,6 @@ const DEPARTMENT_ICONS: Record<string, React.ComponentType<{ className?: string 
   "ceo-office": Radio,
   "agent-infrastructure": Cpu,
   "growth-engines": TrendingUp,
-  "sales-operations": BriefcaseBusiness,
   localization: Languages,
   integrations: PlugZap,
   trust: ShieldCheck,
@@ -622,11 +666,48 @@ function replaceCompanyWorkspaceUrl(option: CompanyOption | null) {
   window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`)
 }
 
+function PolsiaCompanyStartActions({
+  onCreate,
+  onGrow,
+}: {
+  onCreate: () => void
+  onGrow: () => void
+}) {
+  return (
+    <div className="w-full max-w-[360px] bg-white px-4 py-2">
+      <button
+        type="button"
+        data-testid="agent-company-create-new"
+        className="flex h-11 w-full items-center justify-center rounded-md bg-zinc-950 px-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950/30 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+        onClick={onCreate}
+      >
+        Crear una empresa nueva
+      </button>
+      <p className="mt-1.5 text-center text-[12px] italic text-zinc-500">Empezar desde cero</p>
+      <div className="my-3 flex items-center gap-3">
+        <span className="h-px flex-1 bg-zinc-200 dark:bg-white/10" />
+        <span className="text-[10px] font-medium lowercase tracking-[0.18em] text-zinc-400">o</span>
+        <span className="h-px flex-1 bg-zinc-200 dark:bg-white/10" />
+      </div>
+      <button
+        type="button"
+        data-testid="agent-company-grow-existing"
+        className="flex h-11 w-full items-center justify-center rounded-md bg-zinc-950 px-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-white transition-colors hover:bg-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-zinc-950/30 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200"
+        onClick={onGrow}
+      >
+        Hacer crecer mi empresa
+      </button>
+      <p className="mt-1.5 text-center text-[12px] italic text-zinc-500">Ya tengo un negocio</p>
+    </div>
+  )
+}
+
 export function AgentCompanyPanel() {
   const { user } = useAuth()
   const isMobile = useIsMobile()
   const [dockSlot, setDockSlot] = React.useState<HTMLElement | null>(null)
   const [previewSlot, setPreviewSlot] = React.useState<HTMLElement | null>(null)
+  const [centerSlot, setCenterSlot] = React.useState<HTMLElement | null>(null)
   const {
     files,
     activeFolder,
@@ -637,19 +718,28 @@ export function AgentCompanyPanel() {
     listCodeChatSessionsForWorkspace,
     switchCodexWorkspace,
     forgetWorkspace,
+    setActiveFolder,
+    hydrateFiles,
   } = useCodeWorkspace()
 
   const [view, setView] = React.useState<CompanyView>("home")
   const [previewView, setPreviewView] = React.useState<CompanyPreviewView | null>(null)
   const [selectedDepartmentId, setSelectedDepartmentId] = React.useState("ceo-office")
+  const [computerStatus, setComputerStatus] = React.useState<{ loading: boolean; error: string | null }>({
+    loading: false,
+    error: null,
+  })
   const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null)
   const [officeOpen, setOfficeOpen] = React.useState(false)
   const [companyMenuOpen, setCompanyMenuOpen] = React.useState(false)
   const [projects, setProjects] = React.useState<Project[]>([])
-  const [projectsLoading, setProjectsLoading] = React.useState(false)
+  const [projectsLoading, setProjectsLoading] = React.useState(true)
   const [companyRegistry, setCompanyRegistry] = React.useState<ReturnType<typeof listCodexProjects>>([])
   const [newCompanyOpen, setNewCompanyOpen] = React.useState(false)
   const [newCompanyName, setNewCompanyName] = React.useState("")
+  const [newCompanyMode, setNewCompanyMode] = React.useState<"create" | "grow">("create")
+  const [newCompanyWebsite, setNewCompanyWebsite] = React.useState("")
+  const [newCompanyAbout, setNewCompanyAbout] = React.useState("")
   const [creatingCompany, setCreatingCompany] = React.useState(false)
   const [editingCompany, setEditingCompany] = React.useState<CompanyOption | null>(null)
   const [editingCompanyName, setEditingCompanyName] = React.useState("")
@@ -683,6 +773,7 @@ export function AgentCompanyPanel() {
   const [companyContext, setCompanyContext] = React.useState<CodexCompanyContext | null>(null)
   const [commandCenter, setCommandCenter] = React.useState<CodexEnterpriseCommandCenter | null>(null)
   const [associationState, setAssociationState] = React.useState<CodexCompanyAssociationState | null>(null)
+  const [associationError, setAssociationError] = React.useState<{ code: string; message: string } | null>(null)
   const [associationLoading, setAssociationLoading] = React.useState(false)
   const [associationWizardOpen, setAssociationWizardOpen] = React.useState(false)
   const [associationBusy, setAssociationBusy] = React.useState(false)
@@ -696,8 +787,7 @@ export function AgentCompanyPanel() {
   const proactiveMutationVersionRef = React.useRef(0)
   const companyProjectId = React.useMemo(() => {
     const value = String(activeFolder?.id || "").trim()
-    if (!value || value.startsWith("local:")) return null
-    return value.replace(/^project:/, "")
+    return codexProjectIdFromWorkspaceId(value, { assumeProject: true })
   }, [activeFolder?.id])
   const associationLoadGenerationRef = React.useRef(0)
   const associationRequestCompanyRef = React.useRef<string | null>(null)
@@ -794,11 +884,43 @@ export function AgentCompanyPanel() {
           setCompanyCapacity(proactiveResult.value.capacity || null)
           setDepartmentPools(Array.isArray(proactiveResult.value.departmentPools) ? proactiveResult.value.departmentPools : [])
           setProgressMemory(proactiveResult.value.memory || null)
-          const custom = proactiveResult.value.departments
+          const serverDepartments = Array.isArray(proactiveResult.value.departments)
+            ? proactiveResult.value.departments
+            : []
+          const custom = serverDepartments
             .filter((department) => department.custom)
             .map((department) => ({ ...department, custom: true as const }))
           setCustomDepartments(custom)
           writeCustomDepartments(activeFolder?.id, custom)
+          // Merge built-in capacity/mission from the server so logical agents and
+          // office seats match backend fleet sizing (not the FE 1-agent fallback).
+          const builtInIds = new Set(AGENT_COMPANY_DEPARTMENTS.map((row) => row.id))
+          const serverOverrides: Record<string, DepartmentOverride> = {}
+          for (const department of serverDepartments) {
+            if (!department || department.custom || !builtInIds.has(department.id)) continue
+            const base = AGENT_COMPANY_DEPARTMENTS.find((row) => row.id === department.id)
+            if (!base) continue
+            const patch: DepartmentOverride = {}
+            if (department.desiredAgents != null && department.desiredAgents !== base.desiredAgents) {
+              patch.desiredAgents = Math.max(1, Math.min(MAX_LOGICAL_AGENTS, Number(department.desiredAgents) || 1))
+            }
+            if (department.name && department.name !== base.name) patch.name = department.name
+            if (department.mission && department.mission !== base.mission) patch.mission = department.mission
+            if (department.description && department.description !== base.description) {
+              patch.description = department.description
+            }
+            if (Object.keys(patch).length) serverOverrides[department.id] = patch
+          }
+          if (Object.keys(serverOverrides).length) {
+            setDepartmentOverrides((current) => {
+              const next = { ...current }
+              for (const [id, patch] of Object.entries(serverOverrides)) {
+                next[id] = { ...next[id], ...patch }
+              }
+              writeDepartmentOverrides(activeFolder?.id, next)
+              return next
+            })
+          }
           setProactiveOn(enabled)
           setProactiveCompanyEnabled(enabled, { workspaceId: activeFolder?.id || null })
         }
@@ -834,11 +956,13 @@ export function AgentCompanyPanel() {
     associationRequestCompanyRef.current = requestedCompanyId
     if (companyChanged) {
       setAssociationState(null)
+      setAssociationError(null)
       setAssociationCandidateId("")
       setAssociationConnectorIds([])
     }
     if (!requestedCompanyId) {
       setAssociationState(null)
+      setAssociationError(null)
       setAssociationLoading(false)
       setActiveCodexProject(null)
       return null
@@ -854,6 +978,7 @@ export function AgentCompanyPanel() {
         state,
       })) return null
       setAssociationState(state)
+      setAssociationError(null)
       if (state.association) {
         const codexProjectId = state.association.codexProject.id
         setAssociationCandidateId(codexProjectId)
@@ -868,13 +993,13 @@ export function AgentCompanyPanel() {
         setActiveCodexProject(null)
       }
       return state
-    } catch {
+    } catch (error) {
       if (
         generation !== associationLoadGenerationRef.current
         || companyProjectIdRef.current !== requestedCompanyId
       ) return null
+      setAssociationError(codexIdentityIssue(error))
       setAssociationState(null)
-      setActiveCodexProject(null)
       return null
     } finally {
       if (
@@ -888,6 +1013,16 @@ export function AgentCompanyPanel() {
     void refreshCompanyAssociation()
   }, [refreshCompanyAssociation])
 
+  React.useEffect(() => {
+    const openAssociation = () => {
+      if (!companyProjectId) return
+      setAssociationWizardOpen(true)
+      void refreshCompanyAssociation()
+    }
+    window.addEventListener(CODE_OPEN_COMPANY_ASSOCIATION_EVENT, openAssociation)
+    return () => window.removeEventListener(CODE_OPEN_COMPANY_ASSOCIATION_EVENT, openAssociation)
+  }, [companyProjectId, refreshCompanyAssociation])
+
   const confirmCompanyAssociation = React.useCallback(async () => {
     if (!companyProjectId || !associationCandidateId || associationBusy) return
     setAssociationBusy(true)
@@ -899,6 +1034,7 @@ export function AgentCompanyPanel() {
         "manual",
       )
       await refreshCompanyAssociation()
+      notifyCompanyAssociationChanged()
       setAssociationWizardOpen(false)
       toast.success("Entorno y conectores asociados de forma persistente.")
     } catch (error) {
@@ -921,6 +1057,7 @@ export function AgentCompanyPanel() {
 
   React.useEffect(() => subscribeAgentCompanySlot(setDockSlot), [])
   React.useEffect(() => subscribeAgentCompanyPreviewSlot(setPreviewSlot), [])
+  React.useEffect(() => subscribeAgentCompanyCenterSlot(setCenterSlot), [])
   const dockedInAppsRail = !isMobile && Boolean(dockSlot)
   const chatLivesInWorkspaceColumn = dockedInAppsRail
 
@@ -967,9 +1104,9 @@ export function AgentCompanyPanel() {
     const params = new URLSearchParams(window.location.search)
     if (params.get("companyView") === "resources" || params.has("social")) {
       if (isMobile) setView("resources")
-      else if (dockedInAppsRail && previewSlot) setPreviewView("resources")
+      else if (dockedInAppsRail && (centerSlot || previewSlot)) setPreviewView("resources")
     }
-  }, [dockedInAppsRail, isMobile, previewSlot])
+  }, [centerSlot, dockedInAppsRail, isMobile, previewSlot])
 
   const refreshProjects = React.useCallback(async () => {
     setProjectsLoading(true)
@@ -1014,39 +1151,40 @@ export function AgentCompanyPanel() {
         kind: "local-folder",
         isPinned: entry.isPinned === true,
       }))
-    const current: CompanyOption | null = activeFolder
-      ? (() => {
-          const kind = activeFolder.id.startsWith("local:") ? "local-folder" : "project"
-          const projectId = kind === "project" ? activeFolder.id.replace(/^project:/, "") : undefined
-          const registryId = projectId ? codexIdForProject(projectId) : activeFolder.id
-          return {
-            id: projectId || activeFolder.id,
-            projectId,
-            name: activeFolder.name,
-            kind,
-            isPinned: projectId
-              ? projects.find((project) => project.id === projectId)?.isStarred
-                ?? registry.find((entry) => entry.id === registryId)?.isPinned
-                ?? false
-              : registry.find((entry) => entry.id === registryId)?.isPinned === true,
-          }
-        })()
-      : null
-    const merged = current ? [current, ...cloud, ...local] : [...cloud, ...local]
+    const merged = [...cloud, ...local]
     return merged
       .filter((entry, index) => merged.findIndex((candidate) => candidate.id === entry.id) === index)
       .map((entry, index) => ({ entry, index }))
       .sort((left, right) => Number(right.entry.isPinned) - Number(left.entry.isPinned) || left.index - right.index)
       .map(({ entry }) => entry)
-  }, [activeFolder, companyRegistry, projects])
+  }, [companyRegistry, projects])
+
+  const hasCompanies = companyOptions.length > 0
+  const showCompaniesEmpty = !projectsLoading && !hasCompanies
 
   const departmentRows = React.useMemo(() => {
+    const departmentByPoolId = new Map(
+      departmentPools.map((pool) => [pool.id, pool.departmentId] as const),
+    )
+    const runById = new Map(codexRuns.map((run) => [run.id, run] as const))
     return allDepartments.map((department) => {
       const sessions = codeChatSessions.filter(
-        (session) => departmentIdForSession(session, snapshot.rootSessionId, allDepartments) === department.id,
+        (session) => {
+          const linkedRunId = [...session.turns].reverse().find((turn) => turn.codexRunId)?.codexRunId
+          const linkedRun = linkedRunId ? runById.get(linkedRunId) || null : null
+          const durableDepartmentId = linkedRun?.departmentPoolId
+            ? departmentByPoolId.get(linkedRun.departmentPoolId) || null
+            : null
+          return (durableDepartmentId || departmentIdForSession(session, snapshot.rootSessionId, allDepartments)) === department.id
+        },
       )
       const runs = codexRuns.filter(
-        (run) => departmentIdForRun(run, allDepartments) === department.id,
+        (run) => {
+          const durableDepartmentId = run.departmentPoolId
+            ? departmentByPoolId.get(run.departmentPoolId) || null
+            : null
+          return (durableDepartmentId || departmentIdForRun(run, allDepartments)) === department.id
+        },
       )
       const activeRunCount = runs.filter(codeRunIsActive).length
       const activeSessionCount = sessions.filter(codeSessionIsActive).length
@@ -1055,9 +1193,23 @@ export function AgentCompanyPanel() {
       const latestRun = [...runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))[0] || null
       return { department, sessions, runs, activeCount, latest, latestRun }
     })
-  }, [allDepartments, codeChatSessions, codexRuns, snapshot.rootSessionId])
+  }, [allDepartments, codeChatSessions, codexRuns, departmentPools, snapshot.rootSessionId])
 
   const selectedDepartment = departmentRows.find((row) => row.department.id === selectedDepartmentId) || null
+  const chatDepartment = React.useMemo(() => {
+    if (selectedDepartmentId) {
+      const found = allDepartments.find((department) => department.id === selectedDepartmentId)
+      if (found) return found
+    }
+    const session = codeChatSessions.find((entry) => entry.id === activeCodeChatSessionId)
+    if (session) {
+      const id = departmentIdForSession(session, snapshot.rootSessionId, allDepartments)
+      return allDepartments.find((department) => department.id === id)
+        || allDepartments.find((department) => department.id === "ceo-office")
+        || null
+    }
+    return allDepartments.find((department) => department.id === "ceo-office") || null
+  }, [allDepartments, selectedDepartmentId, codeChatSessions, activeCodeChatSessionId, snapshot.rootSessionId])
   const selectedTask = codeChatSessions.find((session) => session.id === selectedTaskId) || null
   const officeModel = React.useMemo(
     () =>
@@ -1090,22 +1242,38 @@ export function AgentCompanyPanel() {
   )
 
   const openCompanySurface = React.useCallback((nextView: CompanyPreviewView) => {
-    if (dockedInAppsRail && previewSlot) {
-      setPreviewView(nextView)
+    if (dockedInAppsRail && (centerSlot || previewSlot)) {
+      setPreviewView((current) => (current === nextView ? null : nextView))
       return
     }
     setView(nextView)
-  }, [dockedInAppsRail, previewSlot])
+  }, [centerSlot, dockedInAppsRail, previewSlot])
+
+  React.useEffect(() => {
+    if (!dockedInAppsRail || typeof window === "undefined") return
+    window.dispatchEvent(
+      new CustomEvent(CODE_NAV_FULLSCREEN_EVENT, { detail: { view: previewView } }),
+    )
+  }, [dockedInAppsRail, previewView])
+
+  React.useEffect(() => {
+    const onFocusCeo = () => setPreviewView(null)
+    window.addEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+    return () => window.removeEventListener(CODE_FOCUS_CEO_CHAT_EVENT, onFocusCeo)
+  }, [])
 
   const ensureCompanyRuntime = React.useCallback(
     ({
       workspaceId = activeFolder?.id || null,
-      name = companyName,
+      name = String(activeFolder?.name || "").trim() || companyName,
+      silent = false,
     }: {
       workspaceId?: string | null
       name?: string
+      silent?: boolean
     } = {}) => {
       if (!workspaceId) {
+        if (silent) return Promise.resolve("")
         return Promise.reject(new Error("Selecciona o crea una empresa antes de iniciar el runtime."))
       }
 
@@ -1122,8 +1290,8 @@ export function AgentCompanyPanel() {
           )
         }
 
-        const durableCompanyId = workspaceId.replace(/^project:/, "")
-        if (workspaceId.startsWith("local:")) {
+        const durableCompanyId = codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true }) || workspaceId
+        if (!codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true })) {
           throw new Error("Los workspaces locales no pueden administrar una empresa persistente.")
         }
         const durableState = workspaceId === activeFolder?.id && associationState
@@ -1138,13 +1306,24 @@ export function AgentCompanyPanel() {
           }
         }
         if (durableState.candidates.length) {
+          const legacyHint = linkedCodexProject({
+            workspaceId,
+            sessionId: activeCodeChatSessionId,
+          })
+          const candidate = durableState.candidates.find((row) => row.id === legacyHint) || durableState.candidates[0]
+          if (silent && candidate) {
+            await codexApi.associateCompany(
+              durableCompanyId,
+              candidate.id,
+              [],
+              "created_for_company",
+            )
+            persistWorkspaceCodexProject(workspaceId, candidate.id)
+            setActiveCodexProject(candidate.id)
+            return candidate.id
+          }
           if (workspaceId === activeFolder?.id) {
             setAssociationState(durableState)
-            const legacyHint = linkedCodexProject({
-              workspaceId,
-              sessionId: activeCodeChatSessionId,
-            })
-            const candidate = durableState.candidates.find((row) => row.id === legacyHint)
             setAssociationCandidateId(candidate?.id || durableState.candidates[0].id)
             setAssociationWizardOpen(true)
           }
@@ -1174,6 +1353,7 @@ export function AgentCompanyPanel() {
           "created_for_company",
         )
         if (workspaceId === activeFolder?.id) await refreshCompanyAssociation()
+        notifyCompanyAssociationChanged()
         persistWorkspaceCodexProject(workspaceId, project.id)
         setActiveCodexProject(project.id)
         return project.id
@@ -1187,6 +1367,7 @@ export function AgentCompanyPanel() {
     [
       activeCodeChatSessionId,
       activeFolder?.id,
+      activeFolder?.name,
       associationState,
       codexAccess,
       companyName,
@@ -1194,12 +1375,40 @@ export function AgentCompanyPanel() {
     ],
   )
 
-  const openCeoOffice = React.useCallback(() => {
-    let rootSessionId = codeChatSessions.find(
-      (session) => session.title.trim().toLowerCase() === "ceo office",
+  const startDepartmentConversation = React.useCallback((departmentId: string) => {
+    const department = allDepartments.find((entry) => entry.id === departmentId)
+    if (!department) return
+    const base = departmentBootstrapTitle(department)
+    const siblings = codeChatSessions.filter((session) => {
+      const title = session.title.trim().toLowerCase()
+      const needle = base.toLowerCase()
+      return title === needle || title.startsWith(`${needle} ·`)
+    })
+    const reusable = siblings.find((session) => !session.turns.some((turn) => turn.content.trim()))
+    if (reusable) {
+      setActiveCodeChatSession(reusable.id)
+      return
+    }
+    const title = siblings.length === 0 ? base : `${base} · ${siblings.length + 1}`
+    setActiveCodeChatSession(createCodeChatSession({ title }))
+  }, [allDepartments, codeChatSessions, createCodeChatSession, setActiveCodeChatSession])
+
+  const openDepartmentChat = React.useCallback((departmentId: string) => {
+    const department = allDepartments.find((entry) => entry.id === departmentId)
+    if (!department) return
+    setSelectedDepartmentId(department.id)
+    const title = departmentBootstrapTitle(department)
+    let sessionId = codeChatSessions.find(
+      (session) => session.title.trim().toLowerCase() === title.toLowerCase(),
     )?.id
-    if (!rootSessionId) rootSessionId = createCodeChatSession({ title: "CEO Office" })
-    setActiveCodeChatSession(rootSessionId)
+    if (!sessionId) {
+      sessionId = codeChatSessions.find((session) => {
+        const text = session.title.trim().toLowerCase()
+        return text === title.toLowerCase() || text.startsWith(`${title.toLowerCase()} ·`)
+      })?.id
+    }
+    if (!sessionId) sessionId = createCodeChatSession({ title })
+    setActiveCodeChatSession(sessionId)
     if (chatLivesInWorkspaceColumn) {
       setView("home")
       focusCeoChatColumn()
@@ -1207,40 +1416,119 @@ export function AgentCompanyPanel() {
     }
     setView("chat")
   }, [
-    chatLivesInWorkspaceColumn,
-    createCodeChatSession,
-    codeChatSessions,
-    setActiveCodeChatSession,
-  ])
-
-  const openDepartmentChat = React.useCallback((departmentId: string) => {
-    if (departmentId === "ceo-office") {
-      openCeoOffice()
-      return
-    }
-    const department = allDepartments.find((entry) => entry.id === departmentId)
-    if (!department) return
-    const title = departmentBootstrapTitle(department)
-    let sessionId = codeChatSessions.find(
-      (session) => session.title.trim().toLowerCase() === title.toLowerCase(),
-    )?.id
-    if (!sessionId) sessionId = createCodeChatSession({ title })
-    setSelectedDepartmentId(departmentId)
-    setActiveCodeChatSession(sessionId)
-    if (chatLivesInWorkspaceColumn) {
-      setView("home")
-      focusCeoChatColumn()
-    } else {
-      setView("chat")
-    }
-  }, [
     allDepartments,
     chatLivesInWorkspaceColumn,
     codeChatSessions,
     createCodeChatSession,
-    openCeoOffice,
     setActiveCodeChatSession,
   ])
+
+  const openCeoOffice = React.useCallback(() => {
+    openDepartmentChat("ceo-office")
+  }, [openDepartmentChat])
+
+  const openDepartmentOverview = React.useCallback((departmentId: string) => {
+    openDepartmentChat(departmentId)
+  }, [openDepartmentChat])
+
+  const openDepartmentComputer = React.useCallback((departmentId: string) => {
+    const department = allDepartments.find((entry) => entry.id === departmentId)
+    if (!department) return
+    setSelectedDepartmentId(departmentId)
+    const computerRunId = department.computerRunId || `dept-${departmentId}`
+    setActiveDepartmentComputer(computerRunId)
+    setComputerStatus({ loading: false, error: null })
+    const projectId = associatedCodexProjectId
+      || desktopRuntimeProjectId(activeFolder?.id)
+      || companyProjectId
+      || getActiveCodexProject()
+    if (projectId) setActiveCodexProject(projectId)
+    setActiveDepartmentSelection({
+      id: department.id,
+      name: department.name,
+      projectId: projectId || null,
+    })
+    if (!projectId) {
+      void ensureCompanyRuntime({ silent: true }).then((id) => {
+        if (!id) return
+        setActiveCodexProject(id)
+        setActiveDepartmentSelection({
+          id: department.id,
+          name: department.name,
+          projectId: id,
+        })
+      }).catch(() => {})
+    }
+    // Header/icon path: right-hand pane only. Never replace the center chat
+    // with DepartmentComputerView and never open the association wizard.
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, { detail: { runId: computerRunId, departmentId, projectId } }),
+      )
+    }
+    if (projectId) {
+      void codexApi.ensureDepartmentComputer(projectId, departmentId).catch(() => {})
+    }
+  }, [
+    activeFolder?.id,
+    allDepartments,
+    associatedCodexProjectId,
+    companyProjectId,
+    ensureCompanyRuntime,
+  ])
+
+  React.useEffect(() => {
+    const projectId = associatedCodexProjectId || companyProjectId || getActiveCodexProject()
+    const dept = chatDepartment
+      ? { id: chatDepartment.id, name: chatDepartment.name, projectId: projectId || null }
+      : { id: "ceo-office", name: "CEO Office", projectId: projectId || null }
+    setActiveDepartmentSelection(dept)
+    if (projectId) setActiveCodexProject(projectId)
+  }, [associatedCodexProjectId, chatDepartment, companyProjectId])
+
+  React.useEffect(() => {
+    return () => setActiveDepartmentSelection(null)
+  }, [])
+
+  React.useEffect(() => {
+    const onRequestCurrent = () => {
+      const id = chatDepartment?.id || selectedDepartmentId || "ceo-office"
+      if (!id) return
+      setSelectedDepartmentId(id)
+      const department = allDepartments.find((entry) => entry.id === id)
+      const computerRunId = department?.computerRunId || `dept-${id}`
+      setActiveDepartmentComputer(computerRunId)
+      const projectId = associatedCodexProjectId
+        || desktopRuntimeProjectId(activeFolder?.id)
+        || companyProjectId
+        || getActiveCodexProject()
+      if (projectId) setActiveCodexProject(projectId)
+      setActiveDepartmentSelection({
+        id,
+        name: department?.name || (id === "ceo-office" ? "CEO Office" : id),
+        projectId: projectId || null,
+      })
+      if (!projectId) {
+        void ensureCompanyRuntime({ silent: true }).then((boundId) => {
+          if (!boundId) return
+          setActiveCodexProject(boundId)
+          setActiveDepartmentSelection({
+            id,
+            name: department?.name || (id === "ceo-office" ? "CEO Office" : id),
+            projectId: boundId,
+          })
+        }).catch(() => {})
+      }
+      window.dispatchEvent(
+        new CustomEvent(CODE_OPEN_DEPARTMENT_COMPUTER_EVENT, { detail: { runId: computerRunId, departmentId: id, projectId } }),
+      )
+      if (projectId) {
+        void codexApi.ensureDepartmentComputer(projectId, id).catch(() => {})
+      }
+    }
+    window.addEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent)
+    return () => window.removeEventListener(CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT, onRequestCurrent)
+  }, [activeFolder?.id, allDepartments, associatedCodexProjectId, chatDepartment, companyProjectId, ensureCompanyRuntime, selectedDepartmentId])
 
   const openOfficeWorker = React.useCallback((worker: AgentOfficeWorker) => {
     setOfficeOpen(false)
@@ -1267,15 +1555,24 @@ export function AgentCompanyPanel() {
       rootSessionId = createCodeChatSession({ title: "CEO Office" })
       existingTitles.add("ceo office")
     }
-    for (const department of PROACTIVE_CORE_DEPARTMENTS) {
-      if (department.id === "ceo-office") continue
+    // Full fleet: every enabled department (built-in + custom) gets a chat seat
+    // so PROACTIVO can assign work without a missing-session race.
+    const fleet = allDepartments.length > 0 ? allDepartments : PROACTIVE_CORE_DEPARTMENTS
+    for (const department of fleet) {
+      if (department.id === "ceo-office" || department.enabled === false) continue
       const title = departmentBootstrapTitle(department)
       if (existingTitles.has(title.toLowerCase())) continue
       createCodeChatSession({ title })
       existingTitles.add(title.toLowerCase())
     }
     return rootSessionId
-  }, [codeChatSessions, createCodeChatSession])
+  }, [allDepartments, codeChatSessions, createCodeChatSession])
+
+  // Keep department chats warm whenever PROACTIVO is on (toggle or server hydrate).
+  React.useEffect(() => {
+    if (!proactiveOn) return
+    ensureDepartmentSessions()
+  }, [proactiveOn, ensureDepartmentSessions])
 
   const toggleProactive = React.useCallback(async () => {
     const next = !proactiveOn
@@ -1427,7 +1724,7 @@ export function AgentCompanyPanel() {
     }
   }, [
     activeFolder?.id,
-    allDepartments.length,
+    allDepartments,
     associatedCodexProjectId,
     codeChatSessions,
     commandCenter?.swarm?.id,
@@ -1519,14 +1816,25 @@ export function AgentCompanyPanel() {
     [switchCodexWorkspace],
   )
 
+  const openCompanyStart = React.useCallback((mode: "create" | "grow") => {
+    setNewCompanyMode(mode)
+    setCompanyMenuOpen(false)
+    setNewCompanyOpen(true)
+  }, [])
+
   const createCompany = React.useCallback(async () => {
     const name = newCompanyName.trim()
     if (!name || creatingCompany) return
     setCreatingCompany(true)
     try {
+      const website = newCompanyWebsite.trim()
+      const about = newCompanyAbout.trim()
+      const description = newCompanyMode === "grow"
+        ? ["Empresa existente — hacer crecer", website && `Sitio: ${website}`, about].filter(Boolean).join(" · ")
+        : "Empresa de agentes"
       const project = await projectsService.create({
         name,
-        description: "Empresa de agentes",
+        description,
         type: "webapp",
       })
       let runtimeReady = false
@@ -1558,15 +1866,24 @@ export function AgentCompanyPanel() {
         )
       }, 0)
       setNewCompanyName("")
+      setNewCompanyWebsite("")
+      setNewCompanyAbout("")
+      setNewCompanyMode("create")
       setNewCompanyOpen(false)
       setProjects((current) => [project, ...current.filter((item) => item.id !== project.id)])
-      if (runtimeReady) toast.success("Empresa creada con CEO Office y runtime operativo.")
+      if (runtimeReady) {
+        toast.success(
+          newCompanyMode === "grow"
+            ? "Empresa lista. Vamos a hacerla crecer con CEO Office y runtime operativo."
+            : "Empresa creada con CEO Office y runtime operativo.",
+        )
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo crear la empresa.")
     } finally {
       setCreatingCompany(false)
     }
-  }, [creatingCompany, ensureCompanyRuntime, newCompanyName, switchCodexWorkspace])
+  }, [creatingCompany, ensureCompanyRuntime, newCompanyAbout, newCompanyMode, newCompanyName, newCompanyWebsite, switchCodexWorkspace])
 
   const toggleCompanyPin = React.useCallback(async (option: CompanyOption) => {
     if (companyMutation) return
@@ -1675,7 +1992,7 @@ export function AgentCompanyPanel() {
       }
 
       const isCurrent = option.projectId
-        ? activeFolder?.id?.replace(/^project:/, "") === option.projectId
+        ? (codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || "") === option.projectId
         : activeFolder?.id === option.id
       if (isCurrent) {
         await switchCodexWorkspace({
@@ -1706,20 +2023,32 @@ export function AgentCompanyPanel() {
     if (!option || companyMutation) return
     setCompanyMutation(`delete:${option.id}`)
 
+    const registryId = option.projectId ? codexIdForProject(option.projectId) : option.id
+    const workspaceId = option.projectId || option.id
+    const isCurrent = (codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || activeFolder?.id)
+      === (codexProjectIdFromWorkspaceId(workspaceId, { assumeProject: true }) || workspaceId)
+    const fallback = companyOptions.find((candidate) => candidate.id !== option.id)
+
+    if (option.projectId) {
+      setProjects((current) => current.filter((project) => project.id !== option.projectId))
+    }
+    removeCodexProject(registryId)
+    setCompanyRegistry((current) =>
+      current.filter((entry) => entry.id !== registryId && entry.id !== option.id),
+    )
+    setDeletingCompany(null)
+    setCompanyMenuOpen(false)
+    setOfficeOpen(false)
+    setPreviewView(null)
+    setView("home")
+    if (isCurrent) replaceCompanyWorkspaceUrl(fallback || null)
+    forgetWorkspace(workspaceId)
+    if (isCurrent && !fallback) setActiveFolder(null)
+
     try {
       if (option.projectId) {
         await projectsService.remove(option.projectId)
-        setProjects((current) => current.filter((project) => project.id !== option.projectId))
       }
-
-      const registryId = option.projectId ? codexIdForProject(option.projectId) : option.id
-      removeCodexProject(registryId)
-
-      const workspaceId = option.projectId || option.id
-      const isCurrent = activeFolder?.id?.replace(/^project:/, "") === workspaceId.replace(/^project:/, "")
-      const fallback = companyOptions.find((candidate) => candidate.id !== option.id)
-      if (isCurrent) replaceCompanyWorkspaceUrl(fallback || null)
-      forgetWorkspace(workspaceId)
       if (isCurrent && fallback) {
         await switchCodexWorkspace({
           id: fallback.projectId ? codexIdForProject(fallback.projectId) : fallback.id,
@@ -1730,14 +2059,14 @@ export function AgentCompanyPanel() {
       }
 
       window.dispatchEvent(new Event(CODEX_UPDATED_EVENT))
-      setDeletingCompany(null)
-      setCompanyMenuOpen(false)
       toast.success(
         option.projectId
           ? "Empresa movida a Papelera. Puedes restaurarla durante 30 días."
           : "Empresa local quitada. No se eliminó ningún archivo del disco.",
       )
     } catch (error) {
+      void refreshProjects()
+      setCompanyRegistry(listCodexProjects())
       toast.error(error instanceof Error ? error.message : "No se pudo eliminar la empresa.")
     } finally {
       setCompanyMutation(null)
@@ -1748,6 +2077,8 @@ export function AgentCompanyPanel() {
     companyOptions,
     deletingCompany,
     forgetWorkspace,
+    refreshProjects,
+    setActiveFolder,
     switchCodexWorkspace,
   ])
 
@@ -1783,8 +2114,8 @@ export function AgentCompanyPanel() {
       setNewDepartmentName("")
       setNewDepartmentAgents(32)
       setNewDepartmentOpen(false)
-      setSelectedDepartmentId(id)
       toast.success("Departamento operativo añadido.")
+      openDepartmentChat(id)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo persistir el departamento.")
     } finally {
@@ -1798,6 +2129,7 @@ export function AgentCompanyPanel() {
     ensureCompanyRuntime,
     newDepartmentAgents,
     newDepartmentName,
+    openDepartmentChat,
   ])
 
   const applyDepartmentPayload = React.useCallback((departments: Array<AgentDepartmentDefinition & { custom?: boolean }>) => {
@@ -1957,60 +2289,77 @@ export function AgentCompanyPanel() {
     savingDepartment,
   ])
 
-  const confirmDeleteDepartment = React.useCallback(async () => {
+  const confirmDeleteDepartment = React.useCallback(() => {
     const target = deleteDepartmentTarget
-    if (!target || deletingDepartment) return
+    if (!target) return
     if (target.id === "ceo-office") {
       toast.error("CEO Office no se puede eliminar.")
       setDeleteDepartmentTarget(null)
       return
     }
 
-    setDeletingDepartment(true)
-    try {
-      const codexProjectId = associatedCodexProjectId || getActiveCodexProject()
-      const isCustom = Boolean(target.custom) || target.id.startsWith("custom-")
-      const serverManaged = isCustom || SERVER_BUILTIN_DEPARTMENT_IDS.has(target.id)
+    const liveAssociatedCodexProjectId = String(associatedCodexProjectId || "").trim()
+    const isCustom = Boolean(target.custom) || target.id.startsWith("custom-")
+    const serverManaged = isCustom || SERVER_BUILTIN_DEPARTMENT_IDS.has(target.id)
+    const previousCustom = customDepartments
+    const previousHidden = hiddenDepartmentIds
 
-      if (codexProjectId && serverManaged) {
-        const result = await codexApi.deleteDepartment(codexProjectId, target.id)
+    // Optimistic hide FIRST — never wait on a dead Codex project.
+    if (isCustom) {
+      const next = customDepartments.filter((department) => department.id !== target.id)
+      setCustomDepartments(next)
+      writeCustomDepartments(activeFolder?.id, next)
+    } else {
+      const nextHidden = [...new Set([...hiddenDepartmentIds, target.id])]
+      setHiddenDepartmentIds(nextHidden)
+      writeHiddenDepartments(activeFolder?.id, nextHidden)
+    }
+    setPinnedDepartmentIds((current) => {
+      const next = current.filter((id) => id !== target.id)
+      writePinnedDepartments(activeFolder?.id, next)
+      return next
+    })
+    if (selectedDepartmentId === target.id) {
+      setSelectedDepartmentId("ceo-office")
+      setActiveDepartmentComputer(null)
+    }
+    setDeleteDepartmentTarget(null)
+    setDeletingDepartment(false)
+    toast.success("Departamento eliminado.")
+
+    if (!serverManaged || !liveAssociatedCodexProjectId) return
+
+    void (async () => {
+      try {
+        const result = await codexApi.deleteDepartment(liveAssociatedCodexProjectId, target.id)
         setCompanyCapacity(result.capacity)
         applyDepartmentPayload(result.departments)
-      } else if (isCustom) {
-        const next = customDepartments.filter((department) => department.id !== target.id)
-        setCustomDepartments(next)
-        writeCustomDepartments(activeFolder?.id, next)
-      } else {
-        const nextHidden = [...new Set([...hiddenDepartmentIds, target.id])]
-        setHiddenDepartmentIds(nextHidden)
-        writeHiddenDepartments(activeFolder?.id, nextHidden)
+      } catch (error) {
+        const code = codexErrorCode(error)
+        if (code === "project_not_found" || code === "company_project_not_found") {
+          return
+        }
+        if (isCustom) {
+          setCustomDepartments(previousCustom)
+          writeCustomDepartments(activeFolder?.id, previousCustom)
+        } else {
+          setHiddenDepartmentIds(previousHidden)
+          writeHiddenDepartments(activeFolder?.id, previousHidden)
+        }
+        toast.error(error instanceof Error ? error.message : "No se pudo eliminar el departamento.")
       }
-
-      setPinnedDepartmentIds((current) => {
-        const next = current.filter((id) => id !== target.id)
-        writePinnedDepartments(activeFolder?.id, next)
-        return next
-      })
-      if (selectedDepartmentId === target.id) setSelectedDepartmentId("ceo-office")
-      setDeleteDepartmentTarget(null)
-      toast.success("Departamento eliminado.")
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "No se pudo eliminar el departamento.")
-    } finally {
-      setDeletingDepartment(false)
-    }
+    })()
   }, [
     activeFolder?.id,
     applyDepartmentPayload,
     associatedCodexProjectId,
     customDepartments,
     deleteDepartmentTarget,
-    deletingDepartment,
     hiddenDepartmentIds,
     selectedDepartmentId,
   ])
 
-  const currentProjectId = activeFolder?.id?.replace(/^project:/, "") || null
+  const currentProjectId = codexProjectIdFromWorkspaceId(activeFolder?.id, { assumeProject: true }) || null
   const associationOptions = associationState?.association
     ? [associationState.association.codexProject]
     : associationState?.candidates || []
@@ -2027,8 +2376,32 @@ export function AgentCompanyPanel() {
         <div className={cn("absolute inset-0", view === "chat" ? "block" : "invisible pointer-events-none")}>
           <AICodeChatPanel
             embedded
+            title={chatDepartment?.name}
             onBack={() => setView("home")}
             proactive={proactiveOn}
+            bardNav={
+              view === "chat" && chatDepartment
+                ? {
+                    companyName,
+                    departmentId: chatDepartment.id,
+                    departmentName: chatDepartment.name,
+                    departments: allDepartments.map((department) => ({
+                      id: department.id,
+                      name: department.name,
+                    })),
+                    recentSessions: (departmentRows.find((row) => row.department.id === chatDepartment.id)?.sessions || [])
+                      .slice()
+                      .sort((a, b) => b.updatedAt - a.updatedAt)
+                      .slice(0, 8)
+                      .map((session) => ({ id: session.id, title: session.title })),
+                    activeSessionId: activeCodeChatSessionId,
+                    onSelectDepartment: openDepartmentChat,
+                    onSelectSession: (sessionId) => setActiveCodeChatSession(sessionId),
+                    onNewConversation: () => startDepartmentConversation(chatDepartment.id),
+                    onBackToCompany: () => setView("home"),
+                  }
+                : undefined
+            }
           />
         </div>
       ) : null}
@@ -2039,6 +2412,21 @@ export function AgentCompanyPanel() {
           !chatLivesInWorkspaceColumn && view === "chat" && "invisible pointer-events-none",
         )}
       >
+        {showCompaniesEmpty ? (
+          centerSlot ? null : (
+            <div
+              className="flex h-full min-h-0 w-full items-center justify-center bg-white"
+              data-companies-empty="polsia"
+              data-testid="agent-companies-empty"
+            >
+              <PolsiaCompanyStartActions
+                onCreate={() => openCompanyStart("create")}
+                onGrow={() => openCompanyStart("grow")}
+              />
+            </div>
+          )
+        ) : (
+        <>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b border-border/55 px-3">
           {view !== "home" ? (
             <Button
@@ -2071,6 +2459,7 @@ export function AgentCompanyPanel() {
               className="isolate w-[min(360px,calc(100vw-24px))] overflow-hidden rounded-lg border border-white/80 bg-white/90 p-0 shadow-[0_24px_70px_-34px_rgba(15,23,42,0.45)] ring-1 ring-black/[0.04] backdrop-blur-2xl dark:border-white/10 dark:bg-zinc-950/90 dark:ring-white/[0.06]"
               data-testid="agent-company-menu"
             >
+              {hasCompanies ? (
               <div className="flex items-center justify-between border-b border-border/45 px-4 py-3">
                 <span className="text-[11px] font-semibold uppercase text-muted-foreground">Empresa de agentes</span>
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-foreground/75">
@@ -2078,6 +2467,7 @@ export function AgentCompanyPanel() {
                   {snapshot.activeAgents > 0 ? `${snapshot.activeAgents} en ejecución` : "Sin ejecuciones"}
                 </span>
               </div>
+              ) : null}
               <div className="max-h-[340px] space-y-2 overflow-y-auto p-3">
                 {projectsLoading && companyOptions.length === 0 ? (
                   <div className="flex items-center justify-center py-8 text-muted-foreground">
@@ -2093,7 +2483,9 @@ export function AgentCompanyPanel() {
                     const optionSnapshot = buildAgentCompanySnapshot(optionSessions, {})
                     const active = optionSnapshot.activeAgents
                     const isCurrent = Boolean(
-                      currentProjectId && companyWorkspaceCandidates(option).some((candidate) => candidate.replace(/^project:/, "") === currentProjectId),
+                      currentProjectId && companyWorkspaceCandidates(option).some(
+                        (candidate) => (codexProjectIdFromWorkspaceId(candidate, { assumeProject: true }) || candidate) === currentProjectId,
+                      ),
                     )
                     return (
                       <div
@@ -2115,7 +2507,7 @@ export function AgentCompanyPanel() {
                           <span className="flex h-9 w-1 shrink-0 rounded-full bg-sky-300" />
                           <span className="min-w-0 flex-1">
                             <span className="flex min-w-0 items-center gap-1.5">
-                              <span className="truncate text-sm font-semibold">{agentCompanyDisplayName(option.name)}</span>
+                              <span className="truncate text-sm font-semibold" data-company-name="as-typed">{agentCompanyDisplayName(option.name)}</span>
                               {option.isPinned ? (
                                 <Pin
                                   className="h-3.5 w-3.5 shrink-0 fill-sky-100 text-sky-600"
@@ -2179,21 +2571,14 @@ export function AgentCompanyPanel() {
                   })
                 )}
               </div>
-              <div className="border-t border-border/45 p-2">
-                <button
-                  type="button"
-                  className="flex h-11 w-full items-center gap-3 rounded-md px-2 text-left text-sm font-medium hover:bg-muted/55"
-                  onClick={() => {
-                    setCompanyMenuOpen(false)
-                    setNewCompanyOpen(true)
-                  }}
-                >
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted">
-                    <Plus className="h-4 w-4" />
-                  </span>
-                  Añadir empresa de agentes
-                </button>
+              {hasCompanies ? (
+              <div className="border-t border-zinc-200/80 bg-white px-4 py-4 dark:border-white/10 dark:bg-zinc-950">
+                <PolsiaCompanyStartActions
+                  onCreate={() => openCompanyStart("create")}
+                  onGrow={() => openCompanyStart("grow")}
+                />
               </div>
+              ) : null}
             </PopoverContent>
           </Popover>
 
@@ -2228,14 +2613,35 @@ export function AgentCompanyPanel() {
               variant="ghost"
               size="icon"
               className="h-10 w-10 shrink-0 rounded-full bg-muted/45"
-              onClick={() => setNewCompanyOpen(true)}
-              aria-label="Añadir empresa de agentes"
-              title="Añadir empresa de agentes"
+              onClick={() => openCompanyStart("create")}
+              aria-label="Crear una empresa nueva"
+              title="Crear una empresa nueva"
             >
               <Plus className="h-5 w-5" />
             </Button>
           ) : null}
         </header>
+
+        {associationError ? (
+          <div
+            className="flex shrink-0 items-center justify-between gap-3 border-b border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+            role="alert"
+            data-testid="company-association-error"
+          >
+            <span>
+              {associationError.code}: {associationError.message}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 shrink-0 border-current bg-transparent text-xs"
+              onClick={() => void refreshCompanyAssociation()}
+            >
+              Reintentar
+            </Button>
+          </div>
+        ) : null}
 
         {view === "home" ? (
           <CompanyHome
@@ -2257,7 +2663,8 @@ export function AgentCompanyPanel() {
             onOpenControl={() => openCompanySurface("control")}
             onOpenFiles={() => openCompanySurface("files")}
             onOpenResources={() => openCompanySurface("resources")}
-            onOpenDepartment={openDepartmentChat}
+            onOpenDepartment={openDepartmentOverview}
+            onOpenComputer={openDepartmentComputer}
             onAddDepartment={() => setNewDepartmentOpen(true)}
             pinnedDepartmentIds={pinnedDepartmentIds}
             onToggleDepartmentPin={toggleDepartmentPin}
@@ -2289,7 +2696,7 @@ export function AgentCompanyPanel() {
             onStart={() => void startEnterpriseExecution()}
             onPause={() => void pauseEnterpriseExecution()}
             onCancel={() => void cancelCompanyExecution()}
-            onOpenDepartment={openDepartmentChat}
+            onOpenDepartment={openDepartmentComputer}
             onOpenCeo={openCeoOffice}
             onOpenTask={(sessionId) => {
               setSelectedTaskId(sessionId)
@@ -2341,34 +2748,96 @@ export function AgentCompanyPanel() {
             onRefreshCompanyAssociation={refreshCompanyAssociation}
             onOpenCeo={openCeoOffice}
           />
+        ) : view === "computer" && selectedDepartment ? (
+          <DepartmentComputerView
+            department={selectedDepartment.department}
+            computerRunId={selectedDepartment.department.computerRunId || `dept-${selectedDepartment.department.id}`}
+            loading={computerStatus.loading}
+            error={computerStatus.error}
+            onRetry={() => openDepartmentComputer(selectedDepartment.department.id)}
+            onBack={() => {
+              setView("home")
+            }}
+            onOpenChat={() => {
+              openDepartmentChat(selectedDepartment.department.id)
+            }}
+          />
         ) : view === "department" && selectedDepartment ? (
-          <DepartmentView row={selectedDepartment} onOpenCeo={openCeoOffice} />
+          <DepartmentView
+            row={selectedDepartment}
+            onOpenCeo={openCeoOffice}
+            onOpenComputer={() => openDepartmentComputer(selectedDepartment.department.id)}
+          />
         ) : view === "task" && selectedTask ? (
           <TaskView surface={isMobile} session={selectedTask} onOpenCeo={openCeoOffice} />
         ) : null}
+        </>
+        )}
       </div>
 
-      <Dialog open={newCompanyOpen} onOpenChange={setNewCompanyOpen}>
-        <DialogContent className="sm:max-w-[420px]">
+      <Dialog
+        open={newCompanyOpen}
+        onOpenChange={(open) => {
+          setNewCompanyOpen(open)
+          if (!open) {
+            setNewCompanyWebsite("")
+            setNewCompanyAbout("")
+            setNewCompanyMode("create")
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[420px]" data-testid="agent-company-start-dialog">
           <DialogHeader>
-            <DialogTitle>Nueva empresa de agentes</DialogTitle>
-            <DialogDescription>Crea un workspace persistente para su operación.</DialogDescription>
+            <DialogTitle>
+              {newCompanyMode === "grow" ? "Hacer crecer mi empresa" : "Crear una empresa nueva"}
+            </DialogTitle>
+            <DialogDescription>
+              {newCompanyMode === "grow"
+                ? "Ya tienes un negocio. Lo traemos y armamos su empresa de agentes."
+                : "Empieza desde cero con un workspace persistente y CEO Office."}
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 py-2">
-            <Label htmlFor="agent-company-name">Nombre</Label>
-            <Input
-              id="agent-company-name"
-              value={newCompanyName}
-              onChange={(event) => setNewCompanyName(event.target.value)}
-              placeholder="Ej. TESIS20.COM"
-              autoComplete="organization"
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault()
-                  void createCompany()
-                }
-              }}
-            />
+          <div className="space-y-3 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="agent-company-name">Nombre</Label>
+              <Input
+                id="agent-company-name"
+                value={newCompanyName}
+                onChange={(event) => setNewCompanyName(event.target.value)}
+                placeholder={newCompanyMode === "grow" ? "Ej. TESIS20" : "Ej. Nueva empresa"}
+                autoComplete="organization"
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    void createCompany()
+                  }
+                }}
+              />
+            </div>
+            {newCompanyMode === "grow" ? (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-company-website">Sitio web</Label>
+                  <Input
+                    id="agent-company-website"
+                    value={newCompanyWebsite}
+                    onChange={(event) => setNewCompanyWebsite(event.target.value)}
+                    placeholder="https://tuempresa.com"
+                    autoComplete="url"
+                    inputMode="url"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent-company-about">Qué hace tu negocio</Label>
+                  <Input
+                    id="agent-company-about"
+                    value={newCompanyAbout}
+                    onChange={(event) => setNewCompanyAbout(event.target.value)}
+                    placeholder="Tesis, clientes, operación…"
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setNewCompanyOpen(false)}>
@@ -2376,7 +2845,7 @@ export function AgentCompanyPanel() {
             </Button>
             <Button type="button" onClick={() => void createCompany()} disabled={!newCompanyName.trim() || creatingCompany}>
               {creatingCompany ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Crear empresa
+              {newCompanyMode === "grow" ? "Continuar" : "Crear empresa"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2744,14 +3213,52 @@ export function AgentCompanyPanel() {
         model={officeModel}
         onClose={() => setOfficeOpen(false)}
         onOpenWorker={openOfficeWorker}
+        onOpenDepartment={(departmentId) => {
+          setOfficeOpen(false)
+          openDepartmentChat(departmentId)
+        }}
+        onOpenDashboard={() => {
+          setOfficeOpen(false)
+          openCompanySurface("dashboard")
+        }}
+        onOpenControl={() => {
+          setOfficeOpen(false)
+          openCompanySurface("control")
+        }}
+        onOpenFiles={() => {
+          setOfficeOpen(false)
+          openCompanySurface("files")
+        }}
+        onOpenResources={() => {
+          setOfficeOpen(false)
+          openCompanySurface("resources")
+        }}
       />
     </div>
   )
 
-  const previewSurface = previewSlot && previewView ? createPortal(
+  const companiesEmptyCenter = showCompaniesEmpty ? (
+    <div
+      className="flex h-full min-h-0 w-full items-center justify-center bg-white"
+      data-companies-empty="polsia"
+      data-testid="agent-companies-empty"
+    >
+      <PolsiaCompanyStartActions
+        onCreate={() => openCompanyStart("create")}
+        onGrow={() => openCompanyStart("grow")}
+      />
+    </div>
+  ) : null
+  const companiesEmptyPortal = companiesEmptyCenter && centerSlot
+    ? createPortal(companiesEmptyCenter, centerSlot)
+    : null
+
+  const navSlot = centerSlot || previewSlot
+  const previewSurface = navSlot && previewView && !showCompaniesEmpty ? createPortal(
     <CompanyPreviewSurface
       companyName={companyName}
       view={previewView}
+      fullscreen={Boolean(centerSlot)}
       onClose={() => setPreviewView(null)}
     >
       {previewView === "dashboard" ? (
@@ -2847,19 +3354,27 @@ export function AgentCompanyPanel() {
         />
       ) : null}
     </CompanyPreviewSurface>,
-    previewSlot,
+    navSlot,
   ) : null
 
   if (dockedInAppsRail && dockSlot) {
     return (
       <>
         {createPortal(panel, dockSlot)}
+        {companiesEmptyPortal}
         {previewSurface}
       </>
     )
   }
-  if (!isMobile) return null
-  return panel
+  if (!isMobile) {
+    return companiesEmptyPortal
+  }
+  return (
+    <>
+      {panel}
+      {companiesEmptyPortal}
+    </>
+  )
 }
 
 const COMPANY_VIEW_LABELS: Record<CompanyPreviewView, string> = {
@@ -2875,17 +3390,20 @@ function CompanyPreviewSurface({
   view,
   onClose,
   children,
+  fullscreen = false,
 }: {
   companyName: string
   view: CompanyPreviewView
   onClose: () => void
   children: React.ReactNode
+  fullscreen?: boolean
 }) {
   return (
     <section
       className="absolute inset-0 flex min-h-0 flex-col bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50"
       data-testid="agent-company-preview-surface"
       data-company-view={view}
+      data-nav-fullscreen={fullscreen ? "1" : "0"}
     >
       <header className="flex h-12 shrink-0 items-center gap-3 border-b border-zinc-200/75 bg-white/95 px-4 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/95">
         <span className="truncate text-[13px] font-semibold">{companyName}</span>
@@ -2896,16 +3414,27 @@ function CompanyPreviewSurface({
         <Button
           type="button"
           variant="ghost"
+          size="sm"
+          className="ml-auto h-8 rounded-md px-2.5 text-xs font-medium"
+          onClick={onClose}
+          aria-label="Volver al chat"
+          title="Volver al chat"
+        >
+          Chat
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
           size="icon"
-          className="ml-auto h-9 w-9 rounded-md"
+          className="h-9 w-9 rounded-md"
           onClick={onClose}
           aria-label="Cerrar vista de empresa"
-          title="Volver al preview de la app"
+          title="Volver al chat"
         >
           <X className="h-4 w-4" />
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-y-contain">{children}</div>
     </section>
   )
 }
@@ -2924,6 +3453,7 @@ function CompanyHome({
   onOpenFiles,
   onOpenResources,
   onOpenDepartment,
+  onOpenComputer,
   onAddDepartment,
   pinnedDepartmentIds,
   onToggleDepartmentPin,
@@ -2957,6 +3487,7 @@ function CompanyHome({
   onOpenFiles: () => void
   onOpenResources: () => void
   onOpenDepartment: (departmentId: string) => void
+  onOpenComputer?: (departmentId: string) => void
   onAddDepartment: () => void
   pinnedDepartmentIds: string[]
   onToggleDepartmentPin: (departmentId: string) => void
@@ -2972,32 +3503,31 @@ function CompanyHome({
 }) {
   const pinnedSet = React.useMemo(() => new Set(pinnedDepartmentIds), [pinnedDepartmentIds])
   const [openDepartmentMenuId, setOpenDepartmentMenuId] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    const unlock = () => {
+      document.body.style.removeProperty("overflow")
+      document.body.style.removeProperty("pointer-events")
+      document.documentElement.style.removeProperty("overflow")
+    }
+    unlock()
+    return unlock
+  }, [departmentRows.length, openDepartmentMenuId])
   return (
-    <>
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-3">
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-auto px-3 pb-24 pt-3 [-webkit-overflow-scrolling:touch] [touch-action:pan-y]">
         <button
           type="button"
           onClick={onOpenOffice}
-          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-lg border border-zinc-300/70 bg-[#dce5e9] text-left shadow-[0_12px_30px_-22px_rgba(15,23,42,0.7)] transition-shadow hover:shadow-[0_16px_34px_-20px_rgba(15,23,42,0.72)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="group relative block aspect-[16/9] w-full overflow-hidden rounded-xl border border-sky-400/20 bg-[#05070d] text-left shadow-[0_18px_38px_-22px_rgba(2,132,199,0.58)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-400/40 hover:shadow-[0_24px_48px_-24px_rgba(2,132,199,0.72)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           aria-label="Abrir oficina de agentes"
           data-testid="agent-company-live-preview"
+          data-office-live-preview="20260815"
         >
-          <div className="pointer-events-none absolute inset-0">
-            <AgentOfficeScene model={officeModel} variant="thumbnail" paused={officeOpen} />
-          </div>
-          <span className="absolute left-3 top-3 inline-flex items-center gap-2 rounded-md border border-white/70 bg-white/[0.9] px-2.5 py-1 text-[11px] font-semibold text-zinc-800 shadow-sm backdrop-blur-xl">
-            <span className={cn("h-2 w-2 rounded-full", officeModel.activeCount > 0 ? "bg-sky-400" : "bg-zinc-400")} />
-            Oficina · {officeModel.truth.occupiedDesks}/{officeModel.truth.physicalAgents || officeModel.activeCount} puestos
-            {officeModel.truth.latestBlockers.length > 0
-              ? ` · ${officeModel.truth.latestBlockers.length} bloqueos`
-              : officeModel.truth.pendingApprovals > 0
-                ? ` · ${officeModel.truth.pendingApprovals} aprob.`
-                : ""}
-          </span>
-          <span className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-zinc-950/[0.78] px-3 py-2 text-white opacity-100 backdrop-blur-sm transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-visible:opacity-100">
-            <span className="truncate text-[11px] font-medium">Entrar a la sede de {companyName}</span>
-            <ChevronRight className="h-4 w-4" />
-          </span>
+          <OfficeLivePreview
+            model={officeModel}
+            paused={officeOpen}
+            className="pointer-events-none absolute inset-0"
+          />
         </button>
 
         {proactiveOn || proactiveState.lastError ? (
@@ -3055,6 +3585,21 @@ function CompanyHome({
           </Button>
         </div>
 
+        <button
+          type="button"
+          className="mt-1 flex min-h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[12px] font-medium text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+          onClick={() => {
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(new CustomEvent("siragpt:code-new-dept-conversation"))
+            }
+          }}
+          data-drop-dup-header="20260815"
+          data-testid="sidebar-new-conversation"
+        >
+          <Plus className="h-3.5 w-3.5 shrink-0" />
+          Nueva conversación
+        </button>
+
         <div className="mt-1 space-y-0.5">
           {departmentRows.map(({ department, activeCount, latest, latestRun }) => {
             const status = latestRun
@@ -3069,8 +3614,8 @@ function CompanyHome({
               <div
                 key={department.id}
                 className={cn(
-                  "group/dept relative flex min-h-[58px] w-full items-center gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
-                  hideFooter && "min-h-[46px] gap-1 rounded-md px-1.5 py-1.5",
+                  "group/dept relative flex min-h-[58px] w-full items-start gap-1.5 rounded-lg px-2 py-2 transition-colors hover:bg-muted/55 focus-within:bg-muted/45",
+                  hideFooter && "min-h-[52px] gap-1 rounded-md px-1.5 py-1.5",
                   department.id === "ceo-office" && "bg-muted/50",
                   isPinned && "bg-sky-50/70 ring-1 ring-sky-500/10 dark:bg-sky-950/20",
                   menuOpen && "bg-muted/55",
@@ -3080,8 +3625,9 @@ function CompanyHome({
                 <button
                   type="button"
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-3 rounded-md px-0.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    hideFooter && "gap-2",
+                    "flex min-w-0 flex-1 items-start gap-3 rounded-md px-0.5 text-left transition-colors hover:bg-transparent active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                    hideFooter && "gap-2 pr-14 [@media(hover:hover)]:pr-0",
+                    !hideFooter && "pr-16 [@media(hover:hover)]:pr-0",
                   )}
                   onClick={() => onOpenDepartment(department.id)}
                   aria-label={`Abrir ${department.name}`}
@@ -3098,12 +3644,21 @@ function CompanyHome({
                         "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-background",
                         hideFooter && "h-2 w-2",
                         STATUS_STYLES[status.tone],
+                        proactiveOn && "sira-proactive-dept-dot",
                       )}
                     />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="flex items-center gap-1.5">
-                      <span className={cn("truncate text-[13px] font-semibold", hideFooter && "text-[11px]")}>
+                    <span className="flex min-w-0 items-start gap-1.5">
+                      <span
+                        className={cn(
+                          "min-w-0 flex-1 whitespace-normal break-words text-[13px] font-semibold leading-snug [overflow-wrap:anywhere] xl:whitespace-normal xl:overflow-visible xl:text-clip",
+                          hideFooter && "text-[11px]",
+                        )}
+                        title={department.name}
+                        data-dept-name-wrap="1"
+                        data-dept-name-1280="wrap"
+                      >
                         {department.name}
                       </span>
                       {isPinned ? (
@@ -3137,6 +3692,32 @@ function CompanyHome({
                   </span>
                 </button>
 
+                <div
+                  className={cn(
+                    "absolute right-1 top-2 z-10 flex items-center gap-0.5",
+                    "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/dept:opacity-100 [@media(hover:hover)]:group-focus-within/dept:opacity-100",
+                    menuOpen && "opacity-100",
+                  )}
+                >
+                {onOpenComputer ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      "inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background/90 hover:text-foreground active:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
+                      hideFooter && "h-7 w-7",
+                    )}
+                    aria-label={`Abrir computadora de ${department.name}`}
+                    title={`Computadora de ${department.name}`}
+                    data-testid={`agent-company-department-computer-${department.id}`}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onOpenComputer(department.id)
+                    }}
+                  >
+                    <Monitor className={cn("h-4 w-4", hideFooter && "h-3.5 w-3.5")} />
+                  </button>
+                ) : null}
+
                 <DropdownMenu
                   open={menuOpen}
                   onOpenChange={(open) => setOpenDepartmentMenuId(open ? department.id : null)}
@@ -3147,9 +3728,7 @@ function CompanyHome({
                       className={cn(
                         "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-all hover:bg-background/90 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                         hideFooter && "h-7 w-7",
-                        menuOpen
-                          ? "bg-background/90 text-foreground opacity-100"
-                          : "opacity-100 sm:opacity-0 sm:group-hover/dept:opacity-100 sm:group-focus-within/dept:opacity-100",
+                        menuOpen && "bg-background/90 text-foreground opacity-100",
                       )}
                       aria-label={`Opciones de ${department.name}`}
                       data-testid={`agent-company-department-menu-${department.id}`}
@@ -3194,15 +3773,7 @@ function CompanyHome({
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-
-                <ChevronRight
-                  className={cn(
-                    "hidden h-4 w-4 shrink-0 text-muted-foreground/45 transition-opacity sm:block",
-                    menuOpen || isPinned
-                      ? "sm:hidden"
-                      : "sm:group-hover/dept:hidden sm:group-focus-within/dept:hidden",
-                  )}
-                />
+                </div>
               </div>
             )
           })}
@@ -3229,6 +3800,7 @@ function CompanyHome({
           onClick={onToggleProactive}
           disabled={proactiveBusy}
           aria-pressed={proactiveOn}
+          data-proactive-live={proactiveOn ? "1" : undefined}
           title={
             canRun === false && !proactiveOn
               ? "Ejecución protegida: requiere un runtime aislado o autorización administrativa."
@@ -3241,28 +3813,34 @@ function CompanyHome({
             proactiveOn || snapshot.activeAgents > 0
               ? "border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
               : "border-border/60 bg-muted/35 text-foreground/75 hover:bg-muted/60",
+            proactiveOn && "sira-proactive-live",
           )}
         >
           {canRun === false && !proactiveOn ? (
             <ShieldCheck className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : proactiveOn ? (
+            <>
+              <span className="sira-proactive-dot" aria-hidden />
+              <Radio className="h-3.5 w-3.5 text-emerald-500" />
+            </>
           ) : (
             <Radio
               className={cn(
                 "h-3.5 w-3.5",
-                snapshot.activeAgents > 0 ? "text-sky-500" : proactiveOn ? "text-emerald-500" : "text-muted-foreground",
+                snapshot.activeAgents > 0 ? "text-sky-500" : "text-muted-foreground",
               )}
             />
           )}
-          {snapshot.activeAgents > 0
-            ? "EN EJECUCIÓN"
-            : proactiveOn
-              ? "PROACTIVO · ON"
+          {proactiveOn
+            ? "PROACTIVO · VIVO"
+            : snapshot.activeAgents > 0
+              ? "EN EJECUCIÓN"
               : canRun === false
                 ? "PROTEGIDO"
                 : "PROACTIVO"}
         </button>
       </footer>
-    </>
+    </div>
   )
 }
 
@@ -3286,7 +3864,7 @@ function CompanyNavRow({
       type="button"
       onClick={onClick}
       className={cn(
-        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        "group flex h-11 w-full items-center gap-3 rounded-lg px-3 text-left text-sm font-medium transition-colors hover:bg-muted/55 active:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-40",
         compact && "h-8 gap-2 rounded-md px-2 text-xs",
         active && "bg-muted/65 text-foreground",
       )}
@@ -3311,8 +3889,11 @@ function ViewBody({ children }: { children: React.ReactNode }) {
 
 const SOCIAL_PROVIDER_MARKS: Record<CompanySocialPlatform, { mark: string; className: string }> = {
   facebook: { mark: "f", className: "bg-[#1877f2] text-white" },
+  instagram: { mark: "ig", className: "bg-[#E4405F] text-white" },
   linkedin: { mark: "in", className: "bg-[#0a66c2] text-white" },
+  whatsapp: { mark: "wa", className: "bg-[#25D366] text-white" },
   x: { mark: "X", className: "bg-zinc-950 text-white dark:bg-white dark:text-zinc-950" },
+  youtube: { mark: "yt", className: "bg-[#ff0000] text-white" },
 }
 
 function ResourcesView({
@@ -3576,7 +4157,15 @@ function ResourcesView({
       if (
         socialScopeRef.current === operationScope
         && socialLoadGenerationRef.current === generation
-      ) toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+      ) {
+        const code = (error as { body?: { error?: string } })?.body?.error
+        if (code === "approval_stale" || code === "approval_expired" || code === "approval_invalid") {
+          toast.error("La aprobación quedó obsoleta. Revisa la acción actualizada antes de enviarla.")
+          void refreshCompanyOps()
+        } else {
+          toast.error(error instanceof Error ? error.message : "La operación no pudo completarse.")
+        }
+      }
     } finally {
       if (
         socialScopeRef.current === operationScope
@@ -3643,9 +4232,17 @@ function ResourcesView({
   ) => {
     await runCompanyOperation(
       `action:${action.id}`,
-      (projectId) => decision === "approve"
-        ? codexApi.approveCompanyAction(projectId, action.id)
-        : codexApi.rejectCompanyAction(projectId, action.id),
+      (projectId) => {
+        if (decision === "reject") return codexApi.rejectCompanyAction(projectId, action.id)
+        const approval = action.payload._approval
+        if (!approval?.actionHash || approval.version !== 1) {
+          throw new Error("La acción no tiene una aprobación vigente. Actualiza la vista antes de enviar.")
+        }
+        return codexApi.approveCompanyAction(projectId, action.id, {
+          actionHash: approval.actionHash,
+          actionVersion: approval.version,
+        })
+      },
       decision === "approve" ? "Acción aprobada y ejecutada." : "Acción rechazada.",
     )
   }, [runCompanyOperation])
@@ -3763,7 +4360,12 @@ function ResourcesView({
       window.location.assign(result.url)
     } catch (error) {
       setProviderBusy(null)
-      toast.error(error instanceof Error ? error.message : "No se pudo iniciar la conexión.")
+      const code = (error as { code?: string } | null)?.code
+      toast.error(
+        code === "social_provider_not_configured"
+          ? "Falta configurar la app"
+          : error instanceof Error ? error.message : "No se pudo iniciar la conexión.",
+      )
     }
   }, [])
 
@@ -3786,7 +4388,31 @@ function ResourcesView({
   const connectBusinessConnector = React.useCallback(async (connector: CoworkConnector) => {
     setConnectorBusy(connector.id)
     try {
+      if (connector.id === "gmail") {
+        toast.info("Si Google muestra que no verificó esta app, es normal. Pulsa «Configuración avanzada» y continúa.")
+      }
       await coworkApi.beginConnectorConnection(connector.connectUrl)
+      if (connector.id === "gmail") {
+        const onMessage = (event: MessageEvent) => {
+          const data = event.data as { status?: string; service?: string; error?: string } | null
+          if (!data || data.service !== "gmail") return
+          window.removeEventListener("message", onMessage)
+          if (data.status === "success") {
+            toast.success("Gmail quedó conectado.")
+            void load()
+            return
+          }
+          if (data.status === "error") {
+            toast.error(
+              data.error === "access_denied"
+                ? "La conexión se canceló. Si viste el aviso de Google, pulsa Configuración avanzada y continúa."
+                : "No se pudo conectar Gmail. Si Google no verificó la app, pulsa Configuración avanzada y continúa.",
+            )
+          }
+        }
+        window.addEventListener("message", onMessage)
+        window.setTimeout(() => window.removeEventListener("message", onMessage), 5 * 60_000)
+      }
       window.setTimeout(() => void load(), 1_500)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "No se pudo iniciar la conexión.")
@@ -4795,6 +5421,12 @@ function CompanyOperationsPanel({
                     <span className="font-semibold">Asunto:</span>{" "}
                     <span className="text-muted-foreground">{action.payload.subject || "Respuesta al hilo original"}</span>
                   </p>
+                  {action.kind !== "social_reply" && action.payload._approval ? (
+                    <p className="break-all text-[9px] text-muted-foreground">
+                      <span className="font-semibold">Aprobación:</span>{" "}
+                      v{action.payload._approval.version || "?"} · {action.payload._approval.actionHash || "hash ausente"}
+                    </p>
+                  ) : null}
                   <details className="border-y border-border/45 py-2">
                     <summary className="cursor-pointer font-semibold">Revisar mensaje completo</summary>
                     <p className="mt-2 max-h-48 overflow-y-auto whitespace-pre-wrap break-words leading-relaxed text-muted-foreground">
@@ -6005,6 +6637,8 @@ function FilesView({
   const [missionError, setMissionError] = React.useState<string | null>(null)
   const [expandedRecordId, setExpandedRecordId] = React.useState<string | null>(null)
   const [viewMode, setViewMode] = React.useState<"icons" | "list">("icons")
+  const [folderDeptId, setFolderDeptId] = React.useState<string | null>(null)
+  const [folderSubpath, setFolderSubpath] = React.useState<string[]>([])
 
   const refreshMissionLedger = React.useCallback(async () => {
     if (!codexProjectId) {
@@ -6098,6 +6732,11 @@ function FilesView({
   const artifacts = built.artifacts
   const agentGroups = built.groups
 
+  React.useEffect(() => {
+    setFolderDeptId(null)
+    setFolderSubpath([])
+  }, [companyName, codexProjectId])
+
   const filtered = React.useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("es")
     return artifacts.filter((artifact) => {
@@ -6119,6 +6758,67 @@ function FilesView({
       }))
       .filter((group) => group.artifacts.length > 0)
   }, [agentGroups, filtered])
+
+  const departmentFolders = React.useMemo(
+    () => buildCompanyDepartmentFolders(departments, filtered, { includeEmpty: filter === "all" && !query.trim() }),
+    [departments, filter, filtered, query],
+  )
+
+  const currentDepartment = folderDeptId
+    ? departments.find((entry) => entry.id === folderDeptId)
+      || departmentFolders.find((entry) => entry.id === folderDeptId)
+      || null
+    : null
+
+  const explorerEntries = React.useMemo(() => {
+    const needle = query.trim()
+    if (needle) {
+      const scoped = folderDeptId
+        ? filtered.filter((artifact) => artifact.departmentId === folderDeptId)
+        : filtered
+      return scoped.map((artifact) => ({ kind: "file" as const, artifact }))
+    }
+    return listCompanyExplorerEntries({
+      departments,
+      artifacts: filtered,
+      departmentId: folderDeptId,
+      subpath: folderSubpath,
+      includeEmptyDepartments: filter === "all",
+    })
+  }, [departments, filter, filtered, folderDeptId, folderSubpath, query])
+
+  const openExplorerFolder = React.useCallback((entry: { id: string; name: string }) => {
+    setSelectedId(null)
+    if (!folderDeptId) {
+      setFolderDeptId(entry.id)
+      setFolderSubpath([])
+      return
+    }
+    setFolderSubpath((current) => [...current, entry.name])
+  }, [folderDeptId])
+
+  const goExplorerRoot = React.useCallback(() => {
+    setFolderDeptId(null)
+    setFolderSubpath([])
+    setSelectedId(null)
+  }, [])
+
+  const goExplorerBack = React.useCallback(() => {
+    setSelectedId(null)
+    if (folderSubpath.length > 0) {
+      setFolderSubpath((current) => current.slice(0, -1))
+      return
+    }
+    setFolderDeptId(null)
+  }, [folderSubpath.length])
+
+  const applySidebarFilter = React.useCallback((value: "all" | "reports" | "files") => {
+    setFilter(value)
+    if (value === "all") {
+      setFolderDeptId(null)
+      setFolderSubpath([])
+    }
+  }, [])
 
   const selected = artifacts.find((artifact) => artifact.id === selectedId) || null
   const reportCount = artifacts.filter((artifact) => artifact.kind === "report").length
@@ -6181,7 +6881,7 @@ function FilesView({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col lg:h-[calc(100vh-220px)] lg:min-h-[640px] lg:flex-row">
+        <div className="flex min-h-0 flex-1 flex-col lg:h-[calc(100vh-220px)] lg:min-h-[520px] lg:flex-row">
           <aside className="shrink-0 border-b border-zinc-300/70 bg-[#e8e8e6]/90 p-3 dark:border-white/10 dark:bg-zinc-900/80 lg:w-56 lg:border-b-0 lg:border-r">
             <p className="px-2 text-[11px] font-semibold uppercase text-zinc-500 dark:text-zinc-400">Favoritos</p>
             <div className="mt-2 grid gap-1 sm:grid-cols-3 lg:grid-cols-1">
@@ -6189,7 +6889,7 @@ function FilesView({
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setFilter(value)}
+                  onClick={() => applySidebarFilter(value)}
                   className={cn(
                     "flex h-9 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium transition-colors",
                     filter === value
@@ -6205,7 +6905,7 @@ function FilesView({
               ))}
               <button
                 type="button"
-                onClick={() => setFilter("all")}
+                onClick={() => applySidebarFilter("all")}
                 className="flex h-9 items-center gap-2 rounded-lg px-2 text-left text-[13px] font-medium text-zinc-600 hover:bg-white/55 dark:text-zinc-300 dark:hover:bg-white/8"
                 title="Departamentos"
               >
@@ -6267,12 +6967,60 @@ function FilesView({
             </div>
           </aside>
 
-          <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50">
+          <main className="min-h-0 min-w-0 flex-1 overflow-auto bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50" data-files-dept-folders="1">
             <div className="sticky top-0 z-10 flex min-h-12 flex-wrap items-center gap-2 border-b border-zinc-200/80 bg-[#fbfbfa]/92 px-4 py-2 backdrop-blur-xl dark:border-white/10 dark:bg-zinc-950/92">
+              {folderDeptId || folderSubpath.length ? (
+                <button
+                  type="button"
+                  onClick={goExplorerBack}
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-600 hover:bg-zinc-200/70 dark:text-zinc-300 dark:hover:bg-white/10"
+                  aria-label="Volver"
+                  title="Volver"
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+              ) : null}
               <div className="min-w-0 flex-1">
-                <h1 className="truncate text-[15px] font-semibold">Archivos</h1>
+                <nav className="flex min-w-0 items-center gap-1 text-[15px] font-semibold" aria-label="Ruta de archivos">
+                  <button
+                    type="button"
+                    onClick={goExplorerRoot}
+                    className={cn(
+                      "truncate rounded-md px-1 hover:bg-zinc-200/70 dark:hover:bg-white/10",
+                      !folderDeptId && "cursor-default hover:bg-transparent",
+                    )}
+                  >
+                    Archivos
+                  </button>
+                  {currentDepartment ? (
+                    <>
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                      <button
+                        type="button"
+                        onClick={() => { setFolderSubpath([]); setSelectedId(null) }}
+                        className="truncate rounded-md px-1 hover:bg-zinc-200/70 dark:hover:bg-white/10"
+                      >
+                        {currentDepartment.name}
+                      </button>
+                    </>
+                  ) : null}
+                  {folderSubpath.map((segment, index) => (
+                    <React.Fragment key={`${segment}:${index}`}>
+                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-400" />
+                      <button
+                        type="button"
+                        onClick={() => { setFolderSubpath(folderSubpath.slice(0, index + 1)); setSelectedId(null) }}
+                        className="truncate rounded-md px-1 hover:bg-zinc-200/70 dark:hover:bg-white/10"
+                      >
+                        {segment}
+                      </button>
+                    </React.Fragment>
+                  ))}
+                </nav>
                 <p className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-                  {filtered.length} elementos · {groups.length} agentes · {reportCount} reportes · {workspaceFileCount} archivos
+                  {folderDeptId
+                    ? `${explorerEntries.length} elementos · ${currentDepartment?.name || "Departamento"}`
+                    : `${departmentFolders.length} departamentos · ${filtered.length} elementos · ${reportCount} reportes · ${workspaceFileCount} archivos`}
                 </p>
               </div>
               <div className="flex h-8 items-center rounded-lg border border-zinc-200 bg-zinc-100 p-0.5 dark:border-white/10 dark:bg-white/10" role="group" aria-label="Filtrar archivos">
@@ -6280,7 +7028,7 @@ function FilesView({
                   <button
                     key={value}
                     type="button"
-                    onClick={() => setFilter(value)}
+                    onClick={() => applySidebarFilter(value)}
                     className={cn(
                       "h-7 rounded-md px-2.5 text-[11px] font-medium transition-colors",
                       filter === value ? "bg-white text-zinc-950 shadow-sm dark:bg-zinc-700 dark:text-white" : "text-zinc-500 hover:text-zinc-950 dark:hover:text-white",
@@ -6293,94 +7041,132 @@ function FilesView({
               </div>
             </div>
 
-            <div className="px-4 py-5">
-              {groups.map((group) => (
-                <section key={group.id} className="mb-8 last:mb-0" data-testid="company-agent-files-group" data-agent-id={group.id}>
-                  <div className="mb-3 flex items-center gap-2 px-1">
-                    <span className="relative flex h-7 w-8 shrink-0 items-end">
-                      <span className="absolute left-1 top-1 h-2.5 w-4 rounded-t-md bg-[#74c7ff]" />
-                      <span className="relative h-5 w-8 rounded-[6px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-sm" />
-                    </span>
-                    <div className="min-w-0">
-                      <h2 className="truncate text-[13px] font-semibold">{group.name}</h2>
-                      <p className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                        {(group as { departmentName?: string }).departmentName || "Empresa"} · {group.artifacts.length} elementos
-                        {(group as { reportCount?: number }).reportCount ? ` · ${(group as { reportCount?: number }).reportCount} reportes` : ""}
-                      </p>
-                    </div>
-                  </div>
+            <div className="px-4 py-5" data-files-dept-folders="1" data-testid="company-files-dept-folders">
+              {viewMode === "icons" ? (
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-x-5 gap-y-7 sm:grid-cols-[repeat(auto-fill,minmax(118px,1fr))]">
+                  {explorerEntries.map((entry) => {
+                    if (entry.kind === "folder") {
+                      return (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => openExplorerFolder(entry)}
+                          onDoubleClick={() => openExplorerFolder(entry)}
+                          className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
+                          title={entry.name}
+                          data-testid="company-dept-folder"
+                          data-department-id={folderDeptId ? undefined : entry.id}
+                          data-folder-name={entry.name}
+                        >
+                          <span className="relative flex h-[62px] w-[72px] shrink-0 items-end">
+                            <span className="absolute left-2 top-2 h-4 w-8 rounded-t-md bg-[#74c7ff]" />
+                            <span className="relative h-12 w-[72px] rounded-[10px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5" />
+                          </span>
+                          <span className="mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4 text-zinc-800 dark:text-zinc-100">
+                            {entry.name}
+                          </span>
+                          <span className="mt-1 max-w-[108px] truncate text-[10px] text-zinc-500 dark:text-zinc-400">
+                            {entry.count} {entry.count === 1 ? "elemento" : "elementos"}
+                          </span>
+                        </button>
+                      )
+                    }
+                    const artifact = entry.artifact
+                    const Icon = artifactIcon(artifact.extension, artifact.kind)
+                    const active = selectedId === artifact.id
+                    return (
+                      <button
+                        key={artifact.id}
+                        type="button"
+                        onClick={() => setSelectedId(artifact.id)}
+                        onDoubleClick={() => downloadArtifact(artifact)}
+                        className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
+                        title={artifact.path}
+                      >
+                        <span className={cn(
+                          "relative flex h-[62px] w-[54px] shrink-0 items-center justify-center rounded-[10px] border bg-white shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5 dark:border-white/10 dark:bg-zinc-900",
+                          artifact.kind === "report" ? "border-sky-200" : "border-zinc-200",
+                        )}>
+                          <span className="absolute right-0 top-0 h-4 w-4 rounded-bl-md border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
+                          <Icon className={cn("h-7 w-7", artifact.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300")} />
+                        </span>
+                        <span className={cn(
+                          "mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4",
+                          active ? "bg-[#0a84ff] text-white" : "text-zinc-800 dark:text-zinc-100",
+                        )}>
+                          {artifact.name}
+                        </span>
+                        <span className="mt-1 max-w-[108px] truncate text-[10px] uppercase text-zinc-500 dark:text-zinc-400">{artifact.extension}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="overflow-hidden rounded-lg border border-zinc-200/85 bg-white/80 dark:border-white/10 dark:bg-white/5">
+                  {explorerEntries.map((entry) => {
+                    if (entry.kind === "folder") {
+                      return (
+                        <button
+                          key={entry.id}
+                          type="button"
+                          onClick={() => openExplorerFolder(entry)}
+                          className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_88px] items-center gap-3 border-b border-zinc-100 px-3 text-left text-[12px] last:border-b-0 hover:bg-zinc-100 dark:border-white/5 dark:hover:bg-white/8 sm:grid-cols-[minmax(0,1fr)_110px_100px]"
+                          title={entry.name}
+                          data-testid="company-dept-folder"
+                          data-department-id={folderDeptId ? undefined : entry.id}
+                          data-folder-name={entry.name}
+                        >
+                          <span className="flex min-w-0 items-center gap-2">
+                            <span className="relative flex h-5 w-6 shrink-0 items-end">
+                              <span className="absolute left-0.5 top-0.5 h-1.5 w-3 rounded-t-sm bg-[#74c7ff]" />
+                              <span className="relative h-3.5 w-6 rounded-[4px] bg-gradient-to-b from-[#62c5ff] to-[#0a84ff]" />
+                            </span>
+                            <span className="truncate font-medium">{entry.name}</span>
+                          </span>
+                          <span className="hidden truncate text-[11px] text-zinc-500 sm:block">Carpeta</span>
+                          <span className="text-right text-[11px] tabular-nums text-zinc-500">{entry.count} {entry.count === 1 ? "elemento" : "elementos"}</span>
+                        </button>
+                      )
+                    }
+                    const artifact = entry.artifact
+                    const Icon = artifactIcon(artifact.extension, artifact.kind)
+                    const active = selectedId === artifact.id
+                    return (
+                      <button
+                        key={artifact.id}
+                        type="button"
+                        onClick={() => setSelectedId(artifact.id)}
+                        className={cn(
+                          "grid min-h-11 w-full grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 border-b border-zinc-100 px-3 text-left text-[12px] last:border-b-0 dark:border-white/5 sm:grid-cols-[minmax(0,1fr)_110px_100px_84px]",
+                          active ? "bg-[#0a84ff] text-white" : "hover:bg-zinc-100 dark:hover:bg-white/8",
+                        )}
+                        title={artifact.path}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <Icon className={cn("h-4 w-4 shrink-0", active ? "text-white" : "text-zinc-500 dark:text-zinc-300")} />
+                          <span className="truncate font-medium">{artifact.name}</span>
+                        </span>
+                        <span className={cn("hidden truncate text-[11px] sm:block", active ? "text-white/85" : "text-zinc-500")}>{artifactTypeLabel(artifact)}</span>
+                        <span className={cn("truncate text-[11px]", active ? "text-white/85" : "text-zinc-500")}>{relativeActivity(artifact.updatedAt)}</span>
+                        <span className={cn("text-right text-[11px] tabular-nums", active ? "text-white/85" : "text-zinc-500")}>{artifactSizeLabel(artifact.content)}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
 
-                  {viewMode === "icons" ? (
-                    <div className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-x-5 gap-y-7 sm:grid-cols-[repeat(auto-fill,minmax(118px,1fr))]">
-                      {group.artifacts.map((artifact) => {
-                        const Icon = artifactIcon(artifact.extension, artifact.kind)
-                        const active = selectedId === artifact.id
-                        return (
-                          <button
-                            key={artifact.id}
-                            type="button"
-                            onClick={() => setSelectedId(artifact.id)}
-                            onDoubleClick={() => downloadArtifact(artifact)}
-                            className="group/file flex h-[136px] min-w-0 flex-col items-center rounded-lg px-2 py-2 text-center transition-colors hover:bg-zinc-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff] dark:hover:bg-white/8"
-                            title={artifact.path}
-                          >
-                            <span className={cn(
-                              "relative flex h-[62px] w-[54px] shrink-0 items-center justify-center rounded-[10px] border bg-white shadow-[0_10px_22px_-16px_rgba(15,23,42,0.65)] transition-transform group-hover/file:-translate-y-0.5 dark:border-white/10 dark:bg-zinc-900",
-                              artifact.kind === "report" ? "border-sky-200" : "border-zinc-200",
-                            )}>
-                              <span className="absolute right-0 top-0 h-4 w-4 rounded-bl-md border-b border-l border-zinc-200 bg-zinc-100 dark:border-white/10 dark:bg-zinc-800" />
-                              <Icon className={cn("h-7 w-7", artifact.kind === "report" ? "text-[#0a84ff]" : "text-zinc-500 dark:text-zinc-300")} />
-                            </span>
-                            <span className={cn(
-                              "mt-2 line-clamp-2 max-w-[108px] rounded-md px-1.5 py-0.5 text-[12px] font-medium leading-4",
-                              active ? "bg-[#0a84ff] text-white" : "text-zinc-800 dark:text-zinc-100",
-                            )}>
-                              {artifact.name}
-                            </span>
-                            <span className="mt-1 max-w-[108px] truncate text-[10px] uppercase text-zinc-500 dark:text-zinc-400">{artifact.extension}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  ) : (
-                    <div className="overflow-hidden rounded-lg border border-zinc-200/85 bg-white/80 dark:border-white/10 dark:bg-white/5">
-                      {group.artifacts.map((artifact) => {
-                        const Icon = artifactIcon(artifact.extension, artifact.kind)
-                        const active = selectedId === artifact.id
-                        return (
-                          <button
-                            key={artifact.id}
-                            type="button"
-                            onClick={() => setSelectedId(artifact.id)}
-                            className={cn(
-                              "grid min-h-11 w-full grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 border-b border-zinc-100 px-3 text-left text-[12px] last:border-b-0 dark:border-white/5 sm:grid-cols-[minmax(0,1fr)_110px_100px_84px]",
-                              active ? "bg-[#0a84ff] text-white" : "hover:bg-zinc-100 dark:hover:bg-white/8",
-                            )}
-                            title={artifact.path}
-                          >
-                            <span className="flex min-w-0 items-center gap-2">
-                              <Icon className={cn("h-4 w-4 shrink-0", active ? "text-white" : "text-zinc-500 dark:text-zinc-300")} />
-                              <span className="truncate font-medium">{artifact.name}</span>
-                            </span>
-                            <span className={cn("hidden truncate text-[11px] sm:block", active ? "text-white/85" : "text-zinc-500")}>{artifactTypeLabel(artifact)}</span>
-                            <span className={cn("truncate text-[11px]", active ? "text-white/85" : "text-zinc-500")}>{relativeActivity(artifact.updatedAt)}</span>
-                            <span className={cn("text-right text-[11px] tabular-nums", active ? "text-white/85" : "text-zinc-500")}>{artifactSizeLabel(artifact.content)}</span>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
-                </section>
-              ))}
-
-              {groups.length === 0 ? (
+              {explorerEntries.length === 0 ? (
                 <div className="flex min-h-[340px] flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white/55 text-center dark:border-zinc-700 dark:bg-white/5">
                   <span className="relative flex h-16 w-20 items-end">
                     <span className="absolute left-2 top-2 h-4 w-9 rounded-t-lg bg-[#74c7ff]" />
                     <span className="relative h-12 w-20 rounded-xl bg-gradient-to-b from-[#62c5ff] to-[#0a84ff] shadow-lg" />
                   </span>
                   <p className="mt-4 text-sm font-semibold">No hay resultados</p>
-                  <p className="mt-1 max-w-sm text-xs text-zinc-500">Cada agente tiene su carpeta y reporte de archivos. Cambia el filtro o busca otro nombre.</p>
+                  <p className="mt-1 max-w-sm text-xs text-zinc-500">
+                    {folderDeptId
+                      ? "Esta carpeta no tiene archivos todavía. Los reportes y artefactos del departamento aparecerán aquí."
+                      : "Los departamentos aparecen como carpetas. Cambia el filtro o busca otro nombre."}
+                  </p>
                 </div>
               ) : null}
 
@@ -6423,7 +7209,7 @@ function FilesView({
                       const reviewing = missionBusy === `review:${record.id}`
                       return (
                         <article key={record.id} className="border-b border-zinc-100 last:border-b-0 dark:border-white/5" data-testid="company-mission-evidence-record">
-                          <div className="flex flex-col gap-3 px-3 py-3 lg:flex-row lg:items-center">
+                          <div className="flex flex-col gap-3 px-3 py-3">
                             <button
                               type="button"
                               className="min-w-0 flex-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0a84ff]"
@@ -6441,7 +7227,7 @@ function FilesView({
                                 {record.department} · {record.author} · {relativeActivity(Date.parse(record.createdAt))}
                               </span>
                             </button>
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex shrink-0 items-center gap-1.5 self-end">
                               <Button
                                 type="button"
                                 variant="ghost"
@@ -6480,7 +7266,15 @@ function FilesView({
                             </div>
                           </div>
                           {expanded ? (
-                            <div className="grid gap-4 border-t border-zinc-100 px-3 pb-4 pt-3 text-xs dark:border-white/5 lg:grid-cols-2">
+                            <div className="grid gap-4 border-t border-zinc-100 px-3 pb-4 pt-3 text-xs dark:border-white/5">
+                              <div className="rounded-lg bg-zinc-100/75 px-3 py-2 text-[10px] text-zinc-600 dark:bg-white/5 dark:text-zinc-300">
+                                <span className="font-semibold">v{record.version} · {record.source}</span>
+                                {record.contentHash ? (
+                                  <code className="mt-1 block break-all font-mono text-[9px] text-zinc-500 dark:text-zinc-400">
+                                    {record.contentHash}
+                                  </code>
+                                ) : null}
+                              </div>
                               <div>
                                 <h3 className="text-[10px] font-semibold uppercase text-zinc-500">Entregables</h3>
                                 <div className="mt-2 space-y-2">
@@ -6520,6 +7314,27 @@ function FilesView({
                     Las misiones cerradas aparecerán aquí.
                   </div>
                 ) : null}
+
+                {missionLedger?.reports.length ? (
+                  <div className="mt-4 space-y-2" data-testid="company-activity-reports">
+                    {missionLedger.reports.map((report) => (
+                      <div
+                        key={report.id}
+                        className="flex flex-col gap-2 rounded-lg border border-zinc-200 bg-white/75 px-3 py-2.5 text-xs dark:border-white/10 dark:bg-white/5 sm:flex-row sm:items-center"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate font-semibold">{report.title}</span>
+                          <span className="mt-0.5 block text-[10px] text-zinc-500">
+                            {report.author} · {report.counts.missions} misiones · {report.status === "queued" ? "En cola" : "Borrador"}
+                          </span>
+                        </span>
+                        <span className="shrink-0 rounded-md bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-600 dark:bg-white/10 dark:text-zinc-300">
+                          v{report.version}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </section>
             </div>
           </main>
@@ -6552,8 +7367,9 @@ function FilesView({
                   <div><span className="block text-[10px] text-zinc-500">Actualizado</span><strong className="mt-1 block">{relativeActivity(selected.updatedAt)}</strong></div>
                 </div>
                 <pre className="mt-4 min-h-0 max-h-[320px] flex-1 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-3 font-mono text-[10px] leading-relaxed text-zinc-600 dark:border-white/10 dark:bg-zinc-950 dark:text-zinc-300">
-                  {selected.content.slice(0, 8_000)}
-                  {selected.content.length > 8_000 ? "\n\n… vista previa limitada" : ""}
+                  {/^(pptx?|docx?|xlsx?|pdf|zip|png|jpe?g|gif|webp|bin)$/i.test(selected.extension)
+                    ? "Vista previa no disponible para este archivo binario. Usa Descargar."
+                    : `${selected.content.slice(0, 8_000)}${selected.content.length > 8_000 ? "\n\n… vista previa limitada" : ""}`}
                 </pre>
                 <Button type="button" className="mt-4 w-full rounded-lg" onClick={() => downloadArtifact(selected)}>
                   <Download className="mr-2 h-4 w-4" />
@@ -6580,9 +7396,155 @@ function FilesView({
   return body
 }
 
+function DepartmentComputerView({
+  department,
+  computerRunId,
+  loading = false,
+  error = null,
+  onRetry,
+  onBack,
+  onOpenChat,
+}: {
+  department: AgentDepartmentDefinition
+  computerRunId: string
+  loading?: boolean
+  error?: string | null
+  onRetry?: () => void
+  onBack?: () => void
+  onOpenChat: () => void
+}) {
+  const { files, openFile } = useCodeWorkspace()
+  const [terminalOpen, setTerminalOpen] = React.useState(true)
+  const [timedOut, setTimedOut] = React.useState(false)
+  const paths = React.useMemo(
+    () => Object.keys(files).sort((a, b) => a.localeCompare(b, "es")),
+    [files],
+  )
+  const preparing = loading || (paths.length === 0 && !error)
+
+  React.useEffect(() => {
+    setTimedOut(false)
+    if (!preparing) return
+    const timer = window.setTimeout(() => setTimedOut(true), 12_000)
+    return () => window.clearTimeout(timer)
+  }, [preparing, computerRunId])
+
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#fbfbfa] text-zinc-950 dark:bg-zinc-950 dark:text-zinc-50"
+      data-testid="department-computer-surface"
+      data-dept-real-computer="1"
+      data-computer-run-id={computerRunId}
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-border/55 px-2 py-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-11 min-w-11 shrink-0 gap-1.5 px-3 text-[13px] font-semibold"
+          onClick={onBack}
+          aria-label="Volver a departamentos"
+          data-testid="department-computer-back"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Volver
+        </Button>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold">
+            {department.name} · Computadora
+          </h2>
+          <p className="truncate text-[10px] text-muted-foreground">
+            Archivos y terminal del departamento
+          </p>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-11 shrink-0 gap-1.5 px-3 text-[13px]"
+          onClick={onOpenChat}
+        >
+          Chat
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        <p className="px-1 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Archivos
+        </p>
+        {error ? (
+          <div className="px-3 py-8 text-center">
+            <p className="text-sm text-rose-600 dark:text-rose-300">{error}</p>
+            {onRetry ? (
+              <Button type="button" variant="outline" className="mt-3 h-11" onClick={onRetry}>
+                Reintentar
+              </Button>
+            ) : null}
+          </div>
+        ) : preparing ? (
+          <div className="px-3 py-8 text-center" role="status" aria-live="polite">
+            <Loader2 className="mx-auto h-5 w-5 animate-spin text-muted-foreground" />
+            <p className="mt-3 text-sm text-muted-foreground">
+              Preparando el computador del departamento…
+            </p>
+            {timedOut ? (
+              <div className="mt-3">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
+                  Está tardando más de lo normal.
+                </p>
+                {onRetry ? (
+                  <Button type="button" variant="outline" className="mt-2 h-11" onClick={onRetry}>
+                    Reintentar
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <ul className="space-y-px">
+            {paths.map((path) => (
+              <li key={path}>
+                <button
+                  type="button"
+                  onClick={() => openFile(path)}
+                  className="flex min-h-11 w-full items-center gap-2 rounded-md px-2 py-2.5 text-left text-[13px] text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                  title={path}
+                >
+                  <File className="h-4 w-4 shrink-0" />
+                  <span className="truncate">{path}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="flex h-[42%] min-h-[180px] shrink-0 flex-col border-t border-border/55">
+        <div className="flex items-center justify-between border-b border-border/40 px-3 py-1.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Terminal</p>
+        </div>
+        {terminalOpen ? (
+          <TerminalPanel open={terminalOpen} onClose={() => setTerminalOpen(false)} />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-11"
+              onClick={() => setTerminalOpen(true)}
+            >
+              Mostrar terminal
+            </Button>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function DepartmentView({
   row,
   onOpenCeo,
+  onOpenComputer,
 }: {
   row: {
     department: AgentDepartmentDefinition
@@ -6593,6 +7555,7 @@ function DepartmentView({
     latestRun: CodexRun | null
   }
   onOpenCeo: () => void
+  onOpenComputer?: () => void
 }) {
   const orderedRuns = [...row.runs].sort((a, b) => runActivityAt(b) - runActivityAt(a))
   const taskCount = orderedRuns.length > 0 ? orderedRuns.length : row.sessions.length
@@ -6648,7 +7611,13 @@ function DepartmentView({
           <p className="py-8 text-center text-sm text-muted-foreground">Sin tareas asignadas.</p>
         ) : null}
       </div>
-      <Button type="button" className="mt-5 w-full" onClick={onOpenCeo}>
+      {onOpenComputer ? (
+        <Button type="button" className="mt-5 h-11 w-full" onClick={onOpenComputer}>
+          <Monitor className="mr-2 h-4 w-4" />
+          Abrir computadora
+        </Button>
+      ) : null}
+      <Button type="button" className="mt-2 w-full" variant="outline" onClick={onOpenCeo}>
         Coordinar desde CEO Office
       </Button>
     </ViewBody>

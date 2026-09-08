@@ -57,7 +57,7 @@ describe("reduceEvent · file_artifact", () => {
     assert.equal(s.artifacts[1].id, "a2")
   })
 
-  it("replaces an earlier revision of the same deliverable", () => {
+  it("replaces same-filename revisions without source provenance", () => {
     let s = fresh()
     s = reduceEvent(s, {
       type: "file_artifact",
@@ -82,6 +82,121 @@ describe("reduceEvent · file_artifact", () => {
 
     assert.equal(s.artifacts.length, 1)
     assert.equal(s.artifacts[0].id, "final")
+    assert.equal(s.artifacts[0].downloadUrl, "/final")
+  })
+
+  it("keeps same-filename batch outputs when both identify distinct source files", () => {
+    let s = fresh()
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "batch-a",
+        filename: "Informe-editado.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 10,
+        downloadUrl: "/batch-a",
+        sourceFileId: "source-a",
+      },
+    } as any)
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "batch-b",
+        filename: "informe-editado.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 20,
+        downloadUrl: "/batch-b",
+        sourceFileId: "source-b",
+      },
+    } as any)
+
+    assert.equal(s.artifacts.length, 2)
+    assert.deepEqual(s.artifacts.map((artifact) => artifact.sourceFileId), ["source-a", "source-b"])
+  })
+
+  it("replaces a revision of the same source file even when its artifact id and filename change", () => {
+    let s = fresh()
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "source-draft",
+        filename: "Informe-borrador.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 10,
+        downloadUrl: "/source-draft",
+        sourceFileId: "source-1",
+      },
+    } as any)
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "source-final",
+        filename: "Informe-final.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 20,
+        downloadUrl: "/source-final",
+        sourceFileId: "source-1",
+      },
+    } as any)
+
+    assert.equal(s.artifacts.length, 1)
+    assert.equal(s.artifacts[0].id, "source-final")
+    assert.equal(s.artifacts[0].filename, "Informe-final.docx")
+  })
+
+  it("replaces a same-filename sourced card when the incoming revision has no source id", () => {
+    let s = fresh()
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "sourced",
+        filename: "Informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 10,
+        downloadUrl: "/sourced",
+        sourceFileId: "source-1",
+      },
+    } as any)
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "unsourced-revision",
+        filename: "informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 20,
+        downloadUrl: "/unsourced-revision",
+      },
+    } as any)
+
+    assert.equal(s.artifacts.length, 1)
+    assert.equal(s.artifacts[0].id, "unsourced-revision")
+  })
+
+  it("updates a replayed artifact when its stable id matches", () => {
+    let s = fresh()
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "artifact-1",
+        filename: "Informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 10,
+        downloadUrl: "/draft",
+      },
+    } as any)
+    s = reduceEvent(s, {
+      type: "file_artifact",
+      artifact: {
+        id: "artifact-1",
+        filename: "Informe.docx",
+        mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sizeBytes: 20,
+        downloadUrl: "/final",
+      },
+    } as any)
+
+    assert.equal(s.artifacts.length, 1)
+    assert.equal(s.artifacts[0].sizeBytes, 20)
     assert.equal(s.artifacts[0].downloadUrl, "/final")
   })
 })

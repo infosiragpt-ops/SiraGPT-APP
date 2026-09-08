@@ -14,7 +14,24 @@
     "last7Days": "Ultimi 7 giorni",
     "older": "Precedenti",
     "projects": "Projects",
-    "design": "Design"
+    "design": "Design",
+    "justNow": "Adesso",
+    "yesterday": "Ieri",
+    "loadingMoreChats": "Caricamento di altre chat…",
+    "loadMoreChats": "Carica altre chat",
+    "allChatsLoaded": "Tutte le chat caricate",
+    "privacyPolicy": "Informativa sulla privacy",
+    "adminPanel": "Pannello admin",
+    "superAdminPanel": "Pannello super admin",
+    "returnToSuperAdmin": "Torna al super admin",
+    "upgrade": "Aggiorna piano",
+    "upgradeNow": "Aggiorna ora",
+    "administrator": "Amministratore",
+    "superAdministrator": "Super amministratore",
+    "freePlan": "Piano gratuito",
+    "searchBrain": "Cerca",
+    "post": "Pubblicazione",
+    "code": "Codice"
   },
   "projects": {
     "title": "Projects",
@@ -290,7 +307,57 @@
     "continueWithGoogle": "Continua con Google",
     "noAccount": "Non hai un account?",
     "haveAccount": "Hai già un account?",
-    "tagline": "Accedi al tuo account SiraGPT"
+    "tagline": "Accedi al tuo account SiraGPT",
+    "serverWarming": "Il server si sta avviando. Nuovo tentativo automatico…",
+    "serverWarmingButton": "Avvio del server…",
+    "signingIn": "Accesso…",
+    "invalidCreds": "Credenziali non corrette",
+    "createYourAccount": "Crea il tuo account",
+    "registerTagline": "Inizia gratis con SiraGPT",
+    "name": "Nome",
+    "namePlaceholder": "Il tuo nome completo",
+    "confirmPassword": "Conferma password",
+    "passwordMinHint": "Almeno 8 caratteri",
+    "agreeTerms": "Accetto i termini e l'informativa sulla privacy",
+    "emailInvalid": "Inserisci un'email valida",
+    "passwordRequired": "Inserisci la tua password",
+    "brandTagline": "Tutta la potenza dell'IA in un unico posto",
+    "brandFeature1": "I migliori modelli: GPT, Claude, Gemini, Grok e altri",
+    "brandFeature2": "Immagini, documenti, codice e diagrammi all'istante",
+    "brandFeature3": "Ricerca e automazione con agenti specializzati",
+    "brandFooter": "© SiraGPT — Piattaforma IA multimodale",
+    "orWithEmail": "o con la tua email",
+    "signUpWithGoogle": "Registrati con Google",
+    "nameRequired": "Inserisci il tuo nome",
+    "passwordTooShort": "La password deve avere almeno 8 caratteri",
+    "passwordsNoMatch": "Le password non coincidono",
+    "agreeTermsRequired": "Devi accettare i termini per continuare",
+    "back": "Indietro",
+    "backToLogin": "Torna all'accesso",
+    "sending": "Invio…",
+    "sendResetLink": "Invia link di recupero",
+    "resetLinkSent": "Link di recupero inviato",
+    "resetLinkSentDescription": "Se esiste un account con questa email, riceverai un link per reimpostare la password. Controlla posta in arrivo e spam.",
+    "tryAgain": "Riprova",
+    "resetRequestFailed": "Impossibile inviare il link. Riprova.",
+    "forgotPasswordTitle": "Recupera il tuo accesso",
+    "forgotPasswordSubtitle": "Ti invieremo un link per reimpostare la password.",
+    "resetPasswordTitle": "Nuova password",
+    "resetPassword": "Reimposta password",
+    "resetPasswordSubtitle": "Inserisci la nuova password.",
+    "resetting": "Reimpostazione…",
+    "passwordResetSuccess": "Password aggiornata",
+    "passwordResetSuccessDescription": "La tua password è stata aggiornata. Ora puoi accedere.",
+    "resetTokenMissing": "Token di recupero mancante. Richiedi un nuovo link.",
+    "resetTokenNotFound": "Il token di recupero non è valido.",
+    "resetTokenExpired": "Il token di recupero è scaduto.",
+    "resetTokenUsed": "Questo token è già stato utilizzato.",
+    "resetFailed": "Impossibile reimpostare la password.",
+    "requestNewResetLink": "Richiedi nuovo link",
+    "agreeTermsPrefix": "Accetto i",
+    "agreeTermsLink": "termini",
+    "agreeTermsAnd": "e la",
+    "agreePrivacyLink": "informativa sulla privacy"
   },
   "documents": {
     "download": "Scarica",
@@ -343,7 +410,9 @@
       "titleDefault": "SiraGPT — Piattaforma di IA multimodale",
       "titleTemplate": "%s · SiraGPT",
       "description": "SiraGPT integra OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs e OpenClaw in un’esperienza di IA professionale."
-    }
+    },
+    "sidebarMenu": "Menu laterale",
+    "sidebarMenuDescription": "Navigazione principale"
   },
   "thinking": {
     "thinking": "Sto pensando…",
@@ -443,6 +512,7 @@
     },
     "composer": {
       "placeholder": "Describe the idea — AI plans and builds…",
+      "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
       "plan": "Plan",
       "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Send",
@@ -503,12 +573,135 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
     "titleDefault": "SiraGPT — Piattaforma IA Multimodale",
     "titleTemplate": "%s · SiraGPT",
     "description": "Piattaforma multi-LLM con generazione di testo, immagini, audio e video. GPT-4, Claude, Gemini e più in un unico posto."
+  },
+  "profile": {
+    "title": "Impostazioni profilo",
+    "subtitle": "Gestisci le impostazioni e le preferenze del tuo account.",
+    "synced": "Sincronizzato",
+    "admin": "Amministratore",
+    "personalInfo": {
+      "title": "Informazioni personali",
+      "desc": "I tuoi dati del profilo su siraGPT"
+    },
+    "fullName": "Nome completo",
+    "fullNamePlaceholder": "Il tuo nome",
+    "emailImmutable": "L'email non può essere modificata per motivi di sicurezza.",
+    "discard": "Annulla",
+    "save": "Salva modifiche",
+    "saving": "Salvataggio…",
+    "security": {
+      "title": "Sicurezza",
+      "desc": "Aggiorna periodicamente la password"
+    },
+    "currentPassword": "Password attuale",
+    "newPassword": "Nuova password",
+    "confirmPassword": "Conferma password",
+    "minChars": "Almeno 8 caratteri",
+    "updatePassword": "Aggiorna password",
+    "updatingPassword": "Aggiornamento…",
+    "subscription": {
+      "title": "Abbonamento",
+      "desc": "Piano e fatturazione"
+    },
+    "nextBilling": "Prossima fatturazione",
+    "manageSubscription": "Gestisci abbonamento",
+    "usage": {
+      "title": "Utilizzo mensile",
+      "subtitleCalls": "Chiamate consumate",
+      "subtitleTokens": "Token consumati"
+    },
+    "used": "usato",
+    "remaining": "rimanente",
+    "usageWarning": "Hai superato il 70% della tua quota mensile.",
+    "usageDanger": "Ti resta pochissima quota questo mese. Considera di aggiornare il piano per non interrompere il tuo flusso di lavoro.",
+    "adminAccess": {
+      "title": "Accesso amministratore",
+      "desc": "Privilegi attivi"
+    },
+    "openAdmin": "Apri pannello admin"
+  },
+  "messageActions": {
+    "copy": "Copia",
+    "copied": "Copiato",
+    "userMessage": "Messaggio dell'utente",
+    "assistantResponse": "Risposta dell'assistente",
+    "speak": "Leggi ad alta voce",
+    "stopSpeak": "Interrompi lettura",
+    "regenerate": "Rigenera",
+    "share": "Condividi",
+    "feedbackGood": "Risposta utile",
+    "feedbackBad": "Risposta poco utile"
+  },
+  "composer": {
+    "placeholderDefault": "Chiedi a SiraGPT",
+    "placeholderImage": "Descrivi l'immagine che vuoi creare",
+    "placeholderVideo": "Descrivi il video che vuoi creare",
+    "placeholderWebSearch": "Cerca sul web",
+    "placeholderGmail": "Comando Gmail",
+    "placeholderGoogle": "Comando Google",
+    "placeholderSpotify": "Comando Spotify",
+    "placeholderWord": "Descrivi il documento che vuoi creare",
+    "placeholderComputer": "Di' cosa vuoi che controlli",
+    "sendHint": "Invia",
+    "stopHint": "Interrompi",
+    "dropFiles": "Rilascia i file per caricarli"
+  },
+  "chatSearch": {
+    "placeholder": "Cerca nelle tue chat…",
+    "noResults": "Nessun risultato",
+    "noResultsFor": "Nessuna chat trovata per «{query}»",
+    "serverFallback": "Ricerca sul server non riuscita; mostriamo le corrispondenze dei titoli locali.",
+    "emptyHistory": "Non hai ancora chat",
+    "emptyHistoryHint": "Inizia una conversazione per vederla qui",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chat"
   }
 }

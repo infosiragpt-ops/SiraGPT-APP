@@ -136,9 +136,6 @@ export type AgentOfficeModel = {
   truth: AgentOfficeTruth
 }
 
-const MAX_WORKERS_PER_DEPARTMENT = 12
-const MAX_OFFICE_WORKERS = 48
-
 function compactLine(value: string, fallback: string, max = 120): string {
   const line = value.replace(/\s+/g, " ").trim() || fallback
   return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line
@@ -343,23 +340,42 @@ export function buildAgentOfficeModel({
       .filter((pool) => pool?.departmentId)
       .map((pool) => [pool.departmentId, pool] as const),
   )
+  const departmentByPoolId = new Map(
+    (departmentPools || [])
+      .filter((pool) => pool?.id && pool?.departmentId)
+      .map((pool) => [pool.id, pool.departmentId] as const),
+  )
   const commandByDepartment = new Map(
     (commandCenter?.departments || []).map((department) => [department.id, department] as const),
   )
   const evidenceRecords = missionEvidence?.records || []
   const ledger = progressMemory?.ledger || []
   const objectives: readonly CodexObjective[] = progressMemory?.objectives || []
+  const sessionRunIds = new Set(
+    sessions.flatMap((session) => session.turns.map((turn) => turn.codexRunId).filter((id): id is string => Boolean(id))),
+  )
 
   const sessionWorkers = sessions.map<AgentOfficeWorker>((session) => {
-    const departmentId = departmentIdForSession(session, rootSessionId, departments)
+    const linkedRunId = [...session.turns].reverse().find((turn) => turn.codexRunId)?.codexRunId || null
+    const linkedRun = linkedRunId ? runs.find((run) => run.id === linkedRunId) || null : null
+    const linkedPooledDepartmentId = linkedRun?.departmentPoolId
+      ? departmentByPoolId.get(linkedRun.departmentPoolId) || null
+      : null
+    const inferredDepartmentId = departmentIdForSession(session, rootSessionId, departments)
+    const departmentId = linkedPooledDepartmentId && departmentMap.has(linkedPooledDepartmentId)
+      ? linkedPooledDepartmentId
+      : inferredDepartmentId
     const department = departmentMap.get(departmentId) || fallbackDepartment
     const status = codeSessionStatus(session)
     const active = codeSessionIsActive(session)
+    const linkedEvidence = evidenceForRun(evidenceRecords, linkedRunId)
+    const linkedBlocker = linkedRun?.error
+      || (linkedEvidence?.status === "blocked" ? linkedEvidence.summary : null)
     return {
       id: `session:${session.id}`,
       source: "session",
       sessionId: session.id,
-      runId: null,
+      runId: linkedRunId,
       departmentId: department.id,
       departmentName: department.name,
       name: sessionName(session),
@@ -370,17 +386,28 @@ export function buildAgentOfficeModel({
       activity: activityForDepartment(department),
       model: null,
       updatedAt: session.updatedAt,
-      costUsd: null,
-      blocker: status.tone === "attention" && !active
-        ? compactLine(status.label, "Requiere atención", 160)
+      costUsd: linkedRun ? runCostUsd(linkedRun) : null,
+      blocker: linkedBlocker || (status.tone === "attention" && !active)
+        ? compactLine(linkedBlocker || status.label, "Requiere atención", 160)
         : null,
-      evidenceReview: null,
-      evidenceSummary: null,
+      evidenceReview: linkedEvidence
+        ? (linkedEvidence.status === "blocked" ? "blocked" : linkedEvidence.ceoReview.status)
+        : null,
+      evidenceSummary: linkedEvidence
+        ? compactLine(linkedEvidence.summary, linkedEvidence.missionTitle, 180)
+        : null,
     }
   })
 
-  const runWorkers = runs.map<AgentOfficeWorker>((run) => {
-    const departmentId = departmentIdForRun(run, departments)
+  const runWorkers = runs.filter((run) => !sessionRunIds.has(run.id)).map<AgentOfficeWorker>((run) => {
+    // Durable pool attribution is authoritative. Text inference remains only
+    // for legacy runs created before departmentPoolId was persisted.
+    const pooledDepartmentId = run.departmentPoolId
+      ? departmentByPoolId.get(run.departmentPoolId) || null
+      : null
+    const departmentId = pooledDepartmentId && departmentMap.has(pooledDepartmentId)
+      ? pooledDepartmentId
+      : departmentIdForRun(run, departments)
     const department = departmentMap.get(departmentId) || fallbackDepartment
     const status = codeRunStatus(run)
     const active = codeRunIsActive(run)
@@ -422,19 +449,12 @@ export function buildAgentOfficeModel({
     }
   })
 
-  const selectedIds = new Set<string>()
-  for (const department of departments) {
-    const candidates = [...sessionWorkers, ...runWorkers]
-      .filter((worker) => worker.departmentId === department.id)
-      .sort(compareWorkers)
-      .slice(0, MAX_WORKERS_PER_DEPARTMENT)
-    for (const worker of candidates) selectedIds.add(worker.id)
-  }
-
+  // The office is an operational view, so silently dropping workers would make
+  // its counts and navigation untrustworthy. Rendering code is responsible for
+  // choosing an efficient representation (detailed mesh vs. instanced seat),
+  // while the model always retains every real session and durable run.
   const workers = [...sessionWorkers, ...runWorkers]
-    .filter((worker) => selectedIds.has(worker.id))
     .sort(compareWorkers)
-    .slice(0, MAX_OFFICE_WORKERS)
   const visibleIds = new Set(workers.map((worker) => worker.id))
 
   const pendingOpsFromActions = (operations?.actions || []).filter((action) => (

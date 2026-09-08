@@ -14,6 +14,7 @@ const {
   pickPptxTheme,
   listPptxThemes,
   pickChartType,
+  inferRequestedHex,
   looksTemporal,
   sumsToHundred,
 } = require('../src/services/document-pipeline/pptx-design-system');
@@ -51,6 +52,27 @@ test('listPptxThemes exposes id/label/description only', () => {
   for (const item of list) {
     assert.deepEqual(Object.keys(item).sort(), ['description', 'id', 'label']);
   }
+});
+
+
+test('pickPptxTheme: requested color beats premium/boardroom default', () => {
+  const pink = pickPptxTheme({ template: 'premium', prompt: 'crea una ppt del embarazo de color rosado la ppt' });
+  assert.equal(pink.id, 'user-color:FFC0CB');
+  assert.equal(pink.palette.bg, 'FFC0CB');
+  assert.equal(pink.palette.coverBg, 'FFC0CB');
+  assert.equal(pink.palette.sectionBg, 'FFC0CB');
+  assert.equal(inferRequestedHex('ponlas todas rosadas'), 'FFC0CB');
+  assert.equal(inferRequestedHex('cámbialas al hex #1E3A8A'), '1E3A8A');
+  const navy = pickPptxTheme({ template: 'premium', prompt: 'cámbialas al hex #1E3A8A' });
+  assert.equal(navy.palette.bg, '1E3A8A');
+  const white = pickPptxTheme({ template: 'premium', prompt: 'uniformisa el color de las ppts todas de color blanco' });
+  assert.equal(white.palette.bg, 'FFFFFF');
+  const despiteBoardroom = pickPptxTheme({
+    template: 'premium',
+    prompt: 'crea una ppt del embarazo de color rosado la ppt',
+    themeId: 'boardroom',
+  });
+  assert.equal(despiteBoardroom.palette.bg, 'FFC0CB');
 });
 
 test('pickPptxTheme: prompt styling keywords override the template default', () => {

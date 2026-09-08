@@ -20,7 +20,14 @@ const path = require('path');
 const ARTIFACT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'doc-edit-artifacts-'));
 process.env.AGENT_ARTIFACT_DIR = ARTIFACT_DIR;
 
-const { buildDocumentEditTool, MAX_CALLS_PER_TURN, MAX_FILE_BYTES } = require('../src/services/agent-harness/tools/document-edit-tool');
+const {
+  buildDocumentEditTool,
+  MAX_CALLS_PER_TURN,
+  MAX_FILE_BYTES,
+  MAX_TOTAL_FILE_BYTES,
+  _documentEditBulkhead,
+  _reservedRowBytes,
+} = require('../src/services/agent-harness/tools/document-edit-tool');
 const { buildHarnessTools } = require('../src/services/agent-harness/run-agent-turn');
 
 // The tool now tries the in-process source-preserving editor BEFORE the
@@ -58,6 +65,83 @@ function baseCtx(overrides = {}) {
     ...overrides,
   };
 }
+
+test('aggregate byte guard rejects oversized batches before any editor or blob read', async () => {
+  let sourceEditorCalls = 0;
+  let blobReads = 0;
+  let sandboxCalls = 0;
+  const before = _documentEditBulkhead.snapshot();
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1', userId: 'u1', size: MAX_TOTAL_FILE_BYTES + 1,
+      path: '/must/not/read.docx', originalName: 'grande.docx', filename: 'grande.docx',
+    }]),
+    fsImpl: { readFile: async () => { blobReads += 1; return Buffer.from('x'); } },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { sourceEditorCalls += 1; return null; },
+    },
+    runDocumentAgent: async () => { sandboxCalls += 1; return { outputs: [] }; },
+  });
+
+  const out = await tool.execute({ instruction: 'edita el documento completo' }, baseCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'total_files_too_large');
+  assert.equal(out.code, 'DOCUMENT_EDIT_TOTAL_BYTES_EXCEEDED');
+  assert.equal(sourceEditorCalls, 0);
+  assert.equal(blobReads, 0);
+  assert.equal(sandboxCalls, 0);
+  const after = _documentEditBulkhead.snapshot();
+  assert.equal(after.inFlight, before.inFlight);
+  assert.equal(after.tokensInFlight, before.tokensInFlight);
+});
+
+test('measured storage bytes reject a stale legacy size before the source-preserving editor reads it', async () => {
+  let sourceEditorCalls = 0;
+  let blobReads = 0;
+  let sandboxCalls = 0;
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1', userId: 'u1', size: 1024,
+      path: '/legacy/oversized.docx', originalName: 'oversized.docx', filename: 'oversized.docx',
+    }]),
+    statSource: async () => ({ size: MAX_FILE_BYTES + 1 }),
+    fsImpl: { readFile: async () => { blobReads += 1; return Buffer.alloc(MAX_FILE_BYTES + 1); } },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { sourceEditorCalls += 1; return null; },
+    },
+    runDocumentAgent: async () => { sandboxCalls += 1; return { outputs: [] }; },
+  });
+
+  const out = await tool.execute({ instruction: 'edita este documento' }, baseCtx());
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'file_too_large');
+  assert.equal(out.code, 'DOCUMENT_EDIT_FILE_BYTES_EXCEEDED');
+  assert.equal(sourceEditorCalls, 0);
+  assert.equal(blobReads, 0);
+  assert.equal(sandboxCalls, 0);
+});
+
+test('legacy rows reserve the per-file maximum and release global admission on every return path', async () => {
+  assert.equal(
+    _reservedRowBytes([{}, {}, {}]),
+    Math.min(MAX_TOTAL_FILE_BYTES, 3 * MAX_FILE_BYTES),
+    'unknown legacy sizes must be reserved conservatively',
+  );
+
+  const p = tmpFileWith('x');
+  const before = _documentEditBulkhead.snapshot();
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a.docx' }]),
+    sourcePreservingEdit: SP_NULL,
+    runDocumentAgent: async () => ({ outputs: [], finalText: 'sin salida' }),
+  });
+  const out = await tool.execute({ instruction: 'edita este documento' }, baseCtx());
+  assert.equal(out.error, 'no_output');
+  const after = _documentEditBulkhead.snapshot();
+  assert.equal(after.inFlight, before.inFlight);
+  assert.equal(after.tokensInFlight, before.tokensInFlight);
+  fs.rmSync(p, { force: true });
+});
 
 test('happy path: ownership-scoped lookup, agent gets bytes, artifact card emitted', async () => {
   const inputPath = tmpFileWith('original-bytes');
@@ -143,7 +227,7 @@ test('error paths return ok:false without throwing', async () => {
   // file_blob_missing
   const t1 = buildDocumentEditTool({
     sourcePreservingEdit: SP_NULL,
-    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: '/does/not/exist', originalName: 'a.docx', filename: 'a' }]),
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', size: 128, path: '/does/not/exist', originalName: 'a.docx', filename: 'a' }]),
     runDocumentAgent: async () => ({ outputs: [] }),
   });
   const r1 = await t1.execute({ instruction: 'edita el documento' }, baseCtx());
@@ -180,6 +264,45 @@ test('empty outputs are skipped; all-empty → no_output', async () => {
   });
   const out = await tool.execute({ instruction: 'edita el documento' }, baseCtx());
   assert.deepEqual([out.ok, out.error], [false, 'no_output']);
+  fs.rmSync(p, { force: true });
+});
+
+test('sandbox rejects a non-empty invalid output before persistence or card emission', async () => {
+  const p = tmpFileWith('original-stays-intact');
+  const events = [];
+  let saveCalls = 0;
+  const tool = buildDocumentEditTool({
+    sourcePreservingEdit: SP_NULL,
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', path: p, originalName: 'a.docx', filename: 'a.docx' }]),
+    runDocumentAgent: async () => ({
+      outputs: [{ name: 'a-editado.docx', buffer: Buffer.from('non-empty-but-invalid'), valid: false }],
+      finalText: 'Supuestamente editado.',
+      iterations: 2,
+      driver: 'local',
+    }),
+    saveArtifact: () => {
+      saveCalls += 1;
+      throw new Error('invalid output must never reach persistence');
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'edita el documento y devuélveme el Word' },
+    baseCtx({ onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'document_validation_failed');
+  assert.equal(out.code, 'DOCUMENT_VALIDATION_FAILED');
+  assert.deepEqual(out.edited, []);
+  assert.deepEqual(out.failures, [{
+    filename: 'a-editado.docx',
+    error: 'validation_failed',
+    reason: 'ooxml_structure',
+  }]);
+  assert.equal(saveCalls, 0, 'invalid output must be rejected before saveArtifact');
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false, 'invalid output must not emit a chat card');
+  assert.equal(JSON.stringify(out).includes('/api/agent/artifact/'), false, 'invalid output must not expose a download URL');
   fs.rmSync(p, { force: true });
 });
 
@@ -226,6 +349,8 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isDocumentEditRequest('actualiza el informe con los datos nuevos'), true);
   assert.equal(isDocumentEditRequest('corrige la ortografía del archivo'), true);
   assert.equal(isDocumentEditRequest('aplica correcciones minimas al documento porfavor'), true);
+  assert.equal(isDocumentEditRequest('uniformisa el color de la ppts todas de color blanco'), true);
+  assert.equal(isDocumentEditRequest('pon todas las diapositivas de color rosado'), true);
   // negatives — plain Q&A / summaries stay fast
   assert.equal(isDocumentEditRequest('resume este documento'), false);
   assert.equal(isDocumentEditRequest('¿qué dice el documento?'), false);
@@ -239,6 +364,10 @@ test('routing gate: edit requests with attachments enter the agentic loop; doc-Q
   assert.equal(isSourcePreservingEditRequest('borra el jurado evaluador', docx), true);
   assert.equal(isSourcePreservingEditRequest('agrega una conclusión', docx), true);
   assert.equal(isSourcePreservingEditRequest('aplica correcciones minimas al documento porfavor', docx), true);
+  const pptx = [{ name: 'deck.pptx', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }];
+  assert.equal(isSourcePreservingEditRequest('uniformisa el color de la ppts todas de color blanco', pptx), true);
+  assert.equal(isSourcePreservingEditRequest('agrega una ppt de gracias', pptx), true);
+  assert.equal(isSourcePreservingEditRequest('edita estos documentos y devuélvemelos en el mismo formato', docx), true);
   assert.equal(isSourcePreservingEditRequest('¿qué dice el documento?', docx), false);
   assert.equal(isSourcePreservingEditRequest('resume esto', docx), false);
 
@@ -276,7 +405,7 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
           content: 'Reemplacé la sección "Conclusiones".',
           format: 'docx',
           previewHtml: '<p>preview</p>',
-          validation: { ok: true },
+          validation: { passed: true, ok: true },
           artifact: {
             id: 'art-inproc-1',
             filename: 'informe-editado.docx',
@@ -314,6 +443,168 @@ test('in-process fast path: source-preserving edit returns the card WITHOUT touc
   fs.rmSync(inputPath, { force: true });
 });
 
+test('in-process fast path emits and returns every source-preserving batch artifact once', async () => {
+  const events = [];
+  let sandboxCalled = false;
+  const makeResult = (suffix) => ({
+    content: `Edité ${suffix}.docx.`,
+    format: 'docx',
+    previewHtml: `<p>${suffix}</p>`,
+    validation: { passed: true },
+    version: { id: `version-${suffix}`, version: 2, sourceFileId: `f${suffix}` },
+    artifact: {
+      id: `art-${suffix}`,
+      filename: `${suffix}-editado.docx`,
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      format: 'docx',
+      sizeBytes: 1024,
+      downloadUrl: `/api/agent/artifact/art-${suffix}`,
+    },
+  });
+  const first = makeResult('1');
+  const second = makeResult('2');
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([
+      { id: 'f1', userId: 'u1', size: 1024, path: '/not-read/uno.docx', originalName: 'uno.docx', filename: 'uno.docx' },
+      { id: 'f2', userId: 'u1', size: 1024, path: '/not-read/dos.docx', originalName: 'dos.docx', filename: 'dos.docx' },
+    ]),
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => ({
+        batch: true,
+        content: 'Listo. Edité y validé 2 documentos.',
+        format: 'docx',
+        artifact: first.artifact, // singular compatibility alias must not duplicate it
+        results: [first, second],
+        failures: [],
+      }),
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return { outputs: [] };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'cambia el título en todos los documentos' },
+    baseCtx({ fileIds: ['f1', 'f2'], onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(out.batch, true);
+  assert.equal(sandboxCalled, false);
+  assert.deepEqual(out.edited.map((item) => item.id), ['art-1', 'art-2']);
+  assert.deepEqual(out.artifacts.map((item) => item.id), ['art-1', 'art-2']);
+  assert.deepEqual(out.edited.map((item) => item.sourceFileId), ['f1', 'f2']);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'file_artifact').map((event) => event.artifact.id),
+    ['art-1', 'art-2'],
+  );
+});
+
+test('source-preserving fast path emits and returns only artifacts with validation.passed === true', async () => {
+  const events = [];
+  let sandboxCalled = false;
+  const makeResult = (id, validation) => ({
+    validation,
+    version: { id: `version-${id}`, version: 2, sourceFileId: `f${id}` },
+    artifact: {
+      id: `art-${id}`,
+      filename: `${id}-editado.docx`,
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      format: 'docx',
+      sizeBytes: 512,
+      downloadUrl: `/api/agent/artifact/art-${id}`,
+    },
+  });
+  const valid = makeResult('valid', { passed: true });
+  const invalid = makeResult('invalid', { passed: false, ok: true, reason: 'title_not_changed' });
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([
+      { id: 'fvalid', userId: 'u1', size: 512, path: '/not-read/valid.docx', originalName: 'valid.docx', filename: 'valid.docx' },
+      { id: 'finvalid', userId: 'u1', size: 512, path: '/not-read/invalid.docx', originalName: 'invalid.docx', filename: 'invalid.docx' },
+    ]),
+    sourcePreservingEdit: {
+      isSourcePreservingEditRequest: () => true,
+      tryGenerateSourcePreservingDocumentEdit: async () => ({
+        batch: true,
+        results: [valid, invalid],
+      }),
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return { outputs: [{ name: 'regenerado.docx', buffer: Buffer.from('nope'), valid: true }] };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'edita ambos documentos y conserva los originales' },
+    baseCtx({ fileIds: ['fvalid', 'finvalid'], onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, true);
+  assert.equal(out.partial, true);
+  assert.equal(sandboxCalled, false);
+  assert.deepEqual(out.artifacts.map((artifact) => artifact.id), ['art-valid']);
+  assert.deepEqual(out.edited.map((artifact) => artifact.id), ['art-valid']);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'file_artifact').map((event) => event.artifact.id),
+    ['art-valid'],
+  );
+  assert.equal(out.artifacts[0].validation.passed, true);
+  assert.match(out.summary, /No entregué 1 archivo/);
+});
+
+test('source-preserving validation failure is terminal and never falls through to sandbox regeneration', async () => {
+  const events = [];
+  let sandboxCalled = false;
+  let blobReadCalled = false;
+  const tool = buildDocumentEditTool({
+    fsImpl: {
+      readFile: async () => {
+        blobReadCalled = true;
+        return Buffer.from('must-not-read');
+      },
+    },
+    prisma: fakePrisma([
+      { id: 'f1', userId: 'u1', size: 900, path: '/not-read/original.docx', originalName: 'original.docx', filename: 'original.docx' },
+    ]),
+    sourcePreservingEdit: {
+      isSourcePreservingEditRequest: () => true,
+      tryGenerateSourcePreservingDocumentEdit: async () => ({
+        content: 'Afirmación que no debe mostrarse como éxito.',
+        validation: { passed: false, ok: true, reason: 'requested_change_not_verified' },
+        artifact: {
+          id: 'art-invalid-only',
+          filename: 'original-editado.docx',
+          mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          format: 'docx',
+          sizeBytes: 900,
+          downloadUrl: '/api/agent/artifact/art-invalid-only',
+        },
+      }),
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return { outputs: [{ name: 'regenerado.docx', buffer: Buffer.from('nope'), valid: true }] };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'cambia solo el título y devuelve el mismo Word' },
+    baseCtx({ onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'source_preserving_validation_failed');
+  assert.equal(out.code, 'SOURCE_PRESERVING_VALIDATION_FAILED');
+  assert.deepEqual(out.artifacts, []);
+  assert.deepEqual(out.edited, []);
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+  assert.equal(blobReadCalled, false, 'invalid source-preserving output must not enter blob/sandbox path');
+  assert.equal(sandboxCalled, false, 'invalid source-preserving output must not regenerate a replacement');
+  assert.match(out.message, /no generé un documento sustituto/i);
+});
+
 test('in-process fast path runs before the sandbox 20MB blob cap', async () => {
   const inputPath = tmpFileWith('oversized-placeholder');
   const events = [];
@@ -333,7 +624,7 @@ test('in-process fast path runs before the sandbox 20MB blob cap', async () => {
         content: 'Eliminé Anexo 1 y todo el contenido posterior.',
         format: 'docx',
         previewHtml: null,
-        validation: { ok: true },
+        validation: { passed: true, ok: true },
         artifact: {
           id: 'art-large-docx',
           filename: 'tesis-grande_anexo_1_completado.docx',
@@ -359,6 +650,103 @@ test('in-process fast path runs before the sandbox 20MB blob cap', async () => {
   assert.equal(out.edited[0].downloadUrl, '/api/agent/artifact/art-large-docx');
   assert.ok(events.some((event) => event.type === 'file_artifact' && event.artifact.id === 'art-large-docx'));
   fs.rmSync(inputPath, { force: true });
+});
+
+test('source-preserving target failures do not fall through to document regeneration', async () => {
+  let sandboxCalled = false;
+  const targetError = new Error('No se encontró el texto exacto "ANEXO 01" en el documento original.');
+  targetError.code = 'REPLACE_TEXT_NOT_FOUND';
+
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{ id: 'f1', userId: 'u1', size: 1024, path: '/no/read/needed.docx', originalName: 'tesis.docx', filename: 'tesis.docx' }]),
+    sourcePreservingEdit: {
+      isSourcePreservingEditRequest: () => true,
+      tryGenerateSourcePreservingDocumentEdit: async () => { throw targetError; },
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return { outputs: [{ name: 'regenerado.docx', buffer: Buffer.from('nope'), valid: true }] };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'reemplaza ANEXO 01 por ANEXO I y devuélveme el mismo Word editado' },
+    baseCtx(),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'source_preserving_edit_failed');
+  assert.equal(out.code, 'REPLACE_TEXT_NOT_FOUND');
+  assert.equal(sandboxCalled, false, 'target-not-located failures must not regenerate a different document');
+  assert.match(out.hint, /No generé un documento nuevo/);
+});
+
+test('unresolved source-preserving intent fails closed without sandbox or a false Validado artifact', async () => {
+  let sandboxCalled = false;
+  let blobReadCalled = false;
+  let saveArtifactCalled = false;
+  const events = [];
+  const unresolvedError = new Error(
+    'No pude identificar con seguridad el texto exacto que deseas cambiar en el Word.',
+  );
+  unresolvedError.code = 'SOURCE_EDIT_INTENT_UNRESOLVED';
+
+  const tool = buildDocumentEditTool({
+    prisma: fakePrisma([{
+      id: 'f1',
+      userId: 'u1',
+      size: 1024,
+      path: '/must/not/read/original.docx',
+      originalName: 'original.docx',
+      filename: 'original.docx',
+    }]),
+    fsImpl: {
+      readFile: async () => {
+        blobReadCalled = true;
+        return Buffer.from('unchanged-original-bytes');
+      },
+    },
+    sourcePreservingEdit: {
+      tryGenerateSourcePreservingDocumentEdit: async () => { throw unresolvedError; },
+    },
+    runDocumentAgent: async () => {
+      sandboxCalled = true;
+      return {
+        outputs: [{
+          name: 'original-editado.docx',
+          buffer: Buffer.from('unchanged-original-bytes'),
+          valid: true,
+        }],
+        finalText: 'Listo.',
+      };
+    },
+    saveArtifact: () => {
+      saveArtifactCalled = true;
+      return {
+        id: 'must-not-exist',
+        filename: 'original-editado.docx',
+        downloadUrl: '/api/agent/artifact/must-not-exist',
+      };
+    },
+  });
+
+  const out = await tool.execute(
+    { instruction: 'modifica el título, pero no indico cuál es el texto actual ni el nuevo' },
+    baseCtx({ onEvent: (event) => events.push(event) }),
+  );
+
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'source_preserving_edit_failed');
+  assert.equal(out.code, 'SOURCE_EDIT_INTENT_UNRESOLVED');
+  assert.equal(blobReadCalled, false, 'unresolved intent must stop before loading bytes for the sandbox');
+  assert.equal(sandboxCalled, false, 'unresolved intent must never fall through to sandbox regeneration');
+  assert.equal(saveArtifactCalled, false, 'unchanged bytes must never be persisted as a validated artifact');
+  assert.equal(events.some((event) => event.type === 'file_artifact'), false);
+  const serialized = JSON.stringify(out);
+  assert.equal(serialized.includes('/api/agent/artifact/'), false, 'no download URL may escape');
+  assert.equal(serialized.includes('"passed":true'), false, 'the response must not claim deterministic validation');
+  assert.equal(serialized.includes('Validado'), false, 'the response must not claim a false Validado state');
+  assert.match(out.hint, /No generé un documento nuevo/);
 });
 
 test('in-process fast path falls through to the sandbox when the editor returns null or throws', async () => {
@@ -407,6 +795,7 @@ test('sandbox path materializes r2: attachments instead of fs.readFile on the re
     prisma: fakePrisma([{
       id: 'f1',
       userId: 'u1',
+      size: 8,
       path: 'r2:uploads/u1/informe.docx',
       originalName: 'informe.docx',
       filename: 'informe.docx',

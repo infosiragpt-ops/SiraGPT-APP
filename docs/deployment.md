@@ -4,15 +4,27 @@ This document covers the production deployment pipeline, including
 the manual **auto-rollback** path and the **blue-green** scaffold
 added in cycle 34.
 
-## Standard deploy (manual auto-rollback)
+## Standard deploy (automatic + manual auto-rollback)
 
-Entry point: `.github/workflows/deploy.yml` → SSH to the VPS →
-`scripts/deploy-with-rollback.sh`.
+Entry point: `.github/workflows/deploy.yml` -> SSH to the VPS -> inline
+Docker Compose deploy script with automatic rollback.
 
-Production deploys are manual-only. A push to `main` may run CI, but it
-must not deploy to the VPS automatically. To deploy, run the `Deploy to
-production` workflow from GitHub Actions after CI is green. Optionally
-provide `target_sha` to deploy a specific commit.
+Pushes to `main` deploy automatically through the same protected release path:
+
+1. `CI` completes successfully for the exact `main` commit.
+2. `.github/workflows/promote-main-to-production.yml` fast-forwards
+   `production-main` to that same SHA. If `main` and `production-main`
+   diverged, the workflow fails closed and requires a normal branch
+   reconciliation first.
+3. `CI` completes successfully again on `production-main`.
+4. `.github/workflows/deploy.yml` deploys the exact green SHA to the VPS,
+   runs migration safety checks, builds the Docker images, verifies
+   `/api/health/ready`, `/api/version`, the frontend, and the `/code`
+   runtime canary, and rolls back on failure.
+
+Manual releases remain available through the `Deploy to production` workflow
+or a `deploy-production-*` tag after `production-main` CI is green. Optionally
+provide `target_sha` to deploy a specific production-main commit.
 
 Sequence:
 

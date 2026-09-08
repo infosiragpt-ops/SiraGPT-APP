@@ -22,7 +22,7 @@ test('model sync update payload preserves existing admin activation', () => {
   assert.ok(payload.updatedAt instanceof Date);
 });
 
-test('default inactive guard disables existing models once and preserves later manual activation', async () => {
+test('default inactive guard stamps the marker and never re-disables restored actives', async () => {
   const calls = [];
   let marker = null;
   const service = new ModelSyncService({
@@ -52,19 +52,16 @@ test('default inactive guard disables existing models once and preserves later m
 
   assert.deepEqual(first, {
     applied: true,
-    count: 378,
-    reason: 'default_inactive_enforced',
+    count: 0,
+    reason: 'marker_stamped_without_disable',
   });
   assert.deepEqual(second, {
     applied: false,
     count: 0,
     reason: 'already_applied',
   });
-  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 1);
-  assert.deepEqual(calls.find(([name]) => name === 'updateMany')[1], {
-    where: { isActive: true },
-    data: { isActive: false },
-  });
+  assert.equal(calls.filter(([name]) => name === 'updateMany').length, 0);
+  assert.equal(calls.filter(([name]) => name === 'upsert').length, 1);
 });
 
 test('persistModels batches DB work: one findMany, createMany for new, parallel updates', async () => {
@@ -94,10 +91,10 @@ test('persistModels batches DB work: one findMany, createMany for new, parallel 
   });
 
   const result = await service.persistModels([
-    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: false },
+    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: true },
     { name: 'new-2', provider: 'Z.ai', type: 'TEXT' },
     { name: 'existing-model', provider: 'OpenAI', type: 'TEXT' },
-    { name: 'new-1', provider: 'Cerebras', type: 'TEXT' }, // duplicate → deduped
+    { name: 'new-1', provider: 'Cerebras', type: 'TEXT', isActive: true }, // duplicate → last wins, still forced inactive
   ]);
 
   assert.equal(result.created, 2);
@@ -113,8 +110,12 @@ test('persistModels batches DB work: one findMany, createMany for new, parallel 
   assert.ok(createMany, 'used createMany for new rows');
   assert.equal(createMany[1].data.length, 2);
   assert.equal(createMany[1].skipDuplicates, true);
-  // Discovered rows stay inactive unless explicitly true.
-  assert.equal(createMany[1].data.every((d) => d.isActive === false), true);
+  // Discovered rows always stay inactive until an admin explicitly publishes them.
+  assert.equal(
+    createMany[1].data.every((d) => d.isActive === false),
+    true,
+    'provider discovery must never auto-publish new models, even when upstream marks one active',
+  );
   // One update for the single existing row.
   assert.equal(calls.filter(([n]) => n === 'update').length, 1);
 });

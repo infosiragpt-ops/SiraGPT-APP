@@ -9,7 +9,10 @@ const workspaceSource = readFileSync("lib/code-workspace-context.tsx", "utf8")
 const previewSource = readFileSync("components/code/preview-pane.tsx", "utf8")
 const socialApiSource = readFileSync("lib/company-social-api.ts", "utf8")
 const resourceKeysSource = readFileSync("lib/company-resource-keys.ts", "utf8")
-const codexApiSource = readFileSync("lib/codex/codex-api.ts", "utf8")
+const codexApiSource = [
+  readFileSync("lib/codex/api/company-associations.ts", "utf8"),
+  readFileSync("lib/codex/api/company.ts", "utf8"),
+].join("\n")
 const postPageSource = readFileSync("app/post/page.tsx", "utf8")
 
 test("company navigation renders operational surfaces inside the preview slot", () => {
@@ -27,7 +30,7 @@ test("company files and resources expose real workspace and social operations", 
   assert.match(companySource, /testId="company-files-surface"/)
   assert.match(companySource, /buildCompanyAgentFileArtifacts/)
   assert.match(companySource, /workers=\{officeModel\.workers\}/)
-  assert.match(companySource, /data-testid="company-agent-files-group"/)
+  assert.match(companySource, /data-testid="company-files-dept-folders"/)
   assert.match(companySource, /data-testid="company-mission-evidence-ledger"/)
   assert.match(companySource, /codexApi\.getMissionEvidence/)
   assert.match(companySource, /codexApi\.reviewMissionEvidence/)

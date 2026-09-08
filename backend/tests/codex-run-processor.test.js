@@ -3,7 +3,12 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { processCodexRunJob } = require('../src/services/codex/run-processor');
+const {
+  processCodexRunJob,
+  abortRun,
+  executionContextForAdapter,
+} = require('../src/services/codex/run-processor');
+const { nativeCodexAdapter } = require('../src/services/codex/agent-adapters/native-codex-adapter');
 
 // Fake prisma: one run + one project, mutable status.
 function makeDeps({
@@ -325,10 +330,128 @@ test('build processor provisions a run worktree before handing the scoped runner
 
   assert.equal(result.status, 'done');
   assert.equal(calls[0][0], 'branch');
-  assert.equal(calls[0][1], runner);
+  assert.notEqual(calls[0][1], runner, 'branch setup receives an abort-guarded runner');
   assert.deepEqual(calls[1], ['create', 'p1', 'run-1', 'main']);
   assert.deepEqual(calls[2], ['scope', 'run-1', 'p1']);
-  assert.equal(loopRunner, scopedRunner);
+  assert.deepEqual(loopRunner.runScope, scopedRunner.runScope);
+});
+
+test('cancellation during branch setup prevents recovery, second preparation, adapter, and effects', async () => {
+  const d = makeDeps();
+  let releasePrepare;
+  let enteredPrepare;
+  const prepareEntered = new Promise((resolve) => { enteredPrepare = resolve; });
+  let prepareCalls = 0;
+  let recoverCalls = 0;
+  let adapterCalls = 0;
+  let runnerEffects = 0;
+  const runner = {
+    async recoverRunBase() {
+      recoverCalls += 1;
+      runnerEffects += 1;
+      return { ok: true, recoveryRef: 'recovery-ref' };
+    },
+    async exec() {
+      runnerEffects += 1;
+      return { exitCode: 0 };
+    },
+  };
+  const checkpointService = {
+    projectBaseBranch: () => 'main',
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      if (prepareCalls === 1) {
+        enteredPrepare();
+        return new Promise((resolve) => { releasePrepare = resolve; });
+      }
+      return { ok: true, worktree: true };
+    },
+    async createCheckpoint() {
+      runnerEffects += 1;
+      return null;
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runner,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: { NODE_ENV: 'test', CODEX_RUN_BRANCHES: '1', CODEX_RUN_DRAIN_TIMEOUT_MS: '50' },
+  });
+
+  await prepareEntered;
+  d.runRow.status = 'cancelled';
+  assert.equal(abortRun('run-1'), true);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
+
+  const result = await processing;
+  assert.equal(result.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+  assert.equal(prepareCalls, 1);
+  assert.equal(recoverCalls, 0);
+  assert.equal(adapterCalls, 0);
+  assert.equal(runnerEffects, 0);
+  assert.equal(abortRun('run-1'), false);
+});
+
+test('setup hard timeout drains safely, preserves timeout error, and cleans transcript/controller', async () => {
+  const d = makeDeps();
+  let prepareStarted;
+  const prepareWait = new Promise((resolve) => { prepareStarted = resolve; });
+  let releasePrepare;
+  let prepareCalls = 0;
+  let registerCalls = 0;
+  let unregisterCalls = 0;
+  let adapterCalls = 0;
+  const eventStore = {
+    appendEvent: d.eventStore.appendEvent,
+    registerTranscriptSink() {
+      registerCalls += 1;
+      return () => { unregisterCalls += 1; };
+    },
+  };
+  const checkpointService = {
+    async prepareRunBranch() {
+      prepareCalls += 1;
+      prepareStarted();
+      return new Promise((resolve) => { releasePrepare = resolve; });
+    },
+  };
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore,
+    checkpointService,
+    runAgentLoop: async () => {
+      adapterCalls += 1;
+      return { status: 'done' };
+    },
+    clock: d.clock,
+    env: {
+      NODE_ENV: 'test',
+      CODEX_RUN_BRANCHES: '1',
+      CODEX_RUN_TIMEOUT_MS: '10',
+      CODEX_RUN_DRAIN_TIMEOUT_MS: '15',
+    },
+  });
+
+  await prepareWait;
+  const result = await processing;
+  assert.equal(result.status, 'error');
+  assert.match(result.error, /timeout/i);
+  assert.equal(d.runRow.status, 'error');
+  assert.equal(prepareCalls, 1);
+  assert.equal(registerCalls, 0, 'transcript setup must not begin after a setup timeout');
+  assert.equal(unregisterCalls, 0, 'no transcript cleanup is needed when setup never registered it');
+  assert.equal(adapterCalls, 0);
+  assert.equal(abortRun('run-1'), false);
+  releasePrepare({ ok: false, code: 'working_tree_dirty' });
 });
 
 test('boot resume pointer reloads the bounded loop state from the session artifact', async () => {
@@ -456,7 +579,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
   const runRow = { id: 'run-1', projectId: 'p1', userId: 'u1', mode: 'build', status: 'queued' };
   const events = [];
   let cancelFlips = 0;
-  let runningReads = 0;
+  let loopCalled = false;
   const prisma = {
     codexRun: {
       async findUnique({ where }) {
@@ -465,12 +588,9 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
         // pre-cancel `running` value (returns false), then cancelRun lands: the
         // row is `cancelled` by the time the guarded terminal write runs.
         const snapshot = { ...runRow };
-        if (runRow.status === 'running') {
-          runningReads += 1;
-          if (runningReads === 2) {
-            cancelFlips += 1;
-            runRow.status = 'cancelled'; // flips just AFTER the cancellation check
-          }
+        if (runRow.status === 'running' && loopCalled) {
+          cancelFlips += 1;
+          runRow.status = 'cancelled'; // flips just AFTER the cancellation check
         }
         return snapshot;
       },
@@ -485,7 +605,7 @@ test('cancel landing after the isCancelled() check is not clobbered and emits no
     codexProject: { async findUnique() { return { id: 'p1', name: 'Demo' }; } },
   };
   const eventStore = { async appendEvent(runId, type, data) { events.push({ runId, type, data }); } };
-  const loop = async () => ({ status: 'done' });
+  const loop = async () => { loopCalled = true; return { status: 'done' }; };
   let terminalPublishes = 0;
   const res = await processCodexRunJob({
     runId: 'run-1',
@@ -517,6 +637,105 @@ test('hard timeout aborts a hung loop into error', async () => {
   });
   assert.equal(res.status, 'error');
   assert.match(res.error, /timeout/i);
+});
+
+test('abortRun reaches the live adapter by runId and finalizes cancellation', async () => {
+  const d = makeDeps();
+  const processing = processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => resolve({ status: 'cancelled' }), { once: true });
+    }),
+    clock: d.clock,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(abortRun('run-1'), true);
+  const res = await processing;
+  assert.equal(res.status, 'cancelled');
+  assert.equal(d.runRow.status, 'cancelled');
+});
+
+test('timeout waits for cooperative adapter drain and ignores its late outcome', async () => {
+  const d = makeDeps();
+  let drained = false;
+  const startedAt = Date.now();
+  const res = await processCodexRunJob({
+    runId: 'run-1',
+    prisma: d.prisma,
+    eventStore: d.eventStore,
+    runAgentLoop: ({ signal }) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => {
+        setTimeout(() => {
+          drained = true;
+          resolve({ status: 'done' });
+        }, 25);
+      }, { once: true });
+    }),
+    clock: d.clock,
+    env: { CODEX_RUN_TIMEOUT_MS: '10', CODEX_RUN_DRAIN_TIMEOUT_MS: '100' },
+  });
+  assert.equal(res.status, 'error');
+  assert.equal(drained, true);
+  assert.ok(Date.now() - startedAt >= 20);
+  assert.equal(d.runRow.status, 'error');
+});
+
+test('native execution blocks late runner and checkpoint effects after an ignored abort', async () => {
+  const controller = new AbortController();
+  let writes = 0;
+  let execs = 0;
+  let checkpoints = 0;
+  const context = executionContextForAdapter({
+    adapter: nativeCodexAdapter,
+    signal: controller.signal,
+    isCancelled: async () => false,
+    run: { id: 'run-1', mode: 'build' },
+    project: { id: 'p1', name: 'Demo' },
+    deps: {
+      eventStore: { async appendEvent() { writes += 1; } },
+      runner: {
+        async writeFiles() { writes += 1; },
+        async exec() { execs += 1; },
+      },
+      checkpointService: {
+        async createCheckpoint() { checkpoints += 1; },
+      },
+      env: {},
+    },
+  });
+  controller.abort(new Error('timeout'));
+  await new Promise((resolve) => setImmediate(resolve));
+  await context.deps.eventStore.appendEvent('run-1', 'late', {});
+  assert.throws(() => context.deps.runner.writeFiles('p1', []), /blocked after codex run abort/);
+  assert.throws(() => context.deps.runner.exec('p1', ['git', 'status']), /blocked after codex run abort/);
+  assert.throws(() => context.deps.checkpointService.createCheckpoint({}), /blocked after codex run abort/);
+  assert.equal(writes, 0, 'late event/write side effects must not reach downstream clients');
+  assert.equal(execs, 0, 'late exec must not reach the runner');
+  assert.equal(checkpoints, 0, 'late checkpoint must not reach the checkpoint service');
+});
+
+test('outer cleanup releases the controller when terminal side effects throw', async () => {
+  const d = makeDeps();
+  const eventStore = {
+    ...d.eventStore,
+    async appendEvent(runId, type, data, options) {
+      if (type === 'run_status' && data.status === 'done') throw new Error('terminal event failed');
+      return d.eventStore.appendEvent(runId, type, data, options);
+    },
+  };
+  await assert.rejects(
+    () => processCodexRunJob({
+      runId: 'run-1',
+      prisma: d.prisma,
+      eventStore,
+      runAgentLoop: async () => ({ status: 'done' }),
+      clock: d.clock,
+    }),
+    /terminal event failed/,
+  );
+  assert.equal(abortRun('run-1'), false);
 });
 
 test('non-queued run is skipped (idempotency)', async () => {

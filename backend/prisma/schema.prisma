@@ -21,6 +21,7 @@ model User {
   isAdmin          Boolean @default(false)
   isSuperAdmin     Boolean @default(false) // Super admin can impersonate any user
   apiUsage         BigInt  @default(0)
+  docQuotaEpoch    BigInt  @default(0)
   gemaTokenUsage   BigInt  @default(0)
   gemaTokenLimit   BigInt  @default(0)
   monthlyCallLimit BigInt  @default(3) // NEW: counts number of generate calls / month
@@ -139,6 +140,7 @@ model User {
   notifications              Notification[]
   subscriptionEvents         SubscriptionEvent[]
   agentTasks                 AgentTask[]
+  docSandboxJobs             DocSandboxJob[]
   goalRuns                   GoalRun[]
   codexProjects              CodexProject[]
   codexRuns                  CodexRun[]
@@ -216,6 +218,11 @@ model User {
   workspaces            Workspace[]
   hostingTargets        HostingTarget[]
   deployEnvs            DeployEnv[]
+  appConnections        AppConnection[]
+
+  // Sira Voz (VoiceStudio, local): cloned voices + studio jobs (dub, audiobook).
+  voiceProfiles   VoiceProfile[]
+  voiceStudioJobs VoiceStudioJob[]
 
   @@index([deletedAt])
   @@index([lastActiveAt])
@@ -486,6 +493,22 @@ model Chat {
   // server-side (in addition to the client localStorage mirror) so the
   // draft survives across devices.
   draftText String? @db.Text
+
+  // Rolling context compaction (services/conversation-compactor): summary of
+  // the turns older than `contextSummaryUntil`; those rows are no longer
+  // replayed verbatim. Cleared when a covered message is edited or deleted.
+  contextSummary      String?   @db.Text @map("context_summary")
+  contextSummaryUntil DateTime? @map("context_summary_until")
+  contextSummaryMeta  Json?     @map("context_summary_meta")
+
+  // Persistent app pins for this conversation (Apps panel + composer
+  // rail). Array of catalog app ids in visual order, max 4. Server-side
+  // validation: only apps the user has an active connection for can be
+  // pinned. Unpinning never disconnects the underlying OAuth.
+  pinnedAppIds Json? @map("pinned_app_ids")
+  // Monotonic revision for concurrency (If-Match on writes). Bumped by
+  // every effective pin mutation; idempotent no-ops keep it unchanged.
+  pinRevision Int @default(0) @map("pin_revision")
 
   // Language policy — persisted resolution of "what language should the
   // assistant reply in for this thread". Set on first turn (or on any
@@ -1325,6 +1348,106 @@ model AgentTaskEvent {
   @@map("agent_task_events")
 }
 
+// Documents are encrypted private objects; this row contains references, not instructions.
+model DocSandboxJob {
+  id                  String    @id @default(uuid())
+  userId              String    @map("user_id")
+  status              String    @default("queued")
+  admissionReady      Boolean   @default(false) @map("admission_ready")
+  mode                String    @default("preserve")
+  engine              String    @default("anthropic")
+  modelTier           String    @map("model_tier")
+  requestedModel      String    @map("requested_model")
+  tokenBudget         Int       @map("token_budget")
+  quotaReservedTokens BigInt    @default(0) @map("quota_reserved_tokens")
+  quotaEpoch          BigInt    @default(0) @map("quota_epoch")
+  quotaSettledTokens  BigInt?   @map("quota_settled_tokens")
+  quotaSettledAt      DateTime? @map("quota_settled_at") @db.Timestamptz(3)
+  accountPurgeRequested Boolean @default(false) @map("account_purge_requested")
+  instructionsKey     String    @map("instructions_key")
+  inputKeys           String[]  @map("input_keys")
+  outputKeys          String[]  @default([]) @map("output_keys")
+  editPlanKey         String?   @map("edit_plan_key")
+  editPlanHash        String?   @map("edit_plan_hash")
+  validationReportKey String?   @map("validation_report_key")
+  errorCode           String?   @map("error_code")
+  outcome             String?
+  usage               Json      @default("{}")
+  costUsd             Decimal   @default(0) @map("cost_usd") @db.Decimal(18, 8)
+  maxCostUsd          Decimal   @default(0) @map("max_cost_usd") @db.Decimal(18, 8)
+  costReservations    Json      @default("[]") @map("cost_reservations")
+  purgedKeys          String[]  @default([]) @map("purged_keys")
+  storageKeys         String[]  @default([]) @map("storage_keys")
+  attempts            Int       @default(0)
+  fence               Int       @default(0)
+  leaseToken          String?   @map("lease_token")
+  leaseExpiresAt      DateTime? @map("lease_expires_at") @db.Timestamptz(3)
+  eventSeq            Int       @default(0) @map("event_seq")
+  sessionRef          String?   @map("session_ref")
+  providerFiles       Json      @default("[]") @map("provider_files")
+  providerContainers  Json      @default("[]") @map("provider_containers")
+  attemptLeases       Json      @default("[]") @map("attempt_leases")
+  cleanupPending      Boolean   @default(false) @map("cleanup_pending")
+  cleanupNotBefore    DateTime? @map("cleanup_not_before") @db.Timestamptz(3)
+  parentJobId         String?   @map("parent_job_id")
+  idempotencyKey      String    @map("idempotency_key")
+  payloadHash         String    @map("payload_hash")
+  promptVersion       String    @map("prompt_version")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @default(now()) @map("updated_at") @db.Timestamptz(3)
+  startedAt           DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(3)
+  expiresAt           DateTime  @map("expires_at") @db.Timestamptz(3)
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz(3)
+  user                User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  parent              DocSandboxJob? @relation("DocSandboxChildren", fields: [parentJobId], references: [id], onDelete: Restrict)
+  children            DocSandboxJob[] @relation("DocSandboxChildren")
+  events              DocSandboxJobEvent[]
+  artifacts           DocSandboxJobArtifact[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+  @@index([status, leaseExpiresAt])
+  @@index([expiresAt])
+  @@index([cleanupPending])
+  @@map("doc_jobs")
+}
+
+model DocSandboxJobEvent {
+  id          String    @id @default(uuid())
+  jobId       String    @map("job_id")
+  seq         Int
+  type        String
+  payload     Json
+  outbox      String?
+  dispatchedAt DateTime? @map("dispatched_at") @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  job         DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, seq])
+  @@index([outbox, dispatchedAt, createdAt])
+  @@map("doc_job_events")
+}
+
+model DocSandboxJobArtifact {
+  id           String    @id @default(uuid())
+  jobId        String    @map("job_id")
+  attempt      Int
+  kind         String
+  storageKey   String    @unique @map("storage_key")
+  filename     String
+  mime         String
+  size         BigInt
+  sha256       String
+  published    Boolean   @default(false)
+  purgedAt     DateTime?  @map("purged_at") @db.Timestamptz(3)
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  job          DocSandboxJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, kind])
+  @@map("doc_job_artifacts")
+}
+
 // Persistent /goal background runs. Mirrors the AgentTask + AgentTaskEvent
 // shape: the parent row tracks status/counters/final report, and the
 // child event log replays the SSE timeline so the chat composer can
@@ -1401,6 +1524,7 @@ model GeneratedArtifact {
 
   @@index([userId, createdAt])
   @@index([taskId, createdAt])
+  @@index([userId, chatId, createdAt])
   @@map("generated_artifacts")
 }
 
@@ -2428,6 +2552,34 @@ model SocialConnection {
   @@map("social_connections")
 }
 
+// ChatGPT-style first-party apps on /conexiones (Phase 1: github, linkedin, x).
+// Tokens stay in the existing sealed vaults (GithubAccount.encryptedTokens /
+// SocialConnection.accessToken). This row only stores a secretRef + health.
+model AppConnection {
+  id             String    @id @default(cuid())
+  userId         String
+  organizationId String?
+  appId          String
+  status         String    @default("error")
+  scopes         Json?
+  expiresAt      DateTime?
+  lastHealthAt   DateTime?
+  lastHealthOk   DateTime?
+  lastError      String?   @db.Text
+  secretRef      String
+  accountLabel   String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, appId])
+  @@index([userId, status])
+  @@index([secretRef])
+  @@map("app_connections")
+}
+
 model UniversalSearchCache {
   id               String   @id @default(cuid())
   queryHash        String
@@ -2691,6 +2843,7 @@ model Organization {
   companies                   Company[]
   codexProjects               CodexProject[]
   connectorAccounts           ConnectorAccount[]
+  appConnections              AppConnection[]
   companyCodexLinks           CompanyCodexProjectLink[]
   projectConnectorAssignments ProjectConnectorAssignment[]
 
@@ -2927,13 +3080,17 @@ model CodexExternalAction {
   id             String    @id @default(cuid())
   projectId      String
   userId         String
-  kind           String // email_reply | lead_outreach | social_reply
+  kind           String // email_reply | email_send | email_forward | lead_outreach | social_reply
   targetRef      String
   idempotencyKey String    @unique
-  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error
+  status         String    @default("pending_review") // pending_review | approved | executing | completed | rejected | error | expired | delivery_uncertain
   payload        Json
   result         Json?
   approvedAt     DateTime?
+  expiresAt      DateTime?
+  consumedAt     DateTime?
+  attemptId      String?
+  revokedAt      DateTime?
   executedAt     DateTime?
   error          String?   @db.Text
   createdAt      DateTime  @default(now())
@@ -2944,6 +3101,7 @@ model CodexExternalAction {
 
   @@index([userId, projectId, status, createdAt])
   @@index([projectId, kind, createdAt])
+  @@index([projectId, status, expiresAt])
   @@map("codex_external_actions")
 }
 
@@ -3332,6 +3490,7 @@ model CodexRun {
   prompt           String?   @db.Text // user's context/instructions for this run
   model            String?
   tier             String?
+  reasoningEffort  String? // low | medium | high | max (max maps to provider high)
   planRunId        String?
   idempotencyKey   String?   @unique
   departmentPoolId String?
@@ -4062,10 +4221,58 @@ model FileVersion {
   editPlan         Json? // the structured operations that produced it
   validationPassed Boolean  @default(true)
   createdByChatId  String?
+  content          String?  @db.Text // edited Markdown for manual /chat edits (MVP; null for artifact-based versions)
   createdAt        DateTime @default(now())
 
   @@unique([fileId, version])
   @@index([fileId])
   @@index([userId])
   @@map("file_versions")
+}
+
+// ── Sira Voz (VoiceStudio, open source, 100 % local) ─────────────────────────
+// VoiceStudio keeps one flat list of voice profiles; this table scopes each
+// cloned voice to the SiraGPT user who created it. `providerId` is the
+// VoiceStudio profile id (what its `voice` / `profile_id` fields accept).
+model VoiceProfile {
+  id         String    @id @default(cuid())
+  userId     String
+  providerId String    @unique
+  name       String
+  language   String?
+  kind       String    @default("clone")
+  sampleName String?
+  createdAt  DateTime  @default(now())
+  deletedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("voice_profiles")
+}
+
+// Long-running studio work (dub a video, render an audiobook). Polled by the
+// UI through /api/voice-studio/jobs/:id; the result is persisted into the
+// chat as an assistant message when it finishes.
+model VoiceStudioJob {
+  id         String    @id @default(cuid())
+  userId     String
+  chatId     String?
+  kind       String
+  status     String    @default("queued")
+  stage      String?
+  progress   Int       @default(0)
+  title      String?
+  input      Json?
+  result     Json?
+  error      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  finishedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("voice_studio_jobs")
 }

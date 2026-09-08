@@ -7,6 +7,12 @@ const componentPath = path.join(process.cwd(), "components", "chat-interface-enh
 const source = fs.readFileSync(componentPath, "utf8")
 const agenticStepsPath = path.join(process.cwd(), "components", "agentic-steps.tsx")
 const agenticStepsSource = fs.readFileSync(agenticStepsPath, "utf8")
+const artifactChromePath = path.join(process.cwd(), "components", "doc", "document-artifact-chrome.tsx")
+const artifactChromeSource = fs.readFileSync(artifactChromePath, "utf8")
+const thinkingLoaderPath = path.join(process.cwd(), "components", "thinking-status-loader.tsx")
+const thinkingLoaderSource = fs.readFileSync(thinkingLoaderPath, "utf8")
+const thinkingKitPath = path.join(process.cwd(), "lib", "thinking-loaders.ts")
+const thinkingKitSource = fs.readFileSync(thinkingKitPath, "utf8")
 
 function sliceBetween(startMarker: string, endMarker: string, haystack = source): string {
   const start = haystack.indexOf(startMarker)
@@ -49,8 +55,23 @@ describe("chat agentic loop routing source contract", () => {
       "const runClassifiedAgentTask = () => handleAgentTask(msg, filesToSend, {",
       "switch (intent)",
     )
-    assert.match(helper, /userMessageAlreadyAdded: !isNewChat/)
-    assert.match(helper, /assistantMessageId: !isNewChat \? assistantPlaceholder\.id : undefined/)
+    assert.match(helper, /userMessageAlreadyAdded: true/)
+    assert.match(helper, /assistantMessageId: assistantPlaceholder\.id/)
+    const handler = sliceBetween(
+      "const handleAgentTask = async (",
+      "function FeatureRow(",
+    )
+    assert.match(
+      handler,
+      /!userMessageAlreadyAdded \|\| !liveHasUserTurn/,
+      "createChat/selectChat must still graft a USER row with files when the live list has none",
+    )
+    assert.match(handler, /snapshotComposerFilesForMessage\(filesToSend\)/)
+    assert.match(
+      source,
+      /const updatedMessages = \[\.\.\.\(prevChat\.messages \|\| \[\]\), userMessage, assistantPlaceholder\]/,
+      "existing chats must seed the assistant bubble so RunTrace never mounts on the user message",
+    )
 
     const switchBlock = sliceBetween("switch (intent) {", "    } catch (err: any) {")
     for (const marker of ["case 'ppt':", "case 'web_search':", "case 'agent_task':"]) {
@@ -85,19 +106,33 @@ describe("chat agentic loop routing source contract", () => {
   it("renders the agent loop as a minimal professional activity card", () => {
     const liveBlock = sliceBetween(
       "if (isLiveActivity) {",
-      "  return (",
+      "        {liveExpanded && (",
       agenticStepsSource,
     )
     // The live-activity header comment evolved ("Minimal live activity" →
     // "Claude-style live activity"); anchor on the stable phrase.
     assert.match(liveBlock, /live activity/)
     assert.match(agenticStepsSource, /aria-label="Agente trabajando"/)
-    assert.match(agenticStepsSource, /Trabajando/)
-    // The AgentProgressBeam/direct SVG loader was replaced by the shared
-    // ThinkingIndicator source of truth for "pensando" states.
+    // Visible status is the LOADERS CELESTE chip, not the old "Trabajando" copy.
+    assert.match(agenticStepsSource, /import \{ ThinkingStatusLoader \} from "@\/components\/thinking-status-loader"/)
+    assert.match(agenticStepsSource, /import \{ loaderLabel, mapEventToLoaderState, type LoaderState \} from "@\/lib\/thinking-loaders"/)
+    assert.match(liveBlock, /<ThinkingStatusLoader/)
+    assert.match(liveBlock, /mapEventToLoaderState\(\{ label: headerLabel, tool: runningTimelineStep\?\.tool \}\)/)
+    assert.doesNotMatch(liveBlock, /label=\{headerLabel\}/)
+    assert.doesNotMatch(liveBlock, /Trabajando/)
+    assert.match(thinkingLoaderSource, /thinking-shimmer-text/)
+    assert.match(thinkingLoaderSource, /loaderChipSrc\(state\)/)
+    assert.match(thinkingLoaderSource, /<PensandoBars /)
+    assert.match(thinkingKitSource, /pensando: "Pensando…"/)
+    assert.match(thinkingKitSource, /"buscando-internet": "Buscando en internet…"/)
+    assert.match(thinkingKitSource, /completado: "¡Listo!"/)
     assert.match(agenticStepsSource, /ThinkingIndicator/)
-    assert.match(agenticStepsSource, /thinking-shimmer-text/)
-    assert.match(agenticStepsSource, /rounded-2xl border border-border\//)
+    // Both generated and edited documents now share the same card chrome.
+    // Check the real import and consumption as well as the extracted style;
+    // checking only the helper would miss a disconnected card implementation.
+    assert.match(agenticStepsSource, /import \{[^}]*DOCUMENT_CARD_CLASS[^}]*\} from "@\/components\/doc\/document-artifact-chrome"/)
+    assert.match(agenticStepsSource, /className=\{cn\(DOCUMENT_CARD_CLASS,/)
+    assert.match(artifactChromeSource, /export const DOCUMENT_CARD_CLASS = "[^"\n]*rounded-2xl border border-border\//)
   })
 
   it("keeps reloaded empty agent states visible instead of collapsing to a plain spinner", () => {

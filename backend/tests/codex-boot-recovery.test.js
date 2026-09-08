@@ -100,6 +100,32 @@ test('queued runs with no live job are re-enqueued; those with a job are left al
   assert.match(String(d.enqueued[0].jobId), /^q1:rq\d+$/);
 });
 
+test('concurrent boot sweeps claim a running run only once', async () => {
+  const runs = [{ id: 'r1', status: 'running' }];
+  const enqueued = [];
+  const prisma = {
+    codexRun: {
+      async findMany({ where }) { return runs.filter((run) => run.status === where.status); },
+      async updateMany({ where, data }) {
+        const run = runs.find((candidate) => candidate.id === where.id && candidate.status === where.status);
+        if (!run) return { count: 0 };
+        Object.assign(run, data);
+        return { count: 1 };
+      },
+    },
+  };
+  const queue = { async enqueueCodexRun(payload) { enqueued.push(payload); } };
+  const eventStore = { async listEvents() { return []; }, async appendEvent() {} };
+  const options = { prisma, queue, eventStore, env: { CODEX_AGENT_V2: '1', NODE_ENV: 'test' } };
+  const [first, second] = await Promise.all([
+    recoverCodexRunsAfterBoot(options),
+    recoverCodexRunsAfterBoot(options),
+  ]);
+  assert.equal(first.resumedRunning + second.resumedRunning, 1);
+  assert.equal(enqueued.length, 1);
+  assert.equal(runs[0].status, 'queued');
+});
+
 test('a DB failure never throws out of the sweep', async () => {
   const prisma = { codexRun: { async findMany() { throw new Error('db down'); } } };
   const res = await recoverCodexRunsAfterBoot({ prisma, env: { CODEX_AGENT_V2: '1', NODE_ENV: 'test' } });

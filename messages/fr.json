@@ -14,11 +14,28 @@
     "last7Days": "7 derniers jours",
     "older": "Plus anciens",
     "projects": "Projets",
-    "design": "Design"
+    "design": "Design",
+    "justNow": "À l’instant",
+    "yesterday": "Hier",
+    "loadingMoreChats": "Chargement d’autres conversations…",
+    "loadMoreChats": "Charger plus de conversations",
+    "allChatsLoaded": "Toutes les conversations sont chargées",
+    "privacyPolicy": "Politique de confidentialité",
+    "adminPanel": "Panneau d’administration",
+    "superAdminPanel": "Panneau super admin",
+    "returnToSuperAdmin": "Revenir au super admin",
+    "upgrade": "Améliorer le forfait",
+    "upgradeNow": "Améliorer maintenant",
+    "administrator": "Administrateur",
+    "superAdministrator": "Super administrateur",
+    "freePlan": "Forfait gratuit",
+    "searchBrain": "Rechercher",
+    "post": "POST",
+    "code": "Code"
   },
   "projects": {
-    "title": "Projets",
-    "newProject": "Nouveau projet",
+    "title": "Entreprises",
+    "newProject": "Nouvelle entreprise",
     "searchPlaceholder": "Rechercher des projets…",
     "sortBy": "Trier par",
     "sort": {
@@ -290,7 +307,57 @@
     "continueWithGoogle": "Continuer avec Google",
     "noAccount": "Pas de compte ?",
     "haveAccount": "Déjà un compte ?",
-    "tagline": "Connectez-vous à votre compte SiraGPT"
+    "tagline": "Connectez-vous à votre compte SiraGPT",
+    "serverWarming": "Le serveur démarre. Nouvelle tentative automatique…",
+    "serverWarmingButton": "Démarrage du serveur…",
+    "signingIn": "Connexion en cours…",
+    "invalidCreds": "Identifiants incorrects",
+    "createYourAccount": "Créez votre compte",
+    "registerTagline": "Commencez gratuitement avec SiraGPT",
+    "name": "Nom",
+    "namePlaceholder": "Votre nom complet",
+    "confirmPassword": "Confirmer le mot de passe",
+    "passwordMinHint": "8 caractères minimum",
+    "agreeTerms": "J’accepte les conditions d’utilisation et la politique de confidentialité",
+    "emailInvalid": "Veuillez saisir une adresse e-mail valide",
+    "passwordRequired": "Veuillez saisir votre mot de passe",
+    "brandTagline": "Toute la puissance de l’IA, au même endroit",
+    "brandFeature1": "Les meilleurs modèles : GPT, Claude, Gemini, Grok et plus",
+    "brandFeature2": "Images, documents, code et schémas en un instant",
+    "brandFeature3": "Recherchez et automatisez avec des agents spécialisés",
+    "brandFooter": "© SiraGPT — Plateforme d’IA multimodale",
+    "orWithEmail": "ou avec votre adresse e-mail",
+    "signUpWithGoogle": "S’inscrire avec Google",
+    "nameRequired": "Veuillez saisir votre nom",
+    "passwordTooShort": "Le mot de passe doit comporter au moins 8 caractères",
+    "passwordsNoMatch": "Les mots de passe ne correspondent pas",
+    "agreeTermsRequired": "Vous devez accepter les conditions pour continuer",
+    "back": "Retour",
+    "backToLogin": "Revenir à la connexion",
+    "sending": "Envoi en cours…",
+    "sendResetLink": "Envoyer le lien de récupération",
+    "resetLinkSent": "Lien de récupération envoyé",
+    "resetLinkSentDescription": "Si un compte existe avec cette adresse e-mail, vous recevrez un lien pour réinitialiser votre mot de passe. Vérifiez votre boîte de réception et vos courriers indésirables.",
+    "tryAgain": "Réessayer",
+    "resetRequestFailed": "Impossible d’envoyer le lien. Veuillez réessayer.",
+    "forgotPasswordTitle": "Récupérer votre accès",
+    "forgotPasswordSubtitle": "Nous vous enverrons un lien pour réinitialiser votre mot de passe.",
+    "resetPasswordTitle": "Nouveau mot de passe",
+    "resetPassword": "Réinitialiser le mot de passe",
+    "resetPasswordSubtitle": "Saisissez votre nouveau mot de passe.",
+    "resetting": "Réinitialisation en cours…",
+    "passwordResetSuccess": "Mot de passe mis à jour",
+    "passwordResetSuccessDescription": "Votre mot de passe a bien été mis à jour. Vous pouvez maintenant vous connecter.",
+    "resetTokenMissing": "Le jeton de récupération est manquant. Demandez un nouveau lien.",
+    "resetTokenNotFound": "Le jeton de récupération n’est pas valide.",
+    "resetTokenExpired": "Le jeton de récupération a expiré.",
+    "resetTokenUsed": "Ce jeton a déjà été utilisé.",
+    "resetFailed": "Impossible de réinitialiser le mot de passe.",
+    "requestNewResetLink": "Demander un nouveau lien",
+    "agreeTermsPrefix": "J’accepte les",
+    "agreeTermsLink": "conditions d’utilisation",
+    "agreeTermsAnd": "et la",
+    "agreePrivacyLink": "politique de confidentialité"
   },
   "documents": {
     "download": "Télécharger",
@@ -363,7 +430,9 @@
     "regenerate": "Régénérer",
     "share": "Partager",
     "feedbackGood": "Réponse utile",
-    "feedbackBad": "Réponse peu utile"
+    "feedbackBad": "Réponse peu utile",
+    "userMessage": "Message de l’utilisateur",
+    "assistantResponse": "Réponse de l’assistant"
   },
   "composer": {
     "placeholderDefault": "Écrivez un message",
@@ -413,7 +482,9 @@
       "titleDefault": "SiraGPT — Plateforme d’IA multimodale",
       "titleTemplate": "%s · SiraGPT",
       "description": "SiraGPT intègre OpenAI, Gemini, Claude, DeepSeek, Stripe, Replit, ElevenLabs et OpenClaw dans une expérience d’IA professionnelle."
-    }
+    },
+    "sidebarMenu": "Menu latéral",
+    "sidebarMenuDescription": "Navigation principale"
   },
   "thinking": {
     "thinking": "Réflexion…",
@@ -513,6 +584,7 @@
     },
     "composer": {
       "placeholder": "Describe the idea — AI plans and builds…",
+      "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
       "plan": "Plan",
       "planTooltip": "The agent plans internally and builds automatically.",
       "send": "Envoyer",
@@ -573,12 +645,63 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
     "titleDefault": "SiraGPT — Plateforme d'IA Multimodale",
     "titleTemplate": "%s · SiraGPT",
     "description": "Plateforme multi-LLM avec génération de texte, image, audio et vidéo. GPT-4, Claude, Gemini et plus en un seul endroit."
+  },
+  "chatSearch": {
+    "placeholder": "Rechercher dans vos chats…",
+    "noResults": "Aucun résultat",
+    "noResultsFor": "Aucun chat trouvé pour « {query} »",
+    "serverFallback": "La recherche serveur a échoué ; affichage des correspondances de titres locales.",
+    "emptyHistory": "Vous n'avez pas encore de chats",
+    "emptyHistoryHint": "Commencez une conversation pour la voir ici",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }

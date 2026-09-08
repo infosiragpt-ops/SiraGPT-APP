@@ -73,10 +73,11 @@ async function dockerAvailable() {
   return r.exitCode === 0;
 }
 
-/** Create one ephemeral container session. */
-async function createDockerSession() {
+/** Create one container session. Optional workspaceKey mounts a named volume. */
+async function createDockerSession({ workspaceKey } = {}) {
   const name = `sira-doc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const run = await runProcess('docker', [
+  const key = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
+  const args = [
     'run', '-d', '--rm',
     '--name', name,
     '--network', 'none',
@@ -84,8 +85,10 @@ async function createDockerSession() {
     '--cpus', CPUS,
     '--pids-limit', String(PIDS),
     '--security-opt', 'no-new-privileges',
-    IMAGE, 'sleep', 'infinity',
-  ], { timeoutMs: 30_000 });
+  ];
+  if (key) args.push('-v', `sira-ws-${key}:/workspace`);
+  args.push(IMAGE, 'sleep', 'infinity');
+  const run = await runProcess('docker', args, { timeoutMs: 30_000 });
   if (run.exitCode !== 0) throw new Error(`docker run failed: ${run.stderr || run.stdout}`);
   const stage = await fs.mkdtemp(path.join(os.tmpdir(), 'sira-stage-'));
   let destroyed = false;

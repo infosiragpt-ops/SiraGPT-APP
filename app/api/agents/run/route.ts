@@ -1,11 +1,12 @@
 import { NextRequest } from "next/server"
+import { validateActiveSession, type AuthUser } from "@/lib/auth"
 import { getAgent } from "@/server/agents/registry"
 import { streamLlmCall, estimateCost, getToolDefsForAgent } from "@/server/agents/llm"
-import { spawnSubagents } from "@/lib/code-agent/subagent"
 import {
   createWorkspace,
   executeTool,
   listWorkspaceFiles,
+  getEffectiveToolAllowSet,
   type AgentWorkspace,
 } from "@/server/agents/tools"
 import type { LlmMessage } from "@/server/agents/llm"
@@ -37,8 +38,23 @@ function heartbeat(controller: ReadableStreamDefaultController, interval: number
   }, interval)
 }
 
+async function getRequestUser(request: NextRequest): Promise<AuthUser | null> {
+  const authorization = request.headers.get("authorization") || ""
+  const bearer = /^Bearer\s+(.+)$/i.exec(authorization)?.[1]?.trim()
+  const token = bearer || request.cookies.get("auth-token")?.value?.trim()
+  return token ? validateActiveSession(token, request) : null
+}
+
 export async function POST(request: NextRequest) {
-  const body: AgentRunBody = await request.json().catch(() => ({} as AgentRunBody))
+  const user = await getRequestUser(request)
+  if (!user) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    })
+  }
+
+  const body = (await request.json().catch(() => ({}))) as AgentRunBody
   const { agent: agentId, prompt, mode = "auto", webhook_url, session_id } = body
 
   if (!agentId || !prompt) {
@@ -57,22 +73,10 @@ export async function POST(request: NextRequest) {
   }
 
   if (webhook_url) {
-    const resultPromise = runAgentLoop(def, prompt, mode, session_id).catch((e) => ({
-      error: String(e),
-    }))
-    resultPromise.then(async (result) => {
-      try {
-        await fetch(webhook_url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ agent: agentId, result }),
-        })
-      } catch {
-        /* webhook delivery failure */
-      }
-    })
-    return new Response(JSON.stringify({ accepted: true, agent: agentId }), {
-      status: 202,
+    // External delivery is a side effect. There is no durable approval record
+    // in this route, so fail closed instead of treating acceptance as delivery.
+    return new Response(JSON.stringify({ error: "webhook_pending_review", status: "pending_review" }), {
+      status: 403,
       headers: { "Content-Type": "application/json" },
     })
   }
@@ -97,7 +101,7 @@ export async function POST(request: NextRequest) {
         clearInterval(hb)
       })
 
-      runAgentLoop(def, prompt, mode, session_id, send)
+      runAgentLoop(def, prompt, mode, session_id, user.id, send)
         .then((result) => {
           send("done", result)
           clearInterval(hb)
@@ -124,7 +128,6 @@ export async function POST(request: NextRequest) {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
     },
   })
 }
@@ -134,10 +137,16 @@ async function runAgentLoop(
   prompt: string,
   mode: string,
   sessionId?: string,
+  ownerId?: string,
   send?: (event: string, data: unknown) => void,
 ) {
-  const workspace: AgentWorkspace = createWorkspace(sessionId)
-  const tools = getToolDefsForAgent(def.tools as unknown as Record<string, boolean>)
+  if (!ownerId) throw new Error("agent workspace owner required")
+  const workspace: AgentWorkspace = createWorkspace(sessionId, ownerId)
+  const allowedTools = getEffectiveToolAllowSet(def.tools as unknown as Record<string, boolean>)
+  const effectiveConfig = Object.fromEntries(
+    Array.from(allowedTools, (name) => [name, true]),
+  ) as Record<string, boolean>
+  const tools = getToolDefsForAgent(effectiveConfig)
   const files = listWorkspaceFiles(workspace, 40)
   const systemExtra = [
     "",
@@ -145,7 +154,7 @@ async function runAgentLoop(
     `session_id: ${workspace.sessionId}`,
     `root: ${workspace.root}`,
     files.length ? `archivos actuales:\n${files.map((f) => "- " + f).join("\n")}` : "workspace vacío (solo README.md seed).",
-    "Usa las herramientas reales (read/write/edit/bash/glob/grep/web_search/web_fetch). No inventes salidas.",
+    `Usa solo las herramientas autorizadas (${Array.from(allowedTools).join(", ") || "ninguna"}). No inventes salidas.`,
     "Cuando termines, deja de llamar herramientas y entrega un resumen accionable en español.",
   ].join("\n")
 
@@ -237,22 +246,12 @@ async function runAgentLoop(
       let ok = true
       let summary = ""
       try {
-        if (tc.function.name === "spawn_subagent" && def.tools.spawn_subagent) {
-          let args: { name?: string; prompt?: string } = {}
-          try {
-            args = JSON.parse(tc.function.arguments || "{}")
-          } catch {
-            args = {}
-          }
-          const subs = await spawnSubagents([
-            { name: args.name || "subagent", prompt: args.prompt || prompt },
-          ])
-          toolResult = subs[0]?.summary || "Subagent completed"
-          summary = (subs[0]?.summary || "").slice(0, 120)
-          ok = !subs[0]?.error
-          send?.("subagent_result", { name: args.name, result: toolResult })
+        if (!allowedTools.has(tc.function.name)) {
+          ok = false
+          toolResult = `Error: herramienta no permitida para este agent role: "${tc.function.name}".`
+          summary = "tool denied"
         } else {
-          const exec = await executeTool(tc.function.name, tc.function.arguments, workspace)
+          const exec = await executeTool(tc.function.name, tc.function.arguments, workspace, allowedTools)
           toolResult = exec.observation
           ok = exec.ok
           summary = (exec.summary || exec.observation).slice(0, 160)

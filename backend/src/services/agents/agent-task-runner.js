@@ -1,5 +1,6 @@
 const OpenAI = require('openai');
 const reactAgent = require('../react-agent');
+const { statusForAgentStopReason, canRecoverAgentStopReason } = require('./react-run-outcome');
 const { buildTaskTools } = require('./task-tools');
 const taskStore = require('./task-store');
 const auditLog = require('./audit-log');
@@ -31,6 +32,10 @@ const durableExecutionStore = require('./durable-execution-store');
 const { buildDocumentDeliveryPolicy, normalizeDocumentPolicyCoherence } = require('./document-delivery-policy');
 const outputFormat = require('../output-format-contract');
 const { getQueueName } = require('./agent-task-queue');
+const {
+  createHonestProgressTracker,
+  enrichAgentTaskEvent,
+} = require('./agent-task-honest-progress');
 const persistence = require('./agent-task-persistence');
 const { generateAutoDocument } = require('./auto-document-delivery');
 const {
@@ -46,6 +51,7 @@ const { buildAgenticFrameworkStatus } = require('./agentic-frameworks');
 const { buildForbiddenToolNames } = require('./agent-tool-policy');
 const { buildIntegrationRuntimeProfile } = require('../ai-product-os/integration-runtime-profile');
 const {
+  backfillUserMessageFilesForTranscription,
   buildTranscriptionTextFromFiles,
   buildUploadedFileContext,
   isImageFile,
@@ -61,6 +67,7 @@ const {
   DEFAULT_THIN_THRESHOLD,
 } = require('./attachment-context-guard');
 const apa7 = require('../marco-teorico/apa7');
+const { throwIfAborted } = require('../../utils/abort-signals');
 
 const prisma = (() => {
   try { return require('../../config/database'); } catch { return null; }
@@ -138,14 +145,29 @@ function summarizeForChat(text, policy) {
 
 function upsertArtifactForDelivery(artifacts, artifact) {
   if (!Array.isArray(artifacts) || !artifact) return null;
+  const artifactId = String(artifact.id || '').trim();
   const filename = String(artifact.filename || '').trim().toLowerCase();
   const format = String(artifact.format || artifact.mime || '').trim().toLowerCase();
-  const existingIndex = filename
-    ? artifacts.findIndex((item) => (
-      String(item?.filename || '').trim().toLowerCase() === filename
-      && String(item?.format || item?.mime || '').trim().toLowerCase() === format
-    ))
+  const sourceFileId = String(artifact.sourceFileId || '').trim();
+  let existingIndex = artifactId
+    ? artifacts.findIndex((item) => String(item?.id || '').trim() === artifactId)
     : -1;
+  if (existingIndex < 0 && sourceFileId) {
+    existingIndex = artifacts.findIndex((item) => (
+      String(item?.sourceFileId || '').trim() === sourceFileId
+    ));
+  }
+  if (existingIndex < 0 && filename) {
+    existingIndex = artifacts.findIndex((item) => {
+      const sameDeliverySlot = (
+        String(item?.filename || '').trim().toLowerCase() === filename
+        && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+      );
+      if (!sameDeliverySlot) return false;
+      const existingSourceFileId = String(item?.sourceFileId || '').trim();
+      return !(sourceFileId && existingSourceFileId && sourceFileId !== existingSourceFileId);
+    });
+  }
   if (existingIndex >= 0) artifacts.splice(existingIndex, 1, artifact);
   else artifacts.push(artifact);
   return artifact;
@@ -1323,6 +1345,25 @@ function detectAgentRuntimeProvider(modelId) {
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     };
   }
+  // Meta Model API (Muse Spark / Llama 4, bare ids). Live 2026-09-02: a
+  // Muse Spark chat that asked for a document was force-remapped to the
+  // retired OpenAI gpt-4o-mini (whose key answered 401) — the picker model
+  // must drive the agent runtime whenever its own key exists.
+  if (!id.includes('/') && /^(muse-|llama-4)/i.test(id)) {
+    return {
+      provider: 'Meta',
+      apiKeyEnv: process.env.MODEL_API_KEY ? 'MODEL_API_KEY' : (process.env.META_API_KEY ? 'META_API_KEY' : 'LLAMA_API_KEY'),
+      baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || 'https://api.meta.ai/v1',
+    };
+  }
+  // xAI Grok (bare grok-* ids) — OpenAI-compatible at api.x.ai.
+  if (!id.includes('/') && /^grok-/i.test(id)) {
+    return { provider: 'xAI', apiKeyEnv: 'XAI_API_KEY', baseURL: process.env.XAI_BASE_URL || 'https://api.x.ai/v1' };
+  }
+  // Moonshot Kimi (bare kimi-* ids).
+  if (!id.includes('/') && /^kimi-/i.test(id)) {
+    return { provider: 'Kimi', apiKeyEnv: process.env.MOONSHOT_API_KEY ? 'MOONSHOT_API_KEY' : 'KIMI_API_KEY', baseURL: process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1' };
+  }
   // Any aggregator slug ("provider/model") routes through OpenRouter — this is
   // exactly how the main chat flow (provider-inference.js) maps openai/*,
   // google/*, anthropic/*, x-ai/*, qwen/*, mistralai/*, moonshotai/*, etc.
@@ -1472,8 +1513,10 @@ function resolveAgentRuntimeClient(profile) {
   const openAIFallbackModel = String(
     process.env.AGENT_TASK_OPENAI_MODEL || process.env.AGENT_TASK_RUNTIME_MODEL || 'gpt-4o-mini'
   ).trim() || 'gpt-4o-mini';
+  // DeepSeek and OpenRouter first: both keys are healthy in production while
+  // the OpenAI key answers 401 — putting OpenAI first spent the run on a
+  // dead client before the runtime failover kicked in.
   const fallbackTargets = [
-    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
     { provider: 'DeepSeek', apiKeyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', model: 'deepseek-v4-flash' },
     {
       provider: 'OpenRouter',
@@ -1487,6 +1530,7 @@ function resolveAgentRuntimeClient(profile) {
       // otherwise drive a known OpenRouter default.
       model: profile?.detected?.provider === 'OpenRouter' ? profile.runtimeModel : 'moonshotai/kimi-k2.6',
     },
+    { provider: 'OpenAI', apiKeyEnv: 'OPENAI_API_KEY', baseURL: null, model: openAIFallbackModel },
   ];
   for (const target of fallbackTargets) {
     const client = tryTarget(target);
@@ -1572,6 +1616,46 @@ function shouldRunSourcePreservingEdit({
     || isSourcePreservingEditRequest(request, fileIds);
 }
 
+/**
+ * F2 — AgentRunner preloop gate for the durable /api/agent/task entry.
+ * The chat UI's intent classifier routes 'ppt' / document turns here, so
+ * this entry must be runner-first too. Default ON. Like the other
+ * network-touching features of this runner (model failover, LLM
+ * recovery), it is OFF under NODE_ENV=test unless a test opts in with
+ * AGENT_TASK_AGENT_RUNNER=1 — the preloop can reach OpenRouter.
+ */
+function agentTaskAgentRunnerEnabled(env = process.env) {
+  const raw = String(env.AGENT_TASK_AGENT_RUNNER || '').trim().toLowerCase();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  if (raw === '1' || raw === 'true' || raw === 'on') return true;
+  return env.NODE_ENV !== 'test';
+}
+
+function isValidatedSourcePreservingDeliverable(item) {
+  return Boolean(item?.artifact?.id && item?.validation?.passed === true);
+}
+
+const SOURCE_PRESERVING_TARGET_NOT_LOCATED_CODES = new Set([
+  'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
+  'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
+  'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
+  'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
+  'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
+]);
+
+function isSourcePreservingTargetNotLocatedError(err) {
+  return Boolean(err && SOURCE_PRESERVING_TARGET_NOT_LOCATED_CODES.has(err.code));
+}
+
+function buildSourcePreservingFailureMarkdown(err) {
+  const detail = err?.message || 'no se pudo ubicar con precisión el fragmento, sección o tabla solicitada';
+  return [
+    `No pude editar el archivo original sin cambiarlo: ${detail}.`,
+    'No generé un documento nuevo para evitar entregarte contenido que no conserve tu archivo.',
+    'Indica el texto exacto, página, encabezado, tabla o sección donde debo aplicar el cambio y lo reintento sobre el mismo documento.',
+  ].join(' ');
+}
+
 function runAgentTaskJob(payload = {}, job = null) {
   const taskId = payload && payload.taskId;
   if (!taskId) return _runAgentTaskJobImpl(payload, job);
@@ -1610,9 +1694,11 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     maxRuntimeMs = 2 * 60 * 60 * 1000,
     folderCode = null,
     cycle = null,
+    signal: externalSignal = null,
   } = payload;
   if (!taskId) throw new Error('agent task payload missing taskId');
   if (!user?.id) throw new Error('agent task payload missing user.id');
+  throwIfAborted(externalSignal);
   const plainTranscriptionRequest = isPlainTranscriptionRequest(goal);
   const hasAttachedFiles = Array.isArray(files) && files.length > 0;
   const hasEditableDocumentContext = hasAttachedFiles || Boolean(preferRecentArtifact);
@@ -1635,37 +1721,51 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       maxSteps: Math.min(25, maxSteps),
     }));
     if (subTasks.length >= 2) {
-      taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
-      const fj = await forkJoin({
-        subTasks,
-        user,
-        options: {
-          chatId,
-          model,
-          maxSteps: Math.min(25, maxSteps),
-          maxRuntimeMs: Math.min(maxRuntimeMs, 180_000),
-          onEvent: (type, data) => {
-            try {
-              taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
-            } catch (err) {
-              // Best-effort: keep the multi-agent run going, but surface a lost
-              // sub-task event (durable trace + SSE replay feed off this hook).
-              console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
-            }
+      try {
+        throwIfAborted(externalSignal);
+        taskStore.markTaskStatus({ taskId, userId: user.id }, 'running');
+        const fj = await forkJoin({
+          subTasks,
+          user,
+          options: {
+            chatId,
+            model,
+            maxSteps: Math.min(25, maxSteps),
+            maxRuntimeMs: Math.min(maxRuntimeMs, 180_000),
+            signal: externalSignal,
+            onEvent: (type, data) => {
+              try {
+                taskStore.appendTaskEvent({ taskId, userId: user.id }, { type, payload: data });
+              } catch (err) {
+                // Best-effort: keep the multi-agent run going, but surface a lost
+                // sub-task event (durable trace + SSE replay feed off this hook).
+                console.warn('[agent-task-runner] fork_join event append failed for', taskId, '-', err?.message || err);
+              }
+            },
           },
-        },
-      });
-      taskStore.markTaskStatus(
-        { taskId, userId: user.id },
-        fj.ok ? 'completed' : 'failed',
-        { mergedSummary: fj.mergedSummary || null },
-      );
-      return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
+        });
+        throwIfAborted(externalSignal);
+        taskStore.markTaskStatus(
+          { taskId, userId: user.id },
+          fj.ok ? 'completed' : 'failed',
+          { mergedSummary: fj.mergedSummary || null },
+        );
+        return { ok: fj.ok, pattern: 'fork_join', mergedSummary: fj.mergedSummary, results: fj.results };
+      } catch (error) {
+        if (externalSignal?.aborted) {
+          taskStore.markTaskStatus({ taskId, userId: user.id }, 'cancelled');
+        }
+        throw error;
+      }
     }
   }
 
   const internals = routeInternals();
   const controller = new AbortController();
+  const abortFromCaller = () => {
+    if (controller.signal.aborted) return;
+    try { controller.abort(externalSignal?.reason); } catch { controller.abort(); }
+  };
   const startedAt = Date.now();
   const existing = taskStore.getTaskSnapshotForUser(taskId, user.id);
   let streamState = existing?.streamState || internals.initialAgentState();
@@ -1852,6 +1952,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   task.runtimeModel = runtimeModelProfile.runtimeModel;
 
   const artifacts = [];
+  const progressTracker = createHonestProgressTracker({
+    startedAt,
+    maxSteps,
+    maxRuntimeMs,
+    cycleTotal: Array.isArray(cycle?.stages) ? cycle.stages.length : 0,
+  });
   // Throttle in-flight progress upserts. A long-running task emits
   // hundreds of events; firing a Prisma upsert + BullMQ updateProgress
   // on every single one wastes DB connections and Redis round-trips.
@@ -1864,6 +1970,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const isTerminal = status !== 'running';
     if (!force && !isTerminal && now - lastProgressAt < PROGRESS_THROTTLE_MS) return;
     lastProgressAt = now;
+    const progress = progressTracker.snapshot(now);
     void persistence.upsertAgentTask({
       ...task,
       status,
@@ -1875,23 +1982,32 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       // can reject mid-failover. Without .catch() the rejection goes
       // unhandled and (depending on Node policy) can terminate the
       // worker. Progress is best-effort observability — never fatal.
-      Promise.resolve(job.updateProgress({ status, lastEventSeq: task.lastEventSeq || 0 })).catch(() => {});
+      Promise.resolve(job.updateProgress({
+        status,
+        lastEventSeq: task.lastEventSeq || 0,
+        percent: progress.percent,
+        etaMs: progress.etaMs,
+        etaLabel: progress.etaLabel,
+        phase: progress.phase,
+        phaseLabel: progress.phaseLabel,
+      })).catch(() => {});
     }
   };
   const emit = (event) => {
-    streamState = internals.reduceAgentState(streamState, event);
+    const enriched = enrichAgentTaskEvent(event, progressTracker);
+    streamState = internals.reduceAgentState(streamState, enriched);
     task.streamState = streamState;
-    const written = taskStore.appendTaskEvent(task, event, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
+    const written = taskStore.appendTaskEvent(task, enriched, streamState, { eventLimit: internals.TASK_EVENT_LIMIT || 600 });
     if (written) {
       task.events = written.events || task.events;
       task.checkpoints = written.checkpoints || task.checkpoints;
       task.lastEventSeq = written.lastEventSeq || task.lastEventSeq;
       task.artifacts = written.artifacts || task.artifacts;
     }
-    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || event);
-    metrics.counter('agent_task_events_total', { type: event.type || 'unknown' });
+    void persistence.appendAgentTaskEvent(task, task.events?.[task.events.length - 1] || enriched);
+    metrics.counter('agent_task_events_total', { type: enriched.type || 'unknown' });
     persistProgress('running');
-    return event;
+    return enriched;
   };
 
   emit({
@@ -1916,7 +2032,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     executionProfile,
     universalTaskContract,
   });
-  const tools = buildTaskTools({
+  // `let`: the F2 AgentRunner preloop bans create_document for the rest of
+  // the turn when the runner claimed it and failed (see below).
+  let tools = buildTaskTools({
     skillContext: {
       clearance: user.clearance || 'authenticated',
       userId: user.id,
@@ -2087,9 +2205,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
   let stepIdCounter = 0;
   let currentStepId = null;
-  const runtimeTimer = setTimeout(() => controller.abort(), maxRuntimeMs + 5000);
+  const runtimeTimer = setTimeout(() => {
+    const timeoutError = new Error('agent_runtime_timeout');
+    timeoutError.name = 'TimeoutError';
+    timeoutError.code = 'AGENT_RUNTIME_TIMEOUT';
+    try { controller.abort(timeoutError); } catch { controller.abort(); }
+  }, maxRuntimeMs + 5000);
+  runtimeTimer.unref?.();
 
-  // ── BullMQ lock heartbeat ──────────────────────────────────────────
+  // ── Liveness + BullMQ lock heartbeat ───────────────────────────────
   // Agent tasks routinely run 10–20 min (max_steps=80 reached at ~19min
   // in prod logs). BullMQ's automatic lock renewal fires every
   // lockDuration/2 and any single failed renew (Upstash failover, quota
@@ -2102,18 +2226,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
   // single tick fails we retry on the next tick instead of giving up,
   // and we throttle warns so a Redis outage logs once per minute, not
   // once per heartbeat. Cleared in the outer `finally` below.
+  //
+  // The same tick pulses `touchTaskHeartbeat` so the runtime watchdog
+  // can tell a live runner from a dead one (OpenClaw-style no-output
+  // stall). Local in-process runs have no BullMQ lock but still need
+  // the snapshot pulse — otherwise a crashed local runner leaves
+  // /agentes stuck on "Pensando…".
   const lockHeartbeatIntervalMs = Math.max(
     5_000,
     Number.parseInt(process.env.AGENT_WORKER_LOCK_HEARTBEAT_MS || '30000', 10) || 30_000,
   );
   const lockHeartbeatExtendMs = Math.max(
     lockHeartbeatIntervalMs * 4,
-    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60 * 1000,
+    Number.parseInt(process.env.AGENT_WORKER_LOCK_DURATION_MS || '', 10) || 5 * 60_000,
   );
   let lockHeartbeatTimer = null;
   let lockHeartbeatLastWarnAt = 0;
-  if (job && typeof job.extendLock === 'function' && job.token) {
-    const tick = async () => {
+  const tickHeartbeat = async () => {
+    try {
+      taskStore.touchTaskHeartbeat(taskId, user.id);
+    } catch { /* never break the live run */ }
+    if (job && typeof job.extendLock === 'function' && job.token) {
       try {
         await job.extendLock(job.token, lockHeartbeatExtendMs);
       } catch (err) {
@@ -2125,13 +2258,13 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           );
         }
       }
-    };
-    // Refresh immediately so the first long step doesn't race the
-    // initial 30s renew, then on a steady cadence.
-    tick();
-    lockHeartbeatTimer = setInterval(tick, lockHeartbeatIntervalMs);
-    if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
-  }
+    }
+  };
+  // Refresh immediately so the first long step doesn't race the
+  // initial 30s renew / watchdog stale window, then on a steady cadence.
+  tickHeartbeat();
+  lockHeartbeatTimer = setInterval(() => { tickHeartbeat(); }, lockHeartbeatIntervalMs);
+  if (typeof lockHeartbeatTimer.unref === 'function') lockHeartbeatTimer.unref();
   const finishDeterministicTask = async ({
     finalMarkdown,
     stoppedReason,
@@ -2139,6 +2272,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     artifactsList = artifacts,
     metadata = {},
   }) => {
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const doneEvent = emit({
       type: 'done',
@@ -2146,8 +2281,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps, artifacts: artifactsList.length },
     });
 
-    const status = 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
@@ -2226,14 +2359,157 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     return { taskId, status, artifacts: artifactsList.length };
   };
 
+  if (externalSignal?.aborted) abortFromCaller();
+  else externalSignal?.addEventListener?.('abort', abortFromCaller, { once: true });
+
+  // F2 telemetry: which path served this document turn. Best-effort.
+  const logDocRouting = (routePath, reason) => {
+    try {
+      require('../agent-runner/telemetry').logDocumentRouting({
+        entry: 'agent_task',
+        path: routePath,
+        reason,
+        chatId,
+      });
+    } catch (_) { /* telemetry is best-effort */ }
+  };
+
   try {
+    // ── F2: AgentRunner PRIMARY on the durable agent-task entry ──────────
+    // The chat UI's intent classifier still routes 'ppt'/document turns to
+    // POST /api/agent/task, which used to create documents via the loop's
+    // create_document tool or generateAutoDocument (advanced pipeline)
+    // WITHOUT ever consulting the AgentRunner. Runner-first now: when
+    // shouldRunAgentRunner claims the turn there are exactly two outcomes —
+    // a runner-verified file, or (for create-doc / style-color turns) an
+    // honest Spanish error. The surgical source-preserving branch below may
+    // still rescue a claimed EDIT turn; the generic pipeline may not.
+    // Deterministic non-pipeline fast paths (plain transcription, Vancouver
+    // matrix, attachment chat answers) keep priority — they answer from the
+    // user's REAL files and never touch the generic template.
+    let agentRunnerFailure = null;
+    let agentRunnerRunnerOnly = false;
+    let agentRunnerClaimedTurn = false;
+    if (
+      agentTaskAgentRunnerEnabled()
+      && !plainTranscriptionRequest
+      && !deterministicVancouverRequest
+      && !deterministicAttachmentAnswer
+    ) {
+      try {
+        const agentRunner = require('../agent-runner');
+        const runnerText = String(displayGoal || goal || '');
+        let priorArtifacts = false;
+        if (prisma && chatId) {
+          try {
+            priorArtifacts = await agentRunner.hasConversationArtifacts(prisma, {
+              userId: user.id,
+              chatId,
+            });
+          } catch (_) { priorArtifacts = false; }
+        }
+        if (agentRunner.shouldRunAgentRunner({
+          fileIds: files,
+          hasPriorArtifacts: priorArtifacts,
+          text: runnerText,
+        })) {
+          agentRunnerClaimedTurn = true;
+          agentRunnerRunnerOnly = agentRunner.isRunnerOnlyDocumentTurn(runnerText);
+          stepIdCounter += 1;
+          currentStepId = `s${stepIdCounter}`;
+          emit({ type: 'step_start', id: currentStepId, label: 'Agente de documentos trabajando', icon: 'python' });
+          const seenRunnerArtifactIds = new Set();
+          const ran = await agentRunner.executeAgentRunnerTurn({
+            prisma,
+            userId: user.id,
+            chatId,
+            fileIds: files,
+            instruction: runnerText,
+            signal: controller.signal,
+            onEvent: (ev) => {
+              if (!ev) return;
+              try {
+                if (ev.type === 'file_artifact' && ev.artifact) {
+                  seenRunnerArtifactIds.add(String(ev.artifact.id || ev.artifact.downloadUrl));
+                  upsertArtifactForDelivery(artifacts, ev.artifact);
+                  emit({ type: 'file_artifact', artifact: ev.artifact });
+                  void persistence.persistGeneratedArtifact({
+                    artifact: ev.artifact,
+                    task,
+                    validation: ev.artifact.validation || null,
+                  });
+                  return;
+                }
+                if (ev.type === 'tool_call') {
+                  emit({
+                    type: 'tool_call',
+                    stepId: currentStepId,
+                    tool: ev.tool || 'agent_runner',
+                    preview: String(ev.preview || ev.label || '').slice(0, 400),
+                  });
+                } else if (ev.type === 'tool_result') {
+                  emit({
+                    type: 'tool_output',
+                    stepId: currentStepId,
+                    tool: ev.tool || 'agent_runner',
+                    ok: ev.ok !== false,
+                    preview: String(ev.preview || '').slice(0, 400),
+                  });
+                }
+              } catch (_) { /* event fan-out must never break the run */ }
+            },
+          });
+          if (ran && ran.ok && Array.isArray(ran.artifacts) && ran.artifacts.length) {
+            // persistOutputs already emitted file_artifact for each output;
+            // merge defensively so the delivery list never misses one.
+            for (const artifact of ran.artifacts) {
+              if (!artifact || !artifact.downloadUrl) continue;
+              upsertArtifactForDelivery(artifacts, artifact);
+              if (!seenRunnerArtifactIds.has(String(artifact.id || artifact.downloadUrl))) {
+                emit({ type: 'file_artifact', artifact });
+              }
+            }
+            emit({ type: 'step_done', id: currentStepId, ok: true });
+            currentStepId = null;
+            logDocRouting('agent_runner');
+            return await finishDeterministicTask({
+              finalMarkdown: ran.summary,
+              stoppedReason: 'agent_runner',
+              steps: stepIdCounter,
+              artifactsList: artifacts,
+              metadata: { servedBy: 'agent_runner' },
+            });
+          }
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+          agentRunnerFailure = {
+            reason: ran?.stoppedReason || 'no_output',
+            detail: ran?.errorMessage || null,
+          };
+        }
+      } catch (agentRunnerErr) {
+        if (controller.signal.aborted || externalSignal?.aborted) throw agentRunnerErr;
+        console.warn('[agent-task-runner] agent-runner preloop failed:', agentRunnerErr?.message || agentRunnerErr);
+        if (currentStepId) {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
+          currentStepId = null;
+        }
+        if (agentRunnerClaimedTurn) {
+          agentRunnerFailure = {
+            reason: 'exception',
+            detail: agentRunnerErr?.message || String(agentRunnerErr),
+          };
+        }
+      }
+    }
+
     // Editing the user's existing file is not the same as auto-generating a
     // new document. Prompts such as "devuélveme el mismo Word; no crees uno
     // nuevo" intentionally set autoGenerate=false, but must still enter this
     // source-preserving path before the thin-attachment guard.
     if (wantsSourcePreservingEdit) {
-      stepIdCounter = 1;
-      currentStepId = 's1';
+      stepIdCounter += 1;
+      currentStepId = `s${stepIdCounter}`;
       emit({ type: 'step_start', id: currentStepId, label: 'Editando documento original', icon: 'file-text' });
       try {
         emit({
@@ -2286,61 +2562,74 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             },
           });
         }
-        if (!preserved.validation?.passed) {
+        const preservedResults = Array.isArray(preserved.results) && preserved.results.length
+          ? preserved.results
+          : [preserved];
+        const deliverableResults = preservedResults.filter(isValidatedSourcePreservingDeliverable);
+        if (!deliverableResults.length || (!preserved.batch && !preserved.validation?.passed)) {
           const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
-          throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+          throw new Error(`La edición se generó pero no pasó la autoevaluación del documento${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
         }
-        const artifactEvent = {
-          id: preserved.artifact.id,
-          filename: preserved.artifact.filename,
-          format: preserved.artifact.format,
-          mime: preserved.artifact.mime,
-          sizeBytes: preserved.artifact.sizeBytes,
-          downloadUrl: preserved.artifact.downloadUrl,
-          previewHtml: preserved.previewHtml,
-          validation: preserved.validation,
-          sourceFileId: preserved.version?.sourceFileId || null,
-          documentVersion: preserved.version || null,
-        };
-        artifacts.push(artifactEvent);
-        emit({ type: 'file_artifact', artifact: artifactEvent });
-        emit({
-          type: 'checkpoint',
-          label: 'Autoevaluación del documento',
-          status: 'completed',
-          payload: preserved.validation?.details?.agenticCycle || null,
-        });
-        for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
-          emit({
-            type: 'quality_gate',
-            gate: `docx_${criterion.id}`,
-            label: criterion.label || criterion.id,
-            passed: Boolean(criterion.passed),
-            summary: criterion.passed
-              ? 'Criterio verificado en el DOCX generado.'
-              : 'Criterio no cumplido en el DOCX generado.',
-            payload: criterion,
+        for (const item of deliverableResults) {
+          const artifactEvent = {
+            id: item.artifact.id,
+            filename: item.artifact.filename,
+            format: item.artifact.format,
+            mime: item.artifact.mime,
+            sizeBytes: item.artifact.sizeBytes,
+            downloadUrl: item.artifact.downloadUrl,
+            previewHtml: item.previewHtml,
+            validation: item.validation,
+            sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+            documentVersion: item.version || null,
+          };
+          artifacts.push(artifactEvent);
+          emit({ type: 'file_artifact', artifact: artifactEvent });
+          for (const criterion of item.validation?.details?.agenticCycle?.semanticCriteria || []) {
+            emit({
+              type: 'quality_gate',
+              gate: `document_${item.artifact.id}_${criterion.id}`,
+              label: `${item.artifact.filename}: ${criterion.label || criterion.id}`,
+              passed: Boolean(criterion.passed),
+              summary: criterion.passed
+                ? 'Criterio verificado dentro del archivo generado.'
+                : 'Criterio no cumplido dentro del archivo generado.',
+              payload: criterion,
+            });
+          }
+          await persistence.persistGeneratedArtifact({
+            artifact: { ...item.artifact, validation: item.validation },
+            task,
+            previewHtml: item.previewHtml,
+            validation: item.validation,
           });
         }
         emit({
+          type: 'checkpoint',
+          label: deliverableResults.length > 1
+            ? `Autoevaluación de ${deliverableResults.length} documentos`
+            : 'Autoevaluación del documento',
+          status: 'completed',
+          payload: preserved.batch
+            ? preserved.validation?.details || null
+            : preserved.validation?.details?.agenticCycle || null,
+        });
+        emit({
           type: 'quality_gate',
           gate: 'source_preserving_document_edit',
-          label: 'Documento original conservado',
+          label: deliverableResults.length > 1 ? 'Documentos originales conservados' : 'Documento original conservado',
           passed: Boolean(preserved.validation?.passed),
-          summary: 'Se completó el archivo original sin regenerar portada, tablas ni estructura previa.',
+          summary: preserved.partial
+            ? `Se validaron ${deliverableResults.length} documentos; algunos archivos no pudieron completarse y se informaron en la respuesta.`
+            : `Se validaron ${deliverableResults.length} archivo(s) sin mutar los originales.`,
           payload: {
             ...(preserved.validation || {}),
             orchestration: preserved.orchestration || preserved.validation?.details?.orchestration || null,
           },
         });
-        await persistence.persistGeneratedArtifact({
-          artifact: { ...preserved.artifact, validation: preserved.validation },
-          task,
-          previewHtml: preserved.previewHtml,
-          validation: preserved.validation,
-        });
-        emit({ type: 'step_done', id: currentStepId, ok: Boolean(preserved.validation?.passed) });
+        emit({ type: 'step_done', id: currentStepId, ok: deliverableResults.length > 0 });
         currentStepId = null;
+        logDocRouting('source_preserving_edit', agentRunnerFailure ? `rescued_after_${agentRunnerFailure.reason}` : undefined);
         return finishDeterministicTask({
           finalMarkdown: preserved.content,
           stoppedReason: 'source_preserving_document_edit',
@@ -2353,21 +2642,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           },
         });
       } catch (err) {
-        // "Target-not-located" failures (the literal editor couldn't find the
-        // exact string/section to delete/replace) are NOT terminal: the request
-        // is well-formed, the deterministic literal matcher just can't resolve
-        // natural language ("borra el jurado evaluador"). Fall through to the
-        // generative path (grounded in the file's text) instead of dead-ending
-        // with "No pude editar…". The semantic document_edit tool on the inline
-        // /api/ai/generate path is the primary handler; this keeps the queued
-        // surface from giving the user an error on a perfectly valid edit.
-        const TARGET_NOT_LOCATED = new Set([
-          'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
-          'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
-          'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
-          'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
-          'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
-        ]);
         if (err && err.__fallthroughFreshDocument) {
           // Sin archivo base que conservar: cerramos el paso de edición y
           // dejamos que el flujo genere un documento nuevo más abajo en lugar
@@ -2375,16 +2649,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           wantsSourcePreservingEdit = false;
           emit({ type: 'step_done', id: currentStepId, ok: true });
           currentStepId = null;
-        } else if (err && TARGET_NOT_LOCATED.has(err.code)) {
-          wantsSourcePreservingEdit = false;
-          emit({ type: 'step_done', id: currentStepId, ok: true });
+        } else if (isSourcePreservingTargetNotLocatedError(err)) {
+          emit({ type: 'step_done', id: currentStepId, ok: false });
           currentStepId = null;
           emit({
             type: 'quality_gate',
             gate: 'source_preserving_document_edit',
-            label: 'Reintentando la edición de forma semántica',
-            passed: true,
-            summary: 'El editor literal no ubicó el fragmento exacto; el agente reintenta la edición sobre el documento.',
+            label: 'Edición preservadora necesita una referencia exacta',
+            passed: false,
+            summary: err?.message || 'No se ubicó el fragmento exacto dentro del archivo original.',
+          });
+          return finishDeterministicTask({
+            finalMarkdown: buildSourcePreservingFailureMarkdown(err),
+            stoppedReason: 'source_preserving_document_target_not_found',
+            steps: stepIdCounter,
+            artifactsList: [],
+            metadata: {
+              sourcePreservingEdit: true,
+              sourcePreservingError: err?.message || 'target_not_found',
+              sourcePreservingErrorCode: err?.code || null,
+              sourceFileIds: files,
+            },
           });
         } else {
           emit({ type: 'step_done', id: currentStepId, ok: false });
@@ -2397,18 +2682,68 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             summary: err?.message || 'No se pudo editar el archivo original.',
           });
           return finishDeterministicTask({
-            finalMarkdown: `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`,
+            finalMarkdown: buildSourcePreservingFailureMarkdown(err),
             stoppedReason: 'source_preserving_document_edit_failed',
             steps: stepIdCounter,
             artifactsList: [],
             metadata: {
               sourcePreservingEdit: true,
               sourcePreservingError: err?.message || 'unknown_error',
+              sourcePreservingErrorCode: err?.code || null,
               sourceFileIds: files,
             },
           });
         }
       }
+    }
+
+    // F2 HARD STOP: the AgentRunner claimed this DOCUMENT turn (create-a-doc
+    // or style/color follow-up) but did not deliver a file, and the surgical
+    // editor above did not rescue it. Continuing into the LLM loop lets
+    // create_document / generateAutoDocument fabricate a generic filler
+    // document — the exact silent fallback F2 removes. Honest Spanish error
+    // instead.
+    if (agentRunnerFailure && agentRunnerRunnerOnly) {
+      let honestAnswer;
+      try {
+        honestAnswer = require('../agent-runner').buildAgentRunnerFailureMessage(
+          agentRunnerFailure.reason,
+          agentRunnerFailure.detail,
+        );
+      } catch (_) {
+        honestAnswer = 'No pude generar el documento con el agente (créditos/modelo/verificación). '
+          + 'Para no entregarte contenido de relleno, NO voy a usar la plantilla genérica en su lugar. Inténtalo de nuevo.';
+      }
+      logDocRouting('agent_runner_failed', agentRunnerFailure.reason);
+      return await finishDeterministicTask({
+        finalMarkdown: honestAnswer,
+        stoppedReason: 'agent_runner_failed',
+        steps: stepIdCounter,
+        artifactsList: [],
+        metadata: {
+          servedBy: 'agent_runner_failed',
+          agentRunnerFailureReason: agentRunnerFailure.reason,
+        },
+      });
+    }
+    // Claimed EDIT turn continuing into the loop: the loop may still edit
+    // the user's REAL file (document_edit / source-preserving tools), but a
+    // failed-runner turn must never fabricate a NEW generic document — ban
+    // create_document and the auto-document pipeline for the rest of the run.
+    if (agentRunnerFailure) {
+      logDocRouting('agent_runner_failed', `${agentRunnerFailure.reason}_edit_continues_loop`);
+      // Direct assignment (not normalizeDocumentPolicyCoherence, which would
+      // flip autoGenerate back on for doc_required) — same pattern as the
+      // model-failure artifact guard below.
+      documentPolicy = {
+        ...(documentPolicy || {}),
+        autoGenerate: false,
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          agentRunnerFailure: agentRunnerFailure.reason,
+        },
+      };
+      tools = tools.filter((tool) => !(tool && tool.name === 'create_document'));
     }
 
     if (plainTranscriptionRequest) {
@@ -2419,6 +2754,19 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           chatId,
           providedFileIds: files,
         });
+      // The USER bubble was persisted before this fallback ran. When the
+      // send raced the upload/processing, `files` is empty but the turn
+      // still resolved media — write it back so the video/audio stays
+      // visible in the bubble after a refresh instead of vanishing.
+      if ((!Array.isArray(files) || files.length === 0) && transcriptionFileIds.length > 0) {
+        await backfillUserMessageFilesForTranscription(prisma, {
+          chatId,
+          userId: user.id,
+          taskId,
+          fileIds: transcriptionFileIds,
+          clientMetadata: fileMetadata,
+        });
+      }
       const transcriptionText = await buildTranscriptionTextFromFiles(prisma, {
         userId: user.id,
         fileIds: transcriptionFileIds,
@@ -2855,6 +3203,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
 
     const { createAuthorizationGate } = require('./tool-authorization-gate');
     const toolManifest = require('./tool-manifest');
+    const { attachToolFailureCircuit } = require('./tool-failure-circuit');
     const toolGate = createAuthorizationGate();
     const toolUsageMap = {};
     const toolCtx = {
@@ -2902,6 +3251,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         emit(payloadEvent);
       },
     };
+    attachToolFailureCircuit(toolCtx, { sessionKey: taskId });
 
     // Chat-only requests against an attachment have no artifact to
     // produce — the agent only needs to read the file, reason, and
@@ -2914,7 +3264,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     const isChatOnlyWithAttachment = hasAttachedFiles
       && documentPolicy?.mode === 'chat_only';
     const effectiveMaxSteps = isChatOnlyWithAttachment
-      ? Math.min(maxSteps, 20)
+      ? Math.min(maxSteps, 12)
       : maxSteps;
 
     // Professional document cycle: announce the ordered stages up-front so
@@ -3093,7 +3443,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       looksLikeEmptyOrWeakFinalAnswer(finalMarkdown) ||
       looksLikeMissingAttachmentAnswer(finalMarkdown)
     );
-    if (attachmentFinalNeedsRecovery) {
+    if (attachmentFinalNeedsRecovery && canRecoverAgentStopReason(stoppedReason)) {
       // Built only on the recovery path: buildToolObservationFallbackContext is
       // a pure full step×action walk (+ JSON.stringify per observation) that was
       // previously computed on every finalization and discarded on the happy path.
@@ -3120,7 +3470,9 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       finalMarkdown = finalFallbackMarkdown;
       stoppedReason = recoveredMarkdown
         ? 'attachment_empty_response_recovery'
-        : 'attachment_unreadable_empty_response_recovery';
+        : statusForAgentStopReason(stoppedReason) !== 'completed'
+          ? stoppedReason
+          : 'attachment_unreadable_empty_response_recovery';
       documentPolicy = {
         ...(documentPolicy || {}),
         mode: 'chat_only',
@@ -3192,6 +3544,19 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
           : null,
       });
     }
+    // F2: the rebuild above re-derives autoGenerate from the goal text — a
+    // runner-claimed turn that failed must keep the generic auto-document
+    // pipeline banned even after the rebuild.
+    if ((agentRunnerFailure || statusForAgentStopReason(stoppedReason) !== 'completed') && documentPolicy) {
+      documentPolicy = {
+        ...documentPolicy,
+        autoGenerate: false,
+        thresholds: {
+          ...(documentPolicy?.thresholds || {}),
+          ...(agentRunnerFailure ? { agentRunnerFailure: agentRunnerFailure.reason } : {}),
+        },
+      };
+    }
     task.documentPolicy = documentPolicy;
     emit({ type: 'document_policy', policy: documentPolicy });
 
@@ -3221,53 +3586,53 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             // para que el generador de documentos nuevos NO se dispare abajo.
             finalMarkdown = preserved.content;
           } else if (preserved?.artifact) {
-            if (!preserved.validation?.passed) {
+            const preservedResults = Array.isArray(preserved.results) && preserved.results.length
+              ? preserved.results
+              : [preserved];
+            const deliverableResults = preservedResults.filter(isValidatedSourcePreservingDeliverable);
+            if (!deliverableResults.length || (!preserved.batch && !preserved.validation?.passed)) {
               const unresolved = preserved.validation?.details?.agenticCycle?.unresolvedChecks || [];
-              throw new Error(`La edición se generó pero no pasó la autoevaluación del DOCX${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
+              throw new Error(`La edición se generó pero no pasó la autoevaluación del documento${unresolved.length ? `: ${unresolved.join(', ')}` : '.'}`);
             }
-            const artifactEvent = {
-              id: preserved.artifact.id,
-              filename: preserved.artifact.filename,
-              format: preserved.artifact.format,
-              mime: preserved.artifact.mime,
-              sizeBytes: preserved.artifact.sizeBytes,
-              downloadUrl: preserved.artifact.downloadUrl,
-              previewHtml: preserved.previewHtml,
-              validation: preserved.validation,
-            };
-            artifacts.push(artifactEvent);
-            emit({ type: 'file_artifact', artifact: artifactEvent });
-            emit({
-              type: 'checkpoint',
-              label: 'Autoevaluación del documento',
-              status: 'completed',
-              payload: preserved.validation?.details?.agenticCycle || null,
-            });
-            for (const criterion of preserved.validation?.details?.agenticCycle?.semanticCriteria || []) {
-              emit({
-                type: 'quality_gate',
-                gate: `docx_${criterion.id}`,
-                label: criterion.label || criterion.id,
-                passed: Boolean(criterion.passed),
-                summary: criterion.passed
-                  ? 'Criterio verificado en el DOCX generado.'
-                  : 'Criterio no cumplido en el DOCX generado.',
-                payload: criterion,
+            for (const item of deliverableResults) {
+              const artifactEvent = {
+                id: item.artifact.id,
+                filename: item.artifact.filename,
+                format: item.artifact.format,
+                mime: item.artifact.mime,
+                sizeBytes: item.artifact.sizeBytes,
+                downloadUrl: item.artifact.downloadUrl,
+                previewHtml: item.previewHtml,
+                validation: item.validation,
+                sourceFileId: item.sourceFileId || item.version?.sourceFileId || null,
+                documentVersion: item.version || null,
+              };
+              artifacts.push(artifactEvent);
+              emit({ type: 'file_artifact', artifact: artifactEvent });
+              await persistence.persistGeneratedArtifact({
+                artifact: { ...item.artifact, validation: item.validation },
+                task,
+                previewHtml: item.previewHtml,
+                validation: item.validation,
               });
             }
             emit({
+              type: 'checkpoint',
+              label: deliverableResults.length > 1
+                ? `Autoevaluación de ${deliverableResults.length} documentos`
+                : 'Autoevaluación del documento',
+              status: 'completed',
+              payload: preserved.batch ? preserved.validation?.details || null : preserved.validation?.details?.agenticCycle || null,
+            });
+            emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',
-              label: 'Documento original conservado',
+              label: deliverableResults.length > 1 ? 'Documentos originales conservados' : 'Documento original conservado',
               passed: Boolean(preserved.validation?.passed),
-              summary: 'Se agregó el contenido solicitado al archivo original sin regenerar portada, tablas ni estructura previa.',
+              summary: preserved.partial
+                ? `Se validaron ${deliverableResults.length} documentos y se informaron los que no pudieron completarse.`
+                : `Se validaron ${deliverableResults.length} archivo(s) sin mutar los originales.`,
               payload: preserved.validation,
-            });
-            await persistence.persistGeneratedArtifact({
-              artifact: { ...preserved.artifact, validation: preserved.validation },
-              task,
-              previewHtml: preserved.previewHtml,
-              validation: preserved.validation,
             });
             finalMarkdown = preserved.content;
           } else {
@@ -3277,25 +3642,15 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
             wantsSourcePreservingEdit = false;
           }
         } catch (err) {
-          // A "target-not-located" literal failure is not terminal — fall
-          // through to the generative path (grounded in the file's text)
-          // instead of returning an apology, mirroring the BEFORE-loop catch.
-          const TARGET_NOT_LOCATED_POST = new Set([
-            'DELETE_TEXT_NOT_FOUND', 'DELETE_TEXT_UNSPECIFIED',
-            'REPLACE_TEXT_NOT_FOUND', 'REPLACE_TEXT_UNSPECIFIED',
-            'SECTION_TABLE_NOT_FOUND', 'CRONOGRAMA_TABLE_NOT_FOUND',
-            'XLSX_REPLACE_TEXT_NOT_FOUND', 'XLSX_REPLACE_TEXT_UNSPECIFIED',
-            'PPTX_REPLACE_TEXT_NOT_FOUND', 'PPTX_REPLACE_TEXT_UNSPECIFIED',
-          ]);
-          if (err && TARGET_NOT_LOCATED_POST.has(err.code)) {
+          if (isSourcePreservingTargetNotLocatedError(err)) {
             emit({
               type: 'quality_gate',
               gate: 'source_preserving_document_edit',
-              label: 'Reintentando la edición de forma semántica',
-              passed: true,
-              summary: 'El editor literal no ubicó el fragmento exacto; se genera el documento editado sobre el contenido del archivo.',
+              label: 'Edición preservadora necesita una referencia exacta',
+              passed: false,
+              summary: err?.message || 'No se ubicó el fragmento exacto dentro del archivo original.',
             });
-            wantsSourcePreservingEdit = false;
+            finalMarkdown = buildSourcePreservingFailureMarkdown(err);
           } else {
             emit({
               type: 'quality_gate',
@@ -3304,7 +3659,7 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
               passed: false,
               summary: err?.message || 'No se pudo editar el archivo original.',
             });
-            finalMarkdown = `No pude editar el archivo original sin cambiarlo: ${err?.message || 'error desconocido'}. No generé un documento nuevo para evitar entregarte contenido ajeno al archivo.`;
+            finalMarkdown = buildSourcePreservingFailureMarkdown(err);
           }
         }
       }
@@ -3339,6 +3694,8 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       }
     }
 
+    const status = statusForAgentStopReason(stoppedReason);
+    task.status = status;
     if (finalMarkdown) emit({ type: 'final_text', markdown: finalMarkdown });
     const completedStepCount = Math.max(result.steps.length, stepIdCounter);
     const doneEvent = emit({
@@ -3347,8 +3704,6 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
       stats: { steps: completedStepCount, artifacts: artifacts.length },
     });
 
-    const status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
-    task.status = status;
     task.updatedAt = new Date().toISOString();
     const dbMessage = await persistAssistantMessage({
       chatId,
@@ -3410,6 +3765,27 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     metrics.counter('agent_task_invocations_total', { status });
     metrics.observe('agent_task_duration_ms', { status }, Date.now() - startedAt);
     metrics.counter('agent_task_artifacts_total', { status }, artifacts.length);
+    // Per-model canary gate: task-level terminal observation segmented by the
+    // runtime model that actually served the steps (last step's usage wins).
+    try {
+      const telemetryModel = (() => {
+        const steps = Array.isArray(result?.steps) ? result.steps : [];
+        for (let i = steps.length - 1; i >= 0; i -= 1) {
+          const m = steps[i]?.usage?.model;
+          if (m) return m;
+        }
+        return model;
+      })();
+      require('../../services/codex/model-telemetry').recordLlmTurn({
+        model: telemetryModel,
+        provider: null,
+        agent: 'agent_task',
+        outcome: ['done', 'completed', 'success'].includes(String(status).toLowerCase()) ? 'ok' : 'error',
+        error: ['done', 'completed', 'success'].includes(String(status).toLowerCase())
+          ? null
+          : { code: String(stoppedReason || status || 'task_failed') },
+      });
+    } catch { /* optional */ }
     persistProgress(status);
     auditLog.audit({
       event: 'agent_task_worker_finished',
@@ -3489,9 +3865,12 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
         },
       });
     }
-    const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
+    const errorEvent = controller.signal.aborted
+      ? { type: 'error', message: 'Tarea detenida por el usuario.' }
+      : toAgentTaskErrorEvent(err || 'agent task failed');
+    const message = errorEvent.message;
     task.status = controller.signal.aborted ? 'cancelled' : 'error';
-    emit({ type: 'error', message });
+    emit(errorEvent);
     taskStore.markTaskStatus(task, task.status, {
       streamState,
       stats: { durationMs: Date.now() - startedAt, error: message },
@@ -3510,9 +3889,24 @@ async function _runAgentTaskJobImpl(payload = {}, job = null) {
     return { taskId, status: task.status };
   } finally {
     clearTimeout(runtimeTimer);
+    externalSignal?.removeEventListener?.('abort', abortFromCaller);
     if (lockHeartbeatTimer) {
       clearInterval(lockHeartbeatTimer);
       lockHeartbeatTimer = null;
+    }
+    const terminal = String(task.status || '').toLowerCase();
+    if (!['completed', 'cancelled', 'canceled', 'error', 'done', 'failed'].includes(terminal)) {
+      try {
+        const message = controller?.signal?.aborted
+          ? 'Tarea detenida por el usuario.'
+          : 'La tarea terminó sin evento terminal.';
+        task.status = controller?.signal?.aborted ? 'cancelled' : 'error';
+        emit({ type: 'error', message });
+        taskStore.markTaskStatus(task, task.status, {
+          streamState,
+          stats: { durationMs: Date.now() - startedAt, error: message },
+        });
+      } catch { /* already tearing down */ }
     }
   }
 }
@@ -3534,13 +3928,15 @@ function withJitter(baseMs) {
  * Returns { retryable, reason, ttlMs } where ttlMs is how long before retry
  * (0 = immediate, >0 = backoff).
  */
-const { classifyTaskError } = require('../../utils/task-error-classifier');
+const { classifyTaskError, presentTaskError, toAgentTaskErrorEvent } = require('../../utils/task-error-classifier');
 
 module.exports = {
   runAgentTaskJob,
   buildFinalizeProfile,
   buildOpenAICompatibleClient,
   classifyTaskError,
+  presentTaskError,
+  toAgentTaskErrorEvent,
   normalizeAgentRuntimeModel,
   resolveAgentRuntimeClient,
   detectAgentRuntimeProvider,
@@ -3559,5 +3955,7 @@ module.exports = {
   resolveAttachmentFallbackMarkdown,
   resolveAgentToolScopes,
   shouldRunSourcePreservingEdit,
+  isValidatedSourcePreservingDeliverable,
   shouldUseDeterministicAttachmentAnswer,
+  agentTaskAgentRunnerEnabled,
 };

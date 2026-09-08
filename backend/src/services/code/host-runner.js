@@ -26,6 +26,10 @@ const net = require('net');
 const crypto = require('crypto');
 const { buildUntrustedChildEnv } = require('../../utils/untrusted-child-env');
 const { verifyRenderedApp } = require('./verify-agent');
+const {
+  previewTokenFor,
+  verifyPreviewToken,
+} = require('./preview-proxy');
 
 const ROOT = path.join(os.tmpdir(), 'siragpt-coderun');
 
@@ -528,12 +532,11 @@ async function startRun({ runId, userId, files, env }) {
   evictIfNeeded(userId);
 
   const dir = path.join(ROOT, id);
-  // The preview token rides in the URL PATH (not a cookie). The preview iframe is
-  // sandboxed ? opaque ("null") origin, and Vite's <script type="module"> fetches
-  // use a credentials mode that won't send a cross-origin cookie, so a cookie
-  // gate would 403 every asset. A path-embedded token is carried automatically by
-  // every asset/module/dynamic-import request regardless of credentials or CORS.
-  const previewToken = crypto.randomBytes(24).toString('hex');
+  // The preview token rides in the URL PATH (not a cookie). It is signed with a
+  // short-lived exp claim; production refuses to mint or accept tokens without
+  // an explicit preview secret. The path embedding keeps Vite module/assets
+  // authenticated even when the iframe has an opaque origin.
+  const previewToken = previewTokenFor({ runId: id, userId: userId || null });
   const basePath = `/api/code-runner/${id}/${previewToken}/app/`;
   const run = {
     runId: id,
@@ -760,6 +763,12 @@ function getRunForProxy(runId, previewToken) {
   const run = runs.get(id);
   if (!run || !run.previewToken || !previewToken) return null;
   if (run.previewToken !== previewToken) return null;
+  const claims = verifyPreviewToken(previewToken);
+  // Keep test/local fixtures that use opaque run tokens compatible, while the
+  // production boundary is strictly signed + exp-bound.
+  if (process.env.NODE_ENV === 'production' || previewToken.includes('.')) {
+    if (!claims || claims.runId !== id || (claims.userId != null && String(claims.userId) !== String(run.userId || ''))) return null;
+  }
   // Gate on phase like getProxyTarget: a crashed/errored/stopped run can still
   // hold a stale port whose number the OS may have recycled to another process.
   if (!run.port || !['starting', 'ready'].includes(run.phase)) return null;

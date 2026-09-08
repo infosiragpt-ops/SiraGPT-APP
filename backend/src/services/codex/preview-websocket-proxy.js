@@ -101,6 +101,7 @@ function bridgeWebSockets(downstream, upstream) {
 function attachWebSocketProxy(server, {
   shouldHandle,
   resolveTarget,
+  isOriginAllowed = () => true,
   WebSocketClient = WebSocket,
   WebSocketServer = WebSocket.Server,
   handshakeTimeoutMs = 10_000,
@@ -108,6 +109,7 @@ function attachWebSocketProxy(server, {
   if (!server || typeof server.on !== 'function') throw new TypeError('server is required');
   if (typeof shouldHandle !== 'function') throw new TypeError('shouldHandle is required');
   if (typeof resolveTarget !== 'function') throw new TypeError('resolveTarget is required');
+  if (typeof isOriginAllowed !== 'function') throw new TypeError('isOriginAllowed must be a function');
 
   const existing = attachedProxies.get(server);
   if (existing) return existing;
@@ -116,6 +118,10 @@ function attachWebSocketProxy(server, {
   const onUpgrade = (request, socket, head) => {
     if (!shouldHandle(request)) return;
     socket.on('error', () => {});
+    if (!isOriginAllowed(request)) {
+      rejectUpgrade(socket, 403);
+      return;
+    }
 
     Promise.resolve()
       .then(() => resolveTarget(request))

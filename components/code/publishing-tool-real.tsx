@@ -480,6 +480,7 @@ function ExternalPublishingPanel({ projectId }: { projectId: string | null }) {
             <Button
               className="h-8 gap-1.5 rounded-[6px] border-0 bg-[#0f6ecb] px-3 text-[13px] font-medium text-white shadow-none hover:bg-[#1679dc] disabled:bg-[#303030] disabled:text-[#7b7b7b]"
               disabled={deploying}
+              aria-label="Publicar la app"
               onClick={deploy}
             >
               {deploying ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Rocket className="mr-1.5 h-4 w-4" />}

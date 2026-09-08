@@ -68,10 +68,19 @@ describe("chat video generation lifecycle source contract", () => {
       /\['failed', 'cancelled'\]\.includes\(String\(statusResponse\.data\.status/,
       "status route must persist failed and cancelled terminal states"
     )
+    const pollingStart = chatContext.indexOf("const pollVideoStatus = useCallback")
+    const pollingEnd = chatContext.indexOf("const addVideoMessage = useCallback", pollingStart)
+    assert.ok(pollingStart >= 0 && pollingEnd > pollingStart, "video polling implementation must exist")
+    const pollingBlock = chatContext.slice(pollingStart, pollingEnd)
     assert.match(
-      chatContext,
-      /Date\.now\(\) - startedAt > pollTimeoutMs[\s\S]{0,260}cancelVideoGeneration\(operationId\)/,
-      "polling must time out and cancel instead of rendering forever"
+      pollingBlock,
+      /Date\.now\(\) - startedAt > pollTimeoutMs[\s\S]{0,100}return \{ __pollTimeout: true \}/,
+      "serialized polling must convert the wall-clock deadline into a terminal marker"
+    )
+    assert.match(
+      pollingBlock,
+      /if \(statusResponse\?\.__pollTimeout\)[\s\S]{0,420}cancelVideoGeneration\(operationId\)[\s\S]{0,120}settle\('timeout'/,
+      "the timeout marker must cancel the provider operation and settle the composer"
     )
   })
 

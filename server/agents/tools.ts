@@ -7,7 +7,6 @@
  * the agent loop can self-correct (Claude Code style).
  */
 
-import { spawn } from "child_process"
 import {
   existsSync,
   mkdirSync,
@@ -15,23 +14,34 @@ import {
   writeFileSync,
   readdirSync,
   statSync,
-  unlinkSync,
+  lstatSync,
+  realpathSync,
 } from "fs"
 import { join, resolve, relative, dirname, sep } from "path"
 import { tmpdir } from "os"
 import { createHash, randomBytes } from "crypto"
+import { readResponseCapped, safeFetch } from "./safe-network"
 
 const MAX_READ_BYTES = 256 * 1024
 const MAX_WRITE_BYTES = 512 * 1024
-const MAX_BASH_MS = 20_000
-const MAX_BASH_OUTPUT = 64 * 1024
 const MAX_GREP_HITS = 80
 const MAX_GLOB_HITS = 200
 const MAX_FETCH_BYTES = 120_000
 const MAX_FETCH_MS = 12_000
 
-const BASH_BLOCKLIST =
-  /\b(rm\s+-rf\s+\/|mkfs|dd\s+if=|shutdown|reboot|halt|poweroff|useradd|userdel|passwd|chown\s+-R\s+\/|chmod\s+-R\s+777\s+\/|curl\s+.*\|\s*(ba)?sh|wget\s+.*\|\s*(ba)?sh|:\(\)\s*\{\s*:\|:&\s*\})/i
+export const AGENT_TOOL_NAMES = [
+  "read",
+  "write",
+  "edit",
+  "bash",
+  "glob",
+  "grep",
+  "web_search",
+  "web_fetch",
+  "spawn_subagent",
+] as const
+
+export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number]
 
 export interface ToolResult {
   ok: boolean
@@ -52,10 +62,49 @@ function safeId(raw?: string): string {
   return randomBytes(8).toString("hex")
 }
 
-export function createWorkspace(sessionId?: string): AgentWorkspace {
-  const id = safeId(sessionId)
-  const root = join(tmpdir(), "siragpt-agent-sessions", id)
-  mkdirSync(root, { recursive: true })
+export function createWorkspace(sessionId?: string, ownerId?: string): AgentWorkspace {
+  const normalizedOwnerId = String(ownerId || "").trim()
+  if (!normalizedOwnerId) throw new Error("workspace owner required")
+  const ownerNamespace = createHash("sha256")
+    .update("siragpt-agent-owner:v1\0")
+    .update(normalizedOwnerId)
+    .digest("hex")
+    .slice(0, 32)
+  let effectiveId = safeId(sessionId)
+  const base = join(tmpdir(), "siragpt-agent-sessions")
+  mkdirSync(base, { recursive: true })
+  const ownerRoot = join(base, ownerNamespace)
+  if (existsSync(ownerRoot) && (lstatSync(ownerRoot).isSymbolicLink() || !lstatSync(ownerRoot).isDirectory())) {
+    throw new Error("unsafe workspace owner root")
+  }
+  mkdirSync(ownerRoot, { recursive: true })
+  const baseReal = realpathSync(base)
+  const ownerReal = realpathSync(ownerRoot)
+  const expectedOwnerReal = join(baseReal, ownerNamespace)
+  if (ownerReal !== expectedOwnerReal || (ownerReal !== baseReal && !ownerReal.startsWith(baseReal + sep))) {
+    throw new Error("unsafe workspace owner root")
+  }
+  let root = join(ownerRoot, effectiveId)
+  try {
+    if (existsSync(root) && (lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory())) {
+      throw new Error("unsafe workspace root")
+    }
+    mkdirSync(root, { recursive: true })
+    const rootReal = realpathSync(root)
+    if (rootReal !== ownerReal && !rootReal.startsWith(ownerReal + sep)) throw new Error("workspace escaped owner")
+    if (rootReal !== baseReal && !rootReal.startsWith(baseReal + sep)) throw new Error("workspace escaped base")
+    root = rootReal
+  } catch {
+    // A user-controlled session id must never reuse a planted symlink or file.
+    const fallbackId = randomBytes(12).toString("hex")
+    effectiveId = fallbackId
+    const fallbackRoot = join(ownerRoot, fallbackId)
+    mkdirSync(fallbackRoot, { recursive: true })
+    const fallbackReal = realpathSync(fallbackRoot)
+    if (fallbackReal !== ownerReal && !fallbackReal.startsWith(ownerReal + sep)) throw new Error("workspace escaped owner")
+    if (fallbackReal !== baseReal && !fallbackReal.startsWith(baseReal + sep)) throw new Error("workspace escaped base")
+    root = fallbackReal
+  }
   // Seed a tiny README so list/glob always have something.
   const readme = join(root, "README.md")
   if (!existsSync(readme)) {
@@ -65,13 +114,13 @@ export function createWorkspace(sessionId?: string): AgentWorkspace {
         "# SiraGPT Agent Workspace",
         "",
         "Sandbox aislado para el Agents SDK empresarial.",
-        "El agente puede leer, escribir, editar y ejecutar comandos aquí.",
+        "El agente solo puede usar las herramientas autorizadas dentro de este workspace.",
         "",
       ].join("\n"),
       "utf8",
     )
   }
-  return { sessionId: id, root }
+  return { sessionId: effectiveId, root }
 }
 
 /** Resolve a user-supplied path strictly inside the workspace root. */
@@ -81,10 +130,46 @@ function resolveInRoot(root: string, filePath: string): string | null {
   if (!cleaned) return null
   // Treat absolute paths as relative to the sandbox root.
   const candidate = cleaned.startsWith("/") ? cleaned.slice(1) : cleaned
-  const abs = resolve(root, candidate)
-  const rel = relative(root, abs)
-  if (rel.startsWith("..") || rel === ".." || (rel !== "" && resolve(root, rel) !== abs)) return null
-  if (abs !== root && !abs.startsWith(root + sep)) return null
+  const rootAbs = resolve(root)
+  const abs = resolve(rootAbs, candidate)
+  const rel = relative(rootAbs, abs)
+  if (rel.startsWith("..") || rel === ".." || (rel !== "" && resolve(rootAbs, rel) !== abs)) return null
+  if (abs !== rootAbs && !abs.startsWith(rootAbs + sep)) return null
+
+  let rootReal: string
+  try {
+    rootReal = realpathSync(rootAbs)
+    if (lstatSync(rootAbs).isSymbolicLink()) return null
+  } catch {
+    return null
+  }
+
+  // Inspect every existing component with lstat. realpath containment alone
+  // would still allow a symlink that happens to point back inside the root.
+  let cursor = rootAbs
+  for (const part of rel ? rel.split(sep) : []) {
+    cursor = join(cursor, part)
+    try {
+      if (lstatSync(cursor).isSymbolicLink()) return null
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") break
+      return null
+    }
+  }
+
+  // For a new write, resolve the nearest existing parent so a symlinked
+  // parent cannot redirect mkdir/write outside the sandbox.
+  let existing = abs
+  while (existing !== rootAbs) {
+    try {
+      const real = realpathSync(existing)
+      if (real !== rootReal && !real.startsWith(rootReal + sep)) return null
+      break
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null
+      existing = dirname(existing)
+    }
+  }
   return abs
 }
 
@@ -107,6 +192,8 @@ function walkFiles(root: string, dir: string, acc: string[], max: number): void 
     const full = join(dir, name)
     let st
     try {
+      const lst = lstatSync(full)
+      if (lst.isSymbolicLink()) continue
       st = statSync(full)
     } catch {
       continue
@@ -133,84 +220,6 @@ function matchGlob(relPath: string, pattern: string): boolean {
   }
 }
 
-async function runBash(command: string, cwd: string): Promise<ToolResult> {
-  if (!command || !command.trim()) {
-    return { ok: false, observation: "Error: command vacío.", summary: "empty command" }
-  }
-  if (BASH_BLOCKLIST.test(command)) {
-    return {
-      ok: false,
-      observation: "Error: comando bloqueado por política de seguridad del sandbox.",
-      summary: "blocked",
-    }
-  }
-
-  return new Promise((resolvePromise) => {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
-      HOME: cwd,
-      LANG: "C.UTF-8",
-      LC_ALL: "C.UTF-8",
-      NODE_OPTIONS: "--max-old-space-size=512",
-      PYTHONDONTWRITEBYTECODE: "1",
-    }
-    // Drop secrets from the sandboxed shell.
-    for (const key of Object.keys(env)) {
-      if (/KEY|SECRET|TOKEN|PASSWORD|DATABASE_URL|PRIVATE/i.test(key) && key !== "PATH") {
-        delete env[key]
-      }
-    }
-
-    const child = spawn("/bin/bash", ["-lc", command], {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"] as const,
-    })
-
-    let stdout = ""
-    let stderr = ""
-    let killed = false
-    const timer = setTimeout(() => {
-      killed = true
-      try {
-        child.kill("SIGKILL")
-      } catch {
-        /* ignore */
-      }
-    }, MAX_BASH_MS)
-
-    const onChunk = (buf: Buffer, which: "out" | "err") => {
-      const s = buf.toString("utf8")
-      if (which === "out") stdout = truncate(stdout + s, MAX_BASH_OUTPUT)
-      else stderr = truncate(stderr + s, MAX_BASH_OUTPUT)
-    }
-    child.stdout?.on("data", (b: Buffer) => onChunk(b, "out"))
-    child.stderr?.on("data", (b: Buffer) => onChunk(b, "err"))
-
-    child.on("close", (code: number | null) => {
-      clearTimeout(timer)
-      const body = [stdout, stderr].filter(Boolean).join("\n")
-      const ok = !killed && code === 0
-      resolvePromise({
-        ok,
-        summary: killed ? "timeout" : `exit ${code}`,
-        observation: killed
-          ? `Timeout (${MAX_BASH_MS}ms).\n${body}`
-          : `exitCode=${code}\n${body || "(sin salida)"}`,
-      })
-    })
-    child.on("error", (err: Error) => {
-      clearTimeout(timer)
-      resolvePromise({
-        ok: false,
-        summary: "spawn error",
-        observation: `Error ejecutando bash: ${err.message}`,
-      })
-    })
-  })
-}
-
 async function webSearch(query: string): Promise<ToolResult> {
   const q = String(query || "").trim()
   if (!q) return { ok: false, observation: "Error: query vacío.", summary: "empty query" }
@@ -221,10 +230,9 @@ async function webSearch(query: string): Promise<ToolResult> {
     encodeURIComponent(q) +
     "&format=json&no_html=1&skip_disambig=1"
   try {
-    const res = await fetch(url, {
+    const { response: res } = await safeFetch(url, {
       headers: { "User-Agent": "SiraGPT-AgentsSDK/0.2 (+https://siragpt.com)" },
-      signal: AbortSignal.timeout(MAX_FETCH_MS),
-    })
+    }, { maxRedirects: 2, timeoutMs: MAX_FETCH_MS })
     if (!res.ok) {
       return {
         ok: false,
@@ -232,7 +240,11 @@ async function webSearch(query: string): Promise<ToolResult> {
         observation: `web_search falló con HTTP ${res.status}. Reformula la query o usa web_fetch con una URL conocida.`,
       }
     }
-    const data = (await res.json()) as {
+    const body = await readResponseCapped(res, MAX_FETCH_BYTES)
+    if (body.truncated) {
+      return { ok: false, summary: "response too large", observation: "web_search excedió el límite de respuesta." }
+    }
+    const data = JSON.parse(body.text) as {
       AbstractText?: string
       AbstractURL?: string
       Heading?: string
@@ -283,14 +295,12 @@ async function webFetch(url: string): Promise<ToolResult> {
     return { ok: false, observation: "Error: URL debe ser http(s).", summary: "bad url" }
   }
   try {
-    const res = await fetch(u, {
+    const { response: res, finalUrl, redirects } = await safeFetch(u, {
       headers: { "User-Agent": "SiraGPT-AgentsSDK/0.2 (+https://siragpt.com)", Accept: "text/html,application/json,text/plain,*/*" },
-      signal: AbortSignal.timeout(MAX_FETCH_MS),
-      redirect: "follow",
-    })
+    }, { maxRedirects: 4, timeoutMs: MAX_FETCH_MS })
     const ctype = res.headers.get("content-type") || ""
-    const buf = Buffer.from(await res.arrayBuffer())
-    const sliced = buf.subarray(0, MAX_FETCH_BYTES).toString("utf8")
+    const body = await readResponseCapped(res, MAX_FETCH_BYTES)
+    const sliced = body.text
     // Strip tags for HTML to keep token cost down.
     let text = sliced
     if (ctype.includes("html")) {
@@ -303,8 +313,8 @@ async function webFetch(url: string): Promise<ToolResult> {
     }
     return {
       ok: res.ok,
-      summary: `HTTP ${res.status} · ${ctype.split(";")[0] || "unknown"}`,
-      observation: `HTTP ${res.status} ${res.statusText}\nContent-Type: ${ctype}\n\n${truncate(text, MAX_FETCH_BYTES)}`,
+      summary: `HTTP ${res.status} · ${ctype.split(";")[0] || "unknown"}${redirects ? ` · ${redirects} redirects` : ""}`,
+      observation: `HTTP ${res.status} ${res.statusText}\nURL final: ${finalUrl}\nContent-Type: ${ctype}\n\n${truncate(text, MAX_FETCH_BYTES)}${body.truncated ? `\n…[respuesta limitada a ${MAX_FETCH_BYTES} bytes]` : ""}`,
     }
   } catch (err) {
     return {
@@ -319,7 +329,11 @@ export async function executeTool(
   name: string,
   argsRaw: string | Record<string, unknown>,
   workspace: AgentWorkspace,
+  allowedTools?: ReadonlySet<string>,
 ): Promise<ToolResult> {
+  if (allowedTools && !allowedTools.has(name)) {
+    return { ok: false, observation: `Error: herramienta no permitida para este agent role: "${name}".`, summary: "tool denied" }
+  }
   let args: Record<string, unknown> = {}
   try {
     args = typeof argsRaw === "string" ? (JSON.parse(argsRaw || "{}") as Record<string, unknown>) : argsRaw || {}
@@ -355,7 +369,19 @@ export async function executeTool(
         return { ok: false, observation: `Error: contenido > ${MAX_WRITE_BYTES} bytes.`, summary: "too large" }
       }
       try {
+        const expectedHash = readExpectedHash(args)
+        const before = existsSync(abs) ? readFileSync(abs) : null
+        const beforeHash = before ? sha256(before) : null
+        if (expectedHash && beforeHash !== expectedHash) {
+          return { ok: false, observation: "Error: hash de precondición no coincide; relee el archivo.", summary: "precondition failed" }
+        }
+        if (before && sha256(readFileSync(abs)) !== beforeHash) {
+          return { ok: false, observation: "Error: el archivo cambió durante la lectura; reintenta con una lectura nueva.", summary: "concurrent change" }
+        }
         mkdirSync(dirname(abs), { recursive: true })
+        if (!resolveInRoot(workspace.root, String(args.file_path || args.path || ""))) {
+          return { ok: false, observation: "Error: ruta fuera del sandbox o contiene symlink.", summary: "path denied" }
+        }
         writeFileSync(abs, content, "utf8")
         return {
           ok: true,
@@ -376,6 +402,11 @@ export async function executeTool(
       if (!oldStr) return { ok: false, observation: "Error: old_string vacío.", summary: "empty old_string" }
       try {
         const current = readFileSync(abs, "utf8")
+        const currentHash = sha256(Buffer.from(current, "utf8"))
+        const expectedHash = readExpectedHash(args)
+        if (expectedHash && expectedHash !== currentHash) {
+          return { ok: false, observation: "Error: hash de precondición no coincide; relee el archivo.", summary: "precondition failed" }
+        }
         const count = current.split(oldStr).length - 1
         if (count === 0) {
           return {
@@ -392,6 +423,12 @@ export async function executeTool(
           }
         }
         const next = current.replace(oldStr, newStr)
+        if (Buffer.byteLength(next, "utf8") > MAX_WRITE_BYTES) {
+          return { ok: false, observation: `Error: contenido > ${MAX_WRITE_BYTES} bytes.`, summary: "too large" }
+        }
+        if (sha256(readFileSync(abs)) !== currentHash) {
+          return { ok: false, observation: "Error: el archivo cambió durante la lectura; reintenta con una lectura nueva.", summary: "concurrent change" }
+        }
         writeFileSync(abs, next, "utf8")
         return {
           ok: true,
@@ -404,7 +441,7 @@ export async function executeTool(
     }
 
     case "bash": {
-      return runBash(String(args.command || ""), workspace.root)
+      return { ok: false, observation: "Error: bash deshabilitado; no existe un boundary aislado atestado.", summary: "bash denied" }
     }
 
     case "glob": {
@@ -428,9 +465,10 @@ export async function executeTool(
       } catch {
         return { ok: false, observation: "Error: regex inválido.", summary: "bad regex" }
       }
-      const searchRoot = resolveInRoot(workspace.root, String(args.path || ".")) || workspace.root
+      const searchRoot = resolveInRoot(workspace.root, String(args.path || "."))
+      if (!searchRoot) return { ok: false, observation: "Error: ruta fuera del sandbox o contiene symlink.", summary: "path denied" }
       const files: string[] = []
-      if (existsSync(searchRoot) && statSync(searchRoot).isFile()) {
+      if (existsSync(searchRoot) && !lstatSync(searchRoot).isSymbolicLink() && statSync(searchRoot).isFile()) {
         files.push(relative(workspace.root, searchRoot).split(sep).join("/"))
       } else {
         walkFiles(workspace.root, searchRoot, files, 500)
@@ -440,6 +478,7 @@ export async function executeTool(
         if (hits.length >= MAX_GREP_HITS) break
         const abs = join(workspace.root, rel)
         try {
+          if (lstatSync(abs).isSymbolicLink()) continue
           const st = statSync(abs)
           if (st.size > MAX_READ_BYTES) continue
           const text = readFileSync(abs, "utf8")
@@ -466,11 +505,10 @@ export async function executeTool(
       return webFetch(String(args.url || ""))
 
     case "spawn_subagent": {
-      // Handled by the run loop (subagent.ts). Should not reach here.
       return {
         ok: false,
-        observation: "spawn_subagent se gestiona en el loop principal.",
-        summary: "delegated",
+        observation: "Error: spawn_subagent deshabilitado; no existe un boundary aislado atestado.",
+        summary: "subagent denied",
       }
     }
 
@@ -487,6 +525,23 @@ export function workspaceFingerprint(workspace: AgentWorkspace): string {
   const files: string[] = []
   walkFiles(workspace.root, workspace.root, files, 50)
   return createHash("sha1").update(files.join("|")).digest("hex").slice(0, 12)
+}
+
+export function getEffectiveToolAllowSet(toolConfig: Record<string, boolean>): ReadonlySet<string> {
+  return new Set(AGENT_TOOL_NAMES.filter((name) =>
+    name !== "bash" && name !== "spawn_subagent" && toolConfig[name] === true,
+  ))
+}
+
+function sha256(value: Buffer): string {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function readExpectedHash(args: Record<string, unknown>): string | null {
+  const raw = args.expected_sha256 ?? args.expected_hash
+  if (raw === undefined || raw === null || raw === "") return null
+  const hash = String(raw).trim().toLowerCase()
+  return /^[a-f0-9]{64}$/.test(hash) ? hash : "invalid"
 }
 
 export function listWorkspaceFiles(workspace: AgentWorkspace, max = 100): string[] {

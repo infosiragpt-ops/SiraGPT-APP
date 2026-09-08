@@ -13,6 +13,7 @@
  *   POST /api/codex/projects/:id/export          → mirror src a disco  (auth)
  *   POST /api/codex/projects/:id/preview/stop    → dev server off     (auth)
  *   GET  /api/codex/projects/:id/files           → lista de archivos  (auth)
+ *   POST /api/codex/projects/:id/exec            → comando en el workspace del proyecto (auth + acceso agente)
  *   GET  /api/codex/projects/:id/file?path=      → contenido archivo  (auth)
  *   GET  /api/codex/projects/:id/budget          → gasto/corte diario  (auth)
  *
@@ -38,6 +39,7 @@ const eventStore = require('../services/codex/event-store');
 const runAccess = require('../services/codex/run-access');
 const pubsub = require('../services/codex/redis-pubsub');
 const runService = require('../services/codex/run-service');
+const observabilityMetrics = require('../services/codex/observability-metrics');
 const checkpointService = require('../services/codex/checkpoint-service');
 const {
   CodexSessionError,
@@ -45,6 +47,8 @@ const {
 } = require('../services/codex/session-service');
 const codexDb = require('../config/database');
 const publicationService = require('../services/codex/publication-service');
+const opencodeHarness = require('../services/codex/opencode-harness');
+const selfHosting = require('../services/codex/self-hosting');
 const companyAssociationService = require('../services/codex/company-association-service');
 const {
   STRIP_REQUEST_HEADERS,
@@ -53,6 +57,17 @@ const {
 const {
   attachWebSocketProxy,
 } = require('../services/codex/preview-websocket-proxy');
+const {
+  applyPreviewFrameHeaders: applyPreviewFramePolicy,
+  filterPreviewResponseHeaders,
+  injectPreviewInteractionBridges,
+  previewTokenFor: mintPreviewToken,
+  previewNonceFromRequest,
+  previewOriginAllowed,
+  readPreviewBody,
+  stripPreviewNonce,
+  verifyPreviewToken: verifySignedPreviewToken,
+} = require('../services/code/preview-proxy');
 
 const router = express.Router();
 let sessionRunner = null;
@@ -85,41 +100,12 @@ function mapSessionError(error, res) {
   return res.status(502).json({ error: 'codex_session_failed', message: String(error?.message || error) });
 }
 
-function base64urlJson(value) {
-  return Buffer.from(JSON.stringify(value)).toString('base64url');
-}
-
-function signPreviewPayload(payload, env = process.env) {
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const body = base64urlJson(payload);
-  const sig = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${sig}`;
-}
-
 function verifyPreviewToken(token, env = process.env) {
-  const [body, sig] = String(token || '').split('.');
-  if (!body || !sig) return null;
-  const secret = env.CODEX_PREVIEW_TOKEN_SECRET || env.JWT_SECRET || env.SESSION_SECRET || 'codex-preview-dev-secret';
-  const expected = crypto.createHmac('sha256', secret).update(body).digest('base64url');
-  const a = Buffer.from(sig);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
-    if (!payload || typeof payload !== 'object') return null;
-    if (payload.exp && Date.now() > Number(payload.exp)) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+  return verifySignedPreviewToken(token, env);
 }
 
 function previewTokenFor({ projectId, userId }, env = process.env) {
-  return signPreviewPayload({
-    projectId,
-    userId,
-    exp: Date.now() + (Number(env.CODEX_PREVIEW_TOKEN_TTL_MS) || 6 * 60 * 60 * 1000),
-  }, env);
+  return mintPreviewToken({ projectId, userId }, env);
 }
 
 function codexPreviewBasePath(projectId, token) {
@@ -209,7 +195,7 @@ async function previewWebSocketTarget(request, env = process.env) {
   }
   if (!['http:', 'https:'].includes(upstreamBase.protocol)) throw previewUpgradeError(503);
 
-  const target = new URL(String(request.url || '/'), upstreamBase);
+  const target = new URL(stripPreviewNonce(String(request.url || '/')), upstreamBase);
   target.protocol = upstreamBase.protocol === 'https:' ? 'wss:' : 'ws:';
   return {
     url: target.toString(),
@@ -220,6 +206,7 @@ async function previewWebSocketTarget(request, env = process.env) {
 function attachPreviewWebSocketProxy(server, env = process.env) {
   return attachWebSocketProxy(server, {
     shouldHandle: (request) => Boolean(previewUpgradeParts(request)),
+    isOriginAllowed: (request) => previewOriginAllowed(request.headers?.origin, env),
     resolveTarget: (request) => previewWebSocketTarget(request, env),
   });
 }
@@ -230,8 +217,7 @@ function requireCodexAgentAccess(req, res, next) {
 }
 
 function applyPreviewFrameHeaders(_req, res, next) {
-  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+  applyPreviewFramePolicy(res);
   next();
 }
 
@@ -488,6 +474,101 @@ router.get('/projects', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: 'codex_list_failed', message: err.message });
   }
 });
+
+// ── Clone público desde la web (contratos OpenCode, §25) ────────────────────
+// POST /api/codex/projects/clone { name, repoUrl, branch? } → 201 { project, sourceControl }.
+// Clona CUALQUIER repo público github.com HTTPS sin credenciales en el
+// workspace CloudAgent (fetch --depth=1). Nunca clona en máquinas de usuario.
+// Difiere de POST /projects con `repository` (self-host con allowlist cerrada).
+function sendGithubFlowError(res, err) {
+  const code = String(err?.code || 'codex_github_failed');
+  const status = /^(invalid_|repository_|pull_request_sensitive_path)/.test(code) ? 400
+    : code === 'pull_request_too_large' || code === 'pull_request_file_too_large' ? 413
+      : code === 'github_auth_required' ? 401
+        : code === 'base_branch_diverged' || code === 'checkpoint_not_current' ? 409
+          : 502;
+  return res.status(status).json({
+    error: code,
+    message: String(err?.message || err || 'GitHub flow failed.').slice(0, 2_000),
+  });
+}
+
+router.post(
+  '/projects/clone',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    body('name').isString().withMessage('name must be a string').bail().trim().isLength({ min: 1, max: 80 }),
+    body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+    body('branch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+    body('organizationId').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 160 }),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    const name = req.body.name.trim();
+    const repoUrl = String(req.body.repoUrl).trim();
+    const branch = req.body.branch ? String(req.body.branch).trim() : 'main';
+    let repository;
+    try {
+      repository = opencodeHarness.parsePublicGithubRepo(repoUrl);
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+    try {
+      const organizationId = req.body.organizationId || null;
+      if (organizationId && !(await companyAssociationService.hasOrganizationAccess(codexDb, {
+        userId: req.user.id,
+        organizationId,
+      }))) {
+        return res.status(404).json({ error: 'organization_not_found' });
+      }
+      const row = await codexDb.codexProject.create({
+        data: {
+          userId: req.user.id,
+          organizationId,
+          name,
+          brief: {
+            kind: 'repo-public',
+            repository: { url: repository.cloneUrl, webUrl: repository.webUrl },
+            sourceBranch: branch,
+          },
+          status: 'provisioning',
+        },
+      });
+      try {
+        const runner = createSandboxClient();
+        const cloned = await opencodeHarness.clonePublicRepo({
+          runner,
+          projectId: row.id,
+          repoUrl: repository.cloneUrl,
+          branch,
+        });
+        const ready = await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'ready', workspacePath: cloned.workspacePath, previewUrl: null, error: null },
+        });
+        return res.status(201).json({
+          project: projectService.publicProject(ready),
+          sourceControl: {
+            repository: repository.webUrl,
+            sourceBranch: cloned.sourceBranch,
+            workBranch: cloned.workBranch,
+            commitSha: cloned.commitSha,
+          },
+        });
+      } catch (err) {
+        await codexDb.codexProject.update({
+          where: { id: row.id },
+          data: { status: 'error', error: String(err?.message || err).slice(0, 2_000) },
+        }).catch(() => null);
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return res.status(500).json({ error: 'codex_clone_failed', message: String(err?.message || err).slice(0, 2_000) });
+    }
+  },
+);
 
 router.get('/projects/:id', authenticateToken, async (req, res) => {
   try {
@@ -1595,12 +1676,41 @@ router.post(
     try {
       const project = await loadOwnedProjectRecord(req, res);
       if (!project) return undefined;
+      const actionHash = req.body?.actionHash;
+      const actionVersion = req.body?.actionVersion;
+      const actionRecord = await codexDb.codexExternalAction.findFirst({
+        where: {
+          id: req.params.actionId,
+          projectId: project.id,
+          userId: project.userId,
+        },
+        select: { kind: true },
+      });
+      const requiresApprovalBinding = ['email_reply', 'email_send', 'email_forward', 'lead_outreach']
+        .includes(actionRecord?.kind);
+      if (requiresApprovalBinding && (!/^[a-f0-9]{64}$/i.test(String(actionHash || ''))
+        || typeof actionVersion !== 'number'
+        || !Number.isInteger(actionVersion)
+        || actionVersion !== 1)) {
+        return res.status(400).json({
+          error: 'approval_invalid',
+          message: 'actionHash and actionVersion are required for email/lead approval.',
+        });
+      }
       const result = await require('../services/codex/company-operations').approveExternalAction({
         prisma: codexDb,
         project,
         actionId: req.params.actionId,
+        actionHash: /^[a-f0-9]{64}$/i.test(String(actionHash || '')) ? String(actionHash).toLowerCase() : null,
+        actionVersion: typeof actionVersion === 'number' && Number.isInteger(actionVersion) ? actionVersion : null,
+        actorId: req.user.id,
       });
-      return res.status(result.action === 'not_found' ? 404 : 200).json({ result });
+      const status = result.action === 'not_found'
+        ? 404
+        : ['approval_stale', 'approval_expired', 'approval_consumed', 'delivery_uncertain'].includes(result.action)
+          ? 409
+          : 200;
+      return res.status(status).json({ result });
     } catch (err) {
       return sendCompanyOperationsError(res, err);
     }
@@ -1764,6 +1874,112 @@ router.post('/projects/:id/publication/rollback', authenticateToken, requireCode
   }
 });
 
+// ── Publicación GitHub desde la web (contratos OpenCode, §25) ───────────────
+// POST /projects/:id/github/plan { repoUrl, runId, sourceBranch?, title?, body? }
+//   → 200 { plan }. Solo lee el diff (git diff + medición). Sin efectos.
+// POST /projects/:id/github/publish { ...plan, githubToken?, confirm? }
+//   → sin confirm:true → 428 { plan } (E_PLAN_GATE: publicar exige aprobación).
+//   → sin token → 428 { plan } con compareUrl para abrir el PR a mano.
+//   → con token+confirm → 201 { plan, pullRequest }. Merge siempre vía PR
+//     (pull_request_only); el token viaja solo en memoria, nunca se persiste,
+//     loguea ni devuelve.
+const githubPlanValidators = [
+  body('repoUrl').isString().withMessage('repoUrl must be a string').bail().trim().isLength({ min: 1, max: 500 }),
+  body('runId').isString().withMessage('runId must be a string').bail().trim().isLength({ min: 1, max: 96 }),
+  body('sourceBranch').optional().isString().trim().isLength({ min: 1, max: 128 }),
+  body('title').optional().isString().isLength({ max: 120 }),
+  body('body').optional().isString().isLength({ max: 60_000 }),
+];
+
+router.post('/projects/:id/github/plan', authenticateToken, githubPlanValidators, async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+  try {
+    const project = await loadOwnedProjectRecord(req, res);
+    if (!project) return undefined;
+    const plan = await opencodeHarness.buildPublishPlan({
+      runner: createSandboxClient(),
+      projectId: project.id,
+      repoUrl: String(req.body.repoUrl).trim(),
+      sourceBranch: req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main',
+      runId: String(req.body.runId).trim(),
+      title: req.body.title ?? null,
+      body: req.body.body ?? null,
+      hasGithubToken: false,
+    });
+    return res.json({ plan });
+  } catch (err) {
+    return sendGithubFlowError(res, err);
+  }
+});
+
+router.post(
+  '/projects/:id/github/publish',
+  authenticateToken,
+  requireCodexAgentAccess,
+  [
+    ...githubPlanValidators,
+    body('githubToken').optional().isString().isLength({ max: 500 }),
+    body('confirm').optional().isBoolean(),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+    try {
+      const project = await loadOwnedProjectRecord(req, res);
+      if (!project) return undefined;
+      const repoUrl = String(req.body.repoUrl).trim();
+      const runId = String(req.body.runId).trim();
+      const sourceBranch = req.body.sourceBranch ? String(req.body.sourceBranch).trim() : 'main';
+      const token = String(req.body.githubToken || '').trim();
+      const runner = createSandboxClient();
+      const plan = await opencodeHarness.buildPublishPlan({
+        runner,
+        projectId: project.id,
+        repoUrl,
+        sourceBranch,
+        runId,
+        title: req.body.title ?? null,
+        body: req.body.body ?? null,
+        hasGithubToken: token.length > 0,
+      });
+      if (plan.status === 'no_changes') return res.json({ plan, pullRequest: null });
+      if (req.body.confirm !== true) {
+        return res.status(428).json({
+          error: 'confirmation_required',
+          message: 'Publicar en GitHub exige confirmación explícita (confirm:true).',
+          plan,
+        });
+      }
+      if (!token) {
+        return res.status(428).json({
+          error: 'github_auth_required',
+          message: 'Sin token se devuelve el enlace para abrir el PR a mano.',
+          plan,
+        });
+      }
+      try {
+        const published = await selfHosting.publishSelfHostedPullRequest({
+          runner,
+          projectId: project.id,
+          runId,
+          repositoryUrl: repoUrl,
+          sourceBranch,
+          title: plan.title,
+          body: plan.body,
+          env: { ...process.env, CODEX_SELF_HOST_GITHUB_TOKEN: token },
+        });
+        if (published.status === 'no_changes') return res.json({ plan, pullRequest: null });
+        return res.status(201).json({ plan, pullRequest: published.pullRequest || null, branch: published.branch });
+      } catch (err) {
+        return sendGithubFlowError(res, err);
+      }
+    } catch (err) {
+      return sendGithubFlowError(res, err);
+    }
+  },
+);
+
 // Ownership gate compartido por las rutas de preview.
 async function loadOwnedProject(req, res) {
   const project = await projectService.getProject({ userId: req.user.id, id: req.params.id });
@@ -1901,24 +2117,40 @@ router.use('/projects/:id/preview/:token/app', applyPreviewFrameHeaders, async (
       hostname: upstreamBase.hostname,
       port: upstreamBase.port || (upstreamBase.protocol === 'https:' ? 443 : 80),
       method: req.method,
-      path: req.originalUrl || req.url || '/',
+      path: stripPreviewNonce(req.originalUrl || req.url || '/'),
       headers: fwdHeaders,
     },
     (up) => {
-      const headers = {};
-      for (const [k, v] of Object.entries(up.headers)) {
-        const lk = k.toLowerCase();
-        if (lk === 'set-cookie' || HOP_BY_HOP_HEADERS.has(lk)) continue;
-        if (lk === 'content-security-policy' || lk === 'x-frame-options') continue;
-        if (lk.startsWith('access-control-')) continue;
-        headers[k] = v;
+      const nonce = previewNonceFromRequest(req);
+      const injectInteractions = Boolean(nonce && /text\/html|application\/xhtml\+xml/i.test(String(up.headers['content-type'] || '')) && !up.headers['content-encoding']);
+      const headers = filterPreviewResponseHeaders(up.headers);
+      if (injectInteractions) delete headers['content-length'];
+      if (injectInteractions) {
+        readPreviewBody(up).then((body) => {
+          const injected = injectPreviewInteractionBridges(body.toString('utf8'), nonce);
+          headers['content-length'] = String(Buffer.byteLength(injected));
+          res.writeHead(up.statusCode || 502, headers);
+          res.end(injected);
+        }).catch((err) => {
+          upstream.destroy();
+          if (!res.headersSent) {
+            const status = err?.code === 'preview_html_too_large' ? 413 : 502;
+            const error = err?.code === 'preview_html_too_large' ? 'preview_html_too_large' : 'runner_stream_failed';
+            res.status(status).json({ error, message: status === 413 ? 'Preview HTML exceeds the injection limit.' : 'El dev server interrumpió la respuesta.' });
+          } else {
+            try { res.end(); } catch (_) { /* already closed */ }
+          }
+        });
+        return;
       }
-      headers['cache-control'] = 'no-store';
-      headers['x-frame-options'] = 'SAMEORIGIN';
-      headers['content-security-policy'] = "frame-ancestors 'self'";
-      headers['referrer-policy'] = 'no-referrer';
       res.writeHead(up.statusCode || 502, headers);
       up.pipe(res);
+      // The iframe can navigate away mid-stream; aborting the upstream then
+      // frees the runner socket instead of letting the copy drain to a client
+      // that is already gone.
+      const onClientClose = () => upstream.destroy();
+      res.on('close', onClientClose);
+      res.on('error', onClientClose);
     },
   );
   upstream.on('error', () => {
@@ -2042,6 +2274,76 @@ router.get('/projects/:id/file', authenticateToken, async (req, res) => {
   }
 });
 
+// ── Project terminal exec (Shell del panel sobre un proyecto Codex) ─────────
+// One-shot command in the project's workspace via the sandbox sidecar — the
+// same hardened exec the agent's run_command uses (allowlist de binarios,
+// setpriv/prlimit/setsid, sin shell). Antes de esta ruta el panel llamaba
+// GET /files?command=..., que ignoraba `command` y devolvía la lista de
+// archivos: la Shell en modo workspace estaba muerta (audit P0).
+const EXEC_MAX_ARGS = 64;
+const EXEC_MAX_ARG_CHARS = 4_000;
+const EXEC_MAX_TOTAL_CHARS = 32_000;
+const EXEC_DEFAULT_TIMEOUT_MS = 30_000;
+const EXEC_MAX_TIMEOUT_MS = 120_000; // espejo del EXEC_MAX_TIMEOUT_MS del runner
+
+const execValidators = [
+  body('cmd')
+    .isArray({ min: 1, max: EXEC_MAX_ARGS })
+    .withMessage(`cmd must be an array of 1-${EXEC_MAX_ARGS} strings`),
+  body('cmd.*')
+    .isString()
+    .withMessage('each cmd item must be a string')
+    .bail()
+    .isLength({ min: 1, max: EXEC_MAX_ARG_CHARS })
+    .withMessage(`each cmd item must be 1-${EXEC_MAX_ARG_CHARS} chars`),
+  body('cmd').custom((cmd) => {
+    if (!Array.isArray(cmd)) return true;
+    const total = cmd.reduce((sum, a) => sum + String(a || '').length, 0);
+    if (total > EXEC_MAX_TOTAL_CHARS) {
+      throw new Error(`total cmd length must be <= ${EXEC_MAX_TOTAL_CHARS} chars`);
+    }
+    return true;
+  }),
+  body('run').optional({ nullable: true }).isString().trim().isLength({ min: 1, max: 64 }),
+  body('timeoutMs').optional({ nullable: true }).isInt({ min: 1_000, max: EXEC_MAX_TIMEOUT_MS }),
+];
+
+router.post(
+  '/projects/:id/exec',
+  authenticateToken,
+  requireCodexAgentAccess,
+  execValidators,
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ error: 'validation_failed', details: errors.array() });
+
+    try {
+      const project = await loadOwnedProject(req, res);
+      if (!project) return undefined;
+      const cmd = req.body.cmd.map((a) => String(a));
+      const run = typeof req.body.run === 'string' && req.body.run.trim() ? req.body.run.trim() : null;
+      const timeoutMs = Number(req.body.timeoutMs) || undefined;
+      const runner = createSandboxClient();
+      const scoped = run && typeof runner.forRun === 'function' ? runner.forRun(run, project.id) : runner;
+      const out = await scoped.exec(project.id, cmd, { timeoutMs });
+      return res.json({
+        ok: Boolean(out?.ok),
+        exitCode: Number.isFinite(out?.exitCode) ? out.exitCode : null,
+        timedOut: Boolean(out?.timedOut),
+        stdout: String(out?.stdout || ''),
+        stderr: String(out?.stderr || ''),
+      });
+    } catch (err) {
+      const status = Number(err?.status) || 0;
+      // Map the sidecar's error vocabulary onto this route's contract.
+      if (status === 400) return res.status(400).json({ error: err.body?.error || 'invalid_command' });
+      if (status === 404) return res.status(404).json({ error: 'workspace_not_found' });
+      if (status === 409) return res.status(409).json({ error: err.body?.error || 'workspace_unavailable' });
+      return res.status(502).json({ error: 'runner_unreachable', message: err.message });
+    }
+  },
+);
+
 // ── Runs (feature 05) ───────────────────────────────────────────────────────
 // Create/list/detail are scoped under the project (POST/GET /projects/:id/runs)
 // so they never shadow the legacy codex-runs router, which is mounted first and
@@ -2063,6 +2365,7 @@ router.post(
     body('prompt').optional({ nullable: true }).isString().isLength({ max: 20000 }),
     body('model').optional({ nullable: true }).isString().isLength({ max: 200 }),
     body('tier').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('reasoningEffort').optional({ nullable: true }).isString().isIn(['low', 'medium', 'high', 'max']),
     body('planRunId').optional({ nullable: true }).isString().isLength({ max: 64 }),
     body('autoExecute').optional().isBoolean(),
   ],
@@ -2077,6 +2380,7 @@ router.post(
         prompt: req.body.prompt ?? null,
         model: req.body.model ?? null,
         tier: req.body.tier ?? null,
+        reasoningEffort: req.body.reasoningEffort ?? null,
         planRunId: req.body.planRunId ?? null,
         autoExecute: req.body.autoExecute === true,
       });
@@ -2254,6 +2558,15 @@ router.post('/runs/:id/cancel', authenticateToken, requireCodexAgentAccess, asyn
   }
 });
 
+router.post('/runs/:id/cancel-family', authenticateToken, requireCodexAgentAccess, async (req, res) => {
+  try {
+    const result = await runService.cancelRunFamily({ userId: req.user.id, runId: req.params.id });
+    return res.json(result);
+  } catch (err) {
+    return mapRunError(err, res);
+  }
+});
+
 router.post(
   '/runs/:id/summary-audio',
   authenticateToken,
@@ -2399,6 +2712,11 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   const afterSeq = Number.parseInt(req.query.afterSeq, 10);
   const startSeq = Number.isFinite(afterSeq) ? afterSeq : 0;
 
+  // Platform telemetry (batch 2): TTFB = wall time from stream open to the
+  // first emitted event; chunk counter is per SSE event written.
+  const streamOpenedAt = Date.now();
+  let firstEventEmitted = false;
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -2418,11 +2736,22 @@ router.get('/runs/:id/stream', bearerFromQueryFallback, authenticateToken, async
   }
   req.on('close', cleanup);
   res.on('close', cleanup);
+  // Some proxies/networks destroy the socket with an 'error' event and never
+  // emit 'close'; without these the heartbeat keeps writing to a dead socket
+  // until the next 25s tick (and even res.write can silently succeed on a
+  // half-open socket). Treat either event as the client going away.
+  req.on('error', cleanup);
+  res.on('error', cleanup);
 
   function write(envelope) {
     if (closed || res.writableEnded) return false;
     try {
       res.write(`data: ${JSON.stringify(envelope)}\n\n`);
+      if (!firstEventEmitted) {
+        firstEventEmitted = true;
+        observabilityMetrics.recordStreamTtfb({ mode: run?.mode || 'unknown', ttfbMs: Date.now() - streamOpenedAt });
+      }
+      observabilityMetrics.recordStreamChunk({ surface: 'codex' });
       return true;
     } catch {
       cleanup();

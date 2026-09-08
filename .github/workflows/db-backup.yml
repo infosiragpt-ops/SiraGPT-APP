@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Run backup on VPS and upload to S3
-        uses: appleboy/ssh-action@v1.2.0
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
@@ -32,22 +32,26 @@ jobs:
           port: ${{ secrets.VPS_PORT }}
           timeout: 60s
           command_timeout: 15m
-          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION
+          envs: BACKUP_BUCKET,BACKUP_ACCESS_KEY_ID,BACKUP_SECRET_ACCESS_KEY,BACKUP_S3_ENDPOINT,BACKUP_S3_REGION,BACKUP_ENV_AGE_RECIPIENT
           script: |
             set -euo pipefail
             cd /opt/siragpt
 
-            # Source the prod env so $DATABASE_URL / $PRISMA_DATABASE_URL is available.
-            if [[ -f .env ]]; then
-              # shellcheck disable=SC1091
-              set -a; . .env; set +a
-            elif [[ -f backend/.env ]]; then
-              # shellcheck disable=SC1091
-              set -a; . backend/.env; set +a
+            # Read the already-resolved runtime value without executing .env as shell.
+            # Production env files may contain application values that are not valid
+            # Bash assignments, and sourcing them can abort before pg_dump starts.
+            BACKEND_CONTAINER="$(docker ps --filter 'label=com.docker.compose.service=backend' --format '{{.Names}}' | head -n 1 || true)"
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              BACKEND_CONTAINER="$(docker ps --format '{{.Names}}' | grep -E '(^|[-_])backend([-_]|$)' | head -n 1 || true)"
             fi
-            export DATABASE_URL="${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"
-            if [[ -z "${DATABASE_URL:-}" && -n "${POSTGRES_PASSWORD:-}" ]]; then
-              export DATABASE_URL="postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@127.0.0.1:5432/${POSTGRES_DB:-siragpt}"
+            if [[ -z "${BACKEND_CONTAINER}" ]]; then
+              echo "::error::No running backend container was found; refusing to guess database credentials." >&2
+              exit 1
+            fi
+            DATABASE_URL="$(docker exec "${BACKEND_CONTAINER}" sh -lc 'printf "%s" "${DATABASE_URL:-${PRISMA_DATABASE_URL:-}}"')"
+            if [[ -z "${DATABASE_URL:-}" ]]; then
+              echo "::error::The running backend has no DATABASE_URL/PRISMA_DATABASE_URL." >&2
+              exit 1
             fi
             DATABASE_URL="${DATABASE_URL//@db:5432/@127.0.0.1:5432}"
             export DATABASE_URL
@@ -89,10 +93,28 @@ jobs:
               echo "::error::No backup file produced — aborting upload." >&2
               exit 1
             fi
+            if ! gzip -t "${LATEST}"; then
+              echo "::error::Backup gzip integrity check failed: ${LATEST}" >&2
+              exit 1
+            fi
+            sha256sum "${LATEST}" > "${LATEST}.sha256"
+            test -s "${LATEST}.sha256"
+
+            # 2b. Encrypted copy of the production .env into the same bucket
+            #     (age public-key encryption; private key is held offsite).
+            if [[ -f /opt/siragpt/.env && -n "${BACKUP_ENV_AGE_RECIPIENT:-}" ]] && command -v age >/dev/null 2>&1; then
+              ENV_ENC="backups/env/siraGPT_env_$(date -u +%Y%m%dT%H%M%SZ).age"
+              mkdir -p "$(dirname "${ENV_ENC}")"
+              age -r "${BACKUP_ENV_AGE_RECIPIENT}" -o "${ENV_ENC}" /opt/siragpt/.env
+              test -s "${ENV_ENC}"
+            else
+              ENV_ENC=""
+              echo "::notice::Skipping .env backup (missing file, recipient, or age binary)."
+            fi
 
             if [[ -z "${BACKUP_BUCKET:-}" || -z "${BACKUP_ACCESS_KEY_ID:-}" || -z "${BACKUP_SECRET_ACCESS_KEY:-}" ]]; then
               echo "::notice::BACKUP_BUCKET / BACKUP_ACCESS_KEY_ID / BACKUP_SECRET_ACCESS_KEY are not fully configured; local pg_dump succeeded, skipping S3 upload."
-              echo "Backup retained locally: ${LATEST}"
+              echo "Backup and checksum retained locally: ${LATEST}"
               exit 0
             fi
 
@@ -118,8 +140,16 @@ jobs:
 
             aws "${AWS_ARGS[@]}" s3 cp "${LATEST}" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}")" \
               --only-show-errors
+            aws "${AWS_ARGS[@]}" s3 cp "${LATEST}.sha256" "s3://${BACKUP_BUCKET}/$(basename "${LATEST}.sha256")" \
+              --only-show-errors
 
-            echo "Backup uploaded: $(basename "${LATEST}")"
+            if [[ -n "${ENV_ENC:-}" ]]; then
+              aws "${AWS_ARGS[@]}" s3 cp "${ENV_ENC}" "s3://${BACKUP_BUCKET}/$(basename "${ENV_ENC}")" \
+                --only-show-errors
+              echo "Encrypted .env uploaded: $(basename "${ENV_ENC}")"
+            fi
+
+            echo "Backup and checksum uploaded: $(basename "${LATEST}")"
         env:
           # These are passed THROUGH to the remote shell via the `envs:`
           # field above. They never appear in logs.
@@ -128,3 +158,4 @@ jobs:
           BACKUP_SECRET_ACCESS_KEY: ${{ secrets.BACKUP_SECRET_ACCESS_KEY }}
           BACKUP_S3_ENDPOINT: ${{ secrets.BACKUP_S3_ENDPOINT }}
           BACKUP_S3_REGION: ${{ secrets.BACKUP_S3_REGION }}
+          BACKUP_ENV_AGE_RECIPIENT: ${{ secrets.BACKUP_ENV_AGE_RECIPIENT }}

@@ -181,7 +181,10 @@ async function triageInbox({
           body: draftBody,
           providerDraftId: item.providerDraftId || null,
         },
-        status: policyDecision.action === 'execute' ? 'approved' : 'pending_review',
+        // Inbox triage can classify and prepare a draft, but it must never
+        // promote an email action into an executable state. A human approval
+        // is required later for the exact action hash/version.
+        status: 'pending_review',
       });
       let action = ensured.record;
       if (ensured.created && policyDecision.action === 'review' && !item.providerDraftId) {
@@ -226,23 +229,11 @@ async function triageInbox({
         }
       }
       actions.push(action);
-      if (policyDecision.action === 'execute' && ['approved', 'executing'].includes(action.status)) {
-        const executed = await externalActions.executeExternalAction({
-          prisma,
-          project,
-          actionId: action.id,
-          gmailLoader: async () => ({ client }),
-          now,
-        });
-        actions[actions.length - 1] = executed.record || action;
-      }
     }
     items.push(item);
   }
   return {
-    action: policyDecision.allowed
-      ? (policyDecision.action === 'execute' ? 'triaged_auto' : 'triaged_review')
-      : `triaged_${policyDecision.reason}`,
+    action: policyDecision.allowed ? 'triaged_review' : `triaged_${policyDecision.reason}`,
     items,
     actions,
     policy: policyDecision,
