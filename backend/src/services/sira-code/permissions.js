@@ -39,6 +39,9 @@ const TOOL_ALIASES = Object.freeze({
   web_fetch: 'webfetch',
   todo: 'todo',
   todowrite: 'todo',
+  diagnostics: 'diagnostics',
+  lsp_diagnostics: 'diagnostics',
+  diagnostic: 'diagnostics',
 });
 
 const WRITE_TOOLS = new Set(['write', 'edit', 'apply_patch']);

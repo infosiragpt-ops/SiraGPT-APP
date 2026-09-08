@@ -2,7 +2,7 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
- * Also ls (directory listing), apply_patch, webfetch and todo.
+ * Also ls, apply_patch, webfetch, todo and diagnostics.
  *
  * File tools stay inside the session workspace. bash/shell runs through
  * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
@@ -18,6 +18,7 @@ const { runTodo } = require('./todos');
 const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
 const { searchGrep, searchGlob } = require('./search');
 const { runRead, runWrite, runEdit } = require('./file-tools');
+const { runDiagnostics } = require('./diagnostics');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -105,6 +106,12 @@ function runTodoTool(_workspace, args, ctx = {}) {
   return runTodo(ctx.session, args || {});
 }
 
+async function runDiagnosticsTool(workspace, args, ctx = {}) {
+  const result = await runDiagnostics(workspace, args || {}, ctx);
+  if (result.ok) return { ...result, content: cap(result.content) };
+  return result;
+}
+
 const EXECUTORS = {
   read: runRead,
   write: runWrite,
@@ -117,6 +124,7 @@ const EXECUTORS = {
   apply_patch: runApplyPatch,
   webfetch: runWebFetchTool,
   todo: runTodoTool,
+  diagnostics: runDiagnosticsTool,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
@@ -297,6 +305,21 @@ const TOOL_DEFINITIONS = [
         type: 'object',
         properties: {
           todos: { type: 'array' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'diagnostics',
+      description: 'Resume diagnósticos LSP/sintaxis del workspace (jail). path acota archivo o carpeta; severity filtra (error/warn/info/hint/all); limit acota resultados. Solo lectura: Planificar y Construir pueden usarla.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          severity: { type: 'string' },
+          limit: { type: 'integer' },
         },
       },
     },

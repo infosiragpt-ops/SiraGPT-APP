@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode `diagnostics` summarizes workspace LSP/syntax issues with
+  the OpenCode report contract (`ERROR [line:col]`,
+  `<diagnostics file="…">` blocks, per-file cap). Optional injectable
+  runner (tests / later LSP hosts); default in-process JSON+JS syntax
+  pass. Workspace-jailed, Spanish errors. Planificar and Construir
+  can read it. Native CommonJS — not a dump of
+  `vendor/opencode/src/lsp/diagnostic.ts`. No OpenRouter.
+
 - SiraCode jailed `read` / `write` / `edit` now match the OpenCode
   file-tool contract (1-indexed offset, unique `old_str`, size caps,
   binary reject, symlink-aware path jail, Spanish errors). Planificar

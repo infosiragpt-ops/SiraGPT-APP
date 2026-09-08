@@ -98,8 +98,12 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   contract (1-indexed offset, unique old_str, size caps, binary
   reject, symlink-aware path jail; Planificar stays read-only;
   Construir writes go through permission-resume when the composer
-  asks). ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
-  `edit.ts` — see AGENTS.md §25.
+  asks), and a workspace-jailed `diagnostics` summary matching the
+  OpenCode LSP.Diagnostic contract (`pretty` / `report`: severity
+  labels, 1-based `[line:col]`, `<diagnostics file>` blocks, per-file
+  cap; optional injectable runner instead of an Effect LSP client).
+  ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
+  `edit.ts` / `src/lsp/diagnostic.ts` — see AGENTS.md §25.
   The native helpers are local and deterministic — no title-agent
   LLM, no Effect runtime, no Snapshot git-diff, no MAX_STEPS
   prompt dump, no ripgrep sidecar, no global tool-output
