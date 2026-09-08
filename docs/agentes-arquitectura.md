@@ -1,6 +1,7 @@
 # `/agentes` Coding Agents — target architecture
 
-Status: Phase 1 of `AGENTES_CODING_V2` (docs + policy + flag scaffold).
+Status: Phase 3a of `AGENTES_CODING_V2` (flag-gated IDE shell on `/agentes`).
+Phase 1 = docs + flag; Phase 2a = session adapter. Flag still default **OFF**.
 This document is the engineering contract for a **multi-tenant web** coding
 agent. It is not a local desktop app, not a clone-on-user-machine product,
 and not a revival of `/code`.
@@ -144,11 +145,12 @@ narrow control API:
 Do not copy Claude Agent SDK source, Open Interpreter, or any banned
 row in `docs/oss-catalog.md`.
 
-## 7. Web IDE on `/agentes` (later, flag-gated)
+## 7. Web IDE on `/agentes` (Phase 3a, flag-gated)
 
-When `AGENTES_CODING_V2` is on, a later PR may mount an editor **behind
-the existing `/agentes` shell** (Monaco + xterm.js, MIT npm). That PR
-must update UI-lock hashes and is not this one.
+When `AGENTES_CODING_V2` is on, `/agentes` mounts a coding IDE shell
+behind the existing chrome (file tree + Monaco + diff + terminal stub).
+See [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md). xterm.js
+is still a stub (`data-ws-ready`); no new npm dep in this phase.
 
 While the flag is off:
 
@@ -224,12 +226,12 @@ Do not dump a monorepo to satisfy a catalog row.
 
 Do not set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 
-## 11. Later phases (not this PR)
+## 11. Later phases
 
-1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo
+1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo (Phase 2a memory + docker DEV landed)
 2. TypeScript harness in the sandbox, wired to SiraCode contracts
-3. Flag-gated Monaco / xterm pane on `/agentes` (UI-lock update)
+3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub)
 4. K8s + gVisor/Firecracker when Docker isolation is proven
 5. e2e “todo app” golden on the sandbox path
 
-Each of those is its own PR to `production-main`.
+Each remaining item is its own PR to `production-main`.

@@ -13,8 +13,8 @@
  *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort (stub)
  *   DELETE /api/agentes-coding/sessions/:id           → destroy
  *
- * Does not change default /agentes UX. No Monaco. See
- * docs/agentes-coding-sandbox.md and docs/agentes-arquitectura.md.
+ * Does not change default /agentes UX. IDE shell (Phase 3a) mounts
+ * only when health.enabled. See docs/agentes-coding-ide.md.
  */
 
 const express = require('express');
