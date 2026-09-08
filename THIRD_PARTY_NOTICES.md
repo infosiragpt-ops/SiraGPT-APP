@@ -128,6 +128,11 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   MEMORY.md / USER.md character-limit contract (tools/memory_tool.py)
   plus a per-user write rate-limit. Errors are Spanish with §16 codes
   (`E_PARAMS` / `E_QUOTA`). No Python memory tool was copied.
+  Session-memory compaction and ranked retrieval in
+  `backend/src/services/agents/hermes-memory-compaction.js` adapt the
+  Hermes MEMORY.md / USER.md bounded-store idea (fold older log text,
+  never drop profile facts). Native CommonJS; no `tools/memory_tool.py`
+  dump, no OpenRouter, no paid summarizer on the default path.
 
   The owner checks in `backend/src/routes/hermes.js`,
   `backend/src/services/agents/cron/hermes-cron-bridge.js` and
