@@ -768,6 +768,7 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     after,
     sinceSeq: req.query.sinceSeq,
     lastEventId,
+    actorUserId: req.user?.id,
   });
   res.json({
     ok: true,
@@ -849,7 +850,7 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   if (!task) {
     const snapshot = taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
     if (!snapshot) return res.status(404).json({ error: 'task not found' });
-    const decision = claimTaskCancel(snapshot);
+    const decision = claimTaskCancel(snapshot, { actorUserId: req.user?.id });
     persistCancelRequest(snapshot);
     if (!decision.apply) {
       return res.json({
@@ -896,7 +897,7 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
     });
   }
 
-  const liveDecision = claimTaskCancel(task);
+  const liveDecision = claimTaskCancel(task, { actorUserId: req.user?.id });
   persistCancelRequest(task);
   if (!liveDecision.apply) {
     return res.json(buildCancelAck(task, liveDecision));
@@ -2720,6 +2721,7 @@ function streamTaskEvents(req, res, taskId, userId) {
         lastEventId,
         events: snapshot.events,
         lastEventSeq: snapshot.lastEventSeq,
+        ...(snapshot.userId ? { actorUserId: userId, ownerUserId: snapshot.userId } : {}),
       });
       lastSeq = started.lastSeq;
       if (started.ackedTerminal) terminalEmitted = true;

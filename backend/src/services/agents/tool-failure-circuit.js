@@ -485,12 +485,22 @@ function attachToolFailureCircuit(ctx, opts = {}) {
 
 function presentCircuitDenial(gate) {
   if (!gate || gate.allowed) return null;
-  return {
+  const denial = {
     error: gate.reason || 'session_circuit_open',
     code: gate.code || CIRCUIT_CODE,
     message: gate.label || CIRCUIT_LABELS.open_session,
     circuit: { state: gate.state, scope: gate.scope, remainingMs: gate.remainingMs || 0 },
   };
+  try {
+    require('./session-isolation').attachAuditLine(denial, {
+      kind: 'circuit',
+      code: denial.code,
+      scope: gate.scope,
+      reason: gate.reason,
+      label: denial.message,
+    });
+  } catch { /* audit is best-effort */ }
+  return denial;
 }
 
 function circuitSessionKeyOf(ctx) {
