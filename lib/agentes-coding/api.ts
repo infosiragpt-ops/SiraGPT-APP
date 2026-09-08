@@ -50,38 +50,6 @@ export type CodingRepoMap = {
   query?: string
 }
 
-export type CodingStructMatch = {
-  path: string
-  text: string
-  replacement?: string
-  start?: number
-  end?: number
-}
-
-export type CodingStructDiff = {
-  path: string
-  original: string
-  proposed: string
-  matchCount?: number
-  changed?: boolean
-}
-
-export type CodingStructPreview = {
-  ok: true
-  matches: CodingStructMatch[]
-  diffs: CodingStructDiff[]
-  scanned?: number
-  lang?: string
-  pattern?: string
-  rewrite?: string
-}
-
-export type CodingStructApply = {
-  ok: true
-  applied: Array<{ path: string; bytes?: number }>
-  skipped: Array<{ path: string; reason?: string }>
-}
-
 export class AgentesCodingApiError extends Error {
   readonly status: number
   readonly code: string
@@ -228,40 +196,6 @@ export function createAgentesCodingApi(opts: AgentesCodingApiOptions = {}) {
         scanned: body.scanned,
         headerBytes: body.headerBytes,
         query: body.query,
-      }
-    },
-
-    async structEditPreview(
-      sessionId: string,
-      opts: { pattern: string; rewrite?: string; lang?: string; path?: string },
-    ): Promise<CodingStructPreview> {
-      const body = await authed<CodingStructPreview>(
-        `/sessions/${encodeURIComponent(sessionId)}/struct-edit`,
-        { method: "POST", body: JSON.stringify(opts) },
-      )
-      return {
-        ok: true,
-        matches: Array.isArray(body.matches) ? body.matches : [],
-        diffs: Array.isArray(body.diffs) ? body.diffs : [],
-        scanned: body.scanned,
-        lang: body.lang,
-        pattern: body.pattern,
-        rewrite: body.rewrite,
-      }
-    },
-
-    async structEditApply(
-      sessionId: string,
-      opts: { diffs?: CodingStructDiff[]; pattern?: string; rewrite?: string; lang?: string },
-    ): Promise<CodingStructApply> {
-      const body = await authed<CodingStructApply>(
-        `/sessions/${encodeURIComponent(sessionId)}/struct-edit/apply`,
-        { method: "POST", body: JSON.stringify(opts) },
-      )
-      return {
-        ok: true,
-        applied: Array.isArray(body.applied) ? body.applied : [],
-        skipped: Array.isArray(body.skipped) ? body.skipped : [],
       }
     },
 

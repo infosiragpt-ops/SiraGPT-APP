@@ -27,8 +27,8 @@ and improvement cycles follow a sequential number with the date the work landed.
   (`POST /sessions/:id/struct-edit` preview + `/struct-edit/apply`
   via `writeFile` after path-escape checks). Thin Node wrapper with
   injectable `sg` exec — no ast-grep monorepo dump, no `--update-all`,
-  no `/code`, flag stays off in production. See
-  `docs/agentes-coding-struct-edit.md`.
+  no `/code`, no new IDE chrome (API-only), flag stays off in
+  production. See `docs/agentes-coding-struct-edit.md`.
 - Phase 3b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   Aider-pattern `repo-map` ranked file/symbol hints
   (`name` + `path` + `score`) from a session workspace without loading

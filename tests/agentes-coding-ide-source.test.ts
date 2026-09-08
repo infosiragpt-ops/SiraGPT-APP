@@ -59,8 +59,6 @@ describe("AGENTES_CODING_V2 Phase 3a IDE shell", () => {
     assert.match(term, /data-ws-ready="1"/)
     assert.match(term, /Ejecutar/)
     assert.match(api, /\/api\/agentes-coding|\/agentes-coding/)
-    assert.match(api, /struct-edit/)
-    assert.match(api, /structEditPreview/)
     assert.doesNotMatch(shell, /app\/code|CodeWorkspaceGate|\/code\/page/)
   })
 

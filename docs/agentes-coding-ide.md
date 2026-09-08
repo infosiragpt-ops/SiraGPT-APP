@@ -14,7 +14,7 @@ Architecture:
 | Piece | Path |
 |---|---|
 | Health hook | `lib/agentes-coding/health.ts` — starts `enabled:false` |
-| API client | `lib/agentes-coding/api.ts` — `createSession` / `listFiles` / `readFile` / `writeFile` / `exec` / `repoMap` (Phase 3b) / `structEditPreview` + `structEditApply` (Phase 3c, no new chrome) |
+| API client | `lib/agentes-coding/api.ts` — `createSession` / `listFiles` / `readFile` / `writeFile` / `exec` / `repoMap` (Phase 3b) |
 | Gate | `components/agentes/coding-ide-gate.tsx` — render `null` unless `health.enabled === true` |
 | Shell | `components/agentes/coding-ide-shell.tsx` — file tree, Monaco, diff, terminal stub |
 

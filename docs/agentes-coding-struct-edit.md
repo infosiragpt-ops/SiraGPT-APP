@@ -17,11 +17,11 @@ Sessions: [`docs/agentes-coding-sandbox.md`](./agentes-coding-sandbox.md).
 | Service | `backend/src/services/agentes-coding/structural-edit/` |
 | HTTP | `POST /api/agentes-coding/sessions/:id/struct-edit` — preview |
 | HTTP | `POST /api/agentes-coding/sessions/:id/struct-edit/apply` — write via `writeFile` |
-| IDE hook | `structEditPreview` / `structEditApply` on `lib/agentes-coding/api.ts` (no new chrome) |
 
 `GET /api/agentes-coding/health` stays `{ ok, enabled }`. Flag stays **off**
 on Lenovo. Do not set `AGENTES_CODING_V2=1` on the origin from this PR.
 
+API-only in this PR (no new `/agentes` chrome; UI-lock unchanged).
 The wrapper prefers the `sg` / `ast-grep` binary when present
 (`AGENTES_CODING_SG_BIN` or `PATH`). CI injects a runner — no binary
 required. The CLI is **never** invoked with `--update-all`.

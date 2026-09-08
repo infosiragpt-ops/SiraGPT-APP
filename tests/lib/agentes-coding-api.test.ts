@@ -84,16 +84,6 @@ describe("agentes-coding API client", () => {
           hints: [{ name: "a.ts", path: "a.ts", kind: "file", score: 1 }],
         })
       }
-      if (url.endsWith("/sessions/csb_1/struct-edit") && init?.method === "POST") {
-        return jsonResponse({
-          ok: true,
-          matches: [{ path: "a.ts", text: "foo()", replacement: "bar()" }],
-          diffs: [{ path: "a.ts", original: "foo()", proposed: "bar()", changed: true }],
-        })
-      }
-      if (url.endsWith("/sessions/csb_1/struct-edit/apply") && init?.method === "POST") {
-        return jsonResponse({ ok: true, applied: [{ path: "a.ts", bytes: 6 }], skipped: [] })
-      }
       return jsonResponse({ error: "not_found" }, 404)
     })
     const api = createAgentesCodingApi({
@@ -114,24 +104,7 @@ describe("agentes-coding API client", () => {
       headerBytes: undefined,
       query: undefined,
     })
-    expect(await api.structEditPreview(session.id, { pattern: "foo()", rewrite: "bar()" })).toEqual({
-      ok: true,
-      matches: [{ path: "a.ts", text: "foo()", replacement: "bar()" }],
-      diffs: [{ path: "a.ts", original: "foo()", proposed: "bar()", changed: true }],
-      scanned: undefined,
-      lang: undefined,
-      pattern: undefined,
-      rewrite: undefined,
-    })
-    expect(await api.structEditApply(session.id, {
-      diffs: [{ path: "a.ts", original: "foo()", proposed: "bar()" }],
-    })).toEqual({
-      ok: true,
-      applied: [{ path: "a.ts", bytes: 6 }],
-      skipped: [],
-    })
     expect(String(request.mock.calls[0][0])).toBe("https://sira.test/api/agentes-coding/sessions")
-    expect(String(request.mock.calls[4][0])).toContain("/sessions/csb_1/map?limit=8")
-    expect(String(request.mock.calls.at(-1)?.[0])).toContain("/sessions/csb_1/struct-edit/apply")
+    expect(String(request.mock.calls.at(-1)?.[0])).toContain("/sessions/csb_1/map?limit=8")
   })
 })
