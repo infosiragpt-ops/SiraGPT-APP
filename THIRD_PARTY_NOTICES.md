@@ -92,6 +92,19 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   `sessions/`. Snapshot SHA
   `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
 
+  The scheduled-job completion contract in
+  `backend/src/services/scheduler/scheduler.js` is a native adaptation of
+  OpenClaw commit `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`, specifically
+  `src/cron/types.ts` (`CronRunOutcome`), `src/cron/service/timer.ts`
+  (persisting `lastRunStatus` from the execution outcome), and
+  `src/cron/service.persists-delivered-status.test.ts` (execution outcome
+  distinguished from delivery acknowledgment). The existing inactive
+  snapshot at `src/upstream/openclaw/` preserves the reference; the MIT
+  license is retained at `docs/upstream/OPENCLAW-LICENSE`. No upstream
+  scheduler, gateway, provider fallback or retry runtime is activated.
+  SiraGPT's prohibition on replaying an entire effectful agent turn is a
+  local safety policy, not a claim that OpenClaw disables all retries.
+
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**
   inspired by OpenCode's session/prompt loop, build vs plan agents,
