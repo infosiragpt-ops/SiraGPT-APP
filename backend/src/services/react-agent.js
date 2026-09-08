@@ -31,6 +31,11 @@
  */
 
 const { calculateCost } = require('./observability/llm-cost');
+const { createHash } = require('node:crypto');
+const { normalizeToolCalls, collectToolCallIds } = require('./agents/tool-call-normalizer');
+// engine-3h59 fingerprint cut lives in agent-runner/loop.js. This chat
+// loop already stops repeats via dupCallCache + EXHAUSTED_REPOLL_LIMIT
+// (identical args) and the 5× unavailable breaker (hard failures).
 
 const DEFAULT_MAX_STEPS = 8;
 const DEFAULT_MAX_RUNTIME_MS = 30 * 60 * 1000;
@@ -91,8 +96,8 @@ const COMPACT_DISABLED = process.env.SIRAGPT_REACT_COMPACT_DISABLED === '1';
 // a weak model that can never produce the evidence the guard demands) spins
 // for the entire step/runtime budget — burning ~50 min of LLM calls on a
 // runaway loop while the client already gave up at ~90s ("dejó de responder").
-// These caps force a degraded-but-real finalize once the guard has clearly
-// become unsatisfiable, instead of grinding to max_steps.
+// These caps stop an unverified run honestly; they never approve a draft
+// that failed verification merely because the repair allowance ran out.
 const MAX_FINALIZE_REJECTIONS = (() => {
   const v = Number(process.env.SIRAGPT_REACT_MAX_FINALIZE_REJECTIONS);
   return Number.isFinite(v) && v >= 1 ? Math.floor(v) : 8; // absolute cap across the run
@@ -113,11 +118,27 @@ const TOOL_PARALLEL_DISABLED = ['0', 'off', 'false', 'no'].includes(
   String(process.env.SIRAGPT_TOOL_PARALLEL || '').trim().toLowerCase()
 );
 const TOOL_PARALLEL_MAX = Math.max(2, Number(process.env.SIRAGPT_TOOL_PARALLEL_MAX) || 4);
-const PARALLEL_SAFE_RX = /^(web_search|read_url|web_extract|deep_search|github_search|scientific_search|x_search|rag_retrieve|search_docs|search_code|get_symbol|list_files|read_file|list_dir|glob_files|code_grep|docintel|deep_analyze|memory_recall|session_search|session_list|session_history|sunat_)/i;
+const PARALLEL_SAFE_NAMES = new Set([
+  'web_search', 'read_url', 'web_extract', 'deep_search', 'github_search',
+  'scientific_search', 'x_search', 'rag_retrieve', 'search_docs', 'search_code',
+  'get_symbol', 'list_files', 'read_file', 'list_dir', 'glob_files', 'code_grep',
+  'docintel_analyze', 'docintel_retrieve', 'docintel_extract_tables', 'docintel_compare',
+  'deep_analyze', 'memory_recall', 'session_search', 'session_list', 'session_history', 'sunat_peru',
+]);
 
-function isParallelSafeTool(name) {
+function isParallelSafeTool(name, registry) {
   const n = String(name || '');
-  return n !== 'finalize' && PARALLEL_SAFE_RX.test(n);
+  if (n === 'finalize') return false;
+  const policy = registry?.find((tool) => tool && tool.name === n);
+  // Only trusted local policy is authoritative. Remote MCP hints and a
+  // read-looking prefix are not permission to reorder a stateful operation.
+  if (policy?.readOnly === false) return false;
+  return policy?.readOnly === true || PARALLEL_SAFE_NAMES.has(n);
+}
+
+function isCacheableTool(name, registry) {
+  return isParallelSafeTool(name, registry)
+    && registry?.find((tool) => tool && tool.name === name)?.cacheable !== false;
 }
 
 // Per-call cap on how long the prefetch BATCH waits for any single tool. A
@@ -136,9 +157,10 @@ function prefetchCallTimeoutMs() {
 const PREFETCH_PENDING = Symbol('prefetch_pending');
 
 /**
- * Concurrently dispatch the read-only/idempotent tool calls of one step,
+ * Concurrently dispatch the leading read-only/idempotent calls of one step,
  * returning a Map<call.id, dispatchResult | {__pending: Promise}>. Mutating
- * calls are skipped here (they run inline, sequentially, in the main loop).
+ * calls form a barrier (they and all following calls run inline). A read
+ * after a write may depend on it; it must not execute before the write.
  * Bounded by TOOL_PARALLEL_MAX; each batch waits at most
  * prefetchCallTimeoutMs() (env SIRAGPT_TOOL_PREFETCH_TIMEOUT_MS, default 8000)
  * for stragglers (partial results, never a stall).
@@ -153,15 +175,19 @@ async function prefetchParallelDispatch(registry, toolCalls, ctx, exhaustedTools
   // repeats resolve to the cached result in the main loop once the first is
   // stored (dupCallCache.set at the store site).
   const seenSig = new Set();
-  const safe = toolCalls.filter((c) => {
+  const safe = [];
+  for (const c of toolCalls) {
     const n = c && c.function && c.function.name;
-    if (!isParallelSafeTool(n) || (exhaustedTools && exhaustedTools.has(n)) || c.id == null) return false;
+    if (!isParallelSafeTool(n, registry)) break;
+    if ((exhaustedTools && exhaustedTools.has(n)) || c.id == null) continue;
     const sig = toolCallSignature(n, c.function?.arguments);
-    if (dupCallCache && dupCallCache.has(sig)) return false; // cached from a prior step
-    if (seenSig.has(sig)) return false; // duplicate within this batch — dispatch once
-    seenSig.add(sig);
-    return true;
-  });
+    if (isCacheableTool(n, registry)) {
+      if (dupCallCache && dupCallCache.has(sig)) continue;
+      if (seenSig.has(sig)) continue;
+      seenSig.add(sig);
+    }
+    safe.push(c);
+  }
   if (safe.length < 2) return out; // nothing to gain from parallelism
   for (let i = 0; i < safe.length; i += TOOL_PARALLEL_MAX) {
     const chunk = safe.slice(i, i + TOOL_PARALLEL_MAX);
@@ -411,9 +437,9 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   // Budget is consumed only AFTER lookup + arg validation: a malformed or
   // unknown call must not burn a tool-call slot the model could still use
   // with corrected arguments on the next turn.
-  if (ctx?.checkToolBudget && name !== 'finalize') {
-    const usage = ctx.toolUsageMap || {};
-    const budget = ctx.checkToolBudget(name, usage);
+  if (ctx && name !== 'finalize') {
+    const usage = ctx.toolUsageMap || Object.create(null);
+    const budget = ctx.checkToolBudget?.(name, usage);
     if (budget && budget.ok === false) {
       return { error: budget.reason || 'tool_budget_exceeded' };
     }
@@ -426,6 +452,16 @@ async function dispatchTool(registry, name, argsRaw, ctx) {
   } catch (e) {
     return { error: `tool_execution_failed: ${e.message}` };
   }
+}
+
+// Tool handlers use both thrown exceptions and structured failure envelopes.
+// Only explicit top-level protocol markers are failures: arbitrary prose,
+// nested records and empty successful output remain data. Do not turn these
+// envelopes into thrown dispatch errors: that would enable fallback/retries
+// after intentional denials or validation failures.
+function isReportedToolFailure(result) {
+  return Boolean(result && typeof result === 'object' && !Array.isArray(result)
+    && (result.error || result.ok === false || result.isError === true));
 }
 
 /**
@@ -745,6 +781,15 @@ function parseNativeToolCalls(content) {
 
 function buildDegradedAnswer(stoppedReason) {
   const reason = String(stoppedReason || '');
+  if (reason.startsWith('verification_failed')) {
+    return 'No pude verificar que se haya completado lo solicitado. Detuve los intentos de reparación y no daré el resultado por terminado sin esa comprobación.';
+  }
+  if (reason === 'invalid_resume_checkpoint') {
+    return 'No pude reanudar la tarea con seguridad porque el registro de progreso está incompleto o no es válido. No repetí las acciones anteriores.';
+  }
+  if (reason === 'resume_budget_exhausted') {
+    return 'La tarea ya había agotado el límite de ejecución. Conservé el progreso anterior y no repetí las acciones ni reinicié los límites.';
+  }
   if (reason.startsWith('runtime_budget')) {
     return 'No alcancé a completar la tarea dentro del tiempo disponible. Te dejo lo procesado hasta ahora; si necesitas el resultado completo, vuelve a intentarlo o acota la solicitud.';
   }
@@ -756,6 +801,9 @@ function buildDegradedAnswer(stoppedReason) {
   }
   if (reason === 'no_message') {
     return 'El modelo no devolvió una respuesta utilizable. Por favor vuelve a intentarlo o reformula la solicitud.';
+  }
+  if (reason === 'invalid_tool_calls') {
+    return 'El modelo devolvió un grupo de instrucciones de herramientas inválido. No ejecuté ese grupo ni puedo dar la tarea por completada. Vuelve a intentarlo para continuar.';
   }
   // max_steps, empty reason, guard-blocked, anything else.
   return 'No logré cerrar la tarea dentro del presupuesto de pasos disponible. Te respondo con lo que alcancé a determinar; si necesitas más profundidad, reformula la solicitud o divídela en partes más pequeñas.';
@@ -956,7 +1004,7 @@ async function run(openai, opts) {
   const steps = [];
   let finalAnswer = null;
   let stoppedReason = 'max_steps';
-  const startedAt = Date.now();
+  let startedAt = Date.now();
 
   // Prevent infinite loops when tools fail silently and the model
   // keeps making the same call. Track tool error frequency per step.
@@ -973,13 +1021,6 @@ async function run(openai, opts) {
   // Finalize-guard rejection tracking (see MAX_FINALIZE_REJECTIONS above).
   let finalizeRejectionsTotal = 0;
   let finalizeRejectionsConsecutive = 0;
-  // Last real answer the model produced that a finalize guard rejected below
-  // the breaker thresholds. On the last step (and under a forceFinalize latch)
-  // the loop narrows tool_choice to finalize; if the guard rejects that final
-  // attempt the for-loop ends without a terminator firing and the safety net
-  // below would discard the model's real answer for generic degraded text.
-  // Rescuing it here keeps the weak-model draft instead of throwing it away.
-  let lastGuardRejectedAnswer = null;
   // Escape hatch for exhausted-tool re-polling: some models keep calling a
   // tool we already declared unavailable, re-reading the same observation
   // forever. After EXHAUSTED_REPOLL_LIMIT consecutive such calls we force
@@ -992,6 +1033,7 @@ async function run(openai, opts) {
   // mean the model is looping and we force finalize (same escape hatch as
   // exhausted-tool re-polling).
   const dupCallCache = new Map();
+  const noProgressEvidence = new Set();
   let duplicateRepolls = 0;
   // Recent provider latencies (ms) — used to stop exploring when the trend
   // says there is no runtime left for another full step (see toolChoice).
@@ -1002,16 +1044,63 @@ async function run(openai, opts) {
   // is rebuilt fresh each run — tool schemas/contracts may have changed) plus
   // the breaker counters, and offsets the step budget by the work already
   // done. Checkpoints are only written at step boundaries, so the restored
-  // trace always ends on a complete assistant→tool round. Invalid/stale
-  // checkpoints are ignored — the run silently starts from scratch.
+  // trace always ends on a complete assistant→tool round. Never silently
+  // restart a supplied checkpoint: previous writes may already be committed.
   let resumeStepOffset = 0;
-  if (resumeCheckpoint && typeof resumeCheckpoint === 'object') {
+  let resumeBlocked = false;
+  if (resumeCheckpoint != null) {
     try {
-      const cpSteps = Number(resumeCheckpoint.stepsCompleted);
-      const cpMessages = Array.isArray(resumeCheckpoint.messages)
-        ? resumeCheckpoint.messages.filter((m) => m && m.role && m.role !== 'system')
-        : [];
-      if (Number.isFinite(cpSteps) && cpSteps > 0 && cpSteps < maxSteps && cpMessages.length >= 1) {
+      const cp = JSON.parse(JSON.stringify(resumeCheckpoint));
+      const cpSteps = cp?.stepsCompleted;
+      const validCounter = (n) => Number.isSafeInteger(n) && n >= 0;
+      if (!cp || (cp.v != null && cp.v !== 1 && cp.v !== 2)
+          || !validCounter(cpSteps) || !Array.isArray(cp.messages) || !cp.messages.length) {
+        throw new Error('invalid_checkpoint_shape');
+      }
+      const cpMessages = cp.messages.filter((m) => m?.role !== 'system');
+      const pending = new Set();
+      for (const message of cpMessages) {
+        if (!message || !['user', 'assistant', 'tool'].includes(message.role)) throw new Error('invalid_checkpoint_role');
+        if (message.role !== 'tool' && pending.size) throw new Error('incomplete_checkpoint_round');
+        if (message.role === 'assistant' && message.tool_calls) {
+          if (!Array.isArray(message.tool_calls)) throw new Error('invalid_checkpoint_calls');
+          for (const call of message.tool_calls) {
+            if (!call?.id || typeof call.id !== 'string' || pending.has(call.id) || !call.function?.name) {
+              throw new Error('invalid_checkpoint_call');
+            }
+            pending.add(call.id);
+          }
+        }
+        if (message.role === 'tool' && !pending.delete(message.tool_call_id)) throw new Error('unpaired_checkpoint_result');
+      }
+      if (!cpMessages.length || pending.size) throw new Error('incomplete_checkpoint_round');
+      const readCounters = (value, integer = true) => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid_checkpoint_counters');
+        return Object.entries(value).map(([key, n]) => {
+          if (['__proto__', 'constructor', 'prototype'].includes(key)
+              || (integer ? !validCounter(n) : (!Number.isFinite(n) || n < 0))) throw new Error('invalid_checkpoint_counter');
+          return [key, n];
+        });
+      };
+      // Old checkpoints did not record actual attempts (including fallbacks).
+      // Under a per-task budget those cannot safely receive fresh allowances.
+      if ((cp.v === 2 || ctx.checkToolBudget) && !cp.toolUsageMap) throw new Error('missing_checkpoint_usage');
+      const restoredUsage = readCounters(cp.toolUsageMap || {});
+      const currentUsage = readCounters(ctx.toolUsageMap || {});
+      const restoredErrors = readCounters(cp.toolErrorBudget || {}, false);
+      for (const key of ['finalizeRejectionsTotal', 'finalizeRejectionsConsecutive', 'exhaustedRepolls', 'duplicateRepolls']) {
+        if (cp[key] != null && !validCounter(cp[key])) throw new Error('invalid_checkpoint_counter');
+      }
+      if (cp.elapsedMs != null && (!Number.isFinite(cp.elapsedMs) || cp.elapsedMs < 0)) throw new Error('invalid_checkpoint_elapsed');
+      if (cp.exhaustedTools != null && (!Array.isArray(cp.exhaustedTools)
+          || cp.exhaustedTools.some((name) => typeof name !== 'string'))) throw new Error('invalid_checkpoint_exhaustion');
+      if (cp.steps != null && (!Array.isArray(cp.steps) || cp.steps.some((s) => !s || typeof s !== 'object'
+          || !validCounter(s.step) || !Array.isArray(s.actions)))) throw new Error('invalid_checkpoint_steps');
+      if (cp.noProgressEvidence != null && (!Array.isArray(cp.noProgressEvidence) || cp.noProgressEvidence.length > 100
+          || cp.noProgressEvidence.some((hash) => typeof hash !== 'string' || !/^[a-f0-9]{64}$/.test(hash)))) {
+        throw new Error('invalid_checkpoint_progress');
+      }
+      {
         messages.length = 1; // keep the fresh system head
         messages.push(...cpMessages);
         messages.push({
@@ -1021,30 +1110,45 @@ async function run(openai, opts) {
             + 'Continúa la tarea desde donde quedó — NO repitas trabajo ya hecho; revisa las observaciones previas antes de llamar herramientas.',
         });
         resumeStepOffset = cpSteps;
-        if (Array.isArray(resumeCheckpoint.steps)) {
-          for (const s of resumeCheckpoint.steps) {
-            if (s && typeof s === 'object') steps.push(s);
-          }
+        steps.push(...(cp.steps || []));
+        for (const t of cp.exhaustedTools || []) exhaustedTools.add(t);
+        ctx.toolUsageMap = Object.create(null);
+        for (const [name, count] of [...currentUsage, ...restoredUsage]) {
+          ctx.toolUsageMap[name] = Math.max(ctx.toolUsageMap[name] || 0, count);
         }
-        for (const t of resumeCheckpoint.exhaustedTools || []) exhaustedTools.add(String(t));
-        if (Number.isFinite(Number(resumeCheckpoint.finalizeRejectionsTotal))) {
-          finalizeRejectionsTotal = Number(resumeCheckpoint.finalizeRejectionsTotal);
-        }
-        if (Number.isFinite(Number(resumeCheckpoint.finalizeRejectionsConsecutive))) {
-          finalizeRejectionsConsecutive = Number(resumeCheckpoint.finalizeRejectionsConsecutive);
+        for (const [name, count] of restoredErrors) toolErrorBudget.set(name, count);
+        for (const hash of cp.noProgressEvidence || []) noProgressEvidence.add(hash);
+        finalizeRejectionsTotal = cp.finalizeRejectionsTotal || 0;
+        finalizeRejectionsConsecutive = cp.finalizeRejectionsConsecutive || 0;
+        exhaustedRepolls = cp.exhaustedRepolls || 0;
+        duplicateRepolls = cp.duplicateRepolls || 0;
+        forceFinalize = cp.forceFinalize === true;
+        startedAt -= cp.elapsedMs || 0;
+        if (cpSteps >= maxSteps || (cp.elapsedMs || 0) >= maxRuntimeMs) {
+          resumeBlocked = true;
+          stoppedReason = 'resume_budget_exhausted';
+        } else if (finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
+            || finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS) {
+          resumeBlocked = true;
+          stoppedReason = 'verification_failed:resume_limit';
         }
       }
-    } catch (resumeErr) {
-      try { console.warn('[react-agent] resume checkpoint rejected (starting fresh):', resumeErr && resumeErr.message); } catch { /* noop */ }
+    } catch {
+      resumeBlocked = true;
+      stoppedReason = 'invalid_resume_checkpoint';
     }
   }
+
+  // Scope identities to this run and seed them only after checkpoint restore.
+  // Keep the set across compaction so new calls cannot alias prior results.
+  const usedToolCallIds = collectToolCallIds(messages);
 
   // Serializable snapshot of the loop state at a step boundary. Observations
   // inside `steps` records are truncated — the guard only needs tool names +
   // gist, while the full context lives in `messages` (already bounded by
   // compaction).
   const buildCheckpoint = (stepsCompleted) => ({
-    v: 1,
+    v: 2,
     stepsCompleted,
     savedAt: new Date().toISOString(),
     messages: messages.filter((m) => m && m.role !== 'system'),
@@ -1065,9 +1169,16 @@ async function run(openai, opts) {
     exhaustedTools: Array.from(exhaustedTools),
     finalizeRejectionsTotal,
     finalizeRejectionsConsecutive,
+    toolUsageMap: { ...ctx.toolUsageMap },
+    toolErrorBudget: Object.fromEntries(toolErrorBudget),
+    exhaustedRepolls,
+    duplicateRepolls,
+    forceFinalize,
+    elapsedMs: Math.max(0, Date.now() - startedAt),
+    noProgressEvidence: Array.from(noProgressEvidence),
   });
 
-  for (let step = resumeStepOffset; step < maxSteps; step++) {
+  for (let step = resumeStepOffset; !resumeBlocked && step < maxSteps; step++) {
     const stepStartedAt = Date.now();
     if (typeof onBeforeStep === 'function') {
       let control = null;
@@ -1186,6 +1297,9 @@ async function run(openai, opts) {
       : (shouldForceInitialTool ? { type: 'function', function: { name: initialToolChoice } } : 'auto');
 
     let resp;
+    // Per-model canary telemetry timers (best-effort; never alters behavior).
+    const modelTelemetryStepStart = Date.now();
+    let modelTelemetryTtfbAt = null;
     // Per-step wall-clock timeout. A single hung/slow provider completion
     // must NOT exceed the chat UI's 90s "stale" threshold (agentic-steps.tsx)
     // — otherwise the user sees "El asistente dejó de responder" while the
@@ -1240,6 +1354,17 @@ async function run(openai, opts) {
       stoppedReason = timedOut
         ? `model_error: step_timeout_${stepTimeoutMs}ms`
         : `model_error: ${err.message}`;
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model: activeModel,
+          provider: activeProvider,
+          agent: 'react_agent',
+          outcome: (ctx?.signal && ctx.signal.aborted) ? 'cancelled' : 'error',
+          error: timedOut ? { code: 'timeout', message: `step_timeout_${stepTimeoutMs}ms` } : err,
+          durationMs: Date.now() - modelTelemetryStepStart,
+          ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        });
+      } catch { /* optional */ }
       break;
     } finally {
       clearTimeout(stepTimer);
@@ -1250,11 +1375,37 @@ async function run(openai, opts) {
 
     const choice = resp.choices?.[0];
     const msg = choice?.message;
-    if (!msg) { stoppedReason = 'no_message'; break; }
+    if (!msg) {
+      try {
+        require('../codex/model-telemetry').recordLlmTurn({
+          model: activeModel,
+          provider: activeProvider,
+          agent: 'react_agent',
+          outcome: 'stall',
+          error: { code: 'no_message' },
+          durationMs: Date.now() - modelTelemetryStepStart,
+          ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        });
+      } catch { /* optional */ }
+      stoppedReason = 'no_message';
+      break;
+    }
     const usage = responseUsage(resp, {
       model: activeModel,
       provider: activeProvider,
     });
+    try {
+      require('../codex/model-telemetry').recordLlmTurn({
+        model: activeModel,
+        provider: activeProvider,
+        agent: 'react_agent',
+        outcome: 'ok',
+        durationMs: Date.now() - modelTelemetryStepStart,
+        ttftMs: modelTelemetryTtfbAt === null ? null : modelTelemetryTtfbAt - modelTelemetryStepStart,
+        tokensIn: usage.inputTokens,
+        tokensOut: usage.outputTokens,
+      });
+    } catch { /* optional */ }
 
     // Normalise NATIVE tool-call formats → OpenAI `tool_calls`. Models like
     // Moonshot Kimi K2.6 (via OpenRouter) emit tool calls as tokens inside
@@ -1287,6 +1438,19 @@ async function run(openai, opts) {
       }
     }
 
+    // Validate the complete control envelope before any handler can execute.
+    // Provider/native duplicate IDs must not overwrite the parallel result Map
+    // or associate one tool's observation with another tool's arguments.
+    try {
+      if (msg.tool_calls != null) {
+        msg.tool_calls = normalizeToolCalls(msg.tool_calls, { usedIds: usedToolCallIds });
+      }
+    } catch {
+      stoppedReason = 'invalid_tool_calls';
+      finalAnswer = buildDegradedAnswer(stoppedReason);
+      break;
+    }
+
     // Persist the thought + any tool_calls so the NEXT turn has full
     // context — this is how the model "sees" its own trace.
     messages.push(msg);
@@ -1314,28 +1478,26 @@ async function run(openai, opts) {
         } catch (err) {
           guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
         }
-        if (!guard?.ok) {
+        if (ctx?.signal?.aborted) {
+          stoppedReason = 'aborted';
           steps.push(plainStepRecord);
           onStep(plainStepRecord);
           await onStepDone(plainStepRecord);
-          // Count plain-text rejections against the same circuit breaker as the
-          // finalize-tool path. A weak prompted model that keeps ignoring the
-          // tool_call protocol and answering in prose would otherwise spin to
-          // the full step budget (2 LLM calls/step) and have its answer
-          // discarded for generic degraded text. Trip the breaker and accept
-          // the prose answer once the guard is clearly unsatisfiable.
+          break;
+        }
+        if (guard?.ok !== true) {
+          steps.push(plainStepRecord);
+          onStep(plainStepRecord);
+          await onStepDone(plainStepRecord);
+          // Plain text has exactly the same evidence requirement and bounded
+          // repair allowance as native finalize calls.
           finalizeRejectionsTotal += 1;
           finalizeRejectionsConsecutive += 1;
           if (
             finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS ||
             finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
           ) {
-            // `thought || ''` — if the prose was empty, the post-loop fallback
-            // honestly degrades via buildDegradedAnswer instead of shipping an
-            // empty answer.
-            finalAnswer = thought || '';
-            stoppedReason = `finalized_guard_breaker:plain_text:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
-            try { console.warn(`[react-agent] plain-text finalize guard rejected ${finalizeRejectionsConsecutive} consecutive (${finalizeRejectionsTotal} total) — tripping breaker and accepting prose answer`); } catch { /* noop */ }
+            stoppedReason = `verification_failed:plain_text:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
             break;
           }
           messages.push({
@@ -1348,6 +1510,12 @@ async function run(openai, opts) {
               repairInstructions: guard?.repairInstructions || 'Call the missing tools, inspect observations, then call finalize.',
             }),
           });
+          // Rejected prose consumed a model step and review allowance too.
+          // Persist it before continuing so failover cannot reset either.
+          if (typeof onCheckpoint === 'function') {
+            try { await onCheckpoint(buildCheckpoint(step + 1)); } catch { /* caller owns checkpoint retry */ }
+          }
+          stepDurations.push(Date.now() - stepStartedAt);
           continue;
         }
       }
@@ -1370,6 +1538,7 @@ async function run(openai, opts) {
       })),
     });
     let finalized = false;
+    let verificationStopped = false;
 
     // A2: pre-dispatch the independent read-only tool calls of this step
     // concurrently. Their results are consumed in original order below, so
@@ -1439,7 +1608,7 @@ async function run(openai, opts) {
       // Compute the duplicate-cache signature once per iteration (pure fn of
       // name+args, which are never mutated below) and reuse it at the store site
       // instead of recomputing the stableSchemaKey walk.
-      const dupSig = (toolName !== 'finalize' && isParallelSafeTool(toolName))
+      const dupSig = (toolName !== 'finalize' && isCacheableTool(toolName, registry))
         ? toolCallSignature(toolName, call.function?.arguments)
         : null;
       if (dupSig !== null) {
@@ -1466,6 +1635,11 @@ async function run(openai, opts) {
       }
       duplicateRepolls = 0;
 
+      // Even a failed write may have committed before its response was lost.
+      // Invalidate before dispatch, never replay it here, and let subsequent
+      // reads verify the current state instead of returning pre-write data.
+      if (toolName !== 'finalize' && !isParallelSafeTool(toolName, registry)) dupCallCache.clear();
+
       let dispatch = prefetched.has(call.id)
         ? prefetched.get(call.id)
         : await dispatchTool(registry, toolName, call.function?.arguments, ctx);
@@ -1481,14 +1655,16 @@ async function run(openai, opts) {
       if (
         dispatch.error
         && toolName !== 'finalize'
+        && isParallelSafeTool(toolName, registry)
         && !TOOL_FALLBACK_DISABLED
         && !/abort/i.test(String(dispatch.error))
       ) {
         const altName = fallbackToolFor(toolName);
-        if (altName && altName !== toolName && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
+        if (altName && altName !== toolName && isParallelSafeTool(altName, registry)
+            && !exhaustedTools.has(altName) && registry.some((t) => t && t.name === altName)) {
           try {
             const altDispatch = await dispatchTool(registry, altName, call.function?.arguments, ctx);
-            if (altDispatch && !altDispatch.error) {
+            if (altDispatch && !altDispatch.error && !isReportedToolFailure(altDispatch.result)) {
               console.log(`[react-agent] tool fallback ${toolName} → ${altName} recovered (step ${step})`);
               const altResult = (altDispatch.result && typeof altDispatch.result === 'object' && !Array.isArray(altDispatch.result))
                 ? { ...altDispatch.result, _recovered_from: toolName, _recovered_via: altName }
@@ -1502,12 +1678,18 @@ async function run(openai, opts) {
       let observation = dispatch.error
         ? { error: dispatch.error }
         : dispatch.result;
+      const toolFailed = Boolean(dispatch.error) || isReportedToolFailure(dispatch.result);
+      if (toolFailed && observation && typeof observation === 'object' && !observation.error) {
+        // Keep code, remediation, MCP content and any partial evidence intact,
+        // while exposing the failure to existing trace/finalization consumers.
+        observation = { ...observation, error: 'tool_reported_failure' };
+      }
 
       // Track consecutive tool errors per tool to prevent infinite loops.
       // Transient blips weigh a fraction so a flaky upstream isn't retired as
       // fast as a deterministically broken tool (see classifyToolError).
-      if (dispatch.error) {
-        const errWeight = classifyToolError(dispatch.error) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
+      if (toolFailed) {
+        const errWeight = classifyToolError(dispatch.error || dispatch.result) === 'transient' ? TRANSIENT_TOOL_ERROR_WEIGHT : 1;
         const errCount = (toolErrorBudget.get(toolName) || 0) + errWeight;
         toolErrorBudget.set(toolName, errCount);
         if (errCount >= MAX_TOOL_ERRORS && toolName !== 'finalize') {
@@ -1522,7 +1704,7 @@ async function run(openai, opts) {
             error: 'tool_unavailable',
             tool: toolName,
             failures,
-            lastError: dispatch.error,
+            lastError: observation.error,
             message: `The tool "${toolName}" failed ${failures} times in a row and is now unavailable. Stop calling it. Provide the best possible answer to the user directly (use other tools or your own reasoning), then call finalize.`,
           };
         }
@@ -1531,10 +1713,29 @@ async function run(openai, opts) {
         // A successful non-finalize tool call is genuine progress: reset the
         // consecutive finalize-rejection counter so a run that keeps moving
         // forward is only ever stopped by the absolute cap, never the soft one.
-        if (toolName !== 'finalize') finalizeRejectionsConsecutive = 0;
+        if (toolName !== 'finalize') {
+          let newEvidence = true;
+          // A first explicit no-op can answer a question. Repeating exactly
+          // that result (even with churned arguments) is not new progress.
+          // Do not infer no-progress from generic success or nested fields.
+          if (dispatch.result?.ok === true && dispatch.result?.changed === false) {
+            try {
+              const fingerprint = createHash('sha256')
+                .update(toolName + ':' + stableSchemaKey(dispatch.result)).digest('hex');
+              newEvidence = !noProgressEvidence.has(fingerprint);
+              if (newEvidence && noProgressEvidence.size >= 100) {
+                noProgressEvidence.delete(noProgressEvidence.values().next().value);
+              }
+              noProgressEvidence.add(fingerprint);
+            } catch { /* Unserializable evidence is not proof of repetition. */ }
+          } else if (dispatch.result?.ok === true && dispatch.result?.changed === true) {
+            noProgressEvidence.clear();
+          }
+          if (newEvidence) finalizeRejectionsConsecutive = 0;
+        }
       }
 
-      if (toolName === 'finalize' && !dispatch.error && typeof finalizeGuard === 'function') {
+      if (toolName === 'finalize' && !toolFailed && typeof finalizeGuard === 'function') {
         const proposedAction = { tool: toolName, args: call.function?.arguments || '', observation };
         const proposedSteps = steps.concat([{ ...stepRecord, actions: stepRecord.actions.concat([proposedAction]) }]);
         let guard;
@@ -1550,39 +1751,26 @@ async function run(openai, opts) {
         } catch (err) {
           guard = { ok: false, message: `finalize guard failed: ${err.message || err}` };
         }
-        if (!guard?.ok) {
+        if (ctx?.signal?.aborted) {
+          stoppedReason = 'aborted';
+          observation = { error: 'verification_cancelled' };
+          verificationStopped = true;
+        } else if (guard?.ok !== true) {
           finalizeRejectionsTotal += 1;
           finalizeRejectionsConsecutive += 1;
+          observation = {
+            error: 'finalize_guard_failed',
+            message: guard?.message || 'Finalization blocked by execution policy.',
+            missingTools: guard?.missingTools || [],
+            requiredTools: guard?.requiredTools || [],
+            repairInstructions: guard?.repairInstructions || 'Run the missing tool calls, then call finalize again.',
+          };
           if (
             finalizeRejectionsConsecutive >= MAX_CONSEC_FINALIZE_REJECTIONS ||
             finalizeRejectionsTotal >= MAX_FINALIZE_REJECTIONS
           ) {
-            // Circuit breaker: the finalize guard has rejected this answer too
-            // many times. Treating it as unsatisfiable, we accept the model's
-            // current answer (degraded) rather than spin to the step/runtime
-            // budget. Leave `observation` as the finalize result (no error) so
-            // the terminator below fires and the user gets a real answer.
-            stoppedReason = `finalized_guard_breaker:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
-            try {
-              console.warn(
-                `[react-agent] finalize guard rejected ${finalizeRejectionsConsecutive} times in a row `
-                + `(${finalizeRejectionsTotal} total) — tripping breaker and accepting degraded answer: `
-                + `${guard?.message || 'blocked by execution policy'}`
-              );
-            } catch { /* logging must never crash the run */ }
-          } else {
-            // Remember the real answer the model produced. If this is the last
-            // finalize attempt the run can afford (last step / forced finalize),
-            // the safety net below rescues it instead of discarding it.
-            const rej = String(dispatch.result?.answer || '').trim();
-            if (rej) lastGuardRejectedAnswer = rej;
-            observation = {
-              error: 'finalize_guard_failed',
-              message: guard?.message || 'Finalization blocked by execution policy.',
-              missingTools: guard?.missingTools || [],
-              requiredTools: guard?.requiredTools || [],
-              repairInstructions: guard?.repairInstructions || 'Run the missing tool calls, then call finalize again.',
-            };
+            stoppedReason = `verification_failed:${finalizeRejectionsConsecutive}/${finalizeRejectionsTotal}`;
+            verificationStopped = true;
           }
         } else {
           finalizeRejectionsConsecutive = 0;
@@ -1602,10 +1790,11 @@ async function run(openai, opts) {
         tool_call_id: call.id,
         content: obsContent,
       });
+      if (verificationStopped) break;
 
       // Remember successful read-only results so an identical repeat can be
       // served from cache (see the duplicate short-circuit above).
-      if (!dispatch.error && toolName !== 'finalize' && isParallelSafeTool(toolName)
+      if (!toolFailed && toolName !== 'finalize' && isCacheableTool(toolName, registry)
           && !(observation && typeof observation === 'object' && observation.error)) {
         if (dupCallCache.size >= DUP_CALL_CACHE_MAX) {
           dupCallCache.delete(dupCallCache.keys().next().value);
@@ -1613,13 +1802,9 @@ async function run(openai, opts) {
         dupCallCache.set(dupSig, { step, content: obsContent });
       }
 
-      if (toolName === 'finalize' && !dispatch.error && !observation.error) {
+      if (toolName === 'finalize' && !toolFailed && !observation.error) {
         finalAnswer = dispatch.result?.answer || '';
-        // Preserve the breaker's degraded-run signal (set just above when the
-        // circuit tripped) instead of clobbering it to a clean 'finalized' —
-        // otherwise breaker-degraded answers look indistinguishable from clean
-        // finalizes downstream (agent_done / agent_metadata telemetry).
-        stoppedReason = String(stoppedReason).startsWith('finalized_guard_breaker') ? stoppedReason : 'finalized';
+        stoppedReason = 'finalized';
         finalized = true;
         break;
       }
@@ -1633,14 +1818,14 @@ async function run(openai, opts) {
     // round here). Skipped once finalized — the final answer persists via
     // the caller's normal completion path and the checkpoint would only
     // invite a spurious re-run. The callback must never break the loop.
-    if (typeof onCheckpoint === 'function' && !finalized) {
+    if (typeof onCheckpoint === 'function' && !finalized && !verificationStopped) {
       try { await onCheckpoint(buildCheckpoint(step + 1)); } catch (cpErr) {
         try { console.warn('[react-agent] onCheckpoint failed (continuing):', cpErr && cpErr.message); } catch { /* noop */ }
       }
     }
 
     stepDurations.push(Date.now() - stepStartedAt);
-    if (finalized) break;
+    if (finalized || verificationStopped) break;
   }
 
   // Safety net: NEVER return an empty/null answer. A run can stop without a
@@ -1653,13 +1838,10 @@ async function run(openai, opts) {
   finalAnswer = sanitizeFinalAnswerDiagnostics(finalAnswer);
 
   if (finalAnswer == null || String(finalAnswer).trim() === '') {
-    if (lastGuardRejectedAnswer) {
-      // The model produced a real answer on its final finalize attempt but the
-      // guard rejected it below the breaker thresholds (last step / forced
-      // finalize). Ship that answer instead of the generic degraded text.
-      finalAnswer = lastGuardRejectedAnswer;
-      stoppedReason = 'finalized_last_step_guard_override';
-    } else if (exhaustedTools.size > 0) {
+    if (finalizeRejectionsTotal > 0 && stoppedReason === 'max_steps') {
+      stoppedReason = 'verification_failed:step_budget';
+    }
+    if (exhaustedTools.size > 0 && !String(stoppedReason).startsWith('verification_failed')) {
       const toolList = Array.from(exhaustedTools).join(', ');
       finalAnswer = 'Una herramienta interna necesaria para esta tarea falló de forma repetida. Te respondo con la información disponible; si necesitas más precisión, vuelve a intentarlo o acota la solicitud.';
       if (!stoppedReason || stoppedReason === 'max_steps') {

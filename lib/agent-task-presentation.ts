@@ -1,4 +1,5 @@
 import type { AgentTaskState } from "./agent-task-service"
+import { humanToolLabel, humanizeToolDetail, normalizeToolKey } from "./run-trace"
 
 export type AgentActivityStatus =
   | "queued"
@@ -45,16 +46,24 @@ const TOOL_LABELS: Record<string, string> = {
   document_pipeline: "Construyendo archivo",
   spreadsheet: "Preparando hoja de cálculo",
   presentation: "Preparando presentación",
+  create_presentation: "Creando presentación",
+  render_preview: "Renderizando vista previa",
   pdf: "Preparando PDF",
 }
 
 function lookupToolLabel(value: string): string | null {
+  const mapped = humanToolLabel(value, "")
+  if (mapped) return mapped
   const normalized = value.trim()
-  return TOOL_LABELS[normalized] || TOOL_LABELS[normalized.toLowerCase()] || null
+  return TOOL_LABELS[normalized] || TOOL_LABELS[normalized.toLowerCase()] || TOOL_LABELS[normalizeToolKey(normalized)] || null
 }
 
 export function toolToProfessionalLabel(tool?: string | null): string {
   if (!tool) return "Procesando tarea"
+  const mapped = humanToolLabel(tool, "")
+  if (mapped) return mapped
+  const humanized = humanizeToolDetail(tool)
+  if (humanized) return humanized
   const normalized = String(tool).trim()
   return lookupToolLabel(normalized) || sanitizeAgentText(normalized.replace(/[_-]+/g, " "), "Procesando tarea")
 }
@@ -136,4 +145,16 @@ export function summarizeAgentActivity(state: AgentTaskState): AgentActivitySumm
     validationPassed,
     validationTotal,
   }
+}
+
+
+/** OLA200_WAVE_G FE-059 — carry lastArtifactId so a PPT follow-up edits the deck. */
+export function followUpPresentationPayload(state: { lastArtifactId?: string | null; artifactId?: string | null } | null | undefined, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const last = (state && (state.lastArtifactId || state.artifactId)) || null
+  const id = typeof last === "string" && last.trim() ? last.trim() : null
+  if (!id) return { ...extra }
+  return { ...extra, lastArtifactId: id, followUp: true }
+}
+export function shouldRecreatePresentationDeck(payload: { lastArtifactId?: unknown } | null | undefined): boolean {
+  return !payload || typeof payload.lastArtifactId !== "string" || !payload.lastArtifactId.trim()
 }

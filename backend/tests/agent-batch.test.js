@@ -254,7 +254,7 @@ describe('POST /api/agent/batch', () => {
 
   test('reports per-task errors without aborting the batch when failFast=false', async () => {
     route.INTERNAL.setRunner(async (task) => {
-      if (task.goal === 'bad') throw new Error('nope');
+      if (task.goal === 'bad') throw new Error('Bearer prod-token sk-secret /opt/siragpt/.env');
       return { ok: true };
     });
 
@@ -272,7 +272,53 @@ describe('POST /api/agent/batch', () => {
     assert.equal(summary.failed, 1);
     assert.equal(summary.cancelled, 0);
     const errEvt = res.events.find((e) => e.type === 'error');
-    assert.equal(errEvt.error.message, 'nope');
+    assert.equal(errEvt.error.code, 'internal_error');
+    assert.equal(errEvt.error.message, 'La operación no pudo completarse.');
+    assert.equal(errEvt.error.traceId, res.events.find((e) => e.type === 'batch_meta').traceId);
+    assert.doesNotMatch(JSON.stringify(errEvt), /Bearer|prod-token|sk-secret|\/opt\/siragpt\/\.env/);
+  });
+
+  test('resolved cancelled/failed runner statuses are never emitted as successful done events', async () => {
+    route.INTERNAL.setRunner(async (task) => (
+      task.goal.includes('cancel')
+        ? { taskId: 'cancelled-task', status: 'cancelled' }
+        : { taskId: 'failed-task', status: 'failed', ok: false }
+    ));
+
+    const res = await postSseAndCollect(server, '/api/agent/batch', {
+      tasks: [{ goal: 'cancel this task' }, { goal: 'fail this task' }],
+      options: { concurrency: 2, failFast: false },
+    }, { Authorization: auth.authHeader });
+
+    assert.equal(res.events.filter((event) => event.type === 'done').length, 0);
+    assert.equal(res.events.filter((event) => event.type === 'error').length, 2);
+    const summary = res.events.find((event) => event.type === 'batch_done').summary;
+    assert.equal(summary.ok, 0);
+    assert.equal(summary.cancelled, 1);
+    assert.equal(summary.failed, 1);
+    assert.equal(summary.ok + summary.cancelled + summary.failed, summary.total);
+  });
+
+  test('defaultRunner normalizes the real runner cancelled status as a failed outcome', async () => {
+    const runnerModule = require('../src/services/agents/agent-task-runner');
+    const original = runnerModule.runAgentTaskJob;
+    runnerModule.runAgentTaskJob = async () => ({ taskId: 'real-runner-task', status: 'cancelled' });
+    try {
+      const result = await route.INTERNAL.defaultRunner(
+        { goal: 'cancelled by timeout' },
+        {
+          signal: new AbortController().signal,
+          traceId: 'trace-test',
+          user: { id: 'u1' },
+          timeoutMs: 1000,
+        },
+      );
+      assert.equal(result.ok, false);
+      assert.equal(result.cancelled, true);
+      assert.equal(route.INTERNAL.classifyRunnerOutcome(result), 'cancelled');
+    } finally {
+      runnerModule.runAgentTaskJob = original;
+    }
   });
 
   test('enforces plan quota: FREE user over daily cap is 429ed before any runner runs', async () => {

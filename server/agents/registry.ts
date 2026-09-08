@@ -115,8 +115,12 @@ function parseAgentToml(filePath: string): AgentDefinition | null {
       author: String(agent.author || ""),
       enabled: Boolean(agent.enabled ?? true),
       model: {
-        provider: String(model.provider || "anthropic"),
-        name: String(model.name || "claude-sonnet-4-20250514"),
+        provider: String(
+          model.provider || process.env.SIRAGPT_AGENT_DEFAULT_PROVIDER || "anthropic",
+        ),
+        name: String(
+          model.name || process.env.SIRAGPT_AGENT_DEFAULT_MODEL || "claude-sonnet-4-20250514",
+        ),
         temperature: Number(model.temperature ?? 0.3),
         max_tokens: Number(model.max_tokens ?? 4096),
       },

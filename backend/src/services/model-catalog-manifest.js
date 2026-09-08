@@ -82,10 +82,10 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
   {
     id: 'deepseek-v4-flash',
     name: 'deepseek-v4-flash',
-    displayName: 'DeepSeek V4 Flash',
+    displayName: 'Sira Rápido',
     provider: 'DeepSeek',
     type: 'TEXT',
-    description: 'DeepSeek V4 Flash for low-latency chat, paraphrasing, drafting and high-throughput assistance.',
+    description: 'Sira Rápido for low-latency chat, paraphrasing, drafting and high-throughput assistance.',
     contextLength: 1000000,
     maxTokens: 384000,
     reasoning: true,
@@ -96,10 +96,10 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
   {
     id: 'deepseek-v4-pro',
     name: 'deepseek-v4-pro',
-    displayName: 'DeepSeek V4 Pro',
+    displayName: 'Sira Pro',
     provider: 'DeepSeek',
     type: 'TEXT',
-    description: 'DeepSeek V4 Pro for professional reasoning, code, document generation and complex Spanish workflows.',
+    description: 'Sira Pro for professional reasoning, code, document generation and complex Spanish workflows.',
     contextLength: 1000000,
     maxTokens: 384000,
     reasoning: true,
@@ -387,6 +387,18 @@ const STATIC_MODEL_MANIFEST = Object.freeze([
     type: 'AUDIO',
     description: 'OpenAI TTS-1 HD: síntesis de voz de alta calidad para producción de contenido.',
     tags: ['openai', 'audio', 'text-to-speech', 'voice', 'hd', 'professional'],
+  },
+  {
+    // Sira Voz — VoiceStudio (AGPL-3.0, github.com/debpalash/VoiceStudio) running
+    // as a private container on the production host. Cloning, dubbing,
+    // transcription and audiobooks, 100 % local and free for every plan.
+    id: 'sira-voz',
+    name: 'sira-voz',
+    displayName: 'Sira Voz',
+    provider: 'VoiceStudio',
+    type: 'AUDIO',
+    description: 'Sira Voz: clona voces, dobla vídeos, transcribe y crea audiolibros. 100 % local, gratis, +600 idiomas (VoiceStudio, open source).',
+    tags: ['voicestudio', 'local', 'free', 'audio', 'text-to-speech', 'voice-clone', 'dubbing', 'audiobook', 'multilingual'],
   },
   {
     id: 'gemini-2.5-flash-tts',

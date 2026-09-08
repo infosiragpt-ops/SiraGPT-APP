@@ -16,6 +16,94 @@ const { PassThrough } = require('node:stream');
 
 const agenticStream = require('../src/services/agentic-chat-stream');
 
+test('retry policy: adapted writes and unknown tools are never repeated after an uncertain result', async () => {
+  await Promise.all([
+    'session_send', 'session_spawn', 'browser_click', 'browser_type',
+    'github_create_issue', 'linkedin_publish_post', 'x_publish_post', 'unknown_read_tool',
+  ].map(async (name) => {
+    let effects = 0;
+    const uncertain = new Error('socket hang up after accepting the action');
+    const tool = agenticStream._internal.adaptAgentTool({
+      name,
+      description: 'Synthetic tool; no external action.',
+      // Untrusted tool metadata is not a server retry policy.
+      retrySafe: true,
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      handler: async () => { effects += 1; throw uncertain; },
+    }, { type: 'object' });
+    await assert.rejects(tool.execute({}, {}), (err) => err === uncertain);
+    assert.equal(effects, 1, name);
+  }));
+});
+
+test('retry policy: the native read policy retains args, context and retry behavior', async () => {
+  const controller = new AbortController();
+  const args = { query: 'synthetic query' };
+  const ctx = { userId: 'synthetic-user', signal: controller.signal };
+  let attempts = 0;
+  const tool = agenticStream._internal.adaptAgentTool({
+    name: 'synthetic_read',
+    description: 'Synthetic read; no network.',
+    handler: async (seenArgs, seenCtx) => {
+      assert.equal(seenArgs, args);
+      assert.equal(seenCtx, ctx);
+      attempts += 1;
+      if (attempts === 1) throw new Error('socket hang up');
+      return { ok: true };
+    },
+  }, { type: 'object' }, { retrySafe: true });
+  assert.deepEqual(await tool.execute(args, ctx), { ok: true });
+  assert.equal(attempts, 2);
+});
+
+test('retry policy: Stop reaches the live adapter before invoking a handler', async () => {
+  const controller = new AbortController();
+  const reason = Object.assign(new Error('cancelled by user'), { code: 'E_CANCELLED' });
+  controller.abort(reason);
+  let calls = 0;
+  const tool = agenticStream._internal.adaptAgentTool({
+    name: 'synthetic_read',
+    handler: async () => { calls += 1; return 'unexpected'; },
+  }, { type: 'object' }, { retrySafe: true });
+  await assert.rejects(tool.execute({}, { signal: controller.signal }), (err) => err === reason);
+  assert.equal(calls, 0);
+});
+
+test('retry policy: the production base toolset opts in only its audited first-party reads', async (t) => {
+  const nativeTools = require('../src/services/agents/agent-tools');
+  const safeReads = [
+    'web_search', 'read_url', 'web_extract', 'session_search',
+    'session_list', 'session_history', 'github_search', 'scientific_search',
+  ];
+  const singleAttempt = [
+    'browser_navigate', 'browser_click', 'browser_type', 'browser_scroll',
+    'github_create_issue', 'linkedin_publish_post', 'x_publish_post',
+    'github_list_repos', 'linkedin_read_profile', 'x_list_mentions', 'x_search',
+  ];
+  const counts = new Map();
+  for (const name of [...safeReads, ...singleAttempt]) {
+    counts.set(name, 0);
+    t.mock.method(nativeTools[name], 'handler', async () => {
+      const attempt = counts.get(name) + 1;
+      counts.set(name, attempt);
+      if (attempt === 1) throw new Error('socket hang up');
+      return { ok: true };
+    });
+  }
+  const toolset = agenticStream._internal.baseWebTools();
+  await Promise.all([...safeReads, ...singleAttempt].map(async (name) => {
+    const tool = toolset.find((entry) => entry.name === name);
+    assert.ok(tool, `native tool exists: ${name}`);
+    if (safeReads.includes(name)) {
+      assert.deepEqual(await tool.execute({}, {}), { ok: true });
+      assert.equal(counts.get(name), 2, name);
+    } else {
+      await assert.rejects(tool.execute({}, {}), /socket hang up/);
+      assert.equal(counts.get(name), 1, name);
+    }
+  }));
+});
+
 // Minimal Response stand-in: collects everything written so we can
 // inspect the SSE frames after the run completes.
 function makeFakeRes() {
@@ -201,6 +289,71 @@ test('shouldUseAgenticChat keeps simple doc Q&A / summaries on the reliable plai
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'cual es el titulo de la investigacion?', files: [{ id: 'f1' }] }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'resume este archivo', files: [{ id: 'f1' }] }), false);
   assert.equal(agenticStream.shouldUseAgenticChat({ prompt: 'que dice el documento sobre el presupuesto?', files: [{ id: 'f1' }] }), false);
+});
+
+test('isHandledAgenticChatResult keeps a successful Office edit off the plain stream', () => {
+  const liveAnswer = 'Listo. Conservé el documento original y apliqué la edición solicitada.';
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit',
+    finalAnswer: liveAnswer,
+    artifacts: [{ id: 'art-1' }],
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_validation_failed',
+    finalAnswer: 'No entregué el documento editado porque ninguna copia generada superó la validación de integridad.',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit_failed',
+    finalAnswer: 'No pude aplicar el cambio en el documento adjunto.',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'image_edit_clarification_needed',
+    finalAnswer: '¿Cuál imagen quieres reemplazar?',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'finalized',
+    finalAnswer: 'hola',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'finalized_guard_breaker_unsatisfiable',
+    finalAnswer: 'respuesta real',
+  }), true);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'max_steps',
+    finalAnswer: 'No logré cerrar la tarea',
+  }), false);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'source_preserving_document_edit',
+    finalAnswer: '',
+  }), false);
+  assert.equal(agenticStream.isHandledAgenticChatResult({
+    stoppedReason: 'agent_runner',
+    finalAnswer: 'Listo. Generé deck-editado.pptx.',
+    artifacts: [{ id: 'art-1' }],
+  }), true);
+});
+
+test('honest verification and resume failures cannot fall through to a second plain model answer', () => {
+  for (const stoppedReason of ['verification_failed:3/3', 'verification_failed:step_budget',
+    'invalid_resume_checkpoint', 'resume_budget_exhausted']) {
+    assert.equal(agenticStream.isHandledAgenticChatResult({ stoppedReason, finalAnswer: 'No pude verificar la tarea.' }), true);
+    assert.equal(agenticStream.isHandledAgenticChatResult({ stoppedReason, finalAnswer: '' }), false);
+  }
+});
+
+test('shouldUseAgenticChat routes same-deck "agrega N ppts" as an attachment edit', () => {
+  const live = 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion';
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: live,
+    files: [{ id: 'pptx-1', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }],
+  }), true);
+  assert.equal(agenticStream.shouldUseAgenticChat({ prompt: live, files: [] }), true);
+});
+
+test('shouldUseAgenticChat routes "crea una ppt del embarazo de color rosado"', () => {
+  assert.equal(agenticStream.shouldUseAgenticChat({
+    prompt: 'crea una ppt del embarazo de color rosado la ppt',
+  }), true);
 });
 
 test('shouldUseAgenticChat routes visual + document create requests through the agent', () => {
@@ -409,6 +562,46 @@ test('runAgenticChat injects a media-intent directive naming the tool + specs', 
   assert.match(system, /180/);
 });
 
+test('runAgenticChat forces generate_speech and forbids HTML speechSynthesis for audio', async () => {
+  let firstArgs = null;
+  let calls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async (a) => {
+          calls += 1;
+          if (!firstArgs) firstArgs = a;
+          if (calls === 1) return toolCallMessage('generate_speech', { text: 'Juan vende papas en el mercado' });
+          return finalizeMessage('Audio listo.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  await agenticStream.runAgenticChat({
+    openai,
+    model: 'gpt-4o-mini',
+    userQuery: 'créame un audio: Juan vende papas en el mercado',
+    history: [],
+    res,
+    toolsOverride: [{
+      name: 'generate_speech',
+      description: 'generate speech',
+      parameters: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text'],
+        additionalProperties: false,
+      },
+      execute: async () => ({ ok: true, downloadUrl: '/api/agent/artifact/x', mime: 'audio/mpeg' }),
+    }],
+  });
+  const system = firstArgs.messages.find(m => m.role === 'system')?.content || '';
+  assert.match(system, /generate_speech/);
+  assert.match(system, /speechSynthesis|Web Speech API/);
+  assert.match(system, /PROHIBIDO/);
+});
+
 test('runAgenticChat auto-selects generate_video first for "crea un video"', async () => {
   let firstCreateArgs = null;
   let createCalls = 0;
@@ -591,7 +784,10 @@ test('runAgenticChat blocks finalize until every requested artifact is created a
   const result = await agenticStream.runAgenticChat({
     openai,
     model: 'gpt-4o-mini',
-    userQuery: 'Crea el informe en Word y PDF',
+    // "Prepara" (not "crea") keeps this multi-artifact turn OUT of the
+    // AgentRunner claim — a claimed turn without a runner file now ends in
+    // an honest error instead of reaching the loop under test here.
+    userQuery: 'Prepara el informe en Word y PDF',
     res,
     customGptCapabilities: { agentMode: 'auto', multipleArtifacts: true, maxArtifactsPerTurn: 6 },
     toolsOverride: [
@@ -1033,8 +1229,378 @@ test('runAgenticChat source-preserving pre-loop short-circuits edit turns before
     assert.equal(result.stoppedReason, 'source_preserving_document_edit');
     assert.match(result.finalAnswer, /Conservé el DOCX original/);
     assert.equal(result.artifacts[0].id, 'art-preloop');
+    assert.match(String(result.persistedContent || ''), /art-preloop/);
+    assert.equal(agenticStream.isHandledAgenticChatResult(result), true);
     const body = frames();
     assert.ok(body.some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-preloop'));
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat source-preserving pre-loop runs from chatId when this turn has no fileIds', async () => {
+  let llmCalls = 0;
+  let receivedFileIds = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async (args) => {
+          receivedFileIds = args.fileIds;
+          return {
+            content: 'Listo. Conservé el PPT original y agregué las diapositivas.',
+            artifact: {
+              id: 'art-followup',
+              filename: 'Gestion_amdinistrativa_editado.pptx',
+              format: 'pptx',
+              mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              sizeBytes: 2048,
+              downloadUrl: '/api/agent/artifact/art-followup',
+            },
+            validation: { passed: true },
+          };
+        },
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'agrega 5 ppts mas en estas mimas diapositivas ## Gestion_amdinistrativa.pptx que hablen sobre ejemplos de casos de exito y la ultima d elas 5 que sean sobre bibliografia en apa 7ma edicion',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: [],
+        prisma: {},
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.deepEqual(receivedFileIds, []);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.equal(result.artifacts[0].id, 'art-followup');
+    assert.equal(fresh.isHandledAgenticChatResult(result), true);
+    assert.ok(frames().some((f) => f && f.type === 'file_artifact' && f.artifact && f.artifact.id === 'art-followup'));
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat recovers chat attachment ids when this turn sends empty fileIds', async () => {
+  let llmCalls = 0;
+  let receivedFileIds = null;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async (args) => {
+          receivedFileIds = args.fileIds;
+          return {
+            content: 'Listo. Conservé el documento original y apliqué la edición solicitada.',
+            artifact: {
+              id: 'art-recovered',
+              filename: 'deck_editado.pptx',
+              format: 'pptx',
+              mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+              sizeBytes: 1024,
+              downloadUrl: '/api/agent/artifact/art-recovered',
+            },
+            validation: { passed: true },
+          };
+        },
+      };
+    }
+    if (request === './message-attachments' || request.endsWith('/message-attachments')) {
+      return {
+        resolveChatDocumentFileIds: async () => ['recovered-file-1'],
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  const attachmentsPath = require.resolve('../src/services/message-attachments');
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  delete require.cache[attachmentsPath];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'agrega 5 diapositivas a esta presentacion',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: [],
+        prisma: { chat: {}, message: {} },
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.equal(llmCalls, 0);
+    assert.deepEqual(receivedFileIds, ['recovered-file-1']);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+    delete require.cache[attachmentsPath];
+  }
+});
+
+test('runAgenticChat source-preserving pre-loop streams every batch artifact without duplicating the singular alias', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  const makeResult = (suffix) => ({
+    artifact: {
+      id: `art-batch-${suffix}`,
+      filename: `informe-${suffix}-editado.docx`,
+      format: 'docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: 1200 + suffix,
+      downloadUrl: `/api/agent/artifact/art-batch-${suffix}`,
+    },
+    file: {
+      type: 'doc',
+      format: 'docx',
+      filename: `informe-${suffix}-editado.docx`,
+      url: `/api/agent/artifact/art-batch-${suffix}`,
+    },
+    validation: { passed: true },
+    version: { id: `version-${suffix}`, version: 2, sourceFileId: `f${suffix}` },
+    previewHtml: `<p>preview ${suffix}</p>`,
+  });
+  const first = makeResult(1);
+  const second = makeResult(2);
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => ({
+          batch: true,
+          content: 'Listo. Edité y validé 2 documentos.',
+          artifact: first.artifact, // compatibility alias; results[] is authoritative
+          file: first.file,
+          results: [first, second],
+        }),
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'cambia el título en todos los documentos adjuntos',
+      history: [],
+      res,
+      toolContext: {
+        userId: 'u1',
+        chatId: 'c1',
+        fileIds: ['f1', 'f2'],
+        prisma: {},
+      },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+
+    assert.equal(llmCalls, 0);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.deepEqual(result.artifacts.map((artifact) => artifact.id), ['art-batch-1', 'art-batch-2']);
+    assert.deepEqual(result.artifacts.map((artifact) => artifact.sourceFileId), ['f1', 'f2']);
+    assert.deepEqual(
+      frames()
+        .filter((frame) => frame?.type === 'file_artifact')
+        .map((frame) => frame.artifact.id),
+      ['art-batch-1', 'art-batch-2'],
+    );
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat source-preserving pre-loop exposes only strictly validated batch artifacts', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: { completions: { create: async () => { llmCalls += 1; return finalizeMessage('should-not-run'); } } },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  const makeResult = (id, validation) => ({
+    validation,
+    version: { id: `version-${id}`, version: 2, sourceFileId: `f-${id}` },
+    artifact: {
+      id: `art-${id}`,
+      filename: `${id}-editado.docx`,
+      format: 'docx',
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      sizeBytes: 1024,
+      downloadUrl: `/api/agent/artifact/art-${id}`,
+    },
+  });
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => ({
+          batch: true,
+          content: 'Afirmación de éxito total que no debe usarse para un lote parcial.',
+          results: [
+            makeResult('valid', { passed: true }),
+            makeResult('invalid', { passed: false, ok: true, reason: 'semantic_check_failed' }),
+          ],
+        }),
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita todos los documentos y conserva el original',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f-valid', 'f-invalid'], prisma: {} },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+
+    assert.equal(llmCalls, 0);
+    assert.equal(result.stoppedReason, 'source_preserving_document_edit');
+    assert.deepEqual(result.artifacts.map((artifact) => artifact.id), ['art-valid']);
+    assert.equal(result.artifacts[0].validation.passed, true);
+    assert.deepEqual(
+      frames().filter((frame) => frame?.type === 'file_artifact').map((frame) => frame.artifact.id),
+      ['art-valid'],
+    );
+    assert.match(result.finalAnswer, /No entregué 1 archivo/);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
+});
+
+test('runAgenticChat source-preserving validation failure ends honestly without LLM fallback or artifacts', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: { completions: { create: async () => { llmCalls += 1; return finalizeMessage('regenerated'); } } },
+  };
+  const { res, frames } = makeFakeRes();
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => true,
+        tryGenerateSourcePreservingDocumentEdit: async () => ({
+          content: 'Listo, supuesto éxito que no debe salir.',
+          validation: { passed: false, ok: true, reason: 'requested_change_not_verified' },
+          artifact: {
+            id: 'art-invalid-only',
+            filename: 'informe-editado.docx',
+            format: 'docx',
+            mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            sizeBytes: 1000,
+            downloadUrl: '/api/agent/artifact/art-invalid-only',
+          },
+        }),
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'cambia solo el título y devuelve el mismo Word',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'], prisma: {} },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } } },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+
+    assert.equal(llmCalls, 0, 'validation failure must not fall through to the LLM loop');
+    assert.equal(result.stoppedReason, 'source_preserving_document_validation_failed');
+    assert.deepEqual(result.artifacts, []);
+    assert.equal(frames().some((frame) => frame?.type === 'file_artifact'), false);
+    assert.match(result.finalAnswer, /no generé un documento sustituto/i);
+    assert.equal(frames().some((frame) => /supuesto éxito/.test(String(frame?.content || ''))), false);
   } finally {
     Module._load = originalLoad;
     delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
@@ -1202,4 +1768,190 @@ test('turnPolicy observe mode attaches summary without changing behaviour', asyn
   assert.equal(foundPolicy.toolCallMode, 'native');
   assert.equal(foundPolicy.shouldRunAgentic, true);
   cognitiveMetrics.reset();
+});
+
+// ── F1 hardening: claimed document turns NEVER fall through to the ──────
+// generic pipeline when the AgentRunner cannot deliver a file.
+
+function withStubbedAgentRunner(overrides, fn) {
+  const realAgentRunner = require('../src/services/agent-runner');
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './agent-runner' || request.endsWith('/agent-runner')) {
+      return { ...realAgentRunner, ...overrides };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  const restore = () => {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  };
+  return fn(fresh).finally(restore);
+}
+
+test('runAgenticChat: "crea una ppt … celeste" + runner 402 → honest error, LLM loop NEVER runs', async () => {
+  let llmCalls = 0;
+  let createDocumentCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res, frames } = makeFakeRes();
+  await withStubbedAgentRunner({
+    executeAgentRunnerTurn: async () => ({
+      ok: false,
+      skipped: false,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: 'llm_402',
+      errorMessage: 'This request requires more credits… can only afford 694.',
+    }),
+    hasConversationArtifacts: async () => false,
+  }, async (fresh) => {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'crea una ppt del embarazo de color celeste la ppt',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: [], prisma: {} },
+      toolsOverride: [{
+        name: 'create_document',
+        description: 'create a NEW document (generic pipeline entry)',
+        parameters: { type: 'object', properties: { filename: { type: 'string' } } },
+        execute: async () => {
+          createDocumentCalls += 1;
+          return { ok: true };
+        },
+      }],
+    });
+    assert.equal(llmCalls, 0, 'the LLM loop must never run for a claimed create-doc turn without a runner file');
+    assert.equal(createDocumentCalls, 0, 'create_document (generic pipeline) must never be reachable');
+    assert.equal(result.stoppedReason, 'agent_runner_failed');
+    assert.match(result.finalAnswer, /créditos/);
+    assert.match(result.finalAnswer, /402/);
+    assert.match(result.finalAnswer, /plantilla genérica/);
+    assert.equal(fresh.isHandledAgenticChatResult(result), true, 'the honest error must not fall back to the plain stream');
+    const last = frames().filter((f) => f && f.replace).pop();
+    assert.match(String(last?.content || ''), /plantilla genérica/);
+  });
+});
+
+test('runAgenticChat: style follow-up "ponlas todas de color celeste" + runner no_llm → honest error, no loop', async () => {
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('should-not-run');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  await withStubbedAgentRunner({
+    executeAgentRunnerTurn: async () => ({
+      ok: false,
+      skipped: true,
+      summary: '',
+      artifacts: [],
+      steps: [],
+      stoppedReason: 'no_llm',
+    }),
+    hasConversationArtifacts: async () => true,
+  }, async (fresh) => {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'ponlas todas de color celeste',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: [], prisma: {} },
+      toolsOverride: [],
+    });
+    assert.equal(llmCalls, 0);
+    assert.equal(result.stoppedReason, 'agent_runner_failed');
+    assert.match(result.finalAnswer, /modelo de IA/);
+    assert.match(result.finalAnswer, /plantilla genérica/);
+  });
+});
+
+test('runAgenticChat: claimed EDIT turn with files keeps the surgical loop when the runner fails', async () => {
+  // "edita … cambia el título" + attached file claims the runner via
+  // WORK_RE + files, but it is NOT runner-only: when the runner cannot
+  // deliver, the forced document_edit path must still be able to edit the
+  // user's REAL file (it never touches the generic pipeline).
+  let llmCalls = 0;
+  const openai = {
+    chat: {
+      completions: {
+        create: async () => {
+          llmCalls += 1;
+          return finalizeMessage('Listo, edité el documento.');
+        },
+      },
+    },
+  };
+  const { res } = makeFakeRes();
+  const realAgentRunner = require('../src/services/agent-runner');
+  const Module = require('module');
+  const originalLoad = Module._load;
+  Module._load = function patched(request, parent, isMain) {
+    if (request === './agent-runner' || request.endsWith('/agent-runner')) {
+      return {
+        ...realAgentRunner,
+        executeAgentRunnerTurn: async () => ({
+          ok: false,
+          skipped: false,
+          summary: '',
+          artifacts: [],
+          steps: [],
+          stoppedReason: 'llm_402',
+          errorMessage: '402',
+        }),
+        hasConversationArtifacts: async () => false,
+      };
+    }
+    if (request === './source-preserving-document-edit' || request.endsWith('/source-preserving-document-edit')) {
+      return {
+        isSourcePreservingEditRequest: () => false,
+        tryGenerateSourcePreservingDocumentEdit: async () => null,
+      };
+    }
+    return originalLoad.apply(this, arguments);
+  };
+  delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  const fresh = require('../src/services/agentic-chat-stream');
+  try {
+    const result = await fresh.runAgenticChat({
+      openai,
+      model: 'gpt-4o-mini',
+      userQuery: 'edita el documento adjunto: cambia el título a Informe Final',
+      history: [],
+      res,
+      toolContext: { userId: 'u1', chatId: 'c1', fileIds: ['f1'], prisma: {} },
+      toolsOverride: [{
+        name: 'document_edit',
+        description: 'edit attached document',
+        parameters: { type: 'object', properties: { instruction: { type: 'string' } }, required: ['instruction'] },
+        execute: async () => ({ ok: true }),
+      }],
+    });
+    assert.ok(llmCalls >= 1, 'edit turns must keep the surgical document_edit loop');
+    assert.notEqual(result.stoppedReason, 'agent_runner_failed');
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[require.resolve('../src/services/agentic-chat-stream')];
+  }
 });

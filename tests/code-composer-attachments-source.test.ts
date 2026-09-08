@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs"
 import { describe, it } from "node:test"
 
 const source = readFileSync("components/code/ai-code-chat-panel.tsx", "utf8")
+const attachmentSource = readFileSync("lib/code-agent/composer-attachments.ts", "utf8")
 
 function sectionBetween(start: string, end: string): string {
   const from = source.indexOf(start)
@@ -45,7 +46,8 @@ describe("code composer attachments", () => {
     assert.match(source, /const readyCodeAttachments = React\.useMemo/)
     assert.match(source, /const hasUploadingCodeAttachments =/)
     assert.match(source, /const canSubmitCodePrompt =/)
-    assert.match(source, /function codeAttachmentFileId/)
+    assert.match(source, /codeAttachmentFileId,/)
+    assert.match(attachmentSource, /export function codeAttachmentFileId/)
     assert.match(source, /const fileIds = readyCodeAttachments\.map\(codeAttachmentFileId\)/)
     assert.match(source, /void dispatch\(payload, \{ files: fileIds \}\)/)
     assert.match(
@@ -53,8 +55,14 @@ describe("code composer attachments", () => {
       /files:\s*!webGroundedConversation\s*&&\s*override\?\.files\s*&&\s*override\.files\.length\s*>\s*0\s*\?\s*override\.files\s*:\s*undefined/,
     )
     assert.match(source, /const attachedFileIds = Array\.from\(new Set\(\(opts\?\.files \|\| \[\]\)\.filter\(Boolean\)\)\)/)
-    assert.match(source, /await sendPrompt\(action\.instruction, \{ autoApply: true, files: attachedFileIds \}\)/)
-    assert.match(source, /pendingInputRef\.current\.push\(\{ text: rawInput, files: attachedFileIds \}\)/)
+    assert.match(
+      source,
+      /await sendPrompt\(action\.instruction, \{ autoApply: true, files: attachedFileIds, mode: effectiveMode \}\)/,
+    )
+    assert.match(
+      source,
+      /pendingInputRef\.current\.push\(\{ text: rawInput, files: attachedFileIds, mode: effectiveMode \}\)/,
+    )
     assert.match(source, /composeCodePromptWithAttachments\(promptWithTarget, readyCodeAttachments\)/)
     assert.match(source, /selectedPreviewTarget/)
     assert.match(source, /buildSelectedElementPrompt\(selectedPreviewTarget, instruction\)/)

@@ -151,8 +151,9 @@ async function checkApp({
   let puppeteer = puppeteerImpl;
   if (!puppeteer) {
     try {
-      // eslint-disable-next-line global-require
-      puppeteer = require('puppeteer');
+      // Puppeteer 25 is ESM-only; import lazily so loading the backend
+      // neither launches a browser nor fails on an async ESM dependency.
+      puppeteer = (await import('puppeteer')).default;
     } catch (err) {
       return { ok: false, unavailable: true, reason: `puppeteer_unavailable: ${err.message}` };
     }

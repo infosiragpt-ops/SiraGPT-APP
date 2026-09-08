@@ -93,7 +93,7 @@ test('reset script never embeds or logs a password fallback', () => {
   assert.doesNotMatch(source, /totpEnabled:\s*false/);
 });
 
-test('a terminal migration retires the legacy bootstrap identity', () => {
+test('credential-bearing bootstrap migrations are absent and the terminal retirement remains', () => {
   const migrationsDir = path.join(repoRoot, 'backend', 'prisma', 'migrations');
   const retirementName = '20260731233000_retire_legacy_bootstrap_admin';
   const resetNames = [
@@ -105,13 +105,15 @@ test('a terminal migration retires the legacy bootstrap identity', () => {
     .readdirSync(migrationsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
+    .filter((name) => fs.existsSync(path.join(migrationsDir, name, 'migration.sql')))
     .sort();
 
   assert.ok(migrationNames.includes(retirementName));
   for (const resetName of resetNames) {
-    assert.ok(
-      migrationNames.indexOf(retirementName) > migrationNames.indexOf(resetName),
-      `${retirementName} must run after ${resetName}`,
+    assert.equal(
+      migrationNames.includes(resetName),
+      false,
+      `${resetName} must not be part of the active Prisma migration chain`,
     );
   }
 

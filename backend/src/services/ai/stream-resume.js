@@ -23,7 +23,14 @@
  * downgrades to "no resume available" — the request path is never broken.
  */
 
-const DEFAULT_TTL_SECONDS = 5 * 60; // 5 minutes
+const configuredTtlSeconds = Number.parseInt(process.env.AI_STREAM_RESUME_TTL_SECONDS || '', 10);
+// Long-running agent turns can spend hours thinking or executing tools without
+// emitting content. Active owners renew this bounded lease independently of
+// the browser socket (see touch()), so runtime is unbounded while terminal or
+// abandoned records are reclaimed promptly.
+const DEFAULT_TTL_SECONDS = Number.isFinite(configuredTtlSeconds) && configuredTtlSeconds >= 300
+  ? configuredTtlSeconds
+  : 10 * 60;
 const DEFAULT_MAX_CHUNKS = 4000;    // hard cap per-stream to bound memory
 const KEY_PREFIX = 'sira:sse-resume:';
 // Hard cap on distinct sessions held in the in-process fallback Map so an
@@ -34,6 +41,7 @@ const SWEEP_INTERVAL_MS = 60 * 1000; // proactive expiry sweep cadence
 
 let _injectedRedis = null;
 let _ioredisClient = null;
+let _nowFn = () => Date.now();
 const _memoryStore = new Map(); // streamId -> { record, expiresAt }
 
 // ─── Per-streamId serialization ────────────────────────────────────────
@@ -76,11 +84,15 @@ function _ensureSweeper() {
   if (_sweepTimer && typeof _sweepTimer.unref === 'function') _sweepTimer.unref();
 }
 
-function _now() { return Date.now(); }
+function _now() { return _nowFn(); }
 
 function _setInjectedRedis(client) {
   // Test seam — pass an ioredis-compatible fake.
   _injectedRedis = client;
+}
+
+function _setNowForTests(nowFn) {
+  _nowFn = typeof nowFn === 'function' ? nowFn : () => Date.now();
 }
 
 function _resetForTests() {
@@ -88,6 +100,7 @@ function _resetForTests() {
   _ioredisClient = null;
   _memoryStore.clear();
   _opChains.clear();
+  _nowFn = () => Date.now();
   if (_sweepTimer) {
     clearInterval(_sweepTimer);
     _sweepTimer = null;
@@ -291,6 +304,30 @@ async function append(streamId, chunk, { ttlSeconds = DEFAULT_TTL_SECONDS } = {}
 }
 
 /**
+ * Renew an active stream's resumability lease without adding a content frame.
+ * This is deliberately independent of res.write: a detached browser socket
+ * must not make a still-running owner lose its Last-Event-ID record.
+ */
+async function _touchImpl(streamId, ttlSeconds) {
+  const record = _memoryGet(streamId) || await _redisGet(streamId);
+  if (!record) return false;
+  const effectiveTtl = Number.isFinite(ttlSeconds) && ttlSeconds > 0
+    ? ttlSeconds
+    : (Number.isFinite(record.ttlSeconds) && record.ttlSeconds > 0
+      ? record.ttlSeconds
+      : DEFAULT_TTL_SECONDS);
+  record.ttlSeconds = effectiveTtl;
+  _memorySet(streamId, record, effectiveTtl);
+  await _redisSet(streamId, record, effectiveTtl);
+  return true;
+}
+
+async function touch(streamId, options = {}) {
+  if (!streamId) return false;
+  return _runExclusive(streamId, () => _touchImpl(streamId, options.ttlSeconds));
+}
+
+/**
  * Mark the session complete (graceful end of stream). Caller may also
  * delete the record afterwards to release storage early.
  */
@@ -351,6 +388,7 @@ module.exports = {
   open,
   openExisting,
   append,
+  touch,
   complete,
   fail,
   destroy,
@@ -361,5 +399,6 @@ module.exports = {
   DEFAULT_MAX_CHUNKS,
   // Test seams
   _setInjectedRedis,
+  _setNowForTests,
   _resetForTests,
 };

@@ -32,6 +32,14 @@ import {
   normalizePath,
 } from "./code-workspace-utils"
 import {
+  createWorkspaceFile,
+  deleteWorkspaceFile,
+  renameWorkspaceFile,
+  updateWorkspaceFile,
+  type WorkspaceFileTransition,
+  type WorkspaceMirrorCommand,
+} from "./code-workspace-state"
+import {
   CODEX_UPDATED_EVENT,
   codexIdForLocalFolder,
   codexIdForProject,
@@ -39,7 +47,7 @@ import {
   upsertCodexProject,
 } from "./codex-projects"
 import { projectsService } from "./projects-service"
-import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed } from "./code-git-mirror"
+import { mirrorWrite, mirrorDelete, mirrorRename, setMirrorSuppressed, abortPendingMirrors } from "./code-git-mirror"
 import {
   canOpenLocalDirectory,
   getLinkedLocalFolderName,
@@ -74,6 +82,7 @@ import { codexApi } from "./codex/codex-api"
 import {
   codexProjectIdFromWorkspaceId,
   codexWorkspaceIdForProject,
+  isSameCodexWorkspace,
 } from "./codex-workspace-identity"
 
 export const SWITCH_CODEX_WORKSPACE_EVENT = "siragpt:switch-codex-workspace"
@@ -87,6 +96,12 @@ export const CODE_SELECT_CHAT_SESSION_EVENT = "siragpt:code-select-chat-session"
 export const CODE_OPEN_TOOL_EVENT = "siragpt:code-open-tool"
 export const CODE_OPEN_TOOL_LAUNCHER_EVENT = "siragpt:code-open-tool-launcher"
 export const CODE_OPEN_COMPANY_ASSOCIATION_EVENT = "siragpt:code-open-company-association"
+export const CODE_COMPANY_ASSOCIATION_CHANGED_EVENT = "siragpt:code-company-association-changed"
+
+export function notifyCompanyAssociationChanged(): void {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent(CODE_COMPANY_ASSOCIATION_CHANGED_EVENT))
+}
 // Broadcast the host-runner run id whenever a real dev server starts/stops, so
 // the Shell tool can exec real commands against that run's workspace. detail:
 // { runId: string | null } — null means no live host run (fall back to the
@@ -137,6 +152,40 @@ export function getActiveCodexProject(): string | null {
   return _activeCodexProjectId
 }
 
+// Department computer: a stable synthetic run id `dept-<departmentId>` that
+// scopes Files / Shell / Preview to that department's worktree on the shared
+// company machine. Same late-consumer singleton as the Codex project id.
+let _activeDepartmentComputerRunId: string | null = null
+export const CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT = "siragpt:active-department-computer"
+export const CODE_OPEN_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-department-computer"
+export function setActiveDepartmentComputer(runId: string | null) {
+  _activeDepartmentComputerRunId = runId
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_COMPUTER_EVENT, { detail: { runId } }),
+    )
+  }
+}
+export function getActiveDepartmentComputer(): string | null {
+  return _activeDepartmentComputerRunId
+}
+
+export type ActiveDepartmentSelection = { id: string; name: string; projectId?: string | null } | null
+let _activeDepartmentSelection: ActiveDepartmentSelection = null
+export const CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT = "siragpt:active-department-selection"
+export const CODE_OPEN_CURRENT_DEPARTMENT_COMPUTER_EVENT = "siragpt:open-current-department-computer"
+export function setActiveDepartmentSelection(selection: ActiveDepartmentSelection) {
+  _activeDepartmentSelection = selection
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, { detail: { selection } }),
+    )
+  }
+}
+export function getActiveDepartmentSelection(): ActiveDepartmentSelection {
+  return _activeDepartmentSelection
+}
+
 export type CodeNewChatDetail = {
   workspaceId: string
   name: string
@@ -152,6 +201,17 @@ type PersistedState = {
   files: CodeFiles
   openTabs: string[]
   activePath: string | null
+}
+
+function dispatchWorkspaceMirror(projectId: string | null, command: WorkspaceMirrorCommand | null) {
+  if (!command) return
+  if (command.kind === "write") {
+    mirrorWrite(projectId, command.path, command.content)
+  } else if (command.kind === "rename") {
+    mirrorRename(projectId, command.from, command.to)
+  } else {
+    mirrorDelete(projectId, command.path)
+  }
 }
 
 export type ActiveFolder = {
@@ -320,6 +380,27 @@ function readStoredActiveFolder(): ActiveFolder | null {
   }
 }
 
+
+// OLA200_WAVE_F FE-039 — abort in-flight workspace writes when the folder changes.
+const workspaceWriteControllers = new Set<AbortController>()
+
+export function abortWorkspaceInflightWrites(reason = "workspace_changed"): void {
+  for (const ac of Array.from(workspaceWriteControllers)) {
+    try { ac.abort() } catch { /* ignore */ }
+    workspaceWriteControllers.delete(ac)
+  }
+  try { abortPendingMirrors() } catch { /* ignore */ }
+  void reason
+}
+
+export function beginWorkspaceWrite(): AbortController {
+  const ac = new AbortController()
+  workspaceWriteControllers.add(ac)
+  const cleanup = () => workspaceWriteControllers.delete(ac)
+  ac.signal.addEventListener("abort", cleanup, { once: true })
+  return ac
+}
+
 export function CodeWorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Boot the active folder synchronously from localStorage so we can
   // pick the right per-folder bucket on the very first render. Doing
@@ -330,11 +411,35 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   // Latest active project id, readable from stable callbacks without
   // re-creating them on every folder switch (used by the git mirror).
   const activeFolderIdRef = React.useRef<string | null>(initialFolder?.id ?? null)
-  React.useEffect(() => {
-    activeFolderIdRef.current = activeFolder?.id ?? null
-  }, [activeFolder?.id])
-  const [state, setState] = React.useState<PersistedState>(() =>
+  const [state, setRenderedState] = React.useState<PersistedState>(() =>
     buildInitialStateFor(initialFolder?.id ?? null),
+  )
+  // React may defer or replay functional state updaters. Keep the latest
+  // accepted workspace state in a ref so event handlers can derive a state
+  // transition and its mirror command synchronously, exactly once.
+  const stateRef = React.useRef(state)
+  const commitState = React.useCallback((next: PersistedState) => {
+    if (Object.is(stateRef.current, next)) return
+    stateRef.current = next
+    setRenderedState(next)
+  }, [])
+  const setState = React.useCallback(
+    (action: React.SetStateAction<PersistedState>) => {
+      const previous = stateRef.current
+      const next = typeof action === "function"
+        ? (action as (current: PersistedState) => PersistedState)(previous)
+        : action
+      commitState(next)
+    },
+    [commitState],
+  )
+  const applyWorkspaceTransition = React.useCallback(
+    (transition: (current: PersistedState) => WorkspaceFileTransition) => {
+      const result = transition(stateRef.current)
+      commitState(result.state)
+      return result
+    },
+    [commitState],
   )
   const [workspaceSource, setWorkspaceSource] = React.useState<WorkspaceSource>({
     kind: "browser",
@@ -364,6 +469,12 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
   const setActiveFolder = React.useCallback((folder: ActiveFolder | null) => {
     const previousFolderId = lastFolderIdRef.current
     const nextFolderId = folder?.id ?? null
+    // Mirror commands issued in the same tick as a workspace switch must use
+    // the new owner; waiting for a React effect would leave a stale project id.
+    activeFolderIdRef.current = nextFolderId
+    if (previousFolderId !== nextFolderId) {
+      abortWorkspaceInflightWrites("workspace_changed")
+    }
     if (previousFolderId === nextFolderId) {
       // Same folder — only the metadata (description/instructions) may
       // have been re-hydrated from the API. Keep the file state intact.
@@ -391,7 +502,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     } catch {
       /* fail soft */
     }
-  }, [])
+  }, [setState])
 
   // Persist on every change. Cheap because the tree is small and
   // localStorage writes are sync but very fast for sub-MB payloads.
@@ -422,7 +533,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const openTabs = prev.openTabs.includes(cleaned) ? prev.openTabs : [...prev.openTabs, cleaned]
       return { files, openTabs, activePath: cleaned }
     })
-  }, [])
+  }, [setState])
 
   const closeTab = React.useCallback((path: string) => {
     setState((prev) => {
@@ -435,7 +546,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       }
       return { ...prev, openTabs, activePath }
     })
-  }, [])
+  }, [setState])
 
   const setActiveTab = React.useCallback((path: string) => {
     setState((prev) => {
@@ -443,88 +554,37 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       const openTabs = prev.openTabs.includes(path) ? prev.openTabs : [...prev.openTabs, path]
       return { ...prev, openTabs, activePath: path }
     })
-  }, [])
+  }, [setState])
 
   const updateFile = React.useCallback((path: string, content: string) => {
-    let changed = false
-    setState((prev) => {
-      const existing = prev.files[path]
-      if (!existing) return prev
-      if (existing.content === content) return prev
-      changed = true
-      const files = { ...prev.files, [path]: { ...existing, content, updatedAt: Date.now() } }
-      return { ...prev, files }
-    })
-    if (changed) mirrorWrite(activeFolderIdRef.current, path, content)
-  }, [])
+    const result = applyWorkspaceTransition((current) =>
+      updateWorkspaceFile(current, path, content),
+    )
+    dispatchWorkspaceMirror(activeFolderIdRef.current, result.mirror)
+  }, [applyWorkspaceTransition])
 
   const createFile = React.useCallback((path: string, content = "") => {
     const cleaned = normalizePath(path)
     if (!cleaned) return
-    let isNew = false
-    setState((prev) => {
-      if (prev.files[cleaned]) {
-        // Treat as "open the existing file" rather than overwriting.
-        return {
-          ...prev,
-          openTabs: prev.openTabs.includes(cleaned) ? prev.openTabs : [...prev.openTabs, cleaned],
-          activePath: cleaned,
-        }
-      }
-      const file: CodeFile = {
-        path: cleaned,
-        language: languageForPath(cleaned),
-        content,
-        updatedAt: Date.now(),
-      }
-      isNew = true
-      return {
-        files: { ...prev.files, [cleaned]: file },
-        openTabs: [...prev.openTabs, cleaned],
-        activePath: cleaned,
-      }
-    })
-    if (isNew) mirrorWrite(activeFolderIdRef.current, cleaned, content)
-  }, [])
+    const result = applyWorkspaceTransition((current) =>
+      createWorkspaceFile(current, cleaned, content),
+    )
+    dispatchWorkspaceMirror(activeFolderIdRef.current, result.mirror)
+  }, [applyWorkspaceTransition])
 
   const renameFile = React.useCallback((oldPath: string, newPath: string) => {
     const cleanedNew = normalizePath(newPath)
     if (!cleanedNew || cleanedNew === oldPath) return
-    let didRename = false
-    setState((prev) => {
-      const file = prev.files[oldPath]
-      if (!file) return prev
-      if (prev.files[cleanedNew]) return prev // refuse to clobber
-      didRename = true
-      const renamed: CodeFile = {
-        ...file,
-        path: cleanedNew,
-        language: languageForPath(cleanedNew),
-        updatedAt: Date.now(),
-      }
-      const files = { ...prev.files, [cleanedNew]: renamed }
-      delete files[oldPath]
-      const openTabs = prev.openTabs.map((p) => (p === oldPath ? cleanedNew : p))
-      const activePath = prev.activePath === oldPath ? cleanedNew : prev.activePath
-      return { files, openTabs, activePath }
-    })
-    if (didRename) mirrorRename(activeFolderIdRef.current, oldPath, cleanedNew)
-  }, [])
+    const result = applyWorkspaceTransition((current) =>
+      renameWorkspaceFile(current, oldPath, cleanedNew),
+    )
+    dispatchWorkspaceMirror(activeFolderIdRef.current, result.mirror)
+  }, [applyWorkspaceTransition])
 
   const deleteFile = React.useCallback((path: string) => {
-    let didDelete = false
-    setState((prev) => {
-      if (!prev.files[path]) return prev
-      didDelete = true
-      const files = { ...prev.files }
-      delete files[path]
-      const openTabs = prev.openTabs.filter((p) => p !== path)
-      const activePath =
-        prev.activePath === path ? openTabs[openTabs.length - 1] ?? null : prev.activePath
-      return { files, openTabs, activePath }
-    })
-    if (didDelete) mirrorDelete(activeFolderIdRef.current, path)
-  }, [])
+    const result = applyWorkspaceTransition((current) => deleteWorkspaceFile(current, path))
+    dispatchWorkspaceMirror(activeFolderIdRef.current, result.mirror)
+  }, [applyWorkspaceTransition])
 
   const resetWorkspace = React.useCallback(() => {
     const starter = defaultStarterFiles()
@@ -532,21 +592,33 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     for (const f of starter) files[f.path] = f
     setState({ files, openTabs: starter.slice(0, 2).map((f) => f.path), activePath: starter[0]?.path ?? null })
     setWorkspaceSource({ kind: "starter", name: "Ejemplo local", linked: false })
-  }, [])
+  }, [setState])
 
   const forgetWorkspace = React.useCallback(
     (id: string) => {
       if (!id) return
+      const activeWorkspaceId = activeFolder?.id || null
+      const projectId = codexProjectIdFromWorkspaceId(id, { assumeProject: true })
+      const canonicalProjectWorkspaceId = projectId
+        ? codexWorkspaceIdForProject(projectId)
+        : null
+      const workspaceIds = new Set<string>([id])
+      if (canonicalProjectWorkspaceId) workspaceIds.add(canonicalProjectWorkspaceId)
+      if (activeWorkspaceId && isSameCodexWorkspace(activeWorkspaceId, id)) {
+        workspaceIds.add(activeWorkspaceId)
+      }
       if (typeof window !== "undefined") {
         try {
-          window.localStorage.removeItem(storageKeyFor(id))
+          for (const workspaceId of workspaceIds) {
+            window.localStorage.removeItem(storageKeyFor(workspaceId))
+          }
         } catch {
           /* fail soft */
         }
       }
       // If the deleted workspace is the one currently open, drop back to the
       // starter project so the editor never points at a folder that's gone.
-      if (activeFolder?.id === id) {
+      if (isSameCodexWorkspace(activeWorkspaceId, id)) {
         setActiveFolder(null)
         resetWorkspace()
       }
@@ -630,7 +702,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       if (err?.name === "AbortError") return
       toast.error(err?.message || "No se pudo abrir la carpeta local.")
     }
-  }, [setActiveFolder])
+  }, [setActiveFolder, setState])
 
   const switchCodexWorkspace = React.useCallback(
     async (target: { id: string; name: string; kind: "local-folder" | "project"; projectId?: string }) => {
@@ -786,7 +858,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
       window.dispatchEvent(new CustomEvent("siragpt:code-open-preview"))
     }
     return cleaned
-  }, [])
+  }, [setState])
 
   // Bulk-load files into the workspace (e.g. from a bound GitHub repo) WITHOUT
   // mirroring back to the clone — the clone is the source here.
@@ -816,7 +888,7 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
     } else {
       setMirrorSuppressed(folderId, false)
     }
-  }, [])
+  }, [setState])
 
   const registerChatFocusHandler = React.useCallback((handler: ChatFocusListener) => {
     chatFocusListeners.current.add(handler)
@@ -907,22 +979,20 @@ export function CodeWorkspaceProvider({ children }: { children: React.ReactNode 
         projectId: detail.projectId,
       })
       const key = codexWorkspaceSessionKey(detail.workspaceId)
-      const existing = detail.title
-        ? listSessionsForWorkspace(key, chatSessionStore).find((session) => session.title === detail.title)
-        : null
-      if (existing) {
-        setChatSessionStore(setActiveCodeChatSessionRecord(key, existing.id, chatSessionStore))
-      } else {
-        const { store } = createCodeChatSessionRecord(
+      setChatSessionStore((prev) => {
+        const existing = detail.title
+          ? listSessionsForWorkspace(key, prev).find((session) => session.title === detail.title)
+          : null
+        if (existing) return setActiveCodeChatSessionRecord(key, existing.id, prev)
+        return createCodeChatSessionRecord(
           key,
           detail.title ? { title: detail.title } : undefined,
-          chatSessionStore,
-        )
-        setChatSessionStore(store)
-      }
+          prev,
+        ).store
+      })
       focusChat()
     },
-    [chatSessionStore, focusChat, switchCodexWorkspace],
+    [focusChat, switchCodexWorkspace],
   )
 
   React.useEffect(() => {

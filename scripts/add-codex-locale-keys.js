@@ -89,6 +89,7 @@ const ES = {
   },
   "composer": {
     "placeholder": "Describe tu idea — la IA propone el plan y ejecuta…",
+    "placeholderApps": "Ej: crea un software como ChatGPT, un CRM o un ERP… la IA compila todas las capas y puede trabajar horas",
     "plan": "Plan",
     "planTooltip": "El agente planifica internamente y ejecuta en modo automático.",
     "send": "Enviar",
@@ -139,7 +140,7 @@ const ES = {
     "emptyDescribe": "Describe qué quieres construir para proponer un plan.",
     "emptySelect": "Crea o selecciona un proyecto para empezar.",
     "filesHint": "El árbol de archivos del workspace se abre desde el editor de /code.",
-    "webUnavailable": "El preview aún no está disponible. Arráncalo desde un checkpoint o el botón Ejecutar.",
+    "webUnavailable": "El preview aún no está disponible. Ábrelo desde un checkpoint.",
     "openInTab": "Abrir en pestaña nueva",
     "checklistEmpty": "Aún no hay un plan aprobado con tareas.",
     "defaultProjectName": "Proyecto {n}",
@@ -149,7 +150,48 @@ const ES = {
     "disabledTitle": "APPS aún no está activo",
     "disabledBody": "El motor Codex V2 está apagado en este entorno. Activa CODEX_AGENT_V2 para construir apps con chat, runs y preview real.",
     "forbiddenTitle": "Acceso restringido",
-    "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist."
+    "forbiddenBody": "Tu cuenta no está autorizada para ejecutar APPS en producción. Pide acceso de admin o agrega tu usuario al allowlist.",
+    "agentComputer": {
+      "title": "Computadora del agente",
+      "status": {
+        "live": "En vivo",
+        "starting": "Pensando…",
+        "error": "Error",
+        "idle": "En espera"
+      },
+      "dock": {
+        "browser": "Navegador",
+        "files": "Archivos",
+        "terminal": "Terminal",
+        "desktop": "Escritorio",
+        "openLabel": "Abrir {app}",
+        "focusedBrowser": "Chrome enfocado en la computadora del agente",
+        "focusedOther": "{app} enfocado",
+        "unavailable": "La computadora del agente no está disponible aquí"
+      },
+      "routines": {
+        "toggle": "Rutinas",
+        "active": "activa",
+        "mejoraConstanteName": "Mejora constante chat y code",
+        "mejoraConstanteSchedule": "cada 3 h",
+        "mejoraConstanteNext": "en curso",
+        "avisarTiendasName": "Avisar tiendas iPhone/Android",
+        "avisarTiendasSchedule": "9:32 / 15:32 días laborables",
+        "avisarTiendasNext": "programada"
+      },
+      "loginHandoff": {
+        "title": "Inicia sesión en el equipo",
+        "instruction": "Inicia sesión en este sitio",
+        "neverSees": "SiraGPT no ve tu contraseña",
+        "ready": "Listo",
+        "captchaTitle": "Completa el captcha en el equipo",
+        "captchaInstruction": "Hay un captcha. Tómalo tú.",
+        "otpTitle": "Completa la verificación en el equipo",
+        "otpInstruction": "Ingresa el código 2FA en esta computadora",
+        "paymentTitle": "Completa el pago en el equipo",
+        "paymentInstruction": "Paga en esta computadora. SiraGPT no ve tus datos."
+      }
+    }
   }
 };
 
@@ -221,6 +263,7 @@ const EN = {
   },
   "composer": {
     "placeholder": "Describe the idea — AI plans and builds…",
+    "placeholderApps": "e.g. build software like ChatGPT, a CRM or ERP… AI compiles every layer and can work for hours",
     "plan": "Plan",
     "planTooltip": "The agent plans internally and builds automatically.",
     "send": "Send",
@@ -281,7 +324,48 @@ const EN = {
     "disabledTitle": "APPS is not active yet",
     "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
     "forbiddenTitle": "Restricted access",
-    "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+    "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+    "agentComputer": {
+      "title": "Agent computer",
+      "status": {
+        "live": "Live",
+        "starting": "Thinking…",
+        "error": "Error",
+        "idle": "Waiting"
+      },
+      "dock": {
+        "browser": "Browser",
+        "files": "Files",
+        "terminal": "Terminal",
+        "desktop": "Desktop",
+        "openLabel": "Open {app}",
+        "focusedBrowser": "Chrome focused on the agent's computer",
+        "focusedOther": "{app} focused",
+        "unavailable": "The agent's computer is not available here"
+      },
+      "routines": {
+        "toggle": "Routines",
+        "active": "active",
+        "mejoraConstanteName": "Continuous chat and code improvement",
+        "mejoraConstanteSchedule": "every 3 h",
+        "mejoraConstanteNext": "in progress",
+        "avisarTiendasName": "Notify iPhone and Android stores",
+        "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+        "avisarTiendasNext": "scheduled"
+      },
+      "loginHandoff": {
+        "title": "Sign in on the computer",
+        "instruction": "Sign in to this site",
+        "neverSees": "SiraGPT cannot see your password",
+        "ready": "Done",
+        "captchaTitle": "Complete the captcha on the computer",
+        "captchaInstruction": "There is a captcha. Take it yourself.",
+        "otpTitle": "Complete verification on the computer",
+        "otpInstruction": "Enter the 2FA code on this computer",
+        "paymentTitle": "Complete payment on the computer",
+        "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+      }
+    }
   }
 };
 

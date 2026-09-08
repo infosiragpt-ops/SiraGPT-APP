@@ -53,8 +53,10 @@ const EXPENSIVE_GENERATION_MOUNTS = Object.freeze([
   '/api/artifact',
   '/api/enterprise',
   '/api/social-posts',
+  '/api/apps',
   '/api/gpts',
   '/api/voice/grok',
+  '/api/voice-studio',
 ]);
 
 const COOKIE_AUTH_CSRF_MOUNTS = Object.freeze(Array.from(new Set([

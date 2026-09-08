@@ -1,0 +1,13 @@
+# Append to Lenovo publish.sh AFTER runner / backend / frontend.
+# publish.sh is not in this repo. Do not compose down -v.
+# Do not git reset --hard. Do not replace the live Caddyfile.
+# --no-deps: do not recreate gateway/backend as a side effect of the orch.
+
+COMPOSE_FILE="${COMPOSE_FILE:-/home/user/deployments/iliagpt/compose.yaml}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-iliagpt}"
+# After pasting the service into compose.yaml, these two lines are enough.
+# If you keep the overlay as a second file instead:
+#   -f "$COMPOSE_FILE" -f /path/to/computer-orchestrator.compose.yaml
+
+docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" build computer-orchestrator
+docker compose -p "$COMPOSE_PROJECT" -f "$COMPOSE_FILE" up -d --no-deps computer-orchestrator

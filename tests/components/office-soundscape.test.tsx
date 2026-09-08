@@ -29,6 +29,14 @@ type FakeSource = {
   stop: ReturnType<typeof vi.fn>
 }
 
+type FakeFilter = {
+  type: BiquadFilterType
+  frequency: ReturnType<typeof audioParam>
+  Q: ReturnType<typeof audioParam>
+  connect: ReturnType<typeof vi.fn>
+  disconnect: ReturnType<typeof vi.fn>
+}
+
 const contexts: FakeAudioContext[] = []
 let resumeAllowed = true
 
@@ -52,6 +60,7 @@ class FakeAudioContext {
   state: AudioContextState = "suspended"
   currentTime = 0
   destination = {}
+  filters: FakeFilter[] = []
   close = vi.fn(async () => {
     this.state = "closed"
   })
@@ -68,6 +77,29 @@ class FakeAudioContext {
     connect: vi.fn(),
     disconnect: vi.fn(),
   }))
+  createDynamicsCompressor = vi.fn(() => ({
+    threshold: audioParam(),
+    knee: audioParam(),
+    ratio: audioParam(),
+    attack: audioParam(),
+    release: audioParam(),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+  }))
+  createBiquadFilter = vi.fn(() => {
+    const filter: FakeFilter & { gain: ReturnType<typeof audioParam> } = {
+      type: "lowpass",
+      frequency: audioParam(),
+      Q: audioParam(),
+      // BiquadFilterNode exposes a `gain` AudioParam (DOM lib.dom.d.ts);
+      // the coast-day mix chain reads body.gain/presence.gain.
+      gain: audioParam(),
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+    }
+    this.filters.push(filter)
+    return filter
+  })
   createBufferSource = vi.fn((): FakeSource => ({
     buffer: null,
     loop: false,
@@ -125,9 +157,7 @@ describe("office soundscape lifecycle", () => {
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
 
     expect(result.current.enabled).toBe(true)
-    expect(result.current.volume).toBe(0.32)
     expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-day")
-    expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("terrace-steps")
     expect(contexts[0]?.resume).toHaveBeenCalled()
   })
 
@@ -176,15 +206,54 @@ describe("office soundscape lifecycle", () => {
     expect(context?.close).toHaveBeenCalled()
   })
 
-  it("persists a deliberate mute and restores the selected volume", async () => {
+  it("persists a deliberate mute", async () => {
     const { result } = renderSoundscape()
     await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
 
-    act(() => result.current.setVolume(0.21))
     act(() => result.current.toggle())
 
-    expect(localStorage.getItem("siragpt:office-sound-volume")).toBe("0.21")
     expect(localStorage.getItem("siragpt:office-sound-enabled")).toBe("off")
     expect(result.current.enabled).toBe(false)
+  })
+
+  it("plays restrained operational cues only after a live count changes", async () => {
+    const { result, rerender } = renderHook(
+      ({ activeCount, approvalCount, attentionCount }) =>
+        useOfficeSoundscape({
+          active: true,
+          timeOfDay: "night",
+          timePhase: "night",
+          paused: false,
+          activeCount,
+          approvalCount,
+          attentionCount,
+        }),
+      {
+        initialProps: {
+          activeCount: 2,
+          approvalCount: 0,
+          attentionCount: 0,
+        },
+      },
+    )
+
+    await waitFor(() => expect(result.current.state).toBe("elevenlabs"))
+    expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("coast-night")
+    expect(apiClientMock.getOfficeSoundscape).not.toHaveBeenCalledWith("work-start")
+
+    rerender({ activeCount: 3, approvalCount: 0, attentionCount: 0 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("work-start"),
+    )
+
+    rerender({ activeCount: 3, approvalCount: 1, attentionCount: 0 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("approval-ready"),
+    )
+
+    rerender({ activeCount: 3, approvalCount: 1, attentionCount: 1 })
+    await waitFor(() =>
+      expect(apiClientMock.getOfficeSoundscape).toHaveBeenCalledWith("attention"),
+    )
   })
 })

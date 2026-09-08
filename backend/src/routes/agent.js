@@ -25,6 +25,11 @@ const reactAgent = require('../services/react-agent');
 const executor = require('../services/agents/executor');
 const rag = require('../services/rag-service');
 const skills = require('../services/skills');
+const {
+  buildPublicStreamError,
+  sanitizePublicStoppedReason,
+  sanitizePublicStreamEvent,
+} = require('../services/observability/public-stream-error');
 
 const router = express.Router();
 
@@ -235,9 +240,16 @@ router.post(
           ctx,
           maxSteps: req.body.maxSteps,
           model: req.body.model,
-          onStep: (step) => send({ type: 'step', step }),
+          onStep: (step) => send(sanitizePublicStreamEvent(
+            { type: 'step', step },
+            { req, surface: 'agent.run.step' },
+          )),
         });
-        send({ type: 'final', answer: result.finalAnswer, stoppedReason: result.stoppedReason });
+        send({
+          type: 'final',
+          answer: result.finalAnswer,
+          stoppedReason: sanitizePublicStoppedReason(result.stoppedReason),
+        });
       } else {
         result = await executor.run(openai, {
           goal: req.body.query,
@@ -245,12 +257,15 @@ router.post(
           thinking,
           executorModel: req.body.model || 'gpt-4o',
           ctx,
-          onStep: (evt) => send({ type: evt.phase, ...evt }),
+          onStep: (evt) => send(sanitizePublicStreamEvent(
+            { type: evt.phase, ...evt },
+            { req, surface: 'agent.run.step' },
+          )),
         });
         send({
           type: 'final',
           answer: result.finalAnswer,
-          stoppedReason: result.stoppedReason,
+          stoppedReason: sanitizePublicStoppedReason(result.stoppedReason),
           plan: result.plan,
           replans: result.replans,
         });
@@ -258,7 +273,10 @@ router.post(
       res.end();
     } catch (err) {
       console.error('[agent] run failed:', err);
-      send({ type: 'error', error: err.message || 'agent run failed' });
+      send({
+        type: 'error',
+        ...buildPublicStreamError(err, { req, surface: 'agent.run' }),
+      });
       res.end();
     }
   }

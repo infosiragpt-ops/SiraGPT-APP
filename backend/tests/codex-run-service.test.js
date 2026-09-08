@@ -4,11 +4,17 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const runService = require('../src/services/codex/run-service');
-const { createRun, cancelRun, getRun, listRuns, RunServiceError } = runService;
+const { createRun, cancelRun, cancelRunFamily, getRun, listRuns, RunServiceError } = runService;
 
 // In-memory fake of the Prisma surface run-service touches.
 function makeDb({ projects = [], runs = [] } = {}) {
   let id = 0;
+  const matchesWhere = (row, where = {}) => Object.entries(where).every(([key, value]) => {
+    if (key === 'OR') return value.some((branch) => matchesWhere(row, branch));
+    if (value && typeof value === 'object' && Array.isArray(value.in)) return value.in.includes(row[key]);
+    if (value && typeof value === 'object' && Object.hasOwn(value, 'not')) return row[key] !== value.not;
+    return row[key] === value;
+  });
   const db = {
     _runs: runs,
     codexProject: {
@@ -18,22 +24,11 @@ function makeDb({ projects = [], runs = [] } = {}) {
     },
     codexRun: {
       async findFirst({ where }) {
-        return (
-          runs.find((r) =>
-            Object.entries(where).every(([k, v]) => {
-              if (k === 'status' && v && v.in) return v.in.includes(r.status);
-              return r[k] === v;
-            }),
-          ) || null
-        );
+        return runs.find((run) => matchesWhere(run, where)) || null;
       },
       async findUnique({ where }) { return runs.find((r) => r.id === where.id) || null; },
       async count({ where }) {
-        return runs.filter((r) =>
-          r.projectId === where.projectId &&
-          where.status.in.includes(r.status) &&
-          (!where.id || !where.id.not || r.id !== where.id.not),
-        ).length;
+        return runs.filter((run) => matchesWhere(run, where)).length;
       },
       async create({ data }) {
         const row = { id: `run-${++id}`, createdAt: new Date(), startedAt: null, finishedAt: null, jobId: null, ...data };
@@ -48,16 +43,12 @@ function makeDb({ projects = [], runs = [] } = {}) {
       async updateMany({ where, data }) {
         let count = 0;
         for (const r of runs) {
-          const match = Object.entries(where).every(([k, v]) => {
-            if (k === 'status' && v && v.in) return v.in.includes(r.status);
-            return r[k] === v;
-          });
-          if (match) { Object.assign(r, data); count += 1; }
+          if (matchesWhere(r, where)) { Object.assign(r, data); count += 1; }
         }
         return { count };
       },
       async findMany({ where }) {
-        return runs.filter((r) => r.projectId === where.projectId && r.userId === where.userId);
+        return runs.filter((run) => matchesWhere(run, where));
       },
     },
   };
@@ -240,6 +231,82 @@ test('createRun (build) succeeds with an approvable plan run', async () => {
   }]);
 });
 
+test('build continuation inherits the exact plan model, tier and reasoning effort', async () => {
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [{
+      id: 'plan-depth',
+      projectId: 'p1',
+      userId: 'u1',
+      mode: 'plan',
+      status: 'waiting_approval',
+      model: 'gpt-5.4',
+      tier: 'power',
+      reasoningEffort: 'max',
+    }],
+  });
+  const run = await createRun({
+    userId: 'u1',
+    projectId: 'p1',
+    mode: 'build',
+    planRunId: 'plan-depth',
+    db,
+    queue: fakeQueue(),
+    eventStore: fakeEventStore(),
+  });
+
+  assert.equal(run.model, 'gpt-5.4');
+  assert.equal(run.tier, 'power');
+  assert.equal(run.reasoningEffort, 'max');
+});
+
+test('createRun rejects unsupported reasoning effort', async () => {
+  const db = makeDb({ projects: [PROJECT] });
+  await assert.rejects(
+    () => createRun({
+      userId: 'u1',
+      projectId: 'p1',
+      mode: 'plan',
+      reasoningEffort: 'unbounded',
+      db,
+      queue: fakeQueue(),
+    }),
+    (error) => error.code === 'invalid_reasoning_effort' && error.status === 400,
+  );
+});
+
+test('build creation revalidates a plan cancelled while approval was in flight', async () => {
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [{ id: 'plan-race', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' }],
+  });
+  const originalFindFirst = db.codexRun.findFirst.bind(db.codexRun);
+  let planReads = 0;
+  db.codexRun.findFirst = async (args) => {
+    const row = await originalFindFirst(args);
+    if (args.where?.id === 'plan-race' && row && ++planReads === 1) {
+      const snapshot = { ...row };
+      row.status = 'cancelled';
+      return snapshot;
+    }
+    return row;
+  };
+
+  await assert.rejects(
+    () => createRun({
+      userId: 'u1',
+      projectId: 'p1',
+      mode: 'build',
+      planRunId: 'plan-race',
+      db,
+      queue: fakeQueue(),
+      eventStore: fakeEventStore(),
+    }),
+    (error) => error.code === 'invalid_plan_run' && error.status === 409,
+  );
+  assert.equal(db._runs.some((row) => row.mode === 'build'), false);
+});
+
 test('build approval is idempotent for the same plan run', async () => {
   const calls = [];
   const db = makeDb({
@@ -407,6 +474,98 @@ test('cancelRun flips to cancelled, removes the job, and emits one terminal even
   assert.deepEqual(aborts, ['r1']);
   assert.deepEqual(calls.find((c) => c[0] === 'cancelQueued'), ['cancelQueued', 'r1']);
   assert.deepEqual(events, [{ runId: 'r1', type: 'run_status', data: { status: 'cancelled' } }]);
+});
+
+test('cancelRunFamily atomically stops a plan and its active build continuation', async () => {
+  const db = makeLockingDb({
+    projects: [PROJECT],
+    runs: [
+      { id: 'plan-family', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' },
+      { id: 'build-family', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running', planRunId: 'plan-family' },
+      { id: 'other-run', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running', planRunId: 'other-plan' },
+    ],
+  });
+  const events = [];
+  const queueCalls = [];
+  const aborts = [];
+  const result = await cancelRunFamily({
+    userId: 'u1',
+    runId: 'plan-family',
+    db,
+    queue: fakeQueue(queueCalls),
+    eventStore: fakeEventStore(events),
+    abortRun: (runId) => { aborts.push(runId); return true; },
+  });
+
+  assert.deepEqual(new Set(result.cancelledRunIds), new Set(['plan-family', 'build-family']));
+  assert.equal(db._runs.find((run) => run.id === 'plan-family').status, 'cancelled');
+  assert.equal(db._runs.find((run) => run.id === 'build-family').status, 'cancelled');
+  assert.equal(db._runs.find((run) => run.id === 'other-run').status, 'running');
+  assert.deepEqual(new Set(aborts), new Set(['plan-family', 'build-family']));
+  assert.equal(events.filter((event) => event.type === 'run_status').length, 2);
+  assert.equal(db._locks.length, 1, 'family cancellation shares the createRun advisory lock');
+});
+
+test('cancelRunFamily fans out only rows whose conditional cancellation won', async () => {
+  const completedAt = new Date('2026-08-03T12:00:00.000Z');
+  const db = makeLockingDb({
+    projects: [PROJECT],
+    runs: [
+      { id: 'plan-racing', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'waiting_approval' },
+      { id: 'build-racing', projectId: 'p1', userId: 'u1', mode: 'build', status: 'running', planRunId: 'plan-racing' },
+    ],
+  });
+  const originalFindMany = db.codexRun.findMany.bind(db.codexRun);
+  let raced = false;
+  db.codexRun.findMany = async (args) => {
+    const rows = await originalFindMany(args);
+    if (!raced && args.where?.status?.in) {
+      raced = true;
+      const build = db._runs.find((run) => run.id === 'build-racing');
+      build.status = 'done';
+      build.finishedAt = completedAt;
+    }
+    return rows;
+  };
+
+  const events = [];
+  const queueCalls = [];
+  const aborts = [];
+  const result = await cancelRunFamily({
+    userId: 'u1',
+    runId: 'plan-racing',
+    db,
+    queue: fakeQueue(queueCalls),
+    eventStore: fakeEventStore(events),
+    abortRun: (runId) => { aborts.push(runId); return true; },
+  });
+
+  assert.deepEqual(result.cancelledRunIds, ['plan-racing']);
+  assert.equal(db._runs.find((run) => run.id === 'plan-racing').status, 'cancelled');
+  assert.equal(db._runs.find((run) => run.id === 'build-racing').status, 'done');
+  assert.equal(db._runs.find((run) => run.id === 'build-racing').finishedAt, completedAt);
+  assert.deepEqual(aborts, ['plan-racing']);
+  assert.deepEqual(queueCalls.filter((call) => call[0] === 'cancelQueued'), [['cancelQueued', 'plan-racing']]);
+  assert.deepEqual(events.map((event) => event.runId), ['plan-racing']);
+});
+
+test('cancelRunFamily is idempotent when the family is already terminal', async () => {
+  const db = makeDb({
+    projects: [PROJECT],
+    runs: [
+      { id: 'plan-done', projectId: 'p1', userId: 'u1', mode: 'plan', status: 'done' },
+      { id: 'build-done', projectId: 'p1', userId: 'u1', mode: 'build', status: 'cancelled', planRunId: 'plan-done' },
+    ],
+  });
+  const result = await cancelRunFamily({
+    userId: 'u1',
+    runId: 'plan-done',
+    db,
+    queue: fakeQueue(),
+    eventStore: fakeEventStore(),
+  });
+  assert.deepEqual(result.cancelledRunIds, []);
+  assert.equal(result.runs.length, 2);
 });
 
 test('cancelRun 404s for a foreign run and 409s for a terminal one', async () => {

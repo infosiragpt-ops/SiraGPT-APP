@@ -1,0 +1,44 @@
+'use strict';
+
+/**
+ * SiraCode — native coding-agent core for SiraGPT.
+ *
+ * Independent rewrite inspired by anomalyco/opencode (MIT). Not a vendor
+ * copy and not affiliated with OpenCode or Anomaly. See NOTICE / THIRD_PARTY_NOTICES.md.
+ */
+
+const agents = require('./agents');
+const permissions = require('./permissions');
+const display = require('./display');
+const workspace = require('./workspace');
+const tools = require('./tools');
+const events = require('./events');
+const store = require('./session-store');
+const loop = require('./loop');
+const engine = require('./engine');
+const planHandoff = require('./plan-handoff');
+const permissionResume = require('./permission-resume');
+const sessionTitle = require('./session-title');
+const toolResult = require('./tool-result');
+const sessionSummary = require('./session-summary');
+const toolRounds = require('./tool-rounds');
+const shellSandbox = require('./shell-sandbox');
+
+module.exports = {
+  ...agents,
+  ...permissions,
+  ...display,
+  ...workspace,
+  ...tools,
+  ...events,
+  ...store,
+  ...loop,
+  ...engine,
+  ...planHandoff,
+  ...permissionResume,
+  ...sessionTitle,
+  ...toolResult,
+  ...sessionSummary,
+  ...toolRounds,
+  ...shellSandbox,
+};

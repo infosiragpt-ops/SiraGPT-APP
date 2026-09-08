@@ -116,12 +116,12 @@ function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
  * RATE_LIMIT_API_MAX × TTL keys before the limiter cuts them off).
  *
  * Two record states share the same map:
- *   { state: 'pending', bodyHash, expiresAt }   — in-flight lock
+ *   { state: 'pending', bodyHash, leaseToken, expiresAt } — in-flight lease
  *   { state: 'final',   status, body, headers, bodyHash, expiresAt }
  *
  * tryAcquire(key, bodyHash, lockTtlMs) atomically inserts a pending
  * record only if no record exists. Returns:
- *   { acquired: true }                         — caller owns the slot
+ *   { acquired: true, leaseToken }             — caller owns the slot
  *   { acquired: false, existing }              — somebody else has it
  */
 function createInMemoryIdempotencyStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now = () => Date.now() } = {}) {
@@ -150,6 +150,7 @@ function createInMemoryIdempotencyStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now 
         ? customTtlSeconds
         : ttlSeconds;
       map.set(key, { ...value, expiresAt: now() + ttl * 1000 });
+      return true;
     },
     async tryAcquire(key, bodyHash, lockTtlMs) {
       gc();
@@ -157,24 +158,53 @@ function createInMemoryIdempotencyStore({ ttlSeconds = DEFAULT_TTL_SECONDS, now 
       if (existing && existing.expiresAt > now()) {
         return { acquired: false, existing };
       }
+      const leaseToken = crypto.randomUUID();
       map.set(key, {
         state: 'pending',
         bodyHash: bodyHash || null,
+        leaseToken,
         expiresAt: now() + lockTtlMs,
       });
-      return { acquired: true };
+      return { acquired: true, leaseToken };
     },
-    async release(key) {
+    async putIfLease(key, leaseToken, value, customTtlSeconds) {
+      gc();
       const existing = map.get(key);
-      if (existing && existing.state === 'pending') {
+      if (!existing || existing.state !== 'pending' || existing.leaseToken !== leaseToken) return false;
+      const ttl = (typeof customTtlSeconds === 'number' && customTtlSeconds > 0)
+        ? customTtlSeconds
+        : ttlSeconds;
+      map.set(key, { ...value, expiresAt: now() + ttl * 1000 });
+      return true;
+    },
+    async release(key, leaseToken) {
+      const existing = map.get(key);
+      if (existing && existing.state === 'pending' && existing.leaseToken === leaseToken) {
         map.delete(key);
+        return true;
       }
+      return false;
     },
     _size() { return map.size; },
   };
 }
 
 function createRedisIdempotencyStore({ redis, prefix, ttlSeconds }) {
+  const putIfLeaseScript = [
+    "local raw = redis.call('GET', KEYS[1])",
+    'if not raw then return 0 end',
+    'local ok, current = pcall(cjson.decode, raw)',
+    "if not ok or current['state'] ~= 'pending' or current['leaseToken'] ~= ARGV[1] then return 0 end",
+    "redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])",
+    'return 1',
+  ].join('\n');
+  const releaseIfLeaseScript = [
+    "local raw = redis.call('GET', KEYS[1])",
+    'if not raw then return 0 end',
+    'local ok, current = pcall(cjson.decode, raw)',
+    "if not ok or current['state'] ~= 'pending' or current['leaseToken'] ~= ARGV[1] then return 0 end",
+    "return redis.call('DEL', KEYS[1])",
+  ].join('\n');
   return {
     mode: 'redis',
     async get(key) {
@@ -192,15 +222,18 @@ function createRedisIdempotencyStore({ redis, prefix, ttlSeconds }) {
         : ttlSeconds;
       try {
         await redis.set(`${prefix}${key}`, JSON.stringify(value), 'EX', ttl);
+        return true;
       } catch (_err) {
         // best-effort; a failed put just means the next retry runs the handler.
+        return false;
       }
     },
     async tryAcquire(key, bodyHash, lockTtlMs) {
+      const leaseToken = crypto.randomUUID();
       try {
-        const payload = JSON.stringify({ state: 'pending', bodyHash: bodyHash || null });
+        const payload = JSON.stringify({ state: 'pending', bodyHash: bodyHash || null, leaseToken });
         const setRes = await redis.set(`${prefix}${key}`, payload, 'PX', lockTtlMs, 'NX');
-        if (setRes) return { acquired: true };
+        if (setRes) return { acquired: true, leaseToken };
         const raw = await redis.get(`${prefix}${key}`);
         return { acquired: false, existing: raw ? JSON.parse(raw) : null };
       } catch (_err) {
@@ -208,19 +241,38 @@ function createRedisIdempotencyStore({ redis, prefix, ttlSeconds }) {
         // proceeds rather than hanging. The trade-off is one
         // duplicate execution under split-brain — preferable to a
         // wedged client retry loop.
-        return { acquired: true };
+        return { acquired: true, leaseToken, uncoordinated: true };
       }
     },
-    async release(key) {
+    async putIfLease(key, leaseToken, value, customTtlSeconds) {
+      const ttl = (typeof customTtlSeconds === 'number' && customTtlSeconds > 0)
+        ? customTtlSeconds
+        : ttlSeconds;
       try {
-        const raw = await redis.get(`${prefix}${key}`);
-        if (!raw) return;
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.state === 'pending') {
-          await redis.del(`${prefix}${key}`);
-        }
+        const result = await redis.eval(
+          putIfLeaseScript,
+          1,
+          `${prefix}${key}`,
+          String(leaseToken || ''),
+          JSON.stringify(value),
+          String(ttl),
+        );
+        return Number(result) === 1;
       } catch (_err) {
-        // best-effort
+        return false;
+      }
+    },
+    async release(key, leaseToken) {
+      try {
+        const result = await redis.eval(
+          releaseIfLeaseScript,
+          1,
+          `${prefix}${key}`,
+          String(leaseToken || ''),
+        );
+        return Number(result) > 0;
+      } catch (_err) {
+        return false;
       }
     },
   };
@@ -394,12 +446,14 @@ function idempotencyMiddleware(options = {}) {
     // wait for them to finish (same body) or fast-fail (different
     // body, or wait timed out).
     let acquired = false;
+    let leaseToken = null;
     let lastSeen = cachedExisting || null;
     const deadline = now() + lockTimeoutMs;
     while (true) {
       const attempt = await store.tryAcquire(cacheKey, bodyHash, lockHoldMs);
       if (attempt.acquired) {
         acquired = true;
+        leaseToken = attempt.leaseToken || null;
         break;
       }
       const existing = attempt.existing;
@@ -446,17 +500,29 @@ function idempotencyMiddleware(options = {}) {
         }
         // Fire-and-forget: a slow Redis put should never block the
         // response. Errors are swallowed by the store.
-        void store.put(cacheKey, {
+        const finalRecord = {
           state: 'final',
           status,
           body,
           headers: headersToCache,
           bodyHash,
-        });
+        };
+        const persist = typeof store.putIfLease === 'function'
+          ? store.putIfLease(cacheKey, leaseToken, finalRecord)
+          : false;
+        void Promise.resolve(persist)
+          .then((stored) => {
+            if (stored === false && acquired) return store.release(cacheKey, leaseToken);
+            return null;
+          })
+          .catch(() => {
+            if (acquired) return store.release(cacheKey, leaseToken);
+            return null;
+          });
       } else {
         // Non-2xx or streaming: drop the pending lock so subsequent
         // retries can run fresh instead of waiting on a phantom slot.
-        if (acquired) void store.release(cacheKey);
+        if (acquired) void store.release(cacheKey, leaseToken);
       }
       return originalJson(body);
     };
@@ -466,10 +532,10 @@ function idempotencyMiddleware(options = {}) {
     // next retry isn't blocked for the full lock TTL.
     if (typeof res.on === 'function') {
       res.on('close', () => {
-        if (!settled && acquired) void store.release(cacheKey);
+        if (!settled && acquired) void store.release(cacheKey, leaseToken);
       });
       res.on('finish', () => {
-        if (!settled && acquired) void store.release(cacheKey);
+        if (!settled && acquired) void store.release(cacheKey, leaseToken);
       });
     }
 

@@ -1,7 +1,7 @@
 import { authenticatedFetch } from "./authenticated-fetch"
 import { getNormalizedApiBaseUrl } from "./api-base-url"
 
-export type CompanySocialPlatform = "facebook" | "linkedin" | "x"
+export type CompanySocialPlatform = "facebook" | "instagram" | "linkedin" | "whatsapp" | "x" | "youtube"
 
 export type CompanySocialConnection = {
   id: string
@@ -109,7 +109,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const errorBody = body as { error?: string; code?: string } | null
     throw Object.assign(
       new Error(errorBody?.error || `Social operations HTTP ${response.status}`),
-      { status: response.status, code: errorBody?.code, body },
+      { status: response.status, code: errorBody?.code || mapOAuthErrorCode(errorBody || body), body },
     )
   }
   return body as T
@@ -165,4 +165,21 @@ export const companySocialApi = {
       `/${encodeURIComponent(postId)}/publish-now`,
       { method: "POST" },
     ),
+}
+
+const OAUTH_CODE_RE = /\b(invalid_grant|access_denied|invalid_request|invalid_client|unauthorized_client|unsupported_response_type|invalid_scope|server_error|temporarily_unavailable|bad_verification_code)\b/i
+
+/** FE-057: map OAuth errors to a stable code, never HTML from a popup. */
+export function mapOAuthErrorCode(input: unknown): string {
+  if (input == null) return "oauth_error"
+  if (typeof input === "object") {
+    const rec = input as { code?: unknown; error?: unknown; message?: unknown }
+    const direct = String(rec.code || rec.error || "")
+    const m = OAUTH_CODE_RE.exec(direct) || OAUTH_CODE_RE.exec(String(rec.message || ""))
+    if (m) return m[1].toLowerCase()
+  }
+  const text = String(input)
+  if (/<html|<!doctype/i.test(text)) return "oauth_popup_html"
+  const m = OAUTH_CODE_RE.exec(text)
+  return m ? m[1].toLowerCase() : "oauth_error"
 }

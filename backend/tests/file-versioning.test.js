@@ -24,13 +24,15 @@ function makeFakePrisma({ failCreate = false } = {}) {
       async findFirst({ where, orderBy, select } = {}) {
         let match = rows.filter((r) => (!where?.fileId || r.fileId === where.fileId)
           && (!where?.userId || r.userId === where.userId)
-          && (!where?.id || r.id === where.id));
+          && (!where?.id || r.id === where.id)
+          && (where?.validationPassed === undefined || r.validationPassed === where.validationPassed));
         if (orderBy?.version === 'desc') match = match.sort((a, b) => b.version - a.version);
         return match[0] || null;
       },
       async findMany({ where, orderBy } = {}) {
         let match = rows.filter((r) => (!where?.fileId || r.fileId === where.fileId)
-          && (!where?.userId || r.userId === where.userId));
+          && (!where?.userId || r.userId === where.userId)
+          && (where?.validationPassed === undefined || r.validationPassed === where.validationPassed));
         if (orderBy?.version === 'desc') match = match.sort((a, b) => b.version - a.version);
         return match;
       },
@@ -73,6 +75,27 @@ describe('versioning', () => {
     const v = await recordFileVersion(prisma, { fileId: 'file-a', userId: 'u1', artifactId: 'a', filename: 'a.docx' });
     assert.ok(await getFileVersion(prisma, { versionId: v.id, userId: 'u1' }));
     assert.equal(await getFileVersion(prisma, { versionId: v.id, userId: 'intruder' }), null);
+  });
+
+  test('invalid candidates are neither recorded nor exposed as versions', async () => {
+    const prisma = makeFakePrisma();
+    const rejected = await recordFileVersion(prisma, {
+      fileId: 'file-a', userId: 'u1', artifactId: 'invalid-new', filename: 'invalid.docx', validationPassed: false,
+    });
+    assert.equal(rejected, null);
+    assert.equal(prisma._rows.length, 0, 'a failed validation must not create a version row');
+
+    prisma._rows.push({
+      id: 'legacy-invalid', fileId: 'file-a', userId: 'u1', version: 7,
+      artifactId: 'legacy-invalid-artifact', filename: 'legacy-invalid.docx',
+      validationPassed: false, createdAt: new Date(),
+    });
+    assert.deepEqual(await listFileVersions(prisma, { fileId: 'file-a', userId: 'u1' }), []);
+    assert.equal(await getFileVersion(prisma, { versionId: 'legacy-invalid', userId: 'u1' }), null);
+    assert.equal(await restoreFileVersion(prisma, {
+      fileId: 'file-a', versionId: 'legacy-invalid', userId: 'u1',
+    }), null);
+    assert.equal(prisma._rows.length, 1, 'restoring a legacy invalid row must not create a new head');
   });
 
   test('restore creates a new head pointing at the selected immutable artifact', async () => {

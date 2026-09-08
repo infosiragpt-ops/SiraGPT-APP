@@ -269,6 +269,11 @@ async function fireJob(jobId, { source = 'cron', payload = null } = {}) {
   const job = getJob(jobId);
   if (!job) return { ok: false, reason: 'job not found' };
   if (!job.enabled) return { ok: false, reason: 'disabled' };
+  // Same-process guard shared by cron and webhook entry points. This is
+  // not a distributed lease: multiple workers need a durable claim store.
+  if (running.has(job.id)) {
+    return { ok: false, reason: 'already running', code: 'overlap_skipped' };
+  }
   if (!_invoker) {
     console.warn(`[scheduler] no invoker registered — skipping job ${jobId}`);
     return { ok: false, reason: 'no invoker' };

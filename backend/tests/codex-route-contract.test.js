@@ -745,6 +745,43 @@ test('GET /projects/:id/preview/status is never cached', async () => {
   assert.equal(res.body.ready, false);
 });
 
+test('tokenized Codex preview injects the shared DOM selector bridge into HTML', async () => {
+  const upstreamHits = [];
+  const server = http.createServer((req, res) => {
+    upstreamHits.push(req.url);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Content-Length', '95');
+    res.end('<!doctype html><html><head></head><body><button id="codex-target">Elegir</button></body></html>');
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  process.env.CODE_RUNNER_DEV_INTERNAL_URL = `http://127.0.0.1:${port}`;
+  runnerMockPort = port;
+
+  try {
+    const app = buildApp();
+    const start = await request(app).post('/api/codex/projects/p1/preview/start');
+    assert.equal(start.status, 200);
+    const joiner = start.body.previewUrl.includes('?') ? '&' : '?';
+    const res = await request(app).get(
+      `${start.body.previewUrl}${joiner}__sgpt_preview_nonce=codex-selector-nonce-1234`,
+    );
+
+    assert.equal(res.status, 200);
+    assert.match(res.text, /data-sgpt-preview-bridge/);
+    assert.match(res.text, /data-sgpt-preview-selector-bridge/);
+    assert.match(res.text, /sgpt-preview-select-start/);
+    assert.match(res.text, /sgpt-preview-selection-ready/);
+    assert.match(res.text, /selectionMethod: 'dom'/);
+    assert.match(res.text, /codex-selector-nonce-1234/);
+    assert.doesNotMatch(upstreamHits[0], /__sgpt_preview_nonce/);
+    assert.ok(Number(res.headers['content-length']) > 95);
+  } finally {
+    delete process.env.CODE_RUNNER_DEV_INTERNAL_URL;
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('tokenized preview proxy strips credentials and forces frame headers', async () => {
   const upstreamHits = [];
   const server = http.createServer((req, res) => {

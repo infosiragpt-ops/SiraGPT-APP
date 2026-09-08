@@ -8,6 +8,7 @@
 
 const { describe, test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require('node:fs');
 
 const {
   resolveRateLimitConfig,
@@ -19,8 +20,8 @@ describe("resolveRateLimitConfig", () => {
     const cfg = resolveRateLimitConfig({});
     assert.equal(cfg.windowMs, FIFTEEN_MINUTES_MS);
     assert.equal(cfg.auth, 30);
-    assert.equal(cfg.expensive, 60);
-    assert.equal(cfg.api, 1000);
+    assert.equal(cfg.expensive, 180);
+    assert.equal(cfg.api, 3000);
   });
 
   test("honors valid integer env vars across all four knobs", () => {
@@ -47,8 +48,8 @@ describe("resolveRateLimitConfig", () => {
     });
     assert.equal(cfg.windowMs, FIFTEEN_MINUTES_MS);
     assert.equal(cfg.auth, 30);
-    assert.equal(cfg.expensive, 60);
-    assert.equal(cfg.api, 1000);
+    assert.equal(cfg.expensive, 180);
+    assert.equal(cfg.api, 3000);
   });
 
   test("rejects zero and negative values (a 0-cap would block all traffic, presumed unintended)", () => {
@@ -57,14 +58,30 @@ describe("resolveRateLimitConfig", () => {
       RATE_LIMIT_API_MAX: "-5",
     });
     assert.equal(cfg.auth, 30);
-    assert.equal(cfg.api, 1000);
+    assert.equal(cfg.api, 3000);
   });
 
   test("each tier resolves independently — partial config does not collapse other defaults", () => {
     const cfg = resolveRateLimitConfig({ RATE_LIMIT_AUTH_MAX: "5" });
     assert.equal(cfg.auth, 5);
-    assert.equal(cfg.expensive, 60);
-    assert.equal(cfg.api, 1000);
+    assert.equal(cfg.expensive, 180);
+    assert.equal(cfg.api, 3000);
     assert.equal(cfg.windowMs, FIFTEEN_MINUTES_MS);
+  });
+});
+
+describe('document generation admission controls', () => {
+  test('/api/doc and /api/doc-agent use the expensive tier without also consuming the general tier', () => {
+    const indexSource = fs.readFileSync(require.resolve('../index.js'), 'utf8');
+    assert.match(indexSource, /app\.use\('\/api\/doc', expensiveLimiter\)/);
+    assert.match(indexSource, /app\.use\('\/api\/doc-agent', expensiveLimiter\)/);
+    assert.match(indexSource, /apiLimiterSpecificPrefixes\s*=\s*\[[\s\S]*'\/api\/doc\/'/);
+    assert.match(indexSource, /apiLimiterSpecificPrefixes\s*=\s*\[[\s\S]*'\/api\/doc-agent'/);
+  });
+
+  test('/api/doc/generate replays completed operations before charging plan quota', () => {
+    const routeSource = fs.readFileSync(require.resolve('../src/routes/doc'), 'utf8');
+    assert.match(routeSource, /const documentPlanQuota = enforcePlanQuota\(\{ surface: 'doc\.generate' \}\)/);
+    assert.match(routeSource, /prepareDocumentReplay,\s*documentPlanQuota,\s*async \(req, res\)/);
   });
 });

@@ -18,6 +18,32 @@
 
 import type { CodeFiles } from "./code-workspace-utils"
 
+// OLA200_WAVE_F FE-051 — cancel the previous preview build before starting another.
+let __previewBuildGeneration = 0
+let __previewBuildAbort: AbortController | null = null
+
+export function currentPreviewBuildGeneration(): number {
+  return __previewBuildGeneration
+}
+
+export function cancelPreviewBuild(reason = "superseded"): void {
+  try { __previewBuildAbort?.abort() } catch { /* ignore */ }
+  __previewBuildAbort = null
+  void reason
+}
+
+export function beginPreviewBuild(): { generation: number; signal: AbortSignal } {
+  cancelPreviewBuild("superseded")
+  __previewBuildGeneration += 1
+  __previewBuildAbort = new AbortController()
+  return { generation: __previewBuildGeneration, signal: __previewBuildAbort.signal }
+}
+
+export function isCurrentPreviewBuild(generation: number): boolean {
+  return generation === __previewBuildGeneration
+}
+
+
 export type PreviewKind = "html" | "react" | "markdown" | "svg" | "unsupported" | "empty"
 
 export type PreviewResult = {
@@ -27,6 +53,51 @@ export type PreviewResult = {
   entry: string | null
   /** Optional human note for unsupported/empty states. */
   note?: string
+}
+
+const PREVIEW_REVISION_OFFSET = 0x811c9dc5
+const PREVIEW_REVISION_PRIME = 0x01000193
+const previewFileRevisionCache = new WeakMap<CodeFiles[string], string>()
+
+function hashPreviewValue(value: string, seed = PREVIEW_REVISION_OFFSET): number {
+  let hash = seed
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, PREVIEW_REVISION_PRIME) >>> 0
+  }
+  return hash
+}
+
+function previewFileRevision(file: CodeFiles[string]): string {
+  const cached = previewFileRevisionCache.get(file)
+  if (cached) return cached
+
+  const content = file.content ?? ""
+  const hash = hashPreviewValue(content).toString(16).padStart(8, "0")
+  const revision = `${content.length}:${hash}`
+  previewFileRevisionCache.set(file, revision)
+  return revision
+}
+
+/**
+ * Stable, content-sensitive revision for preview auto-run de-duplication.
+ *
+ * CodeFile objects are immutable in the workspace reducer, so a WeakMap lets
+ * unchanged files reuse their content hash while an edited file gets a fresh
+ * hash. Sorting paths makes the result independent of object insertion order.
+ */
+export function workspacePreviewRevision(files: CodeFiles): string {
+  const paths = Object.keys(files).sort()
+  let workspaceHash = PREVIEW_REVISION_OFFSET
+
+  for (const path of paths) {
+    const file = files[path]
+    if (!file) continue
+    const entry = `${path.length}:${path}:${previewFileRevision(file)}\u0000`
+    workspaceHash = hashPreviewValue(entry, workspaceHash)
+  }
+
+  return `${paths.length}:${workspaceHash.toString(16).padStart(8, "0")}`
 }
 
 function ext(path: string): string {
@@ -642,6 +713,7 @@ export function projectNeedsDevServer(files: CodeFiles): boolean {
 
 /** Pick the best entry + kind given the active file and the whole project. */
 export function buildPreviewDocument(files: CodeFiles, activePath: string | null, nonce = ""): PreviewResult {
+  beginPreviewBuild()
   const paths = Object.keys(files)
   if (paths.length === 0) return { html: placeholder("Aún no hay archivos. Empieza a programar y el preview aparecerá aquí."), kind: "empty", entry: null }
 

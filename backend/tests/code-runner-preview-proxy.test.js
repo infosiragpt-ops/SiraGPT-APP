@@ -15,7 +15,9 @@ const {
   attachCodeRunnerPreviewWebSocketProxy,
   applyPreviewCorsHeaders,
   buildPreviewConsoleBridge,
+  buildPreviewSelectorBridge,
   injectPreviewConsoleBridge,
+  injectPreviewInteractionBridges,
   MAX_PREVIEW_HTML_BYTES,
   previewFrameAncestors,
   previewOriginAllowed,
@@ -120,6 +122,26 @@ test('console bridge carries nonce and is injected into live HTML', () => {
   const html = injectPreviewConsoleBridge('<html><head></head><body>ok</body></html>', 'nonce-for-test-1234');
   assert.match(html, /data-sgpt-preview-bridge/);
   assert.match(html, /sgpt-preview-console/);
+});
+
+test('shared preview interaction bridges install one nonce-bound DOM selector', () => {
+  const nonce = 'nonce-for-selector-tests-1234';
+  const selector = buildPreviewSelectorBridge();
+  assert.match(selector, /data-sgpt-preview-selector-bridge/);
+  assert.match(selector, /sgpt-preview-select-start/);
+  assert.match(selector, /sgpt-preview-selection-ready/);
+  assert.match(selector, /selectionMethod: 'dom'/);
+
+  const first = injectPreviewInteractionBridges(
+    '<html><head></head><body><button id="real-target">Elegir</button></body></html>',
+    nonce,
+  );
+  const second = injectPreviewInteractionBridges(first, nonce);
+  assert.match(first, /data-sgpt-preview-bridge/);
+  assert.match(first, /data-sgpt-preview-selector-bridge/);
+  assert.match(first, new RegExp(nonce));
+  assert.equal((second.match(/data-sgpt-preview-bridge/g) || []).length, 1);
+  assert.equal((second.match(/data-sgpt-preview-selector-bridge/g) || []).length, 1);
 });
 
 test('code runner preview WebSocket upgrade reaches only the token-bound run', async (t) => {

@@ -11,21 +11,24 @@
 
 import * as React from "react"
 import {
+  ArrowRight,
+  Bot,
+  Briefcase,
   ChevronLeft,
   ChevronRight,
+  CheckCircle2,
   Circle,
   Eraser,
   ExternalLink,
   LayoutGrid,
+  Lightbulb,
   Lock,
   Monitor,
   MonitorSmartphone,
   MousePointer2,
-  Play,
   RefreshCw,
   RotateCw,
   Smartphone,
-  Square,
   Tablet,
   TerminalSquare,
   Zap,
@@ -47,7 +50,27 @@ import {
 } from "@/lib/code-workspace-context"
 import { codexApi } from "@/lib/codex/codex-api"
 import { ensureCodexPreviewOrigin } from "@/lib/codex/use-codex-health"
-import { buildPreviewDocument, projectNeedsDevServer, type PreviewKind } from "@/lib/code-preview-build"
+import {
+  CODE_AUTONOMOUS_STARTERS,
+  requestCodeAgentInstruction,
+} from "@/lib/code-autonomous-starters"
+import {
+  buildPreviewDocument,
+  projectNeedsDevServer,
+  workspacePreviewRevision,
+  type PreviewKind,
+} from "@/lib/code-preview-build"
+import {
+  shouldCleanupStalePreviewStart,
+  startPreviewWithCleanupFence,
+  trackPreviewStartFlight,
+  waitForPreviousPreviewStart,
+  type PreviewResourceLease,
+} from "@/lib/code-preview-start-fence"
+import {
+  startSerializedPreviewPoll,
+  type SerializedPreviewPollController,
+} from "@/lib/code-preview-poll"
 import { CODE_TEMPLATES } from "@/lib/code-templates"
 import { hostRunnerService } from "@/lib/code-runner/host-runner-service"
 import { githubService } from "@/lib/github-service"
@@ -93,6 +116,11 @@ function humanizePreviewError(raw?: string | null): string {
   }
   return value
 }
+
+// Layout remounts (phone first paint, sidebar dock) must not stop a preview
+// that a successor instance is about to claim.
+let previewOwnerGeneration = 0
+
 // A dead remote project/run: the codex mapping is stale (project wiped, or
 // created in another session). Self-heal by dropping the mapping and re-running
 // locally instead of showing a scary error.
@@ -114,6 +142,11 @@ const AUTO_FIX_MAX = 3
 // Bump the runner's lastTouch (and catch a post-ready crash) while the app is
 // live so the idle reaper never kills an app the user is actively viewing.
 const READY_HEARTBEAT_MS = 60_000
+
+// Readiness is a wall-clock budget, not an attempt budget: a single status
+// request may consume its own network timeout. The serialized poll aborts its
+// in-flight read when this generation reaches the deadline.
+const PREVIEW_READY_DEADLINE_MS = 200_000
 
 // Codex previews are served from a SIBLING origin (a Caddy vhost that exposes
 // ONLY the tokenized preview proxy; the backend advertises it via /health's
@@ -201,6 +234,11 @@ export function PreviewPane() {
   const previewNonceRef = React.useRef("")
   const previewNonce = previewNonceRef.current ||= crypto.randomUUID()
   const [selectionMode, setSelectionMode] = React.useState(false)
+  const selectionModeRef = React.useRef(false)
+  const setSelectionActive = React.useCallback((active: boolean) => {
+    selectionModeRef.current = active
+    setSelectionMode(active)
+  }, [])
   const [selectionFallback, setSelectionFallback] = React.useState(false)
   const selectionReadyRef = React.useRef(false)
   const selectionTimersRef = React.useRef<number[]>([])
@@ -224,14 +262,19 @@ export function PreviewPane() {
   // runner. The dev server stays private on the server; the browser reaches it
   // through the same-origin reverse proxy (/api/code-runner/<id>/app/).
   const [liveRun, setLiveRun] = React.useState<LiveRun>({ phase: "idle", devUrl: "", note: "" })
-  const pollRef = React.useRef<number | null>(null)
+  const pollRef = React.useRef<SerializedPreviewPollController | null>(null)
   const runIdRef = React.useRef<string>("")
   const modeRef = React.useRef<"host" | "github" | "codex">("host")
+  // Capture the project that actually owns the running Codex preview. The
+  // globally active project may change before this pane unmounts.
+  const codexPreviewProjectIdRef = React.useRef<string | null>(null)
   // Every preview start owns a generation and an abort signal. Stopping or
   // starting again invalidates the previous generation so a late 90-second
   // Codex response can never resurrect a preview the user already stopped.
   const previewRunGenerationRef = React.useRef(0)
   const previewStartAbortRef = React.useRef<AbortController | null>(null)
+  const previewStartInFlightRef = React.useRef<Promise<void> | null>(null)
+  const previewResourceLeaseRef = React.useRef<PreviewResourceLease | null>(null)
   const pendingAutoRunRef = React.useRef(false)
   const forceAutoRunRef = React.useRef(false)
   // Guards the codex self-heal so a genuinely-gone project can't loop forever:
@@ -263,15 +306,10 @@ export function PreviewPane() {
   const canRunProject = hasNodeProject || Boolean(gitBinding) || Boolean(activeCodexProjectId)
   const projectSignature = React.useMemo(() => {
     if (!canRunProject) return ""
-    // Fingerprint EVERY file by path + content length (not a fixed list of key
-    // files), so an edit to any source file changes the signature. This is only
-    // the dedupe fallback for non-forced auto triggers; agent results carry an
-    // explicit force flag and bypass it entirely.
-    const names = Object.keys(files || {}).sort()
-    const fingerprint = names
-      .map((path) => `${path}:${files[path]?.content?.length ?? 0}`)
-      .join("|")
-    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${fingerprint}`
+    // Hash file contents as well as paths: equal-length edits must invalidate
+    // the auto-run dedupe just like insertions and deletions do.
+    const revision = workspacePreviewRevision(files || {})
+    return `${activeFolder?.id || "local"}:${gitBinding || activeCodexProjectId || "workspace"}:${revision}`
   }, [activeCodexProjectId, activeFolder?.id, canRunProject, files, gitBinding])
 
   React.useEffect(() => {
@@ -303,9 +341,17 @@ export function PreviewPane() {
 
   const clearPoll = React.useCallback(() => {
     if (pollRef.current) {
-      window.clearInterval(pollRef.current)
+      pollRef.current.stop()
       pollRef.current = null
     }
+  }, [])
+
+  const deactivatePreviewResourceLease = React.useCallback((key?: string, generation?: number) => {
+    const lease = previewResourceLeaseRef.current
+    if (!lease) return
+    if (key && lease.key !== key) return
+    if (generation !== undefined && lease.generation !== generation) return
+    previewResourceLeaseRef.current = { ...lease, active: false }
   }, [])
 
   const stopApp = React.useCallback(() => {
@@ -314,92 +360,111 @@ export function PreviewPane() {
     previewStartAbortRef.current = null
     pendingAutoRunRef.current = false
     forceAutoRunRef.current = false
+    deactivatePreviewResourceLease()
     clearPoll()
     setLiveRun({ phase: "idle", devUrl: "", note: "" })
     if (modeRef.current === "codex") {
-      const codexProjectId = activeCodexProjectId || getActiveCodexProject()
+      const codexProjectId = codexPreviewProjectIdRef.current || activeCodexProjectId || getActiveCodexProject()
+      codexPreviewProjectIdRef.current = null
       if (codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
     } else if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
     else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
     // The Shell tool loses its exec target when the run stops.
     setActiveHostRunId(null)
-  }, [activeCodexProjectId, clearPoll])
+  }, [activeCodexProjectId, clearPoll, deactivatePreviewResourceLease])
 
   // While the app is live, keep polling status at a slow cadence (a) so the
   // runner's lastTouch keeps getting bumped and the idle reaper never kills an
   // app the user is actively viewing, and (b) so a crash that happens AFTER the
   // dev server first went ready surfaces as an error instead of a frozen iframe.
   const startReadyHeartbeat = React.useCallback(
-    (statusFn: () => Promise<RunnerStatus>, generation: number) => {
+    (statusFn: (signal?: AbortSignal) => Promise<RunnerStatus>, generation: number) => {
       clearPoll()
-      const intervalId = window.setInterval(async () => {
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        const st = await statusFn()
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        if (st.error) {
-          clearPoll()
-          const rawNote = st.error || "El dev server se cayó."
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
-          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
-        }
-        // A benign not-ready blip (HMR reload) is ignored — we only react to a
-        // hard error; the mere status read already bumped lastTouch.
-      }, READY_HEARTBEAT_MS)
-      pollRef.current = intervalId
+      pollRef.current = startSerializedPreviewPoll({
+        read: statusFn,
+        intervalMs: READY_HEARTBEAT_MS,
+        isCurrent: () => previewRunGenerationRef.current === generation,
+        onValue: (st) => {
+          if (st.error) {
+            clearPoll()
+            const rawNote = st.error || "El dev server se cayó."
+            lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+            setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+            return false
+          }
+          // A benign not-ready blip (HMR reload) is ignored — the status read
+          // already bumped lastTouch and the next read queues after this one.
+          return true
+        },
+        schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (timer) => window.clearTimeout(timer),
+      })
     },
     [clearPoll],
   )
 
   // Poll a runner's status until the dev server is ready (or fails / times out).
   const pollUntilReady = React.useCallback(
-    (statusFn: () => Promise<RunnerStatus>, fallbackUrl: string, generation: number) => {
+    (statusFn: (signal?: AbortSignal) => Promise<RunnerStatus>, fallbackUrl: string, generation: number) => {
       clearPoll()
       let tries = 0
-      const intervalId = window.setInterval(async () => {
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        tries += 1
-        const st = await statusFn()
-        if (previewRunGenerationRef.current !== generation) {
-          window.clearInterval(intervalId)
-          if (pollRef.current === intervalId) pollRef.current = null
-          return
-        }
-        if (st.ready) {
-          codexSelfHealedRef.current = false
-          setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
-          startReadyHeartbeat(statusFn, generation)
-        } else if (st.error || tries > 80) {
-          // ~3.3 min budget: a cold npm install of vite + tailwind v4 +
-          // framer-motion + lucide plus dev-server boot can be slow.
-          clearPoll()
-          const rawNote = st.error || "El dev server no arrancó a tiempo."
-          // Keep the full tail so the auto-repair effect hands the agent real
-          // build/runtime output, not just the one-line summary.
-          lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
-          setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
-        } else {
+      let timedOut = false
+      const readinessDeadlineAtMs = Date.now() + PREVIEW_READY_DEADLINE_MS
+      const finishTimedOut = () => {
+        if (timedOut || previewRunGenerationRef.current !== generation) return
+        timedOut = true
+        clearPoll()
+        const rawNote = "El dev server no arrancó a tiempo."
+        lastErrorLogRef.current = rawNote
+        setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+      }
+      pollRef.current = startSerializedPreviewPoll({
+        read: async (signal) => {
+          tries += 1
+          return statusFn(signal)
+        },
+        intervalMs: 2500,
+        isCurrent: () => previewRunGenerationRef.current === generation,
+        onValue: (st) => {
+          if (st.ready) {
+            codexSelfHealedRef.current = false
+            setLiveRun({ phase: "ready", devUrl: st.devUrl || fallbackUrl, note: st.framework || "app" })
+            startReadyHeartbeat(statusFn, generation)
+            return false
+          }
+          if (st.error || tries > 80) {
+            // Keep an attempt cap as a secondary safety net. The absolute
+            // deadline below is authoritative when status reads are slow.
+            clearPoll()
+            const rawNote = st.error || "El dev server no arrancó a tiempo."
+            // Keep the full tail so the auto-repair effect hands the agent real
+            // build/runtime output, not just the one-line summary.
+            lastErrorLogRef.current = [st.error, ...(st.tail || [])].filter(Boolean).join("\n") || rawNote
+            setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(rawNote) })
+            return false
+          }
           setLiveRun((p) => ({ ...p, note: (st.tail && st.tail[st.tail.length - 1]) || p.note }))
-        }
-      }, 2500)
-      pollRef.current = intervalId
+          return true
+        },
+        onError: () => {
+          if (Date.now() < readinessDeadlineAtMs) return true
+          finishTimedOut()
+          return false
+        },
+        deadlineAtMs: readinessDeadlineAtMs,
+        onDeadline: finishTimedOut,
+        schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clear: (timer) => window.clearTimeout(timer),
+      })
     },
     [clearPoll, startReadyHeartbeat],
   )
 
   const runApp = React.useCallback(async (opts?: { auto?: boolean }) => {
     const auto = opts?.auto ?? false
+    const previousStart = previewStartInFlightRef.current
+    const startFlight = trackPreviewStartFlight()
+    previewStartInFlightRef.current = startFlight.flight
     previewStartAbortRef.current?.abort()
     const startController = new AbortController()
     previewStartAbortRef.current = startController
@@ -407,8 +472,14 @@ export function PreviewPane() {
     previewRunGenerationRef.current = generation
     const isCurrentRun = () =>
       previewRunGenerationRef.current === generation && !startController.signal.aborted
+    // Listeners read phaseRef before the next paint. Mark starting now so a
+    // second ▶ / event queues instead of overlapping /start on the same runId.
+    phaseRef.current = "starting"
     clearPoll()
     setLiveRun({ phase: "starting", devUrl: "", note: "Instalando dependencias y arrancando el dev server…" })
+    try {
+    await waitForPreviousPreviewStart(previousStart)
+    if (!isCurrentRun()) return
     if (!runIdRef.current) {
       try {
         runIdRef.current = crypto.randomUUID()
@@ -419,18 +490,34 @@ export function PreviewPane() {
     const boundRepo = getGitBinding(activeFolder?.id ?? null)
     if (boundRepo) {
       modeRef.current = "github"
+      codexPreviewProjectIdRef.current = null
       runIdRef.current = boundRepo
       const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
-      const started = await githubService.run(boundRepo, runtimeEnv).catch((err) => ({ error: err instanceof Error ? err.message : "runner unreachable" }))
-      if (!isCurrentRun()) return
+      const resourceKey = `github:${boundRepo}`
+      previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+      const fencedStart = await startPreviewWithCleanupFence({
+        start: () => githubService.run(boundRepo, runtimeEnv, startController.signal).catch((err) => ({
+          error: err instanceof Error ? err.message : "runner unreachable",
+        })),
+        isCurrent: isCurrentRun,
+        cleanup: () => githubService.stop(boundRepo),
+        shouldCleanup: () => shouldCleanupStalePreviewStart(
+          previewResourceLeaseRef.current,
+          resourceKey,
+          generation,
+        ),
+      })
+      if (fencedStart.stale) return
+      const started = fencedStart.value
       if ("error" in started && started.error) {
+        deactivatePreviewResourceLease(resourceKey, generation)
         lastErrorLogRef.current = started.error
         setLiveRun({ phase: "error", devUrl: "", note: humanizePreviewError(started.error) })
         return
       }
       pollUntilReady(
-        async () => {
-          const st = await githubService.runStatus(boundRepo)
+        async (signal) => {
+          const st = await githubService.runStatus(boundRepo, signal)
           return {
             ready: Boolean(st.ready || st.status === "ready"),
             error: st.error || null,
@@ -453,11 +540,12 @@ export function PreviewPane() {
     const codexProjectId = activeCodexProjectId || getActiveCodexProject()
     if (codexProjectId) {
       modeRef.current = "codex"
+      codexPreviewProjectIdRef.current = codexProjectId
       const previewOrigin = await codexPreviewOrigin()
       if (!isCurrentRun()) return
       const toDevUrl = (basePath?: string | null) => (basePath ? `${previewOrigin}${basePath}` : "")
-      const codexStatus = async (): Promise<RunnerStatus> => {
-        const st: any = await codexApi.previewStatus(codexProjectId).catch(() => null)
+      const codexStatus = async (signal?: AbortSignal): Promise<RunnerStatus> => {
+        const st: any = await codexApi.previewStatus(codexProjectId, signal).catch(() => null)
         const p = st?.previewStatus || st || {}
         return {
           ready: Boolean(p.ready),
@@ -467,11 +555,26 @@ export function PreviewPane() {
           devUrl: toDevUrl(p.basePath),
         }
       }
-      const started: any = await codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
-        error: err instanceof Error ? err.message : "runner unreachable",
-      }))
-      if (!isCurrentRun()) return
+      const resourceKey = `codex:${codexProjectId}`
+      previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+      const fencedStart = await startPreviewWithCleanupFence({
+        start: () => codexApi.startPreview(codexProjectId, startController.signal).catch((err) => ({
+          error: err instanceof Error ? err.message : "runner unreachable",
+        })),
+        isCurrent: isCurrentRun,
+        // stopApp/unmount may have sent an early stop before /preview/start
+        // finished. Repeat it after settlement to clean up that late server.
+        cleanup: () => codexApi.stopPreview(codexProjectId),
+        shouldCleanup: () => shouldCleanupStalePreviewStart(
+          previewResourceLeaseRef.current,
+          resourceKey,
+          generation,
+        ),
+      })
+      if (fencedStart.stale) return
+      const started: any = fencedStart.value
       if (started?.error) {
+        deactivatePreviewResourceLease(resourceKey, generation)
         // Self-heal: a stale codex mapping (project wiped / another session)
         // 404s here. Drop it and re-run locally ONCE so the preview just works
         // (Replit never shows a dead project) instead of a scary raw code.
@@ -486,7 +589,9 @@ export function PreviewPane() {
             return
           }
           modeRef.current = "host"
+          codexPreviewProjectIdRef.current = null
           setLiveRun({ phase: "starting", devUrl: "", note: "Recuperando el proyecto…" })
+          startFlight.settle()
           await runAppRef.current({ auto })
           return
         }
@@ -508,17 +613,32 @@ export function PreviewPane() {
     const fileMap: Record<string, string> = {}
     for (const [p, f] of Object.entries(files)) fileMap[p] = f?.content ?? ""
     modeRef.current = "host"
+    codexPreviewProjectIdRef.current = null
     // No-Docker host runner: install deps + boot a real vite dev server, then
     // iframe it through the same-origin reverse proxy (started.devUrl).
     const runtimeEnv = buildRuntimeEnv(activeFolder?.id ?? null, files)
-    const started = await hostRunnerService.start(fileMap, runIdRef.current, runtimeEnv)
-    if (!isCurrentRun()) return
+    const hostRunId = runIdRef.current
+    const resourceKey = `host:${hostRunId}`
+    previewResourceLeaseRef.current = { key: resourceKey, generation, active: true }
+    const fencedStart = await startPreviewWithCleanupFence({
+      start: () => hostRunnerService.start(fileMap, hostRunId, runtimeEnv, startController.signal),
+      isCurrent: isCurrentRun,
+      cleanup: () => hostRunnerService.stop(hostRunId),
+      shouldCleanup: () => shouldCleanupStalePreviewStart(
+        previewResourceLeaseRef.current,
+        resourceKey,
+        generation,
+      ),
+    })
+    if (fencedStart.stale) return
+    const started = fencedStart.value
     // An AUTO run (the agent just finished building) must degrade SILENTLY when
     // the runner can't even start — a disabled environment, or a user who isn't
     // on the allowlist (403 → started.error). Falling back to the static preview
     // is friendlier than slapping a red "no se pudo correr" over a preview the
     // user never asked to run. A manual ▶ Ejecutar still surfaces the reason.
     if (started.disabled) {
+      deactivatePreviewResourceLease(resourceKey, generation)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -531,6 +651,7 @@ export function PreviewPane() {
       return
     }
     if (started.error) {
+      deactivatePreviewResourceLease(resourceKey, generation)
       if (auto) {
         setLiveRun({ phase: "idle", devUrl: "", note: "" })
         return
@@ -541,8 +662,15 @@ export function PreviewPane() {
     }
     // Host run is live → the Shell tool can now exec real commands against it.
     setActiveHostRunId(runIdRef.current)
-    pollUntilReady(() => hostRunnerService.status(runIdRef.current), started.devUrl || "", generation)
-  }, [activeCodexProjectId, activeFolder?.id, clearPoll, files, pollUntilReady])
+    pollUntilReady(
+      (signal) => hostRunnerService.status(runIdRef.current, signal),
+      started.devUrl || "",
+      generation,
+    )
+    } finally {
+      startFlight.settle()
+    }
+  }, [activeCodexProjectId, activeFolder?.id, clearPoll, deactivatePreviewResourceLease, files, pollUntilReady])
 
   // Mirror the latest values into refs so the auto-run listener (registered
   // once) and the post-commit auto-run effect always read FRESH state without
@@ -597,16 +725,26 @@ export function PreviewPane() {
       }
       const hasRunnableProject =
         Object.keys(filesRef.current || {}).some((p) => /(^|\/)package\.json$/.test(p)) ||
-        Boolean(getGitBinding(activeFolderIdRef.current))
+        Boolean(getGitBinding(activeFolderIdRef.current)) ||
+        Boolean(getActiveCodexProject())
       if (hasRunnableProject) {
+        if (phaseRef.current === "starting") {
+          pendingAutoRunRef.current = true
+          return
+        }
         void runAppRef.current()
       }
     }
     window.addEventListener("siragpt:code-run-app", onRun)
-    window.addEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+    const onQueuedPreviewRun = (event: Event) => {
+      const detail = (event as CustomEvent<{ force?: boolean }>).detail
+      if (detail?.force) forceAutoRunRef.current = true
+      queueAutoRun()
+    }
+    window.addEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     return () => {
       window.removeEventListener("siragpt:code-run-app", onRun)
-      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, queueAutoRun)
+      window.removeEventListener(CODE_RUN_PREVIEW_EVENT, onQueuedPreviewRun)
     }
   }, [])
 
@@ -783,9 +921,10 @@ export function PreviewPane() {
     if (typeof window === "undefined") return
     const beaconStop = () => {
       previewRunGenerationRef.current += 1
+      deactivatePreviewResourceLease()
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
-      if (pollRef.current) window.clearInterval(pollRef.current)
+      clearPoll()
       // GitHub-backed runs are shut down by githubService.stop on unmount; the
       // keepalive beacon only targets the same-origin host runner.
       if (modeRef.current !== "host" || !runIdRef.current) return
@@ -799,19 +938,30 @@ export function PreviewPane() {
         /* best-effort — the idle reaper is the safety net */
       }
     }
+    previewOwnerGeneration += 1
     window.addEventListener("pagehide", beaconStop)
     return () => {
       window.removeEventListener("pagehide", beaconStop)
       previewRunGenerationRef.current += 1
+      deactivatePreviewResourceLease()
       previewStartAbortRef.current?.abort()
       previewStartAbortRef.current = null
-      if (pollRef.current) window.clearInterval(pollRef.current)
-      // Component teardown (e.g. switching away from the preview): actively stop
-      // the dev server instead of leaking it to the reaper.
-      if (modeRef.current === "github" && runIdRef.current) void githubService.stop(runIdRef.current)
-      else if (runIdRef.current) void hostRunnerService.stop(runIdRef.current)
+      clearPoll()
+      const generation = previewOwnerGeneration
+      const mode = modeRef.current
+      const codexProjectId = mode === "codex"
+        ? (codexPreviewProjectIdRef.current || getActiveCodexProject())
+        : null
+      const runId = runIdRef.current
+      codexPreviewProjectIdRef.current = null
+      window.setTimeout(() => {
+        if (previewOwnerGeneration !== generation) return
+        if (mode === "codex" && codexProjectId) void codexApi.stopPreview(codexProjectId).catch(() => {})
+        else if (mode === "github" && runId) void githubService.stop(runId)
+        else if (runId) void hostRunnerService.stop(runId)
+      }, 400)
     }
-  }, [])
+  }, [clearPoll, deactivatePreviewResourceLease])
 
   // Debounce rebuilds so typing stays smooth; manual refresh bypasses it.
   const [snapshot, setSnapshot] = React.useState({ files, activePath })
@@ -854,12 +1004,16 @@ export function PreviewPane() {
         return
       }
       if (m.type === "sgpt-preview-selection-ready") {
+        if (!selectionModeRef.current) return
         selectionReadyRef.current = true
-        setSelectionMode(true)
+        setSelectionActive(true)
         setSelectionFallback(false)
         return
       }
       if (m.type === "sgpt-preview-selection") {
+        // A message already queued by the iframe must not revive a selection
+        // after Escape/Cancelar turned the inspector off in the parent.
+        if (!selectionModeRef.current) return
         const meta = previewMetaRef.current
         const raw = (m.detail || {}) as CodePreviewSelectionDetail
         const detail: CodePreviewSelectionDetail = {
@@ -870,7 +1024,7 @@ export function PreviewPane() {
           activeFolderId: meta.activeFolderId,
           capturedAt: raw.capturedAt || new Date().toISOString(),
         }
-        setSelectionMode(false)
+        setSelectionActive(false)
         setSelectionFallback(false)
         selectionReadyRef.current = false
         clearSelectionTimers()
@@ -878,7 +1032,10 @@ export function PreviewPane() {
         return
       }
       if (m.type === "sgpt-preview-selection-cancelled") {
-        setSelectionMode(false)
+        // Local cancellation already updated the UI and sent the cancel command;
+        // ignore the bridge acknowledgement so it cannot emit duplicate toasts.
+        if (!selectionModeRef.current) return
+        setSelectionActive(false)
         setSelectionFallback(false)
         selectionReadyRef.current = false
         clearSelectionTimers()
@@ -891,7 +1048,7 @@ export function PreviewPane() {
     }
     window.addEventListener("message", onMsg)
     return () => window.removeEventListener("message", onMsg)
-  }, [clearSelectionTimers, previewNonce])
+  }, [clearSelectionTimers, previewNonce, setSelectionActive])
 
   const refresh = React.useCallback(() => {
     setSnapshot({ files, activePath })
@@ -899,17 +1056,12 @@ export function PreviewPane() {
   }, [files, activePath])
 
   const openInNewTab = React.useCallback(() => {
+    // El HTML estático del preview también es salida NO confiable del agente.
+    // Abrirlo como documento top-level hereda el origen de SiraGPT (acceso a
+    // localStorage/cookies/APIs) — mismo vector que el runner en vivo, que ya
+    // está bloqueado. Mantenemos la preview aislada dentro del iframe sandboxed.
     if (typeof window === "undefined") return
-    // NUNCA abrir el runner en vivo en una pestaña top-level: ahí no hay sandbox
-    // y el código generado NO confiable correría con el origen real de SiraGPT
-    // (acceso a localStorage/cookies/APIs). La app en vivo solo se ve dentro del
-    // iframe aislado. Para la preview estática (HTML) sí abrimos un blob.
-    if (liveRun.phase === "ready") return
-    const blob = new Blob([result.html], { type: "text/html" })
-    const url = URL.createObjectURL(blob)
-    window.open(url, "_blank", "noopener,noreferrer")
-    setTimeout(() => URL.revokeObjectURL(url), 30_000)
-  }, [liveRun.phase, result.html])
+  }, [])
 
   const errorCount = logs.filter((l) => l.level === "error").length
   const entryLabel = result.entry ? result.entry.split("/").pop() : "preview"
@@ -1004,14 +1156,17 @@ export function PreviewPane() {
   const cancelSelectionFromPreview = React.useCallback((reason: string) => {
     clearSelectionTimers()
     selectionReadyRef.current = false
-    setSelectionMode(false)
+    setSelectionActive(false)
     setSelectionFallback(false)
+    // Toolbar/Escape live outside a cross-origin iframe. Explicitly disarm the
+    // injected bridge so it removes its listeners, overlay and crosshair too.
+    postSelectionMessage("sgpt-preview-select-cancel")
     window.dispatchEvent(
       new CustomEvent<CodePreviewSelectionCancelDetail>(CODE_SELECTION_CANCEL_EVENT, {
         detail: { reason, source: "preview" },
       }),
     )
-  }, [clearSelectionTimers])
+  }, [clearSelectionTimers, postSelectionMessage, setSelectionActive])
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -1019,7 +1174,7 @@ export function PreviewPane() {
       clearSelectionTimers()
       selectionReadyRef.current = false
       setConsoleOpen(false)
-      setSelectionMode(true)
+      setSelectionActive(true)
       setSelectionFallback(false)
       const arm = () => {
         postSelectionMessage("sgpt-preview-select-start")
@@ -1041,7 +1196,7 @@ export function PreviewPane() {
       const detail = (event as CustomEvent<CodePreviewSelectionCancelDetail>).detail
       clearSelectionTimers()
       selectionReadyRef.current = false
-      setSelectionMode(false)
+      setSelectionActive(false)
       setSelectionFallback(false)
       if (detail?.source !== "preview") {
         postSelectionMessage("sgpt-preview-select-cancel")
@@ -1053,7 +1208,18 @@ export function PreviewPane() {
       window.removeEventListener(CODE_SELECT_TARGET_EVENT, startSelection)
       window.removeEventListener(CODE_SELECTION_CANCEL_EVENT, cancelSelection)
     }
-  }, [cancelSelectionFromPreview, clearSelectionTimers, postSelectionMessage])
+  }, [cancelSelectionFromPreview, clearSelectionTimers, postSelectionMessage, setSelectionActive])
+
+  React.useEffect(() => {
+    if (!selectionMode || typeof window === "undefined") return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      cancelSelectionFromPreview("Selección cancelada.")
+    }
+    window.addEventListener("keydown", onKeyDown, { capture: true })
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true })
+  }, [cancelSelectionFromPreview, selectionMode])
 
   const handlePreviewFrameLoad = React.useCallback(() => {
     if (!selectionMode) return
@@ -1114,10 +1280,10 @@ export function PreviewPane() {
       activeFolderId: meta.activeFolderId,
       capturedAt: new Date().toISOString(),
     }
-    setSelectionMode(false)
+    setSelectionActive(false)
     setSelectionFallback(false)
     window.dispatchEvent(new CustomEvent<CodePreviewSelectionDetail>(CODE_SELECTION_CAPTURED_EVENT, { detail }))
-  }, [clearSelectionTimers, selectionFallback])
+  }, [clearSelectionTimers, selectionFallback, setSelectionActive])
 
   const canRenderStaticPreview = result.kind !== "empty" && result.kind !== "unsupported"
   const staticPreviewFrame = (
@@ -1136,7 +1302,7 @@ export function PreviewPane() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-zinc-50 dark:bg-zinc-950">
-      <div className="flex h-10 shrink-0 items-center gap-1.5 border-b border-border/60 bg-background px-2">
+      <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-1.5 border-b border-border/60 bg-background px-2 py-1.5">
         {/* Canvas — opens the agent-driven mockup canvas tool. The device
             switcher lives beside the address bar, not here. */}
         <button
@@ -1150,7 +1316,7 @@ export function PreviewPane() {
           className="flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-[12px] font-medium text-foreground transition-colors hover:bg-muted/60"
         >
           <LayoutGrid className="h-3.5 w-3.5 text-muted-foreground" />
-          <span>Canvas</span>
+          <span className="hidden md:inline">Canvas</span>
         </button>
 
         <span className="mx-0.5 h-4 w-px shrink-0 bg-border/60" />
@@ -1231,33 +1397,8 @@ export function PreviewPane() {
             onRotate={() => setOrientation((o) => (o === "portrait" ? "landscape" : "portrait"))}
           />
           <span className="mx-0.5 h-4 w-px bg-border/50" />
-          {/* Phase B — auto-run stays primary; manual run is available when idle/error. */}
-          {canRunProject ? (
-            <>
-              {liveRun.phase === "ready" || liveRun.phase === "starting" ? (
-                <button
-                  type="button"
-                  onClick={stopApp}
-                  title="Detener el dev server"
-                  className="flex h-6 items-center gap-1 rounded-md bg-red-600/90 px-2 text-[11px] font-medium text-white transition-colors hover:bg-red-600"
-                >
-                  {liveRun.phase === "starting" ? <ThinkingIndicator size="xs" /> : <Square className="h-3 w-3" />}
-                  <span>{liveRun.phase === "starting" ? "Arrancando…" : "Detener"}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void runApp()}
-                  title="Instalar dependencias y correr el app (npm)"
-                  className="flex h-6 items-center gap-1 rounded-md bg-emerald-600 px-2 text-[11px] font-medium text-white transition-colors hover:bg-emerald-500"
-                >
-                  <Play className="h-3 w-3" />
-                  <span>{gitBinding ? "Ejecutar repo" : "Ejecutar"}</span>
-                </button>
-              )}
-              <span className="mx-0.5 h-4 w-px bg-border/50" />
-            </>
-          ) : null}
+          {/* Manual run/stop lives in the workspace ⋯ overflow — no green
+              Ejecutar / Arrancando play button in this chrome. Auto-run stays. */}
 
           {/* Type-check verdict for the live run: verifying → clean → or the
               error count while the agent auto-repairs. Host runner only. */}
@@ -1331,10 +1472,31 @@ export function PreviewPane() {
           data-testid="agent-company-preview-slot"
         />
         {selectionMode ? (
-          <div className="pointer-events-none absolute left-1/2 top-3 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/45 bg-zinc-950/82 px-3 py-1.5 text-[12px] font-medium text-white shadow-[0_18px_45px_-28px_rgba(15,23,42,0.72)] backdrop-blur-xl">
-            <MousePointer2 className="h-3.5 w-3.5 text-violet-200" />
-            <span>{selectionFallback ? "Selecciona un área del preview" : "Selecciona un elemento del preview"}</span>
-            <span className="rounded-full bg-white/12 px-1.5 py-px font-mono text-[10px] text-white/75">Esc</span>
+          <div
+            role="status"
+            data-testid="code-preview-inspector-toolbar"
+            className="pointer-events-auto absolute left-1/2 top-3 z-30 flex w-[min(430px,calc(100%-24px))] -translate-x-1/2 items-center gap-2.5 rounded-xl border border-white/20 bg-zinc-950/[0.92] p-2 pl-2.5 text-white shadow-[0_18px_55px_-24px_rgba(15,23,42,0.82)] backdrop-blur-xl"
+          >
+            <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-400/[0.15] text-violet-200" aria-hidden="true">
+              <MousePointer2 className="h-4 w-4" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-semibold leading-tight">Inspector visual activo</span>
+              <span className="mt-0.5 block truncate text-[10px] font-normal leading-tight text-white/[0.65]">
+                {selectionFallback ? "Haz clic en el área que quieres modificar" : "Haz clic en un elemento de la interfaz"}
+              </span>
+            </span>
+            <kbd className="hidden rounded-md border border-white/15 bg-white/[0.07] px-1.5 py-1 font-mono text-[9px] font-medium text-white/55 sm:inline-flex">
+              Esc
+            </kbd>
+            <button
+              type="button"
+              onClick={() => cancelSelectionFromPreview("Selección cancelada.")}
+              className="inline-flex min-h-8 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-white/[0.06] px-2.5 text-[10px] font-semibold text-white/80 transition-colors hover:bg-white/[0.12] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300/70"
+              aria-label="Cancelar inspector visual"
+            >
+              Cancelar
+            </button>
           </div>
         ) : null}
         {selectionFallback ? (
@@ -1493,30 +1655,146 @@ export function PreviewPane() {
 }
 
 function PreviewLaunchpad({ kind, note }: { kind: PreviewKind; note?: string }) {
+  const [launchState, setLaunchState] = React.useState<{
+    id: (typeof CODE_AUTONOMOUS_STARTERS)[number]["id"]
+    status: "accepted" | "error"
+  } | null>(null)
+
+  const startAutonomousBuild = React.useCallback(
+    (starter: (typeof CODE_AUTONOMOUS_STARTERS)[number]) => {
+      const accepted = requestCodeAgentInstruction(starter.prompt, { mode: "app" })
+      setLaunchState({ id: starter.id, status: accepted ? "accepted" : "error" })
+    },
+    [],
+  )
+
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-5 p-8 text-center">
-      <div>
-        <p className="text-sm font-medium text-foreground">
-          {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
-        </p>
-        <p className="mx-auto mt-1 max-w-xs text-xs leading-relaxed text-muted-foreground">
-          {note || "Empieza desde una plantilla o pídele algo al agente — lo verás aquí al instante."}
-        </p>
-      </div>
-      <div className="grid w-full max-w-xs gap-2">
-        {CODE_TEMPLATES.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() =>
-              window.dispatchEvent(new CustomEvent("siragpt:code-load-template", { detail: { id: t.id } }))
-            }
-            className="flex flex-col items-start rounded-lg border border-border/60 bg-background px-4 py-3 text-left shadow-sm transition-colors hover:border-border hover:bg-muted/40"
-          >
-            <span className="text-[13px] font-medium text-foreground">{t.name}</span>
-            <span className="text-[11px] text-muted-foreground">{t.description}</span>
-          </button>
-        ))}
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center gap-7 px-4 py-8 sm:px-6">
+        <header className="text-center">
+          <div className="mx-auto mb-3 inline-flex min-h-7 items-center rounded-full border border-border/70 bg-muted/35 px-3 text-[11px] font-medium text-muted-foreground">
+            Desarrollo autónomo
+          </div>
+          <h2 className="text-base font-semibold tracking-tight text-foreground">
+            {kind === "empty" ? "Tu preview en vivo" : "Este archivo no se previsualiza"}
+          </h2>
+          <p className="mx-auto mt-1.5 max-w-lg text-xs leading-relaxed text-muted-foreground">
+            {note || "Elige un objetivo completo para que el agente planifique, construya y verifique el software."}
+          </p>
+        </header>
+
+        <section aria-labelledby="autonomous-starters-title">
+          <div className="mb-3 flex flex-wrap items-end justify-between gap-2 text-left">
+            <div>
+              <h3 id="autonomous-starters-title" className="text-[13px] font-semibold text-foreground">
+                Crear con el agente
+              </h3>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                Inicia una ejecución real en modo App; podrás seguirla y dirigirla desde el chat.
+              </p>
+            </div>
+            <span className="rounded-full border border-border/70 px-2 py-1 text-[10px] font-medium text-muted-foreground">
+              Plan · Build · Test
+            </span>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            {CODE_AUTONOMOUS_STARTERS.map((starter) => {
+              const Icon =
+                starter.id === "ai-platform" ? Bot : starter.id === "business-os" ? Briefcase : Lightbulb
+              const accepted = launchState?.id === starter.id && launchState.status === "accepted"
+              const buildAlreadyStarted = launchState?.status === "accepted"
+
+              return (
+                <button
+                  key={starter.id}
+                  type="button"
+                  onClick={() => startAutonomousBuild(starter)}
+                  disabled={buildAlreadyStarted}
+                  aria-label={`Crear ${starter.title} con el agente autónomo`}
+                  className={cn(
+                    "group flex min-h-[168px] cursor-pointer flex-col rounded-xl border border-border/70 bg-background p-4 text-left shadow-sm transition-[border-color,background-color,box-shadow] duration-200",
+                    "hover:border-foreground/25 hover:bg-muted/25 hover:shadow-md",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                    "disabled:cursor-default disabled:opacity-55",
+                    accepted && "border-foreground/25 bg-muted/30 opacity-100",
+                  )}
+                >
+                  <span className="flex w-full items-start justify-between gap-3">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/35 text-foreground">
+                      <Icon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    {accepted ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-foreground">
+                        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Entregado
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="mt-3 text-[13px] font-semibold text-foreground">{starter.title}</span>
+                  <span className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{starter.description}</span>
+                  <span className="mt-auto flex w-full items-end justify-between gap-2 pt-3">
+                    <span className="text-[10px] font-medium text-muted-foreground">{starter.meta}</span>
+                    <ArrowRight
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 motion-reduce:transform-none"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {launchState ? (
+            <p
+              role={launchState.status === "error" ? "alert" : "status"}
+              aria-live="polite"
+              className={cn(
+                "mt-3 rounded-lg border px-3 py-2 text-[11px] leading-relaxed",
+                launchState.status === "accepted"
+                  ? "border-border/70 bg-muted/25 text-foreground"
+                  : "border-destructive/30 bg-destructive/5 text-destructive",
+              )}
+            >
+              {launchState.status === "accepted"
+                ? "Instrucción entregada al chat. Sigue allí la aceptación del run, el plan y sus verificaciones; el preview aparecerá aquí cuando esté listo."
+                : "No pude conectar con el agente. Abre el panel Empresa y vuelve a intentarlo."}
+            </p>
+          ) : null}
+        </section>
+
+        <section aria-labelledby="local-prototypes-title" className="border-t border-border/60 pt-5">
+          <div className="mb-3 text-left">
+            <h3 id="local-prototypes-title" className="text-[12px] font-semibold text-foreground">
+              Prototipos locales
+            </h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+              Ejemplos rápidos en este navegador. Crean archivos de muestra, pero no inician un desarrollo autónomo.
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {CODE_TEMPLATES.map((template) => (
+              <button
+                key={template.id}
+                type="button"
+                onClick={() =>
+                  window.dispatchEvent(
+                    new CustomEvent("siragpt:code-load-template", { detail: { id: template.id } }),
+                  )
+                }
+                className="flex min-h-11 cursor-pointer items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2 text-left transition-colors duration-200 hover:border-border hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-medium text-foreground">{template.name}</span>
+                  <span className="block truncate text-[10px] text-muted-foreground">{template.description}</span>
+                </span>
+                <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Local
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       </div>
     </div>
   )

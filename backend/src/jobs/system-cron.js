@@ -99,6 +99,11 @@ const DETECT_IDLE_ORGS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_ORGS_SCHED
 // SystemSettings table. Flags users whose User.lastActiveAt is older
 // than 90d (or null) into SystemSettings `user_idle:<userId>`.
 const DETECT_IDLE_USERS_SCHEDULE = process.env.SYSTEM_CRON_DETECT_IDLE_USERS_SCHEDULE || '30 6 * * *';
+// Growth gauges («1.000 clientes» KPI family). Default 07:30 UTC — runs
+// after the idle-user detector (06:30) so both passes read the same
+// nightly User-table state, and before the audit-archive sweep (07:15's
+// SystemSettings sibling already ran at 07:00; this job only reads).
+const GROWTH_GAUGES_SCHEDULE = process.env.SYSTEM_CRON_GROWTH_GAUGES_SCHEDULE || '30 7 * * *';
 // Ratchet 45 — daily SystemSettings drift cleanup. Default 07:00 UTC, runs
 // after the idle-org (06:00) and idle-user (06:30) detectors so the same
 // pass that *writes* fresh flag rows precedes the orphan sweep — we only
@@ -821,6 +826,45 @@ function start(opts = {}) {
     schedule: DETECT_IDLE_USERS_SCHEDULE,
     task: detectIdleUsersTask,
     meta: detectIdleUsersMeta,
+  });
+
+  // Growth gauges — daily «1.000 clientes» KPI refresh (07:30 UTC).
+  let growthGaugesRunning = false;
+  const growthGaugesMeta = {};
+  const growthGaugesTask = cron.schedule(
+    GROWTH_GAUGES_SCHEDULE,
+    async () => {
+      if (growthGaugesRunning) {
+        logger.warn?.('[system-cron] skip growth-gauges — previous run still active');
+        return;
+      }
+      growthGaugesRunning = true;
+      const finish = recordRun(growthGaugesMeta, 'growth-gauges');
+      let runErr = null;
+      try {
+        // eslint-disable-next-line global-require
+        const job = require('./growth-gauges');
+        const runWithRetry = wrapWithRetry(() => job.run({ logger }), {
+          onRetry: ({ attempt, delayMs, reason }) =>
+            logger.warn?.(`[system-cron] growth-gauges retry ${attempt} in ${delayMs}ms (${reason})`),
+        });
+        const res = await runWithRetry();
+        logger.info?.(`[system-cron] growth-gauges done: ${JSON.stringify(res)}`);
+      } catch (err) {
+        runErr = err;
+        logger.error?.(`[system-cron] growth-gauges failed: ${err && err.message}`);
+      } finally {
+        growthGaugesRunning = false;
+        finish(runErr);
+      }
+    },
+    { scheduled: false, timezone: 'UTC' },
+  );
+  tasks.push({
+    name: 'growth-gauges',
+    schedule: GROWTH_GAUGES_SCHEDULE,
+    task: growthGaugesTask,
+    meta: growthGaugesMeta,
   });
 
   // Ratchet 45 — SystemSettings drift cleanup (07:00 UTC).

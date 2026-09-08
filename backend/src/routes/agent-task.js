@@ -17,7 +17,7 @@
  *     { type: "file_artifact", id, filename, mime, sizeBytes, downloadUrl }
  *     { type: "final_text",   markdown }
  *     { type: "done",         stoppedReason, stats }
- *     { type: "error",        message }
+ *     { type: "error",        message, code?, reason? }
  *
  * GET /api/agent/artifact/:id
  *   Serves a previously-created artifact as an attachment download.
@@ -39,6 +39,7 @@ const { authenticateToken } = require('../middleware/auth');
 const { enforcePlanQuota } = require('../middleware/enforce-plan-quota');
 const { resolveRateLimitConfig, makeJwtAwareKeyGenerator, extractBearerToken } = require('../middleware/rate-limit-policy');
 const reactAgent = require('../services/react-agent');
+const { statusForAgentStopReason, canRecoverAgentStopReason } = require('../services/agents/react-run-outcome');
 const { buildTaskTools, ARTIFACT_DIR } = require('../services/agents/task-tools');
 const taskStore = require('../services/agents/task-store');
 const auditLog = require('../services/agents/audit-log');
@@ -92,6 +93,16 @@ const {
   requireRedisUrl,
 } = require('../services/agents/agent-task-queue');
 const { cancelRunningTask } = require('../services/agents/agent-task-worker');
+const {
+  resolveEventCursor,
+  resolveTaskLastError,
+  buildTaskEventsResumePayload,
+} = require('../services/agents/agent-task-event-resume');
+const {
+  claimTaskCancel,
+  buildCancelAck,
+} = require('../services/agents/agent-task-cancel');
+const { toAgentTaskErrorEvent } = require('../utils/task-error-classifier');
 const { resolveAttachmentFallbackMarkdown } = require('../services/agents/agent-task-runner');
 const agentTaskPersistence = require('../services/agents/agent-task-persistence');
 const {
@@ -411,6 +422,12 @@ const TASK_EVENT_LIMIT = 600;
 
 const TASK_SYSTEM_PROMPT = `You are siraGPT's task agent. You work like Claude Code: plan briefly, then call tools to reach a deliverable answer.
 
+POLÍTICA DE COMPUTADORA EN VIVO (obligatoria):
+- Cada chat TIENE una computadora en vivo con navegador. El overlay de ESTE chat es real.
+- Cuando el usuario pide abrirla, buscar en vivo, ofertas, comprar, reservar, agendar una cita, DMV, seguro o revisar un sitio: llama computer_screenshot, computer_navigate, computer_click y computer_type de inmediato, abre el overlay y navega de verdad.
+- NUNCA niegues la computadora ni el navegador de este chat. Confirma precios y ofertas navegando de verdad.
+- El usuario escribe contraseñas, OTP y tarjetas EN el overlay. NUNCA pidas que las pegue en el chat. SiraGPT no ve la contraseña.
+
 Rules:
 - When the user needs data, call web_search (Web of Science / Scopus / OpenAlex / SciELO / Semantic Scholar / Crossref / PubMed / DOAJ) instead of guessing. Do not fabricate citations.
 - When the user refers to uploaded/private documents, previous project knowledge, PDFs, or "según mis archivos":
@@ -487,46 +504,49 @@ router.get('/artifacts', authenticateToken, async (req, res) => {
 // High-fidelity preview: convert the office artifact to PDF with LibreOffice
 // headless (cached by id+mtime) and stream it inline. The frontend renders
 // it in a real PDF viewer instead of hand-rolled HTML tables. Same auth +
-// ownership contract as the download route. 409 → caller falls back to the
-// legacy client-side renderer (e.g. artifact offloaded to R2 or soffice
-// missing) — this endpoint must never break the download path.
+// ownership contract as the download route.
+//
+// Existing artifacts MUST hydrate from R2 when the local binary was
+// offloaded — a missing VM file is not a 409. 409 is reserved for
+// conversion failures (soffice down / format) so the viewer can fall
+// back to the legacy client renderer. Download stays untouched.
 router.get('/artifact/:id/preview.pdf', authenticateToken, async (req, res) => {
   const id = String(req.params.id || '').replace(/[^a-f0-9]/gi, '');
   if (!id || id.length > 40) return res.status(400).json({ error: 'bad id' });
-  if (!fs.existsSync(ARTIFACT_DIR)) return res.status(404).json({ error: 'no artifacts yet' });
 
-  const metadata = readArtifactMetadata(id);
-  let full = null;
-  if (metadata?.storedRelPath) {
-    const root = path.resolve(ARTIFACT_DIR);
-    const candidate = path.resolve(ARTIFACT_DIR, metadata.storedRelPath);
-    if ((candidate === root || candidate.startsWith(root + path.sep)) && fs.existsSync(candidate)) {
-      full = candidate;
-    }
+  const { materializeArtifactSource } = require('../services/agents/artifact-local-source');
+  const source = await materializeArtifactSource({
+    id,
+    artifactDir: ARTIFACT_DIR,
+    ownerUserId: req.user?.id,
+  });
+  if (!source.ok) {
+    return res.status(source.status || 404).json({
+      error: source.error || 'artifact not found',
+      ...(source.reason ? { reason: source.reason } : {}),
+    });
   }
-  if (!full) {
-    let entry = null;
-    try {
-      entry = fs.readdirSync(ARTIFACT_DIR).find(f => f.startsWith(`${id}-`));
-    } catch { entry = null; }
-    if (entry) full = path.join(ARTIFACT_DIR, entry);
-  }
-  if (!full || !fs.existsSync(full)) {
-    // Offloaded-to-R2 or missing binary: no local bytes to convert.
-    return res.status(409).json({ error: 'preview unavailable' });
-  }
-  if (!metadata?.ownerUserId) return res.status(403).json({ error: 'artifact ownership metadata missing' });
-  if (String(metadata.ownerUserId) !== String(req.user?.id)) return res.status(403).json({ error: 'artifact not found' });
 
+  let pdfPath = null;
   try {
     const { getOrCreatePdfPreview } = require('../services/document-pipeline/preview-pdf-service');
-    const pdfPath = await getOrCreatePdfPreview({ sourcePath: full, cacheKey: id });
+    pdfPath = await getOrCreatePdfPreview({
+      sourcePath: source.sourcePath,
+      cacheKey: id,
+    });
+    try { await source.cleanup(); } catch { /* temp from R2 — cache holds the PDF */ }
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
     res.setHeader('Cache-Control', 'private, max-age=300');
-    return fs.createReadStream(pdfPath).pipe(res);
+    res.setHeader('X-Preview-Source', source.fromR2 ? 'r2' : 'local');
+    res.setHeader('X-Preview-Native-Pdf', source.isPdf ? '1' : '0');
+    const stream = fs.createReadStream(pdfPath);
+    res.on('close', () => { if (!res.writableEnded) stream.destroy(); });
+    return stream.pipe(res);
   } catch (err) {
-    // Not previewable / too large / soffice down → the client falls back.
+    try { await source.cleanup(); } catch { /* best-effort */ }
+    // Conversion failed AFTER we had the bytes. The artifact exists;
+    // the client may fall back to Mammoth / JSZip.
     return res.status(409).json({ error: 'preview unavailable', reason: String(err?.message || '').slice(0, 120) });
   }
 });
@@ -726,12 +746,9 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
   if (!task) return res.status(404).json({ error: 'task not found' });
 
   const allEvents = task.events || [];
-  const afterRaw = String(req.query.after || '0');
-  const numericAfter = Number.parseInt(afterRaw, 10);
-  const after = Number.isFinite(numericAfter)
-    ? numericAfter
-    : (allEvents.find((event) => String(event.id) === afterRaw)?.seq || 0);
-  const events = allEvents.filter((event) => (Number(event.seq) || 0) > after);
+  const lastEventId = (req.get && (req.get('Last-Event-ID') || req.get('last-event-id'))) || '';
+  const after = resolveEventCursor(req.query.after, lastEventId, allEvents);
+  const resume = buildTaskEventsResumePayload(task, { after });
   res.json({
     ok: true,
     taskId: task.taskId,
@@ -739,9 +756,14 @@ router.get('/task/:taskId/events', authenticateToken, (req, res) => {
     queue: task.queueName || getQueueName(),
     traceId: task.traceId || null,
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
-    events,
+    events: resume.events,
     streamState: task.streamState || null,
     artifacts: task.artifacts || task.streamState?.artifacts || [],
+    lastEventSeq: resume.lastEventSeq,
+    updatedAt: resume.updatedAt,
+    lastEventAt: resume.lastEventAt,
+    alive: resume.alive,
+    lastError: resume.lastError,
   });
 });
 
@@ -798,37 +820,55 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   if (!task) {
     const snapshot = taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
     if (!snapshot) return res.status(404).json({ error: 'task not found' });
+    const decision = claimTaskCancel(snapshot);
+    persistCancelRequest(snapshot);
+    if (!decision.apply) {
+      return res.json({
+        ...buildCancelAck(snapshot, decision),
+        queueCancel: null,
+        runningCancel: { cancelled: decision.already && decision.reason !== 'already_terminal', already: decision.already, reason: decision.reason, state: decision.status },
+      });
+    }
     let queueCancel = null;
     try { queueCancel = await cancelQueuedTask(snapshot.jobId || snapshot.taskId); } catch { /* redis unavailable */ }
     const runningCancel = await cancelRunningTask(snapshot.taskId, req.user?.id);
-    if (['queued', 'running'].includes(snapshot.status)) {
-      let streamState = {
-        ...(snapshot.streamState || initialAgentState()),
-        done: true,
-        error: 'Tarea cancelada por el usuario.',
-      };
-      streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
-      const writtenCancel = taskStore.appendTaskEvent(snapshot, { type: 'error', message: 'Tarea cancelada por el usuario.' }, streamState, { eventLimit: TASK_EVENT_LIMIT });
-      await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || { type: 'error', message: 'Tarea cancelada por el usuario.' });
-      taskStore.markTaskStatus(snapshot, 'cancelled', {
-        streamState,
-      });
-      await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
-    }
-    return res.json({ ok: true, taskId: snapshot.taskId, status: 'cancelled', queueCancel, runningCancel });
+    let streamState = {
+      ...(snapshot.streamState || initialAgentState()),
+      done: true,
+      error: 'Tarea cancelada por el usuario.',
+      errorCode: 'E_CANCELLED',
+    };
+    streamState = reduceAgentState(streamState, { type: 'queue_status', taskId: snapshot.taskId, status: 'cancelled', queue: snapshot.queueName || getQueueName(), jobId: snapshot.jobId || snapshot.taskId });
+    const cancelEvent = { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' };
+    const writtenCancel = taskStore.appendTaskEvent(snapshot, cancelEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    await agentTaskPersistence.appendAgentTaskEvent(writtenCancel || snapshot, writtenCancel?.events?.[writtenCancel.events.length - 1] || cancelEvent);
+    taskStore.markTaskStatus(snapshot, 'cancelled', {
+      streamState,
+    });
+    await agentTaskPersistence.upsertAgentTask({ ...snapshot, status: 'cancelled', state: streamState });
+    return res.json({
+      ...buildCancelAck(snapshot, decision),
+      status: 'cancelled',
+      queueCancel,
+      runningCancel,
+    });
   }
-  if (task.status !== 'running') {
-    return res.json({ ok: true, taskId: task.taskId, status: task.status });
+
+  const liveDecision = claimTaskCancel(task);
+  persistCancelRequest(task);
+  if (!liveDecision.apply) {
+    return res.json(buildCancelAck(task, liveDecision));
   }
 
   task.status = 'cancelled';
   task.cancelledAt = new Date().toISOString();
   task.updatedAt = task.cancelledAt;
-  task.controller.abort();
-  appendTaskEvent(task, { type: 'error', message: 'Tarea detenida por el usuario.' }, {
+  task.controller?.abort?.();
+  appendTaskEvent(task, { type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea detenida por el usuario.' }, {
     ...task.streamState,
     done: true,
     error: 'Tarea detenida por el usuario.',
+    errorCode: 'E_CANCELLED',
   });
   taskStore.markTaskStatus(task, 'cancelled', { streamState: task.streamState });
   if (task.durableExecution?.graphId) {
@@ -842,7 +882,7 @@ router.post('/task/:taskId/cancel', authenticateToken, async (req, res) => {
   }
   metrics.counter('agent_task_cancellations_total', { reason: 'user' });
 
-  res.json({ ok: true, taskId: task.taskId, status: task.status });
+  res.json(buildCancelAck(task, liveDecision));
 });
 
 // ─── POST /api/agent/task/:taskId/retry ────────────────────────────────
@@ -851,7 +891,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
   const snapshot = getTaskForUser(req.params.taskId, req.user?.id)
     || taskStore.getTaskSnapshotForUser(req.params.taskId, req.user?.id);
   if (!snapshot) return res.status(404).json({ error: 'task not found' });
-  if (!['error', 'cancelled'].includes(snapshot.status)) {
+  if (!['error', 'failed', 'cancelled'].includes(snapshot.status)) {
     return res.status(409).json({ error: 'task is not retryable', status: snapshot.status });
   }
 
@@ -893,6 +933,12 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
     };
     streamState = reduceAgentState(streamState, retryEvent);
     const retryWritten = taskStore.appendTaskEvent({ ...snapshot, status: 'queued', jobId: job.id, queueName: getQueueName() }, retryEvent, streamState, { eventLimit: TASK_EVENT_LIMIT });
+    // The durable retry is now queued. Retire only the previous terminal
+    // record before awaiting mirrors, so Stop reaches the new queued job even
+    // if a persistence mirror fails. Preserve a worker that already started.
+    if (ACTIVE_AGENT_TASKS.get(snapshot.taskId) === snapshot) {
+      ACTIVE_AGENT_TASKS.delete(snapshot.taskId);
+    }
     await agentTaskPersistence.appendAgentTaskEvent(retryWritten || snapshot, retryWritten?.events?.[retryWritten.events.length - 1] || retryEvent);
     const queueEvent = { type: 'queue_status', taskId: snapshot.taskId, status: 'queued', queue: getQueueName(), jobId: String(job.id), position: null };
     streamState = reduceAgentState(streamState, queueEvent);
@@ -903,7 +949,7 @@ router.post('/task/:taskId/retry', authenticateToken, async (req, res) => {
       streamState,
     });
     await agentTaskPersistence.upsertAgentTask({
-      ...snapshot,
+      ...queued,
       userId: req.user?.id,
       status: 'queued',
       jobId: String(job.id),
@@ -1446,7 +1492,8 @@ router.post(
     // planning / first-LLM-call phase. A bare `: keep-alive` comment is not
     // enough — edge proxies buffer/drop SSE comments — so we also send a real
     // `data:` heartbeat frame (mirrors routes/ai.js). The client reducer
-    // treats unknown `heartbeat` events as a no-op.
+    // refreshes lastEventAt / heartbeatAt so the UI stale banner waits
+    // for missed heartbeats, not quiet business events.
     const inlineHeartbeatMs = Math.max(2_000, Number.parseInt(process.env.AGENT_TASK_SSE_HEARTBEAT_MS || '15000', 10) || 15000);
     heartbeatTimer = setInterval(() => {
       if (!clientConnected || res.writableEnded) { clearTimers(); return; }
@@ -1491,7 +1538,10 @@ router.post(
     let assistantMessageId = null;
     let persistTimer = null;
     let lastPersistAt = 0;
+    let terminalStatus = null;
+    const pendingProgressWrites = new Set();
     const persistTaskState = async (status = 'running') => {
+      if (terminalStatus && status === 'running') return;
       if (!assistantMessageId || !prisma) return;
       task.status = status;
       task.updatedAt = new Date().toISOString();
@@ -1531,19 +1581,39 @@ router.post(
       } catch (e) { /* non-fatal */ }
     };
     const schedulePersistTaskState = (status = 'running') => {
+      if (terminalStatus) return;
       if (!assistantMessageId || !prisma) return;
+      const persistProgress = () => {
+        const pending = persistTaskState(status);
+        pendingProgressWrites.add(pending);
+        void pending.then(
+          () => pendingProgressWrites.delete(pending),
+          () => pendingProgressWrites.delete(pending),
+        );
+      };
       const elapsed = Date.now() - lastPersistAt;
       const delay = elapsed >= 1500 ? 0 : 1500 - elapsed;
       if (delay === 0) {
-        void persistTaskState(status);
+        persistProgress();
         return;
       }
       if (!persistTimer) {
         persistTimer = setTimeout(() => {
           persistTimer = null;
-          void persistTaskState(status);
+          persistProgress();
         }, delay);
       }
+    };
+    const finishProgressPersistence = async (status) => {
+      terminalStatus = status;
+      task.status = status;
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+      }
+      // Older progress writes must settle before the terminal DB write;
+      // otherwise a slow update can overwrite the final message afterwards.
+      await Promise.allSettled(Array.from(pendingProgressWrites));
     };
 
     const applyEvent = (obj) => {
@@ -1768,7 +1838,7 @@ router.post(
       let finalMarkdown = result.finalAnswer || '';
       let stoppedReason = result.stoppedReason;
       const attachmentFinalNeedsRecovery = fileIds.length > 0 && looksLikeAttachmentRecoveryNeeded(finalMarkdown);
-      if (attachmentFinalNeedsRecovery) {
+      if (attachmentFinalNeedsRecovery && canRecoverAgentStopReason(stoppedReason)) {
         const recoveredMarkdown = resolveAttachmentFallbackMarkdown({
           goal: displayGoal || agentGoal,
           uploadedFileContext,
@@ -1801,6 +1871,7 @@ router.post(
         }
       }
 
+      await finishProgressPersistence(statusForAgentStopReason(stoppedReason));
       if (finalMarkdown) {
         emit({ type: 'final_text', markdown: finalMarkdown });
       }
@@ -1821,7 +1892,7 @@ router.post(
               metadata: {
                 source: 'agent-task',
                 taskId,
-                status: stoppedReason === 'aborted' ? 'cancelled' : 'completed',
+                status: terminalStatus,
                 displayGoal,
                 artifacts,
                 executionProfile,
@@ -1854,9 +1925,9 @@ router.post(
         ...doneEvent,
         dbMessageId: dbMessage?.id || null,
       };
-      task.status = stoppedReason === 'aborted' ? 'cancelled' : 'completed';
+      task.status = terminalStatus;
       task.updatedAt = new Date().toISOString();
-      taskStore.markTaskStatus(task, task.status, {
+      taskStore.markTaskStatus(task, terminalStatus, {
         streamState,
         stats: {
           steps: result.steps.length,
@@ -1901,7 +1972,7 @@ router.post(
     } catch (err) {
       console.error('[agent-task] fatal:', err);
       const message = controller.signal.aborted ? 'Tarea detenida por el usuario.' : (err.message || 'agent task failed');
-      task.status = controller.signal.aborted ? 'cancelled' : 'error';
+      await finishProgressPersistence(controller.signal.aborted ? 'cancelled' : 'error');
       emit({ type: 'error', message });
       taskStore.markTaskStatus(task, task.status, {
         streamState,
@@ -1953,7 +2024,7 @@ function runAgentJobInProcess(payload, userId) {
         updateProgress: async () => {},
       });
     } catch (err) {
-      failTaskTerminal(payload.taskId, userId, err?.message || 'agent task failed');
+      failTaskTerminal(payload.taskId, userId, err || 'agent task failed');
     }
   });
 }
@@ -2440,13 +2511,13 @@ async function handleLocalTaskRequest(req, res, { fallbackReason = 'local_fallba
       });
     } catch (err) {
       const latest = taskStore.getTaskSnapshotForUser(taskId, req.user?.id) || snapshot;
-      if (['completed', 'cancelled', 'error'].includes(latest.status)) return;
-      const errorEvent = { type: 'error', message: err?.message || 'agent task failed' };
+      if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return;
+      const errorEvent = toAgentTaskErrorEvent(err || 'agent task failed');
       const state = reduceAgentState(latest.streamState || streamState, errorEvent);
       appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
       taskStore.markTaskStatus({ ...latest, userId: req.user?.id }, 'error', {
         streamState: state,
-        stats: { error: errorEvent.message },
+        stats: { error: errorEvent.message, code: errorEvent.code },
       });
     }
   });
@@ -2469,13 +2540,13 @@ function failTaskTerminal(taskId, userId, message) {
     const latest = taskStore.getTaskSnapshotForUser(taskId, userId)
       || taskStore.getTaskSnapshotForUser(taskId, undefined);
     if (!latest) return false;
-    if (['completed', 'cancelled', 'error'].includes(latest.status)) return false;
-    const errorEvent = { type: 'error', message: String(message || 'La tarea agéntica falló.') };
+    if (['completed', 'cancelled', 'error', 'failed'].includes(latest.status)) return false;
+    const errorEvent = toAgentTaskErrorEvent(message || 'La tarea agéntica falló.');
     const state = reduceAgentState(latest.streamState || initialAgentState(), errorEvent);
     appendTaskEvent({ ...latest, events: latest.events || [] }, errorEvent, state);
     taskStore.markTaskStatus({ ...latest, userId: latest.userId || userId }, 'error', {
       streamState: state,
-      stats: { error: errorEvent.message },
+      stats: { error: errorEvent.message, code: errorEvent.code },
     });
     return true;
   } catch (_) {
@@ -2570,7 +2641,7 @@ function streamTaskEvents(req, res, taskId, userId) {
       lastSeq = seq;
       send(event);
     }
-    if (['completed', 'cancelled', 'error'].includes(snapshot.status)) {
+    if (['completed', 'cancelled', 'error', 'failed'].includes(snapshot.status)) {
       safeCloseQueuedConnection();
     }
   };
@@ -2794,6 +2865,10 @@ function buildAgentSystemPrompt(
   agentGoal = ''
 ) {
   const parts = [TASK_SYSTEM_PROMPT];
+  try {
+    const { POLICY_ES } = require('../services/computer/login-handoff');
+    if (POLICY_ES) parts.push(POLICY_ES);
+  } catch (_) { /* computer policy is best-effort */ }
   if (universalTaskContract) {
     parts.push(buildUniversalContractPrompt(universalTaskContract));
   }
@@ -2925,6 +3000,7 @@ function createTaskRecord({
     fileIds: existingSnapshot?.fileIds || [],
     createdAt: now,
     updatedAt: now,
+    lastEventAt: now,
     streamState: streamState || existingSnapshot?.streamState || initialAgentState(),
     executionProfile,
     intentAlignmentProfile,
@@ -2963,6 +3039,17 @@ function getTaskForUser(taskId, userId) {
   const task = ACTIVE_AGENT_TASKS.get(cleanId);
   if (!task || String(task.userId) !== String(userId || '')) return null;
   return task;
+}
+
+function persistCancelRequest(task) {
+  if (!task?.taskId || !task?.userId || !task.cancelRequestedAt) return;
+  try {
+    taskStore.updateTaskSnapshot(task.taskId, task.userId, {
+      cancelRequestedAt: task.cancelRequestedAt,
+    });
+  } catch {
+    // Latch is best-effort; the in-process claim still holds for this turn.
+  }
 }
 
 function appendTaskEvent(task, event, streamState) {
@@ -3021,6 +3108,7 @@ function formatTaskPayload(task) {
     documentPolicy: task.documentPolicy || task.streamState?.documentPolicy || null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
+    lastEventAt: task.lastEventAt || task.streamState?.lastEventAt || task.updatedAt || null,
     completedAt: task.completedAt || null,
     cancelledAt: task.cancelledAt || null,
     failedAt: task.failedAt || null,
@@ -3188,17 +3276,21 @@ function reduceAgentState(state, evt) {
         },
       };
     case 'step_start':
+    case 'step.started': {
+      const { upsertMonotonicStep } = require('../services/agents/run-trace');
       return {
         ...state,
-        steps: [...state.steps, {
+        steps: upsertMonotonicStep(state.steps, {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
           ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
           status: 'running',
+          retryCount: 1,
           toolCalls: [],
-        }],
+        }),
       };
+    }
     case 'tool_call': {
       const stepId = evt.stepId || `tool-${state.steps.length + 1}`;
       const steps = state.steps.some(step => step.id === stepId)
@@ -3250,23 +3342,60 @@ function reduceAgentState(state, evt) {
         }),
       };
     }
+    case 'step.updated': {
+      const updateId = String(evt.id || evt.stepId || '').trim();
+      if (!updateId) return state;
+      return {
+        ...state,
+        steps: state.steps.map((step) =>
+          step.id === updateId
+            ? {
+              ...step,
+              label: evt.label || step.label,
+              reasoning: evt.reasoning || step.reasoning,
+              status: 'running',
+            }
+            : step
+        ),
+      };
+    }
     case 'step_done':
+    case 'step.finished':
       return {
         ...state,
         steps: state.steps.map(step =>
-          step.id === evt.id ? { ...step, status: evt.ok ? 'done' : 'error' } : step
+          step.id === evt.id ? { ...step, status: evt.ok === false ? 'error' : 'done' } : step
         ),
       };
     case 'file_artifact': {
       const artifacts = Array.isArray(state.artifacts) ? [...state.artifacts] : [];
+      const artifactId = String(evt.artifact?.id || '').trim();
       const filename = String(evt.artifact?.filename || '').trim().toLowerCase();
       const format = String(evt.artifact?.format || evt.artifact?.mime || '').trim().toLowerCase();
-      const existingIndex = filename
-        ? artifacts.findIndex((item) => (
-          String(item?.filename || '').trim().toLowerCase() === filename
-          && String(item?.format || item?.mime || '').trim().toLowerCase() === format
-        ))
+      const sourceFileId = String(evt.artifact?.sourceFileId || '').trim();
+      let existingIndex = artifactId
+        ? artifacts.findIndex((item) => String(item?.id || '').trim() === artifactId)
         : -1;
+      if (existingIndex < 0 && sourceFileId) {
+        existingIndex = artifacts.findIndex((item) => (
+          String(item?.sourceFileId || '').trim() === sourceFileId
+        ));
+      }
+      if (existingIndex < 0 && filename) {
+        existingIndex = artifacts.findIndex((item) => {
+          const sameDeliverySlot = (
+            String(item?.filename || '').trim().toLowerCase() === filename
+            && String(item?.format || item?.mime || '').trim().toLowerCase() === format
+          );
+          if (!sameDeliverySlot) return false;
+          const existingSourceFileId = String(item?.sourceFileId || '').trim();
+          // Distinct source ids identify separate outputs in a batch even
+          // when the user uploaded two documents with the same filename.
+          // Legacy/no-source events retain the filename fallback so replayed
+          // revisions do not accumulate duplicate cards.
+          return !(sourceFileId && existingSourceFileId && sourceFileId !== existingSourceFileId);
+        });
+      }
       if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact);
       else artifacts.push(evt.artifact);
       return { ...state, artifacts };
@@ -3274,9 +3403,18 @@ function reduceAgentState(state, evt) {
     case 'final_text':
       return { ...state, finalText: evt.markdown };
     case 'done':
+    case 'run.succeeded':
       return { ...state, done: true, stoppedReason: evt.stoppedReason };
     case 'error':
-      return { ...state, done: true, error: evt.message };
+    case 'run.failed':
+      return {
+        ...state,
+        done: true,
+        error: evt.message,
+        ...(evt.code ? { errorCode: evt.code } : {}),
+      };
+    case 'heartbeat':
+      return { ...state, lastEventAt: evt.ts || new Date().toISOString(), heartbeatAt: evt.ts || new Date().toISOString() };
     default:
       return state;
   }
@@ -3305,6 +3443,7 @@ function toSerializableAgentState(state = {}) {
     finalText: state.finalText || '',
     done: Boolean(state.done),
     error: state.error || undefined,
+    ...(state.errorCode ? { errorCode: state.errorCode } : {}),
     stoppedReason: state.stoppedReason || undefined,
     checkpoints: (state.checkpoints || []).map((checkpoint) => ({
       id: checkpoint.id,
@@ -3353,6 +3492,7 @@ router.INTERNAL = {
   TASK_EVENT_LIMIT,
   appendTaskEvent,
   buildAgentSystemPrompt,
+  buildTaskEventsResumePayload,
   createTaskRecord,
   extractProfessionalContract,
   failTaskTerminal,
@@ -3364,6 +3504,8 @@ router.INTERNAL = {
   normalizeDisplayGoal,
   normalizeSystemContract,
   reduceAgentState,
+  resolveEventCursor,
+  resolveTaskLastError,
   safeJsonStringify,
   resolveQueuedStreamTimeoutMs,
   shouldResumeGeneratedArtifactForDocumentFollowup,

@@ -149,10 +149,13 @@ function contextBudgetChars(modelCapabilities = {}, env = process.env) {
   return Math.min(750_000, Math.max(12_000, Math.floor(inputTokens * 3)));
 }
 
-function effortForStage({ tier = null, verifyRounds = 0, env = process.env } = {}) {
+function effortForStage({ tier = null, reasoningEffort = null, verifyRounds = 0, env = process.env } = {}) {
   const configured = String(env?.CODEX_REASONING_EFFORT || '').trim().toLowerCase();
   if (['low', 'medium', 'high'].includes(configured)) return configured;
   if (verifyRounds > 0) return 'high';
+  const requested = String(reasoningEffort || '').trim().toLowerCase();
+  if (requested === 'max') return 'high';
+  if (['low', 'medium', 'high'].includes(requested)) return requested;
   return String(tier || '').toLowerCase() === 'eco' ? 'low' : 'medium';
 }
 
@@ -236,10 +239,91 @@ function explicitlyRequestsNext(text) {
   return /\bnext(?:\.js|js)?\b/i.test(source);
 }
 
+const COMMON_NEXT_ROUTE_ENTRIES = [
+  'app/page.js',
+  'app/page.jsx',
+  'app/page.mdx',
+  'app/page.ts',
+  'app/page.tsx',
+  'src/app/page.js',
+  'src/app/page.jsx',
+  'src/app/page.mdx',
+  'src/app/page.ts',
+  'src/app/page.tsx',
+  'pages/index.js',
+  'pages/index.jsx',
+  'pages/index.mdx',
+  'pages/index.ts',
+  'pages/index.tsx',
+  'src/pages/index.js',
+  'src/pages/index.jsx',
+  'src/pages/index.mdx',
+  'src/pages/index.ts',
+  'src/pages/index.tsx',
+];
+
+function isNextRouteEntryPath(value) {
+  const path = String(value || '').trim().replace(/^\.\//, '');
+  return /^(?:src\/)?app\/(?:[^/]+\/)*(?:page|route)\.(?:jsx?|tsx?|mdx)$/i.test(path)
+    || /^(?:src\/)?pages\/(?!_(?:app|document|error)\.)(?:[^/]+\/)*[^/]+\.(?:jsx?|tsx?|mdx)$/i.test(path);
+}
+
+function fileTreeLooksLikeNextApplication(fileTree) {
+  return String(fileTree || '')
+    .split(/\r?\n/)
+    .some((line) => {
+      const match = line.trim().match(/^((?:src\/)?(?:app|pages)\/[^\s:]+\.(?:jsx?|tsx?|mdx))/i);
+      return Boolean(match && isNextRouteEntryPath(match[1]));
+    });
+}
+
 function userRequestFromPrompt(text) {
   const source = String(text || '');
   const parts = source.split(/SOLICITUD DEL USUARIO:/i);
   return (parts.length > 1 ? parts.pop() : source).trim();
+}
+
+function projectBriefText(project) {
+  if (typeof project?.brief === 'string') return project.brief;
+  if (typeof project?.brief?.instructions === 'string') return project.brief.instructions;
+  return '';
+}
+
+function fileTreeHasBackend(fileTree) {
+  return /(?:^|\n)[^\n]*(?:server\/(?:index|app|db)\.(?:[cm]?[jt]s)|(?:api|backend)\/)/i
+    .test(String(fileTree || ''));
+}
+
+function fileTreeLooksLikeExpressStarter(fileTree) {
+  const tree = String(fileTree || '');
+  return /server\/index\.(?:[cm]?[jt]s)/i.test(tree) && /server\/db\.(?:[cm]?[jt]s)/i.test(tree);
+}
+
+function explicitlyRequestsCustomBackend(text) {
+  return /\b(?:koa|fastify)\b/i.test(userRequestFromPrompt(text));
+}
+
+/**
+ * APPS may start as a SPA or as the full-stack starter. Do not infer the
+ * contract from the last assistant turn alone: a follow-up such as "cambia el
+ * botón" still belongs to the existing Express/SQLite workspace.
+ */
+function appsHasFullStackContract({ sourcePrompt, project, fileTree, pkgText, serverIndexText, serverDbText, backendEntryText } = {}) {
+  const request = userRequestFromPrompt(sourcePrompt);
+  let intent = false;
+  try {
+    intent = require('./project-service').hasFullStackIntent(request)
+      || require('./project-service').hasFullStackIntent(projectBriefText(project));
+  } catch {
+    // Keep the close path deterministic even if project-service cannot load.
+    intent = /\b(?:full ?stack|backend|servidor|apis?|base de datos|database|sqlite|postgres|autenticaci[oó]n|authentication|multiusuario)\b/i.test(`${request}\n${projectBriefText(project)}`);
+  }
+  if (intent) return true;
+
+  if (fileTreeHasBackend(fileTree)) return true;
+  if (packageLooksFullStack(pkgText)) return true;
+  return /\b(?:express|fastify|koa|bun:sqlite|node:sqlite|CREATE TABLE|\/api\/)\b/i
+    .test(`${serverIndexText || ''}\n${serverDbText || ''}\n${backendEntryText || ''}`);
 }
 
 function titleFromRequest(text, fallback = 'App generada') {
@@ -383,9 +467,38 @@ function buildSystemPrompt({
   parallelTools = true,
   openclawPromptBlock = '',
   companySoul = '',
+  preserveExistingNext = false,
 }) {
   const appsMode = isAppsPrompt(sourcePrompt);
-  const forceViteApps = appsMode && !explicitlyRequestsNext(sourcePrompt);
+  // Existing Next applications are first-class imported workspaces. A follow-up
+  // such as "cambia el encabezado" must not silently opt them into the Vite
+  // starter merely because that individual instruction did not repeat "Next".
+  const preserveNextApps = appsMode
+    && (explicitlyRequestsNext(sourcePrompt) || preserveExistingNext);
+  const forceViteApps = appsMode && !preserveNextApps;
+  const fullStackApps = forceViteApps && appsHasFullStackContract({
+    sourcePrompt,
+    project,
+    fileTree,
+  });
+  const existingCustomBackendApps = fullStackApps && (
+    explicitlyRequestsCustomBackend(sourcePrompt)
+    || (fileTreeHasBackend(fileTree) && !fileTreeLooksLikeExpressStarter(fileTree))
+  );
+  const starterContract = preserveNextApps
+    ? 'Este workspace APPS usa Next.js por solicitud explícita o porque ya contiene un router Next ejecutable. Inspecciona package.json y extiende el proyecto en su estructura actual. Conserva app/, pages/, src/app/, src/pages/, next.config.* y next-env.d.ts cuando existan; NO conviertas el proyecto a Vite ni sustituyas sus scripts, routing o configuración Next.'
+    : existingCustomBackendApps
+      ? 'Este workspace APPS ya contiene un backend propio. Antes de editarlo, inspecciona package.json y su entry real; conserva exactamente el framework actual (por ejemplo Koa o Fastify), el tipo de módulos CJS/ESM, el archivo de entrada y sus scripts de arranque. Vite sigue siendo obligatorio para el frontend, pero NO sustituyas el backend por Express, NO inventes server/index.js y NO cambies package.json al starter Express.'
+      : fullStackApps
+        ? 'El workspace APPS ya viene provisionado con un starter FULL-STACK ejecutable: frontend React 18 + Vite 7 + TypeScript + Tailwind v4; backend Express en server/index.js; SQLite en server/db.js; proxy /api en vite.config.ts; y un script dev compuesto con concurrently que arranca API y web. Conserva y extiende TODAS esas capas: no reemplaces el backend, la base de datos, el proxy ni el script compuesto por una SPA.'
+        : 'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).';
+  const persistenceContract = preserveNextApps
+    ? 'PERSISTENCIA DEL PROYECTO NEXT EXISTENTE: conserva su ORM, driver, esquema, rutas API/server actions y variables actuales. No migres ni reemplaces esa capa salvo petición explícita del usuario.'
+    : existingCustomBackendApps
+      ? 'PERSISTENCIA DEL BACKEND EXISTENTE: conserva su driver, esquema y rutas actuales. No migres datos a localStorage ni reemplaces su capa de persistencia por SQLite/Express por defecto; amplía el contrato existente sólo después de leerlo.'
+      : fullStackApps
+        ? 'PERSISTENCIA FULL-STACK: los datos de dominio viven en SQLite y se exponen mediante rutas Express /api/* con validación server-side. El frontend consume la API usando import.meta.env.BASE_URL; no migres esos datos a localStorage ni al helper storage. Reserva storage únicamente para preferencias efímeras/personales que no pertenezcan al modelo de datos del servidor.'
+        : 'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.';
   const lines = [
     'Eres un agente de software senior trabajando dentro de un workspace aislado.',
     'Narras en PRIMERA PERSONA y en ESPAÑOL lo que vas haciendo, de forma breve y concreta.',
@@ -394,16 +507,22 @@ function buildSystemPrompt({
     parallelTools
       ? 'Cuando varias lecturas, búsquedas o escrituras a archivos DISTINTOS sean independientes, puedes emitirlas en el mismo turno; el runtime preserva automáticamente las dependencias read-after-write.'
       : 'Emite herramientas de una en una; este runtime tiene desactivada la ejecución paralela.',
-    'El workspace ya viene provisionado con un starter REACT 18 + VITE 7 + TypeScript + TAILWIND v4 ejecutable: package.json (react, react-dom, lucide-react para iconos, framer-motion para animación, recharts para gráficas, clsx, tailwindcss + @tailwindcss/vite, @vitejs/plugin-react, typescript, vite), vite.config.ts, tsconfig.json, index.html (carga /src/main.tsx), src/main.tsx, src/App.tsx, src/index.css, src/lib/ai.ts (helper askAI: IA real sin API keys) y src/lib/storage.ts (helper `storage`: PERSISTENCIA REAL server-side sin backend propio).',
-    'PERSISTENCIA: cuando la app deba GUARDAR datos (notas, tareas, favoritos, ajustes, puntuaciones, diarios), usa `storage` de "./lib/storage" (o "../lib/storage"): `await storage.set(key, valor)` / `await storage.get<T>(key)` / `storage.remove(key)` / `storage.keys()` — ámbito PERSONAL por dispositivo; `storage.shared.*` para datos COMPARTIDOS entre todos los visitantes (leaderboards, muro común). Es async y cae a localStorage si el servicio falla. PREFIÉRELO sobre localStorage crudo para que los datos sobrevivan entre dispositivos/sesiones. Solo usa localStorage directo para estado efímero de UI.',
-    'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
-    'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
+    starterContract,
+    persistenceContract,
+    preserveNextApps
+      ? 'SISTEMA DE DISEÑO: conserva el sistema de estilos, componentes y tokens que ya usa el proyecto Next. No introduzcas Tailwind, Vite ni un kit alternativo sin leer primero la configuración existente y sin una petición explícita.'
+      : 'SISTEMA DE DISEÑO: estiliza con clases Tailwind (NO estilos inline salvo valores dinámicos). Los tokens viven en src/index.css (:root → --bg/--surface/--fg/--muted/--accent/--line) y se usan como bg-bg, bg-surface, text-fg, text-muted, bg-accent, border-line; para re-temar la app (o pasarla a claro) edita SOLO esas variables. El kit src/ui/ trae Button, Card(+Header/Title/Description/Content/Footer), Input, Textarea, Label y Badge listos — impórtalos de "./ui" o "../ui" y extiéndelos con className; NO reinventes botones/tarjetas básicos. EXCEPCIÓN: si retomas un proyecto cuyo vite.config.ts NO incluye tailwindcss() (starter anterior), sigue el idioma de estilos que el proyecto ya use.',
+    preserveNextApps
+      ? 'NO ejecutes scaffolds interactivos ni reinicialices el framework. Lee las convenciones App Router/Pages Router existentes y edita sus archivos concretos con write_file/edit_file.'
+      : 'NO inicialices frameworks ni ejecutes scaffolds interactivos (create-next-app/create-vite); construye componentes React (.tsx) editando/creando archivos en src/ con write_file/edit_file.',
     'Si necesitas estructura adicional, crea archivos concretos tú mismo. Para paquetes npm usa install_dependencies (no run_command); luego ejecuta type_check y dev_server_check. Usa run_command solo para comandos no interactivos de verificación o git. En este runner NO uses bunx para tsc, Vitest, Jest o ESLint: usa type_check y los scripts del package.json; los gates ejecutan los binarios locales con Node.',
     'Antes de editar un archivo existente, léelo (read_file) y usa edit_file con el fragmento EXACTO; usa repo_map (mapa rankeado de símbolos) al retomar un proyecto existente y list_files/grep_search para el detalle, en vez de adivinar rutas.',
     'NO reescribas un archivo que ya escribiste salvo para corregir un error concreto (uno que viste en type_check o dev_server_check). Construye archivo por archivo siguiendo el plan; NO intentes hacerlo "todo de una vez" reescribiendo el mismo archivo una y otra vez. Cuando un archivo esté listo, avanza al siguiente paso del plan.',
     'Antes de dar por terminado, asegúrate de que el proyecto compila (el sistema ejecutará una verificación de tipos al final y te devolverá los errores si los hay).',
     'Nunca dependas de prompts interactivos de terminal; los comandos deben terminar solos.',
-    'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
+    preserveNextApps
+      ? 'VERIFICA tu trabajo como lo haría un ingeniero: después de editar o instalar dependencias usa type_check para leer errores reales de compilación, dev_server_check para confirmar que Next corre y browser_check para detectar excepciones de runtime, páginas en blanco u overlays; corrige lo que salga antes de dar el trabajo por terminado.'
+      : 'VERIFICA tu trabajo como lo haría un ingeniero: después de crear, editar o instalar dependencias usa type_check para instalar/leer errores reales de compilación, dev_server_check para confirmar que la app corre y browser_check para ver la app con ojos de usuario (excepciones de runtime, página en blanco, overlay de Vite); corrige lo que salga antes de dar el trabajo por terminado.',
     require('./skills').skillsPromptLine(),
     'Para tareas grandes o especializadas delega con run_subagent: planner (plan de construcción), frontend_builder (UI React/TS), backend_engineer (APIs y capa de datos), db_architect (modelo de datos), qa_reviewer (revisión final), debugger (diagnóstico y fix de errores reales), enterprise_analyst (especificación de negocio). Si el proyecto define agentes custom en .sira/agents.json también puedes delegarles.',
     parallelSubagents
@@ -424,11 +543,20 @@ function buildSystemPrompt({
   }
   if (forceViteApps) {
     lines.push('Este run viene de /apps. Stack OBLIGATORIO: React 18 + Vite 7 + TypeScript (el starter ya provisto). Construye componentes .tsx en src/; el entry es src/main.tsx que monta <App/> en #root.');
-    lines.push('PROHIBIDO Next.js: NO crees next.config.mjs, app/, pages/ ni cambies package.json a "next dev". Mantén el package.json Vite (script dev="vite"). El resultado debe abrir en el preview de inmediato.');
+    lines.push(existingCustomBackendApps
+      ? 'PROHIBIDO degradar el backend existente: conserva framework, CJS/ESM, entry y scripts actuales. Mantén Vite para el frontend y su integración con la API; no introduzcas Express/server/index.js salvo petición explícita del usuario.'
+      : fullStackApps
+        ? 'PROHIBIDO Next.js: NO crees next.config.mjs, app/ ni pages/. Mantén Vite para el frontend Y conserva Express + SQLite + el proxy /api y el script dev con concurrently; NO lo reduzcas a dev="vite". El resultado completo debe abrir en el preview de inmediato.'
+        : 'PROHIBIDO Next.js: NO crees next.config.mjs, app/, pages/ ni cambies package.json a "next dev". Mantén el package.json Vite (script dev="vite"). El resultado debe abrir en el preview de inmediato.');
   }
   if (plan) {
-    lines.push('Plan aprobado por el usuario (síguelo):');
+    lines.push(preserveNextApps
+      ? 'Plan aprobado por el usuario: sigue sus objetivos funcionales sin migrar el framework Next existente.'
+      : 'Plan aprobado por el usuario (síguelo):');
     lines.push(JSON.stringify(plan));
+    if (preserveNextApps) {
+      lines.push('Si el plan menciona Vite, app/ SPA o src/main.tsx, trátalo como una suposición obsoleta del planificador: conserva Next.js y adapta las tareas a su App Router/Pages Router actual.');
+    }
     lines.push('Mantén el checklist del plan al día con update_plan (como TodoWrite): ANTES de empezar una tarea, llama update_plan marcándola in_progress; al terminarla, llama update_plan marcándola completed, ANTES de avanzar a la siguiente. Pasa SIEMPRE la lista COMPLETA de tareas del plan (id + title + status) en cada llamada, no solo la que cambió. Usa exactamente los mismos id y title del plan.');
   }
   if (fileTree) {
@@ -449,7 +577,12 @@ function buildSystemPrompt({
   // builtin playbook, its full body ships with the system prompt — the E2E
   // validation showed models skip a passively-listed use_skill.
   try {
-    const detected = require('./skills').detectSkillForPrompt(sourcePrompt);
+    const autoDetected = require('./skills').detectSkillForPrompt(sourcePrompt);
+    const detected = existingCustomBackendApps && autoDetected?.name === 'backend-real'
+      ? null
+      : fullStackApps && !existingCustomBackendApps
+      ? require('./skills').getSkill('backend-real')
+      : autoDetected;
     if (detected) {
       lines.push(`PLAYBOOK APLICABLE (${detected.name}) — SÍGUELO como estándar de calidad de este trabajo:`);
       lines.push(detected.body);
@@ -686,6 +819,28 @@ async function persistContextSnapshot({
  * exactly like the tsc path. When it started the server itself it stops it so the
  * verification never leaves a dev server hanging.
  */
+function logTailSince(previousTail, currentTail) {
+  const previous = Array.isArray(previousTail) ? previousTail.map((line) => String(line)) : [];
+  const current = Array.isArray(currentTail) ? currentTail.map((line) => String(line)) : [];
+  if (!previous.length || !current.length) return current;
+
+  // The host runner exposes a bounded rolling tail, not timestamps/cursors.
+  // Find the largest suffix/prefix overlap so a reused Vite server is judged
+  // only by lines emitted during this probe. Current browser evidence remains
+  // authoritative for HMR state that produced no new server log lines.
+  for (let overlap = Math.min(previous.length, current.length); overlap > 0; overlap -= 1) {
+    let matches = true;
+    for (let index = 0; index < overlap; index += 1) {
+      if (previous[previous.length - overlap + index] !== current[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return current.slice(overlap);
+  }
+  return current;
+}
+
 async function verifyDevServer({
   runner,
   projectId,
@@ -698,6 +853,7 @@ async function verifyDevServer({
   actionId,
   groupId,
   strict = false,
+  browserCheck = null,
 }) {
   if (!strict && String(env.CODEX_VERIFY_DEV_SERVER ?? '0') !== '1') return { ran: false, ok: true };
   if (typeof runner?.devStatus !== 'function' || typeof runner?.startDev !== 'function') {
@@ -714,8 +870,10 @@ async function verifyDevServer({
   const t0 = clock().getTime();
   let startedByUs = false;
   let status = null;
+  let initialTail = [];
   try {
     status = await runner.devStatus(projectId);
+    initialTail = Array.isArray(status?.tail) ? status.tail : [];
     // Not running (or running a DIFFERENT project) → (re)start it for this one.
     if (!status?.running || (status.project && status.project !== projectId)) {
       await runner.startDev(projectId);
@@ -739,7 +897,9 @@ async function verifyDevServer({
   }
 
   const durationMs = Math.max(0, clock().getTime() - t0);
-  const tail = Array.isArray(status?.tail) ? status.tail.join('\n') : '';
+  const currentTail = Array.isArray(status?.tail) ? status.tail : [];
+  const probeTail = startedByUs ? currentTail : logTailSince(initialTail, currentTail);
+  const tail = probeTail.join('\n');
   const errLines = tail.split('\n').filter((l) => /error|failed|cannot|not found|exception/i.test(l)).join('\n');
   const ok = Boolean(status?.ready) && !status?.error && !errLines;
 
@@ -751,8 +911,10 @@ async function verifyDevServer({
     // contract: no browser/infra → still verified-ok. CODEX_VERIFY_BROWSER=0 disables.
     if (strict || String(env.CODEX_VERIFY_BROWSER || '1').trim() !== '0') {
       try {
+        // Production resolves the real Chromium checker lazily. Tests may inject
+        // the same small contract so the final fail-closed gate stays offline.
         // eslint-disable-next-line global-require
-        const bc = require('./browser-check');
+        const bc = browserCheck || require('./browser-check');
         const url = bc.devUrlFor(env, status?.port || 5173);
         const view = await bc.checkApp({ url, env });
         if (view.unavailable && strict) {
@@ -952,6 +1114,7 @@ async function verifyWorkspace({
   groupId,
   strict = false,
   requireSmoke = false,
+  browserCheck = null,
 }) {
   const gates = {
     typeCheck: { ran: false, ok: !strict },
@@ -1049,6 +1212,7 @@ async function verifyWorkspace({
       actionId: `${actionId}-runtime`,
       groupId,
       strict,
+      browserCheck,
     });
     if (rt.devServer) gates.devServer = rt.devServer;
     if (rt.browser) gates.browser = rt.browser;
@@ -1339,11 +1503,45 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     return error;
   };
 
+  const activeProvider = (() => {
+    try {
+      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
+      if (anthropic.enabled && anthropic.tierEligible) {
+        return { provider: 'anthropic', model: anthropic.model };
+      }
+      return require('./llm-provider').describeActiveProvider({ env });
+    } catch {
+      return { provider: null, model: run?.model || null };
+    }
+  })();
   const llmTurn = async (args) => {
     if (budgetTerminalError) throw budgetTerminalError;
-    const turn = await baseLlmTurn(args);
-    const usage = turn?.usage;
-    recordLlmUsageOnce(metrics, usage);
+    // Per-model canary telemetry: one record per LLM turn, success or failure.
+    // Best-effort — telemetry must never alter run behavior.
+    const modelTurnStarted = Date.now();
+    let modelTtfbAt = null;
+    const baseArgs = args;
+    try {
+      const turn = await baseLlmTurn({
+        ...args,
+        onTextDelta: args.onTextDelta
+          ? (text) => { if (modelTtfbAt === null) modelTtfbAt = Date.now(); return args.onTextDelta(text); }
+          : undefined,
+      });
+      const usage = turn?.usage;
+      recordLlmUsageOnce(metrics, usage);
+      try {
+        require('./model-telemetry').recordLlmTurn({
+          model: usage?.model || args.model || activeProvider?.model || null,
+          provider: usage?.provider || activeProvider?.provider || null,
+          agent: run?.mode === 'plan' ? 'codex_plan' : 'codex_build',
+          outcome: 'ok',
+          durationMs: Date.now() - modelTurnStarted,
+          ttftMs: modelTtfbAt === null ? null : modelTtfbAt - modelTurnStarted,
+          tokensIn: usage?.tokensIn,
+          tokensOut: usage?.tokensOut,
+        });
+      } catch { /* optional */ }
 
     if (
       (
@@ -1465,6 +1663,20 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       }
     }
     return turn;
+    } catch (err) {
+      try {
+        require('./model-telemetry').recordLlmTurn({
+          model: args.model || activeProvider?.model || null,
+          provider: activeProvider?.provider || null,
+          agent: run?.mode === 'plan' ? 'codex_plan' : 'codex_build',
+          outcome: signal?.aborted ? 'cancelled' : 'error',
+          error: err,
+          durationMs: Date.now() - modelTurnStarted,
+          ttftMs: modelTtfbAt === null ? null : modelTtfbAt - modelTurnStarted,
+        });
+      } catch { /* optional */ }
+      throw err;
+    }
   };
 
   if (runBranchesEnabled) {
@@ -1520,17 +1732,6 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
       // MCP is an optional extension; the built-in registry remains available.
     }
   }
-  const activeProvider = (() => {
-    try {
-      const anthropic = require('./anthropic-turn').getAnthropicTurnConfig({ env, tier: run?.tier || null });
-      if (anthropic.enabled && anthropic.tierEligible) {
-        return { provider: 'anthropic', model: anthropic.model };
-      }
-      return require('./llm-provider').describeActiveProvider({ env });
-    } catch {
-      return { provider: null, model: run?.model || null };
-    }
-  })();
   const modelCapabilities = (() => {
     try {
       return require('../agent-harness/model-capabilities').resolveModelCapabilities(
@@ -1558,6 +1759,16 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     }
   } catch { /* budget stays at the base */ }
   const fileTree = deps.fileTree != null ? deps.fileTree : await safeFileTree(runner, projectId);
+  let preserveExistingNext = false;
+  if (isAppsPrompt(sourcePrompt)) {
+    const packageRead = await readRunnerFileResult(runner, projectId, 'package.json');
+    preserveExistingNext = packageRead.ok
+      ? await hasExistingNextApplication({ runner, projectId, pkgText: packageRead.content })
+      // A temporary runner read failure cannot prove the framework. Only a
+      // root-level Next route in the already-known tree activates fail-safe
+      // preservation; ordinary Vite src/pages remains excluded by package read.
+      : fileTreeLooksLikeNextApplication(fileTree);
+  }
   const projectNotes = deps.projectNotes != null ? deps.projectNotes : await safeProjectNotes(runner, projectId);
   const companySoul = deps.companySoul != null
     ? deps.companySoul
@@ -1593,6 +1804,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         parallelTools,
         openclawPromptBlock: deps.openclawPromptBlock || '',
         companySoul,
+        preserveExistingNext,
       }),
     },
     { role: 'user', content: sourcePrompt || 'Construye el proyecto según el plan aprobado.' },
@@ -1825,7 +2037,12 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         env,
         tier: run?.tier || null,
         model: run?.model || null,
-        effort: effortForStage({ tier: run?.tier || null, verifyRounds, env }),
+        effort: effortForStage({
+          tier: run?.tier || null,
+          reasoningEffort: run?.reasoningEffort || null,
+          verifyRounds,
+          env,
+        }),
         ...(streamingEnabled ? {
           onTextDelta: (text) => narrativeStream.push(text),
           onReasoningDelta,
@@ -1899,6 +2116,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
           actionId: `a${++actionCounter}`, groupId: `g${++groupCounter}`,
           strict: strictProactiveGate,
           requireSmoke: Boolean(proactiveMeta?.qaCycle),
+          browserCheck: deps.browserCheck,
         });
         if (v.ran && !v.ok) {
           verifyRounds += 1;
@@ -1938,6 +2156,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         sessionService: deps.sessionService,
         backgroundTaskService: deps.backgroundTaskService,
         backgroundWatchers,
+        browserCheck: deps.browserCheck,
       });
       if (budgetTerminalError) {
         return { status: 'error', error: budgetTerminalError.message };
@@ -2082,6 +2301,11 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
         // delegation runs on the SAME engine as the main loop (Claude for paid
         // tiers) instead of silently dropping to the free Cerebras path.
         tier: run?.tier || null,
+        effort: effortForStage({
+          tier: run?.tier || null,
+          reasoningEffort: run?.reasoningEffort || null,
+          env,
+        }),
         modelCapabilities,
         modelProvider: activeProvider.provider,
         projectSettings,
@@ -2325,6 +2549,7 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
     sessionService: deps.sessionService,
     backgroundTaskService: deps.backgroundTaskService,
     backgroundWatchers,
+    browserCheck: deps.browserCheck,
   });
   if (budgetTerminalError) {
     return { status: 'error', error: budgetTerminalError.message };
@@ -2332,13 +2557,17 @@ async function runBuildLoop({ run, project, signal, isCancelled, deps }) {
   return terminalOutcomeAfterClose(closed, stopHook, 'proactive quality gate failed');
 }
 
-async function readRunnerFile(runner, projectId, path) {
+async function readRunnerFileResult(runner, projectId, path) {
   try {
     const out = await runner.readFile(projectId, path);
-    return String(out?.content || '');
+    return { ok: true, content: String(out?.content || '') };
   } catch {
-    return '';
+    return { ok: false, content: '' };
   }
+}
+
+async function readRunnerFile(runner, projectId, path) {
+  return (await readRunnerFileResult(runner, projectId, path)).content;
 }
 
 function packageLooksLikeNext(pkgText) {
@@ -2351,6 +2580,37 @@ function packageLooksLikeNext(pkgText) {
   }
 }
 
+async function hasExistingNextApplication({ runner, projectId, pkgText }) {
+  if (!packageLooksLikeNext(pkgText)) return false;
+
+  // Fast path for the conventional App/Pages router roots. Reading through the
+  // runner also covers freshly imported files that have not been committed yet.
+  const commonEntries = await Promise.all(
+    COMMON_NEXT_ROUTE_ENTRIES.map((path) => readRunnerFile(runner, projectId, path)),
+  );
+  if (commonEntries.some((content) => content.trim())) return true;
+
+  // Dynamic or nested-only routers (for example app/(site)/page.tsx or
+  // pages/[slug].tsx) need a bounded file listing. Failure is fail-safe: once
+  // package.json identifies Next, an unavailable inventory must never authorize
+  // a destructive framework conversion.
+  if (typeof runner?.exec !== 'function') return true;
+  let listed;
+  try {
+    listed = await runner.exec(
+      projectId,
+      ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+      { timeoutMs: 10_000 },
+    );
+  } catch {
+    return true;
+  }
+  if (!listed || (listed.exitCode != null && listed.exitCode !== 0)) return true;
+  return String(listed.stdout || listed.output || '')
+    .split(/\r?\n/)
+    .some(isNextRouteEntryPath);
+}
+
 function packageLooksLikeVite(pkgText) {
   try {
     const pkg = JSON.parse(pkgText || '{}');
@@ -2359,6 +2619,261 @@ function packageLooksLikeVite(pkgText) {
   } catch {
     return false;
   }
+}
+
+function inspectExistingBackendPackage(pkgText) {
+  try {
+    const pkg = JSON.parse(pkgText || '{}');
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const scripts = pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {};
+    const framework = deps.express ? 'express' : deps.fastify ? 'fastify' : deps.koa ? 'koa' : null;
+    const preferredKeys = ['dev', 'dev:api', 'dev:server', 'server', 'start'];
+    const orderedCommands = [
+      ...preferredKeys.filter((key) => scripts[key]).map((key) => [key, String(scripts[key])]),
+      ...Object.entries(scripts)
+        .filter(([key]) => !preferredKeys.includes(key) && !/(?:seed|test|migrate)/i.test(key))
+        .map(([key, command]) => [key, String(command)]),
+    ];
+    let entry = null;
+    let entryScript = null;
+    for (const [, command] of orderedCommands) {
+      const match = command.match(/(?:^|[\s"'=])((?:\.\/)?(?:server|api|backend)\/[A-Za-z0-9_./-]+\.(?:[cm]?js|ts))(?:[\s"';&|]|$)/i);
+      if (!match) continue;
+      entry = match[1].replace(/^\.\//, '');
+      entryScript = command;
+      break;
+    }
+    const scriptText = Object.values(scripts).join('\n');
+    const dev = String(scripts.dev || '');
+    const previewReady = Boolean(
+      framework
+      && entry
+      && packageLooksLikeVite(pkgText)
+      && !packageLooksLikeNext(pkgText)
+      && /(?:concurrently|npm-run-all|run-p)/i.test(dev)
+      && /vite/i.test(scriptText),
+    );
+    return { pkg, framework, entry, entryScript, previewReady };
+  } catch {
+    return { pkg: null, framework: null, entry: null, entryScript: null, previewReady: false };
+  }
+}
+
+function packageLooksFullStack(pkgText) {
+  const backend = inspectExistingBackendPackage(pkgText);
+  return Boolean(backend.framework || backend.entry);
+}
+
+function packageHasExpressStarterContract(pkgText) {
+  try {
+    const pkg = JSON.parse(pkgText || '{}');
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    const dev = String(pkg.scripts?.dev || '');
+    const scripts = Object.values(pkg.scripts || {}).join('\n');
+    return packageLooksLikeVite(pkgText)
+      && !packageLooksLikeNext(pkgText)
+      && Boolean(deps.express)
+      && Boolean(deps.concurrently)
+      && /concurrently/i.test(dev)
+      && /vite/i.test(scripts)
+      && /server\/index\.[cm]?[jt]s/i.test(scripts);
+  } catch {
+    return false;
+  }
+}
+
+function mergeExistingBackendPackage(currentText, starterText, backend) {
+  let current;
+  let starter;
+  try {
+    current = JSON.parse(currentText || '{}');
+    starter = JSON.parse(starterText || '{}');
+  } catch {
+    return currentText || starterText;
+  }
+  const scripts = current.scripts && typeof current.scripts === 'object' ? { ...current.scripts } : {};
+  const apiCommand = String(
+    scripts['dev:api']
+      || scripts['dev:server']
+      || backend.entryScript
+      || `node ${backend.entry}`,
+  );
+  if (!scripts['dev:api']) scripts['dev:api'] = apiCommand;
+  if (!scripts['dev:web'] || /\bnext\b/i.test(String(scripts['dev:web']))) scripts['dev:web'] = 'vite';
+  scripts.dev = 'concurrently -n api,web -c blue,green "npm run dev:api" "npm run dev:web"';
+  for (const [name, command] of Object.entries(scripts)) {
+    if (!['dev', 'dev:web', 'dev:api', 'dev:server'].includes(name) && /\bnext\b/i.test(String(command))) {
+      delete scripts[name];
+    }
+  }
+  const merged = {
+    ...current,
+    private: current.private ?? true,
+    scripts,
+    dependencies: { ...(starter.dependencies || {}), ...(current.dependencies || {}) },
+    devDependencies: {
+      ...(starter.devDependencies || {}),
+      ...(current.devDependencies || {}),
+      concurrently: current.devDependencies?.concurrently || current.dependencies?.concurrently || '^9.1.0',
+    },
+  };
+  for (const collection of [merged.dependencies, merged.devDependencies]) {
+    for (const name of Object.keys(collection)) {
+      if (name === 'next' || name.startsWith('@next/')) delete collection[name];
+    }
+  }
+  // Deliberately do not add or rewrite `type`: CommonJS, ESM and explicit
+  // .cjs/.mjs entries remain exactly as authored by the backend.
+  return `${JSON.stringify(merged, null, 2)}\n`;
+}
+
+function mergeFullStackPackage(currentText, starterText) {
+  let current;
+  let starter;
+  try {
+    current = JSON.parse(currentText || '{}');
+    starter = JSON.parse(starterText || '{}');
+  } catch {
+    return starterText;
+  }
+  const currentScripts = current.scripts && typeof current.scripts === 'object' ? current.scripts : {};
+  const merged = {
+    ...starter,
+    ...current,
+    name: current.name || starter.name,
+    private: true,
+    type: 'module',
+    scripts: { ...currentScripts, ...(starter.scripts || {}) },
+    dependencies: { ...(current.dependencies || {}), ...(starter.dependencies || {}) },
+    devDependencies: { ...(current.devDependencies || {}), ...(starter.devDependencies || {}) },
+  };
+  // A repaired APPS workspace must be pure Vite on the frontend. Preserve
+  // unrelated libraries/scripts, but remove Next runtime packages and scripts.
+  for (const collection of [merged.dependencies, merged.devDependencies]) {
+    for (const name of Object.keys(collection)) {
+      if (name === 'next' || name.startsWith('@next/')) delete collection[name];
+    }
+  }
+  for (const [name, command] of Object.entries(merged.scripts)) {
+    if (!Object.hasOwn(starter.scripts || {}, name) && /\bnext\b/i.test(String(command))) {
+      delete merged.scripts[name];
+    }
+  }
+  return `${JSON.stringify(merged, null, 2)}\n`;
+}
+
+async function fullStackAppsRepairFiles({
+  runner,
+  projectId,
+  projectName,
+  pkgText,
+  indexText,
+  appText,
+  viteConfigText,
+  serverIndexText,
+  serverDbText,
+}) {
+  const { fullStackStarterFiles } = require('./starter-files');
+  const starter = fullStackStarterFiles({ projectName });
+  const existing = new Map([
+    ['package.json', pkgText],
+    ['index.html', indexText],
+    ['src/App.tsx', appText],
+    ['vite.config.ts', viteConfigText],
+    ['server/index.js', serverIndexText],
+    ['server/db.js', serverDbText],
+  ]);
+  const unread = starter.filter((file) => !existing.has(file.path));
+  const unreadContents = await Promise.all(
+    unread.map((file) => readRunnerFile(runner, projectId, file.path)),
+  );
+  unread.forEach((file, index) => existing.set(file.path, unreadContents[index]));
+
+  const starterPackage = starter.find((file) => file.path === 'package.json')?.content || '';
+  const healthyPackage = packageHasExpressStarterContract(pkgText);
+  const healthyProxy = packageLooksLikeVite(pkgText)
+    && !packageLooksLikeNext(pkgText)
+    && /\bproxy\b[\s\S]*\/api|apiBase[\s\S]*proxy/i.test(String(viteConfigText || ''));
+  const healthyIndex = /<script[^>]+type=["']module["'][^>]+src=["']\/src\/main\.(?:tsx|jsx?)["']/i.test(String(indexText || ''));
+  const customApp = String(appText || '').trim() && !isStarterIndex('', appText);
+
+  const writes = [];
+  for (const file of starter) {
+    const current = String(existing.get(file.path) || '');
+    if (file.path === 'package.json') {
+      if (!healthyPackage) writes.push({ ...file, content: mergeFullStackPackage(pkgText, starterPackage) });
+      continue;
+    }
+    if (file.path === 'vite.config.ts') {
+      if (!healthyProxy) writes.push(file);
+      continue;
+    }
+    if (file.path === 'index.html') {
+      if (!healthyIndex) writes.push(file);
+      continue;
+    }
+    if (file.path === 'src/App.tsx') {
+      if (!customApp) writes.push(file);
+      continue;
+    }
+    // Never overwrite a real API, schema, UI component or project memory.
+    // fullStackStarterFiles fills only the missing layers of an existing app.
+    if (!current.trim()) writes.push(file);
+  }
+  return writes;
+}
+
+async function existingBackendAppsRepairFiles({
+  runner,
+  projectId,
+  projectName,
+  pkgText,
+  indexText,
+  appText,
+  viteConfigText,
+  backend,
+}) {
+  const { starterFiles } = require('./starter-files');
+  const starter = starterFiles({ projectName });
+  const existing = new Map([
+    ['package.json', pkgText],
+    ['index.html', indexText],
+    ['src/App.tsx', appText],
+    ['vite.config.ts', viteConfigText],
+  ]);
+  const unread = starter.filter((file) => !existing.has(file.path));
+  const unreadContents = await Promise.all(
+    unread.map((file) => readRunnerFile(runner, projectId, file.path)),
+  );
+  unread.forEach((file, index) => existing.set(file.path, unreadContents[index]));
+
+  const starterPackage = starter.find((file) => file.path === 'package.json')?.content || '';
+  const healthyIndex = /<script[^>]+type=["']module["'][^>]+src=["']\/src\/main\.(?:tsx|jsx?)["']/i.test(String(indexText || ''));
+  const customApp = String(appText || '').trim() && !isStarterIndex('', appText);
+  const writes = [];
+  for (const file of starter) {
+    const current = String(existing.get(file.path) || '');
+    if (file.path === 'package.json') {
+      if (!backend.previewReady) {
+        writes.push({ ...file, content: mergeExistingBackendPackage(pkgText, starterPackage, backend) });
+      }
+      continue;
+    }
+    if (file.path === 'vite.config.ts') {
+      if (!current.trim()) writes.push(file);
+      continue;
+    }
+    if (file.path === 'index.html') {
+      if (!healthyIndex) writes.push(file);
+      continue;
+    }
+    if (file.path === 'src/App.tsx') {
+      if (!customApp) writes.push(file);
+      continue;
+    }
+    if (!current.trim()) writes.push(file);
+  }
+  return writes;
 }
 
 function isStarterIndex(indexText, appText) {
@@ -2370,23 +2885,108 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
   const sourcePrompt = await resolveRunSourcePrompt({ run, prisma });
   if (!isAppsPrompt(sourcePrompt) || explicitlyRequestsNext(sourcePrompt)) return { repaired: false };
   const projectId = project?.id || run.projectId;
-  const [pkgText, indexText, appText] = await Promise.all([
-    readRunnerFile(runner, projectId, 'package.json'),
-    readRunnerFile(runner, projectId, 'index.html'),
-    readRunnerFile(runner, projectId, 'src/App.tsx'),
-  ]);
+  const packageRead = await readRunnerFileResult(runner, projectId, 'package.json');
+  if (!packageRead.ok) {
+    return { repaired: false, preservationReason: 'package_unavailable' };
+  }
+  const pkgText = packageRead.content;
+  if (await hasExistingNextApplication({ runner, projectId, pkgText })) {
+    return { repaired: false, preservedFramework: 'next' };
+  }
+  const detectedBackend = inspectExistingBackendPackage(pkgText);
+  const paths = [...new Set([
+    'index.html',
+    'src/App.tsx',
+    'vite.config.ts',
+    'server/index.js',
+    'server/app.js',
+    'server/db.js',
+    ...(detectedBackend.entry ? [detectedBackend.entry] : []),
+  ])];
+  const contents = await Promise.all(paths.map((path) => readRunnerFile(runner, projectId, path)));
+  const filesByPath = new Map(paths.map((path, index) => [path, contents[index]]));
+  const indexText = filesByPath.get('index.html') || '';
+  const appText = filesByPath.get('src/App.tsx') || '';
+  const viteConfigText = filesByPath.get('vite.config.ts') || '';
+  const serverIndexText = filesByPath.get('server/index.js') || '';
+  const serverAppText = filesByPath.get('server/app.js') || '';
+  const serverDbText = filesByPath.get('server/db.js') || '';
+  const inferredEntry = detectedBackend.entry
+    || (serverAppText.trim() ? 'server/app.js' : serverIndexText.trim() ? 'server/index.js' : null);
+  const backend = inferredEntry === detectedBackend.entry
+    ? detectedBackend
+    : { ...detectedBackend, entry: inferredEntry, entryScript: inferredEntry ? `node ${inferredEntry}` : null };
+  const backendEntryText = backend.entry ? filesByPath.get(backend.entry) || '' : '';
+  const backendFilesPresent = Boolean(backend.framework && backend.entry && backendEntryText.trim());
+  // Preserve imported Express CommonJS runtimes even when their current `dev`
+  // script starts only Vite. Sending them through the default Express starter
+  // would force `type: module`, replace their entry with server/index.js, and
+  // make the authored `require(...)` backend fail at runtime.
+  const commonJsExpressBackend = backend.framework === 'express' && (
+    backend.pkg?.type === 'commonjs'
+    || /\.cjs$/i.test(String(backend.entry || ''))
+    || (
+      backend.pkg?.type !== 'module'
+      && /\b(?:require\s*\(|module\.exports\b|exports\.)/.test(backendEntryText)
+    )
+  );
+  const preserveExistingBackend = backendFilesPresent && (
+    backend.previewReady
+    || commonJsExpressBackend
+    || ['koa', 'fastify'].includes(backend.framework)
+  );
+  const fullStack = appsHasFullStackContract({
+    sourcePrompt,
+    project,
+    pkgText,
+    serverIndexText,
+    serverDbText,
+    backendEntryText,
+  });
   // A healthy workspace is React + Vite + TS: Vite package.json (not Next) and
   // index.html loading /src/main.tsx (or legacy /src/main.js). Anything else —
   // a Next hybrid, a non-Vite pkg, a stale entry, or the untouched starter — is
-  // repaired to the deterministic React+Vite+TS fallback.
+  // repaired. A valid existing backend is normalized in place without changing
+  // its framework/module/entry contract; only a new or incomplete default
+  // Express stack is filled from fullStackStarterFiles.
   const needsRepair =
     packageLooksLikeNext(pkgText) ||
     !packageLooksLikeVite(pkgText) ||
     !/<script[^>]+type=["']module["'][^>]+src=["']\/src\/main\.(?:tsx|jsx?)["']/i.test(indexText) ||
-    isStarterIndex(indexText, appText);
+    isStarterIndex(indexText, appText) ||
+    (fullStack && preserveExistingBackend && !backend.previewReady) ||
+    (fullStack && !preserveExistingBackend && (
+      !packageHasExpressStarterContract(pkgText)
+      || !/\bproxy\b[\s\S]*\/api|apiBase[\s\S]*proxy/i.test(viteConfigText)
+      || !String(serverIndexText).trim()
+      || !String(serverDbText).trim()
+    ));
   if (!needsRepair) return { repaired: false };
 
-  const files = appsFallbackFiles({ prompt: sourcePrompt, projectName: project?.name || 'App generada' });
+  const files = fullStack && preserveExistingBackend
+    ? await existingBackendAppsRepairFiles({
+      runner,
+      projectId,
+      projectName: project?.name || 'App generada',
+      pkgText,
+      indexText,
+      appText,
+      viteConfigText,
+      backend,
+    })
+    : fullStack
+      ? await fullStackAppsRepairFiles({
+        runner,
+        projectId,
+        projectName: project?.name || 'App generada',
+        pkgText,
+        indexText,
+        appText,
+        viteConfigText,
+        serverIndexText,
+        serverDbText,
+      })
+      : appsFallbackFiles({ prompt: sourcePrompt, projectName: project?.name || 'App generada' });
   await runner.writeFiles(projectId, files);
   // Writing the Vite fallback isn't enough: the agent's Next scaffold (app/,
   // next.config.mjs, next-env.d.ts, .next, pages/) lingers alongside it, so the
@@ -2396,17 +2996,32 @@ async function ensureAppsVitePreviewable({ run, project, runner, eventStore, pri
     // The runner exec API only accepts argv arrays of allowlisted binaries
     // (no shell, no `rm`) — a plain `rm -rf …` string is rejected upstream and
     // the Next leftovers survive. `node -e` with fs.rmSync is allowlisted.
-    const purgePaths = ['app', 'pages', 'src/app', 'next.config.mjs', 'next.config.js', 'next-env.d.ts', '.next', '.next-env.d.ts', 'vite.config.js', 'src/main.js'];
+    const purgePaths = [
+      'app', 'pages', 'src/app', 'src/pages',
+      'next.config.mjs', 'next.config.js', 'next.config.ts', 'next.config.mts', 'next.config.cjs',
+      'next-env.d.ts', '.next', '.next-env.d.ts', 'vite.config.js',
+      // The SPA fallback always writes main.tsx. A repaired full-stack app may
+      // intentionally retain a custom legacy main.js entry, so do not delete it.
+      ...(!fullStack ? ['src/main.js'] : []),
+    ];
     const purgeScript = `const fs=require('fs');for(const p of ${JSON.stringify(purgePaths)}){try{fs.rmSync(p,{recursive:true,force:true})}catch{}}`;
     await runner.exec(projectId, ['node', '-e', purgeScript], { timeoutMs: 15000 }).catch(() => {});
   }
   await eventStore.appendEvent(
     run.id,
     'narrative_delta',
-    { text: 'Normalicé el workspace de APPS a Vite (limpié el scaffold Next) para que el preview abra en /index.html.' },
+    {
+      text: preserveExistingBackend && backend.previewReady
+        ? `Reparé sólo las capas frontend de APPS y preservé intacto el backend ${backend.framework} (${backend.entry}), incluido su contrato de módulos y arranque.`
+        : preserveExistingBackend
+          ? `Conservé el backend ${backend.framework}, su tipo de módulos y su entry ${backend.entry}; normalicé únicamente los scripts web/API necesarios para el preview.`
+        : fullStack
+          ? 'Reparé el workspace APPS como full-stack: mantuve la API y la base SQLite existentes, restauré las capas faltantes de Express + Vite y conservé el arranque compuesto con concurrently.'
+          : 'Normalicé el workspace de APPS a Vite (limpié el scaffold Next) para que el preview abra en /index.html.',
+    },
     { prisma },
   ).catch(() => {});
-  return { repaired: true };
+  return { repaired: true, fullStack };
 }
 
 function gateEvidence(verification) {
@@ -2425,6 +3040,51 @@ function gateEvidence(verification) {
     }
   }
   return parts.join('; ') || 'sin evidencia de verificación';
+}
+
+/**
+ * Fold the mandatory final runtime/browser probe into the project-gate result.
+ * The repair loop is intentionally bounded; without this last admission check a
+ * model could exhaust its repair rounds, pass TypeScript, and still checkpoint
+ * a blank or non-booting app as `done`.
+ */
+function mergeFinalRuntimeGate(projectVerification, runtimeVerification) {
+  const devServer = runtimeVerification?.devServer || { ran: false, ok: false };
+  const browser = runtimeVerification?.browser || { ran: false, ok: false };
+  const passed = Boolean(
+    runtimeVerification?.ran === true
+    && runtimeVerification?.ok === true
+    && devServer.ran === true
+    && devServer.ok === true
+    && browser.ran === true
+    && browser.ok === true,
+  );
+  const blockingGates = new Set(projectVerification?.blockingGates || []);
+  if (!devServer.ran || !devServer.ok) blockingGates.add('dev_server_check');
+  if (!browser.ran || !browser.ok) blockingGates.add('browser_check');
+  const diagnostics = Array.isArray(projectVerification?.diagnostics)
+    ? [...projectVerification.diagnostics]
+    : [];
+  if (!passed) {
+    diagnostics.push({
+      gate: runtimeVerification?.kind === 'browser' ? 'browser_check' : 'dev_server_check',
+      message: String(runtimeVerification?.errors || 'La verificación final de runtime/navegador no produjo evidencia verde.').slice(0, 2000),
+    });
+  }
+  return {
+    ...(projectVerification || {}),
+    ran: true,
+    clean: projectVerification?.clean === true && passed,
+    gates: {
+      ...(projectVerification?.gates || {}),
+      devServer,
+      browser,
+    },
+    ...(passed ? {} : {
+      blockingGates: [...blockingGates],
+      diagnostics: diagnostics.slice(0, 50),
+    }),
+  };
 }
 
 async function workspaceDiffstat({ runner, projectId }) {
@@ -2682,6 +3342,7 @@ async function closeBuild({
   sessionService,
   backgroundTaskService,
   backgroundWatchers = null,
+  browserCheck = null,
 }) {
   await ensureAppsVitePreviewable({ run, project, runner, eventStore, prisma });
   const resolvedSourcePrompt = sourcePrompt != null
@@ -2758,6 +3419,7 @@ async function closeBuild({
       groupId: 'quality-gate',
       strict: true,
       requireSmoke: proactiveMeta.qaCycle,
+      browserCheck,
     });
     for (let round = 1; !verification.ok && round <= maxRepairRounds; round += 1) {
       await eventStore.appendEvent(run.id, 'narrative_delta', {
@@ -2790,9 +3452,52 @@ async function closeBuild({
         groupId: 'quality-gate',
         strict: true,
         requireSmoke: proactiveMeta.qaCycle,
+        browserCheck,
       });
     }
     recordGateMetrics(verification);
+  }
+
+  // Autonomous /code runs explicitly enable the dev-server verifier. Run one
+  // final, strict runtime + browser admission check after every bounded healing
+  // loop, including the proactive debugger. This is the authoritative close
+  // gate: unavailable evidence, a Vite boot error, a blank page, or a browser
+  // exception all block checkpointing.
+  if (
+    verifyRequired
+    && String(env?.CODEX_VERIFY_DEV_SERVER ?? '0') === '1'
+    && projectGateVerification?.clean === true
+  ) {
+    let finalRuntimeVerification;
+    try {
+      finalRuntimeVerification = await verifyDevServer({
+        runner,
+        projectId,
+        run,
+        eventStore,
+        prisma,
+        metrics,
+        clock,
+        env,
+        actionId: 'quality-runtime-final',
+        groupId: 'quality-runtime-final',
+        strict: true,
+        browserCheck,
+      });
+    } catch (error) {
+      finalRuntimeVerification = {
+        ran: true,
+        ok: false,
+        kind: 'infra',
+        errors: String(error?.message || error).slice(0, 2000),
+        devServer: { ran: false, ok: false },
+        browser: { ran: false, ok: false },
+      };
+    }
+    projectGateVerification = mergeFinalRuntimeGate(
+      projectGateVerification,
+      finalRuntimeVerification,
+    );
   }
 
   let diffstat = await workspaceDiffstat({ runner, projectId });
@@ -3064,9 +3769,18 @@ async function runAgentLoop({ run, project, signal, isCancelled, deps = {} } = {
   const { eventStore } = deps;
   if (!eventStore) throw new Error('agent-loop: eventStore dep required');
   const baseLlmTurn = deps.llmTurn || ((a) => require('./llm-turn').defaultLlmTurn(a));
-  // The run tier (composer Power selector) rides along on every model step so
-  // llm-turn can pick the engine (Claude for paid tiers, Cerebras for Eco).
-  const llmTurn = (a) => baseLlmTurn({ tier: run?.tier || null, ...a });
+  // Durable model controls ride along on every model step, including plan mode.
+  // Build mode can still raise effort explicitly for repair rounds via `...a`.
+  const llmTurn = (a = {}) => baseLlmTurn({
+    tier: run?.tier || null,
+    model: run?.model || null,
+    effort: effortForStage({
+      tier: run?.tier || null,
+      reasoningEffort: run?.reasoningEffort || null,
+      env: a.env || deps.env || process.env,
+    }),
+    ...a,
+  });
 
   if (typeof isCancelled === 'function' && (await isCancelled())) return { status: 'cancelled' };
 

@@ -107,3 +107,26 @@ export function buildWriteMetrics(
     },
   }
 }
+
+const PROMPT_KEYS = new Set([
+  "prompt", "fullprompt", "full_prompt", "userprompt", "messages", "input", "query", "text",
+])
+
+/** FE-081: never log the full prompt (PII). Keep counts/durations only. */
+export function sanitizeMetricsForLog(input: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  if (!input || typeof input !== "object") return out
+  for (const [key, value] of Object.entries(input)) {
+    const k = key.toLowerCase().replace(/[^a-z0-9_]/g, "")
+    if (PROMPT_KEYS.has(k) || k.includes("prompt") || k.includes("message")) {
+      out[key] = "[redacted]"
+      continue
+    }
+    if (typeof value === "string" && value.length > 80) {
+      out[key] = `[omitted ${value.length} chars]`
+      continue
+    }
+    out[key] = value
+  }
+  return out
+}

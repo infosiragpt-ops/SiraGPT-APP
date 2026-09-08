@@ -12,8 +12,9 @@
  */
 
 const DEFAULT_TIMEOUT_MS = 130_000;
+const { composeAbortSignals, throwIfAborted } = require('../../utils/abort-signals');
 
-function createRemoteSandbox({ baseUrl, apiKey, fetchImpl } = {}) {
+function createRemoteSandbox({ baseUrl, apiKey, fetchImpl, signal, workspaceKey } = {}) {
   const base = String(baseUrl || process.env.SANDBOX_SERVICE_URL || '').replace(/\/+$/, '');
   const key = apiKey || process.env.SANDBOX_API_KEY || '';
   const doFetch = fetchImpl || globalThis.fetch;
@@ -24,27 +25,39 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl } = {}) {
   let sessionId = null;
   let destroyed = false;
 
-  async function call(method, p, body, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
-    const res = await doFetch(`${base}${p}`, {
-      method,
-      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: body == null ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
+  async function call(method, p, body, { timeoutMs = DEFAULT_TIMEOUT_MS, ignoreParentAbort = false } = {}) {
+    if (!ignoreParentAbort) throwIfAborted(signal);
+    const abortScope = composeAbortSignals(ignoreParentAbort ? [] : [signal], {
+      timeoutMs,
+      timeoutReason: 'remote_sandbox_timeout',
     });
-    const text = await res.text();
-    let json;
-    try { json = text ? JSON.parse(text) : {}; } catch { json = { error: 'bad_json', raw: text.slice(0, 300) }; }
-    if (!res.ok) {
-      const err = new Error(`sandbox service ${res.status}: ${json.error || text.slice(0, 200)}`);
-      err.status = res.status; // lets callers classify auth vs server vs transport failures
-      throw err;
+    try {
+      const res = await doFetch(`${base}${p}`, {
+        method,
+        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: body == null ? undefined : JSON.stringify(body),
+        signal: abortScope.signal,
+      });
+      const text = await res.text();
+      let json;
+      try { json = text ? JSON.parse(text) : {}; } catch { json = { error: 'bad_json', raw: text.slice(0, 300) }; }
+      if (!res.ok) {
+        const err = new Error(`sandbox service ${res.status}: ${json.error || text.slice(0, 200)}`);
+        err.status = res.status; // lets callers classify auth vs server vs transport failures
+        throw err;
+      }
+      return json;
+    } finally {
+      abortScope.cleanup();
     }
-    return json;
   }
+
+  const persistKey = String(workspaceKey || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || null;
 
   async function ensureSession() {
     if (sessionId) return sessionId;
-    const r = await call('POST', '/v1/sessions', {}, { timeoutMs: 40_000 });
+    const body = persistKey ? { workspaceKey: persistKey } : {};
+    const r = await call('POST', '/v1/sessions', body, { timeoutMs: 40_000 });
     sessionId = r.sessionId;
     if (!sessionId) throw new Error('sandbox service returned no sessionId');
     return sessionId;
@@ -52,6 +65,8 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl } = {}) {
 
   return {
     driver: 'remote',
+    persistent: Boolean(persistKey),
+    persistKey,
     root: '/workspace',
     async exec(command, opts = {}) {
       if (destroyed) throw new Error('sandbox destroyed');
@@ -86,7 +101,14 @@ function createRemoteSandbox({ baseUrl, apiKey, fetchImpl } = {}) {
     async destroy() {
       if (destroyed) return;
       destroyed = true;
-      if (sessionId) { try { await call('DELETE', `/v1/sessions/${sessionId}`, undefined, { timeoutMs: 20_000 }); } catch (_) {} }
+      if (sessionId) {
+        try {
+          await call('DELETE', `/v1/sessions/${sessionId}`, undefined, {
+            timeoutMs: 20_000,
+            ignoreParentAbort: true,
+          });
+        } catch (_) {}
+      }
     },
   };
 }

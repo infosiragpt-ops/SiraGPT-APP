@@ -2,10 +2,9 @@
  * scheduler tests — jobs CRUD, fireJob flow, webhook secret check,
  * template interpolation.
  *
- * We isolate the on-disk state by overriding the scheduler's paths
- * to a temp dir before the module's persistence calls run. This
- * keeps the tests hermetic — running them shouldn't clobber real
- * jobs a dev has scheduled locally.
+ * Compile the actual scheduler in an isolated module whose __dirname
+ * is inside a temporary directory. Persistence and node-cron remain
+ * real; no global fs/path patches or repository data writes are needed.
  */
 
 const { test } = require('node:test');
@@ -13,45 +12,39 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { Module, createRequire } = require('node:module');
 
-// Override paths before requiring the scheduler. The module caches
-// paths at require time, so we have to redirect them before the
-// first require() call.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'sched-'));
-process.env.AGENT_SCHEDULER = 'off'; // don't auto-start
-
-const scheduler = require('../src/services/scheduler/scheduler');
-// Redirect paths to our temp dir (exposed via _paths).
-scheduler._paths.DATA_DIR = TMP;
-scheduler._paths.JOBS_FILE = path.join(TMP, 'scheduled-jobs.json');
-scheduler._paths.RUN_LOG_FILE = path.join(TMP, 'scheduled-runs.jsonl');
-// Patch the module's internal references too. The module captures
-// the constants at top-level, so direct mutation won't propagate.
-// Work around by monkey-patching fs for this test suite: we'll reach
-// into the module internals via require.cache.
-const modKey = require.resolve('../src/services/scheduler/scheduler');
-// Swap the constants inside the cached module.
-const cached = require.cache[modKey];
-// Re-evaluating the module with the env var set keeps it clean. But
-// because we already hold a ref, we'll just call saveAll/loadAll
-// through a fresh require after setting env. Simpler: restart the
-// test by reloading. We do this by tearing down require cache.
-delete require.cache[modKey];
-
-// Monkey-patch the path module for just our module's require — we
-// construct it such that the module resolves DATA_DIR to TMP. The
-// cleanest way: override with env var. Let's just re-export paths
-// the module already exposes and write our tests to reset the jobs
-// file directly between tests.
-const sched = require('../src/services/scheduler/scheduler');
+const sourcePath = require.resolve('../src/services/scheduler/scheduler');
+const isolatedPath = path.join(TMP, 'src', 'services', 'scheduler', 'scheduler.js');
+const isolatedModule = new Module(isolatedPath, module);
+isolatedModule.filename = isolatedPath;
+isolatedModule.require = createRequire(sourcePath);
+isolatedModule._compile(fs.readFileSync(sourcePath, 'utf8'), isolatedPath);
+const sched = isolatedModule.exports;
 
 function resetJobsFile() {
-  // Write an empty array to the real JOBS_FILE so each test starts clean.
+  sched.stop();
+  sched.setInvoker(null);
+  // Failure fixtures are terminal. Retry/backoff has its own dedicated tests.
+  sched.setJobClassifier(() => ({ retryable: false, reason: 'test-terminal' }));
   const p = sched._paths.JOBS_FILE;
+  assert.equal(p, path.join(TMP, 'data', 'scheduled-jobs.json'));
   if (!fs.existsSync(path.dirname(p))) fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, '[]');
-  sched.stop();
 }
+
+test.after(() => {
+  sched.stop();
+  fs.rmSync(TMP, { recursive: true, force: true });
+});
+
+test('persistence uses only the isolated temporary directory', () => {
+  resetJobsFile();
+  assert.equal(sched._paths.DATA_DIR, path.join(TMP, 'data'));
+  assert.equal(sched._paths.RUN_LOG_FILE, path.join(TMP, 'data', 'scheduled-runs.jsonl'));
+  assert.equal(fs.readFileSync(sched._paths.JOBS_FILE, 'utf8'), '[]');
+});
 
 test('createCronJob validates cron expression', () => {
   resetJobsFile();
@@ -193,6 +186,59 @@ test('fireJob returns "not found" for an unknown id', async () => {
   assert.match(out.reason, /not found/);
 });
 
+test('fireJob skips an overlapping invocation of the same job in this process', async () => {
+  resetJobsFile();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  sched.setInvoker(async () => {
+    calls += 1;
+    await gate;
+    return { answer: 'done' };
+  });
+  const job = sched.createWebhookJob({ userId: 1, prompt: 'once' });
+  const first = sched.fireJob(job.id);
+  const overlapping = sched.fireJob(job.id);
+  try {
+    assert.equal(calls, 1);
+    assert.equal(sched.getJob(job.id).status, 'running');
+  } finally {
+    release();
+    await Promise.all([first, overlapping]);
+  }
+  assert.deepEqual(await overlapping, { ok: false, reason: 'already running', code: 'overlap_skipped' });
+  assert.equal((await first).ok, true);
+  assert.equal(sched.getJob(job.id).lastRuns.length, 1);
+});
+
+test('fireJob allows different jobs concurrently and releases failed jobs', async () => {
+  resetJobsFile();
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const calls = [];
+  sched.setInvoker(async ({ userId }) => {
+    calls.push(userId);
+    await gate;
+    if (userId === 1) throw new Error('terminal fixture');
+    return { answer: 'done' };
+  });
+  const firstJob = sched.createWebhookJob({ userId: 1, prompt: 'one' });
+  const secondJob = sched.createWebhookJob({ userId: 2, prompt: 'two' });
+  const runs = [sched.fireJob(firstJob.id), sched.fireJob(secondJob.id)];
+  try {
+    assert.deepEqual(calls, [1, 2]);
+    assert.equal(sched._running.size, 2);
+  } finally {
+    release();
+    await Promise.all(runs);
+  }
+  assert.equal((await runs[0]).ok, false);
+  assert.equal((await runs[1]).ok, true);
+  assert.equal(sched._running.size, 0);
+  sched.setInvoker(async () => ({ answer: 'recovered' }));
+  assert.equal((await sched.fireJob(firstJob.id)).ok, true);
+});
+
 test('interpolate substitutes nested fields and leaves unknowns blank', () => {
   assert.equal(sched.interpolate('hi {{payload.name}}', { payload: { name: 'L' } }), 'hi L');
   assert.equal(sched.interpolate('{{a.b.c}}!', { a: { b: { c: 'deep' } } }), 'deep!');
@@ -203,10 +249,4 @@ test('validateCron accepts common 5-field expressions', () => {
   assert.equal(sched.validateCron('0 9 * * 1').ok, true);
   assert.equal(sched.validateCron('*/5 * * * *').ok, true);
   assert.equal(sched.validateCron('garbage').ok, false);
-});
-
-// cleanup: stop all cron tasks so the test process can exit
-test('teardown', () => {
-  sched.stop();
-  try { fs.rmSync(TMP, { recursive: true, force: true }); } catch {}
 });
