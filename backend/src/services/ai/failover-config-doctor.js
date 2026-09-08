@@ -33,6 +33,7 @@ function providerOfModel(model) {
     if (/^claude/.test(m)) return 'anthropic';
     if (/^gemini/.test(m)) return 'gemini';
     if (/^deepseek/.test(m)) return 'deepseek';
+    if (/^muse/.test(m) || /^llama-4/.test(m)) return 'meta';
     if (/^(llama|cerebras)/.test(m)) return 'cerebras';
     if (/^(mistral|mixtral|codestral)/.test(m)) return 'mistral';
     if (/^(grok|xai)/.test(m)) return 'xai';

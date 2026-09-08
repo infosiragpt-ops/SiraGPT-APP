@@ -84,7 +84,7 @@ test("clicking every visible chat button does not throw an uncaught exception", 
     else clickConsoleErrors.push(text)
   })
 
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
 
@@ -191,7 +191,7 @@ test("typing into the chat composer does not throw", async ({ page }) => {
   const pageErrors: Error[] = []
   page.on("pageerror", (err) => pageErrors.push(err))
 
-  const response = await page.goto("/chat", { waitUntil: "domcontentloaded", timeout: 60_000 })
+  const response = await page.goto("/agentes", { waitUntil: "domcontentloaded", timeout: 60_000 })
   expect(response, "navigation should resolve").not.toBeNull()
   await page.waitForLoadState("domcontentloaded", { timeout: 30_000 })
 

@@ -76,7 +76,19 @@ test('classifyTaskError: rate-limit ttl jitter stays within bounds', () => {
     const res = runner.classifyTaskError({ message: 'too many requests', statusCode: 429 });
     assert.equal(res.reason, 'rate-limited');
     assert.ok(res.ttlMs >= 10_000 && res.ttlMs <= 20_000, `ttlMs out of jitter band: ${res.ttlMs}`);
+    assert.match(res.userMessage, /demasiadas solicitudes/);
   }
+});
+
+test('classifyTaskError: Retry-After header replaces jitter with the hinted wait', () => {
+  const res = runner.classifyTaskError({
+    message: 'too many requests',
+    statusCode: 429,
+    headers: { 'retry-after': '20' },
+  });
+  assert.equal(res.reason, 'rate-limited');
+  assert.equal(res.ttlMs, 20_000);
+  assert.match(res.userMessage, /20 segundos/);
 });
 
 test('classifyTaskError: generic 5xx (numeric) is retryable as server-error', () => {
