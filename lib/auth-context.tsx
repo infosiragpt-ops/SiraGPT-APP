@@ -1,5 +1,6 @@
 "use client"
 
+import { clearAuthenticatedFetchCsrfCache } from "./authenticated-fetch"
 import type React from "react"
 import { createContext, useContext, useEffect, useState } from "react"
 import { db, type User } from "./database"
@@ -90,6 +91,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = () => {
     setUser(null)
+
+      // OLA200_WAVE_F FE-064 — drop CSRF cache + refresh family so the next login cannot reuse them.
+      try { clearAuthenticatedFetchCsrfCache() } catch { /* ignore */ }
+      try {
+        window.localStorage.removeItem("siragpt:refresh-family")
+        window.localStorage.removeItem("siragpt:refresh-version")
+      } catch { /* ignore */ }
+
     localStorage.removeItem("userId")
   }
 

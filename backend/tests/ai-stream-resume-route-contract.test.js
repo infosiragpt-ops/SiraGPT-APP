@@ -27,6 +27,18 @@ test('failed streams stay pending and cannot be marked complete by finally', () 
   assert.ok(terminal.indexOf('if (streamCompleted)') < terminal.indexOf('else if (streamFailureMessage)'));
 });
 
+test('fresh owners renew the resume lease independently of socket writes', () => {
+  assert.match(source, /let resumeLeaseHeartbeat = null/);
+  assert.match(
+    source,
+    /if \(!resumeSession\.isResume\) \{[\s\S]{0,320}setInterval\([\s\S]{0,180}streamResume\.touch\(leaseStreamId\)/,
+  );
+  assert.match(
+    source,
+    /if \(resumeLeaseHeartbeat\) \{[\s\S]{0,120}clearInterval\(resumeLeaseHeartbeat\)/,
+  );
+});
+
 test('a valid but incomplete cursor never falls through to a second generation', () => {
   assert.match(source, /const shouldAttachToExisting = resumeSession\.isResume;/);
   assert.match(source, /error: 'stream_resume_pending'/);
@@ -34,6 +46,24 @@ test('a valid but incomplete cursor never falls through to a second generation',
     source,
     /\} else if \(record\.complete\) \{[\s\S]*data: \[DONE\][\s\S]*\} else \{[\s\S]*stream_resume_pending/,
   );
+});
+
+test('Last-Event-ID reconnect bypasses turn singleflight and reaches durable resume attachment', () => {
+  const singleflightStart = source.indexOf('const activeGenerateTurnKey = buildActiveGenerateTurnKey');
+  const resumePreflight = source.indexOf('// ─── SSE resumption preflight', singleflightStart);
+  const singleflight = source.slice(singleflightStart, resumePreflight);
+
+  assert.ok(singleflightStart >= 0 && resumePreflight > singleflightStart);
+  assert.match(
+    singleflight,
+    /if \(!__hasResumeRequest && canPersist && activeGenerateTurnKey\)/,
+  );
+  assert.doesNotMatch(singleflight, /canPersist && !regenerate && activeGenerateTurnKey/);
+  assert.match(
+    singleflight,
+    /if \([\s\S]*?!__hasResumeRequest[\s\S]*?resolveTurnIdentity\(\{ idempotencyKey, streamId \}\)[\s\S]*?\)/,
+  );
+  assert.match(source.slice(resumePreflight), /const shouldAttachToExisting = resumeSession\.isResume;/);
 });
 
 test('explicit resume is fail-closed when the record is absent or the store fails', () => {

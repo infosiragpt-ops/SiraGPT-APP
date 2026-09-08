@@ -26,10 +26,19 @@ const {
   messageChars,
   verifyWorkspace,
   verifyDevServer,
+  effortForStage,
 } = require('../src/services/codex/agent-loop');
 
 // ---------------------------------------------------------------------------
 // anthropic-turn config + message conversion
+
+test('effortForStage respects durable user depth and escalates repairs', () => {
+  assert.equal(effortForStage({ tier: 'power', reasoningEffort: 'low', env: {} }), 'low');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'medium', env: {} }), 'medium');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'high', env: {} }), 'high');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'max', env: {} }), 'high');
+  assert.equal(effortForStage({ tier: 'eco', reasoningEffort: 'low', verifyRounds: 1, env: {} }), 'high');
+});
 
 test('getAnthropicTurnConfig: sin key → disabled; tier controla modelo y elegibilidad', () => {
   assert.equal(getAnthropicTurnConfig({ env: {}, tier: 'power' }).enabled, false);
@@ -456,6 +465,44 @@ test('verifyDevServer: flag on + dev server ready → verificación OK', async (
   assert.ok(events.some((e) => e.t === 'action_end' && e.d.status === 'done'));
 });
 
+test('verifyDevServer: un error histórico del tail no envenena un HMR actualmente verde', async () => {
+  const historical = '[vite] Internal server error: Failed to resolve import "./old"';
+  const runner = devRunner({
+    devStatusSeq: [
+      { running: true, ready: true, project: 'p1', port: 5173, tail: [historical] },
+      { running: true, ready: true, project: 'p1', port: 5173, tail: [historical, '[vite] hmr update /src/App.tsx'] },
+    ],
+  });
+  let browserCalls = 0;
+  const browserCheck = {
+    devUrlFor: () => 'http://runner:5173',
+    checkApp: async () => {
+      browserCalls += 1;
+      return { unavailable: false, ok: true, rendered: true, rootChars: 12, errors: [] };
+    },
+    formatReport: () => 'browser failure',
+  };
+
+  const out = await verifyDevServer({
+    ...RT_BASE,
+    runner,
+    browserCheck,
+    eventStore: { appendEvent: async () => {} },
+    clock: () => new Date(0),
+    env: {
+      CODEX_VERIFY_DEV_SERVER: '1',
+      CODEX_VERIFY_BROWSER: '1',
+      CODEX_VERIFY_DEV_TIMEOUT_MS: '3000',
+    },
+    strict: true,
+  });
+
+  assert.equal(out.ok, true, 'el estado/browser actuales prevalecen sobre el error anterior al probe');
+  assert.equal(out.browser.ok, true);
+  assert.equal(browserCalls, 1, 'el tail viejo no evita comprobar el navegador actual');
+  assert.equal(runner.calls.startDev, 0, 'reutiliza el servidor listo sin reiniciarlo');
+});
+
 test('verifyDevServer: flag on + dev server error → ok:false con errores realimentados', async () => {
   const runner = devRunner({ devStatusSeq: [{ running: false }, { running: true, ready: false, project: 'p1', error: 'Failed to resolve import "./missing"', tail: ['[vite] Internal server error', 'Cannot find module ./missing'] }] });
   const events = [];
@@ -543,6 +590,174 @@ test('build loop: flag on + dev server error → inyecta [VERIFICACIÓN RUNTIME]
   assert.equal(sawRuntimePrompt, true, 'el error de runtime vuelve al modelo como [VERIFICACIÓN RUNTIME]');
   const rtActions = events.filter((e) => e.type === 'action_start' && /verificación runtime: dev server/.test(e.data.command || ''));
   assert.ok(rtActions.length >= 1, 'la verificación runtime aparece en la timeline');
+});
+
+function finalRuntimeGateFixture(runtimeOutcomes) {
+  const files = new Map([
+    ['package.json', JSON.stringify({ scripts: {}, dependencies: {}, devDependencies: {} })],
+    ['tsconfig.json', JSON.stringify({ compilerOptions: { jsx: 'react-jsx' }, include: ['src'] })],
+    ['src/App.tsx', 'export default function App(){ return null }\n'],
+  ]);
+  const outcomes = runtimeOutcomes.slice();
+  const events = [];
+  const state = {
+    afterStart: false,
+    checkpointCalls: 0,
+    browserCalls: 0,
+    startCalls: 0,
+  };
+  const runner = {
+    readFile: async (_project, path) => {
+      if (!files.has(path)) throw new Error(`no existe ${path}`);
+      return { content: files.get(path) };
+    },
+    writeFiles: async (_project, writes) => {
+      for (const file of writes) files.set(file.path, file.content);
+      return { ok: true };
+    },
+    exec: async (_project, command) => {
+      if (command[0] === 'git' && command[1] === 'status') {
+        return { exitCode: 0, stdout: ' M src/App.tsx\n', stderr: '' };
+      }
+      if (command[0] === 'git' && command[1] === 'diff') {
+        return { exitCode: 0, stdout: ' 1 file changed, 1 insertion(+), 1 deletion(-)\n', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    },
+    devStatus: async () => {
+      if (!state.afterStart) return { running: false, ready: false, project: 'p1' };
+      state.afterStart = false;
+      const outcome = outcomes.shift() || 'error';
+      return outcome === 'ready'
+        ? { running: true, ready: true, project: 'p1', port: 5173, tail: ['VITE ready'] }
+        : {
+          running: false,
+          ready: false,
+          project: 'p1',
+          error: 'Failed to resolve import "./still-broken"',
+          tail: ['[vite] Internal server error', 'Cannot find module ./still-broken'],
+        };
+    },
+    startDev: async () => {
+      state.startCalls += 1;
+      state.afterStart = true;
+      return { port: 5173 };
+    },
+    stopDev: async () => ({ ok: true }),
+  };
+  const browserCheck = {
+    devUrlFor: () => 'http://runner:5173',
+    checkApp: async () => {
+      state.browserCalls += 1;
+      return { unavailable: false, ok: true, root: { textLength: 12 } };
+    },
+    formatReport: () => 'browser failure',
+  };
+  const checkpointService = {
+    createCheckpoint: async () => {
+      state.checkpointCalls += 1;
+      return {
+        id: `cp-${state.checkpointCalls}`,
+        commitSha: 'abcdef1234567890',
+        createdAt: new Date('2026-08-03T00:00:00.000Z'),
+      };
+    },
+  };
+  return {
+    events,
+    files,
+    state,
+    deps: {
+      runner,
+      browserCheck,
+      checkpointService,
+      backgroundTaskService: { quiesce: async () => ({ ok: true, stopped: 0 }) },
+      eventStore: {
+        appendEvent: async (_runId, type, data) => { events.push({ type, data }); },
+        listEvents: async () => [],
+      },
+      actionStore: { recordAction: async () => {} },
+      metrics: {
+        recordAction: () => {},
+        recordLlmUsage: () => {},
+        finalize: async () => ({ costAppliedUsd: 0 }),
+      },
+      fileTree: '',
+      plan: null,
+      clock: (() => { let now = 0; return () => new Date(1_000_000 + (now += 10)); })(),
+      env: {
+        NODE_ENV: 'test',
+        CODEX_AUTO_VERIFY: '1',
+        CODEX_VERIFY_DEV_SERVER: '1',
+        CODEX_VERIFY_BROWSER: '1',
+        CODEX_VERIFY_DEV_TIMEOUT_MS: '3000',
+        CODEX_MAX_VERIFY_ROUNDS: '1',
+        CODEX_VERIFY_ROUNDS: '1',
+        CODEX_RUN_BRANCHES: '0',
+      },
+    },
+  };
+}
+
+test('build loop: runtime roto al agotar reparaciones falla cerrado y no crea checkpoint', async () => {
+  const fixture = finalRuntimeGateFixture(['error', 'error']);
+  let sawRepairPrompt = false;
+  fixture.deps.llmTurn = async ({ messages }) => {
+    const last = String(messages[messages.length - 1]?.content || '');
+    if (last.startsWith('[VERIFICACIÓN RUNTIME]')) sawRepairPrompt = true;
+    return { text: 'No pude corregirlo.', toolCalls: [] };
+  };
+
+  const result = await runAgentLoop({
+    run: { id: 'runtime-fail', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'Runtime fail', brief: {} },
+    deps: fixture.deps,
+  });
+
+  assert.equal(sawRepairPrompt, true, 'el primer fallo realimenta una reparación');
+  assert.equal(result.status, 'error');
+  assert.equal(fixture.state.startCalls, 2, 'hay un probe inicial y un gate final independiente');
+  assert.equal(fixture.state.checkpointCalls, 0, 'un runtime rojo nunca llega al checkpoint');
+  assert.ok(result.close.projectGateVerification.blockingGates.includes('dev_server_check'));
+  assert.ok(fixture.events.some((event) => (
+    event.type === 'action_start'
+    && event.data.actionId === 'quality-runtime-final'
+  )));
+});
+
+test('build loop: reparación límite que deja runtime y browser verdes sí termina done', async () => {
+  const fixture = finalRuntimeGateFixture(['error', 'ready']);
+  let sawRepairPrompt = false;
+  fixture.deps.llmTurn = async ({ messages }) => {
+    const last = String(messages[messages.length - 1]?.content || '');
+    if (last.startsWith('[VERIFICACIÓN RUNTIME]')) {
+      sawRepairPrompt = true;
+      return {
+        text: 'Corrijo el último error.',
+        toolCalls: [{
+          name: 'edit_file',
+          args: {
+            path: 'src/App.tsx',
+            find: 'return null',
+            replace: 'return <main>Lista</main>',
+          },
+        }],
+      };
+    }
+    return { text: 'Listo.', toolCalls: [] };
+  };
+
+  const result = await runAgentLoop({
+    run: { id: 'runtime-pass', mode: 'build', prompt: 'haz una app', tier: 'eco' },
+    project: { id: 'p1', name: 'Runtime pass', brief: {} },
+    deps: fixture.deps,
+  });
+
+  assert.equal(sawRepairPrompt, true);
+  assert.equal(result.status, 'done');
+  assert.equal(result.close.projectGateVerification.clean, true);
+  assert.equal(fixture.state.browserCalls, 1, 'el gate final exige evidencia del navegador');
+  assert.equal(fixture.state.checkpointCalls, 1, 'checkpoint sólo después de runtime/browser verdes');
 });
 
 test('build loop: flag OFF → NO arranca el dev server (startDev nunca se llama)', async () => {

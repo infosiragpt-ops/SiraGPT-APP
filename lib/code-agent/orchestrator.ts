@@ -16,10 +16,121 @@ import type {
   AgentAction,
   AgentBuildContext,
   AgentGoal,
+  AgentIterationBudget,
   AgentSignal,
   AgentState,
+  AgentTask,
   BuildErrorVerdict,
 } from "./types"
+
+// ---- persistent task tracking -----------------------------------------------
+
+function generateTaskId(): string {
+  const uuid = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2) + Date.now().toString(36)
+  return `task-${uuid}`
+}
+
+export function createAgentTask(title: string, detail?: string, files?: string[]): AgentTask {
+  const now = Date.now()
+  return {
+    id: generateTaskId(),
+    title,
+    status: "pending",
+    detail,
+    files,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function updateAgentTask(
+  tasks: AgentTask[],
+  taskId: string,
+  patch: Partial<Pick<AgentTask, "status" | "detail" | "files" | "title">>,
+): AgentTask[] {
+  return tasks.map((task) =>
+    task.id === taskId
+      ? { ...task, ...patch, updatedAt: Date.now() }
+      : task,
+  )
+}
+
+export function addAgentTask(tasks: AgentTask[] | undefined, task: AgentTask): AgentTask[] {
+  return [...(tasks || []), task]
+}
+
+export function activeAgentTasks(tasks: AgentTask[] | undefined): AgentTask[] {
+  return (tasks || []).filter((task) => task.status === "in_progress" || task.status === "pending")
+}
+
+export function completedAgentTaskCount(tasks: AgentTask[] | undefined): number {
+  return (tasks || []).filter((task) => task.status === "completed").length
+}
+
+/** Default autonomous-iteration budget: 20 iterations, 60 minutes. */
+export const DEFAULT_MAX_ITERATIONS = 20
+export const DEFAULT_ITERATION_TIMEOUT_MS = 60 * 60 * 1000
+
+/**
+ * Advance the iteration budget for a new autonomous turn. Returns the
+ * incremented budget, or its exhausted flagged copy when the cap is hit.
+ */
+export function advanceIterationBudget(
+  budget: AgentIterationBudget | undefined,
+  now = Date.now(),
+): AgentIterationBudget {
+  const current = budget
+    ? { ...budget }
+    : {
+        count: 0,
+        max: DEFAULT_MAX_ITERATIONS,
+        startedAt: now,
+        timeoutMs: DEFAULT_ITERATION_TIMEOUT_MS,
+      }
+  const count = current.count + 1
+  const overTime = current.timeoutMs > 0 && now - current.startedAt > current.timeoutMs
+  return { ...current, count, max: current.max, startedAt: current.startedAt, timeoutMs: current.timeoutMs, exhausted: count > current.max || overTime }
+}
+
+/** True when the budget is spent, so the FSM must stop autonomous work. */
+export function isBudgetExhausted(budget: AgentIterationBudget | undefined, now = Date.now()): boolean {
+  if (!budget) return false
+  if (budget.count >= budget.max) return true
+  return budget.timeoutMs > 0 && now - budget.startedAt > budget.timeoutMs
+}
+/** Return the next task the agent should work on, or null if none are pending. */
+export function nextPendingTask(tasks: AgentTask[] | undefined): AgentTask | null {
+  const list = tasks || []
+  const inProgress = list.find((task) => task.status === "in_progress")
+  if (inProgress) return inProgress
+  return list.find((task) => task.status === "pending") || null
+}
+
+/** Bare continuation ack: "ok", "continúa", "sigue", "dale", "next", "go". */
+const TASK_CONTINUE_RE =
+  /^(ok(?:ey)?|dale|sigue|continua|contin[uú]a|siguiente|adelante|next|go|procede|avanza|vamos)(?:\s+(?:con|con eso|con la siguiente|la siguiente tarea|el siguiente paso))?(?:\s+(?:ya|ahora|porfa(?:vor)?))?$/
+
+const CONTINUE_WORDS = new Set([
+  "ok", "okay", "dale", "sigue", "continua", "siguiente", "adelante",
+  "next", "go", "procede", "avanza", "vamos", "con", "eso", "la", "el",
+  "tarea", "paso", "ya", "ahora", "porfa", "porfavor", "de", "siguiente",
+])
+
+export function isBareTaskContinue(text: string): boolean {
+  const normalized = clean(text)
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[¡!¿?.,;:'']+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (TASK_CONTINUE_RE.test(normalized)) return true
+  const words = normalized.split(" ").filter(Boolean)
+  if (words.length === 0) return false
+  return words.every((w) => CONTINUE_WORDS.has(w))
+}
 
 // ---- autonomous brief -------------------------------------------------------
 
@@ -56,7 +167,7 @@ function clean(text: string): string {
 }
 
 const BUILD_NOUN =
-  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma|juegos?|videojuegos?|games?|arcade|calculadora|quiz)\b/
+  /\b(landing|app|aplicaci[oó]n|web|p[aá]gina|pagina|sitio|website|portfolio|portafolio|tienda|ecommerce|e-commerce|dashboard|panel|blog|crud|software|sistema|plataforma|juegos?|videojuegos?|games?|arcade|calculadora|quiz|bot|api|servidor|backend|frontend|saas|crm|erp|pos|punto de venta|inventario|reserv[ao]|citas?|agenda|calendario|encuesta|formulario|landing page)\b/
 const BUILD_VERB =
   /\b(cre|cre[ae]|cr[eé]a|cr[eé]ame|crear|crearme|cr[eé]ar|h[aá]z|hazme|haceme|hac[ée]me|construye|constr[uú]ye?me|construir|contr[uú]ye(?:me)?|contruir|costr[uú]ye(?:me)?|costruir|genera|gen[eé]rame|generar|real[ií]z(?:a|ar|[aá]me)|desarroll(?:a|ar|e)|desarr[oó]llame|programa|programar|impl[ée]menta|implementar|monta|m[oó]ntame|prepara|prepar[aá]me|prep[aá]rame|levanta|dame|ponme|quiero|necesito|dise[ñn]a|dise[ñn]ar|armar?|arma|build|make|create)\b/
 const APP_GOAL_CUE =
@@ -212,7 +323,7 @@ export function isConversationalMessage(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
 
   // 1) Desire verb + conversational object beats the "quiero/necesito" build
   //    verb: "quiero preguntarte algo", "necesito saber si…", "quisiera
@@ -433,7 +544,7 @@ export function isBareBuildCommand(text: string): boolean {
   const t = raw
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[¡!¿?.,;:]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -508,6 +619,24 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
   const text = clean(input)
   const tier: "llm" | "deterministic" = signal.hasModel && !signal.forceDeterministic ? "llm" : "deterministic"
 
+  // 0) Autonomous multi-task execution: when there are pending/in-progress tasks
+  //    and the user sent an empty or bare-ack message ("ok", "continúa", "sigue"),
+  //    the agent works on the next task without needing a new instruction.
+  //    This fires BEFORE every other rule so a multi-step plan proceeds
+  //    sequentially without re-prompting the user each turn.
+  if (state.phase === "preview") {
+    const task = nextPendingTask(state.tasks)
+    if (task && (text === "" || isBareTaskContinue(text))) {
+      // Mejora 4: the iteration budget caps how many autonomous turns the agent
+      // may take in one run. Once the cap or the timeout is spent, stop
+      // auto-continuing so a broken loop can never run forever.
+      if (isBudgetExhausted(state.budget)) {
+        return { type: "passthrough" }
+      }
+      return { type: "work_task", taskId: task.id, instruction: task.detail || task.title }
+    }
+  }
+
   // 1) Explicit error-fix bridge always wins (user pressed "Reparar error").
   if (signal.fixErrorText) return { type: "debug", log: signal.fixErrorText }
 
@@ -545,6 +674,16 @@ export function nextAgentAction(state: AgentState, input: string, signal: AgentS
 
   // 7) Iterating on an already-built app.
   if (state.phase === "preview" && !isBuildRequest(text) && text.length > 0) {
+    return { type: "patch", instruction: text }
+  }
+
+  // 7b) Multi-task instruction: user chains 2+ actions with "y luego", "después",
+  //   "también", "primero... luego...", "además". When the preview is already
+  //   running, treat each clause as a sequential patch instruction.
+  if (
+    state.phase === "preview"
+    && /\b(?:y luego|despues|despues de eso|tambien|ademas|primero.*luego|por otro lado|a continuacion|seguidamente)\b/i.test(normalizeCodeIntent(text))
+  ) {
     return { type: "patch", instruction: text }
   }
 
@@ -797,6 +936,78 @@ export function classifyBuildError(log: string): BuildErrorVerdict {
       arreglo:
         "Proyecto Vite/Node: añade el paquete a `dependencies` en `package.json`; el preview reintentará la instalación automáticamente. Preview estático: quita el `import` y cárgalo por CDN (`<script src=…>`), o usa una alternativa ya disponible (React/Tailwind están globales).",
       siguientePaso: "Aplica el cambio; el preview reintentará automáticamente si es un proyecto Node, o se actualizará en vivo si es estático.",
+    }
+  }
+
+  // TypeScript compilation errors.
+  if (/TS\d{4}:|error TS\d{4}|Type error|Type '.*' is not assignable|Cannot find name '.*'|Property '.*' does not exist/i.test(text)) {
+    return {
+      matched: true,
+      category: "typescript_error",
+      diagnostico: "El compilador de TypeScript encontró un error de tipos.",
+      quePasaba: "Un archivo .ts/.tsx tiene un error de tipado: tipo incompatible, nombre no encontrado o propiedad inexistente.",
+      causaRaiz:
+        "El código generado tiene una inconsistencia de tipos: un import faltante, un tipo mal inferido, o una propiedad que no existe en la interfaz/type.",
+      arreglo:
+        "Corrige el archivo específico indicado en el error TS: añade el import faltante, ajusta el tipo, o usa el tipo correcto. Si es un `any` intencional, añade un comentario `// eslint-disable-next-line @typescript-eslint/no-explicit-any` y usa `as` con tipo correcto.",
+      siguientePaso: "Aplico el parche y reintento el build automáticamente.",
+    }
+  }
+
+  // Vite/Next config errors.
+  if (/ vite config|vite\.config|Invalid option|next\.config|ERR_UNSUPPORTED_ESM|ERR_REQUIRE_ESM/i.test(text)) {
+    return {
+      matched: true,
+      category: "config_error",
+      diagnostico: "Error de configuración del bundler (Vite/Next).",
+      quePasaba: "El archivo de configuración (vite.config.ts o next.config.mjs) tiene una opción inválida o sintaxis incorrecta.",
+      causaRaiz: "La configuración generada usa una API incompatible con la versión instalada del bundler.",
+      arreglo:
+        "Revisa vite.config.ts / next.config.mjs: usa solo opciones válidas para la versión instalada. Para Vite 7 con Tailwind v4, los plugins son `react()` y `tailwindcss()` importados de `@vitejs/plugin-react` y `@tailwindcss/vite` respectivamente. NO uses `postcss.config.js` ni `tailwind.config.js` con Tailwind v4.",
+      siguientePaso: "Corrijo la configuración y reintento el build.",
+    }
+  }
+
+  // Port already in use.
+  if (/EADDRINUSE|port.*already.*in.*use|Port \d+ is already in use/i.test(text)) {
+    return {
+      matched: true,
+      category: "port_in_use",
+      diagnostico: "El puerto del dev server ya está en uso.",
+      quePasaba: "Otro proceso (o un dev server anterior que no terminó) ocupa el puerto que el preview intenta usar.",
+      causaRaiz: "Un proceso zombie del preview anterior no liberó el puerto.",
+      arreglo:
+        "El sistema debe matar el proceso anterior y reintentar. Si persiste, cambiar el puerto en vite.config.ts (server.port) o next.config.mjs.",
+      siguientePaso: "Termino el proceso anterior y reintento automáticamente.",
+    }
+  }
+
+  // ESLint / linting errors that block the build.
+  if (/ESLint|eslint.*error|Parsing error|Unexpected token|SyntaxError/i.test(text)) {
+    return {
+      matched: true,
+      category: "syntax_lint_error",
+      diagnostico: "Error de sintaxis o lint que bloquea el build.",
+      quePasaba: "Un archivo tiene un error de sintaxis (token inesperado, JSX mal formado) o un error de ESLint configurado como error.",
+      causaRaiz: "El código generado tiene un typo, un JSX mal cerrado, o un import sin uso que ESLint rechaza.",
+      arreglo:
+        "Corrige la sintaxis en el archivo indicado: cierra todas las etiquetas JSX, verifica comas y llaves, y elimina imports sin uso. Si ESLint es muy estricto, ajusta la regla a `warn` en `.eslintrc` o añade `// eslint-disable-next-line` con justificación.",
+      siguientePaso: "Corrijo la sintaxis y reintento el build.",
+    }
+  }
+
+  // CSS/Tailwind compilation errors.
+  if (/PostCSS|tailwind|@apply|unknown utility|Cannot apply unknown utility/i.test(text)) {
+    return {
+      matched: true,
+      category: "css_tailwind_error",
+      diagnostico: "Error de compilación CSS/Tailwind.",
+      quePasaba: "Tailwind o PostCSS no puede procesar una directiva o utility class.",
+      causaRaiz:
+        "Con Tailwind v4, las directivas v3 (`@tailwind base/components/utilities`) están prohibidas. Se usa `@import \"tailwindcss\"` y `@theme inline`.",
+      arreglo:
+        "En Tailwind v4: reemplaza `@tailwind base; @tailwind components; @tailwind utilities;` por `@import \"tailwindcss\";`. Elimina `tailwind.config.js` y `postcss.config.js` si existen. Usa `@tailwindcss/vite` como plugin en vite.config.ts. Si usas `@apply`, verifica que la utility exista en Tailwind v4.",
+      siguientePaso: "Corrijo el CSS y reintento el build.",
     }
   }
 

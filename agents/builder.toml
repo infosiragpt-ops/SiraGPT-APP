@@ -7,8 +7,8 @@ author = "SiraGPT"
 enabled = true
 
 [model]
-provider = "anthropic"
-name = "claude-sonnet-4-20250514"
+provider = "deepseek"
+name = "deepseek-v4-pro"
 temperature = 0.3
 max_tokens = 8192
 

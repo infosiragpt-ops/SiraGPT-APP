@@ -61,6 +61,9 @@ describe("Agents SDK tools surface", () => {
     assert.match(panel, /CRM de ventas/)
     assert.match(panel, /enterprise_analyst/)
     assert.match(panel, /buildAutonomousPrompt/)
-    assert.match(panel, /Composer disabled=\{false\}/)
+    // Composer stays enabled for first-send bootstrap (props may be multi-line).
+    assert.match(panel, /<Composer[\s\S]*?disabled=\{false\}/)
+    assert.match(panel, /surface=\{surface === "apps" \? "apps" : "code"\}/)
+    assert.match(panel, /tier: surface === "apps" \? "power" : DEFAULT_TIER/)
   })
 })

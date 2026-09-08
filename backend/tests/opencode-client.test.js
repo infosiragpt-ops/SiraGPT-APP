@@ -49,6 +49,18 @@ test('createOpencodeClient returns null when not configured', () => {
   assert.equal(createOpencodeClient({ env: {} }), null);
 });
 
+test('abortSession() POSTs to /session/:id/abort', async () => {
+  const fetchImpl = fakeFetch({ body: { ok: true } });
+  const client = createOpencodeClient({
+    env: { OPENCODE_SERVER_URL: 'http://127.0.0.1:4096', OPENCODE_SERVER_PASSWORD: 'pw' },
+    fetchImpl,
+  });
+  await client.abortSession('s1');
+  const call = fetchImpl.calls[0];
+  assert.equal(call.url, 'http://127.0.0.1:4096/session/s1/abort');
+  assert.equal(call.init.method, 'POST');
+});
+
 test('prompt() POSTs the message-parts shape with auth to the right URL', async () => {
   const fetchImpl = fakeFetch({ body: { id: 'm1' } });
   const client = createOpencodeClient({

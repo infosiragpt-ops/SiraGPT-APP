@@ -194,6 +194,8 @@ services:
       args:
         GIT_COMMIT: ${GIT_COMMIT:-unknown}
         SIRAGPT_VERSION: ${SIRAGPT_VERSION:-unknown}
+        BUNDLE_WHISPER_MODEL: ${BUNDLE_WHISPER_MODEL:-0}
+        WHISPER_MODEL_URL: ${WHISPER_MODEL_URL:-https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin}
       cache_from:
         - siragpt-backend:latest
     image: siragpt-backend:latest
@@ -211,10 +213,10 @@ services:
     environment:
       NODE_ENV: production
       PORT: "5000"
-      # Runtime provenance (must match deploy-time build args so /api/version
-      # can prove the live container after recreate even if image layers cache).
-      GIT_COMMIT: "${GIT_COMMIT:-unknown}"
-      SIRAGPT_VERSION: "${SIRAGPT_VERSION:-unknown}"
+      # Do not interpolate GIT_COMMIT / SIRAGPT_VERSION from host .env here.
+      # A leftover key from an older PR used to override the image-baked ARG
+      # on recreate. Provenance comes from Dockerfile ARG/ENV (build) or
+      # git rev-parse at process start when `.git` is present.
       RBAC_ENFORCEMENT_MODE: "${RBAC_ENFORCEMENT_MODE:-enforce}"
       RBAC_CACHE_TTL_MS: "${RBAC_CACHE_TTL_MS:-60000}"
       RBAC_MUTATION_LOCK_TIMEOUT_MS: "${RBAC_MUTATION_LOCK_TIMEOUT_MS:-500}"
@@ -231,6 +233,10 @@ services:
       # configuration starts the backend with MCP deny-all/degraded.
       SIRAGPT_MCP_ALLOWED_HOSTS: "${SIRAGPT_MCP_ALLOWED_HOSTS:-}"
       SIRAGPT_MCP_ALLOW_HTTP: "0"
+      NEXT_PUBLIC_AGENT_COMPUTER: ${NEXT_PUBLIC_AGENT_COMPUTER:-1}
+      SIRAGPT_AGENT_COMPUTER: ${SIRAGPT_AGENT_COMPUTER:-1}
+      AGENT_COMPUTER_ORCHESTRATOR_URL: ${AGENT_COMPUTER_ORCHESTRATOR_URL:-http://siragpt-computer-orchestrator:8090}
+      AGENT_COMPUTER_PUBLIC_BASE: ${AGENT_COMPUTER_PUBLIC_BASE:-https://siragpt.com}
       # Keep explicit runtime/direct roles untouched. POSTGRES-only deployments
       # are synthesized by the shared pure resolver after all URL roles are
       # confirmed absent, so a remote runtime can never silently target `db`.
@@ -406,8 +412,16 @@ services:
       CODEX_EXPORT_CONTAINER_DIR: ${CODEX_EXPORT_CONTAINER_DIR:-/codex-exports}
       PUBLISHED_SITES_DIR: ${PUBLISHED_SITES_DIR:-/srv/sites}
       CODEX_APPS_BASE_DOMAIN: ${CODEX_APPS_BASE_DOMAIN:-apps.siragpt.com}
+      # Interactive defaults; autonomous/deep APPS runs override via policy
+      # (buildAutonomousRunEnv) up to 4h / 120 steps when MODO APPS is set.
       CODEX_RUN_TIMEOUT_MS: ${CODEX_RUN_TIMEOUT_MS:-900000}
       CODEX_MAX_STEPS: ${CODEX_MAX_STEPS:-24}
+      CODEX_AUTONOMOUS_RUN_TIMEOUT_MS: ${CODEX_AUTONOMOUS_RUN_TIMEOUT_MS:-3600000}
+      CODEX_DEEP_RUN_TIMEOUT_MS: ${CODEX_DEEP_RUN_TIMEOUT_MS:-14400000}
+      CODEX_AUTONOMOUS_MAX_STEPS: ${CODEX_AUTONOMOUS_MAX_STEPS:-48}
+      CODEX_DEEP_MAX_STEPS: ${CODEX_DEEP_MAX_STEPS:-120}
+      CODEX_PLAN_EXTENSIONS: ${CODEX_PLAN_EXTENSIONS:-4}
+      CODEX_MAX_VERIFY_ROUNDS: ${CODEX_MAX_VERIFY_ROUNDS:-4}
       CODEX_ANTHROPIC_CACHE: ${CODEX_ANTHROPIC_CACHE:-1}
       CODEX_CONTEXT_SUMMARY: ${CODEX_CONTEXT_SUMMARY:-1}
       CODEX_STREAMING: ${CODEX_STREAMING:-1}
@@ -499,6 +513,7 @@ services:
       - projects_data:/root/Desktop/sira-projects
       - ${CODEX_EXPORT_BIND:-./.codex-workspaces}:/codex-exports:ro
       - published_sites:/srv/sites
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "127.0.0.1:5000:5000"   # Reverse proxy (nginx/caddy) in front
     networks:
@@ -542,6 +557,7 @@ services:
         NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_TRACES_SAMPLE_RATE:-0}
         NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_REPLAY_SESSION_SAMPLE_RATE:-0}
         NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE: ${NEXT_PUBLIC_SENTRY_REPLAY_ON_ERROR_SAMPLE_RATE:-0}
+        NEXT_PUBLIC_AGENT_COMPUTER: ${NEXT_PUBLIC_AGENT_COMPUTER:-1}
     image: siragpt-frontend:latest
     restart: unless-stopped
     ports:
@@ -566,6 +582,48 @@ services:
           memory: 1G
         reservations:
           memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Persistent per-member Linux desktop. Hostname must match orch-client
+  # default http://siragpt-computer-orchestrator:8090 on the iliagpt network.
+  # Live Lenovo compose is /home/user/deployments/iliagpt/compose.yaml
+  # (see deploy/iliagpt/). MAX_DESKTOPS default 2 — 8×1GB OOM'd that host.
+  computer-orchestrator:
+    container_name: siragpt-computer-orchestrator
+    hostname: siragpt-computer-orchestrator
+    build:
+      context: ./services/computer-orchestrator
+      dockerfile: Dockerfile
+    image: siragpt-computer-orchestrator:latest
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      AGENT_COMPUTER_ORCH_DRIVER: ${AGENT_COMPUTER_ORCH_DRIVER:-docker}
+      AGENT_COMPUTER_DESKTOP_IMAGE: ${AGENT_COMPUTER_DESKTOP_IMAGE:-siragpt-computer-orchestrator:latest}
+      AGENT_COMPUTER_DESKTOP_MEMORY_MB: ${AGENT_COMPUTER_DESKTOP_MEMORY_MB:-1024}
+      AGENT_COMPUTER_DESKTOP_CPUS: ${AGENT_COMPUTER_DESKTOP_CPUS:-1}
+      AGENT_COMPUTER_MAX_DESKTOPS: ${AGENT_COMPUTER_MAX_DESKTOPS:-2}
+      AGENT_COMPUTER_DOCKER_NETWORK: ${AGENT_COMPUTER_DOCKER_NETWORK:-}
+      AGENT_COMPUTER_API_KEY: ${AGENT_COMPUTER_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
     logging:
       driver: "json-file"
       options:

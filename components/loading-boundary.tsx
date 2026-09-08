@@ -10,6 +10,9 @@ interface LoadingBoundaryProps {
   skeleton: React.ReactNode
   minDelay?: number
   className?: string
+  /** Fail-closed so /chat suspense cannot hang forever. */
+  timeoutMs?: number
+  onTimeout?: () => void
 }
 
 /**
@@ -24,9 +27,25 @@ export function LoadingBoundary({
   skeleton,
   minDelay = 400,
   className,
+  timeoutMs = 20_000,
+  onTimeout,
 }: LoadingBoundaryProps) {
   const [showSkeleton, setShowSkeleton] = useState(isLoading)
   const [showContent, setShowContent] = useState(!isLoading)
+  const [timedOut, setTimedOut] = useState(false)
+
+  useEffect(() => {
+    if (!isLoading) {
+      setTimedOut(false)
+      return
+    }
+    if (!timeoutMs || timeoutMs <= 0) return
+    const timer = setTimeout(() => {
+      setTimedOut(true)
+      onTimeout?.()
+    }, timeoutMs)
+    return () => clearTimeout(timer)
+  }, [isLoading, timeoutMs, onTimeout])
 
   useEffect(() => {
     if (isLoading) {
@@ -41,6 +60,14 @@ export function LoadingBoundary({
       return () => clearTimeout(timer)
     }
   }, [isLoading, minDelay])
+
+  if (timedOut && isLoading) {
+    return (
+      <div className={cn("relative p-4 text-sm text-muted-foreground", className)} role="alert">
+        La carga tardó demasiado. Recarga la página.
+      </div>
+    )
+  }
 
   return (
     <div className={cn("relative", className)}>

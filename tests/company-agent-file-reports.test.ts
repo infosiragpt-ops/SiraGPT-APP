@@ -103,7 +103,7 @@ test("buildCompanyAgentFileArtifacts creates one report per agent and groups by 
       blocked: 0,
       pendingReview: 1,
       approved: 0,
-      reports: 0,
+      reports: 1,
       emailQueued: 0,
     },
     records: [
@@ -149,7 +149,41 @@ test("buildCompanyAgentFileArtifacts creates one report per agent and groups by 
         },
       },
     ],
-    reports: [],
+    reports: [
+      {
+        id: "activity:1",
+        title: "Resumen de actividad · 2026-07-23",
+        summary: "Una misión verificada.",
+        author: "CEO Office",
+        source: "mission_evidence",
+        sourceRef: "activity:1",
+        version: 1,
+        contentHash: "hash-activity",
+        createdAt: "2026-07-23T16:00:00.000Z",
+        period: {
+          from: "2026-07-16T16:00:00.000Z",
+          to: "2026-07-23T16:00:00.000Z",
+        },
+        counts: {
+          missions: 1,
+          completed: 1,
+          blocked: 0,
+          pendingReview: 0,
+          approved: 1,
+        },
+        status: "draft",
+        delivery: {
+          channel: "email",
+          status: "not_requested",
+          connectionReady: false,
+          permissionGranted: false,
+          permissionMode: "review",
+          queuedAt: null,
+          sentAt: null,
+          reason: "Borrador.",
+        },
+      },
+    ],
   }
 
   const result = buildCompanyAgentFileArtifacts({
@@ -202,6 +236,12 @@ test("buildCompanyAgentFileArtifacts creates one report per agent and groups by 
   const marketingGroup = result.groups.find((group) => group.departmentId === "marketing")
   assert.ok(marketingGroup)
   assert.ok(marketingGroup?.artifacts.some((item) => item.source === "session"))
+
+  const activityReport = result.artifacts.find((item) => item.source === "activity-report")
+  assert.ok(activityReport)
+  assert.equal(activityReport?.departmentId, "ceo-office")
+  assert.equal(activityReport?.name, "Resumen de actividad · 2026-07-23.md")
+  assert.match(activityReport?.content || "", /Una misión verificada/)
 })
 
 test("empty company still exposes one report folder per agent seat", () => {

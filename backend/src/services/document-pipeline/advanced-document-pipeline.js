@@ -477,7 +477,14 @@ function detectTemplate(prompt = '', explicit) {
 }
 
 function titleFromPrompt(prompt, fallback = 'Documento profesional') {
-  let source = String(prompt || '');
+  let source = String(prompt || '')
+    .replace(/\bamdinistrativ/gi, 'administrativ')
+    .replace(/\badminstrativ/gi, 'administrativ')
+    .replace(/\badminitrativ/gi, 'administrativ')
+    .replace(/\bslaind\w*/gi, 'slides')
+    .replace(/\bbliograf\w*/gi, 'bibliografía')
+    .replace(/\bprofeiosnal\w*/gi, 'profesional')
+    .replace(/\bprofeisonal\w*/gi, 'profesional');
   // agents/auto-document-delivery wraps the goal in a delivery envelope
   // ("Solicitud del usuario: <goal>\nFormato requerido: …"). Titles must come
   // from the goal line only — the metadata used to leak into titles and
@@ -956,7 +963,7 @@ function parseRequestedLength(userRequest = '') {
 // Deterministic slide-count parse ("en 10 láminas/diapositivas/slides").
 // The LLM intent layer handles typos (e.g. "Landin"); this is the offline base.
 function parseRequestedSlides(userRequest = '') {
-  const match = String(userRequest).match(/(\d{1,2})\s*(?:l[áa]minas?|diapositivas?|slides?|transparencias?)\b/i);
+  const match = String(userRequest).match(/(\d{1,2})\s*(?:l[áa]minas?|diapositivas?|slides?|slaind\w*|landin\w*|transparencias?)\b/i);
   if (!match) return null;
   const n = Number(match[1]);
   return n >= 2 && n <= 40 ? n : null;

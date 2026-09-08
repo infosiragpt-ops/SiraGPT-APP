@@ -29,11 +29,17 @@ describe("chat stream error preservation contract", () => {
     assert.doesNotMatch(errorBlock, /bg\.complete\(/,
       "the error callback must not mark the background stream done")
 
-    const successStart = source.indexOf('// Clear pending on successful completion')
+    assert.match(
+      source,
+      /waitsForDefaultStreamTerminal && !terminalSucceeded && !userStopped && !streamFailed/,
+      "a generate 503 / streamFailed turn must not poll getChat and keep Pensando",
+    )
+
+    const successStart = source.indexOf('// Synchronous intent endpoints are terminal')
     const successEnd = source.indexOf('      } catch (error: any) {', successStart)
     assert.ok(successStart >= 0 && successEnd > successStart)
     const successBlock = source.slice(successStart, successEnd)
-    assert.match(successBlock, /if \(!streamFailed\) \{\s*clearPending\(activeChat\.id\)/,
+    assert.match(successBlock, /if \(terminalSucceeded\) \{\s*clearThisPendingTurn\(\)/,
       "pending storage may only clear after a successful turn")
 
     const finallyStart = source.indexOf('      } finally {', successEnd)
@@ -42,7 +48,7 @@ describe("chat stream error preservation contract", () => {
     const finallyBlock = source.slice(finallyStart, finallyEnd)
     assert.match(finallyBlock, /markChatIdle\(activeChat\.id, streamId\)/,
       "a failed stream must release the active-stream guard")
-    assert.match(finallyBlock, /if \(!streamFailed\) \{\s*bg\.complete\(activeChat\.id\)/,
+    assert.match(finallyBlock, /if \(!streamFailed && terminalSucceeded\) \{\s*bg\.complete\(activeChat\.id\)/,
       "finally must not convert a failed background stream into done")
   })
 })

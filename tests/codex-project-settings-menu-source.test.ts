@@ -12,10 +12,10 @@ const globalsSource = fs.readFileSync(globalsPath, "utf8")
 describe("Codex project settings menu source contract", () => {
   it("exposes the full professional APPS project menu", () => {
     for (const label of [
-      "Anclar proyecto",
+      "Anclar empresa",
       "Mostrar en Finder",
       "Crear un worktree permanente",
-      "Cambiar el nombre del proyecto",
+      "Cambiar el nombre de la empresa",
       "Marcar todo como leído",
       "Archivar chats",
       "Eliminar",

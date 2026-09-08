@@ -134,3 +134,17 @@ export const COMPOSER_QUICK_ACTIONS: Record<ComposerQuickActionId, ComposerQuick
 export function getComposerQuickAction(id: ComposerQuickActionId): ComposerQuickAction {
   return COMPOSER_QUICK_ACTIONS[id]
 }
+
+const inFlightActions = new Set<string>()
+
+export function beginComposerAction(id: string): boolean {
+  const key = String(id || "").trim()
+  if (!key) return false
+  if (inFlightActions.has(key)) return false
+  inFlightActions.add(key)
+  return true
+}
+
+export function endComposerAction(id: string): void {
+  inFlightActions.delete(String(id || "").trim())
+}

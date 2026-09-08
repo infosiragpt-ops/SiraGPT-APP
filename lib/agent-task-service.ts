@@ -1,7 +1,9 @@
 "use client"
 
 import { authenticatedFetch } from "./authenticated-fetch"
-import { streamSseJson } from "./sse-client"
+import { streamSseJson, agentTaskResumeHeaders } from "./sse-client"
+import { resolveCatalogModel } from "./chat/catalog-model"
+import { upsertMonotonicStep } from "./run-trace"
 
 /**
  * agent-task-service — SSE adapter for POST /api/agent/task.
@@ -86,14 +88,22 @@ export type AgentTaskEvent =
   | { type: "document_analysis"; analysisIds?: string[]; evidenceRefs?: Array<Record<string, unknown>>; summary?: string; ts?: string; seq?: number }
   | { type: "cycle_init"; taskId?: string; stages?: Array<{ id: string; label: string }>; documentType?: string | null; field?: string | null; citationStyle?: string | null; code?: string | null; ts?: string; seq?: number }
   | { type: "cycle_stage"; taskId?: string; stage: string; status: "start" | "done" | string; label?: string; note?: string; ts?: string; seq?: number }
-  | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  | { type: "meta"; taskId?: string; goal: string; model: string; runtimeModel?: string; runtimeProvider?: string; tools: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus; assistantMessageId?: string }
+  | { type: "activity"; text: string; tool?: string; ts?: string; seq?: number }
   | { type: "step_start"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
+  | { type: "step.started"; id: string; label: string; icon?: AgenticIcon; reasoning?: string }
+  | { type: "step.updated"; id?: string; stepId?: string; label?: string; reasoning?: string }
+  | { type: "step.finished"; id: string; ok?: boolean; summary?: string }
   | { type: "tool_call"; stepId: string; tool: string; preview?: string; language?: string; codePreview?: string }
   | { type: "tool_output"; stepId: string; tool: string; ok: boolean; preview?: string; partial?: boolean }
   | { type: "step_done"; id: string; ok: boolean; summary?: string }
   | { type: "file_artifact"; stepId?: string; artifact: AgentArtifact }
   | { type: "final_text"; markdown: string }
   | { type: "done"; stoppedReason: string; stats: { steps: number; artifacts: number }; dbMessageId?: string | null }
+  | { type: "run.started"; runId?: string; taskId?: string; assistantMessageId?: string }
+  | { type: "run.succeeded"; stoppedReason?: string; stats?: { steps?: number; artifacts?: number } }
+  | { type: "run.failed"; message?: string }
+  | { type: "heartbeat"; at?: number; ts?: string }
   | { type: "error"; message: string }
 
 export interface AgentTaskRunArgs {
@@ -121,8 +131,16 @@ export interface AgentTaskRunArgs {
    * How long to poll the durable task event log when the POST+SSE socket
    * closes before a terminal done/error event. This turns transient proxy or
    * browser stream closes into an agentic reconnect instead of a failed chat.
+   * While the task is still queued/running and the #579 snapshot heartbeat
+   * is fresh, the deadline refreshes up to `inFlightRecoveryMaxMs`.
    */
   closedStreamRecoveryMs?: number
+  /**
+   * Hard cap for in-flight resume after an SSE drop. Default matches the
+   * PLANIFICAR 8-minute ceiling so a live worker can finish after a proxy
+   * close without polling forever.
+   */
+  inFlightRecoveryMaxMs?: number
   /**
    * Override the POST endpoint (relative to API_ROOT). Defaults to
    * "/agent/task". The professional document cycle uses
@@ -138,11 +156,17 @@ export interface AgentTaskRunArgs {
   documentType?: string
   field?: string
   citationStyle?: string
+  lastArtifactId?: string
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
 const DEFAULT_CLOSED_STREAM_RECOVERY_MS = 30_000
+const DEFAULT_IN_FLIGHT_RECOVERY_MAX_MS = 8 * 60 * 1000
 const CLOSED_STREAM_RECOVERY_POLL_MS = 750
+const SNAPSHOT_FRESH_MS = 90_000
+const TERMINAL_LOOKUP_STATUSES = new Set([401, 403, 404, 410])
+const RECOVERABLE_STREAM_DROP_RE =
+  /failed to fetch|networkerror|load failed|fetch failed|socket hang up|econnreset|econnrefused|etimedout|epipe|enotfound|network|connection (lost|reset|closed)|incomplete|stream stalled|body.*disturbed|err_network|idle_timeout|AgentTaskIdleTimeoutError/i
 
 export class AgentTaskIdleTimeoutError extends Error {
   readonly code = "idle_timeout"
@@ -170,6 +194,9 @@ export function normalizeAgentTaskErrorMessage(err: unknown): string {
   }
   if (/idle_timeout|AgentTaskIdleTimeoutError/i.test(raw)) {
     return "El asistente dejó de enviar actualizaciones. Reintenta el pedido."
+  }
+  if (/worker_stalled|dejó de responder|dejo de responder/i.test(raw)) {
+    return "El worker dejó de responder. La tarea se cerró para que no quede en progreso infinito. Puedes reintentar."
   }
   if (/empty_stream|AgentTaskEmptyStreamError/i.test(raw)) {
     return "El asistente cerró la respuesta sin generar texto. Reintenta."
@@ -220,7 +247,60 @@ function eventTaskId(evt: AgentTaskEvent): string | null {
 }
 
 function isTerminalEvent(evt: AgentTaskEvent): boolean {
-  return evt.type === "done" || evt.type === "error"
+  return evt.type === "done" || evt.type === "error" || evt.type === "run.succeeded" || evt.type === "run.failed"
+}
+
+export function isInFlightAgentTaskStatus(status?: string | null): boolean {
+  const normalized = String(status || "").trim().toLowerCase()
+  return normalized === "queued" || normalized === "running"
+}
+
+export function isTerminalAgentTaskJobStatus(status?: string | null): boolean {
+  const normalized = String(status || "").trim().toLowerCase()
+  return normalized === "completed" || normalized === "cancelled" || normalized === "error" || normalized === "failed"
+}
+
+export function isFreshAgentTaskSnapshot(
+  updatedAt?: string | null,
+  now = Date.now(),
+  freshMs = SNAPSHOT_FRESH_MS,
+): boolean {
+  const ts = Date.parse(String(updatedAt || ""))
+  return Number.isFinite(ts) && (now - ts) <= freshMs
+}
+
+export function isRecoverableAgentTaskStreamDrop(
+  err: unknown,
+  opts: { timedOut?: boolean } = {},
+): boolean {
+  if (opts.timedOut) return true
+  if (err instanceof AgentTaskIdleTimeoutError) return true
+  const code = String((err as { code?: string } | null)?.code || "")
+  if (code === "idle_timeout") return true
+  const raw = String((err as { message?: string } | null)?.message || err || "")
+  return RECOVERABLE_STREAM_DROP_RE.test(raw)
+}
+
+export function resolveRecoveredTerminalError(payload: {
+  status?: string
+  lastError?: string | null
+  error?: string | null
+  events?: AgentTaskEvent[]
+  streamState?: Pick<AgentTaskState, "error"> | null
+}): string {
+  const lastError = String(payload.lastError || payload.error || "").trim()
+  if (lastError) return lastError
+  const events = Array.isArray(payload.events) ? payload.events : []
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const evt = events[i]
+    if ((evt.type === "error" || evt.type === "run.failed") && "message" in evt && evt.message) {
+      return String(evt.message)
+    }
+  }
+  const streamError = String(payload.streamState?.error || "").trim()
+  if (streamError) return streamError
+  if (payload.status === "cancelled") return "Tarea detenida."
+  return "La tarea agéntica falló."
 }
 
 function waitForRecoveryPoll(ms: number, signal?: AbortSignal): Promise<void> {
@@ -245,72 +325,92 @@ async function* recoverClosedStreamEvents(
   afterSeq: number,
   timeoutMs: number,
   signal?: AbortSignal,
+  inFlightMaxMs = DEFAULT_IN_FLIGHT_RECOVERY_MAX_MS,
 ): AsyncGenerator<AgentTaskEvent> {
   if (!taskId || signal?.aborted || timeoutMs <= 0) return
-  const deadline = Date.now() + timeoutMs
+  const startedAt = Date.now()
+  const hardDeadline = startedAt + Math.max(timeoutMs, inFlightMaxMs)
+  let deadline = startedAt + timeoutMs
   let cursor = Math.max(0, afterSeq || 0)
 
-  while (!signal?.aborted && Date.now() <= deadline) {
+  while (!signal?.aborted && Date.now() <= deadline && Date.now() <= hardDeadline) {
     let payload: Awaited<ReturnType<typeof getTaskEvents>> | null = null
     try {
       payload = await getTaskEvents(taskId, cursor, { signal })
     } catch {
       payload = null
     }
-    if (!payload?.ok) return
 
-    const events = Array.isArray(payload.events) ? payload.events : []
-    for (const evt of events) {
-      cursor = Math.max(cursor, eventSeq(evt))
-      yield evt
-      if (isTerminalEvent(evt)) return
-    }
-
-    const recovered = payload.streamState
-    if (recovered?.done) {
-      if (recovered.finalText?.trim()) {
-        yield { type: "final_text", markdown: recovered.finalText }
+    if (payload && payload.ok === false) {
+      if (TERMINAL_LOOKUP_STATUSES.has(Number(payload.statusCode) || 0)) return
+    } else if (payload?.ok) {
+      const events = Array.isArray(payload.events) ? payload.events : []
+      let sawProgress = false
+      for (const evt of events) {
+        cursor = Math.max(cursor, eventSeq(evt))
+        sawProgress = true
+        yield evt
+        if (isTerminalEvent(evt)) return
       }
-      if (recovered.error) {
-        yield { type: "error", message: recovered.error }
-      } else {
+
+      const recovered = payload.streamState
+      if (recovered?.done) {
+        if (recovered.finalText?.trim()) {
+          yield { type: "final_text", markdown: recovered.finalText }
+        }
+        if (recovered.error) {
+          yield { type: "error", message: recovered.error }
+        } else {
+          yield {
+            type: "done",
+            stoppedReason: recovered.stoppedReason || payload.status || "recovered",
+            stats: {
+              steps: Array.isArray(recovered.steps) ? recovered.steps.length : 0,
+              artifacts: Array.isArray(recovered.artifacts) ? recovered.artifacts.length : 0,
+            },
+          }
+        }
+        return
+      }
+
+      if (payload.status === "completed") {
         yield {
           type: "done",
-          stoppedReason: recovered.stoppedReason || payload.status || "recovered",
+          stoppedReason: "recovered_completed",
           stats: {
-            steps: Array.isArray(recovered.steps) ? recovered.steps.length : 0,
-            artifacts: Array.isArray(recovered.artifacts) ? recovered.artifacts.length : 0,
+            steps: Array.isArray(recovered?.steps) ? recovered!.steps.length : 0,
+            artifacts: Array.isArray(recovered?.artifacts) ? recovered!.artifacts.length : 0,
           },
         }
+        return
       }
-      return
+      if (payload.status === "error" || payload.status === "cancelled" || payload.status === "failed") {
+        yield {
+          type: "error",
+          message: resolveRecoveredTerminalError(payload),
+        }
+        return
+      }
+
+      if (
+        sawProgress
+        || (isInFlightAgentTaskStatus(payload.status) && isFreshAgentTaskSnapshot(payload.updatedAt))
+      ) {
+        deadline = Math.min(hardDeadline, Date.now() + timeoutMs)
+      }
     }
 
-    if (payload.status === "completed") {
-      yield {
-        type: "done",
-        stoppedReason: "recovered_completed",
-        stats: {
-          steps: Array.isArray(recovered?.steps) ? recovered!.steps.length : 0,
-          artifacts: Array.isArray(recovered?.artifacts) ? recovered!.artifacts.length : 0,
-        },
-      }
-      return
-    }
-    if (payload.status === "error" || payload.status === "cancelled") {
-      yield {
-        type: "error",
-        message: payload.status === "cancelled" ? "Tarea detenida." : (payload.error || "La tarea agéntica falló."),
-      }
-      return
-    }
-
-    await waitForRecoveryPoll(Math.min(CLOSED_STREAM_RECOVERY_POLL_MS, Math.max(50, deadline - Date.now())), signal)
+    const remaining = Math.min(deadline, hardDeadline) - Date.now()
+    if (remaining <= 0) break
+    // Leave slack so a fresh/in-flight poll can run again after the wait.
+    await waitForRecoveryPoll(Math.min(CLOSED_STREAM_RECOVERY_POLL_MS, Math.max(20, remaining - 10)), signal)
   }
 }
 
 export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<AgentTaskEvent> {
-  const { signal, idleTimeoutMs, closedStreamRecoveryMs, endpoint, ...body } = args
+  const { signal, idleTimeoutMs, closedStreamRecoveryMs, inFlightRecoveryMaxMs, endpoint, ...body } = args
+  const locked = resolveCatalogModel(body.model || "deepseek-v4-flash")
+  body.model = locked.name
   const postPath = endpoint && endpoint.trim() ? endpoint.trim() : "/agent/task"
   const idleMs = typeof idleTimeoutMs === "number" && idleTimeoutMs > 0
     ? idleTimeoutMs
@@ -318,6 +418,9 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
   const recoveryMs = typeof closedStreamRecoveryMs === "number" && closedStreamRecoveryMs >= 0
     ? closedStreamRecoveryMs
     : DEFAULT_CLOSED_STREAM_RECOVERY_MS
+  const inFlightMaxMs = typeof inFlightRecoveryMaxMs === "number" && inFlightRecoveryMaxMs >= 0
+    ? inFlightRecoveryMaxMs
+    : DEFAULT_IN_FLIGHT_RECOVERY_MAX_MS
 
   // Combine the caller's abort signal with our own idle-timeout
   // controller. Either side can stop the read loop without leaving
@@ -382,7 +485,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
         yield event
       }
       if (!terminalSeen && taskId && !signal?.aborted) {
-        for await (const event of recoverClosedStreamEvents(taskId, lastSeq, recoveryMs, signal)) {
+        for await (const event of recoverClosedStreamEvents(taskId, lastSeq, recoveryMs, signal, inFlightMaxMs)) {
           lastSeq = Math.max(lastSeq, eventSeq(event))
           terminalSeen = terminalSeen || isTerminalEvent(event)
           yield event
@@ -390,8 +493,17 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
         }
       }
     } catch (err: any) {
-      if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
       if (signal?.aborted) throw err
+      if (taskId && !terminalSeen && isRecoverableAgentTaskStreamDrop(err, { timedOut })) {
+        for await (const event of recoverClosedStreamEvents(taskId, lastSeq, recoveryMs, signal, inFlightMaxMs)) {
+          lastSeq = Math.max(lastSeq, eventSeq(event))
+          terminalSeen = terminalSeen || isTerminalEvent(event)
+          yield event
+          if (terminalSeen) return
+        }
+        if (terminalSeen) return
+      }
+      if (timedOut) throw new AgentTaskIdleTimeoutError(idleMs)
       throw err
     }
   } finally {
@@ -401,7 +513,7 @@ export async function* runIterator(args: AgentTaskRunArgs): AsyncGenerator<Agent
 }
 
 export interface AgentTaskState {
-  meta?: { taskId?: string; goal?: string; model?: string; runtimeModel?: string; runtimeProvider?: string; tools?: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus }
+  meta?: { taskId?: string; goal?: string; model?: string; runtimeModel?: string; runtimeProvider?: string; tools?: string[]; executionProfile?: Record<string, unknown>; intentAlignmentProfile?: Record<string, unknown>; taskPlan?: Record<string, unknown>; frameworks?: AgentFrameworkStatus; assistantMessageId?: string }
   steps: Array<{
     id: string
     label: string
@@ -410,6 +522,7 @@ export interface AgentTaskState {
     // surfaced in the timeline so the chat shows its thinking like Claude.
     reasoning?: string
     status: "running" | "done" | "error"
+    retryCount?: number
     toolCalls: Array<{
       tool: string
       preview?: string
@@ -436,11 +549,14 @@ export interface AgentTaskState {
   qualityGates: Array<{ id: string; label: string; passed: boolean; score?: number | null; summary?: string; payload?: Record<string, unknown> | null; ts?: string }>
   repairs: Array<{ attempt: number; status: string; message: string; ts?: string }>
   finalText: string
+  currentActivity?: string | null
   done: boolean
   stoppedReason?: string
   error?: string
   /** ISO timestamp of the last SSE event seen (heartbeats included). */
   lastEventAt?: string
+  /** ISO timestamp of the last transport heartbeat (`: ping` / type:heartbeat). */
+  heartbeatAt?: string
 }
 
 export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): AgentTaskState {
@@ -551,29 +667,59 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
         }].slice(-10),
       }
     case "meta":
+    case "run.started":
       return {
         ...state,
         meta: {
-          taskId: evt.taskId,
-          goal: evt.goal,
-          model: evt.model,
-          runtimeModel: evt.runtimeModel,
-          runtimeProvider: evt.runtimeProvider,
-          tools: evt.tools,
+          ...(state.meta || {}),
+          taskId: (evt as { taskId?: string }).taskId || state.meta?.taskId,
+          goal: (evt as { goal?: string }).goal || state.meta?.goal,
+          model: (evt as { model?: string }).model || state.meta?.model,
+          runtimeModel: (evt as { runtimeModel?: string }).runtimeModel || state.meta?.runtimeModel,
+          runtimeProvider: (evt as { runtimeProvider?: string }).runtimeProvider || state.meta?.runtimeProvider,
+          tools: (evt as { tools?: string[] }).tools || state.meta?.tools,
+          assistantMessageId: (evt as { assistantMessageId?: string }).assistantMessageId || state.meta?.assistantMessageId,
         },
       }
-    case "step_start":
+    case "heartbeat":
       return {
         ...state,
-        steps: [...state.steps, {
+        heartbeatAt: (evt as { ts?: string }).ts || new Date().toISOString(),
+      }
+    case "activity":
+      return { ...state, currentActivity: evt.text || state.currentActivity || null }
+    case "step_start":
+    case "step.started":
+      return {
+        ...state,
+        currentActivity: evt.label || state.currentActivity || null,
+        steps: upsertMonotonicStep(state.steps, {
           id: evt.id,
           label: evt.label,
           icon: evt.icon,
           ...(evt.reasoning ? { reasoning: evt.reasoning } : {}),
-          status: "running",
+          status: "running" as const,
+          retryCount: 1,
           toolCalls: [],
-        }],
+        }),
       }
+    case "step.updated": {
+      const updateId = String((evt as { id?: string; stepId?: string }).id || (evt as { stepId?: string }).stepId || "")
+      if (!updateId) return state
+      return {
+        ...state,
+        steps: state.steps.map((step) =>
+          step.id === updateId
+            ? {
+              ...step,
+              label: (evt as { label?: string }).label || step.label,
+              reasoning: (evt as { reasoning?: string }).reasoning || step.reasoning,
+              status: "running" as const,
+            }
+            : step
+        ),
+      }
+    }
     case "tool_call": {
       const callStepId = evt.stepId || `tool-${state.steps.length + 1}`
       const callSteps = state.steps.some(s => s.id === callStepId)
@@ -636,24 +782,44 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
       }
     }
     case "step_done":
+    case "step.finished":
       return {
         ...state,
         steps: state.steps.map(s =>
-          s.id === evt.id ? { ...s, status: evt.ok ? "done" : "error" } : s
+          s.id === evt.id ? { ...s, status: (evt as { ok?: boolean }).ok === false ? "error" : "done" } : s
         ),
       }
     case "file_artifact": {
       const artifacts = [...state.artifacts]
+      const incomingId = String(evt.artifact.id || "").trim()
+      const incomingSourceFileId = String(evt.artifact.sourceFileId || "").trim()
       const filename = String(evt.artifact.filename || "").trim().toLowerCase()
       const format = String(evt.artifact.format || evt.artifact.mime || "").trim().toLowerCase()
-      const existingIndex = artifacts.findIndex(artifact => (
-        artifact.id === evt.artifact.id
-        || (
-          filename
-          && String(artifact.filename || "").trim().toLowerCase() === filename
-          && String(artifact.format || artifact.mime || "").trim().toLowerCase() === format
-        )
-      ))
+      let existingIndex = incomingId
+        ? artifacts.findIndex(artifact => String(artifact.id || "").trim() === incomingId)
+        : -1
+
+      // A source-preserving batch can legitimately produce the same output
+      // filename for multiple input documents. Keep those cards only when
+      // both artifacts identify different source files. Generations without
+      // source provenance (for example repeated create_document revisions),
+      // or a new revision of the same source file, replace the prior card.
+      if (existingIndex < 0 && incomingSourceFileId) {
+        existingIndex = artifacts.findIndex(artifact => (
+          String(artifact.sourceFileId || "").trim() === incomingSourceFileId
+        ))
+      }
+      if (existingIndex < 0 && filename) {
+        existingIndex = artifacts.findIndex(artifact => {
+          const samePresentation = (
+            String(artifact.filename || "").trim().toLowerCase() === filename
+            && String(artifact.format || artifact.mime || "").trim().toLowerCase() === format
+          )
+          if (!samePresentation) return false
+          const existingSourceFileId = String(artifact.sourceFileId || "").trim()
+          return !incomingSourceFileId || !existingSourceFileId
+        })
+      }
 
       if (existingIndex >= 0) artifacts.splice(existingIndex, 1, evt.artifact)
       else artifacts.push(evt.artifact)
@@ -663,9 +829,11 @@ export function reduceEvent(prevState: AgentTaskState, evt: AgentTaskEvent): Age
     case "final_text":
       return { ...state, finalText: evt.markdown }
     case "done":
-      return { ...state, done: true, stoppedReason: evt.stoppedReason }
+    case "run.succeeded":
+      return { ...state, done: true, stoppedReason: (evt as { stoppedReason?: string }).stoppedReason, currentActivity: null }
     case "error":
-      return { ...state, done: true, error: evt.message }
+    case "run.failed":
+      return { ...state, done: true, error: (evt as { message?: string }).message || "run_failed", currentActivity: null }
     default:
       return state
   }
@@ -698,6 +866,13 @@ export async function runStream(args: AgentTaskRunArgs, cbs: RunStreamCallbacks 
       cbs.onEvent?.(evt)
       state = reduceEvent(state, evt)
       cbs.onStateChange?.(state)
+    }
+    // Stop cancels the SSE reader; that looks like a clean close, not a
+    // throw. Do not resume or report stream_closed_without_done.
+    if (args.signal?.aborted) {
+      state = { ...state, done: true, error: state.error || "aborted" }
+      cbs.onFinal?.(state)
+      return state
     }
     // The SSE socket closed cleanly. Two failure shapes still need
     // to surface to the user instead of leaving the message bubble
@@ -776,17 +951,46 @@ export async function getTaskEvents(
   taskId: string,
   after = 0,
   options: { signal?: AbortSignal } = {},
-): Promise<{ ok: boolean; events: AgentTaskEvent[]; status?: string; streamState?: AgentTaskState; error?: string }> {
+): Promise<{
+  ok: boolean
+  events: AgentTaskEvent[]
+  status?: string
+  statusCode?: number
+  streamState?: AgentTaskState
+  error?: string
+  lastError?: string
+  updatedAt?: string
+}> {
   const resp = await authenticatedFetch(`${API_ROOT}/agent/task/${encodeURIComponent(taskId)}/events?after=${encodeURIComponent(String(after))}`, {
     method: "GET",
     credentials: "include",
-    headers: { ...authHeader() },
+    headers: { ...authHeader(), ...agentTaskResumeHeaders(after ? String(after) : null) },
     signal: options.signal,
   })
   let payload: any = null
   try { payload = await resp.json() } catch { payload = null }
-  if (!resp.ok) return { ok: false, events: [], error: payload?.error || `HTTP ${resp.status}` }
-  return { ok: true, events: payload?.events || [], status: payload?.status, streamState: payload?.streamState }
+  if (!resp.ok) return { ok: false, events: [], statusCode: resp.status, error: payload?.error || `HTTP ${resp.status}` }
+  return {
+    ok: true,
+    events: payload?.events || [],
+    status: payload?.status,
+    streamState: payload?.streamState,
+    lastError: typeof payload?.lastError === "string" ? payload.lastError : undefined,
+    updatedAt: typeof payload?.updatedAt === "string" ? payload.updatedAt : undefined,
+  }
 }
 
-export const agentTaskService = { runIterator, runStream, reduceEvent, initialAgentState, cancelTask, retryTask, resolveApproval, getTaskEvents }
+export const agentTaskService = {
+  runIterator,
+  runStream,
+  reduceEvent,
+  initialAgentState,
+  cancelTask,
+  retryTask,
+  resolveApproval,
+  getTaskEvents,
+  isRecoverableAgentTaskStreamDrop,
+  isInFlightAgentTaskStatus,
+  isFreshAgentTaskSnapshot,
+  resolveRecoveredTerminalError,
+}

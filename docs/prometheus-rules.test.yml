@@ -4,6 +4,57 @@ rule_files:
 evaluation_interval: 30s
 
 tests:
+  - name: document jobs idle or successful do not alert
+    interval: 30s
+    input_series:
+      - series: 'siragpt_doc_jobs_total{status="done"}'
+        values: '0+1x40'
+      - series: 'siragpt_doc_timeouts_total{}'
+        values: '0+0x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SiraGPTDocumentFailureRate
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: SiraGPTDocumentTimeout
+        exp_alerts: []
+
+  - name: document failures above twenty percent fire and recover after idle window
+    interval: 30s
+    input_series:
+      - series: 'siragpt_doc_jobs_total{status="failed"}'
+        values: '0+1x40 40+0x160'
+      - series: 'siragpt_doc_jobs_total{status="done"}'
+        values: '0+1x40 40+0x160'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SiraGPTDocumentFailureRate
+        exp_alerts:
+          - exp_labels: { severity: warning, service: siragpt-doc-sandbox }
+            exp_annotations:
+              summary: 'Document failure rate exceeds 20% over one hour'
+              runbook: backend/src/modules/doc-sandbox/README.md
+      - eval_time: 90m
+        alertname: SiraGPTDocumentFailureRate
+        exp_alerts: []
+
+  - name: document timeout fires only within the recent increment window
+    interval: 30s
+    input_series:
+      - series: 'siragpt_doc_timeouts_total{}'
+        values: '0+0x9 1+0x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SiraGPTDocumentTimeout
+        exp_alerts:
+          - exp_labels: { severity: warning, service: siragpt-doc-sandbox }
+            exp_annotations:
+              summary: 'A document job exceeded its deadline'
+              runbook: backend/src/modules/doc-sandbox/README.md
+      - eval_time: 12m
+        alertname: SiraGPTDocumentTimeout
+        exp_alerts: []
+
   - name: idle windows emit no availability latency or agent ratios
     interval: 30s
     promql_expr_test:

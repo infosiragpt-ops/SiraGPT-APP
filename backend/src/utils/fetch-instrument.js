@@ -209,8 +209,13 @@ class FetchInstrument {
       timeouts: this[kTimeoutCount],
       minLatencyMs: this[kMinLatency] === Infinity ? 0 : this[kMinLatency],
       maxLatencyMs: this[kMaxLatency],
+      // Floor the average at min and cap it at max so rounding can never
+      // report avg > max (or avg < min) for tiny sample sets.
       avgLatencyMs: this[kTotalCount] > 0
-        ? Math.round(this[kSumLatency] / this[kTotalCount])
+        ? Math.min(
+            this[kMaxLatency],
+            Math.max(this[kMinLatency], Math.round(this[kSumLatency] / this[kTotalCount])),
+          )
         : 0,
     };
   }

@@ -8,13 +8,21 @@ const upload = require('../middleware/upload');
 const fileProcessingStatus = require('../services/file-processing-status');
 const fileProcessor = require('../services/fileProcessor');
 const documentRenderer = require('../services/documentRenderer');
+const extractFastpath = require('../services/document-extract-fastpath');
+const officeImages = require('../services/office-image-extractor');
+const { isPersistedPreviewSource } = require('../services/document-pipeline/preview-object-ready');
 const documentIntelligence = require('../services/document-intelligence');
 const documentContext = require('../services/agents/document-context');
 const documentSummarizer = require('../services/document-summarizer');
 const anthropicCitations = require('../services/providers/anthropic-citations');
 const queryDecomposer = require('../services/rag/query-decomposer');
 const deepAsk = require('../services/rag/deep-ask');
-const { validateUploadPolicy } = require('../services/upload-security-policy');
+const {
+  validateUploadPolicy,
+  isMediaMime,
+  resolveUploadLimits,
+  isDeclaredUploadAllowed,
+} = require('../services/upload-security-policy');
 const prisma = require('../config/database');
 const rag = require('../services/rag-service');
 const ragStore = require('../services/rag-store');
@@ -97,6 +105,20 @@ function scheduleDefaultRagIndex(userId, fileRecord) {
     // No document to index; treat the upload as terminal-ready so
     // the file row converges to a non-pending state for the UI to
     // poll. (Images / pure thumbnails land here.)
+    fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
+    return false;
+  }
+
+  // Preview + chat use extractedText immediately. Embeddings wait for
+  // the first send (operational-rag.ensureIndexed). The composer chip
+  // can leave "Extrayendo texto" without waiting on Voyage/OpenAI.
+  if (extractFastpath.shouldSkipRagUntilSend()) {
+    console.log('[files] RAG skip-until-send', JSON.stringify({
+      event: 'file_rag_skip_until_send',
+      file_id: fileRecord.id,
+      user_id: userId,
+      chars: fileRecord.extractedText ? fileRecord.extractedText.length : 0,
+    }));
     fileProcessingStatus.setStage(prisma, fileRecord.id, 'ready', { userId });
     return false;
   }
@@ -234,9 +256,11 @@ function serializeAnalysisMeta(analysis = null) {
  *
  * Returns `{ mime, ext, source }`:
  *   - `source: 'magic-bytes'` — file-type identified the format from
- *     content. Caller MUST re-validate this against the allowlist
- *     because multer's pre-gate only saw the (potentially spoofed)
- *     declared mime/extension.
+ *     content. Caller MUST hand this to validateUploadPolicy: every
+ *     format is accepted, but a KNOWN extension whose bytes say
+ *     otherwise (`invoice.pdf` that is really a Windows binary) is
+ *     rejected there, and executables / active content are classified so
+ *     the static layer serves them as downloads.
  *   - `source: 'fallback'` — file-type returned null. This is normal
  *     for plain-text formats (md / csv / json / xml / txt / html) which
  *     have no magic bytes; trust the multer-reported mime.
@@ -288,6 +312,9 @@ function withTimeout(promise, ms, label) {
 // upstream is degraded. Overridable via env for ops tuning.
 const EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_EXTRACT_TIMEOUT_MS || '20000', 10);
 const ASYNC_EXTRACT_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_TIMEOUT_MS || '900000', 10);
+// Audio/video transcription of long recordings (local whisper on CPU) needs
+// far more than the 15-minute document budget.
+const ASYNC_EXTRACT_MEDIA_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ASYNC_EXTRACT_MEDIA_TIMEOUT_MS || '7200000', 10);
 const THUMBNAIL_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_THUMBNAIL_TIMEOUT_MS || '12000', 10);
 const OPENAI_FILE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_OPENAI_FILE_TIMEOUT_MS || '15000', 10);
 const ANALYZE_TIMEOUT_MS = Number.parseInt(process.env.SIRAGPT_ANALYZE_TIMEOUT_MS || '8000', 10);
@@ -329,8 +356,8 @@ async function uploadToOpenAiFiles(file) {
 // ─── Parallel batch processor ──────────────────────────────────────────────
 // Processes files in chunks of MAX_CONCURRENT to avoid overwhelming the
 // event loop, DB connection pool, and upstream API rate limits.
-const MAX_CONCURRENT = Number.parseInt(process.env.SIRAGPT_UPLOAD_CONCURRENCY || '5', 10);
-const ASYNC_FILE_PROCESSING_CONCURRENCY = Math.max(1, Number.parseInt(process.env.SIRAGPT_ASYNC_FILE_PROCESSING_CONCURRENCY || '2', 10));
+const MAX_CONCURRENT = extractFastpath.uploadConcurrency();
+const ASYNC_FILE_PROCESSING_CONCURRENCY = extractFastpath.asyncFileProcessingConcurrency();
 const asyncFileProcessingQueue = [];
 let activeAsyncFileProcessors = 0;
 
@@ -351,6 +378,104 @@ function drainAsyncFileProcessingQueue() {
 function enqueueAsyncFileProcessing(task) {
   asyncFileProcessingQueue.push(task);
   setImmediate(drainAsyncFileProcessingQueue);
+}
+
+function extractProcessOptions() {
+  return {
+    deferOfficeImageOcr: extractFastpath.shouldDeferOfficeImageOcr(),
+  };
+}
+
+function ragIndexLabel(queued) {
+  if (queued) return 'queued';
+  if (extractFastpath.shouldSkipRagUntilSend()) return 'deferred';
+  return 'skipped';
+}
+
+async function warmLibreOfficePreview(file, fileRecord) {
+  const sourcePath = file?.path;
+  if (!sourcePath || !fileRecord?.id) return;
+  if (!documentRenderer.isConvertible(file.mimetype || fileRecord.mimeType, file.originalname || fileRecord.originalName)) {
+    return;
+  }
+  try {
+    const out = await documentRenderer.renderToPdf({
+      id: fileRecord.id,
+      path: sourcePath,
+      mimeType: file.mimetype || fileRecord.mimeType,
+      originalName: file.originalname || fileRecord.originalName,
+    });
+    console.log('[files] preview cache warm', JSON.stringify({
+      event: 'file_preview_cache_warm',
+      file_id: fileRecord.id,
+      fromCache: Boolean(out?.fromCache),
+      engine: out?.engine || null,
+    }));
+  } catch (err) {
+    console.warn('[files] preview cache warm failed:', err?.message || err);
+  }
+}
+
+function schedulePostExtractEnrichment({
+  file,
+  userId,
+  prismaClient,
+  fileRecord,
+  result,
+  thumbnailPath,
+  analyzeTimeoutMs,
+}) {
+  enqueueAsyncFileProcessing(async () => {
+    try {
+      fileRecord = await appendDeferredOfficeImageOcr(file.path, fileRecord, prismaClient);
+      await warmLibreOfficePreview(file, fileRecord);
+      try {
+        await withTimeout(
+          documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
+          analyzeTimeoutMs,
+          `document analysis (${file.originalname})`,
+        );
+      } catch (analysisError) {
+        console.warn('[files] document analysis failed:', analysisError.message || analysisError);
+      }
+      try {
+        const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
+        if (storedRef && storedRef !== file.path) {
+          await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
+        }
+      } catch (offloadErr) {
+        console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr);
+      }
+    } catch (err) {
+      console.warn('[files] post-extract enrichment failed:', err?.message || err);
+    }
+  });
+}
+
+async function appendDeferredOfficeImageOcr(filePath, fileRecord, prismaClient) {
+  if (!extractFastpath.shouldDeferOfficeImageOcr()) return fileRecord;
+  if (!filePath) return fileRecord;
+  try {
+    const allowVision = extractFastpath.shouldAllowOfficeImageVision(fileRecord.extractedText);
+    if (!allowVision) {
+      console.log('[files] office vision skipped', JSON.stringify({
+        event: 'file_office_vision_skipped',
+        file_id: fileRecord.id,
+        chars: fileRecord.extractedText ? fileRecord.extractedText.length : 0,
+        minText: extractFastpath.officeVisionMinText(),
+      }));
+    }
+    const appendix = await officeImages.extractImageAppendix(filePath, { allowVision });
+    if (!appendix) return fileRecord;
+    const next = `${fileRecord.extractedText || ''}\n\n${appendix}`;
+    return prismaClient.file.update({
+      where: { id: fileRecord.id },
+      data: { extractedText: next },
+    });
+  } catch (err) {
+    console.warn('[files] deferred office image OCR failed:', err?.message || err);
+    return fileRecord;
+  }
 }
 
 /**
@@ -446,8 +571,9 @@ async function processFilesInParallel(files, userId, prismaClient) {
         // critical because the reverse proxy cuts the response at ~30s. Each
         // is individually bounded and degrades to a safe default on failure,
         // so a slow/down upstream never fails the upload.
+        const extractStarted = Date.now();
         const [result, thumbnailPath, openaiFileId] = await Promise.all([
-          withTimeout(fileProcessor.processFile(file), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
+          withTimeout(fileProcessor.processFile(file, extractProcessOptions()), EXTRACT_TIMEOUT_MS, `text extraction (${file.originalname})`)
             .catch((extractErr) => {
               console.warn(`[files] text extraction failed for ${file.originalname} — upload still succeeds:`, extractErr?.message || extractErr);
               return { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -460,38 +586,36 @@ async function processFilesInParallel(files, userId, prismaClient) {
           uploadToOpenAiFiles(file),
         ]);
 
-        // ── Update DB record ──
+        // Persist text immediately so chat/preview can use it. RAG embeddings
+        // are skip-until-send by default — they no longer block the chip.
         fileRecord = await prismaClient.file.update({
           where: { id: fileRecord.id },
           data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
         });
+        await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
+          userId,
+          durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
+        });
 
         const ragQueued = scheduleDefaultRagIndex(userId, fileRecord);
         const ocrMeta = serializeOcrMeta(result);
-        let analysis = null;
-        try {
-          analysis = await withTimeout(
-            documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }),
-            ANALYZE_TIMEOUT_MS,
-            `document analysis (${file.originalname})`,
-          );
-        } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
-
-        // Offload the binary (+ thumbnail) to R2 AFTER extraction and analysis,
-        // which may re-read the local file. Keeps nothing durable on the VM.
-        try {
-          const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
-          if (storedRef && storedRef !== file.path) {
-            fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
-          }
-        } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
+        schedulePostExtractEnrichment({
+          file,
+          userId,
+          prismaClient,
+          fileRecord,
+          result,
+          thumbnailPath,
+          analyzeTimeoutMs: ANALYZE_TIMEOUT_MS,
+        });
+        const analysis = null;
 
         // The upload itself succeeded (binary stored + record updated), so we
         // always report success. A degraded extraction is surfaced as a soft
         // `extractionWarning`, not a hard `error`, so the attachment stays
         // usable instead of being shown as a failed upload.
         const extractionDegraded = result.success === false;
-        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragQueued ? 'queued' : 'skipped', success: true, error: null, extractionWarning: extractionDegraded ? (result.error || 'extraction_degraded') : null };
+        return { id: fileRecord.id, name: file.originalname, size: file.size, type: file.mimetype, url: `/uploads/${userId}/${file.filename}`, thumbnailUrl: thumbnailPath ? `/uploads/${userId}/${path.basename(thumbnailPath)}` : null, extractedText: fileRecord.extractedText || result.extractedText, ...ocrMeta, ...serializeAnalysisMeta(analysis), openaiFileId, ragIndexed: ragIndexLabel(ragQueued), extractMs: result?.timings?.totalMs || null, success: true, error: null, extractionWarning: extractionDegraded ? (result.error || 'extraction_degraded') : null };
       } catch (error) {
         console.error('File processing error:', error);
         if (fileRecord?.id) { await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'failed', { userId, error: `processing: ${error?.message || error}` }); }
@@ -590,8 +714,10 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
     // "failed" — it stays uploaded and usable (preview + OpenAI Files API),
     // just without locally-extracted text.
     let result;
+    const extractStarted = Date.now();
     try {
-      result = await withTimeout(fileProcessor.processFile(file), ASYNC_EXTRACT_TIMEOUT_MS, `async text extraction (${file.originalname})`);
+      const extractBudgetMs = /^(audio|video)\//i.test(String(file.mimetype || '')) ? ASYNC_EXTRACT_MEDIA_TIMEOUT_MS : ASYNC_EXTRACT_TIMEOUT_MS;
+      result = await withTimeout(fileProcessor.processFile(file, extractProcessOptions()), extractBudgetMs, `async text extraction (${file.originalname})`);
     } catch (extractErr) {
       console.warn(`[files] async text extraction failed for ${file.originalname} — file stays usable:`, extractErr?.message || extractErr);
       result = { success: false, extractedText: '', error: `extraction_degraded: ${extractErr?.message || extractErr}` };
@@ -609,21 +735,21 @@ async function processFileAfterFastUpload(file, userId, prismaClient, fileRecord
       where: { id: fileRecord.id },
       data: { mimeType: file.mimetype, extractedText: result.extractedText, openaiFileId },
     });
+    await fileProcessingStatus.setStage(prismaClient, fileRecord.id, 'extracting', {
+      userId,
+      durationMs: result?.timings?.totalMs || (Date.now() - extractStarted),
+    });
 
     scheduleDefaultRagIndex(userId, fileRecord);
-    try {
-      // Bound analyzeFile with the same budget the synchronous path uses, so a
-      // hung analysis can't leave the R2 offload + path update below unrun.
-      await withTimeout(documentIntelligence.analyzeFile(prismaClient, { userId, fileRecord, extractionResult: result, force: true }), ASYNC_ANALYZE_TIMEOUT_MS, `async document analysis (${file.originalname})`);
-    } catch (analysisError) { console.warn('[files] document analysis failed:', analysisError.message || analysisError); }
-
-    // Offload binary (+ thumbnail) to R2 after extraction + analysis.
-    try {
-      const { ref: storedRef } = await persistUploadBinary({ file, userId, thumbnailPath });
-      if (storedRef && storedRef !== file.path) {
-        fileRecord = await prismaClient.file.update({ where: { id: fileRecord.id }, data: { path: storedRef } });
-      }
-    } catch (offloadErr) { console.warn('[files] R2 offload step failed:', offloadErr?.message || offloadErr); }
+    schedulePostExtractEnrichment({
+      file,
+      userId,
+      prismaClient,
+      fileRecord,
+      result,
+      thumbnailPath,
+      analyzeTimeoutMs: ASYNC_ANALYZE_TIMEOUT_MS,
+    });
 
     if (thumbnailPath) {
       // Thumbnail is stored on disk for later consumers; no extra DB field exists
@@ -753,6 +879,104 @@ function scheduleCrossDocumentAnalysisWhenReady(fileIds, userId) {
 
 // Upload files — parallel batch processing
 router.post('/media-token', authenticateToken, uploadMediaTokenHandler);
+
+// ─── Chunked uploads (large audio/video) ──────────────────────────────
+// The production edge (Cloudflare proxy) rejects single request bodies over
+// 100 MB. Big media is split by the composer into ≤64 MB chunks that the
+// backend reassembles on disk (services/chunked-upload-store), then the file
+// enters the SAME async pipeline as a multipart upload (validation → text
+// extraction / transcription → RAG), returning the same response shape.
+const chunkedUploads = require('../services/chunked-upload-store');
+const CHUNK_BODY_LIMIT = chunkedUploads.MAX_CHUNK_BYTES + 64 * 1024;
+
+function chunkedUploadCap(mimeType, originalName) {
+  const limits = resolveUploadLimits();
+  const ext = String(originalName || '').split('.').pop();
+  const media = isMediaMime(mimeType) || /^(mp3|wav|ogg|oga|opus|m4a|mp4|mov|webm|mpeg|mpg)$/i.test(String(ext || ''));
+  return media ? limits.mediaFileSize : limits.fileSize;
+}
+
+function sendChunkedError(res, err) {
+  if (err && err.name === 'ChunkedUploadError') {
+    return res.status(err.status || 400).json({ error: err.message, code: err.code });
+  }
+  console.error('[files] chunked upload failed:', err && err.message ? err.message : err);
+  return res.status(500).json({ error: 'No se pudo completar la subida por trozos.', code: 'chunked_upload_failed' });
+}
+
+router.post('/upload/chunked/init', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
+  try {
+    const { name, size, mimeType, chunkSize } = req.body || {};
+    const originalName = upload.fixLatin1Filename(String(name || '').trim());
+    if (!originalName) return res.status(400).json({ error: 'Falta el nombre del archivo.', code: 'bad_name' });
+    const declared = { originalname: originalName, mimetype: String(mimeType || '').toLowerCase() || 'application/octet-stream' };
+    if (!isDeclaredUploadAllowed(declared)) {
+      return res.status(415).json({ error: `Tipo no permitido: ${declared.mimetype}`, code: 'unsupported_type' });
+    }
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    await fs.mkdir(userDir, { recursive: true });
+    chunkedUploads.sweepStaleChunkedUploads(userDir).catch(() => {});
+    const session = await chunkedUploads.initChunkedUpload({
+      userDir,
+      name: originalName,
+      size: Number(size),
+      mimeType: declared.mimetype,
+      chunkSize,
+      maxBytes: chunkedUploadCap(declared.mimetype, originalName),
+    });
+    return res.status(201).json({ ...session, maxChunkBytes: chunkedUploads.MAX_CHUNK_BYTES });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.put('/upload/chunked/:uploadId/:index', authenticateToken, requireScope('files:write'), express.raw({ type: () => true, limit: CHUNK_BODY_LIMIT }), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const result = await chunkedUploads.writeChunk({
+      userDir,
+      uploadId: req.params.uploadId,
+      index: Number(req.params.index),
+      buffer: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+    });
+    return res.json(result);
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.delete('/upload/chunked/:uploadId', authenticateToken, requireScope('files:write'), async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    await chunkedUploads.abortChunkedUpload({ userDir, uploadId: req.params.uploadId });
+    return res.json({ ok: true });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
+
+router.post('/upload/chunked/:uploadId/complete', authenticateToken, requireScope('files:write'), enforceOrgRateLimitSafe, async (req, res) => {
+  try {
+    const userDir = upload.resolveUserUploadDir(req.user.id);
+    if (!userDir) return res.status(400).json({ error: 'Propietario de la subida inválido.', code: 'bad_owner' });
+    const file = await chunkedUploads.completeChunkedUpload({ userDir, uploadId: req.params.uploadId });
+    const batchPolicy = validateDocumentBatch([file]);
+    if (!batchPolicy.ok) {
+      await unlinkQuiet(file.path);
+      return res.status(413).json({ error: batchPolicy.message, code: batchPolicy.code });
+    }
+    // Same async pipeline as POST /upload with asyncProcessing=1: the row is
+    // created now, extraction/transcription runs after this response and the
+    // composer polls /processing-status until `ready`.
+    const processedFiles = await processFilesForAsyncPreview([file], req.user.id, prisma);
+    return res.json({ files: processedFiles, chunked: true });
+  } catch (err) {
+    return sendChunkedError(res, err);
+  }
+});
 
 router.post('/upload', authenticateToken, requireScope('files:write'), upload.array('files', UPLOAD_BATCH_MAX), enforceOrgRateLimitSafe, async (req, res) => {
   try {
@@ -1056,6 +1280,105 @@ router.post('/:id/versions/:versionId/restore', authenticateToken, async (req, r
   }
 });
 
+// Persist a manual (human) edit from the /chat rich-text editor as a new
+// FileVersion. Auth + ownership scoped, exactly like the versions routes.
+// The ORIGINAL upload is never mutated; the edited Markdown is recorded as
+// the version's `content` and also mirrored into `summary` so the version list
+// (which only selects summary) shows a human-readable "qué cambió" line, and
+// "recargar conserva el estado" works via GET /:id/versions/{id}/content.
+// The edit route accepts `{ content, chatId?, summary? }`.
+router.post('/:id/edit', authenticateToken, async (req, res) => {
+  try {
+    const file = await prisma.file.findFirst({
+      where: { id: req.params.id, userId: req.user.id },
+      select: { id: true, filename: true, originalName: true },
+    });
+    if (!file) return res.status(404).json({ error: 'File not found' });
+
+    const content = typeof req.body?.content === 'string' ? req.body.content.trim() : '';
+    if (!content) return res.status(400).json({ error: 'El contenido editado no puede estar vacío' });
+    if (content.length > 2_000_000) {
+      return res.status(400).json({ error: 'El contenido excede el tamaño máximo permitido' });
+    }
+
+    const summary = typeof req.body?.summary === 'string' && req.body.summary.trim()
+      ? req.body.summary.trim().slice(0, 500)
+      : 'Edición manual desde el editor de documentos';
+    const createdByChatId = typeof req.body?.chatId === 'string' && req.body.chatId
+      ? req.body.chatId
+      : null;
+
+    const { recordFileVersion } = require('../services/document-editing/versioning');
+    const version = await recordFileVersion(prisma, {
+      fileId: file.id,
+      userId: req.user.id,
+      artifactId: null, // MVP: no binary artifact — the edited content lives on the version row
+      filename: String(file.originalName || file.filename || 'documento'),
+      summary,
+      validationPassed: true,
+      createdByChatId,
+      editPlan: { type: 'manual_edit', source: 'chat-document-editor' },
+    });
+
+    if (!version) {
+      return res.status(500).json({ error: 'No se pudo registrar la versión del documento' });
+    }
+
+    // Persist the edited content on the version row (additive `content` field)
+    // so a reload can rehydrate the editor without re-parsing the original file.
+    await prisma.fileVersion.update({
+      where: { id: version.id },
+      data: { content },
+    }).catch(() => null);
+
+    return res.status(201).json({
+      fileId: file.id,
+      version: {
+        id: version.id,
+        version: version.version,
+        filename: version.filename,
+        summary: version.summary,
+        validationPassed: version.validationPassed,
+        createdAt: version.createdAt,
+        downloadUrl: null,
+      },
+    });
+  } catch (error) {
+    console.error('File edit error:', error);
+    return res.status(500).json({ error: 'No se pudo guardar la edición del documento' });
+  }
+});
+
+// Read the Markdown content of a specific FileVersion — used to rehydrate the
+// /chat document editor ("recargar conserva el estado"). Returns 404 when the
+// row exists but predates the `content` column (e.g. versions recorded by the
+// background editor, which store a file artifact instead of text); the client
+// falls back to the original extracted text in that case.
+router.get('/:id/versions/:versionId/content', authenticateToken, async (req, res) => {
+  try {
+    const version = await prisma.fileVersion.findFirst({
+      where: { id: req.params.versionId, fileId: req.params.id, userId: req.user.id, validationPassed: true },
+      select: { id: true, content: true, version: true, filename: true },
+    });
+    if (!version) return res.status(404).json({ error: 'Versión no encontrada' });
+    if (typeof version.content !== 'string' || !version.content.trim()) {
+      return res.status(404).json({ error: 'Esta versión no guarda texto editable' });
+    }
+    return res.json({
+      fileId: req.params.id,
+      version: {
+        id: version.id,
+        version: version.version,
+        filename: version.filename,
+        content: version.content,
+      },
+    });
+  } catch (error) {
+    console.error('File version content error:', error);
+    return res.status(500).json({ error: 'No se pudo leer el contenido de la versión' });
+  }
+});
+
 router.get('/:id/analysis', authenticateToken, async (req, res) => {
   try {
     const file = await prisma.file.findFirst({
@@ -1232,11 +1555,22 @@ router.get('/:id/render', authenticateToken, async (req, res) => {
     });
     if (!file) return res.status(404).json({ error: 'File not found' });
 
+    const objectExists = await objectStorage.exists(file.path);
+    if (!isPersistedPreviewSource({
+      id: file.id,
+      path: file.path,
+      sizeBytes: file.size,
+      objectExists,
+    })) {
+      res.setHeader('Retry-After', '1');
+      return res.status(409).json({
+        error: 'File object not ready for preview',
+        code: 'PREVIEW_OBJECT_NOT_READY',
+      });
+    }
+
     const isPdf = file.mimeType === 'application/pdf' || /\.pdf$/i.test(file.originalName || '');
     if (isPdf) {
-      if (!(await objectStorage.exists(file.path))) {
-        return res.status(404).json({ error: 'File not found' });
-      }
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', contentDispositionHeader('inline', renderPdfFilename(file.originalName)));
       res.setHeader('Cache-Control', 'private, max-age=86400');

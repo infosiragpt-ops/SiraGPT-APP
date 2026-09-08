@@ -1,5 +1,7 @@
 'use strict';
 
+const { throwIfAborted } = require('../../utils/abort-signals');
+
 /**
  * Document-agent loop — model → tool calls → sandbox execution → tool results
  * → model, until the model answers WITHOUT tool calls or the iteration cap is
@@ -61,7 +63,7 @@ async function runDocAgentLoop({
   let stoppedReason = 'max_iterations';
 
   for (let iteration = 1; iteration <= cap; iteration += 1) {
-    if (signal?.aborted) { stoppedReason = 'aborted'; break; }
+    throwIfAborted(signal);
     onEvent({ type: 'iteration_start', iteration });
 
     let response;
@@ -71,8 +73,10 @@ async function runDocAgentLoop({
         messages,
         tools,
         tool_choice: 'auto',
-      });
+      }, signal ? { signal } : undefined);
+      throwIfAborted(signal);
     } catch (err) {
+      if (signal?.aborted) throwIfAborted(signal);
       onEvent({ type: 'error', message: err?.message || String(err) });
       throw err;
     }
@@ -93,6 +97,7 @@ async function runDocAgentLoop({
     messages.push({ role: 'assistant', content: msg.content || null, tool_calls: toolCalls });
 
     for (const call of toolCalls) {
+      throwIfAborted(signal);
       const name = call?.function?.name || 'unknown';
       const args = safeParseArgs(call?.function?.arguments);
       onEvent({ type: 'tool_call', iteration, tool: name, args, preview: previewOf(args.command || args.path || args) });
@@ -105,13 +110,19 @@ async function runDocAgentLoop({
         result = `ERROR: tool arguments were not valid JSON: ${args.raw}`;
       } else {
         try {
+          throwIfAborted(signal);
           result = await executor(args);
         } catch (err) {
+          if (signal?.aborted) throwIfAborted(signal);
           // Executors return ERROR strings themselves; this is the belt for
           // anything that still escapes — a tool failure must NEVER kill the loop.
           result = `ERROR: ${err?.message || String(err)}`;
         }
       }
+
+      // A subprocess may resolve with exit 130 after the signal aborts. Never
+      // let that become a normal tool result or a partially successful run.
+      throwIfAborted(signal);
 
       const ok = !String(result).startsWith('ERROR:');
       steps.push({ iteration, tool: name, args, ok, resultPreview: previewOf(result, 400) });
@@ -124,6 +135,7 @@ async function runDocAgentLoop({
     }
   }
 
+  throwIfAborted(signal);
   onEvent({ type: 'final', text: finalText, iterations: cap });
   return { finalText, iterations: cap, steps, stoppedReason };
 }

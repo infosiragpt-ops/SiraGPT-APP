@@ -6,6 +6,7 @@ import {
   detectDocumentChatComplexity,
   detectDocumentChatFormat,
   detectDocumentChatTemplate,
+  pickLastArtifactId,
 } from "../lib/document-chat-request"
 
 describe("document chat request · clean prompt contract", () => {
@@ -63,5 +64,25 @@ describe("document chat request · clean prompt contract", () => {
     assert.match(request.prompt, /return the downloadable file/i)
     assert.match(request.prompt, /do not stop at prose suggestions/i)
     assert.match(request.prompt, /consolidate them into one edited output file/i)
+  })
+
+  it("Word path stays docx and forwards lastArtifactId on follow-up", () => {
+    const request = buildDocumentChatRequest({
+      prompt: "ponlas rosadas y agrega un anexo en el Word",
+      chatId: "chat_1",
+      lastArtifactId: "art_docx_1",
+    })
+
+    assert.equal(request.format, "docx")
+    assert.equal(request.lastArtifactId, "art_docx_1")
+    assert.equal(request.displayPrompt, "ponlas rosadas y agrega un anexo en el Word")
+  })
+
+  it("pickLastArtifactId reads the latest assistant artifact, not an older one", () => {
+    const id = pickLastArtifactId([
+      { role: "ASSISTANT", artifacts: [{ id: "art_old" }] },
+      { role: "ASSISTANT", files: [{ artifactId: "art_word", filename: "informe.docx" }] },
+    ])
+    assert.equal(id, "art_word")
   })
 })

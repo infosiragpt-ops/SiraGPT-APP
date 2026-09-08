@@ -46,6 +46,21 @@ const { mutateProjectBrief } = require('./project-brief-store');
 /** Backend mirror of lib/code-agent-company.ts AGENT_COMPANY_DEPARTMENTS. */
 const DEPARTMENTS = companyDepartments.BUILT_IN_DEPARTMENTS;
 const DIRECT_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'marketing']);
+/** Departments that never create CodexRuns — safe while a code build holds the lock. */
+const SIDE_BY_SIDE_OPERATION_DEPARTMENTS = new Set(['sales', 'customer-success', 'marketing']);
+
+function pickSideBySideDepartment(departments, startIndex = 0) {
+  const rows = Array.isArray(departments) ? departments : [];
+  if (!rows.length) return null;
+  const start = Math.max(0, Number(startIndex) || 0) % rows.length;
+  for (let offset = 0; offset < rows.length; offset += 1) {
+    const candidate = rows[(start + offset) % rows.length];
+    if (candidate && SIDE_BY_SIDE_OPERATION_DEPARTMENTS.has(candidate.id) && candidate.enabled !== false) {
+      return candidate;
+    }
+  }
+  return null;
+}
 
 function dayKey(now = new Date()) {
   return now.toISOString().slice(0, 10);
@@ -98,8 +113,56 @@ async function writeProactiveState({ prisma, project, patch }) {
   return next;
 }
 
+/**
+ * Ensure every enabled department has a physical pool seat so the office and
+ * fleet show real capacity (not 0/0 puestos) and writers can claim isolation.
+ * Caps per-department size to keep total under department-pools project max.
+ */
+async function ensureFleetDepartmentPools({ prisma, project }) {
+  const departments = companyDepartments.readDepartments(project)
+    .filter((department) => department && department.enabled !== false);
+  if (!departments.length) return [];
+  const existing = await departmentPools.listDepartmentPools({
+    prisma,
+    projectId: project.id,
+  });
+  const byId = new Map(existing.map((pool) => [pool.departmentId, pool]));
+  const maxProject = departmentPools.MAX_PROJECT_POOL_CAPACITY || 512;
+  // Reserve at least 1 seat per department; distribute remaining capacity by desiredAgents.
+  const logicalTotal = departments.reduce(
+    (sum, department) => sum + Math.max(1, Number(department.desiredAgents) || 1),
+    0,
+  );
+  const created = [];
+  for (const department of departments) {
+    if (byId.has(department.id)) continue;
+    const desired = Math.max(1, Number(department.desiredAgents) || 1);
+    // Proportional share of project capacity, min 1, max 32 for first bootstrap.
+    const share = logicalTotal > 0
+      ? Math.max(1, Math.round((desired / logicalTotal) * Math.min(maxProject, logicalTotal)))
+      : 1;
+    const size = Math.min(32, Math.max(1, share));
+    try {
+      const pool = await departmentPools.upsertDepartmentPool({
+        prisma,
+        project,
+        departmentId: department.id,
+        size,
+        enabled: true,
+      });
+      if (pool) created.push(pool);
+    } catch (err) {
+      console.warn(
+        `[codex proactive] pool bootstrap failed for ${department.id}:`,
+        err?.message || err,
+      );
+    }
+  }
+  return created;
+}
+
 async function setProactive({ prisma, projectId, userId, enabled, now = () => new Date() }) {
-  const project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
+  let project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } });
   if (!project) return null;
   // Permanent fleet: when PROACTIVO turns on, unhide every built-in department
   // and re-enable custom units so the whole company participates in the loop.
@@ -122,8 +185,15 @@ async function setProactive({ prisma, projectId, userId, enabled, now = () => ne
           };
         },
       });
+      project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } }) || project;
     } catch (err) {
       console.warn('[codex proactive] enable-all-departments failed:', err?.message || err);
+    }
+    try {
+      await ensureFleetDepartmentPools({ prisma, project });
+      project = await prisma.codexProject.findFirst({ where: { id: projectId, userId } }) || project;
+    } catch (err) {
+      console.warn('[codex proactive] ensure fleet pools failed:', err?.message || err);
     }
   }
   const state = await writeProactiveState({
@@ -428,12 +498,18 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     where: { projectId: project.id, status: { in: ['queued', 'running', 'waiting_approval'] } },
     orderBy: { createdAt: 'desc' },
   });
+  // When a code build is already in flight, engineering waits — but pure
+  // operational departments (ventas / marketing / clientes) still rotate so the
+  // whole company does not freeze on a single run lock.
+  let forceSideBySideOperations = false;
 
   if (active) {
     const isOwnPlan = active.mode === 'plan'
       && active.status === 'waiting_approval'
       && String(active.prompt || '').startsWith(PROACTIVE_PREFIX);
-    if (!isOwnPlan) return { action: 'skipped_active' };
+    if (!isOwnPlan) {
+      forceSideBySideOperations = true;
+    } else {
     const activeDepartmentId = progressLedger.taskMetaFromPrompt(active.prompt)?.departmentId;
     const activePoolBudget = activeDepartmentId
       ? await (deps.departmentPools || departmentPools).checkDepartmentPoolBudget({
@@ -511,6 +587,7 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
       },
     });
     return { action: 'approved_plan', runId: run && run.id, planRunId: active.id };
+    }
   }
 
   if (budgetBlocked) {
@@ -543,7 +620,10 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     .filter((department) => department.enabled !== false);
   if (!departments.length) return { action: 'skipped_no_department' };
   const qaEvery = qaEveryCycles(env);
-  const qaCycle = qaEvery > 0 && (runsToday + 1) % qaEvery === 0;
+  // Never start a QA/code cycle while another run holds the project lock.
+  const qaCycle = !forceSideBySideOperations
+    && qaEvery > 0
+    && (runsToday + 1) % qaEvery === 0;
   const memory = progressLedger.readProgressContext(project);
   const companyContext = await companyOperatingProfile.loadCompanyOperatingContext({
     prisma,
@@ -600,19 +680,30 @@ async function runCycleInternal({ project, deps = {}, env = process.env, now = (
     roundRobinDepartment.custom === true
     || DIRECT_OPERATION_DEPARTMENTS.has(roundRobinDepartment.id)
   );
-  const selectedMission = directDepartmentTurn ? null : prioritizedMission;
+  const selectedMission = directDepartmentTurn || forceSideBySideOperations
+    ? null
+    : prioritizedMission;
   const missionDepartment = selectedMission
     ? departments.find((entry) => entry.id === selectedMission.departmentId)
     : null;
-  const department = qaCycle
-    ? {
-      id: 'qa-reviewer',
-      name: 'QA Reviewer',
-      mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
-    }
-    : directDepartmentTurn
-      ? roundRobinDepartment
-      : missionDepartment || roundRobinDepartment;
+  const sideBySideDepartment = forceSideBySideOperations
+    ? pickSideBySideDepartment(departments, state.deptIndex)
+    : null;
+  if (forceSideBySideOperations && !sideBySideDepartment) {
+    return { action: 'skipped_active' };
+  }
+  // QA and code-plan cycles are blocked while another run holds the lock.
+  const department = forceSideBySideOperations
+    ? sideBySideDepartment
+    : qaCycle
+      ? {
+        id: 'qa-reviewer',
+        name: 'QA Reviewer',
+        mission: 'Audita el diff acumulado, ejecuta pruebas y corrige regresiones antes de que el producto siga creciendo.',
+      }
+      : directDepartmentTurn
+        ? roundRobinDepartment
+        : missionDepartment || roundRobinDepartment;
   const poolBudget = await (deps.departmentPools || departmentPools).checkDepartmentPoolBudget({
     prisma,
     projectId: project.id,
@@ -1040,6 +1131,7 @@ module.exports = {
   PROACTIVE_PREFIX,
   readProactiveState,
   setProactive,
+  ensureFleetDepartmentPools,
   proposeTask,
   runCycle,
   tickAll,

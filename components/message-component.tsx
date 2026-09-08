@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { cn, downloadHref, downloadUrlAsFile } from "@/lib/utils"
+import { collapseStackedLetters } from "@/lib/chat-input-normalize"
 import dynamic from "next/dynamic"
 import type { AttachmentLike } from "@/components/viewers/UnifiedDocumentViewer"
 const UnifiedDocumentViewer = dynamic(
@@ -23,6 +24,8 @@ function prewarmUnifiedDocumentPreview(attachment: AttachmentLike): void {
     }).catch(() => { /* noop */ })
 }
 import { FileProcessingBadge } from "@/components/file-processing-badge"
+import { DocumentPageThumb } from "@/components/document-page-thumb"
+import { isPagePreviewDocument } from "@/lib/document-first-page"
 import { InteractiveArtifact, extractArtifact } from "@/components/artifact/InteractiveArtifact"
 import { AgenticStepsRenderer } from "@/components/agentic-steps"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -86,6 +89,7 @@ import ProcessingGoogleServicesCard from "./ProcessingGoogleServicesCard"
 import SpotifyConnectionCard from "./SpotifyConnectionCard"
 import SpotifyResults from "./spotify-results"
 import { ThinkingPlaceholder } from "./thinking-placeholder"
+import { activityDurationMs, activityToPlaceholderSteps } from "@/lib/chat/activity-log";
 import ThinkingTrace from "./thinking-trace"
 import AgentTrace from "./agent-trace"
 import MessageActionRail from "./MessageActionRail"
@@ -95,7 +99,11 @@ import type { DocumentPreviewTarget } from "./document-preview"
 import { appendUploadAuthToken, resolveImageAttachmentUrl } from "@/lib/attachment-url"
 import { toDocumentViewerAttachment } from "@/lib/document-viewer-attachment"
 import { isImageOnlyMessageForRender } from "@/lib/message-render-policy"
-import { ThinkingIndicator } from "@/components/ui/thinking-indicator"
+import { parseMessageFilesForRender } from "@/lib/chat/message-rendering"
+import { getAudioMediaMeta, isAudioComposerFile, isVideoComposerFile, resolveComposerMediaSrc } from "@/lib/chat/composer-files"
+import { ChatAudioPlayer, ChatVideoPlayer } from "@/components/chat/media-preview-players"
+import { ThinkingStatusLoader } from "@/components/thinking-status-loader"
+import { resolveReplyBadgeLabel } from "@/lib/chat/reply-badge-model"
 import {
     copyMarkdownToWordClipboard,
     createWordClipboardPayloadFromSelection,
@@ -273,19 +281,62 @@ const isRenderableImageAttachment = (file: any) => {
 const isDocumentLikeAttachment = (file: any) => {
     if (!file) return false;
     if (isRenderableImageAttachment(file)) return false;
+    if (isAudioComposerFile(file)) return false;
+    if (isVideoComposerFile(file)) return false;
     if (['gmail_emails', 'gmail_search_results', 'chart'].includes(file?.type)) return false;
     return !!(getAttachmentName(file) || file?.id || file?.attachmentId);
+};
+
+const formatUserAudioDuration = (seconds: number | null | undefined): string => {
+    if (!Number.isFinite(seconds as number) || (seconds as number) <= 0) return "";
+    const total = Math.round(seconds as number);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    return h > 0
+        ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+        : `${m}:${String(s).padStart(2, "0")}`;
+};
+
+const UserAudioWaveform = ({ peaks }: { peaks: number[] }) => (
+    <span aria-hidden className="flex h-[16px] items-end gap-[1.5px]">
+        {peaks.slice(0, 36).map((p, i) => (
+            <span
+                key={i}
+                className="w-[2px] rounded-full bg-zinc-900/70 dark:bg-zinc-100/70"
+                style={{ height: `${Math.max(2, Math.round(p * 16))}px` }}
+            />
+        ))}
+    </span>
+);
+
+const resolveSameOriginUploadUrl = (pathOrUrl: string) => {
+    const raw = String(pathOrUrl || "").trim();
+    if (!raw) return "";
+    if (/^(data:|blob:)/i.test(raw)) return raw;
+    try {
+        const parsed = /^(https?:|\/\/)/i.test(raw)
+            ? new URL(raw, "https://siragpt.com")
+            : new URL(raw, "https://siragpt.com");
+        if (parsed.pathname.startsWith("/uploads/")) {
+            return `${parsed.pathname}${parsed.search || ""}`;
+        }
+    } catch {
+        /* fall through */
+    }
+    return raw;
 };
 
 const resolveUserImageAttachmentUrl = (file: any) => {
     const imageUrl = resolveImageAttachmentUrl(file, process.env.NEXT_PUBLIC_IMAGE_URL);
     if (!imageUrl) return "";
+    const sameOrigin = resolveSameOriginUploadUrl(imageUrl) || imageUrl;
     const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null;
-    return appendUploadAuthToken(imageUrl, token);
+    return appendUploadAuthToken(sameOrigin, token);
 };
 
 const formatAgentTaskUserContent = (content: string) => {
-    return String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim();
+    return collapseStackedLetters(String(content || "").replace(/^🤖\s*Tarea:\s*/i, "").trim());
 };
 
 const extractRenderableAgentTaskContent = (content: string) => {
@@ -362,6 +413,93 @@ function backendUrl(pathOrUrl: string) {
     const baseUrl = process.env.NEXT_PUBLIC_IMAGE_URL || "http://localhost:5000";
     return `${baseUrl}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
 }
+
+/** Same-origin /uploads path so <img> can send the HttpOnly cookie.
+ *  Stored video cards often have http://localhost:5000/uploads/... or an
+ *  api-host absolute URL that the browser cannot load (mixed content / no cookie).
+ */
+function resolveVideoCardImageUrl(pathOrUrl: string) {
+    const rewritten = resolveSameOriginUploadUrl(pathOrUrl);
+    if (!rewritten) return "";
+    if (/^(data:|blob:)/i.test(rewritten)) return rewritten;
+    if (/^https?:/i.test(rewritten)) return rewritten;
+    return rewritten.startsWith("/") ? rewritten : `/${rewritten}`;
+}
+
+function VideoCardFilmPlaceholder({ variant }: { variant: "poster" | "thumb" }) {
+    return (
+        <span
+            className={variant === "poster" ? "video-liquid-poster-ph" : "video-liquid-thumb video-liquid-thumb-ph"}
+            aria-hidden="true"
+        >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round">
+                <rect x="3.4" y="5.4" width="17.2" height="13.2" rx="1.7" />
+                <path d="M3.4 9.2h17.2M8.1 5.4v3.8M15.9 5.4v3.8M8.1 14.8v3.8M15.9 14.8v3.8" />
+                <circle cx="12" cy="13.15" r="2.05" />
+            </svg>
+        </span>
+    );
+}
+
+function VideoCardStill({ url, variant }: { url: string; variant: "poster" | "thumb" }) {
+    const [failed, setFailed] = React.useState(false);
+    const src = resolveVideoCardImageUrl(url);
+    if (!src || failed) {
+        return <VideoCardFilmPlaceholder variant={variant} />;
+    }
+    return (
+        <img
+            src={src}
+            alt=""
+            className={variant === "poster" ? "video-liquid-poster" : "video-liquid-thumb"}
+            loading="lazy"
+            onError={(event) => {
+                event.currentTarget.removeAttribute("src");
+                setFailed(true);
+            }}
+        />
+    );
+}
+
+function UserChatImage({ file, onOpen }: { file: any; onOpen: (url: string) => void }) {
+    const [failed, setFailed] = React.useState(false);
+    const [naturalWidth, setNaturalWidth] = React.useState<number | null>(
+        Number.isFinite(Number(file?.width)) ? Number(file.width) : null,
+    );
+    const imageUrl = resolveUserImageAttachmentUrl(file);
+    if (!imageUrl || failed) {
+        return (
+            <span
+                className="inline-flex h-[220px] w-[220px] max-w-full items-center justify-center rounded-lg bg-zinc-100 text-zinc-400 dark:bg-zinc-800 dark:text-zinc-500"
+                aria-hidden="true"
+            >
+                <svg viewBox="0 0 24 24" className="h-10 w-10" fill="none" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round">
+                    <rect x="3.4" y="5.4" width="17.2" height="13.2" rx="1.7" />
+                    <path d="M3.4 9.2h17.2M8.1 5.4v3.8M15.9 5.4v3.8M8.1 14.8v3.8M15.9 14.8v3.8" />
+                    <circle cx="12" cy="13.15" r="2.05" />
+                </svg>
+            </span>
+        );
+    }
+    return (
+        <img
+            src={imageUrl}
+            alt={file.name || file.originalName || "Image"}
+            className="chat-user-image max-h-[350px] rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
+            style={naturalWidth ? { ["--img-natural-width" as string]: `${naturalWidth}px` } : undefined}
+            onClick={() => onOpen(imageUrl)}
+            onLoad={(event) => {
+                const width = event.currentTarget.naturalWidth;
+                if (width > 0) setNaturalWidth(width);
+            }}
+            onError={(event) => {
+                event.currentTarget.removeAttribute("src");
+                setFailed(true);
+            }}
+        />
+    );
+}
+
 
 function escapeHtml(value: unknown) {
     return String(value ?? "")
@@ -557,6 +695,14 @@ const MessageDocChipsInner = ({
     onAttachmentPreview?: (attachment: AttachmentLike, siblings: AttachmentLike[], index: number) => void;
 }) => {
     const [idx, setIdx] = React.useState<number | null>(null);
+    const audioFiles = React.useMemo(() => {
+        if (!Array.isArray(parsedFiles)) return [];
+        return parsedFiles.filter(isAudioComposerFile);
+    }, [parsedFiles]);
+    const videoFiles = React.useMemo(() => {
+        if (!Array.isArray(parsedFiles)) return [];
+        return parsedFiles.filter(isVideoComposerFile);
+    }, [parsedFiles]);
     const chips = React.useMemo(() => {
         if (!Array.isArray(parsedFiles)) return [];
         return parsedFiles.filter(isDocumentLikeAttachment);
@@ -592,11 +738,41 @@ const MessageDocChipsInner = ({
         };
     }, [attachments]);
 
-    if (chips.length === 0) return null;
+    if (chips.length === 0 && audioFiles.length === 0 && videoFiles.length === 0) return null;
 
     return (
         <div className="mb-2 flex w-full max-w-[min(92vw,36rem)] flex-wrap justify-end gap-2">
-            {attachments.map((att, i) => (
+            {videoFiles.map((file: any, i: number) => {
+                const meta = getAudioMediaMeta(file);
+                const name = getAttachmentName(file) || file?.name || "video";
+                return (
+                    <ChatVideoPlayer
+                        key={file.id || file.tempId || `video-${i}`}
+                        src={resolveComposerMediaSrc(file)}
+                        poster={meta?.thumbnailDataUrl || file?.thumbnailUrl || null}
+                        title={name}
+                        durationSeconds={meta?.durationSeconds}
+                        variant="bubble"
+                    />
+                );
+            })}
+            {audioFiles.map((file: any, i: number) => {
+                const meta = getAudioMediaMeta(file);
+                const name = getAttachmentName(file) || file?.name || "audio";
+                return (
+                    <ChatAudioPlayer
+                        key={file.id || file.tempId || `audio-${i}`}
+                        src={resolveComposerMediaSrc(file)}
+                        title={name}
+                        durationSeconds={meta?.durationSeconds}
+                        peaks={Array.isArray(meta?.peaks) ? meta.peaks : []}
+                        variant="bubble"
+                    />
+                );
+            })}
+            {attachments.map((att, i) => {
+                const showPage = isPagePreviewDocument(att.name, att.mimeType);
+                return (
                 <button
                     key={att.id || i}
                     type="button"
@@ -607,23 +783,38 @@ const MessageDocChipsInner = ({
                             setIdx(i);
                         }
                     }}
-                    className="group/chip inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-left text-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:border-foreground/40 hover:shadow-sm dark:border-border/60 sm:max-w-[360px]"
+                    className={cn(
+                        "group/chip text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-all hover:shadow-sm",
+                        showPage
+                            ? "w-[5.7rem] overflow-hidden rounded-[0.9rem] border border-gray-200 bg-background dark:border-border/60"
+                            : "inline-flex max-w-full items-center gap-2 rounded-xl border border-gray-200 bg-background px-2 py-1 text-sm dark:border-border/60 sm:max-w-[360px]",
+                    )}
                     aria-label={`Abrir ${att.name}`}
                 >
-                    {getDocumentChipIcon(att.name)}
-                    <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
-                        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
-                            {/* Same state-machine badge the composer chip uses
-                                — kept here so that re-opening an old chat
-                                still reflects whether the document finished
-                                indexing (or failed loudly with the reason). */}
-                            <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
-                        </span>
-                    </span>
+                    {showPage ? (
+                        <>
+                            <span className="block h-[7.4rem] w-full">
+                                <DocumentPageThumb source={att} />
+                            </span>
+                            <span className="block truncate px-1.5 py-1 text-[10.5px] font-medium leading-tight text-foreground">
+                                {att.name}
+                            </span>
+                        </>
+                    ) : (
+                        <>
+                            {getDocumentChipIcon(att.name)}
+                            <span className="flex min-w-0 flex-col">
+                                <span className="truncate text-[13px] font-medium leading-tight">{att.name}</span>
+                                <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                                    <span>{(att.name.split('.').pop() || 'file').slice(0, 4)}</span>
+                                    <FileProcessingBadge fileId={att.id ? String(att.id) : null} compact />
+                                </span>
+                            </span>
+                        </>
+                    )}
                 </button>
-            ))}
+                );
+            })}
             {!onAttachmentPreview && (
                 <UnifiedDocumentViewer
                     open={idx !== null}
@@ -1071,8 +1262,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     const agentTraceView = extractAgentTrace(message);
     const hasAgentTrace = isAssistant && agentTraceView.steps.length > 0;
     const hasLiveReasoning = isAssistant && (reasoningView.reasoningStreaming || (isStreaming && !!reasoningView.reasoning));
-    const isThinking = isAssistant && !message.error && !hasLiveReasoning && (
-      (isStreaming && !message.content) || !!(message as any).progressStage
+    // Claude-style activity timeline (backend `stage` frames). Live only.
+    const activityLog: any[] = Array.isArray((message as any).activityLog) ? (message as any).activityLog : [];
+    const activityDuration = reasoningView.reasoningDurationMs
+        ?? activityDurationMs(activityLog, (message as any).thinkingEndedAt);
+    const hasActivityTrace = isAssistant && activityLog.some((step: any) => step && !/^pensando/i.test(String(step.label || '')));
+    const isThinking = isAssistant && !message.error && !hasLiveReasoning && !message.content && (
+      isStreaming || !!(message as any).progressStage
     );
     // const isThinking = isAssistant && message.content === null;
 
@@ -1379,15 +1575,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     };
 
     const parsedFiles: any[] = useMemo(() => {
-        if (!message.files) return []
-        try {
-            const parsed = typeof message.files === 'string' ? JSON.parse(message.files) : message.files
-            // Ensure we always return an array
-            return Array.isArray(parsed) ? parsed : []
-        } catch (e) {
-            console.error("Failed to parse files:", e)
-            return []
-        }
+        return parseMessageFilesForRender(message.files)
     }, [message.files])
 
     const hasRenderableUserFiles = useMemo(() => {
@@ -1407,16 +1595,30 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
     // place of the plain syntax-highlighted block.
     const CodeBlock = ({ node, inline, className, children, ...props }: any) => {
         const match = /language-([\w-]+)/.exec(className || '');
-        if (!inline && match) {
-            const language = match[1];
+        // react-markdown v10 no longer sends a reliable `inline` flag (it is
+        // `undefined` for both inline spans and fenced blocks). A fenced
+        // block without language (```\nsiragpt.com\n``` — típico de la
+        // transcripción de imágenes) llegaba aquí sin `match` y caía al
+        // pill inline `bg-muted` dentro de un <pre> oscuro de prose:
+        // texto claro sobre pill claro = invisible en ambos temas.
+        // Heurística: es bloque si trae lenguaje, si react-markdown lo
+        // marcó explícito (inline === false), o si el contenido trae
+        // salto de línea (los fences siempre terminan en \n; el código
+        // inline nunca).
+        const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+        const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+        if (isBlock) {
+            const language = match ? match[1] : 'text';
+            const blockClassName = className || 'language-text';
             const codeString = String(children).replace(/\n$/, '');
             if (language === 'agent-task-state') {
                 try {
                     const state = JSON.parse(codeString);
                     // When the typed AgentTrace timeline is active for this
                     // message, the sentinel contributes only its artifacts —
-                    // one timeline, not two.
-                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
+                    // one timeline, not two. Never mount on the user bubble.
+                    if (message.role !== "ASSISTANT") return null;
+                    return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
                 } catch {
                     return null;
                 }
@@ -1432,7 +1634,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 return <ArtifactCard code={codeString} language={language} />;
             }
             return (
-                <CustomCodeBlock className={className} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
+                <CustomCodeBlock className={blockClassName} {...props} canPreview={canPreviewMessage} onPreview={handlePreview}>
                     {children}
                 </CustomCodeBlock>
             );
@@ -1479,10 +1681,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 }
                 return <pre>{children}</pre>
             },
-            p: ({ children }: any) => <p className="mb-4 text-base leading-7">{children}</p>,
-            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-7">{children}</ul>,
-            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-7">{children}</ol>,
-            li: ({ children }: any) => <li className="mb-1.5 text-base leading-7">{children}</li>,
+            p: ({ children }: any) => <p className="mb-4 text-base leading-[1.6]">{children}</p>,
+            ul: ({ children }: any) => <ul className="mb-4 pl-6 text-base leading-[1.6]">{children}</ul>,
+            ol: ({ children }: any) => <ol className="mb-4 pl-6 text-base leading-[1.6]">{children}</ol>,
+            li: ({ children }: any) => <li className="mb-1.5 text-base leading-[1.6]">{children}</li>,
             h1: ({ children }: any) => <h1 className="mb-4 text-2xl font-semibold leading-8">{children}</h1>,
             h2: ({ children }: any) => <h2 className="mb-3 text-xl font-semibold leading-7">{children}</h2>,
             h3: ({ children }: any) => <h3 className="mb-2 text-lg font-semibold leading-7">{children}</h3>,
@@ -1531,13 +1733,20 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             ),
             code: ({ node, inline, className, children, ...props }: any) => {
                 const match = /language-([\w-]+)/.exec(className || '');
-                if (!inline && match) {
-                    const lang = (match[1] || '').toLowerCase();
+                // Misma heurística que CodeBlock (ver comentario ahí):
+                // en react-markdown v10 `inline` no es fiable y un fence
+                // sin lenguaje debe renderizar como bloque oscuro legible,
+                // nunca como pill inline dentro de un <pre>.
+                const codeTextForKind = Array.isArray(children) ? children.join('') : String(children ?? '');
+                const isBlock = inline === false || match != null || (inline == null && /\n/.test(codeTextForKind));
+                if (isBlock) {
+                    const lang = ((match && match[1]) || 'text').toLowerCase();
                     const codeString = String(children).replace(/\n$/, '');
                     if (lang === 'agent-task-state') {
                         try {
                             const state = JSON.parse(codeString);
-                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} />;
+                            if (message.role !== "ASSISTANT") return null;
+                            return <AgenticStepsRenderer state={state} hideSteps={hasAgentTrace} onDocumentPreview={onDocumentPreview} role={message.role} messageId={message.id} />;
                         } catch {
                             return null;
                         }
@@ -1681,7 +1890,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 <div
                     ref={contentRef}
                     className={cn(
-                        "prose prose-sm dark:prose-invert max-w-none text-current leading-relaxed",
+                        "prose prose-sm dark:prose-invert max-w-none text-current leading-[1.6]",
                         "[&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0",
                         "[&_ul:last-child]:!mb-0 [&_ol:last-child]:!mb-0 [&_pre:last-child]:!mb-0",
                     )}
@@ -2238,6 +2447,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
         const imageCount = Number(videoEntry.imageCount || sourceImageUrls.length || 0)
         const durationValue = String(videoEntry.requestedDuration || videoEntry.duration || '').replace(/s$/i, '')
         const durationLabel = durationValue ? `${durationValue}s` : null
+        const requestedAspect = String(videoEntry.aspect_ratio || videoEntry.aspectRatio || 'auto').trim()
+        const previewAspect = ['auto', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16'].includes(requestedAspect)
+            ? requestedAspect
+            : '16:9'
         const metaLine = [
             videoEntry.generationType === 'reference-to-video'
                 ? 'Referencias'
@@ -2246,7 +2459,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     : 'Texto a video',
             videoEntry.resolution,
             durationLabel,
-            videoEntry.aspect_ratio || videoEntry.aspectRatio,
+            requestedAspect,
         ].filter(Boolean).join(' / ')
         const modelLabel = videoEntry.modelDisplayName || videoEntry.model || 'SiraGPT Video'
         const isProcessing = status === 'processing' || status === 'in_progress' || status === 'queued'
@@ -2265,28 +2478,31 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             <VideoIcon className="h-4 w-4" />
                         </span>
                         <div className="min-w-0">
-                            <div className="truncate text-[13px] font-semibold text-emerald-950 dark:text-emerald-50">
+                            <div className="truncate text-[13px] font-semibold text-zinc-950 dark:text-zinc-50">
                                 {isProcessing ? 'Creando video' : status === 'completed' ? 'Video listo' : isCancelled ? 'Video detenido' : 'Video'}
                             </div>
-                            <div className="truncate text-[11px] font-medium text-emerald-800/70 dark:text-emerald-100/62">
+                            <div className="truncate text-[11px] font-medium text-zinc-600 dark:text-zinc-300/80">
                                 {modelLabel}
                             </div>
                         </div>
                     </div>
                     {imageCount > 0 ? (
-                        <span className="rounded-full border border-emerald-500/18 bg-emerald-500/8 px-2 py-1 text-[10.5px] font-semibold text-emerald-800 dark:text-emerald-100/78">
+                        <span className="rounded-full border border-zinc-900/12 bg-zinc-900/5 px-2 py-1 text-[10.5px] font-semibold text-zinc-800 dark:border-white/15 dark:bg-white/8 dark:text-zinc-100">
                             {imageCount} img
                         </span>
                     ) : null}
                 </div>
 
-                <div className="mt-2 text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/50">
+                <div className="mt-2 text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                     {metaLine}
                 </div>
 
                 {isProcessing ? (
                     <div className="video-liquid-stage mt-3">
-                        <div className="video-liquid-preview" aria-hidden="true">
+                        <div className="video-liquid-preview" data-aspect={previewAspect} aria-hidden="true">
+                            {sourceImageUrls[0] ? (
+                                <VideoCardStill url={sourceImageUrls[0]} variant="poster" />
+                            ) : null}
                             <span className="video-liquid-scan" />
                             <span className="video-liquid-contour video-liquid-contour-a" />
                             <span className="video-liquid-contour video-liquid-contour-b" />
@@ -2295,8 +2511,8 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         </div>
                         <div className="mt-3 flex items-center justify-between gap-3">
                             <div className="min-w-0">
-                                <div className="text-[12px] font-semibold text-emerald-950 dark:text-emerald-50">Render en progreso</div>
-                                <div className="mt-0.5 truncate text-[11px] font-medium text-emerald-900/58 dark:text-emerald-100/52">
+                                <div className="text-[12px] font-semibold text-zinc-950 dark:text-zinc-50">Render en progreso</div>
+                                <div className="mt-0.5 truncate text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
                                     {sourceImageUrls.length > 1 ? 'Componiendo referencias e indicaciones' : sourceImageUrls.length === 1 ? 'Animando la imagen y el prompt' : 'Interpretando el prompt'}
                                 </div>
                             </div>
@@ -2308,12 +2524,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         {sourceImageUrls.length > 0 ? (
                             <div className="mt-3 flex items-center gap-1.5">
                                 {sourceImageUrls.slice(0, 4).map((url: string, index: number) => (
-                                    <img
+                                    <VideoCardStill
                                         key={`${url}-${index}`}
-                                        src={backendUrl(url)}
-                                        alt=""
-                                        className="video-liquid-thumb"
-                                        loading="lazy"
+                                        url={url}
+                                        variant="thumb"
                                     />
                                 ))}
                                 {sourceImageUrls.length > 4 ? (
@@ -2332,19 +2546,14 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
                 {status === 'completed' && filename ? (
                     <div className="mt-3 space-y-2">
-                        <video
-                            key={filename}             // don’t remount unless the file changes
-                            ref={videoRef}
-                            className="video-liquid-player"
-                            controls
-                            preload="auto"
-                            playsInline
+                        <ChatVideoPlayer
+                            key={filename}
                             src={getWatchUrl(filename)}
-                            // Removed onTimeUpdate/onLoadedMetadata to avoid frequent re-renders
-                            onError={(e) => {
-                                console.error('Video error', e)
-                                toast.error('Failed to play video inline. Try “Open in new tab”.')
-                            }}
+                            poster={sourceImageUrls[0] || null}
+                            title={filename}
+                            aspect={previewAspect}
+                            variant="generated"
+                            className="video-liquid-player max-w-none"
                         />
                         <div className="flex flex-wrap gap-2">
                             <Button size="sm" variant="outline" onClick={() => downloadVideo(filename)} className="video-liquid-action">
@@ -2714,8 +2923,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
             return (
                 <div className="mt-3 p-3 rounded-lg border border-border/20 bg-muted/20">
                     <div className="flex items-center gap-2 text-sm">
-                        <ThinkingIndicator size="sm" />
-                        <span className="font-medium">Generating Presentation...</span>
+                        <ThinkingStatusLoader state="generando-ppt" compact label="Generando presentación…" />
                     </div>
                     <div className="mt-2 text-xs text-muted-foreground">
                         Your presentation is being created. This may take a moment.
@@ -2912,7 +3120,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div key={index} className="relative inline-block group">
                                         {imageLoading[`file-${index}`] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <ThinkingIndicator size="lg" className="text-primary" />
+                                                <ThinkingStatusLoader state="generando-imagen" hideLabel compact density="glyph" announce={false} />
                                             </div>
                                         )}
                                         {imageError[`file-${index}`] ? (
@@ -2963,7 +3171,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                     <div className="relative inline-block group">
                                         {imageLoading['content-image'] && (
                                             <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800 rounded-lg">
-                                                <ThinkingIndicator size="lg" className="text-primary" />
+                                                <ThinkingStatusLoader state="generando-imagen" hideLabel compact density="glyph" announce={false} />
                                             </div>
                                         )}
                                         {imageError['content-image'] ? (
@@ -3015,23 +3223,16 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                   * appeared twice in the user bubble. Removed.
                   */}
                 {Array.isArray(parsedFiles) && parsedFiles.length > 0 && message.role === "USER" && (
-                    <div className="flex flex-col items-end gap-2">
-                        <div className="flex flex-wrap justify-end gap-2">
-                            {parsedFiles
-                                .filter(isRenderableImageAttachment)
-                                .map((file: any, index: number) => {
-                                    const imageUrl = resolveUserImageAttachmentUrl(file);
-                                    return (
-                                        <img
-                                            key={`img-${index}`}
-                                            src={imageUrl}
-                                            alt={file.name || file.originalName || "Image"}
-                                            className="max-w-full h-auto rounded-lg max-h-[350px] object-cover cursor-pointer hover:opacity-90 transition-opacity"
-                                            onClick={() => setSelectedImage(imageUrl)}
-                                        />
-                                    );
-                                })}
-                        </div>
+                    <div className="msg-user-attachments">
+                        {parsedFiles
+                            .filter(isRenderableImageAttachment)
+                            .map((file: any, index: number) => (
+                                <UserChatImage
+                                    key={`img-${index}`}
+                                    file={file}
+                                    onOpen={setSelectedImage}
+                                />
+                            ))}
                     </div>
                 )}
 
@@ -3042,7 +3243,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
 
     return (
         <article
-            className="flex"
+            className={cn("flex", message.role === "USER" ? "msg--user" : "msg--assistant")}
             data-message-id={message.id}
             aria-label={message.role === 'USER' ? tMessageActions("userMessage") : tMessageActions("assistantResponse")}
         >
@@ -3052,14 +3253,10 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                 </Avatar>
             )} */}
 
-            <div className={`group flex flex-col flex-1 ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
+            <div className={`group flex w-full min-w-0 flex-col ${message.role === 'USER' ? 'items-end' : 'items-start'}`}>
                 {message.role === 'USER' && (
-                    <>
-                        {hasRenderableUserFiles && (
-                            <div className="w-full max-w-[92%] md:max-w-2xl mb-2">
-                                <FileDisplay />
-                            </div>
-                        )}
+                    <div className="msg-user-stack">
+                        {hasRenderableUserFiles && <FileDisplay />}
                         {/* Document chips — clickable, open the same
                             UnifiedDocumentViewer as the composer. Filters
                             out images (FileDisplay renders them inline). */}
@@ -3069,29 +3266,18 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         />
 
                         {hasContent && (
-                            // User-message bubble — tight to content.
-                            //   `w-fit`            shrinks to the natural text width
-                            //   max-w[min(70%,…)]  caps at 70% of conv width / 32rem
-                            //   px-3 py-1.5        snug padding (12px / 6px)
-                            //   [&_p]:m-0          KILLS the `prose` <p> margins
-                            //                      that were ballooning the bubble
-                            //                      around short text like "hola".
-                            //   rounded-br-[6px]   subtle "tail" toward sender side
-                            <Card className={cn(
-                                "chat-user-bubble relative w-fit rounded-[18px] rounded-br-[8px]",
-                                "px-3.5 py-2",
+                            // User bubble: max-content + min 44px. Never
+                            // w-min / width:auto / break-all — that stacks
+                            // "hola" as h/o/l/a. Long lines wrap at words.
+                            <Card
+                                data-testid="user-message"
+                                className={cn(
+                                "chat-user-bubble relative rounded-[18px] rounded-br-[8px]",
+                                "px-[14px] py-2.5",
                                 "bg-muted/85 text-foreground dark:bg-[hsl(var(--surface-elevated))] dark:text-foreground",
                                 "border border-transparent shadow-none",
-                                "text-[14.5px] leading-[1.55] tracking-[-0.005em]",
+                                "text-[15px] leading-[1.45] tracking-[-0.005em]",
                                 "transition-colors duration-base ease-smooth",
-                                // Wrap long tokens (pasted URLs, code strings, or
-                                // long sentences in narrow split-view) instead of
-                                // pushing the bubble past the pane edge.
-                                "[overflow-wrap:anywhere] [word-break:break-word]",
-                                // Strip prose margins so the bubble hugs the
-                                // text on every line of content.
-                                "[&_.prose]:!m-0 [&_p]:!my-0 [&_p:first-child]:!mt-0 [&_p:last-child]:!mb-0",
-                                "[&_ul]:!my-1 [&_ol]:!my-1 [&_pre]:!my-1.5",
                             )}>
                                 {isEditing ? (
                                     <div className="space-y-2 w-full min-w-[300px] md:min-w-[500px]">
@@ -3113,7 +3299,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                         </div>
                                     </div>
                                 ) : (
-                                    <MessageContent content={formatAgentTaskUserContent(message.content)} />
+                                    <p className="chat-user-bubble-inner">{formatAgentTaskUserContent(message.content)}</p>
                                 )}
                             </Card>
                         )}
@@ -3156,7 +3342,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 </Button>
                             </div>
                         )}
-                    </>
+                    </div>
                 )}
 
                 {message.role === 'ASSISTANT' && (
@@ -3173,20 +3359,26 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 run={agentTraceView.run}
                                 permission={agentTraceView.permission}
                             />
-                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming) ? (
+                        ) : !message.error && (reasoningView.reasoning || reasoningView.reasoningStreaming || (hasActivityTrace && !isThinking)) ? (
                             <ThinkingTrace
                                 reasoning={reasoningView.reasoning}
                                 streaming={reasoningView.reasoningStreaming}
-                                durationMs={reasoningView.reasoningDurationMs}
+                                durationMs={activityDuration}
                                 toolCalls={reasoningView.reasoningToolCalls}
+                                activity={activityLog}
                             />
                         ) : null}
                         {message.error ? (
                             <ErrorMessage onRegenerate={onRegenerate} />
-                        ) : isThinking ? (
+                        ) : isThinking && !hasAgentTrace ? (
                             <ThinkingPlaceholder
                                 stage={(message as any).progressStage || null}
                                 pct={(message as any).progressPct ?? null}
+                                steps={(message as any).agentSteps
+                                    || (activityLog.length > 0 ? activityToPlaceholderSteps(activityLog) : null)
+                                    || (message as any).reasoningToolCalls
+                                    || []}
+                                tokens={(message as any).generationUsage || null}
                             />
                         ) : (
                             <>
@@ -3253,13 +3445,13 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                             on pure-code; everything hides during
                             streaming-only state). See MessageActionRail
                             for telemetry contract. */}
-                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && (message as any).model ? (
+                        {!isVideoMessage && message.role === 'ASSISTANT' && !isStreaming && resolveReplyBadgeLabel(message) ? (
                             <div
                                 className="mt-1 mb-0.5 text-[11px] leading-none text-muted-foreground/70 select-none"
-                                title={`Respondido con ${(message as any).model}`}
-                                aria-label={`Respondido con ${(message as any).model}`}
+                                title={`Respondido con ${resolveReplyBadgeLabel(message)}`}
+                                aria-label={`Respondido con ${resolveReplyBadgeLabel(message)}`}
                             >
-                                {String((message as any).model).split('/').pop()}
+                                {resolveReplyBadgeLabel(message)}
                             </div>
                         ) : null}
                         {!isVideoMessage && (
@@ -3267,7 +3459,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                                 <MessageActionRail
                                     messageId={message.id}
                                     chatId={message.chatId}
-                                    model={(message as any).model}
+                                    model={resolveReplyBadgeLabel(message) || undefined}
                                     content={stripNonCopyableArtifactBlocks(extractRenderableAgentTaskContent(message.content || ""))}
                                     hasError={!!message.error}
                                     regenerationAttempt={regenerationAttempt}
@@ -3320,7 +3512,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <ThinkingIndicator size="lg" />
+                                <ThinkingStatusLoader state="cargando-general" hideLabel compact announce={false} />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
@@ -3342,7 +3534,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                     <div className="flex-grow overflow-y-auto p-1">
                         {isContentLoading ? (
                             <div className="flex items-center justify-center h-full">
-                                <ThinkingIndicator size="lg" />
+                                <ThinkingStatusLoader state="cargando-general" hideLabel compact announce={false} />
                             </div>
                         ) : (
                             <pre className="text-sm whitespace-pre-wrap bg-muted p-4 rounded-md"><code>{fileContent}</code></pre>
@@ -3411,7 +3603,7 @@ const MessageComponent = ({ message, user, onRegenerate, onBranch, updateMessage
                         <img
                             src={selectedImage}
                             alt="Full size image"
-                            className="max-w-full max-h-[90vh] object-contain rounded-lg"
+                            className="chat-image-zoom max-w-full max-h-[90vh] object-contain rounded-lg"
                             onClick={(e) => e.stopPropagation()}
                         />
                     </div>
@@ -3426,9 +3618,19 @@ const areMessagePropsEqual = (prev: any, next: any) => {
     if (a.id !== b.id) return false
     if (a.content !== b.content) return false
 
-    const af = typeof a.files === 'string' ? a.files : JSON.stringify(a.files || [])
-    const bf = typeof b.files === 'string' ? b.files : JSON.stringify(b.files || [])
-    if (af !== bf) return false
+    const fileKey = (files: unknown) => {
+        if (!files) return ""
+        if (typeof files === "string") return files
+        try {
+            return JSON.stringify(files, (key, value) => {
+                if (key === "file" || key === "originalFile" || key === "blob" || key === "nativeFile") return undefined
+                return value
+            })
+        } catch {
+            return Array.isArray(files) ? String(files.length) : "1"
+        }
+    }
+    if (fileKey(a.files) !== fileKey(b.files)) return false
 
     // Ignore parent re-renders from user, callbacks (they’re stable from context)
     return true

@@ -85,8 +85,8 @@ test('generate registers/unregisters controllers under the namespaced key', () =
   );
   assert.match(
     src,
-    /streamControllers\.set\(__streamControllerKey,\s*controller\)/,
-    'main generate path must register with the namespaced key',
+    /__ownsStreamController\s*=\s*claimStreamController\([\s\S]{0,180}streamControllers,[\s\S]{0,80}__streamControllerKey,[\s\S]{0,80}controller/,
+    'main generate path must claim the namespaced key without replacing an owner',
   );
   assert.match(
     src,

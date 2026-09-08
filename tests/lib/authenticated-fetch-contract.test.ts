@@ -19,7 +19,7 @@ const AUTHENTICATED_SIRA_TRANSPORTS = [
   "lib/client-logs.ts",
   "lib/code-agent/subagent.ts",
   "lib/code-runner/host-runner-service.ts",
-  "lib/codex/codex-api.ts",
+  "lib/codex/api/core.ts",
   "lib/codex/run-stream.ts",
   "lib/credits-service.ts",
   "lib/database-new.ts",
@@ -65,6 +65,11 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     reason: "Public same-origin health GET used by the operational dashboard.",
     accepts: (text) => text === 'fetch("/api/health")' && isCredentialFreePublicFetch(text),
     required: true,
+  },
+  {
+    file: "app/admin/prueba/page.tsx",
+    reason: "Public same-origin health GET used by the admin diagnostics card.",
+    accepts: (text) => text === 'fetch("/api/health")' && isCredentialFreePublicFetch(text),
   },
   {
     file: "app/admin/status/page.tsx",
@@ -141,15 +146,23 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(normalized)",
   },
   {
+    file: "lib/document-first-page.ts",
+    reason: "Data/blob first-page thumb branch after trusted Sira assets use authenticatedFetch.",
+    accepts: (text) => text === "fetch(normalized)",
+  },
+  {
     file: "components/download-buttons.tsx",
     reason: "Public or external generated-image download.",
     accepts: (text) => text === "fetch(content)",
   },
   {
     file: "components/fal/fal-model-gallery.tsx",
-    reason: "Public cached FAL model manifest GET.",
+    reason: "Public cached FAL model manifest GET plus the optional-auth VIDEO admin catalog GET used to filter hidden video models.",
     accepts: (text) =>
-      text === 'fetch("/api/ai/fal-models")'
+      (
+        text === 'fetch("/api/ai/fal-models", { headers: { "Cache-Control": "no-cache" } })'
+        || text === 'fetch("/api/ai/models?type=VIDEO", { headers: { "Cache-Control": "no-cache" } })'
+      )
       && isCredentialFreePublicFetch(text),
     required: true,
   },
@@ -162,6 +175,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     file: "components/message-component.tsx",
     reason: "Public or external chart-image download; authenticated document downloads use the shared transport.",
     accepts: (text) => text === "fetch(imageUrl)",
+  },
+  {
+    file: "components/mobile/android-download-card.tsx",
+    reason: "Public same-origin mobile release catalog GET used before login.",
+    accepts: (text) =>
+      text === 'fetch("/api/mobile/releases", { signal: controller.signal })'
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
   },
   {
     file: "components/search-brain/UniversalSearchPanel.tsx",
@@ -199,6 +221,19 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     accepts: (text) => text === "fetch(...args)",
   },
   {
+    file: "lib/attachment-url.ts",
+    reason: "Presigned external/blob asset download with a 403 re-presign retry; the presign refresh itself uses authenticatedFetch.",
+    accepts: (text) => text === "fetch(url, init)" || text === "fetch(next, init)",
+  },
+  {
+    file: "lib/code-agent/observability.ts",
+    reason: "Same-origin, credential-free best-effort telemetry POST to the observability store; never attaches user auth and any failure is swallowed.",
+    accepts: (text) =>
+      text.startsWith('fetch("/api/code-agent/observability"')
+      && /\bmethod\s*:\s*["']POST["']/.test(text)
+      && isCredentialFreePublicFetch(text),
+  },
+  {
     file: "lib/api.ts",
     reason: "Anonymous quota GET is intentionally unauthenticated.",
     accepts: (text) => text.includes("/ai/anon-quota") && isNonMutatingFetchCall(text),
@@ -224,7 +259,7 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     required: true,
   },
   {
-    file: "lib/codex/codex-api.ts",
+    file: "lib/codex/api/core.ts",
     reason: "Public Codex feature-flag health GET.",
     accepts: (text) =>
       text.includes("${BASE}/health")
@@ -264,6 +299,15 @@ const RAW_FETCH_ALLOWLIST: RawFetchAllowance[] = [
     reason: "Public GPT category catalog GET.",
     accepts: (text) =>
       text.includes("${this.baseUrl}/categories")
+      && isNonMutatingFetchCall(text)
+      && isCredentialFreePublicFetch(text),
+    required: true,
+  },
+  {
+    file: "lib/mobile-releases.ts",
+    reason: "Server-side public GitHub release catalog GET with no Sira credentials.",
+    accepts: (text) =>
+      text === "fetch(RELEASES_API, requestInit)"
       && isNonMutatingFetchCall(text)
       && isCredentialFreePublicFetch(text),
     required: true,

@@ -7,7 +7,7 @@ import { BrandLogo } from "@/components/BrandLogo"
 
 const footerLinks = {
   product: [
-    { label: "Chat IA", href: "/chat" },
+    { label: "Agentes", href: "/agentes" },
     { label: "GPTs Personalizados", href: "/gpts" },
     { label: "Empresas", href: "/projects" },
     { label: "Design Studio", href: "/design" },

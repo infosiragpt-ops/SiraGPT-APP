@@ -219,8 +219,13 @@ export const deploymentsApi = {
 
   // SSE log tail. Returns an EventSource-like URL with the JWT in the query
   // (EventSource can't set headers; the route accepts ?token= as a fallback).
-  logsStreamUrl: (id: string) => {
+  logsStreamUrl: (id: string, lastEventId?: string | null) => {
     const token = typeof window !== "undefined" ? localStorage.getItem("auth-token") : null
-    return `${BASE}/${id}/logs/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`
+    const qs = new URLSearchParams()
+    if (token) qs.set("token", token)
+    const resume = String(lastEventId || "").trim()
+    if (resume) qs.set("lastEventId", resume)
+    const q = qs.toString()
+    return `${BASE}/${id}/logs/stream${q ? `?${q}` : ""}`
   },
 }
