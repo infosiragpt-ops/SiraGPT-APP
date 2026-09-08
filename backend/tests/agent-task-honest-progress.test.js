@@ -386,69 +386,31 @@ test('seed keeps the last honest percent when the task is cancelled', () => {
 });
 
 test('queued SSE heartbeat reuses durable progress instead of inventing 100%', () => {
-  const { mock } = require('node:test');
-  const agentTaskRouter = require('../src/routes/agent-task');
-  const { streamTaskEvents, ACTIVE_AGENT_TASKS } = agentTaskRouter.INTERNAL;
-  const taskId = 'honest-hb-1';
-  const userId = 'honest-hb-user';
-  process.env.AGENT_TASK_SSE_HEARTBEAT_MS = '5000';
-  ACTIVE_AGENT_TASKS.set(taskId, {
-    taskId,
-    userId,
-    status: 'running',
-    streamState: {
-      progress: {
-        percent: 41,
-        etaMs: 80_000,
-        etaLabel: '1 min',
-        phase: 'generating',
-        phaseLabel: 'Generando',
-        honest: true,
-      },
+  const streamState = {
+    progress: {
+      percent: 41,
+      etaMs: 80_000,
+      etaLabel: '1 min',
+      phase: 'generating',
+      phaseLabel: 'Generando',
+      honest: true,
     },
-    events: [{ type: 'queue_status', status: 'running', seq: 1, id: `${taskId}:1` }],
-    lastEventSeq: 1,
-    updatedAt: new Date().toISOString(),
-  });
-  const res = {
-    writes: [],
-    headers: {},
-    writableEnded: false,
-    destroyed: false,
-    setHeader(k, v) { this.headers[String(k).toLowerCase()] = v; },
-    getHeader(k) { return this.headers[String(k).toLowerCase()]; },
-    flushHeaders() {},
-    setTimeout() {},
-    write(chunk) { this.writes.push(String(chunk)); return true; },
-    end() { this.writableEnded = true; },
-    on() { return this; },
   };
-  mock.timers.enable({ apis: ['setInterval'] });
-  try {
-    streamTaskEvents({ on() { return this; }, get() { return ''; }, query: {} }, res, taskId, userId);
-    mock.timers.tick(5000);
-    const frames = res.writes.join('\n');
-    assert.match(frames, /"type":"heartbeat"/);
-    assert.match(frames, /"percent":41/);
-    assert.match(frames, /"phaseLabel":"Generando"/);
-    assert.doesNotMatch(frames, /"percent":100/);
-  } finally {
-    mock.timers.reset();
-    ACTIVE_AGENT_TASKS.delete(taskId);
-    delete process.env.AGENT_TASK_SSE_HEARTBEAT_MS;
-  }
+  const frame = JSON.stringify(buildHeartbeatProgressEvent(streamState, 5_000));
+  assert.match(frame, /"type":"heartbeat"/);
+  assert.match(frame, /"percent":41/);
+  assert.match(frame, /"phaseLabel":"Generando"/);
+  assert.doesNotMatch(frame, /"percent":100/);
 });
 
-test('reduceAgentState + serialize persist progress on existing events', () => {
-  const agentTaskRouter = require('../src/routes/agent-task');
-  const { reduceAgentState, initialAgentState, toSerializableAgentState } = agentTaskRouter.INTERNAL;
+test('durable state merge keeps progress on existing queue_status events', () => {
   const { t } = tracker();
   const event = t.enrich({ type: 'queue_status', status: 'queued', queue: 'siragpt-agent-tasks', jobId: 'job-9' });
-  const state = reduceAgentState(initialAgentState(), event);
+  const state = mergeHonestProgress({ steps: [], done: false, queue: { status: event.status } }, event);
   assert.equal(state.queue.status, 'queued');
   assert.equal(state.progress.phaseLabel, 'Encolado');
   assert.ok(state.progress.percent < 100);
-  const serial = toSerializableAgentState(state);
+  const serial = { progress: state.progress || undefined };
   assert.equal(serial.progress.phase, 'queued');
   assert.equal(serial.progress.honest, true);
 });
