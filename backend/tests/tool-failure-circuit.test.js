@@ -298,6 +298,17 @@ test('reset clears a session so tools run again', () => {
   assert.equal(c.snapshot('s1').consecutive, 0);
 });
 
+test('transient identical failures do not trip generic_repeat', () => {
+  const c = createToolFailureCircuit({
+    toolThreshold: 20,
+    sessionThreshold: 20,
+    repeatOpen: 4,
+  });
+  failTimes(c, 's1', 'web_search', 8, { argsKey: '{"q":"x"}', transient: true });
+  assert.equal(c.authorize('s1', 'web_search').allowed, true);
+  assert.equal(c.snapshot('s1').state, 'closed');
+});
+
 test('generic_repeat detector opens the session circuit', () => {
   const c = createToolFailureCircuit({
     toolThreshold: 20,

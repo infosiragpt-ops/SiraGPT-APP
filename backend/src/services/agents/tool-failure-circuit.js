@@ -199,6 +199,7 @@ function createToolFailureCircuit(opts = {}) {
     if (unknownTool) {
       let streak = 0;
       for (let i = hist.length - 1; i >= 0; i -= 1) {
+        if (hist[i].transient) continue;
         if (hist[i].unknown && hist[i].name === name) streak += 1;
         else break;
       }
@@ -209,6 +210,7 @@ function createToolFailureCircuit(opts = {}) {
 
     let repeat = 0;
     for (let i = hist.length - 1; i >= 0; i -= 1) {
+      if (hist[i].transient) continue;
       if (hist[i].name === name && hist[i].sig === sig && hist[i].ok === false) repeat += 1;
       else break;
     }
@@ -219,7 +221,7 @@ function createToolFailureCircuit(opts = {}) {
     if (hist.length >= pingPongOpen) {
       const tail = hist.slice(-pingPongOpen);
       const names = tail.map((h) => h.name);
-      const allFailed = tail.every((h) => h.ok === false);
+      const allFailed = tail.every((h) => h.ok === false && !h.transient);
       const unique = new Set(names);
       if (allFailed && unique.size === 2 && names[0] !== names[1]) {
         let alternating = true;
@@ -324,6 +326,7 @@ function createToolFailureCircuit(opts = {}) {
       sig,
       ok: success,
       unknown: Boolean(outcome.unknownTool),
+      transient: Boolean(outcome.transient),
       at: t,
     });
     if (rec.history.length > historySize) rec.history.shift();
