@@ -55,6 +55,46 @@ What it does (and what was done in production):
 > way into this host is the Cloudflare SSH tunnel; corrupting the shared config
 > would mean a permanent lockout. An isolated tunnel removes that risk entirely.
 
+## Deploy on the same host as the app (Docker Compose — production today)
+
+When the app itself runs on the Docker host (the Lenovo production stack), the
+service runs as a compose service instead of a systemd unit. `Dockerfile` in
+this directory builds it (node:22-alpine + docker-cli); it joins the internal
+`app` network, mounts the Docker socket and is never published to the host.
+
+```yaml
+  sandbox:
+    build:
+      context: /home/user/SiraGPT-APP/services/sandbox
+      dockerfile: Dockerfile
+    image: siragpt-sandbox:latest
+    container_name: siragpt-sandbox
+    hostname: siragpt-sandbox
+    restart: unless-stopped
+    environment:
+      SANDBOX_BIND: "0.0.0.0"
+      SANDBOX_PORT: "4000"
+      SANDBOX_API_KEY: ${SANDBOX_API_KEY}          # interpolated from the deploy .env
+      SANDBOX_RUNNER_IMAGE: siragpt-doc-sandbox:latest
+      SANDBOX_MAX_CONCURRENCY: "8"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    expose: ["4000"]
+    networks: [app]
+```
+
+The backend then needs, in the same `.env`:
+
+```
+SANDBOX_SERVICE_URL=http://siragpt-sandbox:4000
+SANDBOX_API_KEY=<same key>
+```
+
+`createSandbox()` (auto driver) picks the remote sandbox as soon as both are
+set — the backend container itself needs neither the Docker CLI nor the
+socket. The runner image is built once on the host:
+`docker build -t siragpt-doc-sandbox:latest services/sandbox/runner`.
+
 ## Validate from anywhere
 ```bash
 SANDBOX_SERVICE_URL=https://sandbox.chatagic.com SANDBOX_API_KEY=<key> \

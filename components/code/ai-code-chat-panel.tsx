@@ -119,6 +119,7 @@ import {
   claimPendingCodeAgentInstruction,
   requestCodeAgentInstruction,
 } from "@/lib/code-autonomous-starters"
+import { departmentEmptySuggestions } from "@/lib/code-department-empty-suggestions"
 import {
   buildProactiveCompanySystemBlock,
   claimPendingSeedPrompt,
@@ -126,8 +127,10 @@ import {
   setProactiveCompanyObjective,
 } from "@/lib/code-agent-company-proactive"
 import {
+  CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT,
   CODE_COMPANY_ASSOCIATION_CHANGED_EVENT,
   CODE_OPEN_COMPANY_ASSOCIATION_EVENT,
+  getActiveDepartmentSelection,
   notifyCompanyAssociationChanged,
   CODE_OPEN_TOOL_LAUNCHER_EVENT,
   setActiveCodexProject,
@@ -274,7 +277,8 @@ import {
 
 import { DiffView } from "./diff-view"
 
-import { DotmCircular15, THINKING_GLYPH_COLOR } from "@/components/ui/dotm-circular-15"
+import { DotmCircular15 } from "@/components/ui/dotm-circular-15"
+import { PensandoBars } from "@/components/pensando-bars"
 import MemoMarkdownBlock from "@/components/markdown/memo-markdown-block"
 
 const CODE_OPEN_PREVIEW_EVENT = "siragpt:code-open-preview"
@@ -836,11 +840,7 @@ export type AICodeChatPanelProps = {
 
 export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBack, proactive, bardNav }: AICodeChatPanelProps = {}) {
   const { user, token } = useAuth()
-  const {
-    selectedModel,
-    selectProvider,
-    availableModels,
-  } = useChat()
+  const { availableModels } = useChat()
   const {
     files,
     activePath,
@@ -943,39 +943,6 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
     }
   }, [])
 
-  // FREE-plan / sparse catalogs return models:[] but the backend still ships a
-  // policy.fallbackModel it will route to. Surface it so the composer never gets
-  // stuck on "Cargando modelos…" and Ask can stream. (Agent's first build is
-  // LLM-free and works even with no model at all.)
-  const [fallbackModel, setFallbackModel] = React.useState<{
-    name: string
-    provider?: string
-    displayName?: string
-  } | null>(null)
-
-  React.useEffect(() => {
-    if ((availableModels && availableModels.length > 0) || fallbackModel) return
-    let cancelled = false
-    void (async () => {
-      try {
-        const res = await apiClient.getAIModels("TEXT")
-        const fb = (
-          res as {
-            policy?: { fallbackModel?: { name?: string; provider?: string; displayName?: string } }
-          }
-        )?.policy?.fallbackModel
-        if (!cancelled && fb?.name) {
-          setFallbackModel({ name: fb.name, provider: fb.provider, displayName: fb.displayName })
-        }
-      } catch {
-        /* best-effort: deterministic Agent build still works without a model */
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [availableModels, fallbackModel])
-
   React.useEffect(() => {
     if (codeModel || !availableModels || availableModels.length === 0) return
     let restored: { name: string; provider?: string } | null = null
@@ -1001,44 +968,44 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
     }
   }, [])
 
-  // If a real catalog loads later (e.g. an admin activates models) and our
-  // persisted choice is the policy fallback — which isn't in the catalog — drop
-  // it so the picker reflects the real list instead of pinning "Gema4".
+  // Remove persisted selections as soon as the admin catalog no longer lists
+  // them. An empty active catalog must leave /code without a selected model;
+  // policy fallbacks are not selectable admin models.
   React.useEffect(() => {
-    if (!availableModels || availableModels.length === 0 || !codeModel) return
-    if (availableModels.some((m) => m.name === codeModel.name)) return
+    if (!codeModel) return
+    if (availableModels?.some((m) => m.name === codeModel.name)) return
+    if (!availableModels || availableModels.length === 0) {
+      setCodeModel(null)
+      try {
+        window.localStorage.removeItem("code-workspace:model")
+      } catch {
+        /* quota / private mode */
+      }
+      return
+    }
     const next = recommendFastModel(availableModels) || availableModels[0]
     if (next) chooseCodeModel({ name: next.name, provider: next.provider })
   }, [availableModels, codeModel, chooseCodeModel])
 
-  // Resolved model the code chat actually uses. Priority:
-  //  1. an explicit code-chat choice (codeModel),
-  //  2. a fast model derived inline from the catalog (so the FIRST request is
-  //     already fast even before the auto-pick effect has run),
-  //  3. the main-chat selection as a last resort (may be a slow model).
+  // Resolve only from the live active catalog. This deliberately excludes the
+  // main-chat selection and backend policy fallback because either may have
+  // been deactivated since it was persisted.
+  const activeCodeModel = React.useMemo(
+    () => codeModel && availableModels?.some((model) => model.name === codeModel.name)
+      ? codeModel
+      : null,
+    [availableModels, codeModel],
+  )
   const autoFastModel = React.useMemo(
     () => recommendFastModel(availableModels || []),
     [availableModels],
   )
-  const activeModelName =
-    codeModel?.name || autoFastModel?.name || selectedModel || fallbackModel?.name || ""
-  const activeProvider =
-    codeModel?.provider || autoFastModel?.provider || selectProvider || fallbackModel?.provider
-  // What the model picker shows: the real catalog when present, else the single
-  // policy fallback so the user sees "Gema4" rather than an endless spinner.
-  const pickerModels = React.useMemo<ModelOption[]>(() => {
-    if (availableModels && availableModels.length > 0) return availableModels as ModelOption[]
-    if (fallbackModel) {
-      return [
-        {
-          name: fallbackModel.name,
-          displayName: fallbackModel.displayName,
-          provider: fallbackModel.provider,
-        } as ModelOption,
-      ]
-    }
-    return []
-  }, [availableModels, fallbackModel])
+  const activeModelName = activeCodeModel?.name || autoFastModel?.name || ""
+  const activeProvider = activeCodeModel?.provider || autoFastModel?.provider
+  const pickerModels = React.useMemo<ModelOption[]>(
+    () => Array.isArray(availableModels) ? availableModels as ModelOption[] : [],
+    [availableModels],
+  )
   // Fast = streaming-friendly (good for the live preview); slow = reasoning/heavy.
   const modelIsFast = !!activeModelName && !isSlowModel(activeModelName)
 
@@ -1839,7 +1806,7 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
         return { applied: [] as Array<{ path: string; content: string }> }
       }
       if (!activeModelName) {
-        toast.error("Cargando modelos… intenta de nuevo en un momento.")
+        toast.error("No hay modelos activos. Activa uno desde Administración e inténtalo de nuevo.")
         return { applied: [] as Array<{ path: string; content: string }> }
       }
 
@@ -4936,7 +4903,13 @@ export function AICodeChatPanel({ embedded = false, title: _title, onBack: _onBa
 
       <div ref={scrollerRef} className="min-h-0 flex-1 overflow-y-auto p-4">
         {turns.length === 0 ? (
-          <EmptyChat active={agentsActive} proactive={proactiveEnabled} durable={codexAvailable} />
+          <EmptyChat
+            active={agentsActive}
+            proactive={proactiveEnabled}
+            durable={codexAvailable}
+            departmentId={bardNav?.departmentId}
+            departmentName={bardNav?.departmentName || _title}
+          />
         ) : (
           <div className="space-y-3">
             {turns.map((turn) => (
@@ -5283,13 +5256,34 @@ function EmptyChat({
   active,
   proactive = false,
   durable = false,
+  departmentId,
+  departmentName,
 }: {
   active: boolean
   proactive?: boolean
   durable?: boolean
+  departmentId?: string
+  departmentName?: string
 }) {
+  const [selection, setSelection] = React.useState(() => getActiveDepartmentSelection())
+  React.useEffect(() => {
+    const onSelect = (event: Event) => {
+      const next = (event as CustomEvent<{ selection: ReturnType<typeof getActiveDepartmentSelection> }>).detail?.selection
+      if (next) setSelection(next)
+    }
+    window.addEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+    return () => window.removeEventListener(CODE_ACTIVE_DEPARTMENT_SELECTION_EVENT, onSelect)
+  }, [])
+  const resolved = departmentEmptySuggestions(
+    departmentId || selection?.id,
+    departmentName || selection?.name,
+  )
+
   return (
-    <div className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center">
+    <div
+      className="flex min-h-full flex-col items-center justify-center px-3 py-8 text-center"
+      data-testid="code-chat-empty-state"
+    >
       <span className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-muted/35 px-2.5 py-1 text-[10px] font-medium text-muted-foreground">
         <span
           className={cn("h-1.5 w-1.5 rounded-full", durable ? "bg-emerald-500" : "bg-amber-500")}
@@ -5300,32 +5294,59 @@ function EmptyChat({
       <span className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[hsl(var(--accent-violet)/0.28)] bg-[hsl(var(--accent-violet)/0.10)] text-[hsl(var(--accent-violet))]">
         <Sparkles className={cn("h-5 w-5", active && "animate-pulse")} />
       </span>
-      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground">
-        {proactive ? "Objetivo de la empresa" : "¿Qué quieres lanzar?"}
+      <h2 className="mt-4 text-base font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-department">
+        {resolved.name}
       </h2>
       <p className="mt-1.5 max-w-[22rem] text-[13px] leading-relaxed text-muted-foreground">
         {proactive
-          ? "Modo PROACTIVO activo: define un objetivo y la empresa de agentes planifica, construye, verifica y opera en bucle autónomo."
-          : "Describe el producto en una instrucción. El agente planifica, programa por capas, prueba y corrige el preview."}
+          ? "Modo PROACTIVO activo. Elige una acción o escribe el objetivo de este departamento."
+          : "Elige una acción o escribe qué debe hacer este departamento."}
       </p>
-      <div className="mt-5 grid w-full max-w-[25rem] gap-2 text-left">
+      <div className="mt-5 grid w-full max-w-[28rem] gap-2 text-left">
+        {resolved.suggestions.map((suggestion) => (
+          <button
+            key={suggestion.id}
+            type="button"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => requestCodeAgentInstruction(suggestion.prompt, { mode: "app" })}
+            data-testid={`code-dept-suggestion-${suggestion.id}`}
+            aria-label={suggestion.label}
+            title={suggestion.label}
+          >
+            <span className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
+                <Rocket className="h-4 w-4" aria-hidden="true" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-[13px] font-semibold text-foreground">{suggestion.label}</span>
+                  <ArrowUp className="h-3.5 w-3.5 rotate-45 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5" aria-hidden="true" />
+                </span>
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <h3 className="mt-7 text-[13px] font-semibold tracking-tight text-foreground" data-testid="code-chat-empty-launch">
+        ¿Qué quieres lanzar?
+      </h3>
+      <p className="mt-1 max-w-[22rem] text-[12px] leading-relaxed text-muted-foreground">
+        Elige un producto completo para que el agente planifique, construya y verifique.
+      </p>
+      <div className="mt-3 grid w-full max-w-[28rem] gap-2 text-left">
         {CODE_AUTONOMOUS_STARTERS.map((starter) => (
           <button
             key={starter.id}
             type="button"
-            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition hover:border-foreground/20 hover:bg-muted/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2"
+            className="group min-h-14 rounded-xl border border-border/70 bg-background px-3.5 py-3 text-left shadow-sm transition-colors hover:border-foreground/20 hover:bg-muted/25 active:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0f87ff]/50 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-40"
             onClick={() => requestCodeAgentInstruction(starter.prompt, { mode: "app" })}
             data-testid={`code-agent-starter-${starter.id}`}
+            aria-label={starter.title}
+            title={starter.title}
           >
             <span className="flex items-start gap-3">
               <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-muted/45 text-foreground/80">
-                {starter.id === "ai-platform" ? (
-                  <BrainCircuit className="h-4 w-4" aria-hidden="true" />
-                ) : starter.id === "business-os" ? (
-                  <LayoutGrid className="h-4 w-4" aria-hidden="true" />
-                ) : (
-                  <Rocket className="h-4 w-4" aria-hidden="true" />
-                )}
+                <BrainCircuit className="h-4 w-4" aria-hidden="true" />
               </span>
               <span className="min-w-0 flex-1">
                 <span className="flex items-center justify-between gap-2">
@@ -5335,20 +5356,12 @@ function EmptyChat({
                 <span className="mt-0.5 block text-[11px] leading-relaxed text-muted-foreground">
                   {starter.description}
                 </span>
-                <span className="mt-1.5 block text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/80">
+                <span className="mt-1 block text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80">
                   {starter.meta}
                 </span>
               </span>
             </span>
           </button>
-        ))}
-      </div>
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5 text-[10px] font-medium text-muted-foreground" aria-label="Flujo del agente">
-        {["Plan", "Código", "Pruebas", "Preview"].map((step, index) => (
-          <React.Fragment key={step}>
-            {index > 0 ? <span aria-hidden="true">→</span> : null}
-            <span>{step}</span>
-          </React.Fragment>
         ))}
       </div>
     </div>
@@ -5400,7 +5413,7 @@ function ChatBubble({
               <span className="opacity-60">({formatWorked(turn.planMs)})</span>
             ) : null}
             {turn.streaming ? (
-              <DotmCircular15 size={16} dotSize={2} color={THINKING_GLYPH_COLOR} ariaLabel="Pensando" className="inline shrink-0" />
+              <PensandoBars size={16} className="inline shrink-0" />
             ) : null}
           </span>
         ) : null}
@@ -5928,7 +5941,7 @@ function ModelPickerInline({
   }, [grouped, query])
 
   const active = models.find((m) => m.name === selectedModel)
-  const label = active?.displayName || active?.name || selectedModel || "Modelo"
+  const label = active?.displayName || active?.name || "Sin modelos activos"
 
   React.useEffect(() => {
     if (!open) setQuery("")
@@ -5982,7 +5995,7 @@ function ModelPickerInline({
         <div className="max-h-[min(280px,calc(100vh-240px))] overflow-y-auto p-1">
           {models.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-              Cargando modelos…
+              Sin modelos activos
             </div>
           ) : filtered.length === 0 ? (
             <div className="px-3 py-4 text-center text-xs text-muted-foreground">

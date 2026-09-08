@@ -469,6 +469,34 @@ test('agent task store: findStaleRunningTasks + recoverStaleRunningTasks marks s
   assert.equal(taskStore.getTaskSnapshotForUser('t-fresh', 'u').status, 'running');
 });
 
+test('agent task store: recoverStaleRunningTasks honors a custom errorMessage', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-stale-msg-'));
+  taskStore.writeTaskSnapshot({ taskId: 't-msg', userId: 'u', status: 'running', displayGoal: 'old' });
+  taskStore.updateTaskSnapshot('t-msg', 'u', { updatedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() });
+
+  const result = taskStore.recoverStaleRunningTasks({
+    staleAfterMs: 60 * 60 * 1000,
+    reason: 'worker_stalled',
+    errorMessage: 'El worker dejó de responder.',
+  });
+  assert.equal(result.count, 1);
+  const recovered = taskStore.getTaskSnapshotForUser('t-msg', 'u');
+  assert.equal(recovered.streamState.error, 'worker_stalled');
+  assert.equal(recovered.events.at(-1).message, 'El worker dejó de responder.');
+});
+
+test('agent task store: touchTaskHeartbeat refreshes updatedAt on running tasks only', () => {
+  process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-hb-'));
+  taskStore.writeTaskSnapshot({ taskId: 't-run', userId: 'u', status: 'running', displayGoal: 'live' });
+  taskStore.updateTaskSnapshot('t-run', 'u', { updatedAt: new Date(Date.now() - 60_000).toISOString() });
+
+  const touched = taskStore.touchTaskHeartbeat('t-run', 'u');
+  assert.equal(touched.status, 'running');
+  assert.ok(Date.now() - Date.parse(touched.updatedAt) < 5_000);
+  assert.ok(Date.now() - Date.parse(touched.lastEventAt) < 5_000);
+  assert.equal(touched.lastEventAt, touched.streamState.lastEventAt);
+});
+
 test('agent task store: compactSnapshotEvents drops verbose tool payloads on completed tasks', () => {
   process.env.AGENT_TASK_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sgpt-compact-'));
 

@@ -13,6 +13,7 @@ const {
   MAX_CONTROL_STEPS,
   REPEAT_ACTION_LIMIT,
 } = require('./flags');
+const { redactLogPayload } = require('./login-handoff');
 
 function canonicalizeAction(name, args) {
   if (!name) return '';
@@ -34,7 +35,7 @@ function logStep(payload) {
     console.log(JSON.stringify({
       evt: 'computer_step',
       ts: new Date().toISOString(),
-      ...(payload && typeof payload === 'object' ? payload : { payload }),
+      ...(payload && typeof payload === 'object' ? redactLogPayload(payload) : { payload }),
     }));
   } catch (_) { /* never throw from a log */ }
 }

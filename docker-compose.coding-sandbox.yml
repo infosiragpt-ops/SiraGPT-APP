@@ -1,0 +1,30 @@
+# DEV overlay for AGENTES_CODING_V2 Phase 2a.
+# Not started by default `docker compose up`.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.coding-sandbox.yml \
+#     --profile agentes-coding build
+#
+# The Node adapter docker-runs ephemeral session containers from
+# siragpt-coding-sandbox:dev. This file only builds the image and
+# defines an isolated internal network (no egress, no backend/postgres).
+# Do not enable AGENTES_CODING_V2 on the Lenovo origin from this PR.
+
+networks:
+  coding-sandbox:
+    name: siragpt-coding-sandbox
+    driver: bridge
+    internal: true
+
+services:
+  coding-sandbox-image:
+    profiles:
+      - agentes-coding
+    build:
+      context: ./infra/coding-sandbox
+      dockerfile: Dockerfile
+    image: siragpt-coding-sandbox:dev
+    command: ["true"]
+    restart: "no"
+    networks:
+      - coding-sandbox
+    # Intentionally no daemon socket, no database URL, no cache URL.

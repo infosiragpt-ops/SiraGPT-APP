@@ -171,6 +171,8 @@ const PLATFORM_ADMIN_PERMISSIONS = [
   'admin.metrics.read',
   'admin.connections.manage',
   'admin.models.read',
+  // Administrador (users.isAdmin → PLATFORM_ADMIN) must keep manage so
+  // the Modelos IA Estado switch can PUT. Read alone is not enough.
   'admin.models.manage',
   'admin.billing.read',
   'admin.system.read',

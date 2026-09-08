@@ -19,6 +19,7 @@ const {
 } = require('./ai-product-os/litellm-gateway');
 const { applyAnthropicCacheToMessages } = require('./anthropic-cache-formatter');
 const { attachConversationSummary } = require('./conversation-summarizer');
+const objectStorage = require('./object-storage');
 
 let __anthropicSummarizerClient = null;
 function getAnthropicSummarizerClient() {
@@ -35,7 +36,31 @@ function getAnthropicSummarizerClient() {
     }
 }
 const { GEMA4_MODEL_ID } = require('./plan-credits-catalog');
+const {
+    inferProviderFromModelId,
+    resolveGenerateProvider,
+    CONNECTION_UNAVAILABLE_MESSAGE,
+} = require('./ai/provider-inference');
 const { sharedFetch } = require('../utils/provider-http-agent');
+const {
+    isCustomProvider,
+    isSiraMiniAlias,
+    createCustomProviderClient,
+    SIRA_MINI_DEFAULT_BASE_URL,
+    SIRA_MINI_UNAVAILABLE_MESSAGE,
+} = require('./ai/custom-provider-client');
+const {
+    createAnthropicStreamingClient,
+    createMoonshotClient,
+    createXaiClient,
+    stripVendorPrefix,
+} = require('./ai/first-party-chat-clients');
+const { resolveThinkingLevelForTurn, isTrivialChatTurn } = require('./trivial-turn');
+const {
+    publicGenerateErrorMessage,
+    isProviderClientError,
+    closeGenerateSseWithError,
+} = require('./ai/generate-sse-close');
 
 const HEARTBEAT_INTERVAL_MS = 15000;
 
@@ -88,7 +113,23 @@ function writeWithBackpressure(res, frame) {
  * tried before another model on the same account so billing/auth outages fail
  * over without serial dead hops.
  */
-function getFallbackChain(primaryProvider = '') {
+function isPinnedLocalGenerate(provider, model) {
+    return isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim()) || isSiraMiniAlias(model);
+}
+
+function isPinnedUserGenerate(provider, model) {
+    if (isPinnedLocalGenerate(provider, model)) return true;
+    // Any explicit picker model is user-pinned — never silent-swap vendors.
+    // Empty model keeps the legacy chain for internal callers (timeout tests).
+    if (String(model || '').trim()) return true;
+    return /^(Gemini|Anthropic|OpenAI|Kimi|Moonshot|DeepSeek|Custom)$/i.test(String(provider || '').trim());
+}
+
+function getFallbackChain(primaryProvider = '', primaryModel = '') {
+    // User-pinned picker models (Mini, Gemini, Claude, GPT, Kimi, Sira pair,
+    // leftover Grok/Z.ai, …) must never walk gemini → gpt-4o-mini → Flash.
+    if (isPinnedUserGenerate(primaryProvider, primaryModel)) return [];
+
     const raw = (process.env.FALLBACK_MODELS || '').trim();
     if (raw) return raw.split(',').map(s => s.trim()).filter(Boolean);
 
@@ -141,76 +182,32 @@ function providerForModel(model) {
         return process.env.GEMA4_PROVIDER || 'OpenAI';
     }
     if (isSiragptCombined(m)) return 'OpenRouter';
-    if (/^deepseek-(v\d|chat|reasoner)/i.test(m)) return 'DeepSeek';
-    if (/^(claude|anthropic\/)/i.test(m)) return 'OpenRouter';
-    if (/^(openai|google|x-ai|openrouter|meta-llama|deepseek|mistralai|qwen|z-ai|nvidia|microsoft|cohere|moonshotai)\//i.test(m)) return 'OpenRouter';
-    if (/^\/?(gpt-oss|zephyr)/i.test(m)) return 'OpenRouter';
-    if (/^(gemini|imagen)/i.test(m)) return 'Gemini';
-    return 'OpenAI';
+    return inferProviderFromModelId(m);
 }
 
 function normalizeChatProvider(provider, model) {
-    const p = String(provider || '').trim();
-    if (/^anthropic$/i.test(p)) return 'OpenRouter';
-    if (!p) return providerForModel(model);
-    return p;
+    return resolveGenerateProvider(provider, model);
 }
 
 function normalizeModelForProvider(provider, model) {
     const m = String(model || '').trim();
     if (!m) return m;
-    if (/^openrouter$/i.test(String(provider || '')) && /^claude/i.test(m) && !m.includes('/')) {
-        return `anthropic/${m}`;
-    }
+    const p = String(provider || '').trim();
+    if (/^anthropic$/i.test(p)) return stripVendorPrefix(m, ['anthropic/']);
+    if (/^(kimi|moonshot)$/i.test(p)) return stripVendorPrefix(m, ['moonshotai/', 'moonshot/']);
+    if (/^gemini$/i.test(p)) return stripVendorPrefix(m, ['google/']);
+    if (/^openai$/i.test(p) && !/gpt-oss/i.test(m)) return stripVendorPrefix(m, ['openai/']);
+    if (/^(meta|llama)$/i.test(p)) return stripVendorPrefix(m, ['meta/', 'llama/', 'meta-llama/']);
     return m;
 }
 
-function modelSupportsVision(provider, model) {
-    const normalizedProvider = String(provider || '').toLowerCase();
-    const normalizedModel = String(model || '').toLowerCase();
-
-    if (normalizedProvider === 'deepseek') return false;
-    if (normalizedProvider === 'gemini') return /^gemini/.test(normalizedModel);
-    if (normalizedProvider === 'openai') {
-        return /(gpt-4o|gpt-4\.1|gpt-5|o3|o4|vision)/i.test(normalizedModel);
-    }
-    if (normalizedProvider === 'openrouter') {
-        return /(gpt-4o|gpt-4\.1|gpt-5|gemini|claude|qwen.*vl|vision|llava|pixtral)/i.test(normalizedModel);
-    }
-    return false;
-}
-
-function selectVisionRuntime(provider, model) {
-    if (modelSupportsVision(provider, model)) {
-        return { provider, model, switched: false };
-    }
-    if (process.env.OPENAI_API_KEY) {
-        return {
-            provider: 'OpenAI',
-            model: process.env.VISION_MODEL || 'gpt-4o-mini',
-            switched: true,
-        };
-    }
-    if (process.env.GEMINI_API_KEY) {
-        return {
-            provider: 'Gemini',
-            model: process.env.GEMINI_VISION_MODEL || 'gemini-2.5-flash',
-            switched: true,
-        };
-    }
-    if (process.env.OPENROUTER_API_KEY) {
-        return {
-            provider: 'OpenRouter',
-            model: process.env.OPENROUTER_VISION_MODEL || 'openai/gpt-4o-mini',
-            switched: true,
-        };
-    }
-    return { provider, model, switched: false };
-}
-
-function shouldAttachVisionContent(provider, model, visionRuntime = selectVisionRuntime(provider, model)) {
-    return Boolean(visionRuntime && visionRuntime.switched) || modelSupportsVision(provider, model);
-}
+// Vision routing lives in ./ai/vision-runtime (shared with the file
+// processor). Kept as local names so the call sites below read unchanged.
+const {
+    modelSupportsVision,
+    selectVisionRuntime,
+    shouldAttachVisionContent,
+} = require('./ai/vision-runtime');
 
 /**
  * Classify a provider error as transient (safe to retry) vs terminal.
@@ -310,6 +307,53 @@ class AIService {
             });
         }
 
+        if (isCustomProvider(provider) || /^sira$/i.test(String(provider || '').trim())) {
+            return createCustomProviderClient({
+                url: SIRA_MINI_DEFAULT_BASE_URL,
+                apiKey: null,
+                authType: 'None',
+            });
+        }
+
+        if (/^anthropic$/i.test(String(provider || ''))) {
+            return createAnthropicStreamingClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(kimi|moonshot)$/i.test(String(provider || ''))) {
+            return createMoonshotClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(xai|x-ai|grok)$/i.test(String(provider || ''))) {
+            return createXaiClient({
+                fetchImpl: sharedFetch,
+                timeout: OPENAI_HTTP_TIMEOUT_MS,
+            });
+        }
+
+        if (/^(meta|llama)$/i.test(String(provider || ''))) {
+            const apiKey = String(
+                process.env.MODEL_API_KEY || process.env.META_API_KEY || process.env.LLAMA_API_KEY || '',
+            ).trim();
+            if (!apiKey) {
+                const err = new Error(CONNECTION_UNAVAILABLE_MESSAGE);
+                err.code = 'PROVIDER_CONNECTION_UNAVAILABLE';
+                err.status = 503;
+                err.provider = 'Meta';
+                throw err;
+            }
+            return new OpenAI({
+                ...baseOpts,
+                apiKey,
+                baseURL: process.env.META_BASE_URL || process.env.LLAMA_BASE_URL || 'https://api.meta.ai/v1',
+            });
+        }
+
         // Proveedor por defecto: OpenAI
         return new OpenAI({
             ...baseOpts,
@@ -361,10 +405,18 @@ class AIService {
      * @returns {object} - Formatted image object for vision API
      */
     async prepareImageForVision(imagePath, mimeType) {
+        let tempFile = null;
         try {
-            const fullPath = path.isAbsolute(imagePath)
-                ? imagePath
-                : path.join(__dirname, '../../', imagePath);
+            // R2 refs ("r2:<key>") point to object storage, not the local disk —
+            // materialize a temp copy first or fs.existsSync below always fails.
+            if (objectStorage.isRemote(imagePath)) {
+                tempFile = await objectStorage.toLocalTemp(imagePath);
+            }
+
+            const sourcePath = tempFile ? tempFile.path : imagePath;
+            const fullPath = path.isAbsolute(sourcePath)
+                ? sourcePath
+                : path.join(__dirname, '../../', sourcePath);
 
             if (!fs.existsSync(fullPath)) {
                 console.error(`Image file not found: ${fullPath}`);
@@ -384,6 +436,8 @@ class AIService {
         } catch (error) {
             console.error('Error preparing image for vision:', error);
             return null;
+        } finally {
+            if (tempFile) { try { await tempFile.cleanup(); } catch { /* best-effort */ } }
         }
     }
 
@@ -481,7 +535,13 @@ class AIService {
         }
     }
 
-    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null }) {
+    async generateStream({ provider, model, messages, systemBlocks, chatId, res, signal, streamId, files, language = 'es', userPrompt = '', qualityGuard = true, temperature = 0.55, skipDoneSentinel = false, reasoningSink = null, maxOutputTokens = null, client = null, customConnection = null, thinkingLevel = null, trivialTurn = null, toolChoice = undefined, tools = undefined }) {
+        // The route hands us a client for the provider it resolved. When an
+        // image turn has to leave a text-only model, `provider` changes below;
+        // that client must then NOT be reused (live 2026-09-02: Meta's client
+        // was asked for an OpenAI model → 404). Remember what it was built for.
+        const requestedProvider = provider;
+        let visionFallbackModels = [];
         // ── Siragpt 1.0 — modelo combinado ──
         // Si el caller pidió siragpt-1.0 y hay imágenes adjuntas, las
         // describimos primero con Gemini 2.5 Flash Lite, inyectamos la
@@ -638,6 +698,7 @@ class AIService {
                                 console.log(`[vision] Routing image turn through vision-capable runtime: ${provider}:${model} -> ${visionRuntime.provider}:${visionRuntime.model}`);
                                 provider = visionRuntime.provider;
                                 model = visionRuntime.model;
+                                visionFallbackModels = (visionRuntime.fallbacks || []).map((c) => c.model);
                             } else {
                                 console.log(`[vision] Using selected vision-capable runtime: ${provider}:${model}`);
                             }
@@ -658,8 +719,25 @@ class AIService {
 
             // Build the model chain: primary first, then env-configured
             // fallbacks. Deduped so the primary doesn't get tried twice.
-            const fallbackModels = getFallbackChain(provider).filter(m => m !== model);
+            // A user-selected catalog model (Mini / Gemini / Claude / GPT /
+            // Kimi / Sira pair) never walks to another vendor.
+            const pinnedUser = isPinnedUserGenerate(provider, model);
+            // A vision turn that left the selected (text-only) model may still
+            // hit a dead runtime (invalid key, retired model id): walk the
+            // remaining vision-capable runtimes before giving up.
+            const baseFallbacks = pinnedUser ? [] : getFallbackChain(provider, model);
+            const fallbackModels = [...visionFallbackModels, ...baseFallbacks]
+                .filter((m, i, arr) => m && m !== model && arr.indexOf(m) === i);
             const modelChain = [model, ...fallbackModels];
+            const resolveAttemptClient = (currentProvider, currentModel) => {
+                if (client && (currentProvider === requestedProvider || isPinnedLocalGenerate(currentProvider, currentModel))) {
+                    return client;
+                }
+                if (customConnection && customConnection.url && isPinnedLocalGenerate(currentProvider, currentModel)) {
+                    return createCustomProviderClient(customConnection);
+                }
+                return this.getClient(currentProvider);
+            };
 
             console.log(`🤖 Generating with primary=${provider}:${model}, fallback=[${fallbackModels.join(', ') || 'none'}]`);
             console.log(`📝 Messages count: ${workingMessages.length}`);
@@ -687,26 +765,49 @@ class AIService {
                 // we restore the old behaviour for gpt-oss (exclude, so the
                 // user isn't staring at silence until the final answer).
                 const extraPayload = { temperature: normalizedTemperature };
+                const turnThinkingLevel = resolveThinkingLevelForTurn({
+                    thinkingLevel,
+                    userPrompt,
+                    fallback: currentThinkingLevel(),
+                });
+                const isTrivial = trivialTurn === true || isTrivialChatTurn(userPrompt);
+                const thinkingDisabled = isTrivial || String(turnThinkingLevel).toLowerCase() === 'disabled';
+                // OpenRouter-shaped `reasoning` 400s on Meta/Llama/Muse Spark
+                // ("unknown parameter reasoning"). Only attach it for OpenRouter.
+                if (thinkingDisabled && currentProvider === 'OpenRouter') {
+                    extraPayload.reasoning = { exclude: true };
+                }
+                if (thinkingDisabled && currentProvider === 'Anthropic') {
+                    extraPayload.thinking = { type: 'disabled' };
+                }
                 if (!reasoningStreamEnabled() && currentProvider === 'OpenRouter' && /gpt-oss/i.test(currentRuntimeModel)) {
                     extraPayload.reasoning = { exclude: true };
                 }
                 // Custom GPTs / long-form trained deliverables may pass a higher
                 // maxOutputTokens so the model can finish a full chapter in one
                 // turn instead of stopping mid-outline. Still hard-capped by the
-                // model completion limit.
+                // model completion limit. Trivial §3.2 turns stay ≤256.
                 const requestedMax = Number(maxOutputTokens);
                 const modelCap = getCompletionLimit(currentRuntimeModel);
-                const effectiveMaxOutput = Number.isFinite(requestedMax) && requestedMax > 0
-                    ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
-                    : Math.min(modelCap, 16384);
+                // Meta Muse Spark counts its reasoning tokens against max_tokens:
+                // at 256 a plain "hola" finished with `length` and no content.
+                // Keep a roomier trivial cap there (reasoning_effort is minimal).
+                const trivialCap = /^(meta|llama)$/i.test(String(currentProvider || '')) ? 1024 : 256;
+                const effectiveMaxOutput = isTrivial
+                    ? Math.min(trivialCap, modelCap || trivialCap)
+                    : (Number.isFinite(requestedMax) && requestedMax > 0
+                        ? Math.min(modelCap, Math.max(1024, Math.floor(requestedMax)))
+                        : Math.min(modelCap, 16384));
                 const providerPayload = buildProviderChatPayload({
                     provider: currentProvider,
                     model: currentRuntimeModel,
                     messages: workingMessages,
                     stream: true,
-                    thinkingLevel: currentThinkingLevel(),
+                    thinkingLevel: turnThinkingLevel,
                     extra: extraPayload,
                     maxOutputTokens: effectiveMaxOutput,
+                    tools: Array.isArray(tools) ? tools : [],
+                    toolChoice: isTrivial ? 'none' : toolChoice,
                 });
                 const payload = providerPayload.payload;
 
@@ -730,7 +831,7 @@ class AIService {
                     }, FIRST_BYTE_TIMEOUT_MS);
 
                     try {
-                        const client = this.getClient(currentProvider);
+                        const attemptClient = resolveAttemptClient(currentProvider, currentModel);
                         // Per-(provider, model) circuit breaker: if a provider
                         // has been failing consistently, short-circuit the call
                         // so we move to the next model in the chain instantly
@@ -741,7 +842,7 @@ class AIService {
                             resetTimeoutMs: 60_000,
                         });
                         const stream = await breaker.execute(() =>
-                            client.chat.completions.create(payload, { signal: attemptCtrl.signal })
+                            attemptClient.chat.completions.create(payload, { signal: attemptCtrl.signal })
                         );
 
                         // Per-attempt reasoning state. A retry/fallback restarts
@@ -883,7 +984,7 @@ class AIService {
                         // the external client abort (terminal) — both show
                         // up as AbortError from the SDK.
                         const isOurTimeout = timedOut || err.code === 'TIMEOUT';
-                        const isClientCancel = !isOurTimeout && signal?.aborted;
+                        const isClientCancel = !isOurTimeout && signal?.aborted && !isProviderClientError(err);
                         if (isClientCancel) throw err;
                         // Empty-completion reset (above) already cleared
                         // hasStreamedAnyContent + fullResponseContent, so
@@ -921,7 +1022,11 @@ class AIService {
             // All models exhausted with no content streamed.
             throw lastError || new Error('AI generation failed after exhausting fallback chain');
         } catch (apiError) {
-            if (apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError') {
+            const providerHttpError = isProviderClientError(apiError);
+            if (
+                apiError && typeof apiError === 'object' && 'name' in apiError && apiError.name === 'AbortError'
+                && !providerHttpError
+            ) {
                 console.warn(`AI stream aborted by client for provider: ${provider}.`);
                 return fullResponseContent;
             }
@@ -934,6 +1039,20 @@ class AIService {
                 const note = '\n\n' + getFallbackMessage(language);
                 try { res.write(`data: ${JSON.stringify({ content: note })}\n\n`); } catch { /* socket may be gone */ }
                 return fullResponseContent + note;
+            }
+
+            // User-selected catalog model: honest Spanish error. Never recover
+            // by swapping to another vendor / DeepSeek Flash / Sira Rápido.
+            // Write error + [DONE] + end so Caddy does not turn an incomplete
+            // SSE body into HTTP 502 (Meta 400 unknown parameter reasoning).
+            if (isPinnedUserGenerate(provider, model) || providerHttpError) {
+                const mini = isPinnedLocalGenerate(provider, model);
+                const message = mini
+                    ? SIRA_MINI_UNAVAILABLE_MESSAGE
+                    : publicGenerateErrorMessage(apiError);
+                const error = mini ? 'sira_mini_unavailable' : 'connection_unavailable';
+                closeGenerateSseWithError(res, { message, code: error, recovered: false });
+                return message;
             }
 
             // Nothing was streamed — deliver a professional fallback as the
@@ -994,7 +1113,10 @@ class AIService {
                 model,
                 messages,
                 stream: false,
-                thinkingLevel: currentThinkingLevel(),
+                thinkingLevel: resolveThinkingLevelForTurn({
+                    userPrompt,
+                    fallback: currentThinkingLevel(),
+                }),
                 extra: { temperature: normalizeTemperature(temperature) },
                 maxOutputTokens: Math.min(getCompletionLimit(model), 16384),
             });
@@ -1534,6 +1656,13 @@ service.__test = {
     normalizeChatProvider,
     normalizeModelForProvider,
     getFallbackChain,
+    isPinnedLocalGenerate,
+    isPinnedUserGenerate,
+    resolveThinkingLevelForTurn,
+    currentThinkingLevel,
+    publicGenerateErrorMessage,
+    isProviderClientError,
+    closeGenerateSseWithError,
 };
 service.modelSupportsVision = modelSupportsVision;
 service.selectVisionRuntime = selectVisionRuntime;

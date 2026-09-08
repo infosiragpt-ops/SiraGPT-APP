@@ -509,6 +509,19 @@ function bootBuiltins() {
       outputKind: 'artifact',
       tags: ['document', 'generation', 'professional'],
     },
+    {
+      id: 'biblioteca_deposit',
+      label: 'Biblioteca Deposit',
+      category: 'document',
+      description: 'Land a skill report, plan, or markdown artifact in Biblioteca for the owning user only.',
+      tools: ['skill_curator', 'save_artifact'],
+      prerequisites: ['query_text'],
+      sideEffects: ['artifact_file'],
+      idempotent: true,
+      clearance: 'authenticated',
+      outputKind: 'artifact',
+      tags: ['biblioteca', 'library', 'document', 'hermes', 'curator'],
+    },
   ];
 
   for (const desc of builtins) {
