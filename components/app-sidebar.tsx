@@ -28,6 +28,12 @@ import {
   LayoutGrid,
   Pin,
   Folder,
+  FolderInput,
+  List,
+  Copy,
+  Share2,
+  ExternalLink,
+  Circle,
   Send,
   Download,
   Archive,
@@ -106,6 +112,8 @@ import Link from "next/link"
 import UpgradeModal from "./UpgradeModal"
 import { ChatSearchDialog } from "./ChatSearchDialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
+import { ChatFolderTree } from "@/components/sidebar/chat-folder-tree"
+import { useSidebarFolderState } from "@/lib/use-sidebar-folder-state"
 import { SidebarFoldersDropdown } from "./sidebar/sidebar-folders-dropdown"
 import { registerAgentCompanySlot } from "@/lib/agent-company-slot"
 import {
@@ -135,11 +143,9 @@ import {
   type RecentChatTypeFilter,
 } from "@/lib/sidebar-recent-chats-filters"
 import {
-  CHAT_FOLDER_NAMES_STORAGE_KEY,
-  CHAT_FOLDERS_STORAGE_KEY,
-  SUGGESTED_CHAT_FOLDERS,
   chatsAvailableToSendToFolder,
   countChatsInFolder,
+  chatFolderKey,
   decodeChatFolderDragId,
   deleteChatFolder,
   encodeChatFolderDragId,
@@ -148,7 +154,6 @@ import {
   listChatFolderNames,
   normalizeChatFolderName,
   parseChatFolderAssignments,
-  parseChatFolderNameList,
   renameChatFolder,
 } from "@/lib/sidebar-chat-folders"
 
@@ -164,7 +169,7 @@ const LG_ITEM = cn(
 const LG_SEP = "my-1 bg-border/60"
 
 const CHAT_ACTION_MENU = cn(
-  "relative isolate w-[214px] overflow-hidden rounded-[18px] p-1.5",
+  "relative isolate w-[280px] overflow-hidden rounded-[18px] p-1.5",
   "border border-white/65 bg-white/72 text-zinc-800",
   "shadow-[inset_0_1px_0_rgba(255,255,255,0.86),0_18px_50px_rgba(15,23,42,0.16)]",
   "backdrop-blur-2xl backdrop-saturate-150 supports-[backdrop-filter]:bg-white/58",
@@ -172,13 +177,13 @@ const CHAT_ACTION_MENU = cn(
   "dark:shadow-[0_20px_54px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.08)]",
 )
 const CHAT_ACTION_ITEM = cn(
-  "h-8 cursor-pointer rounded-[10px] px-2 text-[13px] font-medium leading-none",
+  "h-9 cursor-pointer rounded-[10px] px-2.5 text-sm font-medium leading-none",
   "text-zinc-700 transition-all duration-150",
   "focus:bg-white/72 focus:text-zinc-950 focus:shadow-[inset_0_1px_0_rgba(255,255,255,0.76),0_8px_18px_rgba(15,23,42,0.08)]",
   "data-[highlighted]:bg-white/72 data-[highlighted]:text-zinc-950",
   "dark:text-zinc-300 dark:focus:bg-white/12 dark:focus:text-white dark:data-[highlighted]:bg-white/12 dark:data-[highlighted]:text-white",
 )
-const CHAT_ACTION_ICON = "mr-2 h-3.5 w-3.5 shrink-0 stroke-[1.9]"
+const CHAT_ACTION_ICON = "mr-2.5 h-4 w-4 shrink-0 stroke-[1.9]"
 const CHAT_ACTION_SEP = "mx-1 my-1 bg-zinc-950/[0.08] dark:bg-white/10"
 const CHAT_ACTION_SUBMENU = cn(
   "w-[196px] rounded-[16px] border border-white/65 bg-white/72 p-1.5",
@@ -429,7 +434,7 @@ export function AppSidebar() {
   // para el resto (export, rename) usamos `getCurrentChatSnapshot`
   // que NO suscribe a actualizaciones. (Task #57.)
   const {
-    chats,
+    chats: accountChats,
     currentChatId,
     createNewChat,
     setCurrentChat,
@@ -442,6 +447,7 @@ export function AppSidebar() {
     isLoadingChats,
     getCurrentChatSnapshot,
   } = useChatList()
+  const chats = React.useMemo(() => accountChats.filter((chat) => chat.userId === user?.id), [accountChats, user?.id])
   const { selectedModel, setSelectedModel } = useModelsAndFiles()
   const router = useRouter()
   // NB: pathname is declared here (not further down like the original)
@@ -586,14 +592,48 @@ export function AppSidebar() {
   const [pinnedChatOverrides, setPinnedChatOverrides] = React.useState<Record<string, boolean>>({})
   const [archivedChatIds, setArchivedChatIds] = React.useState<string[]>([])
   const [hiddenChatIds, setHiddenChatIds] = React.useState<string[]>([])
-  const [chatFolders, setChatFolders] = React.useState<Record<string, string>>({})
-  const [namedChatFolders, setNamedChatFolders] = React.useState<string[]>([])
+  const knownChatIds = React.useMemo(() => chats.filter((chat) => (chat as any).userId === user?.id).map((chat) => chat.id), [chats, user?.id])
+  const folderStore = useSidebarFolderState(user?.id, knownChatIds)
+  const { assignments: chatFolders, names: namedChatFolders } = folderStore.state
+  const [expandedFolders, setExpandedFolders] = React.useState<string[]>([])
+  const [folderDescription, setFolderDescription] = React.useState("")
+  const [folderChatCache, setFolderChatCache] = React.useState<Record<string, any>>({})
+  const [folderLoading, setFolderLoading] = React.useState<string[]>([])
+  const folderLoadsRef = React.useRef(new Set<string>())
+  const folderQueueRef = React.useRef<Promise<void>>(Promise.resolve())
+  const [archiveOverrides, setArchiveOverrides] = React.useState<Record<string, boolean>>({})
+  const folderAccountRef = React.useRef(user?.id)
+  folderAccountRef.current = user?.id
+  const [sectionTarget, setSectionTarget] = React.useState<any | null>(null)
+  const [sectionName, setSectionName] = React.useState("")
+  const [shareTarget, setShareTarget] = React.useState<any | null>(null)
+  const [shareLink, setShareLink] = React.useState("")
+  const [sharing, setSharing] = React.useState(false)
+  const creatingFolderChatRef = React.useRef(false)
+  React.useEffect(() => {
+    setExpandedFolders([])
+    setFolderChatCache({})
+    setSelectedFolder(null)
+    setShareTarget(null)
+    setShareLink("")
+    setSharing(false)
+    creatingFolderChatRef.current = false
+    setFolderLoading([])
+    setFolderDialogOpen(false)
+    setFolderDialogChat(null)
+    setFolderDialogRenameFrom(null)
+    setSendChatFolder(null)
+    setSectionTarget(null)
+    setChatPendingDelete(null)
+    setArchiveOverrides({})
+    folderLoadsRef.current = new Set()
+    folderQueueRef.current = Promise.resolve()
+  }, [user?.id])
   const [folderDialogOpen, setFolderDialogOpen] = React.useState(false)
   const [folderDialogName, setFolderDialogName] = React.useState("")
   const [folderDialogChat, setFolderDialogChat] = React.useState<any | null>(null)
   const [folderDialogRenameFrom, setFolderDialogRenameFrom] = React.useState<string | null>(null)
   const [selectedFolder, setSelectedFolder] = React.useState<string | null>(null)
-  const [folderDropTarget, setFolderDropTarget] = React.useState<string | null>(null)
   const [sendChatFolder, setSendChatFolder] = React.useState<string | null>(null)
   const [sendChatQuery, setSendChatQuery] = React.useState("")
   const [scheduledChats, setScheduledChats] = React.useState<Record<string, { at: string; note?: string; title?: string }>>({})
@@ -696,21 +736,18 @@ export function AppSidebar() {
         const value = JSON.parse(localStorage.getItem(key) || "{}")
         return value && typeof value === "object" && !Array.isArray(value) ? value : {}
       }
-      setPinnedChatIds(readArray("sira:pinned-chat-ids"))
-      setArchivedChatIds(readArray("sira:archived-chat-ids"))
-      setHiddenChatIds(readArray("sira:hidden-chat-ids"))
-      setChatFolders(parseChatFolderAssignments(readRecord(CHAT_FOLDERS_STORAGE_KEY)))
-      setNamedChatFolders(parseChatFolderNameList(JSON.parse(localStorage.getItem(CHAT_FOLDER_NAMES_STORAGE_KEY) || "[]")))
+      setPinnedChatIds(readArray(`sira:pinned-chat-ids:${user?.id || "guest"}`))
+      setArchivedChatIds(readArray(`sira:archived-chat-ids:${user?.id || "guest"}`))
+      setHiddenChatIds(readArray(`sira:hidden-chat-ids:${user?.id || "guest"}`))
       setScheduledChats(readRecord("sira:scheduled-chats"))
     } catch {
       setPinnedChatIds([])
       setArchivedChatIds([])
       setHiddenChatIds([])
-      setChatFolders({})
-      setNamedChatFolders([])
       setScheduledChats({})
     }
-  }, [])
+    setPinnedChatOverrides({})
+  }, [user?.id])
 
   const persistArrayState = React.useCallback((
     key: string,
@@ -739,78 +776,106 @@ export function AppSidebar() {
   const togglePinnedChat = React.useCallback(async (chat: any) => {
     if (!chat?.id) return
     const nextPinned = !isChatPinned(chat)
-    setPinnedChatOverrides((current) => ({ ...current, [chat.id]: nextPinned }))
-    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => {
-      const deduped = current.filter((id) => id !== chat.id)
-      return nextPinned ? [chat.id, ...deduped] : deduped
-    })
-    toast.success(nextPinned ? "Chat fijado" : "Chat desfijado")
+    const account = user?.id
     try {
       await apiClient.pinChat(chat.id, nextPinned)
-    } catch (error) {
-      toast.warning("Guardado solo en este navegador; reinicia el backend para sincronizarlo.")
-    }
-  }, [isChatPinned, persistArrayState])
+      if (folderAccountRef.current !== account) return
+      setPinnedChatOverrides((current) => ({ ...current, [chat.id]: nextPinned }))
+      persistArrayState(`sira:pinned-chat-ids:${user?.id || "guest"}`, setPinnedChatIds, (current) => {
+        const deduped = current.filter((id) => id !== chat.id)
+        return nextPinned ? [chat.id, ...deduped] : deduped
+      })
+      toast.success(nextPinned ? "Chat fijado" : "Chat desfijado")
+    } catch { toast.error("No se pudo guardar. Intenta fijar la conversación de nuevo.") }
+  }, [isChatPinned, persistArrayState, user?.id])
 
   const archiveChat = React.useCallback(async (chat: any) => {
     if (!chat?.id) return
-    persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => (
-      current.includes(chat.id) ? current : [chat.id, ...current]
-    ))
-    toast.success("Chat archivado")
+    const nextArchived = !(chat.isArchived || archivedChatIds.includes(chat.id))
+    const account = user?.id
     try {
-      await apiClient.archiveChat(chat.id, true)
-    } catch (error) {
-      toast.warning("Archivado localmente; reinicia el backend para sincronizarlo.")
-    }
-  }, [persistArrayState])
+      await apiClient.archiveChat(chat.id, nextArchived)
+      if (folderAccountRef.current !== account) return
+      persistArrayState(`sira:archived-chat-ids:${user?.id || "guest"}`, setArchivedChatIds, (current) => nextArchived ? Array.from(new Set([chat.id, ...current])) : current.filter((id) => id !== chat.id))
+      setArchiveOverrides((current) => ({ ...current, [chat.id]: nextArchived }))
+      toast.success(nextArchived ? "Chat archivado" : "Chat desarchivado")
+    } catch { toast.error("No se pudo guardar el archivo de la conversación. Reintenta.") }
+  }, [archivedChatIds, persistArrayState, user?.id])
 
   const hideChatLocally = React.useCallback((chat: any) => {
-    persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => (
+    persistArrayState(`sira:hidden-chat-ids:${user?.id || "guest"}`, setHiddenChatIds, (current) => (
       current.includes(chat.id) ? current : [chat.id, ...current]
     ))
     toast.success("Chat ocultado")
-  }, [persistArrayState])
-
-  const persistChatFolders = React.useCallback((
-    assignments: Record<string, string>,
-    named: string[],
-  ) => {
-    const nextAssignments = parseChatFolderAssignments(assignments)
-    const nextNamed = listChatFolderNames(nextAssignments, named)
-    setChatFolders(nextAssignments)
-    setNamedChatFolders(nextNamed)
-    try {
-      localStorage.setItem(CHAT_FOLDERS_STORAGE_KEY, JSON.stringify(nextAssignments))
-      localStorage.setItem(CHAT_FOLDER_NAMES_STORAGE_KEY, JSON.stringify(nextNamed))
-    } catch (err) {
-      console.debug('storage unavailable', err)
-    }
-    return { assignments: nextAssignments, named: nextNamed }
-  }, [])
+  }, [persistArrayState, user?.id])
 
   const visibleChatFolders = React.useMemo(
-    () => listChatFolderNames(chatFolders, namedChatFolders),
-    [chatFolders, namedChatFolders],
+    () => listChatFolderNames(chatFolders, namedChatFolders).sort((a, b) =>
+      Number(Boolean(folderStore.state.metadata[chatFolderKey(b)]?.isPinned)) -
+      Number(Boolean(folderStore.state.metadata[chatFolderKey(a)]?.isPinned))),
+    [chatFolders, namedChatFolders, folderStore.state.metadata],
   )
-
-  const moveMenuFolders = React.useMemo(
-    () => listChatFolderNames(chatFolders, [...SUGGESTED_CHAT_FOLDERS, ...namedChatFolders]),
-    [chatFolders, namedChatFolders],
-  )
+  const moveMenuFolders = visibleChatFolders
 
   const moveChatToFolder = React.useCallback((chat: any, folder: string | null) => {
-    if (!chat?.id) return
-    const next = { ...(chatFolders || {}) }
-    if (folder) next[chat.id] = folder
-    else delete next[chat.id]
-    persistChatFolders(next, folder ? [...namedChatFolders, folder] : namedChatFolders)
-    toast.success(folder ? `Conversación enviada a ${folder}` : "Chat quitado de carpeta")
-  }, [chatFolders, namedChatFolders, persistChatFolders])
+    if (!chat?.id || !folderStore.ready) return
+    folderStore.update((current) => {
+      const assignments = { ...current.assignments }
+      if (folder) assignments[chat.id] = folder
+      else delete assignments[chat.id]
+      return { ...current, assignments, names: listChatFolderNames(assignments, folder ? [...current.names, folder] : current.names) }
+    })
+    if (folder) setExpandedFolders((current) => current.includes(folder) ? current : [...current, folder])
+  }, [folderStore.update, folderStore.ready])
 
-  const toggleSelectedFolder = React.useCallback((folder: string) => {
-    setSelectedFolder((current) => (current && isSameChatFolder(current, folder) ? null : folder))
-  }, [])
+  const allFolderChats = React.useMemo(() => {
+    const byId = new Map(Object.values(folderChatCache).map((chat) => [chat.id, chat]))
+    for (const chat of chats) byId.set(chat.id, chat)
+    return Array.from(byId.values()).map((chat) => ({ ...chat, ...(Object.prototype.hasOwnProperty.call(archiveOverrides, chat.id) ? { isArchived: archiveOverrides[chat.id] } : {}) }))
+  }, [chats, folderChatCache, archiveOverrides])
+
+  const loadFolderChats = (folder: string) => {
+    const account = user?.id
+    const key = chatFolderKey(folder)
+    if (folderLoadsRef.current.has(key)) return
+    const loaded = new Set(allFolderChats.map((chat) => chat.id))
+    const missing = Object.entries(chatFolders).filter(([id, name]) => isSameChatFolder(name, folder) && !loaded.has(id)).map(([id]) => id)
+    if (!missing.length) return
+    folderLoadsRef.current.add(key)
+    setFolderLoading((current) => [...current, key])
+    // Queue folders, with at most two reads at once across the entire sidebar.
+    folderQueueRef.current = folderQueueRef.current.then(async () => {
+      if (folderAccountRef.current !== account) return
+      try {
+        let cursor = 0
+        const reads = await Promise.allSettled(Array.from({ length: Math.min(2, missing.length) }, async () => {
+          while (cursor < missing.length && folderAccountRef.current === account) {
+            const id = missing[cursor++]
+            const response = await apiClient.getChat(id)
+            if (folderAccountRef.current === account && response?.chat) {
+              const { id: chatId, title, updatedAt, isPinned, pinnedAt, isArchived, deletedAt, userId } = response.chat
+              setFolderChatCache((current) => ({ ...current, [id]: { id: chatId, title, updatedAt, isPinned, pinnedAt, isArchived, deletedAt, userId } }))
+            }
+          }
+        }))
+        if (reads.some((result) => result.status === "rejected")) throw new Error("history_load_failed")
+      } catch {
+        if (folderAccountRef.current === account) toast.error("No se pudieron cargar todos los chats. Cierra y abre la carpeta para reintentar.")
+      } finally {
+        if (folderAccountRef.current === account) {
+          folderLoadsRef.current.delete(key)
+          setFolderLoading((current) => current.filter((item) => item !== key))
+        }
+      }
+    })
+  }
+
+  const toggleSelectedFolder = (folder: string) => {
+    const expanded = expandedFolders.some((name) => isSameChatFolder(name, folder))
+    setSelectedFolder(folder)
+    setExpandedFolders((current) => expanded ? current.filter((name) => !isSameChatFolder(name, folder)) : [...current, folder])
+    if (!expanded) void loadFolderChats(folder)
+  }
 
   const openSendChatToFolderDialog = React.useCallback((folder: string) => {
     setSendChatFolder(folder)
@@ -826,26 +891,26 @@ export function AppSidebar() {
   const sendableChatsForFolder = React.useMemo(() => {
     if (!sendChatFolder) return []
     const needle = sendChatQuery.trim().toLowerCase()
-    return chatsAvailableToSendToFolder(chats || [], chatFolders, sendChatFolder).filter((chat) => {
+    return chatsAvailableToSendToFolder(allFolderChats, chatFolders, sendChatFolder).filter((chat) => {
       if (!needle) return true
       return String(chat.title || "").toLowerCase().includes(needle)
     })
-  }, [chatFolders, chats, sendChatFolder, sendChatQuery])
+  }, [chatFolders, allFolderChats, sendChatFolder, sendChatQuery])
 
   const handleFolderDrop = React.useCallback((event: React.DragEvent, folder: string) => {
     event.preventDefault()
     event.stopPropagation()
-    setFolderDropTarget(null)
     const chatId = decodeChatFolderDragId(event.dataTransfer.getData("text/plain"))
     if (!chatId) return
-    const chat = (chats || []).find((item: any) => item?.id === chatId)
+    const chat = allFolderChats.find((item: any) => item?.id === chatId)
     if (chat) moveChatToFolder(chat, folder)
-  }, [chats, moveChatToFolder])
+  }, [allFolderChats, moveChatToFolder])
 
   const openCreateFolderDialog = React.useCallback((chat?: any) => {
     setFolderDialogChat(chat ?? null)
     setFolderDialogRenameFrom(null)
     setFolderDialogName("")
+    setFolderDescription("")
     setFolderDialogOpen(true)
   }, [])
 
@@ -853,8 +918,9 @@ export function AppSidebar() {
     setFolderDialogChat(null)
     setFolderDialogRenameFrom(folder)
     setFolderDialogName(folder)
+    setFolderDescription(folderStore.state.metadata[chatFolderKey(folder)]?.description || "")
     setFolderDialogOpen(true)
-  }, [])
+  }, [folderStore.state.metadata])
 
   const closeFolderDialog = React.useCallback(() => {
     setFolderDialogOpen(false)
@@ -863,54 +929,98 @@ export function AppSidebar() {
     setFolderDialogRenameFrom(null)
   }, [])
 
-  const submitFolderDialog = React.useCallback(() => {
+  const submitFolderDialog = () => {
     const name = normalizeChatFolderName(folderDialogName)
-    if (!name) {
-      toast.error("Escribe un nombre de carpeta")
+    if (!name || !folderStore.ready) return
+    if (visibleChatFolders.some((existing) => isSameChatFolder(existing, name) && (!folderDialogRenameFrom || !isSameChatFolder(existing, folderDialogRenameFrom)))) {
+      toast.error("Ya existe una carpeta con ese nombre")
       return
     }
-    if (folderDialogRenameFrom) {
-      const next = renameChatFolder(chatFolders, namedChatFolders, folderDialogRenameFrom, name)
-      persistChatFolders(next.assignments, next.named)
-      if (selectedFolder && isSameChatFolder(selectedFolder, folderDialogRenameFrom)) {
-        setSelectedFolder(name)
-      }
-      if (sendChatFolder && isSameChatFolder(sendChatFolder, folderDialogRenameFrom)) {
-        setSendChatFolder(name)
-      }
-      toast.success(`Carpeta renombrada a ${name}`)
-      closeFolderDialog()
-      return
-    }
-    if (folderDialogChat?.id) {
-      moveChatToFolder(folderDialogChat, name)
-      setSelectedFolder(name)
-    } else {
-      persistChatFolders(chatFolders, [...namedChatFolders, name])
-      setSelectedFolder(name)
-      toast.success(`Carpeta "${name}" creada`)
-    }
+    const from = folderDialogRenameFrom
+    folderStore.update((current) => {
+      const renamed = from ? renameChatFolder(current.assignments, current.names, from, name) : { assignments: { ...current.assignments }, named: [...current.names, name] }
+      if (folderDialogChat?.id) renamed.assignments[folderDialogChat.id] = name
+      const metadata = { ...current.metadata }
+      const previous = from ? metadata[chatFolderKey(from)] : undefined
+      if (from) delete metadata[chatFolderKey(from)]
+      metadata[chatFolderKey(name)] = { ...previous, description: folderDescription.trim() }
+      return { ...current, assignments: renamed.assignments, names: renamed.named, metadata }
+    })
+    setSelectedFolder(name)
+    setExpandedFolders((current) => Array.from(new Set([...current.filter((item) => !from || !isSameChatFolder(item, from)), name])))
+    if (sendChatFolder && from && isSameChatFolder(sendChatFolder, from)) setSendChatFolder(name)
     closeFolderDialog()
-  }, [
-    chatFolders,
-    closeFolderDialog,
-    folderDialogChat,
-    folderDialogName,
-    folderDialogRenameFrom,
-    moveChatToFolder,
-    namedChatFolders,
-    persistChatFolders,
-    selectedFolder,
-    sendChatFolder,
-  ])
+  }
 
-  const removeNamedFolder = React.useCallback((folder: string) => {
-    const next = deleteChatFolder(chatFolders, namedChatFolders, folder)
-    persistChatFolders(next.assignments, next.named)
+  const removeNamedFolder = (folder: string) => {
+    folderStore.update((current) => {
+      const next = deleteChatFolder(current.assignments, current.names, folder)
+      const metadata = { ...current.metadata }
+      delete metadata[chatFolderKey(folder)]
+      return { ...current, assignments: next.assignments, names: next.named, metadata }
+    })
+    setExpandedFolders((current) => current.filter((name) => !isSameChatFolder(name, folder)))
     if (selectedFolder && isSameChatFolder(selectedFolder, folder)) setSelectedFolder(null)
     if (sendChatFolder && isSameChatFolder(sendChatFolder, folder)) closeSendChatToFolderDialog()
-    toast.success(`Carpeta "${folder}" eliminada`)
-  }, [chatFolders, closeSendChatToFolderDialog, namedChatFolders, persistChatFolders, selectedFolder, sendChatFolder])
+  }
+
+  const toggleFolderPin = (folder: string) => folderStore.update((current) => {
+    const key = chatFolderKey(folder)
+    return { ...current, metadata: { ...current.metadata, [key]: { ...current.metadata[key], isPinned: !current.metadata[key]?.isPinned } } }
+  })
+
+  const setChatUnread = (chatId: string, unread: boolean) => folderStore.update((current) => ({
+    ...current, unreadIds: unread ? Array.from(new Set([...current.unreadIds, chatId])) : current.unreadIds.filter((id) => id !== chatId),
+  }))
+
+  const moveChatToSection = (chat: any, section: string | null) => folderStore.update((current) => {
+    const chatSections = { ...current.chatSections }
+    if (section) chatSections[chat.id] = section
+    else delete chatSections[chat.id]
+    return { ...current, chatSections, sections: section ? Array.from(new Set([...current.sections, section])) : current.sections }
+  })
+
+  const copyChat = async (chat: any, kind: "link" | "title" | "text") => {
+    try {
+      let text = kind === "link" ? new URL(agentsHomeHref(`id=${encodeURIComponent(chat.id)}`), window.location.origin).href : String(optimisticUpdates[chat.id] || chat.title || "Chat")
+      if (kind === "text") {
+        const active = getCurrentChatSnapshot()
+        const source = active?.id === chat.id ? active : (await apiClient.getChat(chat.id)).chat
+        text = (source?.messages || []).map((message: any) => `${message.role === "user" ? "Tú" : "Sira"}: ${String(message.content || "")}`).join("\n\n")
+      }
+      await navigator.clipboard.writeText(text)
+      toast.success("Copiado")
+    } catch { toast.error("No se pudo copiar. Comprueba el permiso del portapapeles.") }
+  }
+
+  const createFolderChat = async (folder: string) => {
+    if (!folderStore.ready || creatingFolderChatRef.current) return
+    creatingFolderChatRef.current = true
+    const account = user?.id
+    try {
+      const chat = await createNewChat("text", undefined, undefined, { skipInitialProcessing: true })
+      if (!chat?.id) throw new Error("create_failed")
+      if (folderAccountRef.current !== account) return
+      moveChatToFolder(chat, folder)
+      handleChatClick(chat.id)
+    } catch { toast.error("No se pudo crear la conversación") }
+    finally { if (folderAccountRef.current === account) creatingFolderChatRef.current = false }
+  }
+
+  const createShareLink = async () => {
+    if (!shareTarget?.id || sharing) return
+    const account = user?.id
+    setSharing(true)
+    try {
+      const result = await apiClient.handleShare(shareTarget.id)
+      const raw = result.shareableLink || result.url
+      if (!raw) throw new Error("missing_link")
+      const url = new URL(raw, window.location.origin)
+      if (url.origin !== window.location.origin || !["http:", "https:"].includes(url.protocol)) throw new Error("invalid_link")
+      if (folderAccountRef.current === account) setShareLink(url.href)
+    } catch { toast.error("No se pudo crear el enlace para compartir") }
+    finally { if (folderAccountRef.current === account) setSharing(false) }
+  }
 
   const downloadChatExport = React.useCallback(async (chat: any) => {
     try {
@@ -926,7 +1036,6 @@ export function AppSidebar() {
         `# ${source.title || "Chat"}`,
         "",
         `- ID: ${source.id}`,
-        `- Modelo: ${source.model || "N/A"}`,
         `- Actualizado: ${source.updatedAt || chat.updatedAt || ""}`,
         "",
         ...messages.flatMap((message: any) => [
@@ -976,20 +1085,22 @@ export function AppSidebar() {
   }, [scheduleAt, scheduleNote, scheduleTarget])
 
   const removeChatLocalMetadata = React.useCallback((chatId: string) => {
-    persistArrayState("sira:pinned-chat-ids", setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
-    persistArrayState("sira:archived-chat-ids", setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
-    persistArrayState("sira:hidden-chat-ids", setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
-    persistChatFolders(
-      Object.fromEntries(Object.entries(chatFolders).filter(([id]) => id !== chatId)),
-      namedChatFolders,
-    )
+    setFolderChatCache((current) => { const next = { ...current }; delete next[chatId]; return next })
+    folderStore.update((current) => {
+      const chatSections = { ...current.chatSections }; delete chatSections[chatId]
+      const assignments = { ...current.assignments }; delete assignments[chatId]
+      return { ...current, assignments, chatSections, unreadIds: current.unreadIds.filter((id) => id !== chatId) }
+    })
+    persistArrayState(`sira:pinned-chat-ids:${user?.id || "guest"}`, setPinnedChatIds, (current) => current.filter((id) => id !== chatId))
+    persistArrayState(`sira:archived-chat-ids:${user?.id || "guest"}`, setArchivedChatIds, (current) => current.filter((id) => id !== chatId))
+    persistArrayState(`sira:hidden-chat-ids:${user?.id || "guest"}`, setHiddenChatIds, (current) => current.filter((id) => id !== chatId))
     setScheduledChats((current) => {
       const next = { ...(current || {}) }
       delete next[chatId]
       try { localStorage.setItem("sira:scheduled-chats", JSON.stringify(next)) } catch (err) { console.debug('storage unavailable', err) }
       return next
     })
-  }, [chatFolders, namedChatFolders, persistArrayState, persistChatFolders])
+  }, [persistArrayState, user?.id, folderStore.update])
 
   const confirmDeleteChat = React.useCallback(async () => {
     const id = chatPendingDelete?.id
@@ -1137,6 +1248,7 @@ export function AppSidebar() {
   }
 
   const handleChatClick = (chatId: string) => {
+    if (folderStore.ready && folderStore.state.unreadIds.includes(chatId)) setChatUnread(chatId, false)
     markSharedNavigationIntent("/agentes", "Chat")
     selectChat(chatId)
     // Navigate to agents home if not already there
@@ -1281,6 +1393,259 @@ export function AppSidebar() {
       loadMoreChats()
     }
   }, [hasMoreChats, isLoadingMore, loadMoreChats])
+
+                      const renderChatItem = (chat: any) => {
+                        const isEditing = editingChatId === chat.id
+                        const { title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
+                        const isTruncated = displayTitle.length > 25
+                        // Per-chat status — compact left rail:
+                        // spinner while generating, blue dot for a
+                        // freshly completed task, red dot for an error.
+                        const streamStatus = bgStreams.get(chat.id)?.status
+                        const isStreaming = streamStatus === "streaming"
+                        const isComplete = streamStatus === "done"
+                        const isFailed = streamStatus === "error"
+
+                        return (
+                          <SidebarMenuItem key={chat.id} className="chat-history-item">
+                            <div
+                              className="flex w-full items-center gap-0.5 group"
+                              draggable={!isEditing}
+                              onDragStart={(event) => {
+                                event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
+                                event.dataTransfer.effectAllowed = "move"
+                              }}
+                            >
+                              {isEditing ? (
+                                <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+                                  <Input
+                                    ref={editInputRef}
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                    onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
+                                    onBlur={() => handleSaveEdit(chat.id)}
+                                    className="h-7 text-sm flex-1 px-2 py-1"
+                                    onClick={(e) => e.stopPropagation()}
+                                    autoFocus
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleSaveEdit(chat.id)
+                                    }}
+                                  >
+                                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleCancelEdit()
+                                    }}
+                                  >
+                                    <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
+                                  </Button>
+                                </div>
+                              ) : (
+                                <>
+                                  <SidebarMenuButton
+                                        isActive={currentChatId === chat.id && isAgentsHomePath(pathname)}
+                                        aria-current={currentChatId === chat.id && isAgentsHomePath(pathname) ? 'page' : undefined}
+                                        title={isTruncated ? displayTitle : undefined}
+                                        onClick={() => !isEditing && handleChatClick(chat.id)}
+                                        className={cn(
+                                          "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
+                                          "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
+                                        )}
+                                      >
+                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                            {/* Emoji como ancla izquierda (pegado al borde de
+                                                la fila). Antes había una columna de estado
+                                                vacía delante que empujaba el emoji ~24px a la
+                                                derecha en todos los chats inactivos; ahora el
+                                                estado vive como un punto-badge en la esquina
+                                                del emoji, de modo que el glifo queda alineado a
+                                                la izquierda y todas las filas comparten el mismo
+                                                ancho de columna (h-5 w-5). */}
+                                            {/* No per-chat emoji — clean, ChatGPT-like titles.
+                                                A leading slot only appears for chats with an
+                                                actual status (generating / done / error); normal
+                                                chats keep the title flush-left. */}
+                                            {(isStreaming || isComplete || isFailed) && (
+                                              <span
+                                                className="relative flex h-4 w-4 shrink-0 items-center justify-center leading-none"
+                                                aria-hidden={isStreaming ? undefined : true}
+                                                title={
+                                                  isStreaming
+                                                    ? "Generando..."
+                                                    : isComplete
+                                                      ? "Tarea completada"
+                                                      : "Tarea con error"
+                                                }
+                                              >
+                                                {isStreaming ? (
+                                                  <ThinkingIndicator
+                                                    size="xs"
+                                                    label="Chat en progreso"
+                                                    className="text-muted-foreground/80"
+                                                  />
+                                                ) : (
+                                                  <span
+                                                    className={cn(
+                                                      "h-2 w-2 rounded-full",
+                                                      isComplete
+                                                        ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
+                                                        : "bg-destructive/85"
+                                                    )}
+                                                    aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
+                                                  />
+                                                )}
+                                              </span>
+                                            )}
+                                            <span className={cn("text-sm flex-1 truncate", folderStore.state.unreadIds.includes(chat.id) && "font-semibold")} >
+                                              {displayTitle}
+                                            </span>
+                                            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55">
+                                              {folderStore.state.unreadIds.includes(chat.id) && <Circle className="h-2 w-2 fill-current" aria-label="No leído" />}
+                                              {isChatPinned(chat) && (
+                                                <Pin className="h-3 w-3" aria-label="Chat fijado" />
+                                              )}
+                                              {chatFolders[chat.id] && (
+                                                <Folder className="h-3 w-3" aria-label={`Carpeta ${chatFolders[chat.id]}`} />
+                                              )}
+                                              {scheduledChats[chat.id] && (
+                                                <CalendarDays className="h-3 w-3" aria-label="Chat programado" />
+                                              )}
+                                            </span>
+                                            {/* Timestamp fades on row-hover so the 3-dot menu
+                                                doesn't fight it for the right slot. tabular-nums
+                                                keeps widths aligned between "3h" and "12d".
+                                                Lote D · #97 — native title surfaces the absolute
+                                                timestamp on hover (e.g. "22/5/2026 4:38"). Using
+                                                the native browser tooltip keeps it free of layout
+                                                cost and works on touch via long-press. */}
+                                            <span
+                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0"
+                                              title={(() => {
+                                                try {
+                                                  const d = new Date(chat.updatedAt)
+                                                  return Number.isNaN(d.getTime())
+                                                    ? ""
+                                                    : d.toLocaleString("es-ES", {
+                                                        dateStyle: "medium",
+                                                        timeStyle: "short",
+                                                      })
+                                                } catch { return "" }
+                                              })()}
+                                            >
+                                              {formatChatTimeCompact(chat.updatedAt)}
+                                            </span>
+                                          </div>
+                                  </SidebarMenuButton>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className={cn(
+                                          CHAT_ROW_SLOT,
+                                          "opacity-100 text-muted-foreground md:opacity-0 transition-opacity md:group-hover:opacity-100",
+                                        )}
+                                        aria-label="Acciones del chat"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent
+                                      align="end"
+                                      onClick={(e) => e.stopPropagation()}
+                                      sideOffset={6}
+                                      className={CHAT_ACTION_MENU}
+                                    >
+                                      <DropdownMenuItem onSelect={() => deferChatMenuAction(() => handleEditClick(chat))} className={CHAT_ACTION_ITEM}>
+                                        <Edit2 className={CHAT_ACTION_ICON} />Renombrar
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onSelect={() => { void togglePinnedChat(chat) }} className={CHAT_ACTION_ITEM}>
+                                        <Pin className={CHAT_ACTION_ICON} />{isChatPinned(chat) ? "Desfijar" : "Fijar"}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem disabled={!folderStore.ready} onSelect={() => setChatUnread(chat.id, !folderStore.state.unreadIds.includes(chat.id))} className={CHAT_ACTION_ITEM}>
+                                        <Circle className={CHAT_ACTION_ICON} />{folderStore.state.unreadIds.includes(chat.id) ? "Marcar como leído" : "Marcar como no leído"}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onSelect={() => { void archiveChat(chat) }} className={CHAT_ACTION_ITEM}>
+                                        <Archive className={CHAT_ACTION_ICON} />{chat.isArchived || archivedChatIds.includes(chat.id) ? "Desarchivar" : "Archivar"}
+                                      </DropdownMenuItem>
+                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger disabled={!folderStore.ready} className={CHAT_ACTION_ITEM}>
+                                          <FolderInput className={CHAT_ACTION_ICON} />Proyecto
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
+                                            {moveMenuFolders.map((folder) => (
+                                              <DropdownMenuItem key={folder} onSelect={() => moveChatToFolder(chat, folder)} className={CHAT_ACTION_ITEM}>
+                                                <Folder className={CHAT_ACTION_ICON} />{folder}
+                                                {isSameChatFolder(chatFolders[chat.id] || "", folder) && <Check className="ml-auto h-3.5 w-3.5" />}
+                                              </DropdownMenuItem>
+                                            ))}
+                                            <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
+                                            <DropdownMenuItem onSelect={() => deferChatMenuAction(() => openCreateFolderDialog(chat))} className={CHAT_ACTION_ITEM}>
+                                              <Plus className={CHAT_ACTION_ICON} />Nueva carpeta…
+                                            </DropdownMenuItem>
+                                            {chatFolders[chat.id] && <DropdownMenuItem onSelect={() => moveChatToFolder(chat, null)} className={CHAT_ACTION_ITEM}><X className={CHAT_ACTION_ICON} />Quitar del proyecto</DropdownMenuItem>}
+                                          </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                      </DropdownMenuSub>
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger disabled={!folderStore.ready} className={CHAT_ACTION_ITEM}><List className={CHAT_ACTION_ICON} />Sección</DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
+                                            {folderStore.state.sections.map((section) => <DropdownMenuItem key={section} onSelect={() => moveChatToSection(chat, section)} className={CHAT_ACTION_ITEM}>{section}{folderStore.state.chatSections[chat.id] === section && <Check className="ml-auto h-3.5 w-3.5" />}</DropdownMenuItem>)}
+                                            <DropdownMenuItem onSelect={() => deferChatMenuAction(() => { setSectionTarget(chat); setSectionName("") })} className={CHAT_ACTION_ITEM}><Plus className={CHAT_ACTION_ICON} />Nueva sección…</DropdownMenuItem>
+                                            {folderStore.state.chatSections[chat.id] && <DropdownMenuItem onSelect={() => moveChatToSection(chat, null)} className={CHAT_ACTION_ITEM}>Quitar de la sección</DropdownMenuItem>}
+                                          </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                      </DropdownMenuSub>
+                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
+                                      <DropdownMenuItem onSelect={() => deferChatMenuAction(() => { setShareTarget(chat); setShareLink("") })} className={CHAT_ACTION_ITEM}><Share2 className={CHAT_ACTION_ICON} />Compartir</DropdownMenuItem>
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger className={CHAT_ACTION_ITEM}><Copy className={CHAT_ACTION_ICON} />Copiar</DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
+                                            <DropdownMenuItem onSelect={() => { void copyChat(chat, "link") }} className={CHAT_ACTION_ITEM}>Enlace de la conversación</DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => { void copyChat(chat, "title") }} className={CHAT_ACTION_ITEM}>Título</DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => { void copyChat(chat, "text") }} className={CHAT_ACTION_ITEM}>Texto de la conversación</DropdownMenuItem>
+                                          </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                      </DropdownMenuSub>
+                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
+                                      <DropdownMenuItem onSelect={() => window.open(agentsHomeHref(`id=${encodeURIComponent(chat.id)}`), "_blank", "noopener,noreferrer")} className={CHAT_ACTION_ITEM}><ExternalLink className={CHAT_ACTION_ICON} />Abrir en nueva ventana</DropdownMenuItem>
+                                      <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger className={CHAT_ACTION_ITEM}><MoreHorizontal className={CHAT_ACTION_ICON} />Más</DropdownMenuSubTrigger>
+                                        <DropdownMenuPortal>
+                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
+                                            <DropdownMenuItem onSelect={() => { void downloadChatExport(chat) }} className={CHAT_ACTION_ITEM}><Download className={CHAT_ACTION_ICON} />Descargar</DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => deferChatMenuAction(() => openScheduleDialog(chat))} className={CHAT_ACTION_ITEM}><CalendarDays className={CHAT_ACTION_ICON} />Programar</DropdownMenuItem>
+                                            <DropdownMenuItem onSelect={() => hideChatLocally(chat)} className={CHAT_ACTION_ITEM}><EyeOff className={CHAT_ACTION_ICON} />Ocultar</DropdownMenuItem>
+                                            <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
+                                            <DropdownMenuItem onSelect={() => deferChatMenuAction(() => requestDeleteChat(chat, displayTitle))} className={cn(CHAT_ACTION_ITEM, "text-red-600 focus:text-red-700")}><Trash2 className={CHAT_ACTION_ICON} />Eliminar</DropdownMenuItem>
+                                          </DropdownMenuSubContent>
+                                        </DropdownMenuPortal>
+                                      </DropdownMenuSub>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
+                                </>
+                              )}
+                            </div>
+                          </SidebarMenuItem>
+                        )
+                      }
+
 
   // Check if we're on GPTs page
   const isOnChatPage = isAgentsHomePath(activePathname)
@@ -1599,6 +1964,7 @@ export function AppSidebar() {
                 type="button"
                 data-sidebar-folders-add="1"
                 onClick={() => openCreateFolderDialog()}
+                disabled={!folderStore.ready}
                 className={FOLDER_ADD_ICON}
                 aria-label="Nueva carpeta"
                 title="Nueva carpeta"
@@ -1611,84 +1977,52 @@ export function AppSidebar() {
               data-sidebar-folders-list="1"
               className={cn("pb-1", (state === "closed" || foldersCollapsed) && "hidden")}
             >
-              {visibleChatFolders.length === 0 ? (
-                <p className="px-2 pb-1 text-[11px] leading-snug text-muted-foreground">
-                  Crea una carpeta con + y envíale conversaciones.
-                </p>
+              {!folderStore.ready ? (
+                <p className="px-2 py-2 text-xs text-muted-foreground" role="status">Cargando carpetas…</p>
               ) : (
-                visibleChatFolders.map((folder) => {
-                  const isActive = Boolean(selectedFolder && isSameChatFolder(selectedFolder, folder))
-                  const isDropTarget = Boolean(folderDropTarget && isSameChatFolder(folderDropTarget, folder))
-                  const folderCount = countChatsInFolder(chatFolders, folder)
-                  return (
-                  <div key={folder} className="group flex w-full items-center gap-0.5">
-                    <button
-                      type="button"
-                      data-sidebar-folder-row="1"
-                      aria-pressed={isActive}
-                      onClick={() => toggleSelectedFolder(folder)}
-                      onDragOver={(event) => {
-                        event.preventDefault()
-                        event.dataTransfer.dropEffect = "move"
-                        setFolderDropTarget(folder)
-                      }}
-                      onDragLeave={() => {
-                        setFolderDropTarget((current) => (current && isSameChatFolder(current, folder) ? null : current))
-                      }}
-                      onDrop={(event) => handleFolderDrop(event, folder)}
-                      className={cn(
-                        "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-left text-sm text-foreground/85 transition-colors",
-                        "hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                        isActive && "bg-muted text-foreground",
-                        isDropTarget && "ring-2 ring-ring/50 bg-muted",
-                      )}
-                    >
-                      <Folder className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      <span className="truncate">{folder}</span>
-                      <span className="ml-auto tabular-nums text-[11px] text-muted-foreground/70">{folderCount}</span>
-                    </button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className={cn(CHAT_ROW_SLOT, "text-muted-foreground hover:bg-muted/70 hover:text-foreground")}
-                          aria-label={`Acciones de la carpeta ${folder}`}
-                        >
-                          <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className={CHAT_ACTION_MENU}>
-                        <DropdownMenuItem
-                          onSelect={() => deferChatMenuAction(() => openSendChatToFolderDialog(folder))}
-                          className={CHAT_ACTION_ITEM}
-                        >
-                          <Send className={CHAT_ACTION_ICON} />
-                          Enviar conversación
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => deferChatMenuAction(() => openRenameFolderDialog(folder))}
-                          className={CHAT_ACTION_ITEM}
-                        >
-                          <Edit2 className={CHAT_ACTION_ICON} />
-                          Renombrar
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          onSelect={() => deferChatMenuAction(() => removeNamedFolder(folder))}
-                          className={cn(
-                            CHAT_ACTION_ITEM,
-                            "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700",
-                          )}
-                        >
-                          <Trash2 className={CHAT_ACTION_ICON} />
-                          Eliminar
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  )
-                })
+                <ChatFolderTree
+                  folders={visibleChatFolders.map((name) => ({ name, isPinned: Boolean(folderStore.state.metadata[chatFolderKey(name)]?.isPinned), description: folderStore.state.metadata[chatFolderKey(name)]?.description }))}
+                  expandedFolders={expandedFolders}
+                  activeFolder={selectedFolder}
+                  onToggleExpand={toggleSelectedFolder}
+                  onTogglePin={toggleFolderPin}
+                  onEdit={openRenameFolderDialog}
+                  onNewChat={(name) => { void createFolderChat(name) }}
+                  onSendChat={openSendChatToFolderDialog}
+                  onDelete={removeNamedFolder}
+                  onDrop={handleFolderDrop}
+                  getChatCount={(name) => countChatsInFolder(Object.fromEntries(Object.entries(chatFolders).filter(([id]) => !archivedChatIds.includes(id) && !hiddenChatIds.includes(id) && !allFolderChats.find((chat) => chat.id === id)?.isArchived)), name)}
+                  renderChats={(name) => (
+                    <>
+                      {(() => {
+                        const items = sortChatsNewestFirst(filterChatsByFolder(allFolderChats, chatFolders, name).filter((chat) => !chat.isArchived && !archivedChatIds.includes(chat.id) && !hiddenChatIds.includes(chat.id)))
+                        return <>
+                          {items.filter((chat) => !folderStore.state.chatSections[chat.id]).map(renderChatItem)}
+                          {folderStore.state.sections.map((section) => {
+                            const grouped = items.filter((chat) => folderStore.state.chatSections[chat.id] === section)
+                            return grouped.length ? <li key={`section:${section}`}><p className="px-2 pt-2 text-xs text-muted-foreground">{section}</p><ul>{grouped.map(renderChatItem)}</ul></li> : null
+                          })}
+                        </>
+                      })()}
+                      {folderLoading.includes(chatFolderKey(name)) && <li className="px-2 py-2 text-xs text-muted-foreground" role="status">Cargando conversaciones…</li>}
+                    </>
+                  )}
+                />
               )}
+              {folderStore.ready && folderStore.legacyNames.length > 0 && (
+                <details className="px-2 py-2 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">Carpetas anteriores de este navegador</summary>
+                  <p className="my-2">Puedes importar estos nombres a tu cuenta: {folderStore.legacyNames.join(", ")}. Comprueba que te pertenecen.</p>
+                  <button type="button" onClick={folderStore.importLegacyNames} className="underline">Importar estas carpetas</button>
+                </details>
+              )}
+              {folderStore.error && (
+                <div className="px-2 py-1 text-xs" role="alert">
+                  <span>{folderStore.error}</span>{" "}
+                  <button type="button" onClick={folderStore.retry} className="underline">Reintentar</button>
+                </div>
+              )}
+              {folderStore.saving && <p className="px-2 text-xs text-muted-foreground" role="status">Guardando carpetas…</p>}
             </div>
             <div
               id="sidebar-recent-chats-toolbar"
@@ -1715,7 +2049,7 @@ export function AppSidebar() {
                   )}
                   aria-hidden="true"
                 />
-                <span className="truncate">{selectedFolder || t("recentChats")}</span>
+                <span className="truncate">{t("recentChats")}</span>
                 {isLoadingChats || isLoadingMore ? (
                   <ThinkingIndicator
                     size="xs"
@@ -1806,7 +2140,7 @@ export function AppSidebar() {
                       </button>
                       {filterOpenRow === row.key && (
                         <div className="pb-1 pl-2">
-                          {row.options.map(([id, label]) => (
+                          {row.options.map(([id, label]: readonly [string, string]) => (
                             <button
                               key={id}
                               type="button"
@@ -1911,9 +2245,10 @@ export function AppSidebar() {
                       // just shows the fine offset ("3h", "2d").
                       const titledChats = chats.map((chat) => ({
                         ...chat,
+                        ...(Object.prototype.hasOwnProperty.call(archiveOverrides, chat.id) ? { isArchived: archiveOverrides[chat.id] } : {}),
                         title: getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title).title,
                       }))
-                      const scopedChats = filterChatsByFolder(titledChats, chatFolders, selectedFolder)
+                      const scopedChats = chatStatusFilter !== "active" ? allFolderChats : titledChats.filter((chat) => !chatFolders[chat.id])
                       const visibleChats = filterRecentChats(scopedChats, {
                         type: chatTypeFilter,
                         status: chatStatusFilter,
@@ -1925,17 +2260,17 @@ export function AppSidebar() {
                       })
                       const visibleById = new Map(visibleChats.map((chat) => [chat.id, chat]))
                       const serverPinnedIds = visibleChats
-                        .filter((chat) => Boolean((chat as any)?.isPinned))
+                        .filter((chat) => isChatPinned(chat))
                         .sort((a, b) => new Date((b as any).pinnedAt || b.updatedAt || 0).getTime() - new Date((a as any).pinnedAt || a.updatedAt || 0).getTime())
                         .map((chat) => chat.id)
                       const renderPinnedIds = Array.from(new Set([...serverPinnedIds, ...pinnedChatIds]))
                       const showPinnedSection = chatStatusFilter === "active" && chatGroupBy === "date"
                       const pinnedChats = showPinnedSection
-                        ? renderPinnedIds.map((id) => visibleById.get(id)).filter(Boolean) as any[]
+                        ? renderPinnedIds.map((id) => visibleById.get(id)).filter((chat) => chat && isChatPinned(chat)) as any[]
                         : []
                       const pinnedSet = new Set(pinnedChats.map((chat) => chat.id))
                       const validChats = sortChatsNewestFirst(
-                        visibleChats.filter((chat) => !pinnedSet.has(chat.id)),
+                        visibleChats.filter((chat) => !pinnedSet.has(chat.id) && !folderStore.state.chatSections[chat.id]),
                       )
                       const buckets = groupChatsByTime(validChats)
                       const hasVisibleChats = visibleChats.length > 0
@@ -1945,281 +2280,6 @@ export function AppSidebar() {
                         ["last7Days", t("last7Days")],
                         ["older", t("older")],
                       ]
-
-                      const renderChatItem = (chat: any) => {
-                        const isEditing = editingChatId === chat.id
-                        const { title: displayTitle } = getSidebarChatTitleParts(optimisticUpdates[chat.id] || chat.title)
-                        const isTruncated = displayTitle.length > 25
-                        // Per-chat status — compact left rail:
-                        // spinner while generating, blue dot for a
-                        // freshly completed task, red dot for an error.
-                        const streamStatus = bgStreams.get(chat.id)?.status
-                        const isStreaming = streamStatus === "streaming"
-                        const isComplete = streamStatus === "done"
-                        const isFailed = streamStatus === "error"
-
-                        return (
-                          <SidebarMenuItem key={chat.id} className="chat-history-item">
-                            <div
-                              className="flex w-full items-center gap-0.5 group"
-                              draggable={!isEditing}
-                              onDragStart={(event) => {
-                                event.dataTransfer.setData("text/plain", encodeChatFolderDragId(chat.id))
-                                event.dataTransfer.effectAllowed = "move"
-                              }}
-                            >
-                              {isEditing ? (
-                                <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-                                  <Input
-                                    ref={editInputRef}
-                                    value={editTitle}
-                                    onChange={(e) => setEditTitle(e.target.value)}
-                                    onKeyDown={(e) => handleEditKeyDown(e, chat.id)}
-                                    onBlur={() => handleSaveEdit(chat.id)}
-                                    className="h-7 text-sm flex-1 px-2 py-1"
-                                    onClick={(e) => e.stopPropagation()}
-                                    autoFocus
-                                  />
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-6 w-6 p-0 hover:bg-green-100 dark:hover:bg-green-900/20"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleSaveEdit(chat.id)
-                                    }}
-                                  >
-                                    <Check className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />
-                                  </Button>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    className="h-6 w-6 p-0 hover:bg-red-100 dark:hover:bg-red-900/20"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      handleCancelEdit()
-                                    }}
-                                  >
-                                    <X className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <>
-                                  <SidebarMenuButton
-                                        isActive={currentChatId === chat.id && isAgentsHomePath(pathname)}
-                                        aria-current={currentChatId === chat.id && isAgentsHomePath(pathname) ? 'page' : undefined}
-                                        title={isTruncated ? displayTitle : undefined}
-                                        onClick={() => !isEditing && handleChatClick(chat.id)}
-                                        className={cn(
-                                          "h-8 min-w-0 flex-1 justify-start py-0 pr-1 transition-all",
-                                          "focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1",
-                                        )}
-                                      >
-                                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                                            {/* Emoji como ancla izquierda (pegado al borde de
-                                                la fila). Antes había una columna de estado
-                                                vacía delante que empujaba el emoji ~24px a la
-                                                derecha en todos los chats inactivos; ahora el
-                                                estado vive como un punto-badge en la esquina
-                                                del emoji, de modo que el glifo queda alineado a
-                                                la izquierda y todas las filas comparten el mismo
-                                                ancho de columna (h-5 w-5). */}
-                                            {/* No per-chat emoji — clean, ChatGPT-like titles.
-                                                A leading slot only appears for chats with an
-                                                actual status (generating / done / error); normal
-                                                chats keep the title flush-left. */}
-                                            {(isStreaming || isComplete || isFailed) && (
-                                              <span
-                                                className="relative flex h-4 w-4 shrink-0 items-center justify-center leading-none"
-                                                aria-hidden={isStreaming ? undefined : true}
-                                                title={
-                                                  isStreaming
-                                                    ? "Generando..."
-                                                    : isComplete
-                                                      ? "Tarea completada"
-                                                      : "Tarea con error"
-                                                }
-                                              >
-                                                {isStreaming ? (
-                                                  <ThinkingIndicator
-                                                    size="xs"
-                                                    label="Chat en progreso"
-                                                    className="text-muted-foreground/80"
-                                                  />
-                                                ) : (
-                                                  <span
-                                                    className={cn(
-                                                      "h-2 w-2 rounded-full",
-                                                      isComplete
-                                                        ? "bg-sky-500 shadow-[0_0_0_3px_rgba(14,165,233,0.16)]"
-                                                        : "bg-destructive/85"
-                                                    )}
-                                                    aria-label={isComplete ? "Tarea completada" : "Tarea con error"}
-                                                  />
-                                                )}
-                                              </span>
-                                            )}
-                                            <span className="text-sm flex-1 truncate">
-                                              {displayTitle}
-                                            </span>
-                                            <span className="flex shrink-0 items-center gap-1 text-muted-foreground/55">
-                                              {isChatPinned(chat) && (
-                                                <Pin className="h-3 w-3" aria-label="Chat fijado" />
-                                              )}
-                                              {chatFolders[chat.id] && (
-                                                <Folder className="h-3 w-3" aria-label={`Carpeta ${chatFolders[chat.id]}`} />
-                                              )}
-                                              {scheduledChats[chat.id] && (
-                                                <CalendarDays className="h-3 w-3" aria-label="Chat programado" />
-                                              )}
-                                            </span>
-                                            {/* Timestamp fades on row-hover so the 3-dot menu
-                                                doesn't fight it for the right slot. tabular-nums
-                                                keeps widths aligned between "3h" and "12d".
-                                                Lote D · #97 — native title surfaces the absolute
-                                                timestamp on hover (e.g. "22/5/2026 4:38"). Using
-                                                the native browser tooltip keeps it free of layout
-                                                cost and works on touch via long-press. */}
-                                            <span
-                                              className="text-[11px] text-muted-foreground/60 shrink-0 tabular-nums transition-opacity duration-150 group-hover:opacity-0"
-                                              title={(() => {
-                                                try {
-                                                  const d = new Date(chat.updatedAt)
-                                                  return Number.isNaN(d.getTime())
-                                                    ? ""
-                                                    : d.toLocaleString("es-ES", {
-                                                        dateStyle: "medium",
-                                                        timeStyle: "short",
-                                                      })
-                                                } catch { return "" }
-                                              })()}
-                                            >
-                                              {formatChatTimeCompact(chat.updatedAt)}
-                                            </span>
-                                          </div>
-                                  </SidebarMenuButton>
-                                  <DropdownMenu>
-                                    <DropdownMenuTrigger asChild>
-                                      <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        className={cn(
-                                          CHAT_ROW_SLOT,
-                                          "opacity-100 text-muted-foreground md:opacity-0 transition-opacity md:group-hover:opacity-100",
-                                        )}
-                                        aria-label="Acciones del chat"
-                                        onClick={(e) => e.stopPropagation()}
-                                      >
-                                        <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-                                      </Button>
-                                    </DropdownMenuTrigger>
-                                    <DropdownMenuContent
-                                      align="end"
-                                      onClick={(e) => e.stopPropagation()}
-                                      sideOffset={6}
-                                      className={CHAT_ACTION_MENU}
-                                    >
-                                      <DropdownMenuItem
-                                        onSelect={() => { void togglePinnedChat(chat) }}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <Pin className={CHAT_ACTION_ICON} />
-                                        {isChatPinned(chat) ? "Desfijar chat" : "Fijar chat"}
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        onSelect={() => deferChatMenuAction(() => handleEditClick(chat))}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <Edit2 className={CHAT_ACTION_ICON} />
-                                        Editar
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger className={CHAT_ACTION_ITEM}>
-                                          <Folder className={CHAT_ACTION_ICON} />
-                                          Mover a carpeta
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuPortal>
-                                          <DropdownMenuSubContent className={CHAT_ACTION_SUBMENU}>
-                                            {moveMenuFolders.map((folder) => (
-                                              <DropdownMenuItem
-                                                key={folder}
-                                                onSelect={() => moveChatToFolder(chat, folder)}
-                                                className={CHAT_ACTION_ITEM}
-                                              >
-                                                <Folder className={CHAT_ACTION_ICON} />
-                                                {folder}
-                                                {chatFolders[chat.id] === folder && <Check className="ml-auto h-3.5 w-3.5" />}
-                                              </DropdownMenuItem>
-                                            ))}
-                                            <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
-                                            <DropdownMenuItem
-                                              onSelect={() => deferChatMenuAction(() => openCreateFolderDialog(chat))}
-                                              className={CHAT_ACTION_ITEM}
-                                            >
-                                              <Plus className={CHAT_ACTION_ICON} />
-                                              Nueva carpeta...
-                                            </DropdownMenuItem>
-                                            {chatFolders[chat.id] && (
-                                              <DropdownMenuItem
-                                                onSelect={() => moveChatToFolder(chat, null)}
-                                                className={CHAT_ACTION_ITEM}
-                                              >
-                                                <X className={CHAT_ACTION_ICON} />
-                                                Quitar de carpeta
-                                              </DropdownMenuItem>
-                                            )}
-                                          </DropdownMenuSubContent>
-                                        </DropdownMenuPortal>
-                                      </DropdownMenuSub>
-                                      <DropdownMenuItem
-                                        onSelect={() => { void downloadChatExport(chat) }}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <Download className={CHAT_ACTION_ICON} />
-                                        Descargar
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        onSelect={() => deferChatMenuAction(() => openScheduleDialog(chat))}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <CalendarDays className={CHAT_ACTION_ICON} />
-                                        Programar
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
-                                      <DropdownMenuItem
-                                        onSelect={() => { void archiveChat(chat) }}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <Archive className={CHAT_ACTION_ICON} />
-                                        Archivar
-                                      </DropdownMenuItem>
-                                      <DropdownMenuItem
-                                        onSelect={() => hideChatLocally(chat)}
-                                        className={CHAT_ACTION_ITEM}
-                                      >
-                                        <EyeOff className={CHAT_ACTION_ICON} />
-                                        Ocultar
-                                      </DropdownMenuItem>
-                                      <DropdownMenuSeparator className={CHAT_ACTION_SEP} />
-                                      <DropdownMenuItem
-                                        onSelect={() => deferChatMenuAction(() => requestDeleteChat(chat, displayTitle))}
-                                        onClick={() => deferChatMenuAction(() => requestDeleteChat(chat, displayTitle))}
-                                        className={cn(
-                                          CHAT_ACTION_ITEM,
-                                          "text-red-600 focus:bg-red-500/10 focus:text-red-700 data-[highlighted]:bg-red-500/10 data-[highlighted]:text-red-700 dark:text-red-400 dark:focus:text-red-300 dark:data-[highlighted]:text-red-300",
-                                        )}
-                                      >
-                                        <Trash2 className={CHAT_ACTION_ICON} />
-                                        Eliminar
-                                      </DropdownMenuItem>
-                                    </DropdownMenuContent>
-                                  </DropdownMenu>
-                                </>
-                              )}
-                            </div>
-                          </SidebarMenuItem>
-                        )
-                      }
 
                       // Static date separators — they only label/count each
                       // bucket now. Collapsing happens once at the "Recent
@@ -2237,24 +2297,9 @@ export function AppSidebar() {
                         return (
                           <div className="px-3 py-5 text-center">
                             <p className="text-sm font-medium text-foreground/80">
-                              {selectedFolder ? "Esta carpeta está vacía" : "Ningún chat coincide"}
+                              Ningún chat coincide
                             </p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {selectedFolder
-                                ? "Envía una conversación o arrástrala aquí."
-                                : "Prueba otro filtro o busca en todo el historial."}
-                            </p>
-                            {selectedFolder ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                className="mt-3"
-                                onClick={() => openSendChatToFolderDialog(selectedFolder)}
-                              >
-                                Enviar conversación
-                              </Button>
-                            ) : null}
+                            <p className="mt-1 text-xs text-muted-foreground">Prueba otro filtro o abre una carpeta.</p>
                           </div>
                         )
                       }
@@ -2269,6 +2314,10 @@ export function AppSidebar() {
                               </div>
                             </React.Fragment>
                           )}
+                          {folderStore.state.sections.map((section) => {
+                            const items = visibleChats.filter((chat) => folderStore.state.chatSections[chat.id] === section && !pinnedSet.has(chat.id))
+                            return items.length ? <React.Fragment key={`section:${section}`}>{renderChatGroupHeader(section, items.length)}{items.map(renderChatItem)}</React.Fragment> : null
+                          })}
                           {chatGroupBy === "none"
                             ? (
                               <div>
@@ -2649,7 +2698,7 @@ export function AppSidebar() {
       >
         <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle>{folderDialogRenameFrom ? "Renombrar carpeta" : "Nueva carpeta"}</DialogTitle>
+            <DialogTitle>{folderDialogRenameFrom ? "Editar proyecto" : "Nueva carpeta"}</DialogTitle>
             <DialogDescription>
               {folderDialogRenameFrom
                 ? "El nombre se actualiza en todos los chats de esta carpeta."
@@ -2677,6 +2726,10 @@ export function AppSidebar() {
                 autoFocus
                 maxLength={60}
               />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="sidebar-folder-description">Descripción</label>
+              <Textarea id="sidebar-folder-description" value={folderDescription} onChange={(event) => setFolderDescription(event.target.value)} maxLength={500} placeholder="¿Qué organizas en este proyecto?" />
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={closeFolderDialog}>
@@ -2740,6 +2793,25 @@ export function AppSidebar() {
             <Button type="button" variant="outline" onClick={closeSendChatToFolderDialog}>
               Cerrar
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(sectionTarget)} onOpenChange={(open) => { if (!open) setSectionTarget(null) }}>
+        <DialogContent className="max-w-sm rounded-2xl">
+          <DialogHeader><DialogTitle>Nueva sección</DialogTitle><DialogDescription>Agrupa conversaciones en una sección de la barra lateral.</DialogDescription></DialogHeader>
+          <form onSubmit={(event) => { event.preventDefault(); const name = normalizeChatFolderName(sectionName); if (name && sectionTarget) { moveChatToSection(sectionTarget, name); setSectionTarget(null); setSectionName("") } }}>
+            <Input aria-label="Nombre de la sección" value={sectionName} onChange={(event) => setSectionName(event.target.value)} maxLength={60} autoFocus />
+            <DialogFooter className="mt-4"><Button type="button" variant="outline" onClick={() => setSectionTarget(null)}>Cancelar</Button><Button type="submit" disabled={!sectionName.trim()}>Crear</Button></DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(shareTarget)} onOpenChange={(open) => { if (!open && !sharing) { setShareTarget(null); setShareLink("") } }}>
+        <DialogContent className="max-w-md rounded-2xl">
+          <DialogHeader><DialogTitle>Compartir conversación</DialogTitle><DialogDescription>Cualquier persona con el enlace podrá ver el contenido compartido de esta conversación.</DialogDescription></DialogHeader>
+          {shareLink && <Input aria-label="Enlace compartido" readOnly value={shareLink} onFocus={(event) => event.target.select()} />}
+          <DialogFooter>
+            <Button variant="outline" disabled={sharing} onClick={() => { setShareTarget(null); setShareLink("") }}>Cerrar</Button>
+            {shareLink ? <Button onClick={async () => { try { await navigator.clipboard.writeText(shareLink); toast.success("Enlace copiado") } catch { toast.error("Selecciona y copia el enlace") } }}>Copiar enlace</Button> : <Button disabled={sharing} onClick={() => { void createShareLink() }}>{sharing ? "Creando enlace…" : "Crear enlace"}</Button>}
           </DialogFooter>
         </DialogContent>
       </Dialog>

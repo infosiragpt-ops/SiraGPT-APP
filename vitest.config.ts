@@ -27,7 +27,7 @@ export default defineConfig({
     },
   },
   oxc: {
-    jsx: 'automatic',
+    jsx: { runtime: 'automatic' },
   },
   resolve: {
     alias: {
@@ -35,3 +35,4 @@ export default defineConfig({
     },
   },
 })
+

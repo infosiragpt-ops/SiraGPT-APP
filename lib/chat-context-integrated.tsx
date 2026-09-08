@@ -1090,7 +1090,7 @@ export function ChatProvider({ children }: { children: React.ReactNode }) {
   // }
   const loadUserChats = async (page: number = 1, limit: number = 20) => {
     try {
-      const response = await apiClient.getChats({ page, limit })
+      const response = await apiClient.getChats({ page, limit, includeArchived: true })
 
       if (page === 1) {
         // First page - replace all chats
@@ -4524,3 +4524,4 @@ export function useChat(): ChatContextType {
     resetChats: list.resetChats,
   }), [list, current, streaming, mf])
 }
+

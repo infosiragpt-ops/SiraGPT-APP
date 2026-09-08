@@ -16,6 +16,8 @@
 import React from "react"
 import { authenticatedFetch } from "./authenticated-fetch"
 
+import { withoutSidebarFolderSettings } from "./sidebar-folder-state"
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api"
 const STORAGE_KEY = "siraGPT-settings"
 
@@ -272,7 +274,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       authenticatedFetch(`${API_BASE}/users/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        // Folder organization has its own account-scoped writer. A settings
+        // screen hydrated earlier must not restore its stale folder snapshot.
+        body: JSON.stringify(withoutSidebarFolderSettings(settings)),
       })
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`)

@@ -5,6 +5,7 @@ import path from "node:path"
 
 const sidebarPath = path.join(process.cwd(), "components", "app-sidebar.tsx")
 const source = fs.readFileSync(sidebarPath, "utf8")
+const folderTreeSource = fs.readFileSync(path.join(process.cwd(), "components/sidebar/chat-folder-tree.tsx"), "utf8")
 
 describe("app sidebar single recent-chats collapse source contract", () => {
   it("persists one collapsed state for the whole recent-chats section", () => {
@@ -74,15 +75,16 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     const foldersStart = source.indexOf('id="sidebar-chat-folders-toolbar"')
     const recentsStart = source.indexOf('id="sidebar-recent-chats-toolbar"')
     const folders = source.slice(foldersStart, recentsStart)
-    assert.match(folders, /data-sidebar-folder-row="1"/)
+    assert.match(folders, /ChatFolderTree/)
+    assert.match(folderTreeSource, /aria-expanded=\{expanded\}/)
     assert.match(folders, /openSendChatToFolderDialog/)
-    assert.match(folders, /Enviar conversación/)
+    assert.match(folderTreeSource, /Agregar conversación/)
     assert.match(folders, /onDrop=/)
     assert.match(source, /selectedFolder/)
     assert.match(source, /filterChatsByFolder/)
     assert.match(source, /encodeChatFolderDragId/)
     assert.match(source, /draggable=\{!isEditing\}/)
-    assert.match(source, /Esta carpeta está vacía/)
+    assert.match(folderTreeSource, /Sin chats/)
   })
 
   it("opens the centered ChatSearchDialog from the recent-chats lupa and ⌘K", () => {
@@ -131,3 +133,4 @@ describe("app sidebar recent-chats toolbar source contract", () => {
     assert.match(source, /label="Apps"/)
   })
 })
+

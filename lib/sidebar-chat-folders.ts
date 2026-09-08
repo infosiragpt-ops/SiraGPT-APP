@@ -108,7 +108,7 @@ export function renameChatFolder(
 ): { assignments: Record<string, string>; named: string[] } {
   const current = normalizeChatFolderName(from)
   const nextName = normalizeChatFolderName(to)
-  if (!current || !nextName || current.toLowerCase() === nextName.toLowerCase()) {
+  if (!current || !nextName || current === nextName) {
     return {
       assignments: { ...assignments },
       named: listChatFolderNames(assignments, named),
