@@ -78,6 +78,12 @@ describe("agentes-coding API client", () => {
       if (url.endsWith("/sessions/csb_1/files") && init?.method === "PUT") {
         return jsonResponse({ ok: true, file: { path: "a.ts", bytes: 9 } })
       }
+      if (url.includes("/sessions/csb_1/map")) {
+        return jsonResponse({
+          ok: true,
+          hints: [{ name: "a.ts", path: "a.ts", kind: "file", score: 1 }],
+        })
+      }
       return jsonResponse({ error: "not_found" }, 404)
     })
     const api = createAgentesCodingApi({
@@ -90,6 +96,15 @@ describe("agentes-coding API client", () => {
     expect(await api.listFiles(session.id)).toEqual([{ path: "a.ts", size: 2 }])
     expect(await api.readFile(session.id, "a.ts")).toBe("export {}")
     expect(await api.writeFile(session.id, "a.ts", "export {}")).toEqual({ path: "a.ts", bytes: 9 })
+    expect(await api.repoMap(session.id, { limit: 8 })).toEqual({
+      ok: true,
+      hints: [{ name: "a.ts", path: "a.ts", kind: "file", score: 1 }],
+      omitted: undefined,
+      scanned: undefined,
+      headerBytes: undefined,
+      query: undefined,
+    })
     expect(String(request.mock.calls[0][0])).toBe("https://sira.test/api/agentes-coding/sessions")
+    expect(String(request.mock.calls.at(-1)?.[0])).toContain("/sessions/csb_1/map?limit=8")
   })
 })

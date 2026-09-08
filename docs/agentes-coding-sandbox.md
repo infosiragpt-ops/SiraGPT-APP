@@ -19,6 +19,7 @@ that file is not on the branch yet). License / Tier S catalog:
 | Module | `backend/src/services/agentes-coding/coding-sandbox/` |
 | HTTP | `GET /api/agentes-coding/health` always 200 `{ ok, enabled }` |
 | Sessions | `/api/agentes-coding/sessions*` — **404** unless the flag is on |
+| Repo-map | `GET|POST /sessions/:id/map` — Phase 3b, see [`docs/agentes-coding-repomap.md`](./agentes-coding-repomap.md) |
 | DEV compose | `docker-compose.coding-sandbox.yml` profile `agentes-coding` |
 
 Interface (same on memory + docker drivers):
@@ -67,5 +68,5 @@ Monaco on `/agentes`): [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md).
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js
 ```

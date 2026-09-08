@@ -8,7 +8,14 @@ export {
   type CodingSession,
   type CodingFileEntry,
   type CodingExecResult,
+  type CodingRepoMapHint,
+  type CodingRepoMap,
 } from "./api"
 
 export { useAgentesCodingHealth } from "./health"
-export { buildFileTree, languageFromPath, type FileTreeNode } from "./file-tree"
+export {
+  buildFileTree,
+  languageFromPath,
+  applyMapHints,
+  type FileTreeNode,
+} from "./file-tree"
