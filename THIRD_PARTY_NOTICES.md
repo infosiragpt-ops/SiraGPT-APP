@@ -80,6 +80,17 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   separate; Spanish errors replace Conectada-style success when the
   transport never confirmed the send. Not a dump of
   `docs/concepts/message-lifecycle-refactor.md` or any channel plugin.
+  Gateway-style session isolation in
+  `backend/src/services/agents/session-isolation.js` (wired through
+  `agent-gateway/index.js`, `agent-gateway/event-log.js`,
+  `agent-gateway/http.js`, `agent-task-event-resume.js`,
+  `agent-task-cancel.js`, `tool-failure-circuit.js`, `overlap-lease.js`
+  and `delivery-receipt.js`) is a native CommonJS rewrite of OpenClaw
+  multi-user session-scope ideas: owner-scoped abort, Last-Event-ID
+  exclusive to that owner, and a Spanish `[DENEGACIÓN]` audit line for
+  circuit / lease / receipt denials. Not a dump of `gateway/` or
+  `sessions/`. Snapshot SHA
+  `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**

@@ -74,7 +74,7 @@ function newToken() {
 }
 
 function heldResult({ jobId = null, distributed = true, fallback = null } = {}) {
-  return {
+  const out = {
     ok: false,
     code: 'overlap_skipped',
     error: 'overlap_skipped',
@@ -83,6 +83,15 @@ function heldResult({ jobId = null, distributed = true, fallback = null } = {}) 
     distributed: Boolean(distributed),
     fallback,
   };
+  try {
+    require('../agents/session-isolation').attachAuditLine(out, {
+      kind: 'lease',
+      code: 'overlap_skipped',
+      jobId,
+      label: OVERLAP_HELD_REASON_ES,
+    });
+  } catch { /* audit is best-effort */ }
+  return out;
 }
 
 function parseSetFlags(args) {

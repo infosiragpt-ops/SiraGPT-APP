@@ -153,13 +153,22 @@ function createDeliveryReceipt(input = {}) {
 }
 
 function rejectedReceipt(errorCode, extra = {}) {
-  return createDeliveryReceipt({
+  const receipt = createDeliveryReceipt({
     accepted: false,
     delivered: false,
     status: DELIVERY_STATUSES.REJECTED,
     errorCode,
     ...extra,
   });
+  try {
+    require('../../services/agents/session-isolation').attachAuditLine(receipt, {
+      kind: 'receipt',
+      code: (receipt.error && receipt.error.code) || errorCode,
+      channel: receipt.channel,
+      label: receipt.error && receipt.error.message,
+    });
+  } catch { /* audit is best-effort */ }
+  return receipt;
 }
 
 function acceptedNotDeliveredReceipt(errorCode, extra = {}) {

@@ -18,6 +18,11 @@ const {
   WORKER_STALLED_REASON,
   WORKER_STALLED_MESSAGE,
 } = require('./agent-task-runtime-watchdog');
+const {
+  authorizeEventReplay,
+  emptyResumePayload,
+  recordDenialAudit,
+} = require('./session-isolation');
 
 const IN_FLIGHT_STATUSES = Object.freeze(['queued', 'running']);
 const TERMINAL_STATUSES = Object.freeze(['completed', 'cancelled', 'error', 'failed']);
@@ -254,7 +259,30 @@ function beginSseResume({
   lastEventId,
   events = [],
   lastEventSeq = 0,
+  actorUserId,
+  ownerUserId,
 } = {}) {
+  if (actorUserId != null) {
+    const auth = authorizeEventReplay({
+      ownerUserId,
+      actorUserId,
+      sessionKnown: true,
+    });
+    if (!auth.allowed) {
+      recordDenialAudit({
+        kind: 'replay',
+        code: auth.code,
+        reason: auth.reason,
+        label: auth.message,
+      });
+      return {
+        lastSeq: 0,
+        ackedTerminal: false,
+        pending: [],
+        advisory: null,
+      };
+    }
+  }
   const cursor = resolveResumeCursor({ sinceSeq, after, lastEventId, events });
   const classified = classifyResumeCursor({
     cursor,
@@ -291,7 +319,24 @@ function buildTaskEventsResumePayload(task, {
   lastEventId,
   now = Date.now(),
   freshMs = SNAPSHOT_FRESH_MS,
+  actorUserId,
 } = {}) {
+  if (actorUserId != null) {
+    const auth = authorizeEventReplay({
+      ownerUserId: task && task.userId,
+      actorUserId,
+      sessionKnown: Boolean(task && (task.taskId || task.userId)),
+    });
+    if (!auth.allowed) {
+      recordDenialAudit({
+        kind: 'replay',
+        code: auth.code,
+        reason: auth.reason,
+        label: auth.message,
+      });
+      return emptyResumePayload(auth);
+    }
+  }
   const allEvents = Array.isArray(task && task.events) ? task.events : [];
   const cursor = resolveResumeCursor({
     sinceSeq,
