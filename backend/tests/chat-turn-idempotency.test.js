@@ -633,7 +633,11 @@ describe('chat turn idempotency', () => {
     assert.match(activeSource, /const activeWait = await waitForActiveTurn\(activeTurn\)/);
     assert.match(
       activeSource,
-      /return respondGenerateTurnError\(res, \{[\s\S]*?code: 'turn_in_progress'/,
+      /activeWait\.outcome === 'replay'[\s\S]*?streamDuplicateTurnReplay/,
+    );
+    assert.doesNotMatch(
+      activeSource,
+      /code: 'turn_in_progress'/,
     );
     assert.match(
       activeSource,
@@ -649,7 +653,20 @@ describe('chat turn idempotency', () => {
     assert.match(activeSource, /claimStreamController\([\s\S]*?\{ replaceOwner: true \}/);
     assert.match(
       activeSource,
-      /duplicateTurn\?\.idempotencyConflict[\s\S]*?IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/,
+      /duplicateTurn\?\.idempotencyConflict[\s\S]*?generateLog\.warn\(\s*'idempotency\.payload_conflict'/,
+    );
+    assert.doesNotMatch(
+      activeSource,
+      /duplicateTurn\?\.idempotencyConflict[\s\S]*?respondGenerateTurnError/,
+    );
+    assert.doesNotMatch(activeSource, /IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_PAYLOAD/);
+    assert.match(
+      activeSource,
+      /generateLog\.warn\(\s*'idempotency\.stale_turn_dropped'/,
+    );
+    assert.match(
+      activeSource,
+      /activeGenerateTurns\.delete\(activeGenerateTurnKey\)/,
     );
     assert.match(lookupSource, /findMessagesByTurnIdentity\(\{[\s\S]*?roles: \['USER', 'ASSISTANT'\]/);
     assert.doesNotMatch(lookupSource, /timestamp:\s*\{\s*gte:|take:\s*80/);

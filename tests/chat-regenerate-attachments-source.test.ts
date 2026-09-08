@@ -8,7 +8,7 @@ const source = fs.readFileSync(contextPath, "utf8")
 
 describe("chat regenerate attachments source contract", () => {
   it("reuses the shared file-id collector so refresh JSON strings keep attachments", () => {
-    assert.match(source, /import \{ collectMessageFileIds \} from "\.\/chat\/composer-files"/)
+    assert.match(source, /import \{[^}]*\bcollectMessageFileIds\b[^}]*\} from "\.\/chat\/composer-files"/)
     assert.match(source, /collectMessageFileIds\(originalUserMessage\.files\)/)
     assert.match(source, /collectMessageFileIds\(parsedFiles\)/)
     assert.doesNotMatch(

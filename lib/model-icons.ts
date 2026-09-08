@@ -209,7 +209,7 @@ export function resolveModelIconName(model: ModelIconInput | null | undefined): 
   if (has(searchable, /groq\/|\bgroq\b/)) return "MessageSquare"
   if (has(searchable, /nvidia|nemotron/)) return "NvidiaLogo"
   if (has(searchable, /poolside|laguna/)) return "PoolsideLogo"
-  if (has(searchable, /llama|meta-llama|meta\//)) return "MetaLogo"
+  if (has(searchable, /llama|meta-llama|meta\/|muse[-\s]?spark|muse[-\s]?image/)) return "MetaLogo"
   if (has(searchable, /mistral|codestral/)) return "MistralLogo"
   if (has(searchable, /fal\.ai|fal-ai\//)) return "FalLogo"
 

@@ -93,6 +93,16 @@ test('detects a TTS/audio (narration) request and language/voice', () => {
   assert.equal(r.specs.voice, 'female');
 });
 
+test('detects "créame un audio: Juan vende papas en el mercado" as speech, not HTML', () => {
+  const r = detectMediaIntent('créame un audio: Juan vende papas en el mercado');
+  assert.equal(r.kind, 'audio');
+  assert.equal(r.tool, 'generate_speech');
+  const hint = buildMediaIntentHint(r);
+  assert.match(hint, /generate_speech/);
+  assert.match(hint, /speechSynthesis|Web Speech API/);
+  assert.match(hint, /PROHIBIDO/);
+});
+
 test('returns no intent for non-media chat', () => {
   assert.equal(detectMediaIntent('¿cuál es la capital de Francia?').kind, null);
   assert.equal(detectMediaIntent('explícame qué es una API REST').kind, null);

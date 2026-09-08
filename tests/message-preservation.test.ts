@@ -206,3 +206,43 @@ test('re-inserts a visible user message if the backend refresh drops the turn', 
   assert.deepEqual((merged[2] as any).files, [{ id: 'img-1', mimeType: 'image/png' }]);
   assert.equal(merged[3].content, 'LAS NORMAS A USAR SON VANCOUVER');
 });
+
+test('replaces empty msg-ai placeholder with persisted cmti row of the same turn', () => {
+  const turn = { idempotencyKey: 'turn-hola' };
+  const localChat = {
+    id: 'chat-1',
+    messages: [
+      { id: 'msg-user-abc', role: 'USER', content: 'hola', metadata: turn },
+      {
+        id: 'msg-ai-chat-1-xyz',
+        role: 'ASSISTANT',
+        content: '',
+        metadata: turn,
+        model: { name: 'grok-4.5', displayName: 'Grok 4.5', provider: 'xAI' },
+      },
+    ],
+  };
+  const incomingChat = {
+    id: 'chat-1',
+    messages: [
+      { id: 'cmtuser01', role: 'USER', content: 'hola', metadata: turn },
+      {
+        id: 'cmtassist01',
+        role: 'ASSISTANT',
+        content: 'Hola, Luis. ¿En qué te ayudo hoy?',
+        metadata: { ...turn, generationUsage: { model: 'grok-4.5' } },
+      },
+    ],
+  };
+
+  const merged = mergeChatPreservingUserMessages(incomingChat, localChat);
+  const assistants = merged.messages.filter((message) => String(message.role).toUpperCase() === 'ASSISTANT');
+  assert.equal(assistants.length, 1);
+  assert.equal(assistants[0].id, 'cmtassist01');
+  assert.equal(assistants[0].content, 'Hola, Luis. ¿En qué te ayudo hoy?');
+  assert.deepEqual((assistants[0] as { model?: unknown }).model, {
+    name: 'grok-4.5',
+    displayName: 'Grok 4.5',
+    provider: 'xAI',
+  });
+});
