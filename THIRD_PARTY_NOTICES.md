@@ -114,9 +114,15 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   clarifying-ask contract (`questions[]` with `header` / `options` /
   `multiple`; replies are arrays of labels; Construir pauses on the
   existing permission-resume card; Planificar may ask read-only
-  clarifications that never unlock writes).
+  clarifications that never unlock writes), batched `multiedit`
+  (atomic jailed edits[] with unique old_str; Planificar stays
+  read-only), and a `task` subagent spawn stub that queues a child
+  job via the existing agent-task APIs (`enqueueAgentTask` /
+  `createTaskRecord`; Planificar only read-only children; no LLM
+  loop in the stub).
   ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
-  `edit.ts` / `src/lsp/diagnostic.ts` / `question.ts` — see AGENTS.md §25.
+  `edit.ts` / `src/lsp/diagnostic.ts` / `question.ts` / `task.ts`
+  — see AGENTS.md §25.
   The native helpers are local and deterministic — no title-agent
   LLM, no Effect runtime, no Snapshot git-diff, no MAX_STEPS
   prompt dump, no ripgrep sidecar, no global tool-output

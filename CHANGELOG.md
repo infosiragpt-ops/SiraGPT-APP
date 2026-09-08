@@ -8,6 +8,17 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode native `multiedit` applies a jailed batch of unique
+  `old_str` → `new_str` replacements atomically (nothing is written
+  if one edit misses). Planificar stays read-only; Construir goes
+  through composer / permission-resume. Spanish errors. Not a dump
+  of anomalyco/opencode `edit.ts`.
+- SiraCode `task` is a subagent spawn stub: it queues a child job
+  via the existing agent-task APIs (`enqueueAgentTask` /
+  `createTaskRecord`). Planificar may only spawn read-only children
+  (`general` / `planificar`). No LLM loop in the stub. Not a dump
+  of `task.ts`.
+
 - SiraCode `diagnostics` summarizes workspace LSP/syntax issues with
   the OpenCode report contract (`ERROR [line:col]`,
   `<diagnostics file="…">` blocks, per-file cap). Optional injectable

@@ -5,7 +5,8 @@
  *
  * Contract inspired by OpenCode file tools (anomalyco/opencode, MIT):
  * read(path, offset, limit), write(path, content), edit(path, old_str, new_str)
- * with unique occurrence, size caps, binary reject, path jail. Native
+ * plus batched `multiedit` (edits[] applied atomically inside the jail).
+ * Unique occurrence, size caps, binary reject, path jail. Native
  * CommonJS — not a copy of vendor/opencode read.ts / write.ts / edit.ts.
  * No Effect, no LSP, no Snapshot, no OpenRouter.
  */
@@ -18,6 +19,8 @@ const { truncateToolResult } = require('./tool-result');
 const DEFAULT_READ_LIMIT = 2_000;
 const MAX_LINE_CHARS = 2_000;
 const BINARY_SNIFF_BYTES = 8_192;
+const MAX_MULTI_EDITS = 32;
+const MAX_MULTI_FILES = 16;
 const BINARY_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf',
   '.zip', '.gz', '.7z', '.exe', '.dll', '.so', '.dylib',
@@ -40,6 +43,12 @@ const ERRORS = Object.freeze({
   read_failed: 'no se pudo leer el archivo',
   write_failed: 'no se pudo escribir el archivo',
   edit_failed: 'no se pudo editar el archivo',
+  validation_edits: 'edits debe ser una lista',
+  validation_edits_empty: 'edits no puede estar vacía',
+  validation_edits_limit: 'demasiadas ediciones en el lote',
+  validation_files_limit: 'demasiados archivos en el lote',
+  multiedit_failed: 'no se pudo aplicar el lote',
+  multiedit_partial: 'el lote no se aplicó; se restauraron los archivos',
 });
 
 function cap(text) {
@@ -291,17 +300,158 @@ async function runEdit(workspace, args) {
   }
 }
 
+function pickEditPath(item, fallback) {
+  return String((item && (item.path || item.filePath || item.file_path || item.filename))
+    || fallback
+    || '').trim();
+}
+
+function pickOldNew(item) {
+  const oldRaw = item && (item.old_str != null
+    ? item.old_str
+    : (item.oldString != null ? item.oldString : item.old));
+  const newRaw = item && (item.new_str != null
+    ? item.new_str
+    : (item.newString != null
+      ? item.newString
+      : (item.content != null ? item.content : item.new)));
+  return {
+    oldRaw,
+    newRaw: newRaw == null ? '' : newRaw,
+    replaceAll: Boolean(item && (item.replaceAll === true || item.replace_all === true)),
+  };
+}
+
+function normalizeEdits(args) {
+  const fallbackPath = pickPath(args);
+  const raw = args && (args.edits || args.changes || args.replacements);
+  if (raw == null) {
+    return { ok: false, code: 'validation', error: ERRORS.validation_edits };
+  }
+  if (!Array.isArray(raw)) {
+    return { ok: false, code: 'validation', error: ERRORS.validation_edits };
+  }
+  if (!raw.length) {
+    return { ok: false, code: 'validation', error: ERRORS.validation_edits_empty };
+  }
+  if (raw.length > MAX_MULTI_EDITS) {
+    return { ok: false, code: 'validation', error: ERRORS.validation_edits_limit };
+  }
+  const edits = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i] || {};
+    const rel = pickEditPath(item, fallbackPath);
+    const pair = pickOldNew(item);
+    if (!rel) return { ok: false, code: 'validation', error: ERRORS.validation_path };
+    if (pair.oldRaw == null || String(pair.oldRaw) === '') {
+      return { ok: false, code: 'validation', error: ERRORS.validation_old };
+    }
+    edits.push({
+      path: rel,
+      old_str: String(pair.oldRaw),
+      new_str: String(pair.newRaw),
+      replaceAll: pair.replaceAll,
+      index: i,
+    });
+  }
+  const files = new Set(edits.map((item) => item.path));
+  if (files.size > MAX_MULTI_FILES) {
+    return { ok: false, code: 'validation', error: ERRORS.validation_files_limit };
+  }
+  return { ok: true, edits };
+}
+
+function applyEditsInMemory(current, edits) {
+  const ending = detectLineEnding(current);
+  let next = current;
+  let replacements = 0;
+  for (const edit of edits) {
+    const needle = applyLineEnding(edit.old_str, ending);
+    const replacement = applyLineEnding(edit.new_str, ending);
+    const before = next;
+    next = replaceUnique(next, needle, replacement, { replaceAll: edit.replaceAll });
+    replacements += edit.replaceAll ? countOccurrences(before, needle) : 1;
+  }
+  return { text: next, replacements };
+}
+
+async function runMultiedit(workspace, args) {
+  const normalized = normalizeEdits(args || {});
+  if (!normalized.ok) return toolError(normalized.code, normalized.error);
+  const byFile = new Map();
+  for (const edit of normalized.edits) {
+    const list = byFile.get(edit.path) || [];
+    list.push(edit);
+    byFile.set(edit.path, list);
+  }
+
+  const planned = [];
+  try {
+    for (const [rel, fileEdits] of byFile) {
+      await resolveTarget(workspace, rel);
+      const current = await workspace.readFile(rel);
+      const applied = applyEditsInMemory(current, fileEdits);
+      if (Buffer.byteLength(applied.text, 'utf8') > MAX_FILE_BYTES) {
+        return toolError('file_too_large', ERRORS.file_too_large);
+      }
+      planned.push({
+        path: rel,
+        original: current,
+        text: applied.text,
+        replacements: applied.replacements,
+      });
+    }
+  } catch (err) {
+    return mapFsError(err, 'multiedit_failed', ERRORS.multiedit_failed);
+  }
+
+  const written = [];
+  try {
+    for (const file of planned) {
+      const saved = await workspace.writeFile(file.path, file.text);
+      written.push({ ...file, path: saved });
+    }
+  } catch (err) {
+    for (const file of written) {
+      try {
+        await workspace.writeFile(file.path, file.original);
+      } catch {
+        // best-effort restore; the batch still fails
+      }
+    }
+    const mapped = mapFsError(err, 'multiedit_failed', ERRORS.multiedit_failed);
+    return { ...mapped, code: written.length ? 'multiedit_partial' : mapped.code };
+  }
+
+  const total = written.reduce((sum, file) => sum + file.replacements, 0);
+  const names = written.map((file) => file.path).join(', ');
+  return toolOk(`editados ${names} (${total} reemplazo${total === 1 ? '' : 's'})`, {
+    paths: written.map((file) => file.path),
+    files: written.map((file) => ({
+      path: file.path,
+      replacements: file.replacements,
+    })),
+    replacements: total,
+    edits: normalized.edits.length,
+  });
+}
+
 module.exports = {
   DEFAULT_READ_LIMIT,
   MAX_LINE_CHARS,
   BINARY_SNIFF_BYTES,
   BINARY_EXTS,
+  MAX_MULTI_EDITS,
+  MAX_MULTI_FILES,
   ERRORS,
   looksBinary,
   countOccurrences,
   replaceUnique,
   formatReadOutput,
+  normalizeEdits,
+  applyEditsInMemory,
   runRead,
   runWrite,
   runEdit,
+  runMultiedit,
 };

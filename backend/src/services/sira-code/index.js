@@ -27,6 +27,7 @@ const shellSandbox = require('./shell-sandbox');
 const fileTools = require('./file-tools');
 const diagnostics = require('./diagnostics');
 const questionTool = require('./question-tool');
+const taskSpawn = require('./task-spawn');
 
 module.exports = {
   ...agents,
@@ -49,6 +50,7 @@ module.exports = {
   runRead: fileTools.runRead,
   runWrite: fileTools.runWrite,
   runEdit: fileTools.runEdit,
+  runMultiedit: fileTools.runMultiedit,
   replaceUnique: fileTools.replaceUnique,
   FILE_TOOL_ERRORS: fileTools.ERRORS,
   runDiagnostics: diagnostics.runDiagnostics,
@@ -61,4 +63,7 @@ module.exports = {
   publicQuestions: questionTool.publicQuestions,
   runQuestion: questionTool.runQuestion,
   QUESTION_ERRORS: questionTool.ERRORS,
+  runTask: taskSpawn.runTask,
+  resolveSubagentType: taskSpawn.resolveSubagentType,
+  TASK_SPAWN_ERRORS: taskSpawn.ERRORS,
 };

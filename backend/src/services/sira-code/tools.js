@@ -2,7 +2,8 @@
 
 /**
  * Permissioned SiraCode tools: read, write/edit, bash, grep, glob.
- * Also ls, apply_patch, webfetch, todo, diagnostics and question.
+ * Also ls, apply_patch, webfetch, todo, diagnostics, question,
+ * multiedit and task.
  *
  * File tools stay inside the session workspace. bash/shell runs through
  * the native allowlist (shell-sandbox) then execInWorkspace (scrubbed
@@ -17,9 +18,10 @@ const { runWebFetch } = require('./webfetch');
 const { runTodo } = require('./todos');
 const { authorizeShellCommand, ERRORS: SHELL_ERRORS } = require('./shell-sandbox');
 const { searchGrep, searchGlob } = require('./search');
-const { runRead, runWrite, runEdit } = require('./file-tools');
+const { runRead, runWrite, runEdit, runMultiedit } = require('./file-tools');
 const { runDiagnostics } = require('./diagnostics');
 const { runQuestion } = require('./question-tool');
+const { runTask } = require('./task-spawn');
 
 function cap(text) {
   return truncateToolResult(text).content;
@@ -127,6 +129,8 @@ const EXECUTORS = {
   todo: runTodoTool,
   diagnostics: runDiagnosticsTool,
   question: runQuestion,
+  multiedit: runMultiedit,
+  task: runTask,
 };
 
 async function executeTool(session, toolName, args = {}, ctx = {}) {
@@ -365,6 +369,51 @@ const TOOL_DEFINITIONS = [
           },
         },
         required: ['questions'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'multiedit',
+      description: 'Aplica un lote de ediciones jailed (edits[] con path, old_str, new_str; opcional replaceAll). Atómico: si una falla, no escribe. Planificar: denegado. Construir: sujeto a permiso/revisor.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          edits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                old_str: { type: 'string' },
+                new_str: { type: 'string' },
+                replaceAll: { type: 'boolean' },
+              },
+              required: ['old_str', 'new_str'],
+            },
+          },
+        },
+        required: ['edits'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'task',
+      description: 'Encola un subagente (stub) vía las APIs de agent-task. description + prompt + subagent_type (general|planificar|construir). task_id reanuda. Planificar solo lanza hijos de lectura. No espera el resultado ni ejecuta un bucle LLM.',
+      parameters: {
+        type: 'object',
+        properties: {
+          description: { type: 'string' },
+          prompt: { type: 'string' },
+          subagent_type: { type: 'string' },
+          task_id: { type: 'string' },
+          background: { type: 'boolean' },
+        },
+        required: ['prompt', 'subagent_type'],
       },
     },
   },
