@@ -27,6 +27,7 @@ function harness({ update = async () => ({}) } = {}) {
     prisma: { message: { update } },
     serializeAgentState: JSON.stringify,
     artifacts: [], displayGoal: 'Synthetic fixture', maxSteps: 1, maxRuntimeMs: 1000,
+    ...require('../src/services/agents/agent-task-honest-progress'),
   };
   for (const key of [
     'executionProfile', 'intentAlignmentProfile', 'taskPlan', 'openclawRuntimeProfile',

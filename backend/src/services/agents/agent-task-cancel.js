@@ -16,6 +16,7 @@
  */
 
 const { isInFlightTaskStatus } = require('./agent-task-event-resume');
+const { recordDenialAudit, DENIAL_LABELS_ES } = require('./session-isolation');
 
 const CANCEL_CODE = 'E_CANCELLED';
 
@@ -26,6 +27,7 @@ const CANCEL_REASONS = Object.freeze({
   ALREADY_REQUESTED: 'already_requested',
   ALREADY_SIGNALLED: 'already_signalled',
   ALREADY_TERMINAL: 'already_terminal',
+  FORBIDDEN: 'forbidden',
 });
 
 function normalizeStatus(task) {
@@ -61,7 +63,22 @@ function result({ apply, already, reason, status }) {
  * An AbortSignal that is already aborted (timeout / orphan close) is NOT
  * enough to skip — only a prior Stop marker is.
  */
-function decideTaskCancel(task) {
+function decideTaskCancel(task, opts = {}) {
+  if (opts.actorUserId != null && task && task.userId
+    && String(task.userId) !== String(opts.actorUserId)) {
+    recordDenialAudit({
+      kind: 'abort',
+      code: 'forbidden',
+      reason: 'cancel_forbidden',
+      label: DENIAL_LABELS_ES.cancel_forbidden,
+    });
+    return result({
+      apply: false,
+      already: false,
+      reason: CANCEL_REASONS.FORBIDDEN,
+      status: null,
+    });
+  }
   if (!task || typeof task !== 'object') {
     return result({
       apply: false,
@@ -121,8 +138,8 @@ function decideTaskCancel(task) {
  * Same decision, then latch the task so a concurrent reconnect retry
  * cannot apply a second cancel. Safe to call twice.
  */
-function claimTaskCancel(task, { now = Date.now() } = {}) {
-  const decision = decideTaskCancel(task);
+function claimTaskCancel(task, { now = Date.now(), actorUserId } = {}) {
+  const decision = decideTaskCancel(task, { actorUserId });
   if (!decision.apply || !task || typeof task !== 'object') return decision;
   task.cancelClaimed = true;
   task.cancelRequestedAt = new Date(now).toISOString();
@@ -133,6 +150,7 @@ function isCancelAck(decision) {
   if (!decision) return false;
   if (decision.reason === CANCEL_REASONS.NOT_FOUND) return false;
   if (decision.reason === CANCEL_REASONS.ALREADY_TERMINAL) return false;
+  if (decision.reason === CANCEL_REASONS.FORBIDDEN) return false;
   return decision.apply || decision.already;
 }
 

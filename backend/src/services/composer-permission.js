@@ -28,6 +28,12 @@ const WRITE_TOOLS = new Set([
   'computer_edit_file',
   'clone_project',
   'apply_patch',
+  'multiedit',
+  'multi_edit',
+  'batch_edit',
+  'task',
+  'spawn_task',
+  'subagent',
 ]);
 
 const COMMAND_TOOLS = new Set([
@@ -68,6 +74,18 @@ const TOOL_ALIASES = Object.freeze({
   web_fetch: 'webfetch',
   todo: 'todo',
   todowrite: 'todo',
+  diagnostics: 'diagnostics',
+  lsp_diagnostics: 'diagnostics',
+  diagnostic: 'diagnostics',
+  question: 'question',
+  user_ask: 'question',
+  ask_user: 'question',
+  multiedit: 'multiedit',
+  multi_edit: 'multiedit',
+  batch_edit: 'multiedit',
+  task: 'task',
+  spawn_task: 'task',
+  subagent: 'task',
 });
 
 function canonicalTool(name) {

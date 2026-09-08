@@ -28,6 +28,7 @@ const WRITE_MAX_PER_WINDOW = writeGuard.WRITE_MAX_PER_WINDOW;
 const WRITE_WINDOW_MS = writeGuard.WRITE_WINDOW_MS;
 const NOTE_MAX_CHARS = 400;
 const NOTES_STORE_LIMIT = 1800;
+const NOTE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const DEFAULT_KEEP_RECENT = 2;
 
 const LAYER_RANK = Object.freeze({
@@ -130,15 +131,27 @@ function normalizeNote(note) {
   if (typeof note === 'string') {
     const text = note.trim();
     if (!text) return null;
-    return { id: noteId(), text, sourceCount: 0, createdAt: 0 };
+    return { id: noteId(), text, sourceCount: 0, createdAt: 0, expiresAt: 0 };
   }
   const text = String(note.text || '').trim();
   if (!text) return null;
+  const createdAt = Number(note.createdAt) || 0;
+  const explicitExpiry = Number(note.expiresAt);
+  const ttlMs = Number.isFinite(Number(note.ttlMs)) && Number(note.ttlMs) > 0
+    ? Number(note.ttlMs)
+    : NOTE_TTL_MS;
+  let expiresAt = 0;
+  if (Number.isFinite(explicitExpiry) && explicitExpiry > 0) {
+    expiresAt = explicitExpiry;
+  } else if (createdAt > 0) {
+    expiresAt = createdAt + ttlMs;
+  }
   return {
     id: String(note.id || noteId()),
     text,
     sourceCount: Number.isFinite(Number(note.sourceCount)) ? Number(note.sourceCount) : 0,
-    createdAt: Number(note.createdAt) || 0,
+    createdAt,
+    expiresAt,
   };
 }
 
@@ -147,7 +160,7 @@ function notesCharCount(notes) {
   return notes.map((note) => note.text).join('\n').length;
 }
 
-function sessionLayers(userId) {
+function sessionLayers(userId, opts = {}) {
   const id = normalizeUserId(userId);
   if (!id) {
     return { profile: [], log: [], notes: [] };
@@ -159,7 +172,7 @@ function sessionLayers(userId) {
   const log = live.ok && live.memory
     ? live.memory.entries.map((text, index) => ({ text, index, createdAt: index }))
     : [];
-  const notes = curated.listNotes(id).map((note, index) => ({
+  const notes = curated.listNotes(id, opts).map((note, index) => ({
     ...note,
     index,
   }));
@@ -223,6 +236,7 @@ function persistCompactedLog(userId, recent, note, opts = {}) {
       text: folded,
       sourceCount: currentNotes.reduce((sum, row) => sum + (row.sourceCount || 1), 0) + note.sourceCount,
       createdAt: note.createdAt,
+      expiresAt: note.expiresAt,
     });
     curated.setNotes(userId, foldedNote ? [foldedNote] : [note]);
   } else {
@@ -242,10 +256,13 @@ function finishCompact(userId, older, recent, summaryResult, opts) {
   if (!summaryResult.ok) return summaryResult;
   const accepted = acceptSummary(summaryResult.text);
   if (!accepted.ok) return accepted;
+  const createdAt = nowMs(opts);
+  const ttlMs = positiveInt(opts.noteTtlMs, NOTE_TTL_MS);
   const note = normalizeNote({
     text: accepted.text.slice(0, positiveInt(opts.noteMaxChars, NOTE_MAX_CHARS)),
     sourceCount: older.length,
-    createdAt: nowMs(opts),
+    createdAt,
+    expiresAt: createdAt + ttlMs,
   });
   if (!note) {
     return fail('E_PARAMS', 'Falló la compactación de memoria. El resumen quedó vacío.');
@@ -383,7 +400,7 @@ function retrieve(userId, query, opts = {}) {
 
   const limit = Math.min(25, positiveInt(opts.limit, 8));
   const terms = tokenize(query);
-  const layers = sessionLayers(id);
+  const layers = sessionLayers(id, opts);
   const items = [];
 
   for (const row of layers.profile) {
@@ -413,10 +430,10 @@ function retrieve(userId, query, opts = {}) {
   return { ok: true, success: true, hits, count: hits.length };
 }
 
-function readSession(userId) {
+function readSession(userId, opts = {}) {
   const id = normalizeUserId(userId);
   if (!id) return { ok: false, ...missingUser('leer memoria') };
-  const layers = sessionLayers(id);
+  const layers = sessionLayers(id, opts);
   return {
     ok: true,
     success: true,
@@ -427,6 +444,7 @@ function readSession(userId) {
       text: row.text,
       sourceCount: row.sourceCount,
       createdAt: row.createdAt,
+      expiresAt: row.expiresAt || 0,
     })),
   };
 }
@@ -439,8 +457,8 @@ function neutralizeNote(text) {
     .trim();
 }
 
-function renderNotesBlock(userId) {
-  const notes = curated.listNotes(userId);
+function renderNotesBlock(userId, opts = {}) {
+  const notes = curated.listNotes(userId, opts);
   if (!notes.length) return '';
   const lines = notes.map((note) => neutralizeNote(note.text));
   const used = notesCharCount(notes);
@@ -462,6 +480,7 @@ function status(userId) {
     writeMaxPerWindow: WRITE_MAX_PER_WINDOW,
     writeWindowMs: WRITE_WINDOW_MS,
     noteMaxChars: NOTE_MAX_CHARS,
+    noteTtlMs: NOTE_TTL_MS,
   };
   const id = normalizeUserId(userId);
   if (!id) return base;
@@ -484,6 +503,7 @@ module.exports = {
   WRITE_WINDOW_MS,
   NOTE_MAX_CHARS,
   NOTES_STORE_LIMIT,
+  NOTE_TTL_MS,
   DEFAULT_KEEP_RECENT,
   LAYER_RANK,
   checkFactSize,

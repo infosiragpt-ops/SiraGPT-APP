@@ -10,6 +10,7 @@ const sessionManager = require('../session-manager');
 const curatedMemory = require('./hermes-curated-memory');
 const { assertMemoryWrite } = require('./memory-write-guard');
 const sessionCompaction = require('./hermes-memory-compaction');
+const memoryPortability = require('./hermes-memory-portability');
 
 function normalizeText(text) {
   return String(text || '')
@@ -69,6 +70,28 @@ function remember(userId, fact, opts = {}) {
     confidence: opts.confidence ?? 0.75,
     maxChars: opts.maxChars,
   });
+}
+
+function rememberCurated(userId, fact, opts = {}) {
+  return curatedMemory.rememberFact(userId, fact, opts);
+}
+
+function forgetCurated(userId, query) {
+  const curated = curatedMemory.forgetFact(userId, query);
+  let activeRemoved = 0;
+  try {
+    activeRemoved = Number(activeMemory.forget(userId, query)?.removed) || 0;
+  } catch {
+    activeRemoved = 0;
+  }
+  return {
+    ...curated,
+    activeRemoved,
+  };
+}
+
+function promoteMemoryToUser(userId, opts = {}) {
+  return curatedMemory.promoteMemoryToUser(userId, opts);
 }
 
 function recall(userId, query, opts = {}) {
@@ -173,7 +196,9 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction', 'hermes-memory-portability', 'hermes-memory-conflict'],
+    portability: memoryPortability.status(),
+    conflict: require('./hermes-memory-conflict').status(),
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
     curated: curatedMemory.status(userId),
     compaction: sessionCompaction.status(userId),
@@ -188,6 +213,9 @@ function status(userId = null) {
 
 module.exports = {
   remember,
+  rememberCurated,
+  forgetCurated,
+  promoteMemoryToUser,
   recall,
   promote,
   buildMemoryPrompt,
@@ -197,10 +225,16 @@ module.exports = {
   curatedReplace: curatedMemory.replace,
   curatedRemove: curatedMemory.remove,
   curatedRead: curatedMemory.read,
+  curatedPin: curatedMemory.pin,
+  curatedUnpin: curatedMemory.unpin,
+  listFacts: curatedMemory.listFacts,
+  resolveConflicts: curatedMemory.resolveConflicts,
   searchSessions,
   retrieveRanked,
   compactSession,
   recordSession: sessionCompaction.record,
+  exportSnapshot: memoryPortability.exportSnapshot,
+  importSnapshot: memoryPortability.importSnapshot,
   nudgePromotion,
   listEntries,
   status,

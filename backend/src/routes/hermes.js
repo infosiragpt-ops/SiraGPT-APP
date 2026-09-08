@@ -177,6 +177,50 @@ router.post('/memory/search-sessions', optionalAuth, (req, res) => {
   res.json({ hits: memoryBridge.searchSessions(userId, req.body?.query || '', { limit: req.body?.limit }) });
 });
 
+router.post('/memory/export', optionalAuth, (req, res) => {
+  const result = memoryBridge.exportSnapshot(req.body?.userId, {
+    sessionUserId: req.user?.id,
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  return res.json(result);
+});
+
+router.post('/memory/import', optionalAuth, (req, res) => {
+  const result = memoryBridge.importSnapshot(req.body?.userId, req.body?.snapshot, {
+    sessionUserId: req.user?.id,
+    mode: req.body?.mode,
+    requireSameOwner: req.body?.requireSameOwner,
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  return res.json(result);
+});
+
+router.post('/memory/resolve', optionalAuth, (req, res) => {
+  const result = memoryBridge.resolveConflicts(req.body?.userId, {
+    sessionUserId: req.user?.id,
+    dryRun: req.body?.dryRun === true,
+    chatId: req.body?.chatId,
+  });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  return res.json(result);
+});
+
+router.post('/memory/pin', optionalAuth, (req, res) => {
+  const userId = req.user?.id || req.body?.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const result = memoryBridge.curatedPin(userId, { old_text: req.body?.old_text || req.body?.query });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  return res.json(result);
+});
+
+router.post('/memory/unpin', optionalAuth, (req, res) => {
+  const userId = req.user?.id || req.body?.userId;
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  const result = memoryBridge.curatedUnpin(userId, { old_text: req.body?.old_text || req.body?.query });
+  if (!result.ok) return res.status(result.status || 400).json(result);
+  return res.json(result);
+});
+
 router.post('/delegate', optionalAuth, async (req, res) => {
   const userId = req.user?.id || req.body?.userId;
   if (!userId) return res.status(400).json({ error: 'userId required' });

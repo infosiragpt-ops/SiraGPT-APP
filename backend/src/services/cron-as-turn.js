@@ -11,6 +11,16 @@
 const inFlight = new Map(); // [owner, jobId] -> { sessionKey, startedAt, abort }
 const { raceWithSignal } = require('../utils/retry-with-backoff');
 const { redactString } = require('../utils/secret-redactor');
+const {
+  acquireJobOverlap,
+  releaseJobOverlap,
+  startJobOverlapRenew,
+  OVERLAP_HELD_REASON_ES,
+} = require('./scheduler/overlap-lease');
+
+function isThenable(value) {
+  return Boolean(value && typeof value.then === 'function');
+}
 
 const DEFAULT_CRON_TURN_TIMEOUT_MS = 180_000;
 const MAX_CRON_PROMPT_CHARS = 8000;
@@ -137,16 +147,43 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
     return { ok: false, error: 'prompt_too_long', code: 'prompt_too_long', sessionKey: args.sessionKey, jobId: id };
   }
   if (shouldSkipOverlappingTick(id, now, 120_000, args.userId)) {
-    return { ok: false, error: 'overlap_skipped', jobId: id };
+    return {
+      ok: false,
+      error: 'overlap_skipped',
+      code: 'overlap_skipped',
+      reason: OVERLAP_HELD_REASON_ES,
+      jobId: id,
+    };
   }
   if (inFlight.size >= MAX_CONCURRENT_CRON_TICKS) {
     return { ok: false, error: 'cron_busy', code: 'cron_busy', jobId: id };
+  }
+
+  // Local acquire is synchronous so timeout tests can tick in the same
+  // turn the dispatcher schedules setTimeout. Redis acquire is async.
+  const claimed = acquireJobOverlap({
+    jobId: id,
+    ownerId: args.userId,
+    holderId: 'cron-as-turn',
+  });
+  const claim = isThenable(claimed) ? await claimed : claimed;
+  if (!claim.ok) {
+    return {
+      ok: false,
+      error: 'overlap_skipped',
+      code: 'overlap_skipped',
+      reason: claim.reason || OVERLAP_HELD_REASON_ES,
+      jobId: id,
+      distributed: Boolean(claim.distributed),
+      fallback: claim.fallback || null,
+    };
   }
 
   const timeoutMs = cronTurnTimeoutMs();
   const abort = { aborted: false, reason: null };
   const key = inflightKey(id, args.userId);
   const activeTick = { sessionKey: args.sessionKey, startedAt: now, abort };
+  const stopRenew = startJobOverlapRenew(claim);
   inFlight.set(key, activeTick);
   try {
     if (gatewayOrRunner && typeof gatewayOrRunner.abortSession === 'function' && job && job.abortPrevious) {
@@ -197,7 +234,7 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
 
     try {
       const result = await Promise.race([runPromise, timeoutPromise]);
-      return result;
+      return await attachOptionalChannelReceipt(result, job, gatewayOrRunner);
     } catch (err) {
       // The dispatcher has already settled. Waiting for evidence must not
       // let its old deadline abort a later run occupying the same session.
@@ -206,19 +243,35 @@ async function dispatchCronJobAsAgentTurn(gatewayOrRunner, job, now = Date.now()
       const code = stableFailureCode(err?.code, 'cron_error');
       const reason = code.includes('timeout') ? 'cron_timeout' : (code || 'cron_error');
       const deadLettered = await pushCronDeadLetter(gatewayOrRunner, args.sessionKey, reason, { jobId: id, userId: args.userId });
-      return {
+      return await attachOptionalChannelReceipt({
         ok: false,
         error: reason,
         code: reason,
         sessionKey: args.sessionKey,
         jobId: id,
         deadLettered,
-      };
+      }, job, gatewayOrRunner);
     } finally {
       if (timer) clearTimeout(timer);
     }
   } finally {
     if (inFlight.get(key) === activeTick) inFlight.delete(key);
+    stopRenew();
+    await releaseJobOverlap(claim);
+  }
+}
+
+async function attachOptionalChannelReceipt(result, job, gatewayOrRunner) {
+  if (!job || !job.channel) return result;
+  try {
+    const { attachCronDeliveryReceipt } = require('../orchestration/multichannel/openclaw-adapter');
+    return await attachCronDeliveryReceipt(result, job, {
+      transport: job.transport || (gatewayOrRunner && gatewayOrRunner.deliverChannel),
+      fetchImpl: job.fetchImpl || (gatewayOrRunner && gatewayOrRunner.fetchImpl),
+      env: job.env,
+    });
+  } catch (_) {
+    return result;
   }
 }
 
@@ -242,4 +295,5 @@ module.exports = {
   CRON_DEAD_LETTER_TIMEOUT_MS,
   DEFAULT_CRON_TURN_TIMEOUT_MS,
   inflightSnapshot,
+  OVERLAP_HELD_REASON_ES,
 };

@@ -8,6 +8,41 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- SiraCode native `multiedit` applies a jailed batch of unique
+  `old_str` → `new_str` replacements atomically (nothing is written
+  if one edit misses). Commits use the #629 conditional mutation
+  guards (`readFileForMutation` / `writeFileIfUnchanged`) so a
+  concurrent edit is `file_changed`, not a silent overwrite.
+  Planificar stays read-only; Construir goes through composer /
+  permission-resume. Spanish errors. Not a dump of
+  anomalyco/opencode `edit.ts`.
+- SiraCode `task` is a subagent spawn stub: it queues a child job
+  via the existing agent-task APIs (`enqueueAgentTask` /
+  `createTaskRecord`). Planificar may only spawn read-only children
+  (`general` / `planificar`). No LLM loop in the stub. Not a dump
+  of `task.ts`.
+
+- SiraCode `diagnostics` summarizes workspace LSP/syntax issues with
+  the OpenCode report contract (`ERROR [line:col]`,
+  `<diagnostics file="…">` blocks, per-file cap). Optional injectable
+  runner (tests / later LSP hosts); default in-process JSON+JS syntax
+  pass. Workspace-jailed, Spanish errors. Planificar and Construir
+  can read it. Native CommonJS — not a dump of
+  `vendor/opencode/src/lsp/diagnostic.ts`. No OpenRouter.
+
+- SiraCode jailed `read` / `write` / `edit` now match the OpenCode
+  file-tool contract (1-indexed offset, unique `old_str`, size caps,
+  binary reject, symlink-aware path jail, Spanish errors). Planificar
+  stays read-only; Construir writes go through permission-resume when
+  the composer asks. Native CommonJS — not a dump of `read.ts` /
+  `write.ts` / `edit.ts`. No OpenRouter.
+
+- SiraCode grep/glob now walk the session workspace jail with the
+  OpenCode search contract (`pattern`, `path`, `include`, `limit`),
+  size/timeout caps, Spanish errors, and blocked path escape. Native
+  CommonJS walker — no ripgrep binary, no Effect LocationSearch, no
+  vendor dump. Available in Planificar (read-only) and Construir.
+
 - Hermes fusion: session memory compaction folds older MEMORY log
   entries into a compact note when the store hits its cap, keeps USER
   profile facts intact, and ranks retrieval as profile > recent log >
@@ -70,6 +105,18 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Fixed
 
+- Scheduled-agent overlap coordination recovers after transient Redis failures
+  without replacing a still-running local holder or leaking new clients.
+  Failed distributed renewal no longer reports a successful local renewal;
+  same-key acquisitions are reserved while in flight. No agent turn replay.
+
+- SiraCode text edits and patch updates compare the complete original bytes
+  before committing, so cooperating edits cannot silently lose each other's
+  changes. Patch Add is exclusive; Move refuses an existing destination.
+  Oversized/invalid UTF-8 inputs and unsupported mutation targets fail closed,
+  and edit replacement markers remain literal. Native OpenCode-inspired port;
+  no upstream runtime, new provider or production configuration changes.
+
 - `/agentes` task failures no longer collapse 503, cancel and timeout
   into one generic banner. `presentTaskError` maps classified reasons to
   AGENTS.md §16 codes (`E_PROVIDER` / `E_CANCELLED` / `E_TIMEOUT`) and
@@ -84,6 +131,12 @@ and improvement cycles follow a sequential number with the date the work landed.
   CLI cron queries and cron tools use only the authenticated owner; absent and
   foreign jobs are indistinguishable, and missing identity cannot inherit a
   stored job's privileges. Static capability maps remain public.
+
+- Scheduled agent jobs no longer report success for incomplete, cancelled or
+  failed runs, including a successful synthesis with failed plan steps. Whole
+  agent turns are invoked once; ambiguous transport errors do not automatically
+  replay external effects. Native OpenClaw-inspired outcome contract; no new
+  provider, gateway, schema or interface changes.
 
 - Backend image rebuilds no longer depend on HuggingFace for
   `ggml-base.bin` when a model is already present. `install-local-whisper.sh`
