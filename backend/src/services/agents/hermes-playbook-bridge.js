@@ -28,6 +28,7 @@ const FOLDER_CAPABILITY_MAP = Object.freeze([
   { hermes: 'tests', sira: 'backend/tests, tests, e2e', status: 'integrated', strategy: 'map Hermes test lanes to Node --test suites' },
   { hermes: 'curator', sira: 'backend/src/services/agents/hermes-skill-curator.js, hermes-skill-hygiene.js', status: 'integrated', strategy: 'deterministic skill-library review + hash/name dedupe + Biblioteca promote with provenance; never mutates bundled skills' },
   { hermes: 'tools/memory_tool.py', sira: 'backend/src/services/agents/hermes-memory-compaction.js', status: 'integrated', strategy: 'bounded log compaction + ranked retrieval (profile > recent log > notes); profile facts never folded' },
+  { hermes: 'memories', sira: 'backend/src/services/agents/hermes-memory-portability.js', status: 'integrated', strategy: 'profile + compacted-notes export/import with sha256 snapshot checksums, Spanish errors, per-user isolation, size caps; no upstream dump' },
 ]);
 
 const UPSTREAM_TO_SIRAGPT_SKILLS = Object.freeze({
