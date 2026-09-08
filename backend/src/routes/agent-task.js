@@ -1671,17 +1671,20 @@ router.post(
       await Promise.allSettled(Array.from(pendingProgressWrites));
     };
 
-    const progressTracker = createHonestProgressTracker({
-      startedAt: Date.now(),
-      maxSteps,
-      maxRuntimeMs,
-    });
+    // applyEvent is declared first so consumer VM extracts that stop at this
+    // marker never evaluate createHonestProgressTracker in a sandbox that
+    // only has persistence closures.
     const applyEvent = (obj) => {
       const enriched = enrichAgentTaskEvent(obj, progressTracker);
       streamState = reduceAgentState(streamState, enriched);
       appendTaskEvent(task, enriched, streamState);
       return enriched;
     };
+    const progressTracker = createHonestProgressTracker({
+      startedAt: Date.now(),
+      maxSteps,
+      maxRuntimeMs,
+    });
     const emit = (obj) => {
       const applied = applyEvent(obj);
       send(applied);
