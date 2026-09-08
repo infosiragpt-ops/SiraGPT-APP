@@ -1,6 +1,6 @@
 # Third-Party Licenses
 
-Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1522**.
+Generated automatically by `scripts/generate-third-party-licenses.js`. Total third-party packages: **1523**.
 
 > Re-run with `npm run licenses:report` after every dependency change. CI enforces that no GPL/AGPL/LGPL/CDDL/EPL/MPL-1.1/NPOSL family appears via `npm run licenses:check`.
 
@@ -222,7 +222,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `puppeteer-core` | 25.10.0 | Apache-2.0 | [link](https://github.com/puppeteer/puppeteer.git#main) |
 | `readdir-glob` | 1.1.3 | Apache-2.0 | [link](https://github.com/Yqnn/node-readdir-glob) |
 | `semifies` | 1.0.0 | Apache-2.0 | [link](https://github.com/holepunchto/semifies) |
-| `sharp` | 0.35.3, 0.35.4 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
+| `sharp` | 0.35.4 | Apache-2.0 | [link](https://github.com/lovell/sharp) |
 | `spdx-correct` | 3.2.0 | Apache-2.0 | [link](https://github.com/jslicense/spdx-correct.js) |
 | `ssh2-sftp-client` | 11.0.0 | Apache-2.0 | [link](https://github.com/theophilusx/ssh2-sftp-client) |
 | `swagger-ui-dist` | 5.32.5 | Apache-2.0 | [link](https://github.com/swagger-api/swagger-ui) |
@@ -454,7 +454,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `yargs-parser` | 21.1.1, 22.0.0 | ISC | [link](https://github.com/yargs/yargs-parser) |
 | `zod-to-json-schema` | 3.25.2 | ISC | [link](https://github.com/StefanTerdell/zod-to-json-schema) |
 
-## MIT (1122)
+## MIT (1123)
 
 | Package | Version(s) | License | Source |
 |---|---|---|---|
@@ -666,49 +666,49 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@standard-schema/utils` | 0.3.0 | MIT | [link](https://github.com/standard-schema/standard-schema) |
 | `@tabby_ai/hijri-converter` | 1.0.5 | MIT |  |
 | `@tarikjabiri/dxf` | 2.8.9 | MIT | [link](https://github.com/dxfjs/writer) |
-| `@tiptap/core` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-blockquote` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bold` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bubble-menu` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-bullet-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-character-count` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-code` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-code-block` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-color` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-document` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-dropcursor` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-floating-menu` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-font-family` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-gapcursor` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-hard-break` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-heading` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-horizontal-rule` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-image` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-italic` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-link` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list-item` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-list-keymap` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-mathematics` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-ordered-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-paragraph` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-placeholder` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-strike` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-cell` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-header` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-table-row` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-task-item` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-task-list` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text-align` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-text-style` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-typography` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extension-underline` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/extensions` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/pm` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/react` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
-| `@tiptap/starter-kit` | 3.23.4 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/core` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-blockquote` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bold` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bubble-menu` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-bullet-list` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-character-count` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-code` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-code-block` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-color` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-document` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-dropcursor` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-floating-menu` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-font-family` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-gapcursor` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-hard-break` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-heading` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-horizontal-rule` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-image` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-italic` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-link` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list-item` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-list-keymap` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-mathematics` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-ordered-list` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-paragraph` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-placeholder` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-strike` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-cell` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-header` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-table-row` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-task-item` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-task-list` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text-align` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-text-style` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-typography` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extension-underline` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/extensions` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/pm` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/react` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
+| `@tiptap/starter-kit` | 3.31.3 | MIT | [link](https://github.com/ueberdosis/tiptap) |
 | `@tokenizer/inflate` | 0.4.1 | MIT | [link](https://github.com/Borewit/tokenizer-inflate) |
 | `@tokenizer/token` | 0.3.0 | MIT | [link](https://github.com/Borewit/tokenizer-token) |
 | `@types/aws-lambda` | 8.10.161 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
@@ -784,7 +784,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `@types/xml2js` | 0.4.14 | MIT | [link](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@upsetjs/venn.js` | 2.0.0 | MIT | [link](https://github.com/upsetjs/venn.js) |
 | `@xmldom/is-dom-node` | 1.0.1 | MIT | [link](https://github.com/xmldom/is-dom-node) |
-| `@xmldom/xmldom` | 0.8.13, 0.9.10 | MIT | [link](https://github.com/xmldom/xmldom) |
+| `@xmldom/xmldom` | 0.8.15, 0.9.12 | MIT | [link](https://github.com/xmldom/xmldom) |
 | `accepts` | 1.3.8, 2.0.0 | MIT | [link](https://github.com/jshttp/accepts) |
 | `acorn` | 8.16.0 | MIT | [link](https://github.com/acornjs/acorn) |
 | `acorn-import-attributes` | 1.9.5 | MIT | [link](https://github.com/xtuc/acorn-import-attributes) |
@@ -1077,7 +1077,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `jpeg-exif` | 1.1.4 | MIT | [link](https://github.com/zhso/jpeg-exif) |
 | `js-tiktoken` | 1.0.21 | MIT | [link](https://github.com/dqbd/tiktoken) |
 | `js-tokens` | 4.0.0 | MIT | [link](https://github.com/lydell/js-tokens) |
-| `js-yaml` | 4.3.1 | MIT | [link](https://github.com/nodeca/js-yaml) |
+| `js-yaml` | 4.3.2 | MIT | [link](https://github.com/nodeca/js-yaml) |
 | `jsdom` | 25.0.1 | MIT | [link](https://github.com/jsdom/jsdom) |
 | `json-bigint` | 1.0.0 | MIT | [link](https://github.com/sidorares/json-bigint) |
 | `json-parse-even-better-errors` | 3.0.2 | MIT | [link](https://github.com/npm/json-parse-even-better-errors) |
@@ -1211,7 +1211,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `ms` | 2.0.0, 2.1.3 | MIT | [link](https://github.com/vercel/ms) |
 | `msgpackr` | 2.0.1 | MIT | [link](https://github.com/kriszyp/msgpackr) |
 | `msgpackr-extract` | 3.0.3 | MIT | [link](https://github.com/kriszyp/msgpackr-extract) |
-| `multer` | 2.2.0 | MIT | [link](https://github.com/expressjs/multer) |
+| `multer` | 2.3.0 | MIT | [link](https://github.com/expressjs/multer) |
 | `mustache` | 4.2.0 | MIT | [link](https://github.com/janl/mustache.js) |
 | `mz` | 2.7.0 | MIT | [link](https://github.com/normalize/mz) |
 | `n-gram` | 2.0.2 | MIT | [link](https://github.com/words/n-gram) |
@@ -1234,7 +1234,7 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `node-gyp-build-optional-packages` | 5.2.2 | MIT | [link](https://github.com/prebuild/node-gyp-build) |
 | `node-pandoc` | 0.3.0 | MIT | [link](https://github.com/eshinn/node-pandoc) |
 | `node-releases` | 2.0.54 | MIT | [link](https://github.com/chicoxyzzy/node-releases) |
-| `nodemailer` | 9.0.1 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
+| `nodemailer` | 9.1.1 | MIT-0 | [link](https://github.com/nodemailer/nodemailer) |
 | `nopt` | 1.0.10, 7.2.1 | MIT | [link](https://github.com/isaacs/nopt) |
 | `normalize-path` | 3.0.0 | MIT | [link](https://github.com/jonschlinkert/normalize-path) |
 | `nwsapi` | 2.2.23 | MIT | [link](https://github.com/dperini/nwsapi) |
@@ -1344,13 +1344,14 @@ Each entry below carries a non-permissive declared license but is permitted with
 | `prosemirror-dropcursor` | 1.8.2 | MIT | [link](https://github.com/prosemirror/prosemirror-dropcursor) |
 | `prosemirror-gapcursor` | 1.4.1 | MIT | [link](https://github.com/prosemirror/prosemirror-gapcursor) |
 | `prosemirror-history` | 1.5.0 | MIT | [link](https://github.com/prosemirror/prosemirror-history) |
+| `prosemirror-inputrules` | 1.5.1 | MIT | [link](https://github.com/prosemirror/prosemirror-inputrules) |
 | `prosemirror-keymap` | 1.2.3 | MIT | [link](https://github.com/prosemirror/prosemirror-keymap) |
-| `prosemirror-model` | 1.25.4 | MIT | [link](https://github.com/prosemirror/prosemirror-model) |
+| `prosemirror-model` | 1.25.11 | MIT | [link](git+https://code.haverbeke.berlin/prosemirror/prosemirror-model) |
 | `prosemirror-schema-list` | 1.5.1 | MIT | [link](https://github.com/prosemirror/prosemirror-schema-list) |
 | `prosemirror-state` | 1.4.4 | MIT | [link](https://github.com/prosemirror/prosemirror-state) |
 | `prosemirror-tables` | 1.8.5 | MIT | [link](https://github.com/ProseMirror/prosemirror-tables) |
 | `prosemirror-transform` | 1.12.0 | MIT | [link](https://github.com/prosemirror/prosemirror-transform) |
-| `prosemirror-view` | 1.41.8 | MIT | [link](git+https://code.haverbeke.berlin/prosemirror/prosemirror-view) |
+| `prosemirror-view` | 1.42.3 | MIT | [link](git+https://code.haverbeke.berlin/prosemirror/prosemirror-view) |
 | `proxy-addr` | 2.0.7 | MIT | [link](https://github.com/jshttp/proxy-addr) |
 | `proxy-from-env` | 2.1.0 | MIT | [link](https://github.com/Rob--W/proxy-from-env) |
 | `pump` | 3.0.4 | MIT | [link](https://github.com/mafintosh/pump) |

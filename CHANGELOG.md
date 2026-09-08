@@ -8,6 +8,13 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Phase 3d of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  session terminal channel (PTY stub) over SSE+POST and an injectable
+  WebSocket attach (`/api/agentes-coding/sessions/:id/terminal*`,
+  `/api/agentes-coding/terminal?channelId=`). Path-jailed `cwd`,
+  Spanish errors, memory/SSE/WS transports. API-only — UI-lock keeps
+  the Phase 3a HTTP exec stub; no `@xterm/xterm` npm. Flag stays off
+  in production. See `docs/agentes-coding-terminal.md`.
 - Phase 1 of Coding Agents (`AGENTES_CODING_V2`): OSS catalog (Tier S
   from a 176-repo pass: OpenSandbox, E2B, gVisor, Firecracker, Aider,
   OpenHands, Cline HITL-only, SWE-agent/SWE-bench, mem0, xterm.js,
