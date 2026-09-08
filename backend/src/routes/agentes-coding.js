@@ -10,6 +10,8 @@
  *   GET    /api/agentes-coding/sessions/:id/files     → listFiles
  *   GET    /api/agentes-coding/sessions/:id/map       → repo-map hints (Phase 3b)
  *   POST   /api/agentes-coding/sessions/:id/map       → repo-map hints (query body)
+ *   POST   /api/agentes-coding/sessions/:id/struct-edit        → preview ast-grep diffs (Phase 3c)
+ *   POST   /api/agentes-coding/sessions/:id/struct-edit/apply  → apply diffs via writeFile
  *   POST   /api/agentes-coding/sessions/:id/read      → readFile
  *   PUT    /api/agentes-coding/sessions/:id/files     → writeFile
  *   POST   /api/agentes-coding/sessions/:id/expose    → exposePort (stub)
@@ -28,11 +30,16 @@ const {
   CodingSandboxError,
 } = require('../services/agentes-coding/coding-sandbox');
 const { mapForRequest } = require('../services/agentes-coding/repo-map');
+const {
+  previewForRequest,
+  applyForRequest,
+} = require('../services/agentes-coding/structural-edit');
 
 function createAgentesCodingRouter(opts = {}) {
   const env = opts.env || process.env;
   const sandbox = opts.sandbox || null;
   const getSandbox = () => sandbox || getDefaultSandbox();
+  const structRunner = opts.sgRunner || opts.structuralEditRunner || null;
 
   const router = express.Router();
 
@@ -131,6 +138,51 @@ function createAgentesCodingRouter(opts = {}) {
    */
   router.get('/sessions/:id/map', authenticateToken, handleRepoMap);
   router.post('/sessions/:id/map', authenticateToken, handleRepoMap);
+
+  /**
+   * ast-grep pattern preview (proposed diffs). Never writes.
+   */
+  router.post('/sessions/:id/struct-edit', authenticateToken, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await previewForRequest(getSandbox(), req.params.id, {
+        pattern: body.pattern,
+        rewrite: body.rewrite,
+        lang: body.lang,
+        path: body.path,
+        paths: body.paths,
+        file: body.file,
+        maxFiles: body.maxFiles,
+        timeoutMs: body.timeoutMs,
+      }, env, { runner: structRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
+
+  /**
+   * Apply proposed diffs through sandbox.writeFile (path jail).
+   */
+  router.post('/sessions/:id/struct-edit/apply', authenticateToken, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const result = await applyForRequest(getSandbox(), req.params.id, {
+        diffs: body.diffs,
+        pattern: body.pattern,
+        rewrite: body.rewrite,
+        lang: body.lang,
+        path: body.path,
+        paths: body.paths,
+        file: body.file,
+        maxFiles: body.maxFiles,
+        timeoutMs: body.timeoutMs,
+      }, env, { runner: structRunner });
+      return res.json(result);
+    } catch (err) {
+      return sendSandboxError(res, err);
+    }
+  });
 
   /**
    * Read one file (JSON body to avoid path-in-URL traversal).

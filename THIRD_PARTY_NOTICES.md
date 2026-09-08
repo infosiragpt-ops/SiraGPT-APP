@@ -11,6 +11,14 @@ Attributions for third-party ARCHITECTURE adapted into this codebase.
   Kubernetes operator was vendored. Daytona (AGPL) is not used.
   See `docs/agentes-coding-sandbox.md` and `docs/agentes-arquitectura.md`.
 
+- **ast-grep** (https://github.com/ast-grep/ast-grep, MIT) — Phase 3c
+  `structural-edit` (`backend/src/services/agentes-coding/structural-edit/`)
+  is a thin native CommonJS wrapper that shells out to an optional `sg`
+  / `ast-grep` binary (injectable exec in tests). Pattern search/replace
+  only; apply goes through the coding-sandbox `writeFile` jail. No
+  upstream Rust/monorepo dump, no `--update-all`. See
+  `docs/agentes-coding-struct-edit.md` and `docs/oss-catalog.md`.
+
 - **Aider** (https://github.com/Aider-AI/aider, Apache-2.0) — Phase 3b
   `repo-map` (`backend/src/services/agentes-coding/repo-map/`) is a
   native CommonJS rewrite of the RepoMap *idea* (ranked file/symbol

@@ -64,9 +64,11 @@ Stable codes: `E_FLAG_OFF` `E_PARAMS` `E_SESSION_NOT_FOUND`
 Cloning user repos, enabling the flag on the Lenovo origin, Daytona
 (AGPL), full OpenSandbox/K8s deploy. Phase 3a IDE shell (flag-gated
 Monaco on `/agentes`): [`docs/agentes-coding-ide.md`](./agentes-coding-ide.md).
+Phase 3c structural edit (ast-grep patterns, flag-gated):
+[`docs/agentes-coding-struct-edit.md`](./agentes-coding-struct-edit.md).
 
 ## Tests
 
 ```bash
-cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js
+cd backend && node --test tests/agentes-coding-flags.test.js tests/agentes-coding-sandbox.test.js tests/agentes-coding-repo-map.test.js tests/agentes-coding-structural-edit.test.js
 ```

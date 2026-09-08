@@ -1,7 +1,8 @@
 # `/agentes` Coding Agents — target architecture
 
-Status: Phase 3a of `AGENTES_CODING_V2` (flag-gated IDE shell on `/agentes`).
-Phase 1 = docs + flag; Phase 2a = session adapter. Flag still default **OFF**.
+Status: Phase 3c of `AGENTES_CODING_V2` (flag-gated structural edit via
+ast-grep patterns). Phase 1 = docs + flag; Phase 2a = session adapter;
+Phase 3a = IDE shell; Phase 3b = repo-map. Flag still default **OFF**.
 This document is the engineering contract for a **multi-tenant web** coding
 agent. It is not a local desktop app, not a clone-on-user-machine product,
 and not a revival of `/code`.
@@ -233,7 +234,7 @@ Do not set `AGENTES_CODING_V2=1` on the Lenovo origin from this PR.
 
 1. OpenSandbox or E2B Apache adapter + Docker service on Lenovo (Phase 2a memory + docker DEV landed)
 2. TypeScript harness in the sandbox, wired to SiraCode contracts
-3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only)
+3. Flag-gated Monaco / xterm pane on `/agentes` — **Phase 3a landed** (Monaco + diff; xterm still stub). **Phase 3b landed**: Aider-pattern repo-map hints (flag-gated `/map`, header-only). **Phase 3c landed**: ast-grep-pattern structural edit (flag-gated `/struct-edit`, apply via `writeFile` only)
 4. K8s + gVisor/Firecracker when Docker isolation is proven
 5. e2e “todo app” golden on the sandbox path
 

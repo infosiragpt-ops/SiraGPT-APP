@@ -10,6 +10,10 @@ export {
   type CodingExecResult,
   type CodingRepoMapHint,
   type CodingRepoMap,
+  type CodingStructMatch,
+  type CodingStructDiff,
+  type CodingStructPreview,
+  type CodingStructApply,
 } from "./api"
 
 export { useAgentesCodingHealth } from "./health"
