@@ -26,6 +26,7 @@ const search = require('./search');
 const shellSandbox = require('./shell-sandbox');
 const fileTools = require('./file-tools');
 const diagnostics = require('./diagnostics');
+const questionTool = require('./question-tool');
 
 module.exports = {
   ...agents,
@@ -54,4 +55,10 @@ module.exports = {
   prettyDiagnostic: diagnostics.pretty,
   reportDiagnosticsFile: diagnostics.reportFile,
   DIAGNOSTIC_ERRORS: diagnostics.ERRORS,
+  isQuestionTool: questionTool.isQuestionTool,
+  normalizeQuestionArgs: questionTool.normalizeQuestionArgs,
+  validateAnswers: questionTool.validateAnswers,
+  publicQuestions: questionTool.publicQuestions,
+  runQuestion: questionTool.runQuestion,
+  QUESTION_ERRORS: questionTool.ERRORS,
 };

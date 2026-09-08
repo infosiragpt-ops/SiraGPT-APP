@@ -135,9 +135,9 @@ async function listFiles(id, userId) {
   return { files };
 }
 
-async function resolvePermission(id, permissionId, decision, userId) {
+async function resolvePermission(id, permissionId, decision, userId, extras = {}) {
   const session = requireOwnedSession(id, userId);
-  const payload = await resolveSessionPermission(session, permissionId, decision);
+  const payload = await resolveSessionPermission(session, permissionId, decision, extras);
   return publicResolvePayload(payload, session);
 }
 

@@ -71,6 +71,9 @@ const TOOL_ALIASES = Object.freeze({
   diagnostics: 'diagnostics',
   lsp_diagnostics: 'diagnostics',
   diagnostic: 'diagnostics',
+  question: 'question',
+  user_ask: 'question',
+  ask_user: 'question',
 });
 
 function canonicalTool(name) {

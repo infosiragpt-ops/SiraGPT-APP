@@ -109,9 +109,14 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   asks), and a workspace-jailed `diagnostics` summary matching the
   OpenCode LSP.Diagnostic contract (`pretty` / `report`: severity
   labels, 1-based `[line:col]`, `<diagnostics file>` blocks, per-file
-  cap; optional injectable runner instead of an Effect LSP client).
+  cap; optional injectable runner instead of an Effect LSP client),
+  and a native `question` / user-ask tool matching the OpenCode
+  clarifying-ask contract (`questions[]` with `header` / `options` /
+  `multiple`; replies are arrays of labels; Construir pauses on the
+  existing permission-resume card; Planificar may ask read-only
+  clarifications that never unlock writes).
   ~0% copy of `vendor/opencode` `read.ts` / `write.ts` /
-  `edit.ts` / `src/lsp/diagnostic.ts` — see AGENTS.md §25.
+  `edit.ts` / `src/lsp/diagnostic.ts` / `question.ts` — see AGENTS.md §25.
   The native helpers are local and deterministic — no title-agent
   LLM, no Effect runtime, no Snapshot git-diff, no MAX_STEPS
   prompt dump, no ripgrep sidecar, no global tool-output

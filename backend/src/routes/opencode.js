@@ -159,6 +159,8 @@ router.post(
       'always_allow',
       'always_allow_in_chat',
     ]),
+    body('answers').optional(),
+    body('reply').optional(),
   ],
   async (req, res) => {
     const errors = validationResult(req);
@@ -171,6 +173,9 @@ router.post(
         req.body.permissionId,
         req.body.decision,
         userIdOf(req),
+        {
+          answers: req.body.answers !== undefined ? req.body.answers : req.body.reply,
+        },
       );
       return res.json(result);
     } catch (err) {

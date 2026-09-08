@@ -33,6 +33,12 @@ file-tool contract (path, offset, limit, unique old_str → new_str,
 size caps, binary reject, workspace jail). They do not copy
 read.ts / write.ts / edit.ts, the Effect runtime, LSP warmup, or
 the Snapshot git-diff.
+The `question` / user-ask tool is a native rewrite of the OpenCode
+question contract (questions with header, options, multiple;
+replies are arrays of labels). Construir pauses via the existing
+permission-resume card; Planificar may ask read-only clarifications.
+It does not copy `question.ts`, the Effect Question service, or the
+TUI question queue.
 
 SiraGPT and SiraCode are not affiliated with, endorsed by, or
 sponsored by OpenCode or Anomaly.
