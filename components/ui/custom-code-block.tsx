@@ -6,6 +6,7 @@ import { useShikiHighlight } from "@/lib/use-shiki-highlight";
 import { DiffBlock } from "@/components/chat/diff-block";
 import { writeText as copyTextSafe } from "@/lib/native/clipboard";
 import { cn } from "@/lib/utils";
+import { hrefForCodeUrl, looksLikePlainOcrText, splitCodeWithUrls } from "@/lib/chat/code-block-utils";
 
 // Lote E · #36 + #40 — line-numbers preference is global and
 // persisted in localStorage so toggling on one block toggles the
@@ -62,6 +63,9 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
         () => (codeString.length === 0 ? 1 : codeString.split(/\r\n|\r|\n/).length),
         [codeString],
     );
+    const plainOcr = looksLikePlainOcrText(language, codeString);
+    const codeSegments = useMemo(() => splitCodeWithUrls(codeString), [codeString]);
+    const usePlainCode = plainOcr || !highlighted;
 
     if (isDiff) {
         return <DiffBlock diff={codeString} />;
@@ -89,13 +93,31 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
         } catch { /* ignore */ }
     };
 
+    const renderedCode = (
+        <code>
+            {codeSegments.map((segment, index) => {
+                if (segment.type !== "url") return <span key={index}>{segment.value}</span>
+                const href = hrefForCodeUrl(segment.value)
+                if (!href) return <span key={index}>{segment.value}</span>
+                return (
+                    <a key={index} href={href} target="_blank" rel="noreferrer noopener">
+                        {segment.value}
+                    </a>
+                )
+            })}
+        </code>
+    )
+
     return (
-        <div className="group/code my-4 overflow-hidden rounded-xl border border-border/55 bg-[#0d1117] shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:bg-[#0a0e15] dark:shadow-[0_12px_28px_-18px_rgba(0,0,0,0.55)]">
+        <div className="chat-code-block group/code my-4 overflow-hidden rounded-xl border border-border/55">
+            <span className="sr-only" aria-live="polite">
+                {isCopied ? "Código copiado al portapapeles" : ""}
+            </span>
             {/* Header — uppercase language eyebrow + tools. Sits above
                 the code panel as a quiet command bar; tools fade in on
                 hover so the chrome doesn't distract from the source. */}
-            <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] bg-white/[0.03] px-3.5 py-2">
-                <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400 font-sans">
+            <div className="flex items-center justify-between gap-3 border-b border-white/[0.08] bg-black/20 px-3.5 py-2">
+                <span className="text-[11px] font-medium uppercase tracking-[0.12em] font-sans" style={{ color: "color-mix(in srgb, var(--code-fg) 72%, transparent)" }}>
                     {language}
                 </span>
                 <div className="flex items-center gap-1.5 opacity-70 transition-opacity duration-200 group-hover/code:opacity-100">
@@ -143,6 +165,7 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
                             isCopied && "text-emerald-400 hover:text-emerald-300",
                         )}
                         aria-label={isCopied ? "Código copiado" : "Copiar código"}
+                        title={isCopied ? "Código copiado" : "Copiar código"}
                     >
                         {isCopied ? (
                             <Check size={13} strokeWidth={2.25} />
@@ -167,27 +190,27 @@ export const CustomCodeBlock = ({ className, children, canPreview, onPreview }: 
                         >
                             {Array.from({ length: lineCount }, (_, index) => index + 1).join("\n")}
                         </pre>
-                        {highlighted ? (
+                        {usePlainCode ? (
+                            <pre className="m-0 p-4 text-[14px] leading-[1.55] whitespace-pre font-mono">
+                                {renderedCode}
+                            </pre>
+                        ) : (
                             <div
                                 className="shiki-host text-[14px] leading-[1.55] [&_pre]:m-0 [&_pre]:p-4 [&_pre]:bg-transparent [&_code]:bg-transparent [&_code]:font-mono"
-                                dangerouslySetInnerHTML={{ __html: highlighted }}
+                                dangerouslySetInnerHTML={{ __html: highlighted || "" }}
                             />
-                        ) : (
-                            <pre className="m-0 p-4 text-[14px] leading-[1.55] text-zinc-100 whitespace-pre font-mono">
-                                <code>{codeString}</code>
-                            </pre>
                         )}
                     </div>
                 </div>
-            ) : highlighted ? (
+            ) : usePlainCode ? (
+                <pre className="m-0 overflow-x-auto p-4 text-[14px] leading-[1.55] whitespace-pre-wrap break-words font-mono">
+                    {renderedCode}
+                </pre>
+            ) : (
                 <div
                     className="shiki-host overflow-x-auto text-[14px] leading-[1.55] [&_pre]:m-0 [&_pre]:p-4 [&_pre]:bg-transparent [&_code]:bg-transparent [&_code]:font-mono"
-                    dangerouslySetInnerHTML={{ __html: highlighted }}
+                    dangerouslySetInnerHTML={{ __html: highlighted || "" }}
                 />
-            ) : (
-                <pre className="m-0 overflow-x-auto p-4 text-[14px] leading-[1.55] text-zinc-100 whitespace-pre-wrap break-words font-mono">
-                    <code>{codeString}</code>
-                </pre>
             )}
         </div>
     );

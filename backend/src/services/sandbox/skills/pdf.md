@@ -1,5 +1,13 @@
 # Skill: PDF editing
 
+## Golden rule: pick the cheapest of three levels
+(a) STRUCTURAL ops (merge/split/rotate/watermark/numbering/forms/annotations/
+redaction) → total fidelity with pypdf/qpdf. (b) TEXT MICRO-EDITS → PyMuPDF
+locates the area, redacts it and inserts with the same embedded font
+(similar-length, single-line only — no paragraph reflow). (c) REWRITES → edit
+the source .docx when available, else PDF→DOCX→edit→export (warn about
+fidelity loss). Scanned PDFs: OCR first. Save with incremental update.
+
 ## Read text from PDF
 Use `pypdf` (formerly PyPDF2):
 ```python

@@ -38,6 +38,8 @@ backend/eval-results/
 
 # misc
 .DS_Store
+__pycache__/
+*.py[cod]
 *.pem
 *.jks
 *.keystore

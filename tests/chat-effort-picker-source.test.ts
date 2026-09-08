@@ -7,6 +7,14 @@ const chatInterface = fs.readFileSync(
   path.join(process.cwd(), "components", "chat-interface-enhanced.tsx"),
   "utf8",
 )
+const effortMenu = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "composer-effort-menu.tsx"),
+  "utf8",
+)
+const contextMenu = fs.readFileSync(
+  path.join(process.cwd(), "components", "chat", "composer-context-menu.tsx"),
+  "utf8",
+)
 const globals = fs.readFileSync(path.join(process.cwd(), "app", "globals.css"), "utf8")
 const orchestrator = fs.readFileSync(
   path.join(process.cwd(), "backend", "src", "services", "reasoning-orchestrator.js"),
@@ -15,7 +23,7 @@ const orchestrator = fs.readFileSync(
 
 describe("composer effort picker source contract", () => {
   it("offers only levels the backend compute planner accepts", () => {
-    const levelsBlock = chatInterface.match(/const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
+    const levelsBlock = effortMenu.match(/export const EFFORT_LEVELS = \[([\s\S]*?)\] as const/)
     assert.ok(levelsBlock, "EFFORT_LEVELS must exist")
     const values = [...levelsBlock![1].matchAll(/value: "([^"]+)"/g)].map((m) => m[1])
     assert.deepEqual(values, ["Bajo", "Medio", "Extra", "Max"])
@@ -44,11 +52,11 @@ describe("composer effort picker source contract", () => {
     assert.match(comparator![1], /prev\.setSelectedEffort === next\.setSelectedEffort/)
   })
 
-  it("renders the effort section inside the model dropdown and wires the context state", () => {
+  it("renders the effort menu on the composer toolbar and wires the context state", () => {
     assert.match(
       chatInterface,
-      /<EffortSection\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
-      "the dropdown must render the effort slider",
+      /<ComposerEffortMenu\s+selectedEffort=\{selectedEffort\}\s+setSelectedEffort=\{setSelectedEffort\}/,
+      "the composer toolbar must render the effort menu",
     )
     assert.match(
       chatInterface,
@@ -57,11 +65,39 @@ describe("composer effort picker source contract", () => {
     )
   })
 
+  it("keeps context and effort as separate one-trigger popovers", () => {
+    assert.match(
+      chatInterface,
+      /<ComposerContextMenu\s+messages=\{currentChat\?\.messages \|\| \[\]\}\s+selectedModel=\{currentChat\?\.model \|\| selectedModel\}\s+availableModels=\{availableModels\}/,
+      "the context popover must receive the active chat and selected model",
+    )
+    assert.equal((contextMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
+    assert.equal((effortMenu.match(/<PopoverTrigger asChild>/g) || []).length, 1)
+    assert.match(contextMenu, /data-testid="composer-context-trigger"/)
+    assert.match(effortMenu, /data-testid="composer-effort-chip"/)
+    assert.doesNotMatch(effortMenu, /composer-context-trigger|composer-effort-ring/)
+  })
+
+  it("uses the exact four labels and copy from the approved effort reference", () => {
+    const labels = [...effortMenu.matchAll(/value: "([^"]+)", label: "([^"]+)"/g)]
+      .map((match) => [match[1], match[2]])
+    assert.deepEqual(labels, [
+      ["Bajo", "Low"],
+      ["Medio", "Medium"],
+      ["Extra", "High"],
+      ["Max", "Extra high"],
+    ])
+    for (const copy of ["Esfuerzo", "Más rápido", "Más inteligente", "Modo rápido", "Respuestas más rápidas, mayor uso de los límites."]) {
+      assert.ok(effortMenu.includes(copy), `missing approved effort copy: ${copy}`)
+    }
+    assert.doesNotMatch(effortMenu, /effort-caption|caption:/, "the compact reference has no descriptive caption")
+    assert.match(effortMenu, /<span className="effort-title" id=\{titleId\}>Esfuerzo<\/span>/, "the title labels the slider")
+    assert.match(effortMenu, /<span className="effort-level" id=\{valueId\}>\{active\.label\}<\/span>/, "the header names the level in text — never color alone (WCAG 1.4.1)")
+  })
+
   it("supports real dragging, not just stop clicks", () => {
-    // Anchor the end at the next top-level declaration: the component's typed
-    // destructure closes with "\n}" too, which a lazy match stops at.
-    const section = chatInterface.match(
-      /function EffortSection\(([\s\S]*?)\nfunction areNavbarModelSelectorPropsEqual/,
+    const section = effortMenu.match(
+      /export function EffortSection\(([\s\S]*?)\nexport function ComposerEffortMenu/,
     )
     assert.ok(section, "EffortSection must exist")
     assert.match(section![1], /onPointerDown=/, "the track must start drags on pointer down")
@@ -76,17 +112,32 @@ describe("composer effort picker source contract", () => {
       /indexFromPointer/,
       "any x on the track must map to the nearest stop"
     )
+    assert.match(section![1], /aria-labelledby=\{\s*`\$\{titleId\} \$\{valueId\}`\s*\}/, "title + value name the slider, never a bare number")
+    assert.match(section![1], /aria-orientation="horizontal"/)
+    assert.match(section![1], /PageUp/, "PageUp jumps forward")
+    assert.match(section![1], /PageDown/, "PageDown jumps back")
+    assert.match(section![1], /className="effort-ticks"/, "discrete step marks under the rail")
+    assert.match(section![1], /className="effort-bubble"/, "value bubble follows the thumb while dragging")
+    assert.match(section![1], /data-dragging=\{dragging \? "true" : undefined\}/)
     assert.match(
       globals,
-      /\.effort-track \{[\s\S]{0,400}touch-action: none/,
-      "touch drags must move the thumb, not scroll the dropdown"
+      /\.effort-track \{[\s\S]{0,520}overflow: hidden/,
+      "neon fill and glow must stay clipped inside the track",
+    )
+    assert.match(effortMenu, /data-effort=\{String\(activeIndex\)\}/)
+    assert.match(effortMenu, /className="effort-track-fill"/)
+    assert.match(
+      globals,
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]{0,220}\.effort-track-fill/,
+      "reduced motion must keep a static fill without flicker",
     )
   })
 
   it("ships the effort styles in the curated stylesheet", () => {
-    for (const cls of [".effort-section", ".effort-track-fill", ".effort-stop-active", ".effort-caption"]) {
+    for (const cls of [".effort-section", ".effort-track-line", ".effort-stop-active", ".effort-ends"]) {
       assert.ok(globals.includes(`${cls} {`), `${cls} must exist in globals.css`)
     }
+    assert.ok(!globals.includes(".effort-caption {"), "the removed caption must not keep stale layout CSS")
     assert.match(
       globals,
       /\.effort-track:focus-visible \{[\s\S]{0,120}outline: 2px solid/,

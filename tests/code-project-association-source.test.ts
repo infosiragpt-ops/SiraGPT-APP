@@ -16,16 +16,11 @@ const codexApiCore = readFileSync("lib/codex/api/core.ts", "utf8")
 const workspaceRoute = readFileSync("lib/code-workspace-route.ts", "utf8")
 
 test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
-  assert.match(page, /data-testid="code-workspace-route-error"/)
-  assert.doesNotMatch(page, /const workspaceId = localId \|\| \(folderId \? `project:\$\{folderId\}`/)
-  assert.match(page, /hydratedFolderRef\.current = null/)
-  assert.match(page, /setHydrationAttempt\(\(attempt\) => attempt \+ 1\)/)
-  assert.match(page, /resolveCodeWorkspaceFolder\([\s\S]*projectsService\.get,[\s\S]*codexApi\.getProject/)
-  assert.match(page, /persistWorkspaceCodexProject\(workspaceId, project\.id\)/)
-  assert.match(page, /setActiveCodexProject\(directCodexProject \? project\.id : null\)/)
+  assert.match(page, /redirect\(/)
+  assert.match(page, /chatSearchToAgentsHome/)
+  assert.doesNotMatch(page, /CodeWorkspaceProvider|ActiveFolderHydrator/)
   assert.match(workspaceRoute, /folderId\.replace\(\/\^\\w\+:\//)
   assert.match(workspaceRoute, /getProject\(projectId\)[\s\S]*status\?[\s\S]*getCodexProject/)
-  assert.match(page, /status\?[\s\S]*setRouteIssue\(1\)/)
   assert.match(sidebar, /codexProjectIdFromWorkspaceId\(opts\.folderId, \{ assumeProject: true \}\)/)
   assert.match(sidebar, /codexWorkspaceIdForProject\(projectId\)/)
   assert.match(company, /codexProjectIdFromWorkspaceId\(activeFolder\?\.id, \{ assumeProject: true \}\)/)
@@ -33,9 +28,6 @@ test("a reloaded/sidebar Project uses the canonical workspace helper", () => {
 })
 
 test("direct CodexProject routes are hydrated before launching an agent", () => {
-  assert.match(page, /hydratedFolderRef\.current !== folderId/)
-  assert.match(page, /const workspaceId = localId \|\| activeFolder\?\.id \|\| null/)
-  assert.match(page, /workspaceId\.replace\(\/\^\(\?:project\|codex\|local\):\//)
   const directSwitch = workspaceContext.indexOf('if (target.id.startsWith("codex:"))')
   const regularSwitch = workspaceContext.indexOf('if (target.kind === "project")')
   assert.ok(directSwitch >= 0 && regularSwitch > directSwitch)
@@ -46,7 +38,6 @@ test("direct CodexProject routes are hydrated before launching an agent", () => 
 test("404s stay actionable and do not silently become a deterministic build", () => {
   const error = Object.assign(new Error("Project not found"), { status: 404 })
   assert.equal(projectsServiceErrorCode(error), "project_not_found")
-  assert.match(page, /setRouteIssue\(1\)/)
   assert.match(company, /data-testid="company-association-error"/)
   assert.match(company, /codexIdentityIssue\(error\)/)
   assert.match(codexApi, /codexIdentityIssue/)

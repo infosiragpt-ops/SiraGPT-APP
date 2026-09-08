@@ -22,55 +22,55 @@ async function delegateTask(opts = {}) {
     return { ok: false, reason: 'max_delegate_depth', depth, maxDepth };
   }
 
-  const { runAgent, enqueueDelegatedTask } = require('./agent-entry');
   const mode = opts.mode || 'async';
+  if (mode !== 'sync') {
+    return {
+      ok: false,
+      mode: 'async',
+      reason: 'hermes_async_delegate_unavailable',
+      error: 'La delegación en segundo plano aún no está disponible. Usa el modo síncrono o continúa en este agente.',
+    };
+  }
   const taskId = opts.taskId || `sub_${Date.now().toString(36)}`;
 
-  registry.record({
-    id: taskId,
-    parentId: opts.parentTaskId || null,
-    mode: opts.policy || 'sandbox',
-    model: opts.model || null,
-    status: 'active',
-  });
-
-  if (mode === 'sync') {
-    try {
-      const result = await runAgent({
-        userId,
-        prompt,
-        thinking: opts.thinking || 'low',
-        model: opts.model || 'gpt-4o',
-        maxSteps: opts.maxSteps || 8,
-        source: opts.source || `hermes:delegate:${taskId}`,
-        depth: depth + 1,
-        taskId,
-      });
-      registry.complete(taskId, { status: 'completed' });
-      return { ok: true, mode: 'sync', taskId, result };
-    } catch (err) {
-      registry.complete(taskId, { status: 'failed', error: err.message });
-      return { ok: false, mode: 'sync', taskId, error: err.message };
-    }
+  let recorded = false;
+  try {
+    const { runTurn, resolveHermesModel } = require('./hermes-agent-bridge');
+    const model = resolveHermesModel(opts.model);
+    registry.record({
+      id: taskId,
+      parentId: opts.parentTaskId || null,
+      mode: opts.policy || 'sandbox',
+      model,
+      status: 'active',
+    });
+    recorded = true;
+    const result = await runTurn({
+      userId,
+      prompt,
+      thinking: opts.thinking || 'low',
+      model,
+      provider: opts.provider,
+      learning: false,
+      maxSteps: opts.maxSteps || 8,
+      maxRuntimeMs: opts.maxRuntimeMs,
+      signal: opts.signal,
+      source: opts.source || `hermes:delegate:${taskId}`,
+      depth: depth + 1,
+      taskId,
+    });
+    registry.complete(taskId, { status: 'completed' });
+    return { ok: true, mode: 'sync', taskId, result };
+  } catch (err) {
+    const code = ['E_PARAMS', 'E_PROVIDER', 'E_CANCELLED'].includes(err?.code) ? err.code : 'E_PROVIDER';
+    const error = code === 'E_PARAMS'
+      ? 'Elige Sira Rápido o Sira Pro con una conexión permitida para ejecutar el agente.'
+      : code === 'E_CANCELLED'
+        ? 'La ejecución del agente fue cancelada.'
+        : 'La ejecución del agente no pudo completarse. Reintenta.';
+    if (recorded) registry.complete(taskId, { status: code === 'E_CANCELLED' ? 'cancelled' : 'failed', error });
+    return { ok: false, mode: 'sync', taskId, code, error };
   }
-
-  const queued = await enqueueDelegatedTask(prompt, {
-    userId,
-    collection: opts.collection || 'default',
-    taskId,
-    depth,
-  }, {
-    taskId,
-    taskType: opts.taskType || 'hermes_delegate',
-    thinking: opts.thinking || 'low',
-    model: opts.model || 'gpt-4o',
-    maxSteps: opts.maxSteps || 8,
-    source: opts.source || `hermes:delegate:${taskId}`,
-    parentTaskId: opts.parentTaskId || null,
-    metadata: opts.metadata || {},
-  });
-
-  return { ok: true, mode: 'async', taskId: queued.taskId, status: queued.status };
 }
 
 function listSubagents(opts = {}) {

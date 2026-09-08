@@ -1,6 +1,6 @@
 {
   "sidebar": {
-    "newChat": "New chat",
+    "newChat": "New agent",
     "searchChats": "Search chats",
     "library": "Library",
     "gpts": "GPTs",
@@ -573,7 +573,48 @@
       "disabledTitle": "APPS is not active yet",
       "disabledBody": "The Codex V2 engine is off in this environment. Enable CODEX_AGENT_V2 to build apps with chat, runs, and real preview.",
       "forbiddenTitle": "Restricted access",
-      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist."
+      "forbiddenBody": "Your account is not authorized to run APPS in production. Ask for admin access or add your user to the allowlist.",
+      "agentComputer": {
+        "title": "Agent computer",
+        "status": {
+          "live": "Live",
+          "starting": "Thinking…",
+          "error": "Error",
+          "idle": "Waiting"
+        },
+        "dock": {
+          "browser": "Browser",
+          "files": "Files",
+          "terminal": "Terminal",
+          "desktop": "Desktop",
+          "openLabel": "Open {app}",
+          "focusedBrowser": "Chrome focused on the agent's computer",
+          "focusedOther": "{app} focused",
+          "unavailable": "The agent's computer is not available here"
+        },
+        "routines": {
+          "toggle": "Routines",
+          "active": "active",
+          "mejoraConstanteName": "Continuous chat and code improvement",
+          "mejoraConstanteSchedule": "every 3 h",
+          "mejoraConstanteNext": "in progress",
+          "avisarTiendasName": "Notify iPhone and Android stores",
+          "avisarTiendasSchedule": "9:32 / 3:32 PM weekdays",
+          "avisarTiendasNext": "scheduled"
+        },
+        "loginHandoff": {
+          "title": "Sign in on the computer",
+          "instruction": "Sign in to this site",
+          "neverSees": "SiraGPT cannot see your password",
+          "ready": "Done",
+          "captchaTitle": "Complete the captcha on the computer",
+          "captchaInstruction": "There is a captcha. Take it yourself.",
+          "otpTitle": "Complete verification on the computer",
+          "otpInstruction": "Enter the 2FA code on this computer",
+          "paymentTitle": "Complete payment on the computer",
+          "paymentInstruction": "Pay on this computer. SiraGPT cannot see your details."
+        }
+      }
     }
   },
   "meta": {
@@ -652,5 +693,15 @@
     "sendHint": "Siųsti",
     "stopHint": "Stabdyti",
     "dropFiles": "Nuvilkite failus čia, kad įkeltumėte"
+  },
+  "chatSearch": {
+    "placeholder": "Search your chats…",
+    "noResults": "No results",
+    "noResultsFor": "We couldn't find chats matching “{query}”",
+    "serverFallback": "Couldn't reach server search; showing local title matches.",
+    "emptyHistory": "You have no chats yet",
+    "emptyHistoryHint": "Start a conversation and it will show up here",
+    "resultCountOne": "{count} chat",
+    "resultCountMany": "{count} chats"
   }
 }
