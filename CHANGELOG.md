@@ -22,6 +22,14 @@ and improvement cycles follow a sequential number with the date the work landed.
   errors. `GET /api/agentes-coding/health` stays `{ ok, enabled }`.
   No Monaco, no `/code`, no Daytona, flag stays off in production.
   See `docs/agentes-coding-sandbox.md`.
+- Phase 3b of Coding Agents (`AGENTES_CODING_V2`, default OFF):
+  Aider-pattern `repo-map` ranked file/symbol hints
+  (`name` + `path` + `score`) from a session workspace without loading
+  whole files (8 KiB headers, PageRank-lite + path heuristics).
+  `GET|POST /api/agentes-coding/sessions/:id/map` is 404 when the flag
+  is off. Optional **Mapa** hook on the Phase 3a file tree. Spanish
+  errors. No Aider dump, no tree-sitter vendor, no `/code`, flag stays
+  off in production. See `docs/agentes-coding-repomap.md`.
 - Phase 3a of Coding Agents (`AGENTES_CODING_V2`, default OFF):
   flag-gated IDE shell on `/agentes` (file tree, Monaco editor, diff
   pane, WebSocket-ready terminal stub) wired to

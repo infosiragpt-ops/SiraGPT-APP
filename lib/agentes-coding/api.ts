@@ -34,6 +34,22 @@ export type CodingExecResult = {
   timedOut?: boolean
 }
 
+export type CodingRepoMapHint = {
+  name: string
+  path: string
+  kind: string
+  score: number
+}
+
+export type CodingRepoMap = {
+  ok: true
+  hints: CodingRepoMapHint[]
+  omitted?: number
+  scanned?: number
+  headerBytes?: number
+  query?: string
+}
+
 export class AgentesCodingApiError extends Error {
   readonly status: number
   readonly code: string
@@ -160,6 +176,27 @@ export function createAgentesCodingApi(opts: AgentesCodingApiOptions = {}) {
         { method: "PUT", body: JSON.stringify({ path: filePath, content }) },
       )
       return body.file || { path: filePath }
+    },
+
+    async repoMap(
+      sessionId: string,
+      opts: { query?: string; limit?: number } = {},
+    ): Promise<CodingRepoMap> {
+      const q = new URLSearchParams()
+      if (opts.query) q.set("query", opts.query)
+      if (opts.limit) q.set("limit", String(opts.limit))
+      const suffix = q.toString() ? `?${q.toString()}` : ""
+      const body = await authed<CodingRepoMap>(
+        `/sessions/${encodeURIComponent(sessionId)}/map${suffix}`,
+      )
+      return {
+        ok: true,
+        hints: Array.isArray(body.hints) ? body.hints : [],
+        omitted: body.omitted,
+        scanned: body.scanned,
+        headerBytes: body.headerBytes,
+        query: body.query,
+      }
     },
 
     async exec(sessionId: string, command: string): Promise<CodingExecResult> {

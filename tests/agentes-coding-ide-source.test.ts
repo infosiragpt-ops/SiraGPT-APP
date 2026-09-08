@@ -48,6 +48,8 @@ describe("AGENTES_CODING_V2 Phase 3a IDE shell", () => {
     assert.match(shell, /listFiles/)
     assert.match(shell, /readFile/)
     assert.match(shell, /writeFile/)
+    assert.match(shell, /repoMap/)
+    assert.match(shell, /data-testid="agentes-coding-repo-map"/)
     assert.match(shell, /Editor de código/)
     assert.match(shell, /Archivos/)
     assert.match(shell, /Diferencias/)
