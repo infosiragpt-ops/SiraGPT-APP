@@ -14,7 +14,7 @@
 ARG BUNDLE_WHISPER_MODEL=0
 
 # ─── Stage 1: Install dependencies ───────────────────────────
-FROM node:22-alpine AS deps
+FROM node:26-alpine AS deps
 WORKDIR /app
 
 # The final image installs Alpine's Chromium; npm needs no bundled browser.
@@ -34,7 +34,7 @@ RUN for attempt in 1 2 3; do \
     done
 
 # ─── Stage 2: Build Prisma client & test assets ──────────────
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 WORKDIR /app
 
 RUN apk add --no-cache pandoc py3-openpyxl python3 py3-pip
@@ -60,7 +60,7 @@ COPY ggml-base.bin /whisper-seed/ggml-base.bin
 FROM whisper-seed-${BUNDLE_WHISPER_MODEL} AS whisper-seed
 
 # ─── Stage 3: Production runner ─────────────────────────────
-FROM node:22-alpine AS runner
+FROM node:26-alpine AS runner
 WORKDIR /app
 
 # Runtime document toolchain for DOCX/XLSX/PPTX/PDF/OCR workflows, plus
