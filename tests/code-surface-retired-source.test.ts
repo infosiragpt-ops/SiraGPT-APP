@@ -26,13 +26,12 @@ describe("retired /code product surface", () => {
     }
   })
 
-  it("keeps Empresas as a sidebar mode toggle and drops the code icon plus sidebar.code control", () => {
+  it("removes the Empresas sidebar row while keeping the code surface retired", () => {
     const sidebar = source("components/app-sidebar.tsx")
-    const rowStart = sidebar.indexOf('aria-label="Empresas"')
-    assert.ok(rowStart > 0, "missing Empresas mode-toggle nav row")
-    const row = sidebar.slice(rowStart, rowStart + 1200)
-    assert.match(row, /switchSidebarMode\(sidebarMode === "code" \? "chat" : "code"\)/)
-    assert.match(row, />Empresas</)
+    assert.doesNotMatch(sidebar, /aria-label="Empresas"/)
+    assert.doesNotMatch(sidebar, /switchSidebarMode/)
+    assert.doesNotMatch(sidebar, />Empresas</)
+    assert.doesNotMatch(sidebar, /\bBriefcase\b/)
     assert.doesNotMatch(sidebar, /<Code2/)
     assert.doesNotMatch(sidebar, /href=['"`]\/code['"`]/)
     assert.doesNotMatch(sidebar, /t\(["']code["']\)/)
