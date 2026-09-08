@@ -23,6 +23,8 @@ user's Biblioteca.
 2. Call `hermes-biblioteca.deposit({ userId, chatId, title, body, kind })`.
 3. Confirm the returned `asset_id` is owner-scoped.
 4. Mid-chat writes persist immediately; listing is `listForUser(userId)`.
+5. Skill-curator promotes include `hash` + `procedencia` in the markdown body.
+   Same hash → skip. Same name, different hash → merge provenance, do not dump upstream.
 
 ## Hermes pattern
 
