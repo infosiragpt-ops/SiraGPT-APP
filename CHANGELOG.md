@@ -8,6 +8,14 @@ and improvement cycles follow a sequential number with the date the work landed.
 
 ### Added
 
+- Hermes fusion: session memory compaction folds older MEMORY log
+  entries into a compact note when the store hits its cap, keeps USER
+  profile facts intact, and ranks retrieval as profile > recent log >
+  compacted notes. Summarizer is injectable (default is local, no
+  OpenRouter). Failures return Spanish `E_PARAMS` / `E_QUOTA` / `E_CONTENT`.
+  Native rewrite of the Hermes MEMORY/USER bounded-store idea; no
+  upstream Python dump.
+
 - Hermes fusion: memory writes now fail closed on a per-fact size cap
   (2000 chars) and a per-user write rate-limit, with Spanish `E_PARAMS`
   / `E_QUOTA` errors. Native rewrite of the Hermes MEMORY.md / USER.md

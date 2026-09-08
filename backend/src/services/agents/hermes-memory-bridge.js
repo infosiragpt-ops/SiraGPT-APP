@@ -9,6 +9,7 @@ const activeMemory = require('../active-memory');
 const sessionManager = require('../session-manager');
 const curatedMemory = require('./hermes-curated-memory');
 const { assertMemoryWrite } = require('./memory-write-guard');
+const sessionCompaction = require('./hermes-memory-compaction');
 
 function normalizeText(text) {
   return String(text || '')
@@ -90,6 +91,14 @@ function buildMemoryPrompt(userId, opts = {}) {
   return [frozen, live].filter(Boolean).join('\n\n');
 }
 
+function retrieveRanked(userId, query, opts = {}) {
+  return sessionCompaction.retrieve(userId, query, opts);
+}
+
+function compactSession(userId, opts = {}) {
+  return sessionCompaction.compactLog(userId, opts);
+}
+
 function beginSession(userId, opts = {}) {
   return curatedMemory.beginSession(userId, opts);
 }
@@ -164,9 +173,10 @@ function listEntries(userId) {
 
 function status(userId = null) {
   const base = {
-    providers: ['active-memory', 'session-manager', 'hermes-curated-memory'],
+    providers: ['active-memory', 'session-manager', 'hermes-curated-memory', 'hermes-memory-compaction'],
     promotionThreshold: Number.parseInt(process.env.SIRAGPT_MEMORY_PROMOTION_THRESHOLD || '3', 10),
     curated: curatedMemory.status(userId),
+    compaction: sessionCompaction.status(userId),
   };
   if (!userId) return base;
   return {
@@ -188,6 +198,9 @@ module.exports = {
   curatedRemove: curatedMemory.remove,
   curatedRead: curatedMemory.read,
   searchSessions,
+  retrieveRanked,
+  compactSession,
+  recordSession: sessionCompaction.record,
   nudgePromotion,
   listEntries,
   status,

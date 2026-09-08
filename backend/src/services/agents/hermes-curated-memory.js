@@ -59,7 +59,7 @@ function sessionKey(userId, chatId) {
 }
 
 function emptyStores() {
-  return { memory: [], user: [] };
+  return { memory: [], user: [], notes: [] };
 }
 
 function storesFor(userId) {
@@ -71,6 +71,7 @@ function storesFor(userId) {
     stores = emptyStores();
     liveByUser.set(id, stores);
   }
+  if (!Array.isArray(stores.notes)) stores.notes = [];
   return stores;
 }
 
@@ -82,6 +83,7 @@ function hydrateUser(userId) {
     liveByUser.set(userId, {
       memory: dedupe(saved.memory),
       user: dedupe(saved.user),
+      notes: Array.isArray(saved.notes) ? saved.notes.filter(Boolean) : [],
     });
   } catch {
     liveByUser.set(userId, emptyStores());
@@ -92,6 +94,7 @@ function persistUser(userId) {
   const id = normalizeUserId(userId);
   if (!id) return;
   const stores = liveByUser.get(id) || emptyStores();
+  if (!Array.isArray(stores.notes)) stores.notes = [];
   try {
     diskPersistence.saveCuratedMemory(id, stores);
   } catch {
@@ -191,6 +194,50 @@ function usagePayload(stores, target) {
   };
 }
 
+function tryFoldLog(userId, opts = {}) {
+  try {
+    const compaction = require('./hermes-memory-compaction');
+    const result = compaction.compactLog(userId, {
+      nextText: opts.nextText,
+      keepRecent: opts.keepRecent,
+    });
+    if (result && typeof result.then === 'function') return { ok: false, skipped: true };
+    return result;
+  } catch {
+    return { ok: false };
+  }
+}
+
+function rewriteTarget(userId, target, entries) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false, success: false, error: 'userId required' };
+  const resolved = resolveTarget(target);
+  if (!resolved) return { ok: false, success: false, error: 'target must be "memory" or "user"' };
+  const stores = storesFor(id);
+  const next = dedupe(entries);
+  if (resolved === 'user') stores.user = next;
+  else stores.memory = next;
+  persistUser(id);
+  return { ok: true, success: true, ...usagePayload(stores, resolved) };
+}
+
+function listNotes(userId) {
+  const id = normalizeUserId(userId);
+  if (!id) return [];
+  const stores = storesFor(id);
+  if (!Array.isArray(stores.notes)) stores.notes = [];
+  return stores.notes;
+}
+
+function setNotes(userId, notes) {
+  const id = normalizeUserId(userId);
+  if (!id) return { ok: false };
+  const stores = storesFor(id);
+  stores.notes = (Array.isArray(notes) ? notes : []).filter((note) => note && note.text);
+  persistUser(id);
+  return { ok: true, count: stores.notes.length };
+}
+
 function successResponse(userId, target, message) {
   const stores = storesFor(userId);
   return {
@@ -225,10 +272,44 @@ function add(userId, { target = 'memory', content, now, maxWrites, windowMs, rat
   const limit = charLimit(resolved);
   const newTotal = charCount(next);
   if (newTotal > limit) {
-    const current = charCount(entries);
+    const rateOpts = { now, maxWrites, windowMs };
+    if (rateLimit !== false) {
+      const ratePeek = checkWriteRate(id, { ...rateOpts, record: false });
+      if (!ratePeek.ok) return ratePeek;
+    }
+    if (resolved === 'memory') {
+      const folded = tryFoldLog(id, { nextText: text });
+      if (folded && folded.ok) {
+        const after = entriesFor(storesFor(id), resolved);
+        const retry = [...after, text];
+        if (charCount(retry) <= limit) {
+          if (rateLimit !== false) {
+            const rate = checkWriteRate(id, rateOpts);
+            if (!rate.ok) return rate;
+          }
+          storesFor(id).memory = retry;
+          persistUser(id);
+          return successResponse(id, resolved, 'Entry added.');
+        }
+      }
+    }
+    const current = charCount(entriesFor(storesFor(id), resolved));
+    if (resolved === 'user') {
+      return {
+        ok: false,
+        success: false,
+        code: 'E_PARAMS',
+        status: 400,
+        used: current,
+        limit,
+        error: `El perfil está lleno (${current}/${limit}). No se compactan los datos de perfil.`,
+        current_entries: [...entriesFor(storesFor(id), resolved)],
+        usage: `${current}/${limit}`,
+      };
+    }
     return {
       ...storeOverflowError({ current, limit, added: text.length }),
-      current_entries: [...entries],
+      current_entries: [...entriesFor(storesFor(id), resolved)],
       usage: `${current}/${limit}`,
     };
   }
@@ -343,12 +424,19 @@ function beginSession(userId, opts = {}) {
   if (!opts.refresh && snapshots.has(key)) return snapshots.get(key);
 
   const stores = storesFor(id);
+  let notesBlock = '';
+  try {
+    notesBlock = require('./hermes-memory-compaction').renderNotesBlock(id);
+  } catch {
+    notesBlock = '';
+  }
   const snap = {
     userId: id,
     chatId: opts.chatId || null,
     frozenAt: Date.now(),
     memory: renderBlock('memory', sanitizeEntriesForSnapshot(stores.memory, 'MEMORY.md')),
     user: renderBlock('user', sanitizeEntriesForSnapshot(stores.user, 'USER.md')),
+    notes: notesBlock,
   };
   snapshots.set(key, snap);
   return snap;
@@ -358,10 +446,10 @@ function getFrozenPromptBlock(userId, opts = {}) {
   const id = normalizeUserId(userId);
   if (!id) return '';
   const stores = storesFor(id);
-  if (!stores.memory.length && !stores.user.length) return '';
+  if (!stores.memory.length && !stores.user.length && !(stores.notes && stores.notes.length)) return '';
   const snap = beginSession(id, opts);
   if (!snap) return '';
-  return [snap.memory, snap.user].filter(Boolean).join('\n\n');
+  return [snap.memory, snap.user, snap.notes].filter(Boolean).join('\n\n');
 }
 
 function inferTarget(entry) {
@@ -427,6 +515,15 @@ function forgetMatching(userId, query) {
     if (target === 'user') stores.user = next;
     else stores.memory = next;
   }
+  const notes = Array.isArray(stores.notes) ? stores.notes : [];
+  const nextNotes = notes.filter((note) => {
+    if (String(note.text || '').toLowerCase().includes(needle.toLowerCase())) {
+      removed += 1;
+      return false;
+    }
+    return true;
+  });
+  stores.notes = nextNotes;
   if (removed) persistUser(id);
   return { removed };
 }
@@ -435,7 +532,7 @@ function clearUser(userId) {
   const id = normalizeUserId(userId);
   if (!id) return { cleared: 0 };
   const stores = storesFor(id);
-  const cleared = stores.memory.length + stores.user.length;
+  const cleared = stores.memory.length + stores.user.length + (stores.notes ? stores.notes.length : 0);
   liveByUser.set(id, emptyStores());
   persistUser(id);
   for (const key of snapshots.keys()) {
@@ -476,6 +573,9 @@ module.exports = {
   replace,
   remove,
   read,
+  rewriteTarget,
+  listNotes,
+  setNotes,
   beginSession,
   getFrozenPromptBlock,
   learnFromEntry,
