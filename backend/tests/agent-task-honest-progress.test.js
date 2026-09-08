@@ -133,6 +133,15 @@ test('cancelled never reports 100%', () => {
   assert.equal(snap.etaMs, null);
 });
 
+test('E_CANCELLED error events stay Cancelado, not Fallido', () => {
+  const { t } = tracker();
+  t.observe({ type: 'queue_status', status: 'cancelled' });
+  const snap = t.observe({ type: 'error', code: 'E_CANCELLED', reason: 'aborted', message: 'Tarea cancelada por el usuario.' });
+  assert.equal(snap.phase, PHASES.CANCELLED);
+  assert.equal(snap.phaseLabel, 'Cancelado');
+  assert.ok(snap.percent < 100);
+});
+
 test('caller-claimed 100% while running is clamped to 99', () => {
   const { t } = tracker();
   const snap = t.observe({ type: 'step_start', id: 's1', percent: 100 });

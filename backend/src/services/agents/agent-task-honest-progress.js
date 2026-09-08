@@ -95,11 +95,14 @@ function inferPhaseFromEvent(event, current) {
   if (TERMINAL_SUCCESS_TYPES.has(type) && status !== 'error' && status !== 'failed' && status !== 'cancelled') {
     return PHASES.DONE;
   }
+  const code = String(event.code || event.reason || '').toLowerCase();
+  if (type === 'queue_status' && status === 'cancelled') return PHASES.CANCELLED;
+  if (status === 'cancelled' || status === 'canceled' || code === 'e_cancelled' || code === 'aborted') {
+    return PHASES.CANCELLED;
+  }
   if (TERMINAL_FAIL_TYPES.has(type) || status === 'error' || status === 'failed') {
     return PHASES.FAILED;
   }
-  if (type === 'queue_status' && status === 'cancelled') return PHASES.CANCELLED;
-  if (status === 'cancelled' || status === 'canceled') return PHASES.CANCELLED;
   if (type === 'queue_status' && status === 'queued') return PHASES.QUEUED;
   if (type === 'queue_status' && (status === 'completed' || status === 'done')) return PHASES.DONE;
   if (POSTPROCESS_TYPES.has(type)) return PHASES.POSTPROCESS;
@@ -370,7 +373,9 @@ function createHonestProgressTracker(options = {}) {
       [PHASES.FAILED]: 4,
       [PHASES.CANCELLED]: 4,
     };
-    if (!terminal || nextPhase === PHASES.DONE || nextPhase === PHASES.FAILED || nextPhase === PHASES.CANCELLED) {
+    if (terminal === 'cancelled' && nextPhase === PHASES.FAILED) {
+      // User cancel stays Cancelado even if the ack is an error frame.
+    } else if (!terminal || nextPhase === PHASES.DONE || nextPhase === PHASES.FAILED || nextPhase === PHASES.CANCELLED) {
       if ((rank[nextPhase] ?? 0) >= (rank[phase] ?? 0) || isTerminalFailurePhase(nextPhase) || isTerminalSuccessPhase(nextPhase)) {
         phase = nextPhase;
       }
