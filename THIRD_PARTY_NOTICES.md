@@ -63,6 +63,15 @@ do not add entries there by hand; the licenses CI gate regenerates it.)
   the lease is held, and an honest single-process Map if Redis is down.
   Not a dump of `cron/active-jobs.ts` or `cron/service/ops.ts`. Snapshot
   SHA `b56ddcc6ffdfc5be78c1c9c93926518367b876eb`.
+  Honest multichannel delivery receipts in
+  `backend/src/orchestration/multichannel/delivery-receipt.js` (wired
+  through `openclaw-adapter.js`, `orchestration-context.js`,
+  `hermes-gateway-bridge.js` and `cron-as-turn.js`) are a native
+  CommonJS rewrite of OpenClaw's receive/send lifecycle idea: accepting
+  a payload is not a platform receipt. `accepted` and `delivered` stay
+  separate; Spanish errors replace Conectada-style success when the
+  transport never confirmed the send. Not a dump of
+  `docs/concepts/message-lifecycle-refactor.md` or any channel plugin.
 
 - **OpenCode** (https://github.com/anomalyco/opencode, MIT License) —
   SiraCode (`backend/src/services/sira-code/`) is an **independent rewrite**
