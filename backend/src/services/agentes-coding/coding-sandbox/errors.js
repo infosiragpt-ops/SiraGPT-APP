@@ -66,6 +66,10 @@ const CATALOG = Object.freeze({
     status: 500,
     message: 'No se pudo construir el mapa del repositorio.',
   },
+  E_STRUCT_EDIT_FAILED: {
+    status: 500,
+    message: 'No se pudo aplicar la edición estructural.',
+  },
 });
 
 class CodingSandboxError extends Error {

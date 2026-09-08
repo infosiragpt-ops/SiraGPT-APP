@@ -63,6 +63,7 @@ Do not vendor the trees. Docker on Lenovo is the short-term sandbox; K8s later.
 | `google/gvisor` | Apache-2.0 | Kernel-level container isolation (`runsc`) | pattern / ops pin of `runsc` binary — not a source dump | Lenovo runner / future K8s RuntimeClass | tier-s |
 | `firecracker-microvm/firecracker` | Apache-2.0 | MicroVM isolation for hostile code | pattern / ops binary — not a source dump | later isolation (after Docker) | tier-s |
 | `aider-ai/aider` | Apache-2.0 | Repo map + git-diff + lint/test repair loop | **pattern only** (repomap / focused repair). No Python agent dump. Phase 3b: native Node hints | `backend/src/services/agentes-coding/repo-map/` | already fused (pattern) |
+| `ast-grep/ast-grep` | MIT | Structural search/replace via AST patterns (`sg` CLI) | **pattern only** (thin Node wrapper + injectable exec). Binary sidecar if present in the sandbox image. No monorepo dump. Phase 3c | `backend/src/services/agentes-coding/structural-edit/` | already fused (pattern) |
 | `OpenHands/software-agent-sdk` | MIT | Workspace task loop, ACP-style worker | **pattern only**. Do not take the PolyForm enterprise tree | harness / AgentAdapter (future) | tier-s |
 | `All-Hands-AI/OpenHands` | MIT (core) / PolyForm (enterprise) | Full coding-agent product | pattern from MIT core only; **enterprise tree = none** | reference, not control plane | tier-s |
 | `cline/cline` | Apache-2.0 | Human-in-the-loop permission UX (ask / once / always / reject) | **HITL patterns only**. Not the VS Code extension, not the desktop UI | permission-resume / `/agentes` confirm card (future) | tier-s |
@@ -146,7 +147,7 @@ policy. Procedure: `AGENTS.md` §25.
 ## What Phase 1 does **not** do
 
 - Clone 176 (or 120) repos into `third_party/`
-- Vendor OpenSandbox, E2B, Monaco, xterm, or tree-sitter
+- Vendor OpenSandbox, E2B, Monaco, xterm, tree-sitter, or ast-grep
 - Ship a Monaco IDE on default `/agentes` UX (Phase 3a is flag-gated;
   off ⇒ identical first paint)
 - Enable `AGENTES_CODING_V2` in production
